@@ -113,6 +113,46 @@ export function canonicaliseDeviceKey(key) {
   return parsed ? `${parsed.protocol}:${parsed.deviceId}` : null
 }
 
+// ── pure: bridge liveness ───────────────────────────────────────
+//
+// A bridge updates ble_bridges.last_seen_at on every heartbeat (~30s)
+// and scan (~5s). The `status` column can lie — on a power cut the Pi
+// can't send a final 'offline', so it stays 'online'. Freshness of
+// last_seen_at is the honest liveness signal, so the TV connection dot
+// keys off that, not status.
+
+// 60s = two missed 30s heartbeats (and a dozen missed 5s scans), so a
+// healthy bridge is never falsely flagged while a dead one trips fast.
+export const BRIDGE_ONLINE_WINDOW_MS = 60 * 1000
+
+/**
+ * Most-recent last_seen_at across a set of bridge rows, as epoch ms
+ * (0 if none have ever been seen). A location may have >1 bridge; the
+ * room is "covered" if ANY of them is live, so we take the max.
+ * @param {Array<{ last_seen_at?: string|null }>} bridges
+ */
+export function latestBridgeSeenMs(bridges) {
+  let max = 0
+  for (const b of bridges || []) {
+    if (!b?.last_seen_at) continue
+    const t = new Date(b.last_seen_at).getTime()
+    if (Number.isFinite(t) && t > max) max = t
+  }
+  return max
+}
+
+/**
+ * Is any bridge at the location "live" — seen within the freshness
+ * window? Drives the TV display's connection dot.
+ * @param {Array<{ last_seen_at?: string|null }>} bridges
+ * @param {number} nowMs
+ * @param {number} windowMs
+ */
+export function isBridgeOnline(bridges, nowMs = Date.now(), windowMs = BRIDGE_ONLINE_WINDOW_MS) {
+  const last = latestBridgeSeenMs(bridges)
+  return last > 0 && (nowMs - last) < windowMs
+}
+
 // ── pure: build sample rows from a strap → session map ──────────
 
 /**
