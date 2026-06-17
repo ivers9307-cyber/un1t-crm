@@ -3,12 +3,17 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, assertLocationAccess } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
+import { timeOffTypeSchema } from '@/lib/schemas'
 import { notifyUsersAtRoles } from '@/lib/notify'
 
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
 
 const TimeOffRequestSchema = z.object({
-  type: z.enum(['holiday', 'sick', 'unpaid', 'other']),
+  // Use the shared catalogue (holiday/sick/unpaid/other/unavailable) — the
+  // employment-gated UI decides which of these a given user is offered, but the
+  // API must accept every valid type. A hard-coded enum here drifted from the
+  // shared schema + the DB CHECK (mig 283) and rejected contractors' 'unavailable'.
+  type: timeOffTypeSchema,
   start_date: ISO_DATE,
   end_date: ISO_DATE,
   reason: z.string().max(2000).nullable().optional(),
