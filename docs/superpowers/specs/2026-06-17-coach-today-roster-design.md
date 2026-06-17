@@ -18,7 +18,7 @@ Plus a model gap: **accepting a swap is manager-approved today** (`PUT /api/sche
 
 ## Locked decisions (design dialogue)
 
-1. **Coach self-accept** — a coach can accept/claim a swap themselves (no manager step). Backend lifecycle + permission change. (Oversight policy = open question O2.)
+1. **Coach self-accept, manager finalises.** A coach **claims/accepts** an offered shift themselves (self-service matching — no manager needed to express interest); the matched swap then **still requires manager approval** to finalise the roster change. New intermediate `awaiting_approval` state between claim and approval. Swaps can be **open** (any `staff` at the location can take) or **targeted** (offered to a specific colleague via a picker).
 2. **Gating** — give the Today tab *instead of* Schedule by role default. **`coach` = `staff` only.** head_coach/manager/owner keep Schedule (head_coach ∈ `MANAGER_ROLES`: creates shifts + approves swaps/time-off → genuinely needs Schedule). (Confirm = open question O1.)
 3. **"Team on today" strip** — bring a light "who else is on with me today" read onto Today (coaches lose the Schedule Team view).
 4. **Roster view defaults** — replace the 2-week with a **Week | Month toggle, Month default**; agenda **hides days off** (per-week count instead); **calendar-month** boundary; grid caps at **2 shifts + "+N more"**; self-serve **Adjust time** stays in the shift-tap actions.
@@ -45,7 +45,7 @@ Keep the existing **"Needs attention"** triage feed (most plain coaches have no 
 ## Backend / data
 
 - **Month roster data** — extend `fetchDashboardShifts()` (`shared/dashboard-data.js`) from its fixed 14-day window to a month; return shifts **bucketed by week** (e.g. `weeksInMonth[]`) alongside a `monthStartIso`/`monthEndIso` + `shiftsThisMonth`/`hoursThisMonth` summary. Keep `weekShifts`/`hoursThisWeek` (current-week KPI = pay period) for back-compat. Pure date-range change, no new tables. Web + mobile both consume this helper.
-- **Self-accept swap** — `PUT /api/schedule/swaps/[id]`: allow the **target** of a `pending` swap (`target_id === user.id`), and/or an **eligible coach claiming an open swap** at the location, to accept → run the same assignment-reassignment the manager-approve path runs, set terminal status. Adds a coach-allowed branch to the route (today manager-only). Lifecycle + statuses in `shift_swap_requests` unchanged structurally; the *who-can-finalize* rule changes.
+- **Coach claim + manager approval (new lifecycle).** `shift_swap_requests` gains an intermediate state. Flow: **post** (open `target_id=null`, or targeted `target_id=B`) → **claim/accept** by an eligible `staff` at the location (open) or by B (targeted): records the taker on `target_id` + sets `status='awaiting_approval'` → **manager approve** runs the existing assignment-reassignment (`status='swapped'`) or **reject** (back to open/`pending`). Coach can **cancel** their own post, taker can **withdraw** a claim before approval. Route change: add a coach-allowed *claim* branch to `PUT /api/schedule/swaps/[id]` (today the only coach-allowed transition is cancel-own); the manager approve/reject branch stays manager-only but now acts on `awaiting_approval`. Likely a small migration to add the `awaiting_approval` status value (CHECK/enum). No new column — `target_id` doubles as "who will take it".
 - **Team-on-today** — a small per-location "who's working today" read (other coaches' shift_assignments for today, slim fields only — matches the RBAC "staff see slim roster" rule). New tiny helper in `shared/dashboard-data.js`.
 - **Gating** — flip `schedule` **off in the `staff` role default** (`DEFAULT_WEB_PERMISSIONS_BY_ROLE` + the mobile `schedule`/`time_off` defaults in `shared/permissions.js`); keep `dashboard_personal` on. No migration (role defaults are code). Existing `staff` with no explicit override become Today-only; per-user/per-location overrides still win.
 
@@ -53,7 +53,7 @@ Keep the existing **"Needs attention"** triage feed (most plain coaches have no 
 
 - **Phase 1 — Month roster** (visual only, no behaviour change): month data bucketing + web calendar grid + mobile agenda + Week|Month toggle. Shippable on its own; Schedule still present.
 - **Phase 2 — Self-service actions on Today**: Request-time-off entry, post-a-shift-for-swap (web net-new UI; mobile reuse), inline cancel, shift-tap action sheet (swap/adjust), "My requests" goes live. Reuses existing `POST /api/schedule/swaps` + `/time-off` + cancel routes.
-- **Phase 3 — Coach self-accept**: the swap-route lifecycle/permission change + the Accept/Claim affordance + "On with you today" strip.
+- **Phase 3 — Coach claim + targeted swaps**: swap lifecycle change (claim → `awaiting_approval` → manager approve/reject), open-pool claim + targeted swaps (colleague picker), the Accept/Claim + withdraw affordances, the "open swaps I can take" list, the live "My requests" states, and the "On with you today" strip. Manager approval retained.
 - **Phase 4 — Gating cutover**: flip `schedule` off for `staff`. Only after 1–3 prove coaches have everything they need on Today.
 
 ## Web specifics
@@ -67,10 +67,10 @@ The personal roster + actions move onto the mobile **home/Personal** surface (`a
 - Roster authoring, publishing, copy-week/month, pay/budget panels — manager surfaces, stay on Schedule.
 - The "Needs attention" feed logic and KPI cards — reused as-is.
 
-## Open questions for spec review
-- **O1 — coach line.** Confirm `coach = staff` only (head_coach keeps Schedule because they manage shifts). If head coaches should *also* be Today-only, their shift-management abilities need a separate home — out of this scope.
-- **O2 — swap oversight.** When a coach self-accepts/claims a swap, does it **finalize immediately** (max self-service, least manager load) or still **require manager approval** (add a per-location "swaps need manager approval" toggle, default off)? Recommend: finalize immediately for v1; add the toggle only if a studio asks.
-- **O3 — open vs targeted swaps.** Today's mobile flow posts **open** swaps (no `target_id`); targeted swaps exist in schema but have no creation UI. Phase 2/3 should support **claim-an-open-swap** as the primary self-accept path (a colleague claims from the pool). Targeted ("I want *you* to take it") is a nice-to-have — include a colleague-picker, or defer?
+## Resolved (spec review, 2026-06-17)
+- **O1 — coach line:** `coach = staff` only. head_coach/manager/owner keep Schedule (head_coach manages shifts + approvals).
+- **O2 — swap oversight:** **manager approval is retained.** Coach claim/accept is a new self-service step *in front of* approval, not a replacement — a coach opts to take a shift; a manager still finalises the roster change. No finalize-immediately, no per-location toggle.
+- **O3 — swap style:** support **both** — open swaps (post to the pool, any eligible `staff` at the location can take) **and** targeted swaps (offer to a specific colleague via a picker).
 
 ---
 
