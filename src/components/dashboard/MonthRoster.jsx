@@ -12,9 +12,19 @@
 //   monthSummary — e.g. "17 shifts · 94h"
 //   weekPanels   — [{title, startIso, endIso, shifts}] for Week mode
 //   showLocation — boolean; show per-shift location chip when true
+//
+// Task 2 additions (Phase 2):
+//   • Each shift chip / row is clickable → ShiftActionMenu (post for swap
+//     or adjust time). Hidden for past shifts and swapped shifts.
+//   • "Request time off" button in the header → RequestTimeOffModal.
 
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
+import { CalendarOff, RefreshCw } from 'lucide-react'
 import { pickLocationColor } from '@shared/location-colors'
+import Modal from '@/components/ui/Modal'
+import Button from '@/components/ui/Button'
+import RequestTimeOffModal from './RequestTimeOffModal'
 
 // ── Week-mode helpers (moved from today/page.js, byte-identical) ────────────
 
@@ -70,9 +80,284 @@ function rangeLabelFor(startIso, endIso) {
   return `${fmt(s)} – ${fmt(e)}`
 }
 
-// ── WeekPanel (moved from today/page.js, byte-identical) ─────────────────────
+// ── Shift action helpers ─────────────────────────────────────────────────────
 
-function WeekPanel({ title, startIso, endIso, shifts, showLocation }) {
+// A shift is "actionable" when it's not past and not already swapped.
+function isActionable(shift, isPast) {
+  if (isPast) return false
+  if (shift.status === 'swapped') return false
+  return true
+}
+
+// Convert HH:MM:SS or HH:MM to HH:MM for <input type="time">
+function toTimeInput(raw) {
+  if (!raw) return ''
+  return raw.slice(0, 5)
+}
+
+// ── ShiftActionMenu — modal that provides post-for-swap + adjust-time ────────
+
+function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
+  const name = shift.shift_templates?.name || 'Shift'
+  const effectiveStart = shift.start_time_override || shift.shift_templates?.start_time || ''
+  const effectiveEnd   = shift.end_time_override   || shift.shift_templates?.end_time   || ''
+  const hasOverride    = !!(shift.start_time_override || shift.end_time_override)
+
+  // Which sub-panel is open: null | 'swap' | 'adjust'
+  const [panel, setPanel]       = useState(null)
+  const [saving, setSaving]     = useState(false)
+  const [error, setError]       = useState(null)
+  const [success, setSuccess]   = useState(null)
+
+  // Adjust-time form state
+  const [adjStart, setAdjStart] = useState(toTimeInput(effectiveStart))
+  const [adjEnd, setAdjEnd]     = useState(toTimeInput(effectiveEnd))
+  const [adjReason, setAdjReason] = useState('')
+
+  // ── Post for swap ──────────────────────────────────────────────────────────
+  async function handlePostSwap() {
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/schedule/swaps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requester_shift_id: shift.id }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        setError(data.error || 'Could not post swap request. Please try again.')
+        setSaving(false)
+        return
+      }
+      setSuccess('Posted for swap — your manager will confirm it.')
+      setSaving(false)
+      onDone?.()
+    } catch {
+      setError('Network error. Please try again.')
+      setSaving(false)
+    }
+  }
+
+  // ── Adjust time ────────────────────────────────────────────────────────────
+  async function handleAdjust(e) {
+    e.preventDefault()
+    if (!adjStart || !adjEnd) {
+      setError('Please enter both start and end times.')
+      return
+    }
+    if (adjStart === adjEnd) {
+      setError('Start and end times cannot be identical.')
+      return
+    }
+    setSaving(true)
+    setError(null)
+    const body = {
+      start_time_override: adjStart + ':00',
+      end_time_override:   adjEnd   + ':00',
+    }
+    if (adjReason.trim()) body.partial_reason = adjReason.trim()
+    try {
+      const res = await fetch(`/api/schedule/assignments/${shift.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        setError(data.error || 'Could not save time adjustment. Please try again.')
+        setSaving(false)
+        return
+      }
+      setSuccess('Shift time updated.')
+      setSaving(false)
+      onDone?.()
+    } catch {
+      setError('Network error. Please try again.')
+      setSaving(false)
+    }
+  }
+
+  // ── Clear override ─────────────────────────────────────────────────────────
+  async function handleClearOverride() {
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/schedule/assignments/${shift.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start_time_override: null, end_time_override: null, partial_reason: null }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        setError(data.error || 'Could not clear override. Please try again.')
+        setSaving(false)
+        return
+      }
+      setSuccess('Override cleared — shift is back to default time.')
+      setSaving(false)
+      onDone?.()
+    } catch {
+      setError('Network error. Please try again.')
+      setSaving(false)
+    }
+  }
+
+  // ── Shift label ────────────────────────────────────────────────────────────
+  const dateLabel = shiftDate
+    ? new Date(shiftDate + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
+    : ''
+
+  return (
+    <Modal open onClose={onClose} title={`${name}${dateLabel ? ` · ${dateLabel}` : ''}`} size="sm">
+      <div className="space-y-3">
+        {/* Time display */}
+        <p className="text-sm text-un1t-subtle">
+          {shiftTime(shift)}
+          {hasOverride && (
+            <span className="ml-1 text-amber-700 text-xs">(adjusted)</span>
+          )}
+        </p>
+
+        {/* Success banner */}
+        {success && (
+          <div className="rounded-lg bg-emerald-500/10 text-emerald-700 text-sm px-3 py-2">
+            {success}
+          </div>
+        )}
+
+        {/* Error banner */}
+        {error && (
+          <div className="rounded-lg bg-red-500/10 text-red-700 text-sm px-3 py-2">{error}</div>
+        )}
+
+        {/* Action buttons — hidden once a sub-panel is open */}
+        {!panel && !success && (
+          <div className="space-y-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setPanel('swap')}
+              className="w-full text-left px-3 py-2.5 rounded-lg border border-un1t-border bg-un1t-surface hover:bg-un1t-dark text-sm text-un1t-text transition-colors"
+            >
+              <span className="font-medium">Post for swap</span>
+              <span className="block text-xs text-un1t-subtle mt-0.5">Ask a colleague to cover this shift</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPanel('adjust')}
+              className="w-full text-left px-3 py-2.5 rounded-lg border border-un1t-border bg-un1t-surface hover:bg-un1t-dark text-sm text-un1t-text transition-colors"
+            >
+              <span className="font-medium">Adjust time</span>
+              <span className="block text-xs text-un1t-subtle mt-0.5">
+                {hasOverride ? 'Change or clear the time override' : 'Override start or end time'}
+              </span>
+            </button>
+          </div>
+        )}
+
+        {/* Swap confirm panel */}
+        {panel === 'swap' && !success && (
+          <div className="space-y-3">
+            <p className="text-sm text-un1t-text">
+              Post <strong>{name}</strong> on <strong>{dateLabel}</strong> as open for swap?
+              Your manager will be notified and will confirm a replacement.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <Button type="button" variant="secondary" onClick={() => { setPanel(null); setError(null) }} disabled={saving}>
+                Back
+              </Button>
+              <Button type="button" variant="primary" loading={saving} onClick={handlePostSwap}>
+                Post for swap
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Adjust time panel */}
+        {panel === 'adjust' && !success && (
+          <form onSubmit={handleAdjust} className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-un1t-subtle mb-1" htmlFor="adj-start">
+                  Start
+                </label>
+                <input
+                  id="adj-start"
+                  type="time"
+                  value={adjStart}
+                  onChange={(e) => setAdjStart(e.target.value)}
+                  required
+                  disabled={saving}
+                  className="w-full rounded-lg border border-un1t-border bg-un1t-surface text-un1t-text text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-un1t-accent"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-un1t-subtle mb-1" htmlFor="adj-end">
+                  End
+                </label>
+                <input
+                  id="adj-end"
+                  type="time"
+                  value={adjEnd}
+                  onChange={(e) => setAdjEnd(e.target.value)}
+                  required
+                  disabled={saving}
+                  className="w-full rounded-lg border border-un1t-border bg-un1t-surface text-un1t-text text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-un1t-accent"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-un1t-subtle mb-1" htmlFor="adj-reason">
+                Reason <span className="text-un1t-muted font-normal">(optional)</span>
+              </label>
+              <input
+                id="adj-reason"
+                type="text"
+                value={adjReason}
+                onChange={(e) => setAdjReason(e.target.value)}
+                maxLength={200}
+                disabled={saving}
+                placeholder="e.g. leaving early for appointment"
+                className="w-full rounded-lg border border-un1t-border bg-un1t-surface text-un1t-text text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-un1t-accent placeholder:text-un1t-muted"
+              />
+            </div>
+            <div className="flex gap-2 justify-between items-center">
+              {hasOverride ? (
+                <button
+                  type="button"
+                  onClick={handleClearOverride}
+                  disabled={saving}
+                  className="text-xs text-red-700 hover:text-red-800 underline underline-offset-2 disabled:opacity-50"
+                >
+                  Clear override
+                </button>
+              ) : <span />}
+              <div className="flex gap-2">
+                <Button type="button" variant="secondary" onClick={() => { setPanel(null); setError(null) }} disabled={saving}>
+                  Back
+                </Button>
+                <Button type="submit" variant="primary" loading={saving}>
+                  Save
+                </Button>
+              </div>
+            </div>
+          </form>
+        )}
+
+        {/* Close button when success is shown */}
+        {success && (
+          <div className="flex justify-end pt-1">
+            <Button type="button" variant="secondary" onClick={onClose}>Close</Button>
+          </div>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
+// ── WeekPanel (moved from today/page.js, byte-identical + clickable shifts) ──
+
+function WeekPanel({ title, startIso, endIso, shifts, showLocation, onShiftClick }) {
   const days = buildWeek(startIso, shifts || [])
   return (
     <div className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden">
@@ -109,36 +394,58 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation }) {
                   Off
                 </div>
               ) : (
-                day.shifts.map((s, i) => (
-                  <div key={s.id} className={i > 0 ? 'mt-1' : ''}>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className={`text-sm font-medium truncate ${day.isPast ? 'text-un1t-subtle' : 'text-un1t-text'}`}>
-                        {s.shift_templates?.name || 'Shift'}
+                day.shifts.map((s, i) => {
+                  const actionable = isActionable(s, day.isPast)
+                  return (
+                    <div
+                      key={s.id}
+                      className={i > 0 ? 'mt-1' : ''}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          disabled={!actionable}
+                          onClick={() => actionable && onShiftClick?.(s, day.iso)}
+                          className={`text-sm font-medium truncate text-left ${
+                            actionable
+                              ? 'cursor-pointer hover:text-blue-700 transition-colors'
+                              : 'cursor-default'
+                          } ${day.isPast ? 'text-un1t-subtle' : 'text-un1t-text'}`}
+                        >
+                          {s.shift_templates?.name || 'Shift'}
+                        </button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {s.published === false && (
+                            <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-700 text-[10px] uppercase font-semibold whitespace-nowrap">
+                              Draft
+                            </span>
+                          )}
+                          {s.status === 'swapped' && (
+                            <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-700 text-[10px] uppercase font-semibold whitespace-nowrap">
+                              Swapped
+                            </span>
+                          )}
+                          {actionable && (
+                            <span className="text-un1t-muted" aria-hidden="true" title="Tap to manage">
+                              <RefreshCw size={11} />
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      {s.published === false && (
-                        <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-700 text-[10px] uppercase font-semibold whitespace-nowrap">
-                          Draft
-                        </span>
-                      )}
-                      {s.status === 'swapped' && (
-                        <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-700 text-[10px] uppercase font-semibold whitespace-nowrap">
-                          Swapped
-                        </span>
-                      )}
+                      <div className={`text-xs flex items-center gap-1.5 flex-wrap ${day.isPast ? 'text-un1t-muted' : 'text-un1t-subtle'}`}>
+                        <span>{shiftTime(s)} · {shiftHours(s)}h</span>
+                        {showLocation && s.locations?.name && (() => {
+                          const c = pickLocationColor(s.locations.id || s.location_id)
+                          return (
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider whitespace-nowrap ${c.bg} ${c.text} ${day.isPast ? 'opacity-60' : ''}`}>
+                              {s.locations.name}
+                            </span>
+                          )
+                        })()}
+                      </div>
                     </div>
-                    <div className={`text-xs flex items-center gap-1.5 flex-wrap ${day.isPast ? 'text-un1t-muted' : 'text-un1t-subtle'}`}>
-                      <span>{shiftTime(s)} · {shiftHours(s)}h</span>
-                      {showLocation && s.locations?.name && (() => {
-                        const c = pickLocationColor(s.locations.id || s.location_id)
-                        return (
-                          <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider whitespace-nowrap ${c.bg} ${c.text} ${day.isPast ? 'opacity-60' : ''}`}>
-                            {s.locations.name}
-                          </span>
-                        )
-                      })()}
-                    </div>
-                  </div>
-                ))
+                  )
+                })
               )}
             </div>
           </div>
@@ -173,26 +480,35 @@ function ModeToggle({ mode, onChange }) {
 
 // ── Month chip — one shift entry inside a calendar cell ──────────────────────
 
-function ShiftChip({ shift, isPast }) {
+function ShiftChip({ shift, isPast, onShiftClick, cellDate }) {
   const time = (shift.start_time_override || shift.shift_templates?.start_time || '').slice(0, 5)
   const name = shift.shift_templates?.name || 'Shift'
   const isDraft = shift.published === false
+  const actionable = isActionable(shift, isPast)
 
   return (
-    <div className={`flex items-center gap-1 rounded px-1 py-0.5 text-[10px] leading-tight border-l-2 ${
-      isDraft
-        ? 'border-amber-500 bg-amber-500/10 text-amber-700'
-        : 'border-blue-500 bg-blue-500/10 text-blue-700'
-    } ${isPast ? 'opacity-60' : ''}`}>
+    <button
+      type="button"
+      disabled={!actionable}
+      onClick={() => actionable && onShiftClick?.(shift, cellDate)}
+      title={actionable ? `${name} — tap to manage` : undefined}
+      className={`w-full flex items-center gap-1 rounded px-1 py-0.5 text-[10px] leading-tight border-l-2 text-left ${
+        isDraft
+          ? 'border-amber-500 bg-amber-500/10 text-amber-700'
+          : 'border-blue-500 bg-blue-500/10 text-blue-700'
+      } ${isPast ? 'opacity-60' : ''} ${actionable ? 'cursor-pointer hover:opacity-80 transition-opacity' : 'cursor-default'}`}
+    >
       <span className="font-semibold whitespace-nowrap">{time}</span>
       <span className="truncate">{name}</span>
-    </div>
+    </button>
   )
 }
 
 // ── Calendar cell ────────────────────────────────────────────────────────────
 
-function CalCell({ day, showLocation }) {
+// showLocation is not rendered inside month chips (too small) but kept
+// for API consistency with WeekPanel.
+function CalCell({ day, showLocation: _showLocation, onShiftClick }) {
   const extra = day.shifts.length > 2 ? day.shifts.length - 2 : 0
   const visible = day.shifts.slice(0, 2)
 
@@ -215,7 +531,13 @@ function CalCell({ day, showLocation }) {
 
       {/* Shift chips */}
       {visible.map((s) => (
-        <ShiftChip key={s.id} shift={s} isPast={day.isPast} showLocation={showLocation} />
+        <ShiftChip
+          key={s.id}
+          shift={s}
+          isPast={day.isPast}
+          onShiftClick={onShiftClick}
+          cellDate={day.iso}
+        />
       ))}
       {extra > 0 && (
         <div className="text-[10px] text-un1t-muted pl-1">+{extra} more</div>
@@ -228,7 +550,7 @@ function CalCell({ day, showLocation }) {
 
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-function MonthGrid({ weeks, showLocation }) {
+function MonthGrid({ weeks, showLocation, onShiftClick }) {
   return (
     <div className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden">
       {/* Weekday header row */}
@@ -244,7 +566,7 @@ function MonthGrid({ weeks, showLocation }) {
       {weeks.map((week, wi) => (
         <div key={wi} className="grid grid-cols-7">
           {week.map((day) => (
-            <CalCell key={day.iso} day={day} showLocation={showLocation} />
+            <CalCell key={day.iso} day={day} showLocation={showLocation} onShiftClick={onShiftClick} />
           ))}
         </div>
       ))}
@@ -256,10 +578,37 @@ function MonthGrid({ weeks, showLocation }) {
 
 export default function MonthRoster({ weeks, monthLabel, monthSummary, weekPanels, showLocation }) {
   const [mode, setMode] = useState('month')
+  const router = useRouter()
+
+  // Shift action menu state
+  const [activeShift, setActiveShift]     = useState(null)   // { shift, date }
+  const [timeOffOpen, setTimeOffOpen]     = useState(false)
+  const [timeOffSuccess, setTimeOffSuccess] = useState(false)
+
+  const handleShiftClick = useCallback((shift, date) => {
+    setActiveShift({ shift, date })
+  }, [])
+
+  function handleShiftDone() {
+    // Refresh the server-rendered page data after a mutation
+    router.refresh()
+  }
+
+  function handleShiftClose() {
+    setActiveShift(null)
+  }
+
+  function handleTimeOffSuccess() {
+    setTimeOffOpen(false)
+    setTimeOffSuccess(true)
+    router.refresh()
+    // Auto-dismiss success notice after 5s
+    setTimeout(() => setTimeOffSuccess(false), 5000)
+  }
 
   return (
     <div>
-      {/* Header row: title + label + toggle + summary */}
+      {/* Header row: title + label + toggle + summary + time-off button */}
       <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
         <div className="flex items-center gap-2 flex-wrap">
           <h2 className="text-sm font-semibold text-un1t-text">My roster</h2>
@@ -267,17 +616,32 @@ export default function MonthRoster({ weeks, monthLabel, monthSummary, weekPanel
             <span className="text-sm text-un1t-subtle">{monthLabel}</span>
           )}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
           {mode === 'month' && monthSummary && (
             <span className="text-xs text-un1t-muted">{monthSummary}</span>
           )}
           <ModeToggle mode={mode} onChange={setMode} />
+          <button
+            type="button"
+            onClick={() => { setTimeOffSuccess(false); setTimeOffOpen(true) }}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-un1t-border bg-un1t-surface text-xs text-un1t-subtle hover:text-un1t-text hover:bg-un1t-dark transition-colors"
+          >
+            <CalendarOff size={13} aria-hidden="true" />
+            Request time off
+          </button>
         </div>
       </div>
 
+      {/* Time-off success notice */}
+      {timeOffSuccess && (
+        <div className="mb-3 rounded-lg bg-emerald-500/10 text-emerald-700 text-sm px-3 py-2">
+          Time-off request submitted — your manager will review it.
+        </div>
+      )}
+
       {/* Month mode: calendar grid */}
       {mode === 'month' && (
-        <MonthGrid weeks={weeks} showLocation={showLocation} />
+        <MonthGrid weeks={weeks} showLocation={showLocation} onShiftClick={handleShiftClick} />
       )}
 
       {/* Week mode: two WeekPanels side-by-side on md+ */}
@@ -291,10 +655,28 @@ export default function MonthRoster({ weeks, monthLabel, monthSummary, weekPanel
               endIso={panel.endIso}
               shifts={panel.shifts}
               showLocation={showLocation}
+              onShiftClick={handleShiftClick}
             />
           ))}
         </div>
       )}
+
+      {/* Shift action menu */}
+      {activeShift && (
+        <ShiftActionMenu
+          shift={activeShift.shift}
+          shiftDate={activeShift.date}
+          onClose={handleShiftClose}
+          onDone={handleShiftDone}
+        />
+      )}
+
+      {/* Request time off modal */}
+      <RequestTimeOffModal
+        open={timeOffOpen}
+        onClose={() => setTimeOffOpen(false)}
+        onSuccess={handleTimeOffSuccess}
+      />
     </div>
   )
 }
