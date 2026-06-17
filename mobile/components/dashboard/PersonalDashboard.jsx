@@ -449,7 +449,7 @@ export default function PersonalDashboard({ refreshKey }) {
   // Guards: past shifts and swapped shifts get no actions.
   function handleShiftPress(shift, day) {
     if (day.isPast || shift.status === 'swapped') return
-    if (!shift.shift_assignment_id) {
+    if (!shift.id) {
       Alert.alert('No actions', 'This shift has no assignment ID and cannot be acted on.')
       return
     }
@@ -461,7 +461,7 @@ export default function PersonalDashboard({ refreshKey }) {
       text: 'Post for swap',
       onPress: async () => {
         const res = await createSwapRequest({
-          requesterShiftId: shift.shift_assignment_id,
+          requesterShiftId: shift.id,
           locationId: activeLocation?.id,
         })
         if (res.success) {
@@ -730,7 +730,7 @@ export default function PersonalDashboard({ refreshKey }) {
 // AgendaAdjustSheet — a slim port of the AdjustSheet from schedule.jsx,
 // adapted for use inside PersonalDashboard. Opens as a slide-up Modal over
 // the Today surface; uses adjustShiftAssignment (already imported above).
-// Only the shift's shift_assignment_id is used to PUT the assignments route.
+// Only the shift's id (the shift_assignments row id) is used to PUT the assignments route.
 function AgendaAdjustSheet({ shift, onClose, onSaved, locationId }) {
   const blockStart = (shift?.start_time || shift?.shift_templates?.start_time || '').slice(0, 5)
   const blockEnd = (shift?.end_time || shift?.shift_templates?.end_time || '').slice(0, 5)
@@ -760,7 +760,7 @@ function AgendaAdjustSheet({ shift, onClose, onSaved, locationId }) {
       setErr('Use HH:MM format (24-hour).'); return
     }
     setSaving(true)
-    const r = await adjustShiftAssignment(shift.shift_assignment_id, {
+    const r = await adjustShiftAssignment(shift.id, {
       startTime: start === blockStart ? null : start,
       endTime: end === blockEnd ? null : end,
       reason: reason.trim() || null,
@@ -773,7 +773,7 @@ function AgendaAdjustSheet({ shift, onClose, onSaved, locationId }) {
 
   async function clearOverride() {
     setErr(null); setSaving(true)
-    const r = await adjustShiftAssignment(shift.shift_assignment_id, {
+    const r = await adjustShiftAssignment(shift.id, {
       startTime: null, endTime: null, reason: null, locationId,
     })
     setSaving(false)
