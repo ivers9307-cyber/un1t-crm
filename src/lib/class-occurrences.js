@@ -119,3 +119,50 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
   }
   return { ok: true, upserted: rows.length, seen: result.events.length }
 }
+
+// ── "which class is on right now?" (HR-CLASS-ALLOC.1) ────────────
+//
+// Grace windows: a member is plausibly "in the class" from a bit before
+// start (arriving / warming up) to a bit after end (cooling down).
+const OCC_PRE_MS = 20 * 60_000
+const OCC_POST_MS = 10 * 60_000
+
+/**
+ * Pure: is this occurrence "live" at nowMs (inside the pre/post grace
+ * window around start..end)?
+ */
+export function occurrenceIsLive(occ, nowMs, { preMs = OCC_PRE_MS, postMs = OCC_POST_MS } = {}) {
+  if (!occ?.starts_at) return false
+  const start = new Date(occ.starts_at).getTime()
+  const end = occ.ends_at ? new Date(occ.ends_at).getTime() : start + 60 * 60_000
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return false
+  return nowMs >= start - preMs && nowMs <= end + postMs
+}
+
+/**
+ * IO: the class occurrence running at a location right now (the most
+ * recently-started live one), or null. Reads the spine — no live Glofox
+ * call. Used to stamp a HR session with the class it happened in.
+ *
+ * @param {object} db  service-role client
+ * @param {{ locationId: string, nowMs?: number }} opts
+ * @returns {Promise<null | { glofox_event_id: string, class_name: string|null }>}
+ */
+export async function resolveCurrentOccurrence(db, { locationId, nowMs = Date.now() } = {}) {
+  if (!db || !locationId) return null
+  const sinceIso = new Date(nowMs - 3 * 60 * 60_000).toISOString()
+  const untilIso = new Date(nowMs + OCC_PRE_MS).toISOString()
+  const { data } = await db
+    .from('class_occurrences')
+    .select('glofox_event_id, name, starts_at, ends_at')
+    .eq('location_id', locationId)
+    .gte('starts_at', sinceIso)
+    .lte('starts_at', untilIso)
+    .order('starts_at', { ascending: false })
+  for (const occ of data || []) {
+    if (occurrenceIsLive(occ, nowMs)) {
+      return { glofox_event_id: occ.glofox_event_id, class_name: occ.name || null }
+    }
+  }
+  return null
+}

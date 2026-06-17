@@ -201,6 +201,20 @@ describe('pairOverride', () => {
             update: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ error: null })) })),
           }
         }
+        if (table === 'class_occurrences') {
+          // No live class running — existing session returned unchanged.
+          return {
+            select: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                gte: vi.fn(() => ({
+                  lte: vi.fn(() => ({
+                    order: vi.fn(() => Promise.resolve({ data: [], error: null })),
+                  })),
+                })),
+              })),
+            })),
+          }
+        }
         if (table === 'strap_assignments') {
           return {
             insert: vi.fn((row) => {

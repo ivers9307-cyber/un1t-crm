@@ -3,6 +3,7 @@ import {
   toMillis,
   durationToMinutes,
   mapEventToOccurrence,
+  occurrenceIsLive,
   DEFAULT_CLASS_MINUTES,
 } from './class-occurrences'
 import {
@@ -76,6 +77,41 @@ describe('class-occurrences: mapEventToOccurrence', () => {
   it('reads capacity from an object shape', () => {
     const row = mapEventToOccurrence({ _id: 'e', time_start: startSec, size: { limit: 20 } }, loc)
     expect(row.capacity).toBe(20)
+  })
+})
+
+describe('class-occurrences: occurrenceIsLive (HR-CLASS-ALLOC.1)', () => {
+  // A 06:00–07:00 class. Default grace: 20 min before, 10 min after.
+  const occ = { starts_at: '2026-06-18T05:00:00Z', ends_at: '2026-06-18T06:00:00Z' }
+  const at = (iso) => Date.parse(iso)
+
+  it('is live mid-class', () => {
+    expect(occurrenceIsLive(occ, at('2026-06-18T05:30:00Z'))).toBe(true)
+  })
+  it('is live inside the pre-start grace window (15 min early)', () => {
+    expect(occurrenceIsLive(occ, at('2026-06-18T04:45:00Z'))).toBe(true)
+  })
+  it('is not live before the pre-start grace (25 min early)', () => {
+    expect(occurrenceIsLive(occ, at('2026-06-18T04:35:00Z'))).toBe(false)
+  })
+  it('is live inside the post-end grace window (5 min after)', () => {
+    expect(occurrenceIsLive(occ, at('2026-06-18T06:05:00Z'))).toBe(true)
+  })
+  it('is not live past the post-end grace (15 min after)', () => {
+    expect(occurrenceIsLive(occ, at('2026-06-18T06:15:00Z'))).toBe(false)
+  })
+  it('honours custom grace windows', () => {
+    expect(occurrenceIsLive(occ, at('2026-06-18T04:35:00Z'), { preMs: 30 * 60_000 })).toBe(true)
+  })
+  it('falls back to a 60-min duration when ends_at is missing', () => {
+    const noEnd = { starts_at: '2026-06-18T05:00:00Z' }
+    expect(occurrenceIsLive(noEnd, at('2026-06-18T05:55:00Z'))).toBe(true)
+    expect(occurrenceIsLive(noEnd, at('2026-06-18T06:15:00Z'))).toBe(false)
+  })
+  it('returns false for a malformed / empty occurrence', () => {
+    expect(occurrenceIsLive(null, at('2026-06-18T05:30:00Z'))).toBe(false)
+    expect(occurrenceIsLive({}, at('2026-06-18T05:30:00Z'))).toBe(false)
+    expect(occurrenceIsLive({ starts_at: 'nonsense' }, at('2026-06-18T05:30:00Z'))).toBe(false)
   })
 })
 
