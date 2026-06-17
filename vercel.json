@@ -102,7 +102,7 @@
     },
     {
       "path": "/api/cron/morning-briefing",
-      "schedule": "0 6 * * *"
+      "schedule": "0 6 * * 1"
     },
     {
       "path": "/api/cron/process-invoice-analysis",
