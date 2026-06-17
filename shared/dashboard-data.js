@@ -12,6 +12,8 @@
 // safe to import from Metro (React Native) and from server / client
 // React components.
 
+import { monthBounds, summariseShifts } from './roster-month.js'
+
 // ============================================================
 // Date helpers (shared across all three fetchers)
 // ============================================================
@@ -123,8 +125,10 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
 
   // 14-day window — this Monday → next Sunday — fetched as a single
   // query and split client-side. Cheaper than two queries.
-  const thisWeekStart = startOfWeek()
-  const thisWeekEnd = endOfWeek()
+  const today = new Date()
+  const todayIso = isoDate(today)
+  const thisWeekStart = startOfWeek(today)
+  const thisWeekEnd = endOfWeek(today)
   const nextWeekStart = new Date(thisWeekEnd); nextWeekStart.setDate(nextWeekStart.getDate() + 1)
   const nextWeekEnd = new Date(nextWeekStart); nextWeekEnd.setDate(nextWeekEnd.getDate() + 6); nextWeekEnd.setHours(23, 59, 59, 999)
 
@@ -133,7 +137,10 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
   const nextWeekStartIso = isoDate(nextWeekStart)
   const nextWeekEndIso = isoDate(nextWeekEnd)
 
-  const [shifts, swapsTargetingMe, myPendingTimeOff, myConvos] =
+  // Month bounds anchored on the same "today" used for week dates.
+  const { monthStartIso, monthEndIso } = monthBounds(todayIso)
+
+  const [shifts, monthShiftsResult, swapsTargetingMe, myPendingTimeOff, myConvos] =
     await Promise.all([
       // Cross-location query — filtered by profile_id only. Multi-
       // location staff see every shift they're assigned to, anywhere.
@@ -142,6 +149,10 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
       // RETIRE-SHIFTS-MIRROR.2 — reads shift_assignments+shift_blocks now;
       // shape (incl. derived `published`) is unchanged. Re-sorted below.
       fetchDashboardShifts(supabase, { profileId, startDate: thisWeekStartIso, endDate: nextWeekEndIso }),
+
+      // Month shifts for the calendar/agenda view (personal data is small —
+      // a second range call is fine; avoids coupling the 14-day window logic).
+      fetchDashboardShifts(supabase, { profileId, startDate: monthStartIso, endDate: monthEndIso }),
 
       supabase
         .from('shift_swap_requests')
@@ -166,6 +177,14 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
     ])
 
   if (shifts.error) return { success: false, error: shifts.error.message }
+
+  const monthShifts = (monthShiftsResult.data || []).slice().sort((a, b) => {
+    if (a.shift_date !== b.shift_date) return a.shift_date.localeCompare(b.shift_date)
+    const aStart = a.start_time_override || a.shift_templates?.start_time || ''
+    const bStart = b.start_time_override || b.shift_templates?.start_time || ''
+    return aStart.localeCompare(bStart)
+  })
+  const monthSummary = summariseShifts(monthShifts)
 
   // Sort by date then start time so "first shift of the day" is index [0].
   const sortedShifts = (shifts.data || []).slice().sort((a, b) => {
@@ -200,6 +219,12 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
       nextWeekShifts,
       nextWeekStartIso,
       nextWeekEndIso,
+      // Month roster (calendar / agenda view)
+      monthShifts,
+      monthStartIso,
+      monthEndIso,
+      shiftsThisMonth: monthSummary.count,
+      hoursThisMonth: monthSummary.hours,
       // Other
       pendingSwapsForMe: swapsTargetingMe.data || [],
       myPendingTimeOff: myPendingTimeOff.data || [],
