@@ -1,19 +1,20 @@
 'use client'
-// My requests — live list of the coach's own pending swap + time-off
+// My requests — live list of the coach's own posted swap + time-off
 // requests with inline Cancel actions. Replaces the two read-only
 // ListCards ("Swap requests for you" + "Your time-off requests") that
 // previously deep-linked to /schedule.
 //
 // Props (initial server data, refreshed via router.refresh() after mutations):
-//   postedSwaps  — swaps the user posted that are still pending (myPostedSwaps)
-//   swapsForMe   — swaps offered to this coach (pendingSwapsForMe, read-only)
+//   postedSwaps  — swaps the user posted that are still live (myPostedSwaps:
+//                  pending OR awaiting_approval once a colleague claims it)
 //   timeOff      — user's own pending time-off rows (myPendingTimeOff)
+//
+// Swaps OFFERED to this coach (accept/decline/claim) are handled by the
+// sibling <SwapActions> component (CT-P3b) — not here.
 //
 // Cancel calls:
 //   Swap   → PUT /api/schedule/swaps/[id]    { status: 'cancelled' }
 //   Time-off → PUT /api/schedule/time-off/[id] { status: 'cancelled' }
-//
-// No Accept button — that's Phase 3.
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -37,8 +38,10 @@ function StatusChip({ status }) {
       </span>
     )
   }
-  // awaiting_manager is amber; default (pending) is neutral slate
-  if (status === 'awaiting_manager') {
+  // awaiting_manager / awaiting_approval are amber (the backend uses
+  // 'awaiting_approval'; the older 'awaiting_manager' string is kept for
+  // back-compat). Default (pending) is neutral slate.
+  if (status === 'awaiting_manager' || status === 'awaiting_approval') {
     return (
       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-700">
         Awaiting manager
@@ -87,13 +90,13 @@ function RequestRow({ icon, title, subtitle, status, onCancel, cancelling, isLas
 }
 
 // ── main component ────────────────────────────────────────────────────────
-export default function MyRequests({ postedSwaps = [], swapsForMe = [], timeOff = [] }) {
+export default function MyRequests({ postedSwaps = [], timeOff = [] }) {
   const router = useRouter()
   // Track which row ids are mid-cancel-request to disable the button.
   const [cancellingSwap, setCancellingSwap] = useState(null)
   const [cancellingTimeOff, setCancellingTimeOff] = useState(null)
 
-  const totalCount = postedSwaps.length + swapsForMe.length + timeOff.length
+  const totalCount = postedSwaps.length + timeOff.length
   const isEmpty = totalCount === 0
 
   async function handleCancelSwap(id) {
@@ -159,34 +162,12 @@ export default function MyRequests({ postedSwaps = [], swapsForMe = [], timeOff 
       subtitle: shiftDate
         ? `Posted for ${shiftDate}`
         : `Posted ${new Date(s.created_at).toLocaleDateString()}`,
-      status: 'pending',
+      // Render the real status so an awaiting_approval posted swap (a
+      // colleague has claimed it) shows the amber chip. The requester can
+      // still cancel a claimed swap — the backend allows it.
+      status: s.status || 'pending',
       onCancel: () => handleCancelSwap(s.id),
       cancelling: cancellingSwap === s.id,
-    })
-  }
-
-  for (const s of swapsForMe) {
-    const shiftName =
-      s.requester_shift?.shift_templates?.name ||
-      s.requester_shift?.shift_blocks?.shift_templates?.name ||
-      'a shift'
-    const shiftDate =
-      s.requester_shift?.shift_blocks?.block_date ||
-      s.requester_shift?.shift_date ||
-      null
-    rows.push({
-      key: `swap-forme-${s.id}`,
-      icon: <ArrowLeftRight size={16} />,
-      title: `${s.requester?.full_name || 'Someone'} wants you to take a shift`,
-      subtitle: shiftName
-        ? `${shiftName}${shiftDate ? ` on ${shiftDate}` : ''}`
-        : shiftDate
-          ? `On ${shiftDate}`
-          : `Posted ${new Date(s.created_at).toLocaleDateString()}`,
-      // Awaiting manager — Phase 3 adds self-accept, no Cancel here (not the requester)
-      status: 'awaiting_manager',
-      onCancel: null,
-      cancelling: false,
     })
   }
 
