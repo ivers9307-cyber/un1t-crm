@@ -1,18 +1,29 @@
 'use client'
 
 // CLASS-CLIMATE.1 — the dedicated card for the class-climate automation.
-// Toggle + config (devices, offsets, optional class filter) + two test
-// affordances: "Run schedule check now" (the real climate logic, on
-// demand) and "Test AC now" (turn the chosen units on immediately via the
-// existing AC route, to verify the hardware wiring without waiting for a
-// class). All config lives in location_automations.config.
+// Toggle + config (devices, offsets, optional class filter) + a view of
+// the synced Glofox schedule (the spine) so the operator can SEE what the
+// automation runs off + two test affordances: "Run schedule check now"
+// (the real climate logic, on demand) and "Test AC now" (turn the chosen
+// units on immediately via the existing AC route). All config lives in
+// location_automations.config.
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Loader2, Snowflake, AlertCircle, Play, Zap } from 'lucide-react'
+import { Loader2, Snowflake, AlertCircle, Play, Zap, CalendarClock } from 'lucide-react'
 
 const KEY = 'class_climate'
+
+function fmtDublin(iso) {
+  if (!iso) return ''
+  try {
+    return new Date(iso).toLocaleString('en-IE', {
+      timeZone: 'Europe/Dublin', weekday: 'short', day: '2-digit', month: 'short',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    })
+  } catch { return iso }
+}
 
 export default function ClassClimateCard({ locationId, glofoxConnected, devices, initialEnabled, initialConfig }) {
   const router = useRouter()
@@ -26,10 +37,27 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
   const [run, setRun] = useState(null) // { phase, planned, actions, errors, message, tests }
+  const [schedule, setSchedule] = useState([])
+  const [schedLoading, setSchedLoading] = useState(false)
+
+  const loadSchedule = useCallback(async () => {
+    if (!locationId) return
+    setSchedLoading(true)
+    try {
+      const res = await fetch(`/api/automations/${KEY}/schedule?location_id=${encodeURIComponent(locationId)}`)
+      const j = await res.json()
+      if (res.ok && j.success !== false) setSchedule(j.classes || [])
+    } catch { /* leave as-is */ } finally { setSchedLoading(false) }
+  }, [locationId])
+
+  useEffect(() => { loadSchedule() }, [loadSchedule])
 
   const enabledDevices = (devices || []).filter((d) => d.enabled)
   const hasDevices = enabledDevices.length > 0
   const canEnable = glofoxConnected && hasDevices && deviceIds.length > 0
+
+  const filters = filterText.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
+  const classMatches = (name) => filters.length === 0 || filters.some((f) => String(name || '').toLowerCase().includes(f))
 
   function buildConfig() {
     return {
@@ -70,6 +98,7 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
       const j = await res.json()
       if (!res.ok || j.success === false) throw new Error(j.error || 'Run failed')
       setRun({ phase: 'done', ...j })
+      loadSchedule()
     } catch (e) { setRun({ phase: 'error', message: e.message }) }
   }
 
@@ -134,6 +163,40 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
         )}
       </div>
 
+      {/* Synced schedule (the spine) */}
+      {glofoxConnected && (
+        <div className="mt-4 border-t border-un1t-gray/60 pt-3">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-semibold text-un1t-white inline-flex items-center gap-1">
+              <CalendarClock size={13} /> Upcoming classes (from Glofox)
+            </p>
+            <button type="button" onClick={loadSchedule} className="text-[11px] underline text-un1t-light">
+              {schedLoading ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
+          {schedule.length === 0 && !schedLoading && (
+            <p className="text-[11px] text-un1t-light">No classes synced yet — the schedule refreshes every 15&nbsp;min, or hit “Run schedule check now” below.</p>
+          )}
+          {schedule.length > 0 && (
+            <ul className="space-y-0.5 max-h-64 overflow-y-auto pr-1">
+              {schedule.map((c) => {
+                const matches = classMatches(c.name)
+                return (
+                  <li key={c.glofox_event_id} className={`flex items-center gap-3 text-[11px] rounded px-2 py-1 ${matches ? 'bg-blue-500/5' : 'opacity-40'}`}>
+                    <span className="text-un1t-light tabular-nums shrink-0 w-36">{fmtDublin(c.starts_at)}</span>
+                    <span className="text-un1t-white truncate flex-1">{c.name || 'Class'}</span>
+                    {typeof c.capacity === 'number' && <span className="text-un1t-light shrink-0">cap {c.capacity}</span>}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+          <p className="mt-1.5 text-[10px] text-un1t-light">
+            Times in Dublin. {filters.length ? 'Highlighted classes are the ones this automation will run for.' : 'No filter set — it runs for every class.'}
+          </p>
+        </div>
+      )}
+
       {/* Config */}
       {hasDevices && (
         <div className="mt-4 border-t border-un1t-gray/60 pt-3 space-y-3">
@@ -170,7 +233,7 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
             <label className="text-xs text-un1t-light block">
               Only these classes (optional, comma-separated — leave blank for all)
               <input type="text" value={filterText} onChange={(e) => setFilterText(e.target.value)}
-                placeholder="e.g. Strength, Conditioning"
+                placeholder="e.g. DR1VE, TEMPO"
                 className="mt-1 w-full rounded border border-un1t-gray bg-un1t-black px-2 py-1 text-un1t-white" />
             </label>
           </div>
