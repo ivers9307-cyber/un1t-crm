@@ -18,6 +18,13 @@ export const AUTOMATIONS = Object.freeze([
     supportsBackfill: true,
     reviewBase: '/admin/glofox-import',
   },
+  {
+    key: 'class_climate',
+    label: 'Class climate control',
+    description: 'Turn the studio AC on before each Glofox class and off after — automatically, on the class schedule.',
+    supportsBackfill: false,
+    reviewBase: '/automations',
+  },
 ])
 
 export function getAutomation(key) {
@@ -36,14 +43,22 @@ export function glofoxConnected(location) {
 }
 
 /**
- * Pure status summary for a card. Currently glofox-specific (the only
- * automation); when a second automation arrives, branch on key.
+ * Pure status summary for a card. Branch on key as automations are added.
  * @returns {{ available: boolean, trialConfigured: boolean }}
  */
 export function automationStatus(key, location) {
-  if (key !== 'glofox_lead_provisioning') return { available: false, trialConfigured: false }
-  const g = location?.settings?.glofox || {}
-  const available = glofoxConnected(location)
-  const trialConfigured = Boolean(g.trial_membership_id && g.trial_plan_code)
-  return { available, trialConfigured }
+  if (key === 'glofox_lead_provisioning') {
+    const g = location?.settings?.glofox || {}
+    return {
+      available: glofoxConnected(location),
+      trialConfigured: Boolean(g.trial_membership_id && g.trial_plan_code),
+    }
+  }
+  if (key === 'class_climate') {
+    // Needs the Glofox schedule as its trigger source. AC-device presence
+    // is surfaced in the dedicated card (which has the device list); here
+    // we only gate on the schedule source being connected.
+    return { available: glofoxConnected(location), trialConfigured: false }
+  }
+  return { available: false, trialConfigured: false }
 }

@@ -127,6 +127,14 @@
     {
       "path": "/api/cron/agent-followups",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/sync-class-occurrences",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/class-climate",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
