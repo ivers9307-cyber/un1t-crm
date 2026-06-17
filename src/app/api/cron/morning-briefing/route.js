@@ -1,6 +1,6 @@
 // BRIEFING.1 — /api/cron/morning-briefing
 //
-// Daily 06:00 UTC (07:00 Dublin in summer, 06:00 in winter — Vercel
+// Mondays 06:00 UTC (07:00 Dublin in summer, 06:00 in winter — Vercel
 // cron is UTC-only; see vercel.json). Per active location: builds the
 // same "Needs attention" feed the Today dashboard shows (location
 // level — approvals row omitted, see fetchLocationTodayFeed), renders
