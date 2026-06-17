@@ -84,6 +84,26 @@ export function respondToSwap(id, status, reviewNote, locationId) {
   })
 }
 
+// CT-P3b — swaps targeted at / claimed by the caller (for_me=1). Each row
+// carries the requester NAME + shift via the service-role profiles embed, so
+// the actionable "Swaps offered to you" list works on mobile (the authenticated
+// client can't embed profiles itself).
+export function getSwapsForMe({ locationId }) {
+  const qs = new URLSearchParams()
+  if (locationId) qs.set('location_id', locationId)
+  qs.set('for_me', '1')
+  return api(`/api/schedule/swaps?${qs.toString()}`, { locationId })
+}
+
+// CT-P3b — the open swap pool the caller may claim (open=1): unclaimed,
+// pending, not their own. Same name-bearing service-role shape.
+export function getOpenSwaps({ locationId }) {
+  const qs = new URLSearchParams()
+  if (locationId) qs.set('location_id', locationId)
+  qs.set('open', '1')
+  return api(`/api/schedule/swaps?${qs.toString()}`, { locationId })
+}
+
 /**
  * Set / clear / change a partial-shift override on an assignment
  * (mig 099/100). Pass null to any time field to clear that override

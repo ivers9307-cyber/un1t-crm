@@ -23,7 +23,11 @@ import {
 import {
   createSwapRequest, adjustShiftAssignment,
   cancelSwapRequest, cancelTimeOffRequest,
+  getSwapsForMe, getOpenSwaps, getTeamShifts, respondToSwap,
+  getLocationStaff,
 } from '../../lib/schedule-api'
+// CT-P3b — reuse the schedule Manage-mode colleague picker for targeted swaps.
+import CoachPickerSheet from '../schedule/CoachPickerSheet'
 // CHECKLIST.2 — top-of-Today card showing the coach's checklist
 // when they're on shift today. Self-contained: renders nothing
 // when there's no instance to surface.
@@ -376,6 +380,19 @@ export default function PersonalDashboard({ refreshKey }) {
   // AdjustSheet state — opened by tapping a shift then choosing "Adjust time".
   const [adjustingShift, setAdjustingShift] = useState(null)
 
+  // CT-P3b — actionable swap surfaces fed by the service-role route (names
+  // ride along). offered = targeted-at/claimed-by me; openPool = claimable
+  // pool; onToday = other coaches on shift today. Fetched separately from the
+  // shared dashboard data (which can't embed profiles on mobile).
+  const [offered, setOffered] = useState([])
+  const [openPool, setOpenPool] = useState([])
+  const [onToday, setOnToday] = useState([])
+  const [swapBusy, setSwapBusy] = useState(null) // `${id}:${verb}` while mutating
+  // Targeted-swap colleague picker state (reuses CoachPickerSheet).
+  const [swapPickerShift, setSwapPickerShift] = useState(null)
+  const [swapStaff, setSwapStaff] = useState(null) // null = not loaded
+  const [swapStaffLoading, setSwapStaffLoading] = useState(false)
+
   const load = useCallback(async () => {
     if (!profile) return
     setError(null)
@@ -391,16 +408,52 @@ export default function PersonalDashboard({ refreshKey }) {
     }
   }, [profile, activeLocation])
 
+  // Swap lists (offered + open pool). Best-effort — failures leave the lists
+  // empty rather than blocking the roster.
+  const loadSwaps = useCallback(async () => {
+    const locationId = activeLocation?.id
+    if (!locationId) { setOffered([]); setOpenPool([]); return }
+    try {
+      const [forMe, open] = await Promise.all([
+        getSwapsForMe({ locationId }),
+        getOpenSwaps({ locationId }),
+      ])
+      setOffered(forMe.success ? (forMe.data || []) : [])
+      setOpenPool(open.success ? (open.data || []) : [])
+    } catch {
+      setOffered([]); setOpenPool([])
+    }
+  }, [activeLocation])
+
+  // "On with you today" — other coaches working today (exclude self).
+  const loadOnToday = useCallback(async () => {
+    const locationId = activeLocation?.id
+    if (!locationId || !profile) { setOnToday([]); return }
+    const today = isoDate(new Date())
+    try {
+      const res = await getTeamShifts({ locationId, startDate: today, endDate: today })
+      const others = (res.success ? (res.data || []) : [])
+        .filter((s) => s.profile_id && s.profile_id !== profile.id)
+      setOnToday(others)
+    } catch {
+      setOnToday([])
+    }
+  }, [activeLocation, profile])
+
   useEffect(() => {
     setLoading(true)
     load().finally(() => setLoading(false))
   }, [load, refreshKey])
 
+  useEffect(() => { loadSwaps(); loadOnToday() }, [loadSwaps, loadOnToday, refreshKey])
+
   // Re-fetch when the Home tab regains focus so the roster + KPIs reflect
   // changes made elsewhere (or a "View as user" switch) without a manual
   // pull-to-refresh. Silent — keeps the current data on screen until the
   // new data lands.
-  useFocusEffect(useCallback(() => { load() }, [load]))
+  useFocusEffect(useCallback(() => {
+    load(); loadSwaps(); loadOnToday()
+  }, [load, loadSwaps, loadOnToday]))
 
   if (loading) {
     return (
@@ -442,7 +495,7 @@ export default function PersonalDashboard({ refreshKey }) {
     nextWeekShifts, nextWeekStartIso, nextWeekEndIso,
     shiftsThisWeek, hoursThisWeek,
     monthShifts, monthStartIso, monthEndIso,
-    pendingSwapsForMe, myPostedSwaps, myPendingTimeOff, unreadInbox,
+    myPostedSwaps, myPendingTimeOff, unreadInbox,
   } = data
 
   // Shift-tap action sheet — fires an Alert with options for the tapped shift.
@@ -466,11 +519,17 @@ export default function PersonalDashboard({ refreshKey }) {
         })
         if (res.success) {
           Alert.alert('Posted', 'Managers have been notified.')
-          load()
+          load(); loadSwaps()
         } else {
           Alert.alert("Couldn't post", res.error || 'Unknown error')
         }
       },
+    })
+
+    // CT-P3b — targeted swap: offer this shift to one chosen colleague.
+    options.push({
+      text: 'Swap with a specific coach…',
+      onPress: () => openSwapPicker(shift),
     })
 
     // Adjust time
@@ -487,6 +546,65 @@ export default function PersonalDashboard({ refreshKey }) {
       options,
     )
   }
+
+  // CT-P3b — drive an offered/open swap through the lifecycle, then refetch.
+  //   accept / claim → 'awaiting_approval'   decline → 'rejected'
+  //   withdraw       → 'pending'
+  async function mutateSwap(id, status, verb) {
+    if (swapBusy) return
+    setSwapBusy(`${id}:${verb}`)
+    try {
+      const res = await respondToSwap(id, status, null, activeLocation?.id)
+      if (res.success) {
+        await loadSwaps()
+        load()
+      } else {
+        Alert.alert(`Couldn't ${verb}`, res.error || 'Unknown error')
+      }
+    } finally {
+      setSwapBusy(null)
+    }
+  }
+
+  // Open the colleague picker for a targeted swap. Reuses CoachPickerSheet by
+  // synthesising a block-like object: shift_assignments carries the current
+  // user so the picker excludes them; shift_templates feeds the sheet title.
+  async function openSwapPicker(shift) {
+    setSwapPickerShift(shift)
+    if (swapStaff === null && !swapStaffLoading) {
+      setSwapStaffLoading(true)
+      const res = await getLocationStaff({ locationId: activeLocation?.id })
+      setSwapStaffLoading(false)
+      setSwapStaff(res.success ? (res.data || []) : [])
+      if (!res.success) Alert.alert('Could not load staff', res.error || 'Unknown error')
+    }
+  }
+
+  async function pickSwapCoach(coach) {
+    const shift = swapPickerShift
+    setSwapPickerShift(null)
+    if (!shift) return
+    const res = await createSwapRequest({
+      requesterShiftId: shift.id,
+      targetId: coach.id,
+      locationId: activeLocation?.id,
+    })
+    if (res.success) {
+      Alert.alert('Swap offered', `${coach.full_name} has been asked to take this shift.`)
+      load(); loadSwaps()
+    } else {
+      Alert.alert("Couldn't offer swap", res.error || 'Unknown error')
+    }
+  }
+
+  // Block-like shape for CoachPickerSheet (targeted swap). Excludes self via
+  // shift_assignments; title comes from the shift's template.
+  const swapPickerBlock = swapPickerShift
+    ? {
+        shift_templates: swapPickerShift.shift_templates,
+        shift_assignments: profile ? [{ profile_id: profile.id }] : [],
+      }
+    : null
 
   // Build the month matrix once (pure — fast enough to compute on render)
   const todayIso = (() => {
@@ -555,6 +673,154 @@ export default function PersonalDashboard({ refreshKey }) {
         <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
       </Pressable>
 
+      {/* CT-P3b — Swaps offered to you. Pending → Accept / Decline; once
+          claimed (awaiting_approval) → Awaiting-manager chip + Withdraw.
+          Name + shift ride along from the service-role route. */}
+      {offered.length > 0 && (
+        <>
+          <SectionHeader title="Swaps offered to you" count={offered.length} />
+          <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden mb-3">
+            {offered.map((s, i) => {
+              const isLast = i === offered.length - 1
+              const name = s.requester?.full_name || 'A colleague'
+              const tpl = s.requester_shift?.shift_templates?.name || 'a shift'
+              const date = s.requester_shift?.shift_date
+              const awaiting = s.status === 'awaiting_approval'
+              return (
+                <View
+                  key={s.id}
+                  className={`flex-row items-center px-4 py-3 ${!isLast ? 'border-b border-un1t-border' : ''}`}
+                >
+                  <View className="w-8 h-8 rounded-full bg-un1t-border/40 items-center justify-center mr-3">
+                    <Ionicons name="swap-horizontal" size={16} color="#111827" />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>
+                      {`${name} wants you to take ${tpl}`}
+                    </Text>
+                    {date ? (
+                      <Text className="text-xs text-un1t-subtle" numberOfLines={1}>{date}</Text>
+                    ) : null}
+                  </View>
+                  {awaiting ? (
+                    <View className="flex-row items-center">
+                      <View className="ml-2 px-2 py-0.5 rounded-full bg-amber-500/20 mr-2">
+                        <Text className="text-[10px] font-semibold text-amber-700">Awaiting manager</Text>
+                      </View>
+                      <Pressable
+                        disabled={!!swapBusy}
+                        onPress={() => mutateSwap(s.id, 'pending', 'withdraw')}
+                        className="px-2.5 py-1 rounded-lg bg-un1t-border/60 active:opacity-70"
+                      >
+                        <Text className="text-xs font-semibold text-un1t-text">
+                          {swapBusy === `${s.id}:withdraw` ? '…' : 'Withdraw'}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <View className="flex-row items-center">
+                      <Pressable
+                        disabled={!!swapBusy}
+                        onPress={() => mutateSwap(s.id, 'awaiting_approval', 'accept')}
+                        className="px-2.5 py-1 rounded-lg bg-un1t-text active:opacity-70 mr-2"
+                      >
+                        <Text className="text-xs font-semibold text-un1t-bg">
+                          {swapBusy === `${s.id}:accept` ? '…' : 'Accept'}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        disabled={!!swapBusy}
+                        onPress={() => mutateSwap(s.id, 'rejected', 'decline')}
+                        className="px-2.5 py-1 rounded-lg bg-red-500/10 active:opacity-70"
+                      >
+                        <Text className="text-xs font-semibold text-red-700">
+                          {swapBusy === `${s.id}:decline` ? '…' : 'Decline'}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  )}
+                </View>
+              )
+            })}
+          </View>
+        </>
+      )}
+
+      {/* CT-P3b — Open swaps you can take (the unclaimed pool). Claim → the
+          swap becomes awaiting_approval, pending manager finalisation. */}
+      {openPool.length > 0 && (
+        <>
+          <SectionHeader title="Open swaps you can take" count={openPool.length} />
+          <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden mb-3">
+            {openPool.map((s, i) => {
+              const isLast = i === openPool.length - 1
+              const name = s.requester?.full_name || 'A colleague'
+              const tpl = s.requester_shift?.shift_templates?.name || 'Shift'
+              const date = s.requester_shift?.shift_date
+              return (
+                <View
+                  key={s.id}
+                  className={`flex-row items-center px-4 py-3 ${!isLast ? 'border-b border-un1t-border' : ''}`}
+                >
+                  <View className="w-8 h-8 rounded-full bg-un1t-border/40 items-center justify-center mr-3">
+                    <Ionicons name="file-tray-outline" size={16} color="#111827" />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>
+                      {`${name} · ${tpl}`}
+                    </Text>
+                    {date ? (
+                      <Text className="text-xs text-un1t-subtle" numberOfLines={1}>{date}</Text>
+                    ) : null}
+                  </View>
+                  <Pressable
+                    disabled={!!swapBusy}
+                    onPress={() => mutateSwap(s.id, 'awaiting_approval', 'claim')}
+                    className="px-2.5 py-1 rounded-lg bg-un1t-text active:opacity-70"
+                  >
+                    <Text className="text-xs font-semibold text-un1t-bg">
+                      {swapBusy === `${s.id}:claim` ? '…' : 'Claim'}
+                    </Text>
+                  </Pressable>
+                </View>
+              )
+            })}
+          </View>
+        </>
+      )}
+
+      {/* CT-P3b — On with you today (read-only). Other coaches on shift today,
+          with their shift time. Names come from the service-role shifts route. */}
+      {onToday.length > 0 && (
+        <>
+          <SectionHeader title="On with you today" count={onToday.length} />
+          <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden mb-3">
+            {onToday.map((s, i) => {
+              const isLast = i === onToday.length - 1
+              const name = s.profiles?.full_name || 'Coach'
+              const tpl = s.shift_templates?.name
+              const subtitle = [tpl, shiftTime(s)].filter(Boolean).join(' · ')
+              return (
+                <View
+                  key={s.id}
+                  className={`flex-row items-center px-4 py-3 ${!isLast ? 'border-b border-un1t-border' : ''}`}
+                >
+                  <View className="w-8 h-8 rounded-full bg-un1t-border/40 items-center justify-center mr-3">
+                    <Ionicons name="people-outline" size={16} color="#111827" />
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>{name}</Text>
+                    {subtitle ? (
+                      <Text className="text-xs text-un1t-subtle" numberOfLines={1}>{subtitle}</Text>
+                    ) : null}
+                  </View>
+                </View>
+              )
+            })}
+          </View>
+        </>
+      )}
+
       {/* Top KPIs */}
       <KpiRow>
         <KpiCard label="This week" value={`${hoursThisWeek}h`} sublabel={`${shiftsThisWeek} shift${shiftsThisWeek === 1 ? '' : 's'}`} />
@@ -567,20 +833,19 @@ export default function PersonalDashboard({ refreshKey }) {
         />
       </KpiRow>
 
-      {/* My requests — live section replacing the two read-only ListCards.
-          Three sub-sections:
-          1. Swaps I posted (myPostedSwaps) — cancellable.
-          2. Swaps offered to me (pendingSwapsForMe) — read-only "Awaiting manager"
-             (self-accept is Phase 3, no Accept button here).
-          3. My pending time-off (myPendingTimeOff) — cancellable. */}
+      {/* My requests — live section. Two sub-sections:
+          1. Swaps I posted (myPostedSwaps) — cancellable; shows real status
+             (pending OR awaiting_approval once someone has taken it).
+          2. My pending time-off (myPendingTimeOff) — cancellable.
+          Swaps offered TO me moved to the "Swaps offered to you" surface above
+          (CT-P3b — that list is route-fed so it carries the requester name). */}
       <SectionHeader
         title="My requests"
-        count={(myPostedSwaps?.length || 0) + (pendingSwapsForMe?.length || 0) + (myPendingTimeOff?.length || 0)}
+        count={(myPostedSwaps?.length || 0) + (myPendingTimeOff?.length || 0)}
       />
 
-      {/* Empty state when all three request lists are empty */}
+      {/* Empty state when both request lists are empty */}
       {(myPostedSwaps || []).length === 0 &&
-        (pendingSwapsForMe || []).length === 0 &&
         (myPendingTimeOff || []).length === 0 && (
         <ListCard empty emptyText="No pending requests." />
       )}
@@ -589,12 +854,15 @@ export default function PersonalDashboard({ refreshKey }) {
       {(myPostedSwaps || []).length > 0 && (
         <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden mb-3">
           {(myPostedSwaps || []).map((s, i) => {
-            const shiftName = s.requester_shift?.shift_templates?.name
+            const shiftName = s.requester_shift?.shift_blocks?.shift_templates?.name
             const shiftDate = s.requester_shift?.shift_blocks?.block_date
             const subtitle = shiftName && shiftDate
               ? `${shiftName} on ${shiftDate}`
               : `Posted ${new Date(s.created_at).toLocaleDateString()}`
             const isLast = i === (myPostedSwaps || []).length - 1
+            // CT-P3b — reflect the real status. awaiting_approval = a coach has
+            // taken it and it's with a manager; pending = still open.
+            const awaiting = s.status === 'awaiting_approval'
             return (
               <View
                 key={s.id}
@@ -607,8 +875,10 @@ export default function PersonalDashboard({ refreshKey }) {
                   <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>Swap posted</Text>
                   <Text className="text-xs text-un1t-subtle" numberOfLines={1}>{subtitle}</Text>
                 </View>
-                <View className="ml-2 px-2 py-0.5 rounded-full bg-un1t-border/60 mr-2">
-                  <Text className="text-[10px] font-semibold text-un1t-subtle">Pending</Text>
+                <View className={`ml-2 px-2 py-0.5 rounded-full mr-2 ${awaiting ? 'bg-amber-500/20' : 'bg-un1t-border/60'}`}>
+                  <Text className={`text-[10px] font-semibold ${awaiting ? 'text-amber-700' : 'text-un1t-subtle'}`}>
+                    {awaiting ? 'Awaiting manager' : 'Pending'}
+                  </Text>
                 </View>
                 <Pressable
                   onPress={() => {
@@ -619,7 +889,7 @@ export default function PersonalDashboard({ refreshKey }) {
                         style: 'destructive',
                         onPress: async () => {
                           const res = await cancelSwapRequest(s.id, activeLocation?.id)
-                          if (res.success) load()
+                          if (res.success) { load(); loadSwaps() }
                           else Alert.alert("Couldn't cancel", res.error || 'Unknown error')
                         },
                       },
@@ -629,38 +899,6 @@ export default function PersonalDashboard({ refreshKey }) {
                 >
                   <Text className="text-xs font-semibold text-red-700">Cancel</Text>
                 </Pressable>
-              </View>
-            )
-          })}
-        </View>
-      )}
-
-      {/* Swaps offered to me — read-only, no Accept (Phase 3) */}
-      {(pendingSwapsForMe || []).length > 0 && (
-        <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden mb-3">
-          {(pendingSwapsForMe || []).map((s, i) => {
-            const isLast = i === (pendingSwapsForMe || []).length - 1
-            return (
-              <View
-                key={s.id}
-                className={`flex-row items-center px-4 py-3 ${!isLast ? 'border-b border-un1t-border' : ''}`}
-              >
-                <View className="w-8 h-8 rounded-full bg-un1t-border/40 items-center justify-center mr-3">
-                  <Ionicons name="swap-horizontal" size={16} color="#111827" />
-                </View>
-                <View className="flex-1">
-                  <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>
-                    {s.requester?.full_name || 'Someone'} wants you to take a shift
-                  </Text>
-                  <Text className="text-xs text-un1t-subtle" numberOfLines={1}>
-                    {s.requester_shift?.shift_templates?.name
-                      ? `${s.requester_shift.shift_templates.name} on ${s.requester_shift.shift_date}`
-                      : `Posted ${new Date(s.created_at).toLocaleDateString()}`}
-                  </Text>
-                </View>
-                <View className="ml-2 px-2 py-0.5 rounded-full bg-amber-500/20">
-                  <Text className="text-[10px] font-semibold text-amber-700">Awaiting manager</Text>
-                </View>
               </View>
             )
           })}
@@ -722,6 +960,19 @@ export default function PersonalDashboard({ refreshKey }) {
         onClose={() => setAdjustingShift(null)}
         onSaved={() => { setAdjustingShift(null); load() }}
         locationId={activeLocation?.id}
+      />
+
+      {/* CT-P3b — targeted-swap colleague picker (reused from Manage mode).
+          The synthesised block excludes the current user and titles the sheet
+          with the shift template. */}
+      <CoachPickerSheet
+        visible={!!swapPickerShift}
+        block={swapPickerBlock}
+        locationId={activeLocation?.id}
+        staff={swapStaff}
+        loading={swapStaffLoading}
+        onPick={pickSwapCoach}
+        onClose={() => setSwapPickerShift(null)}
       />
     </View>
   )
