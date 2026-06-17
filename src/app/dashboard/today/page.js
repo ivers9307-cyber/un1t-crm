@@ -30,6 +30,7 @@ import {
 } from '@/components/dashboard/Cards'
 import MonthRoster from '@/components/dashboard/MonthRoster'
 import MyRequests from '@/components/dashboard/MyRequests'
+import SwapActions from '@/components/dashboard/SwapActions'
 
 // Icon per triage row id (assembleTodayFeed in shared/today-feed.js
 // owns the ids). Kept here — icons are a web rendering concern.
@@ -85,7 +86,7 @@ export default async function PersonalDashboardPage() {
     weekShifts, weekStartIso, weekEndIso,
     nextWeekShifts, nextWeekStartIso, nextWeekEndIso,
     shiftsThisWeek, hoursThisWeek,
-    myPostedSwaps, pendingSwapsForMe, myPendingTimeOff, unreadInbox,
+    myPostedSwaps, myPendingTimeOff, unreadInbox,
     monthShifts, monthStartIso, monthEndIso,
     shiftsThisMonth, hoursThisMonth,
   } = res.data
@@ -250,9 +251,17 @@ export default async function PersonalDashboardPage() {
         </Link>
       )}
 
+      {/* CT-P3b — coach self-service swap surfaces: accept/decline swaps
+          offered to you, claim open-pool swaps, and "on with you today".
+          Renders nothing when all three lists are empty. */}
+      <SwapActions
+        locationId={user.activeLocation?.id}
+        todayIso={isoDate(new Date())}
+        currentProfileId={user.id}
+      />
+
       <MyRequests
         postedSwaps={myPostedSwaps || []}
-        swapsForMe={pendingSwapsForMe}
         timeOff={myPendingTimeOff}
       />
     </>

@@ -103,7 +103,7 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
   const effectiveEnd   = shift.end_time_override   || shift.shift_templates?.end_time   || ''
   const hasOverride    = !!(shift.start_time_override || shift.end_time_override)
 
-  // Which sub-panel is open: null | 'swap' | 'adjust'
+  // Which sub-panel is open: null | 'swap' | 'adjust' | 'target'
   const [panel, setPanel]       = useState(null)
   const [saving, setSaving]     = useState(false)
   const [error, setError]       = useState(null)
@@ -113,6 +113,11 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
   const [adjStart, setAdjStart] = useState(toTimeInput(effectiveStart))
   const [adjEnd, setAdjEnd]     = useState(toTimeInput(effectiveEnd))
   const [adjReason, setAdjReason] = useState('')
+
+  // Targeted-swap colleague picker state
+  const [colleagues, setColleagues] = useState(null)   // null = not loaded yet
+  const [loadingColleagues, setLoadingColleagues] = useState(false)
+  const [colleagueSearch, setColleagueSearch] = useState('')
 
   // ── Post for swap ──────────────────────────────────────────────────────────
   async function handlePostSwap() {
@@ -131,6 +136,56 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
         return
       }
       setSuccess('Posted for swap — your manager will confirm it.')
+      setSaving(false)
+      onDone?.()
+    } catch {
+      setError('Network error. Please try again.')
+      setSaving(false)
+    }
+  }
+
+  // ── Swap with a specific coach — open the picker + lazy-load colleagues ──────
+  async function openTargetPicker() {
+    setPanel('target')
+    setError(null)
+    if (colleagues !== null || loadingColleagues) return
+    setLoadingColleagues(true)
+    try {
+      const res = await fetch(`/api/staff?location_id=${encodeURIComponent(shift.location_id)}`)
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        setError(data.error || 'Could not load colleagues. Please try again.')
+        setColleagues([])
+      } else {
+        // Exclude the shift's own coach (the current user posts the swap).
+        const list = (data.data || []).filter((p) => p.id && p.id !== shift.profile_id)
+        setColleagues(list)
+      }
+    } catch {
+      setError('Network error loading colleagues.')
+      setColleagues([])
+    } finally {
+      setLoadingColleagues(false)
+    }
+  }
+
+  async function handlePostTargetedSwap(coachId) {
+    if (saving) return
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/schedule/swaps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requester_shift_id: shift.id, target_id: coachId }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        setError(data.error || 'Could not send swap request. Please try again.')
+        setSaving(false)
+        return
+      }
+      setSuccess('Swap request sent — your colleague can accept it, then your manager confirms.')
       setSaving(false)
       onDone?.()
     } catch {
@@ -240,7 +295,15 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
               className="w-full text-left px-3 py-2.5 rounded-lg border border-un1t-border bg-un1t-surface hover:bg-un1t-dark text-sm text-un1t-text transition-colors"
             >
               <span className="font-medium">Post for swap</span>
-              <span className="block text-xs text-un1t-subtle mt-0.5">Ask a colleague to cover this shift</span>
+              <span className="block text-xs text-un1t-subtle mt-0.5">Open to anyone — first to claim takes it</span>
+            </button>
+            <button
+              type="button"
+              onClick={openTargetPicker}
+              className="w-full text-left px-3 py-2.5 rounded-lg border border-un1t-border bg-un1t-surface hover:bg-un1t-dark text-sm text-un1t-text transition-colors"
+            >
+              <span className="font-medium">Swap with a specific coach…</span>
+              <span className="block text-xs text-un1t-subtle mt-0.5">Send the request straight to one colleague</span>
             </button>
             <button
               type="button"
@@ -268,6 +331,57 @@ function ShiftActionMenu({ shift, shiftDate, onClose, onDone }) {
               </Button>
               <Button type="button" variant="primary" loading={saving} onClick={handlePostSwap}>
                 Post for swap
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Targeted-swap colleague picker panel */}
+        {panel === 'target' && !success && (
+          <div className="space-y-3">
+            <p className="text-sm text-un1t-text">
+              Send <strong>{name}</strong> on <strong>{dateLabel}</strong> to a specific colleague.
+              They can accept it, then your manager confirms.
+            </p>
+            <input
+              type="text"
+              value={colleagueSearch}
+              onChange={(e) => setColleagueSearch(e.target.value)}
+              disabled={saving}
+              placeholder="Search colleagues…"
+              className="w-full rounded-lg border border-un1t-border bg-un1t-surface text-un1t-text text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-un1t-accent placeholder:text-un1t-muted"
+            />
+            <div className="max-h-56 overflow-y-auto rounded-lg border border-un1t-border divide-y divide-un1t-border">
+              {loadingColleagues ? (
+                <p className="text-sm text-un1t-subtle px-3 py-3">Loading colleagues…</p>
+              ) : (() => {
+                const q = colleagueSearch.trim().toLowerCase()
+                const list = (colleagues || []).filter(
+                  (p) => !q || (p.full_name || '').toLowerCase().includes(q),
+                )
+                if (list.length === 0) {
+                  return (
+                    <p className="text-sm text-un1t-subtle px-3 py-3">
+                      {colleagueSearch.trim() ? 'No matching colleagues.' : 'No colleagues to swap with.'}
+                    </p>
+                  )
+                }
+                return list.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    disabled={saving}
+                    onClick={() => handlePostTargetedSwap(p.id)}
+                    className="w-full text-left px-3 py-2.5 text-sm text-un1t-text hover:bg-un1t-dark transition-colors disabled:opacity-50"
+                  >
+                    {p.full_name || 'Unnamed coach'}
+                  </button>
+                ))
+              })()}
+            </div>
+            <div className="flex justify-end">
+              <Button type="button" variant="secondary" onClick={() => { setPanel(null); setError(null) }} disabled={saving}>
+                Back
               </Button>
             </div>
           </div>
