@@ -2,14 +2,23 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { CalendarOff, Plus, Check, X, Palmtree, ThermometerSun, Ban } from 'lucide-react'
+import { CalendarOff, Plus, Check, X, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis } from 'lucide-react'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { TIME_OFF_TYPES } from '@shared/time-off'
 
+// All five time-off types (mig 283). The manager screen renders every type
+// that can land in the table — including legacy/unknown values via the
+// FALLBACK_TYPE guard below.
 const TYPE_CONFIG = {
-  holiday:     { label: 'Holiday',     color: '#22C55E', bg: '#22C55E20', icon: Palmtree },
-  sick:        { label: 'Sick Leave',  color: '#EF4444', bg: '#EF444420', icon: ThermometerSun },
-  unavailable: { label: 'Unavailable', color: '#F59E0B', bg: '#F59E0B20', icon: Ban },
+  holiday:     { label: 'Holiday',      color: '#22C55E', bg: '#22C55E20', icon: Palmtree },
+  sick:        { label: 'Sick Leave',   color: '#EF4444', bg: '#EF444420', icon: ThermometerSun },
+  unpaid:      { label: 'Unpaid Leave', color: '#6366F1', bg: '#6366F120', icon: Wallet },
+  other:       { label: 'Other',        color: '#64748B', bg: '#64748B20', icon: CircleEllipsis },
+  unavailable: { label: 'Unavailable',  color: '#F59E0B', bg: '#F59E0B20', icon: Ban },
 }
+
+// Neutral fallback so an unknown legacy `type` value never crashes a row.
+const FALLBACK_TYPE = { label: 'Time off', color: '#64748B', bg: '#64748B20', icon: CircleEllipsis }
 
 const STATUS_STYLES = {
   pending:   'bg-yellow-500/20 text-yellow-400',
@@ -211,7 +220,7 @@ export default function TimeOffManager({ user }) {
       ) : (
         <div className="space-y-2">
           {requests.map(req => {
-            const typeConf = TYPE_CONFIG[req.type] || TYPE_CONFIG.unavailable
+            const typeConf = TYPE_CONFIG[req.type] || FALLBACK_TYPE
             const TypeIcon = typeConf.icon
             const isOwn = req.profile_id === user.id
             const canApprove = isManager && req.status === 'pending' && !isOwn
@@ -364,25 +373,28 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Type selection */}
+          {/* Type selection — driven by the shared catalogue (all five types;
+              managers recording on behalf are not employment-gated). Icon +
+              colour come from TYPE_CONFIG, with a neutral fallback. */}
           <div>
             <label className="block text-xs text-un1t-subtle mb-2">Type</label>
             <div className="grid grid-cols-3 gap-2">
-              {Object.entries(TYPE_CONFIG).map(([key, conf]) => {
+              {TIME_OFF_TYPES.map(({ value, label }) => {
+                const conf = TYPE_CONFIG[value] || FALLBACK_TYPE
                 const Icon = conf.icon
                 return (
                   <button
-                    key={key}
+                    key={value}
                     type="button"
-                    onClick={() => setType(key)}
+                    onClick={() => setType(value)}
                     className={`flex flex-col items-center gap-1.5 p-3 rounded-lg border text-xs transition-colors ${
-                      type === key
+                      type === value
                         ? 'border-un1t-text/40 bg-un1t-border/30'
                         : 'border-un1t-border hover:border-white/20'
                     }`}
                   >
                     <Icon size={18} style={{ color: conf.color }} />
-                    <span>{conf.label}</span>
+                    <span>{label}</span>
                   </button>
                 )
               })}
