@@ -11,7 +11,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Loader2, Snowflake, AlertCircle, Play, Zap, CalendarClock, X } from 'lucide-react'
+import { Loader2, Snowflake, AlertCircle, Play, Zap, CalendarClock, X, Activity } from 'lucide-react'
 import { slotKey } from '@/lib/class-climate'
 
 const KEY = 'class_climate'
@@ -53,6 +53,19 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
   }, [locationId])
 
   useEffect(() => { loadSchedule() }, [loadSchedule])
+
+  const [history, setHistory] = useState([])
+  const [histLoading, setHistLoading] = useState(false)
+  const loadHistory = useCallback(async () => {
+    if (!locationId) return
+    setHistLoading(true)
+    try {
+      const res = await fetch(`/api/automations/${KEY}/history?location_id=${encodeURIComponent(locationId)}`)
+      const j = await res.json()
+      if (res.ok && j.success !== false) setHistory(j.items || [])
+    } catch { /* leave as-is */ } finally { setHistLoading(false) }
+  }, [locationId])
+  useEffect(() => { loadHistory() }, [loadHistory])
 
   const enabledDevices = (devices || []).filter((d) => d.enabled)
   const hasDevices = enabledDevices.length > 0
@@ -108,7 +121,7 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
       const j = await res.json()
       if (!res.ok || j.success === false) throw new Error(j.error || 'Run failed')
       setRun({ phase: 'done', ...j })
-      loadSchedule()
+      loadSchedule(); loadHistory()
     } catch (e) { setRun({ phase: 'error', message: e.message }) }
   }
 
@@ -332,6 +345,40 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
           )}
         </div>
       )}
+
+      {/* Recent activity — what the cron actually did (autonomous + on-demand) */}
+      <div className="mt-3 border-t border-un1t-gray/60 pt-3">
+        <div className="flex items-center justify-between mb-1">
+          <p className="text-xs font-semibold text-un1t-white inline-flex items-center gap-1">
+            <Activity size={13} /> Recent activity
+          </p>
+          <button type="button" onClick={loadHistory} className="text-[11px] underline text-un1t-light">
+            {histLoading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+        {history.length === 0 && (
+          <p className="text-[11px] text-un1t-light">
+            Nothing yet — the automation hasn&apos;t run for a class so far. Each time it turns the AC on (or skips / fails) for a class, it shows here.
+          </p>
+        )}
+        {history.length > 0 && (
+          <ul className="space-y-0.5 max-h-56 overflow-y-auto pr-1">
+            {history.map((h, i) => (
+              <li key={i} className="flex items-center gap-2 text-[11px]">
+                <span className="text-un1t-light tabular-nums shrink-0 w-36">{fmtDublin(h.fired_at)}</span>
+                <span className={`shrink-0 font-medium ${h.status === 'fired' ? 'text-emerald-700' : h.status === 'failed' ? 'text-red-700' : 'text-un1t-light'}`}>
+                  {h.status === 'fired' ? '✓ on' : h.status === 'failed' ? '✗ failed' : '· skipped'}
+                </span>
+                <span className="text-un1t-white truncate flex-1">
+                  {h.class_name || h.glofox_event_id}{h.device_label ? ` · ${h.device_label}` : ''}
+                  {h.status === 'failed' && h.error ? ` — ${h.error}` : ''}
+                  {h.status === 'skipped' && h.reason ? ` — ${String(h.reason).replace(/_/g, ' ')}` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   )
 }
