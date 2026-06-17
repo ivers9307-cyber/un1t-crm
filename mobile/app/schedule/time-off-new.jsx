@@ -1,10 +1,9 @@
 // Modal: Request time off.
 //
-// iOS-feeling form: large title, grouped settings rows, native date
-// pickers via @react-native-community/datetimepicker. We avoid that
-// dependency for now and use plain date inputs (text + +/- buttons)
-// for parity with what's bundled in expo-router. This stays
-// dependency-light and works in Expo Go without prebuild.
+// iOS-feeling form: large title, grouped settings rows. The type menu is
+// gated by employment type (shared/time-off catalogue); dates are picked
+// with a pure-JS tappable month calendar (components/MonthCalendar) — no
+// native picker dependency, so the whole screen ships over-the-air.
 //
 // On submit, we hit POST /api/schedule/time-off and the server fans
 // out a push notification to managers/owners at the location (see
@@ -16,29 +15,22 @@ import {
   View, Text, Pressable, ScrollView, TextInput, ActivityIndicator,
   Alert, KeyboardAvoidingView, Platform,
 } from 'react-native'
-import { Ionicons } from '@expo/vector-icons'
 import { useHeaderHeight } from '@react-navigation/elements'
 import { useAuth } from '../../lib/auth-context'
 import { createTimeOffRequest } from '../../lib/schedule-api'
-import { isoDate, addDays } from '../../lib/dates'
-
-const TYPES = [
-  { value: 'holiday', label: 'Holiday' },
-  { value: 'sick',    label: 'Sick' },
-  { value: 'unpaid',  label: 'Unpaid' },
-  { value: 'other',   label: 'Other' },
-]
-
-function dateMath(iso, days) {
-  return isoDate(addDays(new Date(iso + 'T00:00:00'), days))
-}
+import { isoDate } from '../../lib/dates'
+import { timeOffTypesFor, defaultTimeOffTypeFor } from '../../../shared/time-off'
+import MonthCalendar from '../../components/MonthCalendar'
 
 export default function TimeOffNew() {
-  const { activeLocation } = useAuth()
+  const { activeLocation, profile } = useAuth()
   const router = useRouter()
   const headerHeight = useHeaderHeight()
   const today = isoDate(new Date())
-  const [type, setType] = useState('holiday')
+  // Type menu is gated by employment type — contractors + casual staff
+  // only get "Unavailable"; everyone else gets the four leave types.
+  const types = timeOffTypesFor(profile?.employment_type)
+  const [type, setType] = useState(defaultTimeOffTypeFor(profile?.employment_type))
   const [start, setStart] = useState(today)
   const [end, setEnd] = useState(today)
   const [reason, setReason] = useState('')
@@ -92,31 +84,43 @@ export default function TimeOffNew() {
       />
 
       <ScrollView contentContainerClassName="p-4">
-        {/* Type segmented control */}
+        {/* Type — segmented control when several are allowed; a single
+            static row when employment restricts to one (contractor/casual
+            → "Unavailable"), since a one-option control is pointless. */}
         <Text className="text-xs uppercase tracking-wider text-un1t-subtle px-2 mb-2">Type</Text>
-        <View className="flex-row bg-un1t-surface border border-un1t-border rounded-xl p-1 mb-5">
-          {TYPES.map(t => (
-            <Pressable
-              key={t.value}
-              onPress={() => setType(t.value)}
-              className={`flex-1 py-2 rounded-lg ${type === t.value ? 'bg-un1t-text' : ''}`}
-            >
-              <Text className={`text-center text-sm ${type === t.value ? 'text-un1t-bg font-semibold' : 'text-un1t-subtle'}`}>
-                {t.label}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
+        {types.length > 1 ? (
+          <View className="flex-row bg-un1t-surface border border-un1t-border rounded-xl p-1 mb-5">
+            {types.map(t => (
+              <Pressable
+                key={t.value}
+                onPress={() => setType(t.value)}
+                className={`flex-1 py-2 rounded-lg ${type === t.value ? 'bg-un1t-text' : ''}`}
+              >
+                <Text className={`text-center text-sm ${type === t.value ? 'text-un1t-bg font-semibold' : 'text-un1t-subtle'}`}>
+                  {t.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : (
+          <View className="bg-un1t-surface border border-un1t-border rounded-xl px-4 py-3 mb-5">
+            <Text className="text-base text-un1t-text">
+              {types[0]?.label}
+            </Text>
+          </View>
+        )}
 
-        {/* Date pickers — text + step buttons. Keeps the modal Expo-Go-
-            friendly without pulling in a native picker dependency. */}
+        {/* Dates — tappable month calendar (range select). Pure JS so it
+            ships over-the-air; jump months from the header instead of
+            stepping a day at a time. */}
         <Text className="text-xs uppercase tracking-wider text-un1t-subtle px-2 mb-2">Dates</Text>
-        <View className="bg-un1t-surface border border-un1t-border rounded-xl mb-5">
-          <DateRow label="From" value={start} onChange={v => {
-            setStart(v)
-            if (end < v) setEnd(v)
-          }} isLast={false} />
-          <DateRow label="To" value={end} onChange={setEnd} min={start} isLast />
+        <View className="mb-5">
+          <MonthCalendar
+            startDate={start}
+            endDate={end}
+            minDate={today}
+            onChange={({ start: s, end: e }) => { setStart(s); setEnd(e || s) }}
+          />
         </View>
 
         <Text className="text-xs uppercase tracking-wider text-un1t-subtle px-2 mb-2">Reason (optional)</Text>
@@ -138,29 +142,5 @@ export default function TimeOffNew() {
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>
-  )
-}
-
-function DateRow({ label, value, onChange, min, isLast }) {
-  function step(days) {
-    const next = dateMath(value, days)
-    if (min && next < min) return
-    onChange(next)
-  }
-  // Pretty label, e.g. "Mon 5 May 2026"
-  const pretty = new Date(value + 'T00:00:00').toLocaleDateString(undefined, {
-    weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
-  })
-  return (
-    <View className={`flex-row items-center px-4 py-3 ${!isLast ? 'border-b border-un1t-border' : ''}`}>
-      <Text className="text-base text-un1t-text w-12">{label}</Text>
-      <Text className="flex-1 text-base text-un1t-subtle">{pretty}</Text>
-      <Pressable onPress={() => step(-1)} hitSlop={8} className="px-2">
-        <Ionicons name="remove-circle-outline" size={22} color="#111827" />
-      </Pressable>
-      <Pressable onPress={() => step(1)} hitSlop={8} className="px-2">
-        <Ionicons name="add-circle-outline" size={22} color="#111827" />
-      </Pressable>
-    </View>
   )
 }
