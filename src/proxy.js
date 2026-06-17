@@ -95,7 +95,13 @@ export async function proxy(request) {
   // visitors; without this entry the iframe showed a login redirect
   // (found in the 2026-06-10 audit — the page itself documents the
   // public-embed intent). Data access stays via /api/public/*.
-  const publicPaths = ['/login', '/reset-password', '/book/', '/event/', '/event-pay/', '/tv/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/cron/', '/deposit/', '/welcome', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/']
+  // /api/bridge/ — heart-rate bridge endpoints (heartbeat / samples /
+  // scan). Pi devices running champ-bridge authenticate per-request with
+  // their own `bbr_` bearer token, verified in-handler by verifyBridgeToken
+  // (sha256 match against ble_bridges.api_token_hash) — same self-guarding
+  // pattern as /api/webhooks/ (HMAC) and /api/cron/ (CRON_SECRET). Without
+  // this entry every bridge call 307s to /login and never reaches the handler.
+  const publicPaths = ['/login', '/reset-password', '/book/', '/event/', '/event-pay/', '/tv/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/cron/', '/api/bridge/', '/deposit/', '/welcome', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/']
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
   if (isPublic) return NextResponse.next()
 
