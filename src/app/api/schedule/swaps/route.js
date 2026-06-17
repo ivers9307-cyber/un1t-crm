@@ -37,6 +37,8 @@ export async function GET(request) {
   if (guard) return guard
 
   const status = searchParams.get('status')
+  const forMe = searchParams.get('for_me') === '1'
+  const open = searchParams.get('open') === '1'
   const db = createServerClient()
 
   let query = db.from('shift_swap_requests')
@@ -58,6 +60,20 @@ export async function GET(request) {
     query = query.in('location_id', userLocationIds)
   }
   if (status) query = query.eq('status', status)
+
+  // CT-P3 actionable lists for coaches. for_me = swaps targeted at / claimed
+  // by the caller (needs their accept/decline or shows "awaiting manager").
+  // open = unclaimed pool the caller may take (not their own). Names ride
+  // along via the service-role profiles embed (works for web + mobile, which
+  // can't embed profiles from its authenticated client).
+  if (forMe || open) {
+    if (!user) return NextResponse.json({ success: true, data: [] })
+    if (forMe) {
+      query = query.eq('target_id', user.id).in('status', ['pending', 'awaiting_approval'])
+    } else if (open) {
+      query = query.is('target_id', null).eq('status', 'pending').neq('requester_id', user.id)
+    }
+  }
 
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
