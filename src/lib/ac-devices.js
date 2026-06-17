@@ -381,7 +381,7 @@ export async function loadDeviceWithLocation(deviceId, db) {
   if (!deviceId) return { ok: false, status: 400, error: 'device_id is required.', code: 'missing_device_id' }
   const { data: device } = await db
     .from('ac_devices')
-    .select('id, location_id, label, provider, provider_device_id, enabled')
+    .select('id, location_id, label, provider, provider_device_id, default_mode, default_temp_c, default_fan, session_minutes, enabled')
     .eq('id', deviceId)
     .single()
   if (!device) return { ok: false, status: 404, error: 'AC device not found.', code: 'device_not_found' }
@@ -410,6 +410,36 @@ export async function vendorTurnOff(device, location, { vendorAdapters } = {}) {
   try {
     await adapter.adapter.turnOff(device.provider_device_id, creds.creds)
     return { ok: true }
+  } catch (e) {
+    return vendorError(e)
+  }
+}
+
+/**
+ * Pure vendor power-ON — dispatches to the right adapter using the
+ * device's stored defaults (mode/temp/fan), with no permission check, no
+ * session write, no audit. The schedule-driven crons (class-climate) use
+ * this so they can write their OWN system ac_sessions row (started_by
+ * NULL) with a class-aligned auto_off_at. Symmetric with vendorTurnOff.
+ *
+ * Requires the device row to carry default_mode/default_temp_c/default_fan
+ * (loadDeviceWithLocation selects them). Returns { ok: true, observed }
+ * (observed = vendor's post-set state) or { ok: false, error, status?, code? }.
+ */
+export async function vendorTurnOn(device, location, { vendorAdapters } = {}) {
+  const adapter = pickAdapter(device.provider, { vendorAdapters })
+  if (adapter.error) return adapter.error
+  const creds = resolveCredentials(device, location)
+  if (creds.error) return creds.error
+  const body = adapter.adapter.buildTurnOnState({
+    mode: device.default_mode,
+    tempC: device.default_temp_c,
+    temp: device.default_temp_c, // Sensibo's buildTurnOnState uses `temp`
+    fan: device.default_fan,
+  })
+  try {
+    const observed = await adapter.adapter.setState(device.provider_device_id, body, creds.creds)
+    return { ok: true, observed }
   } catch (e) {
     return vendorError(e)
   }

@@ -3,11 +3,14 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { AUTOMATIONS, automationStatus } from '@/lib/automations/registry'
+import { AUTOMATIONS, automationStatus, glofoxConnected } from '@/lib/automations/registry'
 import AutomationsView from '@/components/automations/AutomationsView'
 import AutomationsFlowList from '@/components/automations/AutomationsFlowList'
+import ClassClimateCard from '@/components/automations/ClassClimateCard'
 
 export const dynamic = 'force-dynamic'
+
+const NO_LOCATION = '00000000-0000-0000-0000-000000000000'
 
 export default async function AutomationsPage() {
   const user = await getCurrentUser()
@@ -21,19 +24,35 @@ export default async function AutomationsPage() {
   const db = createServerClient()
 
   // Curated toggle cards (only when the user has the automations perm).
+  // class_climate is rendered by its own card (it needs config), so it's
+  // filtered out of the generic toggle list.
   let cards = []
+  let climate = null
+  let climateDevices = []
   if (canCurated) {
     const { data: rows } = await db
       .from('location_automations')
-      .select('automation_key, enabled')
-      .eq('location_id', location?.id || '00000000-0000-0000-0000-000000000000')
-    const enabledByKey = Object.fromEntries((rows || []).map((r) => [r.automation_key, r.enabled]))
-    cards = AUTOMATIONS.map((a) => ({
-      key: a.key, label: a.label, description: a.description,
-      supportsBackfill: a.supportsBackfill, reviewBase: a.reviewBase,
-      enabled: Boolean(enabledByKey[a.key]),
-      status: automationStatus(a.key, location),
-    }))
+      .select('automation_key, enabled, config')
+      .eq('location_id', location?.id || NO_LOCATION)
+    const byKey = Object.fromEntries((rows || []).map((r) => [r.automation_key, r]))
+
+    cards = AUTOMATIONS
+      .filter((a) => a.key !== 'class_climate')
+      .map((a) => ({
+        key: a.key, label: a.label, description: a.description,
+        supportsBackfill: a.supportsBackfill, reviewBase: a.reviewBase,
+        enabled: Boolean(byKey[a.key]?.enabled),
+        status: automationStatus(a.key, location),
+      }))
+
+    const { data: devices } = await db
+      .from('ac_devices')
+      .select('id, label, provider, enabled')
+      .eq('location_id', location?.id || NO_LOCATION)
+      .order('label', { ascending: true })
+    climateDevices = devices || []
+    const row = byKey['class_climate']
+    climate = { enabled: Boolean(row?.enabled), config: row?.config || {} }
   }
 
   // Custom flows (only when the user has email/whatsapp).
@@ -54,7 +73,16 @@ export default async function AutomationsPage() {
         <p className="text-sm text-un1t-subtle mt-1">Things that run by themselves for {location?.name || 'your studio'}</p>
       </div>
       {canCurated && (
-        <AutomationsView locationId={location?.id || null} locationName={location?.name || ''} cards={cards} />
+        <div className="space-y-4">
+          <AutomationsView locationId={location?.id || null} locationName={location?.name || ''} cards={cards} />
+          <ClassClimateCard
+            locationId={location?.id || null}
+            glofoxConnected={glofoxConnected(location)}
+            devices={climateDevices}
+            initialEnabled={climate?.enabled}
+            initialConfig={climate?.config}
+          />
+        </div>
       )}
       {canFlows && <AutomationsFlowList sequences={sequences} />}
     </div>
