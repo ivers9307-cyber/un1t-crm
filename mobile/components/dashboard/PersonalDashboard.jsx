@@ -17,6 +17,7 @@ import { useAuth } from '../../lib/auth-context'
 import { fetchPersonalDashboard } from '../../lib/dashboard-api'
 import { pickLocationColor } from '../../../shared/location-colors'
 import { buildMonthMatrix, shiftDurationHours } from '../../../shared/roster-month'
+import { groupTeamShiftsByCoach, coachSpanLabel } from '../../../shared/team-today'
 import {
   KpiCard, KpiRow, SectionHeader, ListCard,
 } from './cards'
@@ -618,6 +619,9 @@ export default function PersonalDashboard({ refreshKey }) {
     ? buildMonthMatrix(monthStartIso, monthEndIso, monthShifts, todayIso)
     : []
 
+  // Group today's team shifts by coach — one row per person (not per shift).
+  const onTodayCoaches = groupTeamShiftsByCoach(onToday)
+
   return (
     <View>
       {/* CHECKLIST.2 — coach's checklist for today, when applicable.
@@ -790,30 +794,35 @@ export default function PersonalDashboard({ refreshKey }) {
         </>
       )}
 
-      {/* CT-P3b — On with you today (read-only). Other coaches on shift today,
-          with their shift time. Names come from the service-role shifts route. */}
-      {onToday.length > 0 && (
+      {/* ON-TODAY — On with you today (read-only). Grouped by coach: one row
+          per person with their earliest–latest span + shift count, so a coach
+          with several blocks shows once and the count reflects people on today,
+          not shift rows. Names come from the service-role shifts route. */}
+      {onTodayCoaches.length > 0 && (
         <>
-          <SectionHeader title="On with you today" count={onToday.length} />
+          <SectionHeader title="On with you today" count={onTodayCoaches.length} />
           <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden mb-3">
-            {onToday.map((s, i) => {
-              const isLast = i === onToday.length - 1
-              const name = s.profiles?.full_name || 'Coach'
-              const tpl = s.shift_templates?.name
-              const subtitle = [tpl, shiftTime(s)].filter(Boolean).join(' · ')
+            {onTodayCoaches.map((c, i) => {
+              const isLast = i === onTodayCoaches.length - 1
+              const span = coachSpanLabel(c)
               return (
                 <View
-                  key={s.id}
+                  key={c.profileId}
                   className={`flex-row items-center px-4 py-3 ${!isLast ? 'border-b border-un1t-border' : ''}`}
                 >
                   <View className="w-8 h-8 rounded-full bg-un1t-border/40 items-center justify-center mr-3">
                     <Ionicons name="people-outline" size={16} color="#111827" />
                   </View>
                   <View className="flex-1">
-                    <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>{name}</Text>
-                    {subtitle ? (
-                      <Text className="text-xs text-un1t-subtle" numberOfLines={1}>{subtitle}</Text>
+                    <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>{c.name}</Text>
+                    {span ? (
+                      <Text className="text-xs text-un1t-subtle" numberOfLines={1}>{span}</Text>
                     ) : null}
+                  </View>
+                  <View className="ml-2 px-2 py-0.5 rounded-full bg-un1t-border/60">
+                    <Text className="text-[10px] font-semibold text-un1t-subtle">
+                      {c.count} shift{c.count === 1 ? '' : 's'}
+                    </Text>
                   </View>
                 </View>
               )

@@ -24,6 +24,7 @@ import { useRouter } from 'next/navigation'
 import { ArrowLeftRight, Inbox, Users } from 'lucide-react'
 import { SectionHeader, ListCard } from '@/components/dashboard/Cards'
 import Button from '@/components/ui/Button'
+import { groupTeamShiftsByCoach, coachSpanLabel } from '@shared/team-today'
 
 // ── helpers ──────────────────────────────────────────────────────────────
 function shiftNameOf(row, fallback = 'a shift') {
@@ -32,14 +33,6 @@ function shiftNameOf(row, fallback = 'a shift') {
 
 function shiftDateOf(row) {
   return row?.requester_shift?.shift_date || null
-}
-
-// HH:MM:SS / HH:MM → HH:MM for a shift on today's "On with you" strip.
-function shiftTimeOf(shift) {
-  const start = (shift.start_time_override || shift.shift_templates?.start_time || '').slice(0, 5)
-  const end = (shift.end_time_override || shift.shift_templates?.end_time || '').slice(0, 5)
-  if (!start && !end) return ''
-  return `${start} – ${end}`
 }
 
 function AwaitingChip() {
@@ -143,7 +136,9 @@ export default function SwapActions({ locationId, todayIso, currentProfileId }) 
     }
   }
 
-  const hasNothing = offered.length === 0 && openPool.length === 0 && onToday.length === 0
+  // Group today's team shifts by coach — one row per person (not per shift).
+  const onTodayCoaches = groupTeamShiftsByCoach(onToday)
+  const hasNothing = offered.length === 0 && openPool.length === 0 && onTodayCoaches.length === 0
   if (hasNothing) return null
 
   return (
@@ -251,25 +246,28 @@ export default function SwapActions({ locationId, todayIso, currentProfileId }) 
         </>
       )}
 
-      {/* 3 — On with you today (read-only) */}
-      {onToday.length > 0 && (
+      {/* 3 — On with you today (read-only). Grouped by coach: one row per
+          person with their earliest–latest span + shift count, so a coach
+          with several blocks shows once and the count reflects people on
+          today, not shift rows. */}
+      {onTodayCoaches.length > 0 && (
         <>
-          <SectionHeader title="On with you today" count={onToday.length} />
+          <SectionHeader title="On with you today" count={onTodayCoaches.length} />
           <ListCard>
-            {onToday.map((s, i) => {
-              const name = s.profiles?.full_name || 'Coach'
-              const time = shiftTimeOf(s)
-              const tpl = s.shift_templates?.name
-              return (
-                <ActionRow
-                  key={s.id}
-                  icon={<Users size={16} />}
-                  title={name}
-                  subtitle={[tpl, time].filter(Boolean).join(' · ') || undefined}
-                  isLast={i === onToday.length - 1}
-                />
-              )
-            })}
+            {onTodayCoaches.map((c, i) => (
+              <ActionRow
+                key={c.profileId}
+                icon={<Users size={16} />}
+                title={c.name}
+                subtitle={coachSpanLabel(c) || undefined}
+                chip={
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600">
+                    {c.count} shift{c.count === 1 ? '' : 's'}
+                  </span>
+                }
+                isLast={i === onTodayCoaches.length - 1}
+              />
+            ))}
           </ListCard>
         </>
       )}
