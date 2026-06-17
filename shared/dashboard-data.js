@@ -154,9 +154,15 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
       // a second range call is fine; avoids coupling the 14-day window logic).
       fetchDashboardShifts(supabase, { profileId, startDate: monthStartIso, endDate: monthEndIso }),
 
+      // Swaps targeted at this coach that still need their accept/decline.
+      // CT-P3: the old embed referenced the dropped public.shifts table AND
+      // profiles!requester_id (which 500s on mobile's authenticated client —
+      // no profiles grant). Read shift info via shift_assignments only; the
+      // requester NAME for the actionable list is fetched client-side from
+      // GET /api/schedule/swaps?for_me=1 (service-role).
       supabase
         .from('shift_swap_requests')
-        .select('id, requester_id, requester_shift_id, reason, created_at, requester:profiles!requester_id(full_name), requester_shift:shifts!requester_shift_id(shift_date, shift_templates(name))')
+        .select('id, requester_id, requester_shift_id, target_id, status, reason, created_at, requester_shift:shift_assignments!requester_shift_id(shift_blocks!block_id(block_date, shift_templates(name)))')
         .eq('target_id', profileId)
         .eq('status', 'pending'),
 
@@ -175,17 +181,17 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
             .gt('unread_count', 0)
         : Promise.resolve({ data: [] }),
 
-      // Swaps the coach has POSTED that are still open — needed for the
-      // Today "My requests" list so they can see + cancel their own posts.
-      // Uses shift_assignments!requester_shift_id to disambiguate the FK
-      // (avoids PGRST201 multi-FK ambiguity) and joins shift_blocks for the
-      // date and shift_templates for the name. A single coach's open posted
-      // swaps is tiny — no pagination needed.
+      // Swaps the coach has POSTED that are still live — pending (nobody took
+      // it yet) OR awaiting_approval (someone claimed; pending manager). Used
+      // by the Today "My requests" list to show status + cancel.
+      // CT-P3 fix: shift_templates must nest UNDER shift_blocks (there is no
+      // shift_assignments->shift_templates FK; the old sibling embed errored
+      // → this list was silently always empty).
       supabase
         .from('shift_swap_requests')
-        .select('id, status, reason, created_at, target_id, requester_shift_id, requester_shift:shift_assignments!requester_shift_id(shift_blocks!block_id(block_date), shift_templates(name))')
+        .select('id, status, reason, created_at, target_id, requester_shift_id, requester_shift:shift_assignments!requester_shift_id(shift_blocks!block_id(block_date, shift_templates(name)))')
         .eq('requester_id', profileId)
-        .eq('status', 'pending'),
+        .in('status', ['pending', 'awaiting_approval']),
     ])
 
   if (shifts.error) return { success: false, error: shifts.error.message }

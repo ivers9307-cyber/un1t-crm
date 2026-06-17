@@ -154,8 +154,10 @@ export const timeOffTypeSchema = z.enum(['holiday', 'sick', 'unpaid', 'other'])
 // Time-off status (used on PUT /api/schedule/time-off/[id])
 export const timeOffStatusSchema = z.enum(['pending', 'approved', 'rejected', 'cancelled'])
 
-// Swap request status
-export const swapStatusSchema = z.enum(['pending', 'approved', 'rejected', 'cancelled'])
+// Swap request status. 'awaiting_approval' = a coach has claimed/accepted the
+// swap and it's waiting for a manager to finalise (CT-P3). Free TEXT in the
+// DB (no CHECK constraint) — this enum is the only gate.
+export const swapStatusSchema = z.enum(['pending', 'awaiting_approval', 'approved', 'rejected', 'cancelled'])
 
 // Report frequency / type — match scheduled_reports.frequency and the
 // report-generator's switch statement.
