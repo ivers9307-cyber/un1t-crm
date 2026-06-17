@@ -12,6 +12,9 @@ import {
   buildHrSampleRows,
   getActiveStrapMap,
   insertHrSamples,
+  isBridgeOnline,
+  latestBridgeSeenMs,
+  BRIDGE_ONLINE_WINDOW_MS,
 } from './bridge-samples.js'
 
 // ── canonicaliseMac ──────────────────────────────────────────────
@@ -259,5 +262,58 @@ describe('insertHrSamples', () => {
     const out = await insertHrSamples(db, [{ session_id: 's', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 145 }])
     expect(out.error).toBeTruthy()
     expect(out.inserted).toBe(0)
+  })
+})
+
+// ── bridge liveness (TV connection dot) ──────────────────────────
+
+describe('latestBridgeSeenMs', () => {
+  it('returns 0 for no bridges / all null', () => {
+    expect(latestBridgeSeenMs([])).toBe(0)
+    expect(latestBridgeSeenMs(null)).toBe(0)
+    expect(latestBridgeSeenMs([{ last_seen_at: null }, {}])).toBe(0)
+  })
+
+  it('returns the max epoch ms across bridges', () => {
+    const older = '2026-06-17T17:00:00.000Z'
+    const newer = '2026-06-17T17:30:00.000Z'
+    expect(latestBridgeSeenMs([{ last_seen_at: older }, { last_seen_at: newer }]))
+      .toBe(new Date(newer).getTime())
+  })
+
+  it('ignores unparseable timestamps', () => {
+    const good = '2026-06-17T17:00:00.000Z'
+    expect(latestBridgeSeenMs([{ last_seen_at: 'not-a-date' }, { last_seen_at: good }]))
+      .toBe(new Date(good).getTime())
+  })
+})
+
+describe('isBridgeOnline', () => {
+  const now = new Date('2026-06-17T18:00:00.000Z').getTime()
+
+  it('is false when no bridge has ever been seen', () => {
+    expect(isBridgeOnline([], now)).toBe(false)
+    expect(isBridgeOnline([{ last_seen_at: null }], now)).toBe(false)
+  })
+
+  it('is true when a bridge was seen within the window', () => {
+    const seen = new Date(now - 5_000).toISOString() // 5s ago
+    expect(isBridgeOnline([{ last_seen_at: seen }], now)).toBe(true)
+  })
+
+  it('is false when the freshest bridge is older than the window', () => {
+    const seen = new Date(now - 5 * 60 * 1000).toISOString() // 5min ago
+    expect(isBridgeOnline([{ last_seen_at: seen }], now)).toBe(false)
+  })
+
+  it('is online if ANY bridge at the location is fresh', () => {
+    const stale = new Date(now - 10 * 60 * 1000).toISOString()
+    const fresh = new Date(now - 10_000).toISOString()
+    expect(isBridgeOnline([{ last_seen_at: stale }, { last_seen_at: fresh }], now)).toBe(true)
+  })
+
+  it('treats exactly-at-window as offline (strict <)', () => {
+    const seen = new Date(now - BRIDGE_ONLINE_WINDOW_MS).toISOString()
+    expect(isBridgeOnline([{ last_seen_at: seen }], now)).toBe(false)
   })
 })

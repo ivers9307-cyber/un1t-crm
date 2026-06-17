@@ -61,11 +61,29 @@ export default function LiveTvClient({ locationId }) {
   const sessions = data?.sessions || []
   const cols = gridColsFor(sessions.length)
 
+  // Green dot to the right of "Live" = the studio's HR bridge (Pi) is
+  // streaming. Driven by last_seen_at freshness server-side (see the
+  // live API); no green dot ⇒ bridge offline.
+  const bridgeOnline = !!data?.bridge?.online
+  const bridgeStatusLabel = bridgeOnline
+    ? 'Heart-rate bridge connected'
+    : 'Heart-rate bridge offline'
+
   return (
     <main className="min-h-screen bg-black text-white">
       <header className="flex items-center justify-between px-6 py-4 border-b border-neutral-800">
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-red-500 font-bold">● Live</p>
+          <p className="flex items-center gap-2 text-xs uppercase tracking-[0.3em] text-red-500 font-bold">
+            <span>● Live</span>
+            <span
+              className={`inline-block h-3 w-3 rounded-full ${
+                bridgeOnline ? 'bg-emerald-500 animate-pulse' : 'bg-neutral-600'
+              }`}
+              role="img"
+              aria-label={bridgeStatusLabel}
+              title={bridgeStatusLabel}
+            />
+          </p>
           <h1 className="mt-1 text-2xl font-bold">{data?.location?.name || 'Studio'}</h1>
         </div>
         <div className="text-right">

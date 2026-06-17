@@ -16,6 +16,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { summariseSession, zoneForBpm } from '@/lib/heart-rate'
+import { isBridgeOnline, latestBridgeSeenMs } from '@/lib/bridge-samples'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,6 +41,19 @@ export async function GET(_request, props) {
     return NextResponse.json({ ok: false, error: 'Location not found' }, { status: 404 })
   }
 
+  // Bridge liveness for the TV connection dot. Keyed off last_seen_at
+  // freshness, not the status column — a Pi that loses power can't send
+  // a final 'offline', so status would lie; a stale heartbeat can't.
+  const { data: bridges } = await db
+    .from('ble_bridges')
+    .select('last_seen_at')
+    .eq('location_id', locationId)
+  const bridgeSeenMs = latestBridgeSeenMs(bridges)
+  const bridge = {
+    online: isBridgeOnline(bridges, nowMs),
+    last_seen_at: bridgeSeenMs > 0 ? new Date(bridgeSeenMs).toISOString() : null,
+  }
+
   // Open sessions at this location.
   const { data: sessions } = await db
     .from('heart_rate_sessions')
@@ -53,6 +67,7 @@ export async function GET(_request, props) {
       ok: true,
       server_time: new Date().toISOString(),
       location: { id: location.id, name: location.name },
+      bridge,
       sessions: [],
     })
   }
@@ -137,6 +152,7 @@ export async function GET(_request, props) {
     ok: true,
     server_time: new Date().toISOString(),
     location: { id: location.id, name: location.name },
+    bridge,
     sessions: tiles,
   })
 }
