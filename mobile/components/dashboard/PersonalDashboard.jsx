@@ -1,10 +1,10 @@
 // "Today" — personal dashboard rendered on the Home tab for everyone
 // (gated by permissions.dashboard_personal, default: all roles).
 //
-// Hero is a week view of YOUR shifts grouped by day — every day Mon
-// through Sun is shown so you can scan your week at a glance. Days
-// with no shifts say "Off". Today is highlighted. Past days are
-// dimmed.
+// Hero is a roster view of YOUR shifts:
+//   Month mode (default) — agenda grouped by week, days-off hidden,
+//     today highlighted, with a Week|Month segmented toggle at the top.
+//   Week mode — the original two-week (This week / Next week) panels.
 
 import { View, Text, ActivityIndicator, Pressable } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
@@ -13,6 +13,7 @@ import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { fetchPersonalDashboard } from '../../lib/dashboard-api'
 import { pickLocationColor } from '../../../shared/location-colors'
+import { buildMonthMatrix, shiftDurationHours } from '../../../shared/roster-month'
 import {
   KpiCard, KpiRow, SectionHeader, PendingRow, ListCard,
 } from './cards'
@@ -29,17 +30,6 @@ function shiftTime(shift) {
   const start = (shift.start_time_override || shift.shift_templates?.start_time || '').slice(0, 5)
   const end = (shift.end_time_override || shift.shift_templates?.end_time || '').slice(0, 5)
   return `${start} – ${end}`
-}
-
-function shiftHours(shift) {
-  const start = shift.start_time_override || shift.shift_templates?.start_time
-  const end = shift.end_time_override || shift.shift_templates?.end_time
-  if (!start || !end) return 0
-  const [sh, sm] = start.split(':').map(Number)
-  const [eh, em] = end.split(':').map(Number)
-  let mins = eh * 60 + em - (sh * 60 + sm)
-  if (mins < 0) mins += 24 * 60
-  return Math.round((mins / 60) * 10) / 10
 }
 
 function isoDate(d) {
@@ -143,7 +133,7 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation }) {
                     </View>
                     <View className="flex-row items-center flex-wrap">
                       <Text className={`text-xs ${day.isPast ? 'text-un1t-muted' : 'text-un1t-subtle'}`}>
-                        {shiftTime(s)} · {shiftHours(s)}h
+                        {shiftTime(s)} · {shiftDurationHours(s)}h
                       </Text>
                       {showLocation && s.locations?.name && (() => {
                         // Per-location accent — same palette as web
@@ -170,12 +160,191 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation }) {
   )
 }
 
+// Short weekday labels for the agenda (Mon-start)
+const WEEKDAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+// Week header range label: "22–28 Jun"
+function weekRangeLabel(days) {
+  // days[0] is Mon, days[6] is Sun — all inMonth days or padded
+  // We find the first and last inMonth day in the row to label the range.
+  const inMonth = days.filter(d => d.inMonth)
+  if (inMonth.length === 0) return null
+  const first = inMonth[0]
+  const last = inMonth[inMonth.length - 1]
+  const fmtDay = iso => {
+    const d = new Date(iso + 'T00:00:00Z')
+    return d.getUTCDate()
+  }
+  const fmtMon = iso => {
+    const d = new Date(iso + 'T00:00:00Z')
+    return d.toLocaleDateString('en-IE', { month: 'short', timeZone: 'UTC' })
+  }
+  const startDay = fmtDay(first.iso)
+  const endDay = fmtDay(last.iso)
+  const endMon = fmtMon(last.iso)
+  return `${startDay}–${endDay} ${endMon}`
+}
+
+// Is this week the one containing today?
+function weekContainsToday(days) {
+  return days.some(d => d.isToday)
+}
+
+// Agenda-style month view: groups weeks, skips days with no shifts,
+// shows a week header and per-day rows for days that have shifts.
+function MonthAgenda({ matrix, showLocation }) {
+  const todayIso = (() => {
+    const now = new Date()
+    const y = now.getFullYear()
+    const m = String(now.getMonth() + 1).padStart(2, '0')
+    const day = String(now.getDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
+  })()
+
+  // Build week groups that have at least one shift day
+  const weekGroups = matrix
+    .map(days => {
+      const shiftDays = days.filter(d => d.inMonth && d.shifts.length > 0)
+      return { days, shiftDays }
+    })
+    .filter(({ shiftDays }) => shiftDays.length > 0)
+
+  if (weekGroups.length === 0) {
+    return (
+      <View className="bg-un1t-surface border border-un1t-border rounded-2xl mb-3 px-4 py-5">
+        <Text className="text-sm text-un1t-subtle text-center">No shifts this month</Text>
+      </View>
+    )
+  }
+
+  return (
+    <View className="mb-1">
+      {weekGroups.map(({ days, shiftDays }, wIdx) => {
+        const isThisWeek = weekContainsToday(days)
+        const rangeLabel = weekRangeLabel(days)
+        const weekHeader = isThisWeek
+          ? 'This week'
+          : (rangeLabel || 'This week')
+        const shiftCount = shiftDays.reduce((t, d) => t + d.shifts.length, 0)
+
+        return (
+          <View key={wIdx} className="bg-un1t-surface border border-un1t-border rounded-2xl mb-3 overflow-hidden">
+            {/* Week header */}
+            <View className="px-4 pt-3 pb-2 flex-row items-baseline justify-between">
+              <Text className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">
+                {weekHeader}
+              </Text>
+              {!isThisWeek && (
+                <Text className="text-xs text-un1t-muted">
+                  {shiftCount} shift{shiftCount === 1 ? '' : 's'}
+                </Text>
+              )}
+            </View>
+
+            {/* Day rows — only days that have shifts */}
+            {shiftDays.map((day, dIdx) => {
+              const isLast = dIdx === shiftDays.length - 1
+              const weekdayLabel = WEEKDAY_SHORT[day.weekday].toUpperCase()
+              return (
+                <View
+                  key={day.iso}
+                  className={`flex-row px-4 py-2.5 ${!isLast ? 'border-b border-un1t-border' : ''} ${
+                    day.isToday ? 'bg-un1t-border/30' : ''
+                  }`}
+                >
+                  {/* Left: weekday short + date number */}
+                  <View className="w-14">
+                    <Text className={`text-[10px] font-semibold uppercase tracking-wider ${
+                      day.isToday ? 'text-un1t-text'
+                      : day.isPast ? 'text-un1t-muted'
+                      : 'text-un1t-subtle'
+                    }`}>
+                      {weekdayLabel}
+                    </Text>
+                    <Text className={`text-base font-semibold ${
+                      day.isPast ? 'text-un1t-muted' : 'text-un1t-text'
+                    }`}>
+                      {day.dayNum}
+                    </Text>
+                  </View>
+
+                  {/* Right: shifts */}
+                  <View className="flex-1">
+                    {day.shifts.map((s, sIdx) => (
+                      <View key={s.id || sIdx} className={sIdx > 0 ? 'mt-1' : ''}>
+                        <View className="flex-row items-center justify-between">
+                          <Text className={`text-sm font-medium ${day.isPast ? 'text-un1t-subtle' : 'text-un1t-text'}`} numberOfLines={1}>
+                            {s.shift_templates?.name || 'Shift'}
+                          </Text>
+                          {s.published === false && (
+                            <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
+                              <Text className="text-[9px] uppercase text-amber-700 font-semibold">Draft</Text>
+                            </View>
+                          )}
+                          {s.status === 'swapped' && (
+                            <View className="ml-2 px-1.5 py-0.5 rounded bg-blue-500/20">
+                              <Text className="text-[9px] uppercase text-blue-700 font-semibold">Swapped</Text>
+                            </View>
+                          )}
+                        </View>
+                        <View className="flex-row items-center flex-wrap">
+                          <Text className={`text-xs ${day.isPast ? 'text-un1t-muted' : 'text-un1t-subtle'}`}>
+                            {shiftTime(s)} · {shiftDurationHours(s)}h
+                          </Text>
+                          {showLocation && s.locations?.name && (() => {
+                            const c = pickLocationColor(s.locations.id || s.location_id)
+                            return (
+                              <View className={`ml-1.5 px-1.5 py-0.5 rounded ${c.bg} ${day.isPast ? 'opacity-60' : ''}`}>
+                                <Text className={`text-[9px] uppercase tracking-wider ${c.text}`}>
+                                  {s.locations.name}
+                                </Text>
+                              </View>
+                            )
+                          })()}
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )
+            })}
+          </View>
+        )
+      })}
+    </View>
+  )
+}
+
+// Week|Month segmented toggle
+function RosterToggle({ value, onChange }) {
+  return (
+    <View className="flex-row bg-un1t-dark border border-un1t-border rounded-lg p-0.5 self-start mb-3">
+      {['Week', 'Month'].map(opt => {
+        const active = value === opt.toLowerCase()
+        return (
+          <Pressable
+            key={opt}
+            onPress={() => onChange(opt.toLowerCase())}
+            className={`px-3 py-1 rounded-md ${active ? 'bg-un1t-surface shadow-sm' : ''}`}
+          >
+            <Text className={`text-xs font-semibold ${active ? 'text-un1t-text' : 'text-un1t-subtle'}`}>
+              {opt}
+            </Text>
+          </Pressable>
+        )
+      })}
+    </View>
+  )
+}
+
 export default function PersonalDashboard({ refreshKey }) {
   const { profile, activeLocation, locations } = useAuth()
   const router = useRouter()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  // 'month' is the default; 'week' shows the classic two-week panels.
+  const [rosterView, setRosterView] = useState('month')
   // Show per-shift location chip only when the user is assigned to
   // 2+ locations — otherwise it's redundant.
   const showLocation = (locations || []).length > 1
@@ -245,8 +414,21 @@ export default function PersonalDashboard({ refreshKey }) {
     weekShifts, weekStartIso, weekEndIso,
     nextWeekShifts, nextWeekStartIso, nextWeekEndIso,
     shiftsThisWeek, hoursThisWeek,
+    monthShifts, monthStartIso, monthEndIso,
     pendingSwapsForMe, myPendingTimeOff, unreadInbox,
   } = data
+
+  // Build the month matrix once (pure — fast enough to compute on render)
+  const todayIso = (() => {
+    const now = new Date()
+    const y = now.getFullYear()
+    const m = String(now.getMonth() + 1).padStart(2, '0')
+    const day = String(now.getDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
+  })()
+  const monthMatrix = (monthShifts && monthStartIso && monthEndIso)
+    ? buildMonthMatrix(monthStartIso, monthEndIso, monthShifts, todayIso)
+    : []
 
   return (
     <View>
@@ -263,23 +445,31 @@ export default function PersonalDashboard({ refreshKey }) {
           permissions never see it. */}
       <NeedsAttentionCard />
 
-      {/* Roster — current week + next week, stacked vertically because
-          a phone is too narrow for two side-by-side weeks. The web
-          equivalent renders these in a 2-col grid. */}
-      <WeekPanel
-        title="This week"
-        startIso={weekStartIso}
-        endIso={weekEndIso}
-        shifts={weekShifts}
-        showLocation={showLocation}
-      />
-      <WeekPanel
-        title="Next week"
-        startIso={nextWeekStartIso}
-        endIso={nextWeekEndIso}
-        shifts={nextWeekShifts}
-        showLocation={showLocation}
-      />
+      {/* Roster — Week|Month toggle (Month default).
+          Month: agenda grouped by week, days-off hidden, today highlighted.
+          Week: the classic This week / Next week panels stacked vertically. */}
+      <RosterToggle value={rosterView} onChange={setRosterView} />
+
+      {rosterView === 'month' ? (
+        <MonthAgenda matrix={monthMatrix} showLocation={showLocation} />
+      ) : (
+        <>
+          <WeekPanel
+            title="This week"
+            startIso={weekStartIso}
+            endIso={weekEndIso}
+            shifts={weekShifts}
+            showLocation={showLocation}
+          />
+          <WeekPanel
+            title="Next week"
+            startIso={nextWeekStartIso}
+            endIso={nextWeekEndIso}
+            shifts={nextWeekShifts}
+            showLocation={showLocation}
+          />
+        </>
+      )}
 
       {/* Top KPIs */}
       <KpiRow>
