@@ -1,17 +1,18 @@
 'use client'
 
 // CLASS-CLIMATE.1 — the dedicated card for the class-climate automation.
-// Toggle + config (devices, offsets, optional class filter) + a view of
-// the synced Glofox schedule (the spine) so the operator can SEE what the
-// automation runs off + two test affordances: "Run schedule check now"
-// (the real climate logic, on demand) and "Test AC now" (turn the chosen
-// units on immediately via the existing AC route). All config lives in
-// location_automations.config.
+// Toggle + config (devices, offsets, optional include-filter) + a view of
+// the synced Glofox schedule (the spine), where clicking a class EXCLUDES
+// its weekly time slot (recurring). Plus two test affordances: "Run
+// schedule check now" (the real climate logic on demand) and "Test AC now"
+// (turn the chosen units on immediately via the existing AC route). All
+// config lives in location_automations.config.
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Loader2, Snowflake, AlertCircle, Play, Zap, CalendarClock } from 'lucide-react'
+import { Loader2, Snowflake, AlertCircle, Play, Zap, CalendarClock, X } from 'lucide-react'
+import { slotKey } from '@/lib/class-climate'
 
 const KEY = 'class_climate'
 
@@ -33,10 +34,11 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
   const [offsetOn, setOffsetOn] = useState(cfg0.offset_on_min ?? 15)
   const [offsetOff, setOffsetOff] = useState(cfg0.offset_off_min ?? 5)
   const [filterText, setFilterText] = useState(Array.isArray(cfg0.class_filter) ? cfg0.class_filter.join(', ') : '')
+  const [excludedSlots, setExcludedSlots] = useState(Array.isArray(cfg0.excluded_slots) ? cfg0.excluded_slots : [])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
-  const [run, setRun] = useState(null) // { phase, planned, actions, errors, message, tests }
+  const [run, setRun] = useState(null)
   const [schedule, setSchedule] = useState([])
   const [schedLoading, setSchedLoading] = useState(false)
 
@@ -58,6 +60,13 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
 
   const filters = filterText.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
   const classMatches = (name) => filters.length === 0 || filters.some((f) => String(name || '').toLowerCase().includes(f))
+  const isExcluded = (iso) => excludedSlots.includes(slotKey(iso))
+
+  function toggleSlot(key) {
+    if (!key) return
+    setExcludedSlots((s) => (s.includes(key) ? s.filter((x) => x !== key) : [...s, key]))
+    setSaved(false)
+  }
 
   function buildConfig() {
     return {
@@ -65,6 +74,7 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
       offset_on_min: Math.max(0, Number(offsetOn) || 0),
       offset_off_min: Math.max(0, Number(offsetOff) || 0),
       class_filter: filterText.split(',').map((s) => s.trim()).filter(Boolean),
+      excluded_slots: excludedSlots,
     }
   }
 
@@ -163,10 +173,10 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
         )}
       </div>
 
-      {/* Synced schedule (the spine) */}
+      {/* Synced schedule (the spine) — click a class to exclude its weekly slot */}
       {glofoxConnected && (
         <div className="mt-4 border-t border-un1t-gray/60 pt-3">
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between mb-1">
             <p className="text-xs font-semibold text-un1t-white inline-flex items-center gap-1">
               <CalendarClock size={13} /> Upcoming classes (from Glofox)
             </p>
@@ -174,25 +184,48 @@ export default function ClassClimateCard({ locationId, glofoxConnected, devices,
               {schedLoading ? 'Refreshing…' : 'Refresh'}
             </button>
           </div>
+          <p className="text-[10px] text-un1t-light mb-2">Click a class to exclude its weekly time slot. Times in Dublin.</p>
+
+          {excludedSlots.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {excludedSlots.map((s) => (
+                <button key={s} type="button" onClick={() => toggleSlot(s)}
+                  className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/40 text-amber-700">
+                  {s} <X size={11} />
+                </button>
+              ))}
+            </div>
+          )}
+
           {schedule.length === 0 && !schedLoading && (
             <p className="text-[11px] text-un1t-light">No classes synced yet — the schedule refreshes every 15&nbsp;min, or hit “Run schedule check now” below.</p>
           )}
           {schedule.length > 0 && (
             <ul className="space-y-0.5 max-h-64 overflow-y-auto pr-1">
               {schedule.map((c) => {
-                const matches = classMatches(c.name)
+                const excluded = isExcluded(c.starts_at)
+                const willRun = !excluded && classMatches(c.name)
+                const cls = excluded
+                  ? 'line-through opacity-50'
+                  : willRun ? 'bg-blue-500/5' : 'opacity-40'
                 return (
-                  <li key={c.glofox_event_id} className={`flex items-center gap-3 text-[11px] rounded px-2 py-1 ${matches ? 'bg-blue-500/5' : 'opacity-40'}`}>
-                    <span className="text-un1t-light tabular-nums shrink-0 w-36">{fmtDublin(c.starts_at)}</span>
-                    <span className="text-un1t-white truncate flex-1">{c.name || 'Class'}</span>
-                    {typeof c.capacity === 'number' && <span className="text-un1t-light shrink-0">cap {c.capacity}</span>}
+                  <li key={c.glofox_event_id}>
+                    <button type="button" onClick={() => toggleSlot(slotKey(c.starts_at))}
+                      title={excluded ? 'Excluded — click to include again' : 'Click to exclude this weekly time slot'}
+                      className={`flex w-full items-center gap-3 text-[11px] rounded px-2 py-1 text-left hover:bg-un1t-gray/30 ${cls}`}>
+                      <span className="text-un1t-light tabular-nums shrink-0 w-36">{fmtDublin(c.starts_at)}</span>
+                      <span className="text-un1t-white truncate flex-1">{c.name || 'Class'}</span>
+                      {excluded
+                        ? <span className="text-amber-700 shrink-0">excluded</span>
+                        : (typeof c.capacity === 'number' && <span className="text-un1t-light shrink-0">cap {c.capacity}</span>)}
+                    </button>
                   </li>
                 )
               })}
             </ul>
           )}
           <p className="mt-1.5 text-[10px] text-un1t-light">
-            Times in Dublin. {filters.length ? 'Highlighted classes are the ones this automation will run for.' : 'No filter set — it runs for every class.'}
+            {filters.length ? 'Highlighted = will run.' : 'Runs for every class'} {excludedSlots.length ? `· ${excludedSlots.length} slot${excludedSlots.length === 1 ? '' : 's'} excluded` : ''} · changes apply on Save below.
           </p>
         </div>
       )}

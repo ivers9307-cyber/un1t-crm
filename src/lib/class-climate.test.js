@@ -10,6 +10,7 @@ import {
   classMatchesFilter,
   planClassClimate,
   autoOffAtFor,
+  slotKey,
   DEFAULT_CONFIG,
 } from './class-climate'
 
@@ -78,17 +79,35 @@ describe('class-occurrences: mapEventToOccurrence', () => {
   })
 })
 
+describe('class-climate: slotKey', () => {
+  it('derives a Dublin weekday+time key (BST = UTC+1)', () => {
+    // 05:00 UTC on Thu 18 Jun 2026 = 06:00 Dublin (BST).
+    expect(slotKey('2026-06-18T05:00:00Z')).toBe('Thu 06:00')
+  })
+  it('two occurrences a week apart share the same slot key', () => {
+    expect(slotKey('2026-06-18T05:00:00Z')).toBe(slotKey('2026-06-25T05:00:00Z'))
+  })
+  it('returns null on junk', () => {
+    expect(slotKey('nope')).toBeNull()
+    expect(slotKey(null)).toBeNull()
+  })
+})
+
 describe('class-climate: resolveConfig', () => {
   it('applies defaults', () => {
     expect(resolveConfig(undefined)).toEqual(DEFAULT_CONFIG)
     expect(resolveConfig({})).toEqual(DEFAULT_CONFIG)
   })
   it('coerces + clamps', () => {
-    const c = resolveConfig({ device_ids: ['d1', null, 'd2'], offset_on_min: -3, offset_off_min: '7', class_filter: ['Strength', ''] })
+    const c = resolveConfig({
+      device_ids: ['d1', null, 'd2'], offset_on_min: -3, offset_off_min: '7',
+      class_filter: ['Strength', ''], excluded_slots: ['Thu 06:00', ''],
+    })
     expect(c.device_ids).toEqual(['d1', 'd2'])
     expect(c.offset_on_min).toBe(0)
     expect(c.offset_off_min).toBe(7)
     expect(c.class_filter).toEqual(['strength'])
+    expect(c.excluded_slots).toEqual(['Thu 06:00'])
   })
 })
 
@@ -113,25 +132,33 @@ describe('class-climate: planClassClimate', () => {
   })
 
   it('fires when inside the pre-class lead window', () => {
-    const plan = planClassClimate({ occurrences: [occ('a', 10)], config: cfg, nowMs: now }) // starts in 10m, offset 15
+    const plan = planClassClimate({ occurrences: [occ('a', 10)], config: cfg, nowMs: now })
     expect(plan.map((p) => p.glofox_event_id)).toEqual(['a'])
   })
   it('fires while the class is running', () => {
-    const plan = planClassClimate({ occurrences: [occ('b', -10)], config: cfg, nowMs: now }) // started 10m ago, 45m long
+    const plan = planClassClimate({ occurrences: [occ('b', -10)], config: cfg, nowMs: now })
     expect(plan.map((p) => p.glofox_event_id)).toEqual(['b'])
   })
   it('does not fire before the lead window opens', () => {
-    const plan = planClassClimate({ occurrences: [occ('c', 30)], config: cfg, nowMs: now }) // starts in 30m, offset 15
+    const plan = planClassClimate({ occurrences: [occ('c', 30)], config: cfg, nowMs: now })
     expect(plan).toEqual([])
   })
   it('does not fire after the class has ended', () => {
-    const plan = planClassClimate({ occurrences: [occ('d', -60, 45)], config: cfg, nowMs: now }) // ended 15m ago
+    const plan = planClassClimate({ occurrences: [occ('d', -60, 45)], config: cfg, nowMs: now })
     expect(plan).toEqual([])
   })
   it('respects the class filter', () => {
     const filtered = resolveConfig({ device_ids: ['d1'], class_filter: ['conditioning'] })
     const plan = planClassClimate({ occurrences: [occ('e', 10)], config: filtered, nowMs: now })
     expect(plan).toEqual([])
+  })
+  it('skips an excluded weekly slot', () => {
+    const one = occ('f', 10)
+    const c = resolveConfig({ device_ids: ['d1'], offset_on_min: 15, excluded_slots: [slotKey(one.starts_at)] })
+    expect(planClassClimate({ occurrences: [one], config: c, nowMs: now })).toEqual([])
+    // ...but a non-excluded slot at the same moment still fires.
+    const c2 = resolveConfig({ device_ids: ['d1'], offset_on_min: 15, excluded_slots: ['Mon 09:00'] })
+    expect(planClassClimate({ occurrences: [one], config: c2, nowMs: now }).map((p) => p.glofox_event_id)).toEqual(['f'])
   })
 })
 
