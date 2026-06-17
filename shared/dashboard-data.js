@@ -140,7 +140,7 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
   // Month bounds anchored on the same "today" used for week dates.
   const { monthStartIso, monthEndIso } = monthBounds(todayIso)
 
-  const [shifts, monthShiftsResult, swapsTargetingMe, myPendingTimeOff, myConvos] =
+  const [shifts, monthShiftsResult, swapsTargetingMe, myPendingTimeOff, myConvos, myPostedSwapsResult] =
     await Promise.all([
       // Cross-location query — filtered by profile_id only. Multi-
       // location staff see every shift they're assigned to, anywhere.
@@ -174,6 +174,18 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
             .eq('assigned_to', profileId)
             .gt('unread_count', 0)
         : Promise.resolve({ data: [] }),
+
+      // Swaps the coach has POSTED that are still open — needed for the
+      // Today "My requests" list so they can see + cancel their own posts.
+      // Uses shift_assignments!requester_shift_id to disambiguate the FK
+      // (avoids PGRST201 multi-FK ambiguity) and joins shift_blocks for the
+      // date and shift_templates for the name. A single coach's open posted
+      // swaps is tiny — no pagination needed.
+      supabase
+        .from('shift_swap_requests')
+        .select('id, status, reason, created_at, target_id, requester_shift_id, requester_shift:shift_assignments!requester_shift_id(shift_blocks!block_id(block_date), shift_templates(name))')
+        .eq('requester_id', profileId)
+        .eq('status', 'pending'),
     ])
 
   if (shifts.error) return { success: false, error: shifts.error.message }
@@ -227,6 +239,7 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
       hoursThisMonth: monthSummary.hours,
       // Other
       pendingSwapsForMe: swapsTargetingMe.data || [],
+      myPostedSwaps: myPostedSwapsResult.data || [],
       myPendingTimeOff: myPendingTimeOff.data || [],
       unreadInbox,
       assignedConversations: myConvos.data || [],
