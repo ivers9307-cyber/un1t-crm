@@ -148,8 +148,10 @@ export const dealStatusSchema = z.enum(['open', 'won', 'lost'])
 // Activity / note types are open-ended in the DB; bound length only.
 export const activityTypeSchema = z.string().min(1).max(50)
 
-// Time-off types from migration 011.
-export const timeOffTypeSchema = z.enum(['holiday', 'sick', 'unpaid', 'other'])
+// Time-off types. Full coherent set matching the DB CHECK (mig 283) + the
+// shared catalogue in shared/time-off.js. The coach-facing menu is gated by
+// employment type in the UI; this enum just bounds what the API will accept.
+export const timeOffTypeSchema = z.enum(['holiday', 'sick', 'unpaid', 'other', 'unavailable'])
 
 // Time-off status (used on PUT /api/schedule/time-off/[id])
 export const timeOffStatusSchema = z.enum(['pending', 'approved', 'rejected', 'cancelled'])
