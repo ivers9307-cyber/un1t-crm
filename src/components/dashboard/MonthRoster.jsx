@@ -690,7 +690,7 @@ function MonthGrid({ weeks, showLocation, onShiftClick }) {
 
 // ── Main export ──────────────────────────────────────────────────────────────
 
-export default function MonthRoster({ weeks, monthLabel, monthSummary, weekPanels, showLocation }) {
+export default function MonthRoster({ weeks, monthLabel, monthSummary, weekPanels, showLocation, employmentType }) {
   const [mode, setMode] = useState('month')
   const router = useRouter()
 
@@ -790,6 +790,7 @@ export default function MonthRoster({ weeks, monthLabel, monthSummary, weekPanel
         open={timeOffOpen}
         onClose={() => setTimeOffOpen(false)}
         onSuccess={handleTimeOffSuccess}
+        employmentType={employmentType}
       />
     </div>
   )

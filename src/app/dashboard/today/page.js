@@ -164,6 +164,7 @@ export default async function PersonalDashboardPage() {
             { title: 'Next week', startIso: nextWeekStartIso, endIso: nextWeekEndIso, shifts: nextWeekShifts },
           ]}
           showLocation={showLocation}
+          employmentType={user.employment_type}
         />
       </div>
 

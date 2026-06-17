@@ -199,7 +199,10 @@ export async function generateReport({ report_type, period_start, period_end, lo
         .lte('end_date', period_end)
         .order('start_date')
 
-      const byType = { holiday: 0, sick: 0, unavailable: 0 }
+      // Seed all five types (mig 283) so unpaid/other/unavailable are bucketed,
+      // not dropped. The `byType[req.type] = …` accumulator below tolerates any
+      // key; seeding just makes the report shape stable.
+      const byType = { holiday: 0, sick: 0, unpaid: 0, other: 0, unavailable: 0 }
       const byStatus = { pending: 0, approved: 0, rejected: 0, cancelled: 0 }
       const byStaff = {}
 
@@ -207,7 +210,7 @@ export async function generateReport({ report_type, period_start, period_end, lo
         byType[req.type] = (byType[req.type] || 0) + Number(req.total_days)
         byStatus[req.status] = (byStatus[req.status] || 0) + 1
         const name = req.profiles?.full_name || 'Unknown'
-        if (!byStaff[name]) byStaff[name] = { holiday: 0, sick: 0, unavailable: 0, total: 0 }
+        if (!byStaff[name]) byStaff[name] = { holiday: 0, sick: 0, unpaid: 0, other: 0, unavailable: 0, total: 0 }
         byStaff[name][req.type] = (byStaff[name][req.type] || 0) + Number(req.total_days)
         byStaff[name].total += Number(req.total_days)
       }
