@@ -12,7 +12,7 @@
 
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Calendar, ArrowLeftRight, AlertCircle, AlertTriangle, ClipboardCheck, Inbox, MessagesSquare, Radar, CheckSquare, Flag } from 'lucide-react'
+import { Calendar, AlertCircle, AlertTriangle, ClipboardCheck, Inbox, MessagesSquare, Radar, CheckSquare, Flag } from 'lucide-react'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
@@ -29,6 +29,7 @@ import {
   KpiCard, KpiRow, SectionHeader, ListCard, PendingRow,
 } from '@/components/dashboard/Cards'
 import MonthRoster from '@/components/dashboard/MonthRoster'
+import MyRequests from '@/components/dashboard/MyRequests'
 
 // Icon per triage row id (assembleTodayFeed in shared/today-feed.js
 // owns the ids). Kept here — icons are a web rendering concern.
@@ -84,7 +85,7 @@ export default async function PersonalDashboardPage() {
     weekShifts, weekStartIso, weekEndIso,
     nextWeekShifts, nextWeekStartIso, nextWeekEndIso,
     shiftsThisWeek, hoursThisWeek,
-    pendingSwapsForMe, myPendingTimeOff, unreadInbox,
+    myPostedSwaps, pendingSwapsForMe, myPendingTimeOff, unreadInbox,
     monthShifts, monthStartIso, monthEndIso,
     shiftsThisMonth, hoursThisMonth,
   } = res.data
@@ -249,35 +250,11 @@ export default async function PersonalDashboardPage() {
         </Link>
       )}
 
-      <SectionHeader title="Swap requests for you" count={pendingSwapsForMe.length} />
-      <ListCard empty={pendingSwapsForMe.length === 0} emptyText="No swap requests waiting on you.">
-        {pendingSwapsForMe.map((s, i) => (
-          <PendingRow
-            key={s.id}
-            icon={<ArrowLeftRight size={16} />}
-            title={`${s.requester?.full_name || 'Someone'} wants you to take a shift`}
-            subtitle={s.requester_shift?.shift_templates?.name
-              ? `${s.requester_shift.shift_templates.name} on ${s.requester_shift.shift_date}`
-              : `Posted ${new Date(s.created_at).toLocaleDateString()}`}
-            href="/schedule"
-            isLast={i === pendingSwapsForMe.length - 1}
-          />
-        ))}
-      </ListCard>
-
-      <SectionHeader title="Your time-off requests" count={myPendingTimeOff.length} />
-      <ListCard empty={myPendingTimeOff.length === 0} emptyText="No pending time-off requests.">
-        {myPendingTimeOff.map((t, i) => (
-          <PendingRow
-            key={t.id}
-            icon={<Calendar size={16} />}
-            title={`${t.type} · awaiting decision`}
-            subtitle={t.start_date === t.end_date ? t.start_date : `${t.start_date} – ${t.end_date}`}
-            href="/schedule"
-            isLast={i === myPendingTimeOff.length - 1}
-          />
-        ))}
-      </ListCard>
+      <MyRequests
+        postedSwaps={myPostedSwaps || []}
+        swapsForMe={pendingSwapsForMe}
+        timeOff={myPendingTimeOff}
+      />
     </>
   )
 }

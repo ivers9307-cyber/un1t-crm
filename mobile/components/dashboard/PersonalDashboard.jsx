@@ -6,7 +6,10 @@
 //     today highlighted, with a Week|Month segmented toggle at the top.
 //   Week mode — the original two-week (This week / Next week) panels.
 
-import { View, Text, ActivityIndicator, Pressable } from 'react-native'
+import {
+  View, Text, ActivityIndicator, Pressable,
+  Alert, Modal, TextInput, KeyboardAvoidingView, Platform,
+} from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter, useFocusEffect } from 'expo-router'
@@ -15,8 +18,12 @@ import { fetchPersonalDashboard } from '../../lib/dashboard-api'
 import { pickLocationColor } from '../../../shared/location-colors'
 import { buildMonthMatrix, shiftDurationHours } from '../../../shared/roster-month'
 import {
-  KpiCard, KpiRow, SectionHeader, PendingRow, ListCard,
+  KpiCard, KpiRow, SectionHeader, ListCard,
 } from './cards'
+import {
+  createSwapRequest, adjustShiftAssignment,
+  cancelSwapRequest, cancelTimeOffRequest,
+} from '../../lib/schedule-api'
 // CHECKLIST.2 — top-of-Today card showing the coach's checklist
 // when they're on shift today. Self-contained: renders nothing
 // when there's no instance to surface.
@@ -75,7 +82,7 @@ function rangeLabelFor(startIso, endIso) {
 // `showLocation` controls whether each shift row renders a small
 // location chip; only shown for staff assigned to 2+ locations so
 // single-location users don't see redundant chrome.
-function WeekPanel({ title, startIso, endIso, shifts, showLocation }) {
+function WeekPanel({ title, startIso, endIso, shifts, showLocation, onShiftPress }) {
   const days = buildWeek(startIso, shifts || [])
   return (
     <View className="bg-un1t-surface border border-un1t-border rounded-2xl mb-3 overflow-hidden">
@@ -115,21 +122,30 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation }) {
                 </Text>
               ) : (
                 day.shifts.map((s, i) => (
-                  <View key={s.id} className={i > 0 ? 'mt-1' : ''}>
+                  <Pressable
+                    key={s.id}
+                    onPress={onShiftPress ? () => onShiftPress(s, day) : undefined}
+                    className={`${i > 0 ? 'mt-1' : ''} active:opacity-60`}
+                  >
                     <View className="flex-row items-center justify-between">
                       <Text className={`text-sm font-medium ${day.isPast ? 'text-un1t-subtle' : 'text-un1t-text'}`} numberOfLines={1}>
                         {s.shift_templates?.name || 'Shift'}
                       </Text>
-                      {s.published === false && (
-                        <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
-                          <Text className="text-[9px] uppercase text-amber-700 font-semibold">Draft</Text>
-                        </View>
-                      )}
-                      {s.status === 'swapped' && (
-                        <View className="ml-2 px-1.5 py-0.5 rounded bg-blue-500/20">
-                          <Text className="text-[9px] uppercase text-blue-700 font-semibold">Swapped</Text>
-                        </View>
-                      )}
+                      <View className="flex-row items-center">
+                        {s.published === false && (
+                          <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
+                            <Text className="text-[9px] uppercase text-amber-700 font-semibold">Draft</Text>
+                          </View>
+                        )}
+                        {s.status === 'swapped' && (
+                          <View className="ml-2 px-1.5 py-0.5 rounded bg-blue-500/20">
+                            <Text className="text-[9px] uppercase text-blue-700 font-semibold">Swapped</Text>
+                          </View>
+                        )}
+                        {onShiftPress && !day.isPast && s.status !== 'swapped' && (
+                          <Ionicons name="ellipsis-horizontal" size={14} color="#94A3B8" style={{ marginLeft: 4 }} />
+                        )}
+                      </View>
                     </View>
                     <View className="flex-row items-center flex-wrap">
                       <Text className={`text-xs ${day.isPast ? 'text-un1t-muted' : 'text-un1t-subtle'}`}>
@@ -149,7 +165,7 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation }) {
                         )
                       })()}
                     </View>
-                  </View>
+                  </Pressable>
                 ))
               )}
             </View>
@@ -192,7 +208,7 @@ function weekContainsToday(days) {
 
 // Agenda-style month view: groups weeks, skips days with no shifts,
 // shows a week header and per-day rows for days that have shifts.
-function MonthAgenda({ matrix, showLocation }) {
+function MonthAgenda({ matrix, showLocation, onShiftPress }) {
   const todayIso = (() => {
     const now = new Date()
     const y = now.getFullYear()
@@ -268,24 +284,33 @@ function MonthAgenda({ matrix, showLocation }) {
                     </Text>
                   </View>
 
-                  {/* Right: shifts */}
+                  {/* Right: shifts — each tappable for actions */}
                   <View className="flex-1">
                     {day.shifts.map((s, sIdx) => (
-                      <View key={s.id || sIdx} className={sIdx > 0 ? 'mt-1' : ''}>
+                      <Pressable
+                        key={s.id || sIdx}
+                        onPress={onShiftPress ? () => onShiftPress(s, day) : undefined}
+                        className={`${sIdx > 0 ? 'mt-1' : ''} active:opacity-60`}
+                      >
                         <View className="flex-row items-center justify-between">
                           <Text className={`text-sm font-medium ${day.isPast ? 'text-un1t-subtle' : 'text-un1t-text'}`} numberOfLines={1}>
                             {s.shift_templates?.name || 'Shift'}
                           </Text>
-                          {s.published === false && (
-                            <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
-                              <Text className="text-[9px] uppercase text-amber-700 font-semibold">Draft</Text>
-                            </View>
-                          )}
-                          {s.status === 'swapped' && (
-                            <View className="ml-2 px-1.5 py-0.5 rounded bg-blue-500/20">
-                              <Text className="text-[9px] uppercase text-blue-700 font-semibold">Swapped</Text>
-                            </View>
-                          )}
+                          <View className="flex-row items-center">
+                            {s.published === false && (
+                              <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20">
+                                <Text className="text-[9px] uppercase text-amber-700 font-semibold">Draft</Text>
+                              </View>
+                            )}
+                            {s.status === 'swapped' && (
+                              <View className="ml-2 px-1.5 py-0.5 rounded bg-blue-500/20">
+                                <Text className="text-[9px] uppercase text-blue-700 font-semibold">Swapped</Text>
+                              </View>
+                            )}
+                            {onShiftPress && !day.isPast && s.status !== 'swapped' && (
+                              <Ionicons name="ellipsis-horizontal" size={14} color="#94A3B8" style={{ marginLeft: 4 }} />
+                            )}
+                          </View>
                         </View>
                         <View className="flex-row items-center flex-wrap">
                           <Text className={`text-xs ${day.isPast ? 'text-un1t-muted' : 'text-un1t-subtle'}`}>
@@ -302,7 +327,7 @@ function MonthAgenda({ matrix, showLocation }) {
                             )
                           })()}
                         </View>
-                      </View>
+                      </Pressable>
                     ))}
                   </View>
                 </View>
@@ -348,6 +373,8 @@ export default function PersonalDashboard({ refreshKey }) {
   // Show per-shift location chip only when the user is assigned to
   // 2+ locations — otherwise it's redundant.
   const showLocation = (locations || []).length > 1
+  // AdjustSheet state — opened by tapping a shift then choosing "Adjust time".
+  const [adjustingShift, setAdjustingShift] = useState(null)
 
   const load = useCallback(async () => {
     if (!profile) return
@@ -388,7 +415,7 @@ export default function PersonalDashboard({ refreshKey }) {
         <View className="flex-row items-start">
           <Ionicons name="alert-circle" size={18} color="#DC2626" />
           <View className="flex-1 ml-2">
-            <Text className="text-sm font-semibold text-red-700">Couldn’t load Today</Text>
+            <Text className="text-sm font-semibold text-red-700">Couldn't load Today</Text>
             <Text className="text-xs text-red-700 mt-1">{error}</Text>
           </View>
         </View>
@@ -415,8 +442,51 @@ export default function PersonalDashboard({ refreshKey }) {
     nextWeekShifts, nextWeekStartIso, nextWeekEndIso,
     shiftsThisWeek, hoursThisWeek,
     monthShifts, monthStartIso, monthEndIso,
-    pendingSwapsForMe, myPendingTimeOff, unreadInbox,
+    pendingSwapsForMe, myPostedSwaps, myPendingTimeOff, unreadInbox,
   } = data
+
+  // Shift-tap action sheet — fires an Alert with options for the tapped shift.
+  // Guards: past shifts and swapped shifts get no actions.
+  function handleShiftPress(shift, day) {
+    if (day.isPast || shift.status === 'swapped') return
+    if (!shift.id) {
+      Alert.alert('No actions', 'This shift has no assignment ID and cannot be acted on.')
+      return
+    }
+    const shiftLabel = shift.shift_templates?.name || 'Shift'
+    const options = []
+
+    // Post for swap — only when shift isn't already swapped
+    options.push({
+      text: 'Post for swap',
+      onPress: async () => {
+        const res = await createSwapRequest({
+          requesterShiftId: shift.id,
+          locationId: activeLocation?.id,
+        })
+        if (res.success) {
+          Alert.alert('Posted', 'Managers have been notified.')
+          load()
+        } else {
+          Alert.alert("Couldn't post", res.error || 'Unknown error')
+        }
+      },
+    })
+
+    // Adjust time
+    options.push({
+      text: 'Adjust time',
+      onPress: () => setAdjustingShift(shift),
+    })
+
+    options.push({ text: 'Cancel', style: 'cancel' })
+
+    Alert.alert(
+      shiftLabel,
+      `${shiftTime(shift)} · ${shiftDurationHours(shift)}h`,
+      options,
+    )
+  }
 
   // Build the month matrix once (pure — fast enough to compute on render)
   const todayIso = (() => {
@@ -451,7 +521,7 @@ export default function PersonalDashboard({ refreshKey }) {
       <RosterToggle value={rosterView} onChange={setRosterView} />
 
       {rosterView === 'month' ? (
-        <MonthAgenda matrix={monthMatrix} showLocation={showLocation} />
+        <MonthAgenda matrix={monthMatrix} showLocation={showLocation} onShiftPress={handleShiftPress} />
       ) : (
         <>
           <WeekPanel
@@ -460,6 +530,7 @@ export default function PersonalDashboard({ refreshKey }) {
             endIso={weekEndIso}
             shifts={weekShifts}
             showLocation={showLocation}
+            onShiftPress={handleShiftPress}
           />
           <WeekPanel
             title="Next week"
@@ -467,9 +538,22 @@ export default function PersonalDashboard({ refreshKey }) {
             endIso={nextWeekEndIso}
             shifts={nextWeekShifts}
             showLocation={showLocation}
+            onShiftPress={handleShiftPress}
           />
         </>
       )}
+
+      {/* Request time off — shortcut from the roster surface so a coach
+          doesn't need to navigate to the Schedule tab to request leave. */}
+      <Pressable
+        onPress={() => router.push('/schedule/time-off-new')}
+        className="flex-row items-center bg-un1t-surface border border-un1t-border rounded-2xl px-4 py-3.5 mb-3 active:opacity-70"
+      >
+        <Ionicons name="calendar-outline" size={18} color="#64748B" />
+        <Text className="text-sm font-medium text-un1t-text ml-2.5">Request time off</Text>
+        <View className="flex-1" />
+        <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+      </Pressable>
 
       {/* Top KPIs */}
       <KpiRow>
@@ -483,37 +567,309 @@ export default function PersonalDashboard({ refreshKey }) {
         />
       </KpiRow>
 
-      {/* Swaps targeting me */}
-      <SectionHeader title="Swap requests for you" count={pendingSwapsForMe.length} />
-      <ListCard empty={pendingSwapsForMe.length === 0} emptyText="No swap requests waiting on you.">
-        {pendingSwapsForMe.map((s, i) => (
-          <PendingRow
-            key={s.id}
-            icon="swap-horizontal"
-            title={`${s.requester?.full_name || 'Someone'} wants you to take a shift`}
-            subtitle={s.requester_shift?.shift_templates?.name
-              ? `${s.requester_shift.shift_templates.name} on ${s.requester_shift.shift_date}`
-              : `Posted ${new Date(s.created_at).toLocaleDateString()}`}
-            onPress={() => router.push('/(tabs)/schedule')}
-            isLast={i === pendingSwapsForMe.length - 1}
-          />
-        ))}
-      </ListCard>
+      {/* My requests — live section replacing the two read-only ListCards.
+          Three sub-sections:
+          1. Swaps I posted (myPostedSwaps) — cancellable.
+          2. Swaps offered to me (pendingSwapsForMe) — read-only "Awaiting manager"
+             (self-accept is Phase 3, no Accept button here).
+          3. My pending time-off (myPendingTimeOff) — cancellable. */}
+      <SectionHeader
+        title="My requests"
+        count={(myPostedSwaps?.length || 0) + (pendingSwapsForMe?.length || 0) + (myPendingTimeOff?.length || 0)}
+      />
 
-      {/* My pending time-off */}
-      <SectionHeader title="Your time-off requests" count={myPendingTimeOff.length} />
-      <ListCard empty={myPendingTimeOff.length === 0} emptyText="No pending time-off requests.">
-        {myPendingTimeOff.map((t, i) => (
-          <PendingRow
-            key={t.id}
-            icon="calendar-outline"
-            title={`${t.type} · awaiting decision`}
-            subtitle={t.start_date === t.end_date ? t.start_date : `${t.start_date} – ${t.end_date}`}
-            onPress={() => router.push('/(tabs)/schedule')}
-            isLast={i === myPendingTimeOff.length - 1}
-          />
-        ))}
-      </ListCard>
+      {/* Empty state when all three request lists are empty */}
+      {(myPostedSwaps || []).length === 0 &&
+        (pendingSwapsForMe || []).length === 0 &&
+        (myPendingTimeOff || []).length === 0 && (
+        <ListCard empty emptyText="No pending requests." />
+      )}
+
+      {/* Swaps I posted — each row has a Cancel button */}
+      {(myPostedSwaps || []).length > 0 && (
+        <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden mb-3">
+          {(myPostedSwaps || []).map((s, i) => {
+            const shiftName = s.requester_shift?.shift_templates?.name
+            const shiftDate = s.requester_shift?.shift_blocks?.block_date
+            const subtitle = shiftName && shiftDate
+              ? `${shiftName} on ${shiftDate}`
+              : `Posted ${new Date(s.created_at).toLocaleDateString()}`
+            const isLast = i === (myPostedSwaps || []).length - 1
+            return (
+              <View
+                key={s.id}
+                className={`flex-row items-center px-4 py-3 ${!isLast ? 'border-b border-un1t-border' : ''}`}
+              >
+                <View className="w-8 h-8 rounded-full bg-un1t-border/40 items-center justify-center mr-3">
+                  <Ionicons name="swap-horizontal" size={16} color="#111827" />
+                </View>
+                <View className="flex-1">
+                  <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>Swap posted</Text>
+                  <Text className="text-xs text-un1t-subtle" numberOfLines={1}>{subtitle}</Text>
+                </View>
+                <View className="ml-2 px-2 py-0.5 rounded-full bg-un1t-border/60 mr-2">
+                  <Text className="text-[10px] font-semibold text-un1t-subtle">Pending</Text>
+                </View>
+                <Pressable
+                  onPress={() => {
+                    Alert.alert('Cancel swap?', 'This will remove the swap request.', [
+                      { text: 'Back', style: 'cancel' },
+                      {
+                        text: 'Cancel swap',
+                        style: 'destructive',
+                        onPress: async () => {
+                          const res = await cancelSwapRequest(s.id, activeLocation?.id)
+                          if (res.success) load()
+                          else Alert.alert("Couldn't cancel", res.error || 'Unknown error')
+                        },
+                      },
+                    ])
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-red-500/10 active:opacity-70"
+                >
+                  <Text className="text-xs font-semibold text-red-700">Cancel</Text>
+                </Pressable>
+              </View>
+            )
+          })}
+        </View>
+      )}
+
+      {/* Swaps offered to me — read-only, no Accept (Phase 3) */}
+      {(pendingSwapsForMe || []).length > 0 && (
+        <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden mb-3">
+          {(pendingSwapsForMe || []).map((s, i) => {
+            const isLast = i === (pendingSwapsForMe || []).length - 1
+            return (
+              <View
+                key={s.id}
+                className={`flex-row items-center px-4 py-3 ${!isLast ? 'border-b border-un1t-border' : ''}`}
+              >
+                <View className="w-8 h-8 rounded-full bg-un1t-border/40 items-center justify-center mr-3">
+                  <Ionicons name="swap-horizontal" size={16} color="#111827" />
+                </View>
+                <View className="flex-1">
+                  <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>
+                    {s.requester?.full_name || 'Someone'} wants you to take a shift
+                  </Text>
+                  <Text className="text-xs text-un1t-subtle" numberOfLines={1}>
+                    {s.requester_shift?.shift_templates?.name
+                      ? `${s.requester_shift.shift_templates.name} on ${s.requester_shift.shift_date}`
+                      : `Posted ${new Date(s.created_at).toLocaleDateString()}`}
+                  </Text>
+                </View>
+                <View className="ml-2 px-2 py-0.5 rounded-full bg-amber-500/20">
+                  <Text className="text-[10px] font-semibold text-amber-700">Awaiting manager</Text>
+                </View>
+              </View>
+            )
+          })}
+        </View>
+      )}
+
+      {/* My pending time-off — each row has a Cancel button */}
+      {(myPendingTimeOff || []).length > 0 && (
+        <View className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden mb-3">
+          {(myPendingTimeOff || []).map((t, i) => {
+            const isLast = i === (myPendingTimeOff || []).length - 1
+            return (
+              <View
+                key={t.id}
+                className={`flex-row items-center px-4 py-3 ${!isLast ? 'border-b border-un1t-border' : ''}`}
+              >
+                <View className="w-8 h-8 rounded-full bg-un1t-border/40 items-center justify-center mr-3">
+                  <Ionicons name="calendar-outline" size={16} color="#111827" />
+                </View>
+                <View className="flex-1">
+                  <Text className="text-sm font-medium text-un1t-text" numberOfLines={1}>
+                    {t.type} · awaiting decision
+                  </Text>
+                  <Text className="text-xs text-un1t-subtle" numberOfLines={1}>
+                    {t.start_date === t.end_date ? t.start_date : `${t.start_date} – ${t.end_date}`}
+                  </Text>
+                </View>
+                <View className="ml-2 px-2 py-0.5 rounded-full bg-un1t-border/60 mr-2">
+                  <Text className="text-[10px] font-semibold text-un1t-subtle">Pending</Text>
+                </View>
+                <Pressable
+                  onPress={() => {
+                    Alert.alert('Cancel time off?', 'This will withdraw your time-off request.', [
+                      { text: 'Back', style: 'cancel' },
+                      {
+                        text: 'Cancel request',
+                        style: 'destructive',
+                        onPress: async () => {
+                          const res = await cancelTimeOffRequest(t.id, activeLocation?.id)
+                          if (res.success) load()
+                          else Alert.alert("Couldn't cancel", res.error || 'Unknown error')
+                        },
+                      },
+                    ])
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-red-500/10 active:opacity-70"
+                >
+                  <Text className="text-xs font-semibold text-red-700">Cancel</Text>
+                </Pressable>
+              </View>
+            )
+          })}
+        </View>
+      )}
+
+      {/* Adjust-shift modal — opened from the shift-tap action sheet */}
+      <AgendaAdjustSheet
+        shift={adjustingShift}
+        onClose={() => setAdjustingShift(null)}
+        onSaved={() => { setAdjustingShift(null); load() }}
+        locationId={activeLocation?.id}
+      />
     </View>
+  )
+}
+
+// AgendaAdjustSheet — a slim port of the AdjustSheet from schedule.jsx,
+// adapted for use inside PersonalDashboard. Opens as a slide-up Modal over
+// the Today surface; uses adjustShiftAssignment (already imported above).
+// Only the shift's id (the shift_assignments row id) is used to PUT the assignments route.
+function AgendaAdjustSheet({ shift, onClose, onSaved, locationId }) {
+  const blockStart = (shift?.start_time || shift?.shift_templates?.start_time || '').slice(0, 5)
+  const blockEnd = (shift?.end_time || shift?.shift_templates?.end_time || '').slice(0, 5)
+
+  const [start, setStart] = useState('')
+  const [end, setEnd] = useState('')
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState(null)
+
+  // Reset fields whenever a new shift is opened.
+  useEffect(() => {
+    if (!shift) return
+    setStart((shift.start_time_override || '').slice(0, 5) || blockStart)
+    setEnd((shift.end_time_override || '').slice(0, 5) || blockEnd)
+    setReason(shift.partial_reason || '')
+    setErr(null)
+  }, [shift]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!shift) return null
+  const hasOverride = !!(shift.start_time_override || shift.end_time_override)
+
+  async function save() {
+    setErr(null)
+    if (start === end) { setErr('Start and end cannot be identical.'); return }
+    if (!/^\d{2}:\d{2}$/.test(start) || !/^\d{2}:\d{2}$/.test(end)) {
+      setErr('Use HH:MM format (24-hour).'); return
+    }
+    setSaving(true)
+    const r = await adjustShiftAssignment(shift.id, {
+      startTime: start === blockStart ? null : start,
+      endTime: end === blockEnd ? null : end,
+      reason: reason.trim() || null,
+      locationId,
+    })
+    setSaving(false)
+    if (r.success) onSaved?.()
+    else setErr(r.error || 'Save failed')
+  }
+
+  async function clearOverride() {
+    setErr(null); setSaving(true)
+    const r = await adjustShiftAssignment(shift.id, {
+      startTime: null, endTime: null, reason: null, locationId,
+    })
+    setSaving(false)
+    if (r.success) onSaved?.()
+    else setErr(r.error || 'Clear failed')
+  }
+
+  return (
+    <Modal visible animationType="slide" transparent onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        className="flex-1 justify-end bg-black/50"
+      >
+        <Pressable className="flex-1" onPress={onClose} />
+        <View className="bg-un1t-bg border-t border-un1t-border rounded-t-3xl p-5">
+          <View className="flex-row items-center justify-between mb-4">
+            <Text className="text-lg font-bold text-un1t-text">Adjust shift times</Text>
+            <Pressable onPress={onClose} hitSlop={10}>
+              <Ionicons name="close" size={22} color="#94A3B8" />
+            </Pressable>
+          </View>
+
+          <Text className="text-xs text-un1t-subtle mb-4">
+            {shift.shift_templates?.name || 'Shift'} · {shift.shift_date}{'\n'}
+            Block default: <Text className="font-mono text-un1t-text">{blockStart}–{blockEnd}</Text>.
+            {' '}Leave equal to inherit.
+          </Text>
+
+          <View className="flex-row gap-3 mb-4">
+            <View className="flex-1">
+              <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-1.5">Start (HH:MM)</Text>
+              <TextInput
+                value={start}
+                onChangeText={setStart}
+                placeholder={blockStart}
+                placeholderTextColor="#64748B"
+                keyboardType="numbers-and-punctuation"
+                maxLength={5}
+                className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text font-mono"
+              />
+            </View>
+            <View className="flex-1">
+              <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-1.5">End (HH:MM)</Text>
+              <TextInput
+                value={end}
+                onChangeText={setEnd}
+                placeholder={blockEnd}
+                placeholderTextColor="#64748B"
+                keyboardType="numbers-and-punctuation"
+                maxLength={5}
+                className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text font-mono"
+              />
+            </View>
+          </View>
+
+          <Text className="text-xs uppercase font-semibold text-un1t-subtle mb-1.5">Reason (optional)</Text>
+          <TextInput
+            value={reason}
+            onChangeText={setReason}
+            placeholder="e.g. left early — sick, covered until 1pm"
+            placeholderTextColor="#64748B"
+            maxLength={200}
+            className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-3 text-base text-un1t-text mb-4"
+          />
+
+          {err && (
+            <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3 flex-row items-start">
+              <Ionicons name="alert-circle" size={16} color="#DC2626" />
+              <Text className="text-sm text-red-700 ml-2 flex-1">{err}</Text>
+            </View>
+          )}
+
+          <Pressable
+            onPress={save}
+            disabled={saving}
+            className="bg-amber-600 active:opacity-80 disabled:opacity-50 px-4 py-3.5 rounded-xl items-center flex-row justify-center"
+          >
+            {saving
+              ? <ActivityIndicator color="#FFFFFF" />
+              : <Ionicons name="checkmark" size={18} color="#FFFFFF" />}
+            <Text className="text-base font-semibold text-white ml-2">
+              {saving ? 'Saving…' : 'Save adjustment'}
+            </Text>
+          </Pressable>
+
+          {hasOverride && (
+            <Pressable
+              onPress={clearOverride}
+              disabled={saving}
+              className="mt-2 active:opacity-70 px-4 py-3 rounded-xl items-center"
+            >
+              <Text className="text-sm font-medium text-un1t-subtle">Clear override (use block default)</Text>
+            </Pressable>
+          )}
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
   )
 }
