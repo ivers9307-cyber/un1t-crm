@@ -15,6 +15,7 @@ import {
   isBridgeOnline,
   latestBridgeSeenMs,
   BRIDGE_ONLINE_WINDOW_MS,
+  dublinWallClockToMs,
 } from './bridge-samples.js'
 
 // ── canonicaliseMac ──────────────────────────────────────────────
@@ -315,5 +316,34 @@ describe('isBridgeOnline', () => {
   it('treats exactly-at-window as offline (strict <)', () => {
     const seen = new Date(now - BRIDGE_ONLINE_WINDOW_MS).toISOString()
     expect(isBridgeOnline([{ last_seen_at: seen }], now)).toBe(false)
+  })
+})
+
+// ── dublinWallClockToMs (HR-CLASS-ALLOC.1) ───────────────────────
+// bookings.booking_date + start_time are Dublin wall-clock with NO tz.
+// The conversion must add the Dublin offset (BST +1h Mar–Oct, GMT +0
+// otherwise) — the naive `T${time}Z` parse was off by the BST offset.
+describe('dublinWallClockToMs', () => {
+  it('summer (BST): 06:00 Dublin = 05:00 UTC', () => {
+    expect(dublinWallClockToMs('2026-06-18', '06:00')).toBe(Date.parse('2026-06-18T05:00:00Z'))
+  })
+
+  it('winter (GMT): 06:00 Dublin = 06:00 UTC', () => {
+    expect(dublinWallClockToMs('2026-01-15', '06:00')).toBe(Date.parse('2026-01-15T06:00:00Z'))
+  })
+
+  it('honours a seconds component', () => {
+    expect(dublinWallClockToMs('2026-06-18', '06:00:30')).toBe(Date.parse('2026-06-18T05:00:30Z'))
+  })
+
+  it('is NOT a naive UTC parse in summer (guards the BST regression)', () => {
+    expect(dublinWallClockToMs('2026-06-18', '06:00')).not.toBe(Date.parse('2026-06-18T06:00:00Z'))
+  })
+
+  it('returns NaN for malformed input', () => {
+    expect(dublinWallClockToMs('not-a-date', '06:00')).toBeNaN()
+    expect(dublinWallClockToMs('2026-06-18', '6pm')).toBeNaN()
+    expect(dublinWallClockToMs(null, null)).toBeNaN()
+    expect(dublinWallClockToMs('2026-06-18', '')).toBeNaN()
   })
 })

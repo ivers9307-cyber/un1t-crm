@@ -28,6 +28,7 @@
 // needed because protocol-namespaced keys can't collide.
 
 import { logWarn } from '@/lib/log'
+import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
 
 // 90 min covers an hour-long class plus 15min before + 15min after.
 const BOOKING_WINDOW_MS = 90 * 60 * 1000
@@ -264,25 +265,76 @@ export async function resolveStrapsForBatch(db, { bridgeId, locationId, deviceKe
 }
 
 /**
- * Find an existing open heart_rate_sessions row for this contact at
- * this location, or create one if the contact has an in-progress
- * booking. Returns null if no active booking.
+ * Find an existing open heart_rate_sessions row for this contact at this
+ * location, or create one. Creation triggers, in priority:
+ *   (b) a Glofox class is running at this location now → tie the session to
+ *       that occurrence (presence). This is the path for ordinary class-goers,
+ *       who have no native CRM booking.
+ *   (c) an in-progress native CRM booking (consultation / PT) → tie to it.
+ * Returns null if neither applies.
  */
 async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, nowMs }) {
-  // (a) any existing open session?
+  // (a) any existing open session? Return it, backfilling the class link if
+  // it doesn't have one yet (e.g. session opened just before class start).
   const { data: existing } = await db
     .from('heart_rate_sessions')
-    .select('id')
+    .select('id, glofox_event_id')
     .eq('contact_id', contactId)
     .eq('location_id', locationId)
     .is('ended_at', null)
     .order('started_at', { ascending: false })
     .limit(1)
     .maybeSingle()
-  if (existing?.id) return existing.id
+  if (existing?.id) {
+    if (!existing.glofox_event_id) {
+      const occ = await resolveCurrentOccurrence(db, { locationId, nowMs })
+      if (occ) {
+        await db.from('heart_rate_sessions')
+          .update({ glofox_event_id: occ.glofox_event_id, class_name: occ.class_name, class_link_source: 'presence' })
+          .eq('id', existing.id)
+      }
+    }
+    return existing.id
+  }
 
-  // (b) find an in-progress booking on today (Dublin date).
-  const now = new Date(nowMs)
+  // Snapshot the contact's max HR once (used by whichever create path runs).
+  const { data: contact } = await db
+    .from('contacts')
+    .select('max_hr_override, dob')
+    .eq('id', contactId)
+    .single()
+  const maxHr = resolveMaxHrForBridgeInsert(contact)
+  const nowIso = new Date(nowMs).toISOString()
+
+  // (b) PRIMARY: a Glofox class is running now → tie the session to it
+  // (presence). This is what makes ordinary class-goers (no native CRM
+  // booking) get a session at all.
+  const occ = await resolveCurrentOccurrence(db, { locationId, nowMs })
+  if (occ) {
+    const { data: created, error: createErr } = await db
+      .from('heart_rate_sessions')
+      .insert({
+        contact_id: contactId,
+        location_id: locationId,
+        booking_id: null,
+        source: 'ble_bridge',
+        device_identifier: deviceKey,
+        started_at: nowIso,
+        max_hr_used: maxHr,
+        glofox_event_id: occ.glofox_event_id,
+        class_name: occ.class_name,
+        class_link_source: 'presence',
+      })
+      .select('id')
+      .single()
+    if (createErr) {
+      logWarn('bridge-samples', 'auto-create (class) session failed', { err: createErr, contactId, glofox_event_id: occ.glofox_event_id })
+      return null
+    }
+    return created?.id || null
+  }
+
+  // (c) FALLBACK: an in-progress native CRM booking (consultation / PT).
   const yesterdayIso = new Date(nowMs - 24 * 3600_000).toISOString().slice(0, 10)
   const tomorrowIso = new Date(nowMs + 24 * 3600_000).toISOString().slice(0, 10)
 
@@ -298,7 +350,10 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
   let activeBooking = null
   for (const b of bookings || []) {
     if (!b.booking_date || !b.start_time) continue
-    const bookingMs = new Date(`${b.booking_date}T${b.start_time}Z`).getTime()
+    // booking_date + start_time are Dublin wall-clock (NOT UTC) — convert
+    // correctly (the old `T${start_time}Z` was off by the BST offset).
+    const bookingMs = dublinWallClockToMs(b.booking_date, b.start_time)
+    if (!Number.isFinite(bookingMs)) continue
     const lo = nowMs - BOOKING_WINDOW_MS
     const hi = nowMs + BOOKING_PRE_GRACE_MS
     if (bookingMs >= lo && bookingMs <= hi) {
@@ -310,15 +365,6 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
 
   if (!activeBooking) return null
 
-  // (c) snapshot the contact's max HR onto the session row.
-  const { data: contact } = await db
-    .from('contacts')
-    .select('max_hr_override, dob')
-    .eq('id', contactId)
-    .single()
-
-  const maxHr = resolveMaxHrForBridgeInsert(contact)
-
   const { data: created, error: createErr } = await db
     .from('heart_rate_sessions')
     .insert({
@@ -327,21 +373,44 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
       booking_id: activeBooking.id,
       source: 'ble_bridge',
       device_identifier: deviceKey,
-      started_at: now.toISOString(),
+      started_at: nowIso,
       max_hr_used: maxHr,
     })
     .select('id')
     .single()
 
   if (createErr) {
-    logWarn('bridge-samples', 'auto-create session failed', {
-      err: createErr,
-      contactId,
-      bookingId: activeBooking.id,
-    })
+    logWarn('bridge-samples', 'auto-create session failed', { err: createErr, contactId, bookingId: activeBooking.id })
     return null
   }
   return created?.id || null
+}
+
+/**
+ * Convert a Dublin wall-clock date + time (the shape `bookings.booking_date`
+ * 'YYYY-MM-DD' + `bookings.start_time` 'HH:MM[:SS]' are stored in — operator-
+ * local, no tz) to an absolute epoch-ms instant. The naive
+ * `new Date(\`${date}T${time}Z\`)` treats it as UTC and is off by the BST
+ * offset (+1h Mar–Oct). Pure + exported for tests.
+ */
+export function dublinWallClockToMs(dateStr, timeStr) {
+  const dm = String(dateStr || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  const tm = String(timeStr || '').match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/)
+  if (!dm || !tm) return NaN
+  const y = +dm[1], mo = +dm[2], d = +dm[3]
+  const h = +tm[1], mi = +tm[2], s = +(tm[3] || 0)
+  const asUtc = Date.UTC(y, mo - 1, d, h, mi, s)
+  // What Dublin wall-clock does that UTC instant show? The delta is Dublin's
+  // offset from UTC at that moment.
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Dublin', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  })
+  const p = {}
+  for (const part of dtf.formatToParts(new Date(asUtc))) p[part.type] = part.value
+  const tzAsUtc = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second)
+  const offset = tzAsUtc - asUtc
+  return asUtc - offset
 }
 
 /**

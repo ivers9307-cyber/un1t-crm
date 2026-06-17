@@ -12,6 +12,7 @@
 // the coach needs to handle in real time.
 
 import { logWarn } from '@/lib/log'
+import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { resolveMaxHr, summariseSession } from '@/lib/heart-rate'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { runDetectionForSession } from '@/lib/achievements'
@@ -165,10 +166,16 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
   if (!contact) return { ok: false, error: 'Contact not found' }
   const maxHr = resolveMaxHr(contact, nowMs)
 
+  // Which Glofox class is running right now? Stamp it on the session so
+  // coach-paired members get the same presence-based class link as the
+  // auto-ingest path (HR-CLASS-ALLOC.1). Best-effort — a strap paired
+  // outside any class still creates a session, just without a class link.
+  const liveClass = await resolveCurrentOccurrence(db, { locationId, nowMs })
+
   // Find or create a session.
   const { data: existing } = await db
     .from('heart_rate_sessions')
-    .select('id, device_identifier')
+    .select('id, device_identifier, glofox_event_id')
     .eq('contact_id', contactId)
     .eq('location_id', locationId)
     .is('ended_at', null)
@@ -188,6 +195,9 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
         device_identifier: deviceKey,
         started_at: new Date(nowMs).toISOString(),
         max_hr_used: maxHr,
+        glofox_event_id: liveClass?.glofox_event_id ?? null,
+        class_name: liveClass?.class_name ?? null,
+        class_link_source: liveClass ? 'presence' : null,
       })
       .select('id')
       .single()
@@ -195,13 +205,19 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
       return { ok: false, error: createErr?.message || 'Session create failed' }
     }
     sessionId = created.id
-  } else if (existing.device_identifier !== deviceKey) {
-    // Member swapped straps mid-class — update the device_identifier
-    // so future samples on this session reference the current strap.
-    await db
-      .from('heart_rate_sessions')
-      .update({ device_identifier: deviceKey })
-      .eq('id', sessionId)
+  } else {
+    // Existing open session — follow a mid-class strap swap, and backfill
+    // the class link if the session predates the occurrence sync.
+    const patch = {}
+    if (existing.device_identifier !== deviceKey) patch.device_identifier = deviceKey
+    if (!existing.glofox_event_id && liveClass) {
+      patch.glofox_event_id = liveClass.glofox_event_id
+      patch.class_name = liveClass.class_name
+      patch.class_link_source = 'presence'
+    }
+    if (Object.keys(patch).length) {
+      await db.from('heart_rate_sessions').update(patch).eq('id', sessionId)
+    }
   }
 
   // strap_assignments override row.
