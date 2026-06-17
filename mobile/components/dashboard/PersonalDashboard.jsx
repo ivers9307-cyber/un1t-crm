@@ -633,6 +633,19 @@ export default function PersonalDashboard({ refreshKey }) {
           permissions never see it. */}
       <NeedsAttentionCard />
 
+      {/* Request time off — top-of-page shortcut, directly under Needs
+          attention, so a coach can request leave without scrolling past the
+          roster or hopping to the Schedule tab. */}
+      <Pressable
+        onPress={() => router.push('/schedule/time-off-new')}
+        className="flex-row items-center bg-un1t-surface border border-un1t-border rounded-2xl px-4 py-3.5 mb-3 active:opacity-70"
+      >
+        <Ionicons name="calendar-outline" size={18} color="#64748B" />
+        <Text className="text-sm font-medium text-un1t-text ml-2.5">Request time off</Text>
+        <View className="flex-1" />
+        <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
+      </Pressable>
+
       {/* Roster — Week|Month toggle (Month default).
           Month: agenda grouped by week, days-off hidden, today highlighted.
           Week: the classic This week / Next week panels stacked vertically. */}
@@ -660,18 +673,6 @@ export default function PersonalDashboard({ refreshKey }) {
           />
         </>
       )}
-
-      {/* Request time off — shortcut from the roster surface so a coach
-          doesn't need to navigate to the Schedule tab to request leave. */}
-      <Pressable
-        onPress={() => router.push('/schedule/time-off-new')}
-        className="flex-row items-center bg-un1t-surface border border-un1t-border rounded-2xl px-4 py-3.5 mb-3 active:opacity-70"
-      >
-        <Ionicons name="calendar-outline" size={18} color="#64748B" />
-        <Text className="text-sm font-medium text-un1t-text ml-2.5">Request time off</Text>
-        <View className="flex-1" />
-        <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
-      </Pressable>
 
       {/* CT-P3b — Swaps offered to you. Pending → Accept / Decline; once
           claimed (awaiting_approval) → Awaiting-manager chip + Withdraw.
