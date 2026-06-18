@@ -74,7 +74,7 @@ export function buildSessionReport(ctx, { nowMs = Date.now() } = {}) {
       class: {
         event_type_id: thisSession?.event_type_id ?? null,
         name: eventTypeName || null,
-        category: null,
+        category: thisSession?.category ?? null,
       },
     },
     summary: {
@@ -93,7 +93,12 @@ export function buildSessionReport(ctx, { nowMs = Date.now() } = {}) {
         percentile: Number.isFinite(ct.percentile) ? ct.percentile : null,
         sample_size: Number.isFinite(ct.recentCount) ? ct.recentCount : 0,
       },
-      vs_category: null,
+      vs_category: analytics.category ? {
+        category: analytics.category.categoryName,
+        mean_points: Number.isFinite(analytics.category.meanPoints) ? analytics.category.meanPoints : null,
+        percentile: Number.isFinite(analytics.category.percentile) ? analytics.category.percentile : null,
+        sample_size: Number.isFinite(analytics.category.recentCount) ? analytics.category.recentCount : 0,
+      } : null,
     },
     highlight: analytics.highlight || null,
     achievements: mapAchievements(ctx.achievements),

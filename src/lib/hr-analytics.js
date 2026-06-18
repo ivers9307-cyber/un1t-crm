@@ -3,7 +3,7 @@
 //
 // Inputs are always arrays of summary rows shaped like:
 //   {
-//     id, started_at, ended_at, event_type_id,
+//     id, started_at, ended_at, event_type_id, class_name, category,
 //     effort_points, peak_hr_bpm, avg_hr_bpm, zones_seconds,
 //   }
 //
@@ -30,6 +30,27 @@ const PRIOR_DAYS = 56
 export function sameClassType(sessions, eventTypeId) {
   if (!eventTypeId) return []
   return (sessions || []).filter((s) => s.event_type_id === eventTypeId)
+}
+
+/** Normalised class-name key — the single source of truth for class identity
+ *  + the class_categories match key. Used by the loaders, the settings API,
+ *  and the grouping below so the write key and read key can never diverge. */
+export function normalizeClassName(name) {
+  return String(name ?? '').trim().toLowerCase()
+}
+
+/** Same class as `className`, matched by normalized name (covers bridge-tracked
+ *  Glofox sessions, which have class_name but no event_type_id). */
+export function sameClass(sessions, className) {
+  const key = normalizeClassName(className)
+  if (!key) return []
+  return (sessions || []).filter((s) => normalizeClassName(s.class_name) === key)
+}
+
+/** Same category (cardio/strength/conditioning) as `category`. */
+export function sameCategory(sessions, category) {
+  if (!category) return []
+  return (sessions || []).filter((s) => s.category === category)
 }
 
 export function withinDays(sessions, days, nowMs = Date.now()) {
@@ -186,7 +207,7 @@ const HIGHLIGHT_RULES = [
 export function pickHighlight({ thisSession, history, eventTypeName, nowMs = Date.now() }) {
   if (!thisSession) return null
   const historyExclThis = (history || []).filter((s) => s.id !== thisSession.id)
-  const sameTypeExclThis = sameClassType(historyExclThis, thisSession.event_type_id)
+  const sameTypeExclThis = sameClass(historyExclThis, thisSession.class_name)
   // Pass nowMs through so the recent-window check matches the rest of
   // this file (withinDays / inWindow / trendDelta all accept it).
   // Without this the percentile-vs-last-28d highlight is non-
@@ -231,13 +252,22 @@ function computeStreak(thisSession, history) {
  */
 export function buildSessionAnalytics({ thisSession, history, eventTypeName, nowMs = Date.now() }) {
   const historyExclThis = (history || []).filter((s) => s.id !== thisSession.id)
-  const sameType = sameClassType(historyExclThis, thisSession.event_type_id)
+  const sameType = sameClass(historyExclThis, thisSession.class_name)
   const sameTypeRecent = withinDays(sameType, RECENT_DAYS, nowMs).slice(0, 8)
 
   const overallPointsTrend = trendDelta(historyExclThis, 'effort_points', nowMs)
   const overallPeakTrend = trendDelta(historyExclThis, 'peak_hr_bpm', nowMs)
   const classTypeMean = meanField(sameTypeRecent, 'effort_points')
   const classTypePercentile = percentileOf(Number(thisSession.effort_points), sameTypeRecent, 'effort_points')
+
+  // vs_category — identical maths over same-CATEGORY history (cardio/strength/…).
+  // Null when this session's class is unmapped.
+  const category = thisSession.category || null
+  const sameCat = sameCategory(historyExclThis, category)
+  const sameCatRecent = withinDays(sameCat, RECENT_DAYS, nowMs).slice(0, 8)
+  const categoryMean = meanField(sameCatRecent, 'effort_points')
+  const categoryPercentile = percentileOf(Number(thisSession.effort_points), sameCatRecent, 'effort_points')
+
   const highlight = pickHighlight({ thisSession, history: historyExclThis, eventTypeName, nowMs })
 
   return {
@@ -250,6 +280,12 @@ export function buildSessionAnalytics({ thisSession, history, eventTypeName, now
       thisPoints: Number.isFinite(thisSession.effort_points) ? thisSession.effort_points : null,
       percentile: classTypePercentile,
     },
+    category: category ? {
+      categoryName: category,
+      recentCount: sameCatRecent.length,
+      meanPoints: categoryMean != null ? Math.round(categoryMean) : null,
+      percentile: categoryPercentile,
+    } : null,
     overall: {
       pointsTrend: overallPointsTrend,
       peakTrend: overallPeakTrend,

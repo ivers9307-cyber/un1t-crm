@@ -14,7 +14,7 @@ describe('buildSessionReport', () => {
     expect(report.session.id).toBe('s-now')
     expect(report.session.duration_seconds).toBe(1800)
     expect(report.session.source).toBe('ble_bridge')
-    expect(report.session.class).toEqual({ event_type_id: 'et-ride', name: 'RIDE', category: null })
+    expect(report.session.class).toEqual({ event_type_id: 'et-ride', name: 'RIDE', category: 'cardio' })
   })
 
   it('summarises points + zones (5 zones, percents sum to ~1)', () => {
@@ -37,6 +37,12 @@ describe('buildSessionReport', () => {
     })
   })
 
+  it('maps the category comparison (all history is cardio)', () => {
+    expect(report.comparisons.vs_category).toEqual({
+      category: 'cardio', mean_points: 237, percentile: 1, sample_size: 3,
+    })
+  })
+
   it('picks the highlight (first time in Z5)', () => {
     expect(report.highlight.id).toBe('first_z5')
     expect(report.highlight.message).toMatch(/red zone/i)
@@ -49,7 +55,6 @@ describe('buildSessionReport', () => {
   })
 
   it('leaves the later-slice slots null', () => {
-    expect(report.comparisons.vs_category).toBeNull()
     expect(report.next_action).toBeNull()
   })
 

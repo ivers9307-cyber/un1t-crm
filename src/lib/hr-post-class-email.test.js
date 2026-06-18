@@ -43,6 +43,8 @@ function ctx({
       id: 'sess-1',
       started_at: startedAt,
       event_type_id: 'evt-RIDE',
+      class_name: eventTypeName,
+      category: null,
       effort_points: thisPoints,
       peak_hr_bpm: thisPeak,
       avg_hr_bpm: thisAvg,
@@ -77,8 +79,8 @@ describe('composeEmail', () => {
     const out = composeEmail(ctx({
       thisPeak: 195,
       history: [
-        { id: 'p1', started_at: '2026-04-20T18:00:00Z', event_type_id: 'evt-RIDE', effort_points: 100, peak_hr_bpm: 170, avg_hr_bpm: 140, zones_seconds: { 5: 0 } },
-        { id: 'p2', started_at: '2026-04-25T18:00:00Z', event_type_id: 'evt-RIDE', effort_points: 100, peak_hr_bpm: 175, avg_hr_bpm: 140, zones_seconds: { 5: 0 } },
+        { id: 'p1', started_at: '2026-04-20T18:00:00Z', event_type_id: 'evt-RIDE', class_name: 'RIDE', effort_points: 100, peak_hr_bpm: 170, avg_hr_bpm: 140, zones_seconds: { 5: 0 } },
+        { id: 'p2', started_at: '2026-04-25T18:00:00Z', event_type_id: 'evt-RIDE', class_name: 'RIDE', effort_points: 100, peak_hr_bpm: 175, avg_hr_bpm: 140, zones_seconds: { 5: 0 } },
       ],
     }), { nowMs: NOW })
     expect(out.subject).toMatch(/peak HR/i)
@@ -92,6 +94,7 @@ describe('composeEmail', () => {
       id: `p${i}`,
       started_at: new Date(NOW - (10 + i * 3) * 24 * 3600 * 1000).toISOString(),
       event_type_id: 'evt-RIDE',
+      class_name: 'RIDE',
       effort_points: 100, peak_hr_bpm: 180, avg_hr_bpm: 140, zones_seconds: { 5: 0 },
     }))
     const out = composeEmail(ctx({ history }), { nowMs: NOW })
@@ -124,6 +127,7 @@ describe('composeEmail', () => {
       id: `p${i}`,
       started_at: new Date(NOW - (5 + i) * 24 * 3600 * 1000).toISOString(),
       event_type_id: 'evt-RIDE',
+      class_name: 'RIDE',
       effort_points: 80 + i, peak_hr_bpm: 170, avg_hr_bpm: 140, zones_seconds: { 5: 0 },
     }))
     const out = composeEmail(ctx({ thisPoints: 200, history }), { nowMs: NOW })
@@ -139,6 +143,14 @@ describe('sendPostClassEmail', () => {
   function mockDb({ session, history = [], stampError = null }) {
     return {
       from: vi.fn((table) => {
+        if (table === 'class_categories') {
+          // No category mappings in test context — degrades gracefully to null categories.
+          return {
+            select: vi.fn(() => ({
+              eq: vi.fn(() => Promise.resolve({ data: [], error: null })),
+            })),
+          }
+        }
         if (table === 'heart_rate_sessions') {
           return {
             select: vi.fn((cols) => {

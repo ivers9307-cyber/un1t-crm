@@ -7,20 +7,22 @@
       "started_at": "2026-06-18T11:00:00.000Z",
       "ended_at": "2026-06-18T11:30:00.000Z",
       "source": "ble_bridge",
+      "class_name": "RIDE",
       "effort_points": 300, "avg_hr_bpm": 150, "peak_hr_bpm": 180, "max_hr_used": 190,
       "zones_seconds": { "1": 60, "2": 240, "3": 600, "4": 600, "5": 300 }
     },
     "thisSession": {
       "id": "s-now", "started_at": "2026-06-18T11:00:00.000Z", "event_type_id": "et-ride",
+      "class_name": "RIDE", "category": "cardio",
       "effort_points": 300, "peak_hr_bpm": 180, "avg_hr_bpm": 150,
       "zones_seconds": { "1": 60, "2": 240, "3": 600, "4": 600, "5": 300 }
     },
     "history": [
-      { "id": "r1", "started_at": "2026-06-10T11:00:00.000Z", "event_type_id": "et-ride", "effort_points": 200, "peak_hr_bpm": 170, "avg_hr_bpm": 145, "zones_seconds": { "1": 600, "2": 600, "3": 600, "4": 0, "5": 0 } },
-      { "id": "r2", "started_at": "2026-06-03T11:00:00.000Z", "event_type_id": "et-ride", "effort_points": 250, "peak_hr_bpm": 175, "avg_hr_bpm": 148, "zones_seconds": { "1": 300, "2": 600, "3": 600, "4": 300, "5": 0 } },
-      { "id": "r3", "started_at": "2026-05-27T11:00:00.000Z", "event_type_id": "et-ride", "effort_points": 260, "peak_hr_bpm": 178, "avg_hr_bpm": 149, "zones_seconds": { "1": 300, "2": 600, "3": 600, "4": 300, "5": 0 } },
-      { "id": "p1", "started_at": "2026-05-05T11:00:00.000Z", "event_type_id": "et-ride", "effort_points": 180, "peak_hr_bpm": 165, "avg_hr_bpm": 140, "zones_seconds": { "1": 600, "2": 600, "3": 300, "4": 0, "5": 0 } },
-      { "id": "p2", "started_at": "2026-04-28T11:00:00.000Z", "event_type_id": "et-ride", "effort_points": 200, "peak_hr_bpm": 168, "avg_hr_bpm": 142, "zones_seconds": { "1": 600, "2": 600, "3": 300, "4": 0, "5": 0 } }
+      { "id": "r1", "started_at": "2026-06-10T11:00:00.000Z", "event_type_id": "et-ride", "class_name": "RIDE", "category": "cardio", "effort_points": 200, "peak_hr_bpm": 170, "avg_hr_bpm": 145, "zones_seconds": { "1": 600, "2": 600, "3": 600, "4": 0, "5": 0 } },
+      { "id": "r2", "started_at": "2026-06-03T11:00:00.000Z", "event_type_id": "et-ride", "class_name": "RIDE", "category": "cardio", "effort_points": 250, "peak_hr_bpm": 175, "avg_hr_bpm": 148, "zones_seconds": { "1": 300, "2": 600, "3": 600, "4": 300, "5": 0 } },
+      { "id": "r3", "started_at": "2026-05-27T11:00:00.000Z", "event_type_id": "et-ride", "class_name": "RIDE", "category": "cardio", "effort_points": 260, "peak_hr_bpm": 178, "avg_hr_bpm": 149, "zones_seconds": { "1": 300, "2": 600, "3": 600, "4": 300, "5": 0 } },
+      { "id": "p1", "started_at": "2026-05-05T11:00:00.000Z", "event_type_id": "et-ride", "class_name": "RIDE", "category": "cardio", "effort_points": 180, "peak_hr_bpm": 165, "avg_hr_bpm": 140, "zones_seconds": { "1": 600, "2": 600, "3": 300, "4": 0, "5": 0 } },
+      { "id": "p2", "started_at": "2026-04-28T11:00:00.000Z", "event_type_id": "et-ride", "class_name": "RIDE", "category": "cardio", "effort_points": 200, "peak_hr_bpm": 168, "avg_hr_bpm": 142, "zones_seconds": { "1": 600, "2": 600, "3": 300, "4": 0, "5": 0 } }
     ],
     "achievements": [
       { "slug": "first_red", "name": "Into the Red", "icon": "Flame", "earned_at": "2026-06-18T11:30:05.000Z" }

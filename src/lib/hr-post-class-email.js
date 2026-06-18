@@ -30,6 +30,7 @@
 
 import { sendTransactionalEmail } from '@/lib/postmark'
 import { buildSessionReport } from '@/lib/hr-session-report'
+import { normalizeClassName } from '@/lib/hr-analytics'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { formatWeekdayShortDateTimeInTZ } from '@/lib/dates'
 
@@ -55,7 +56,7 @@ export async function loadContextForSession(db, sessionId) {
     .select(`
       id, contact_id, location_id, booking_id, started_at, ended_at,
       max_hr_used, avg_hr_bpm, peak_hr_bpm, zones_seconds, effort_points,
-      email_sent_at, source, device_identifier,
+      email_sent_at, source, device_identifier, class_name,
       contact:contacts!heart_rate_sessions_contact_id_fkey ( id, name, email, hr_post_class_emails_enabled ),
       booking:bookings!heart_rate_sessions_booking_id_fkey ( id, booking_date, start_time,
         event_type:event_types!bookings_event_type_id_fkey ( id, name )
@@ -77,26 +78,38 @@ export async function loadContextForSession(db, sessionId) {
   const eventTypeId = session.booking?.event_type?.id || null
   const eventTypeName = session.booking?.event_type?.name || null
 
+  const className = session.class_name ?? eventTypeName ?? null
+  const { data: catRows } = await db
+    .from('class_categories')
+    .select('class_name_normalized, category')
+    .eq('location_id', session.location_id)
+  const catMap = new Map((catRows || []).map((c) => [c.class_name_normalized, c.category]))
+  const categoryFor = (name) => catMap.get(normalizeClassName(name)) ?? null
+
   // Pull 90 days of history for this contact, all class types.
   // Just the columns the analytics layer needs.
   const sinceIso = new Date(Date.now() - HISTORY_LOOKBACK_DAYS * 24 * 3600 * 1000).toISOString()
   const { data: historyRows } = await db
     .from('heart_rate_sessions')
-    .select(`id, started_at, ended_at, effort_points, peak_hr_bpm, avg_hr_bpm, zones_seconds,
-             booking:bookings!heart_rate_sessions_booking_id_fkey ( event_type_id )`)
+    .select(`id, started_at, ended_at, effort_points, peak_hr_bpm, avg_hr_bpm, zones_seconds, class_name,
+             booking:bookings!heart_rate_sessions_booking_id_fkey ( event_type:event_types!bookings_event_type_id_fkey ( name ) )`)
     .eq('contact_id', session.contact_id)
     .gte('started_at', sinceIso)
     .not('ended_at', 'is', null)
 
-  const history = (historyRows || []).map((r) => ({
-    id: r.id,
-    started_at: r.started_at,
-    event_type_id: r.booking?.event_type_id || null,
-    effort_points: r.effort_points,
-    peak_hr_bpm: r.peak_hr_bpm,
-    avg_hr_bpm: r.avg_hr_bpm,
-    zones_seconds: r.zones_seconds,
-  }))
+  const history = (historyRows || []).map((r) => {
+    const name = r.class_name ?? r.booking?.event_type?.name ?? null
+    return {
+      id: r.id,
+      started_at: r.started_at,
+      class_name: name,
+      category: categoryFor(name),
+      effort_points: r.effort_points,
+      peak_hr_bpm: r.peak_hr_bpm,
+      avg_hr_bpm: r.avg_hr_bpm,
+      zones_seconds: r.zones_seconds,
+    }
+  })
 
   // The "thisSession" shape mirrors the history shape so the
   // analytics layer doesn't have to special-case.
@@ -104,6 +117,8 @@ export async function loadContextForSession(db, sessionId) {
     id: session.id,
     started_at: session.started_at,
     event_type_id: eventTypeId,
+    class_name: className,
+    category: categoryFor(className),
     effort_points: session.effort_points,
     peak_hr_bpm: session.peak_hr_bpm,
     avg_hr_bpm: session.avg_hr_bpm,
@@ -115,7 +130,7 @@ export async function loadContextForSession(db, sessionId) {
     session,
     thisSession,
     history,
-    eventTypeName,
+    eventTypeName: className,
     contact: session.contact,
   }
 }
@@ -162,17 +177,24 @@ export function composeEmail(ctx, { nowMs = Date.now() } = {}) {
 
   const sessionUrl = `${APP_URL}/sessions/${session.id}`
 
+  const vc = report.comparisons.vs_category
+  const vcLine = (vc && vc.percentile != null && vc.sample_size >= 2)
+    ? (Math.round(vc.percentile * 100) >= 50
+        ? `Top ${100 - Math.round(vc.percentile * 100)}% of your last ${vc.sample_size} ${vc.category} classes.`
+        : `Building back up in your ${vc.category} classes — avg ${vc.mean_points} pts over your last ${vc.sample_size}.`)
+    : null
+
   const subject = pickSubject({ firstName, classLabel, points, highlight: analytics.highlight })
 
   return {
     subject,
     text: renderText({
       firstName, classLabel, startedAt, points, peak, avg, durationMin,
-      breakdown, analytics, sessionUrl,
+      breakdown, analytics, vcLine, sessionUrl,
     }),
     html: renderHtml({
       firstName, classLabel, startedAt, points, peak, avg, durationMin,
-      breakdown, analytics, sessionUrl, contact, sessionId: session.id,
+      breakdown, analytics, vcLine, sessionUrl, contact, sessionId: session.id,
     }),
     analytics,
   }
@@ -209,7 +231,7 @@ function classTypeLabel(classType) {
   return `Lighter than your usual ${classType.eventTypeName || 'session'} — yours mean ${classType.meanPoints} pts.`
 }
 
-function renderText({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, sessionUrl }) {
+function renderText({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl }) {
   const lines = []
   lines.push(`Hi ${firstName},`)
   lines.push('')
@@ -234,6 +256,10 @@ function renderText({ firstName, classLabel, startedAt, points, peak, avg, durat
     lines.push('')
     lines.push(`Class trend — ${ctLabel}`)
   }
+  if (vcLine) {
+    lines.push('')
+    lines.push(`Category trend — ${vcLine}`)
+  }
 
   const tPoints = trendLabel(analytics.overall.pointsTrend)
   if (tPoints) {
@@ -246,7 +272,7 @@ function renderText({ firstName, classLabel, startedAt, points, peak, avg, durat
   return lines.join('\n')
 }
 
-function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, sessionUrl, contact, sessionId }) {
+function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, contact, sessionId }) {
   const ctLabel = classTypeLabel(analytics.classType)
   const tPoints = trendLabel(analytics.overall.pointsTrend)
   const tPeak = trendLabel(analytics.overall.peakTrend)
@@ -284,6 +310,7 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
 
   const insightLines = []
   if (ctLabel) insightLines.push(`<strong>${escapeHtml(classLabel)}:</strong> ${escapeHtml(ctLabel)}`)
+  if (vcLine) insightLines.push(`<strong>Category:</strong> ${escapeHtml(vcLine)}`)
   if (tPoints) {
     const arrow = tPoints.dir === 'up' ? '↑' : tPoints.dir === 'down' ? '↓' : '→'
     insightLines.push(`<strong>UN1T Points overall:</strong> ${arrow} ${escapeHtml(tPoints.label)}`)

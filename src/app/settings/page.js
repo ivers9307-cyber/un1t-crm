@@ -3,7 +3,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, UserCog, LayoutGrid, Trophy, Cable, ChevronRight, Bell, KeyRound, MessagesSquare, Bot, Download, Globe } from 'lucide-react'
+import { Users, MapPin, Shield, UserCog, LayoutGrid, Trophy, Cable, ChevronRight, Bell, KeyRound, MessagesSquare, Bot, Download, Globe, Activity } from 'lucide-react'
 
 // SETTINGS.3/.4 — reorganized this page:
 //   - Master tools moved to TOP (was mid-page)
@@ -218,6 +218,21 @@ export default async function SettingsPage() {
                 <div className="text-un1t-text">Customer agent</div>
                 <div className="text-xs text-un1t-subtle mt-0.5">
                   The customer-facing WhatsApp / Instagram AI agent — channel connections, behaviour, and the knowledge it answers from. Off by default.
+                </div>
+              </div>
+            </div>
+            <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text shrink-0" />
+          </Link>
+          <Link
+            href="/settings/class-categories"
+            className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <Activity size={16} className="text-un1t-subtle shrink-0" />
+              <div>
+                <div className="text-un1t-text">Class categories</div>
+                <div className="text-xs text-un1t-subtle mt-0.5">
+                  Tag each class cardio / strength / conditioning — powers the post-class report comparisons.
                 </div>
               </div>
             </div>
