@@ -15,10 +15,11 @@ import {
 const NOW = new Date('2026-05-08T18:00:00Z').getTime()
 const day = (n) => new Date(NOW - n * 24 * 3600 * 1000).toISOString()
 
-function s({ id = 'x', startedDaysAgo = 0, eventType = 'evt-RIDE', points = 100, peak = 170, avg = 140, zones = { 1: 60, 2: 600, 3: 1200, 4: 600, 5: 0 } }) {
+function s({ id = 'x', startedDaysAgo = 0, eventType = 'evt-RIDE', className = 'RIDE', points = 100, peak = 170, avg = 140, zones = { 1: 60, 2: 600, 3: 1200, 4: 600, 5: 0 } }) {
   return {
     id, started_at: day(startedDaysAgo),
     event_type_id: eventType,
+    class_name: className,
     effort_points: points, peak_hr_bpm: peak, avg_hr_bpm: avg,
     zones_seconds: zones,
   }
@@ -164,9 +165,9 @@ describe('pickHighlight', () => {
     expect(h.message).toMatch(/RIDE/)
   })
   it('top_quartile_recent when this session is high vs last 28d', () => {
-    // Use a different event type for this session so best_class_type_points
+    // Use a different event type + class name for this session so best_class_type_points
     // can't fire (its sample-of-2-or-more rule won't be met).
-    const thisSession = s({ id: 'now', eventType: 'evt-NEW', points: 200, peak: 170, zones: { 5: 0 } })
+    const thisSession = s({ id: 'now', eventType: 'evt-NEW', className: 'NEWCLASS', points: 200, peak: 170, zones: { 5: 0 } })
     const history = Array.from({ length: 8 }).map((_, i) =>
       s({ id: `p${i}`, eventType: 'evt-RIDE', startedDaysAgo: 5 + i, points: 50 + i, peak: 170 }),
     )
@@ -202,5 +203,31 @@ describe('buildSessionAnalytics', () => {
     expect(out.classType.meanPoints).toBeGreaterThan(0)
     expect(out.classType.percentile).toBeGreaterThanOrEqual(0)
     expect(out.overall.pointsTrend.direction).toMatch(/up|flat|down/)
+  })
+})
+
+describe('buildSessionAnalytics — category grouping', () => {
+  const base = (over) => ({ id: 'x', started_at: day(2), class_name: 'RIDE', category: 'cardio', effort_points: 100, peak_hr_bpm: 170, avg_hr_bpm: 140, zones_seconds: { 1: 60, 2: 600, 3: 1200, 4: 600, 5: 0 }, ...over })
+
+  it('groups vs_category by category, not class, and ignores other categories', () => {
+    const thisSession = base({ id: 'now', startedDaysAgo: 0, started_at: day(0), effort_points: 300 })
+    const history = [
+      base({ id: 'c1', started_at: day(3), class_name: 'RIDE', category: 'cardio', effort_points: 200 }),
+      base({ id: 'c2', started_at: day(5), class_name: 'TEMPO', category: 'cardio', effort_points: 220 }),
+      base({ id: 's1', started_at: day(4), class_name: 'LIFT', category: 'strength', effort_points: 999 }),
+    ]
+    const a = buildSessionAnalytics({ thisSession, history, eventTypeName: 'RIDE', nowMs: NOW })
+    // category = cardio over c1 + c2 (the strength row excluded)
+    expect(a.category).toMatchObject({ categoryName: 'cardio', recentCount: 2, meanPoints: 210 })
+    expect(a.category.percentile).toBe(1) // 300 beats both 200 + 220
+    // vs_this_class = RIDE only (c1), not TEMPO/LIFT
+    expect(a.classType.recentCount).toBe(1)
+    expect(a.classType.meanPoints).toBe(200)
+  })
+
+  it('returns null category when this session has none', () => {
+    const thisSession = base({ id: 'now', started_at: day(0), category: null })
+    const a = buildSessionAnalytics({ thisSession, history: [], eventTypeName: 'RIDE', nowMs: NOW })
+    expect(a.category).toBeNull()
   })
 })
