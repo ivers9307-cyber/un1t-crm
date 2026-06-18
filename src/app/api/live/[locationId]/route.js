@@ -11,6 +11,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { getLiveSessions, getAvailableStraps } from '@/lib/live-class'
+import { getClassRoster, mergeRosterWithSessions } from '@/lib/class-bookings'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -27,15 +28,23 @@ export async function GET(_request, props) {
   }
 
   const db = createServerClient()
-  const [sessions, availableStraps] = await Promise.all([
+  const [sessions, availableStraps, rosterData] = await Promise.all([
     getLiveSessions(db, locationId),
     getAvailableStraps(db, locationId),
+    getClassRoster(db, { locationId }),
   ])
+
+  // HR-CLASS-ALLOC.2 — the live-class roster panel: everyone booked into the
+  // class running now, with HR overlaid on whoever's wearing a strap, plus anon
+  // walk-ins. Empty array when no class is live.
+  const roster = mergeRosterWithSessions(rosterData.roster, sessions)
 
   return NextResponse.json({
     ok: true,
     server_time: new Date().toISOString(),
     sessions,
     available_straps: availableStraps,
+    roster,
+    occurrence: rosterData.occurrence,
   })
 }
