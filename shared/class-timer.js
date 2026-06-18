@@ -122,6 +122,26 @@ export function applySkip(run, timeline, direction, nowMs) {
   return (Number(run.elapsed_offset_ms) || 0) + delta
 }
 
+/**
+ * Pure: pick the template whose `glofox_program` best matches a live class name
+ * (CLASS-TIMER PR4 — "DR1VE is live → load DR1VE intervals?"). `templates` is
+ * assumed ordered by preference (most-recently-updated first). Case-insensitive,
+ * trimmed; matches on equality OR either-contains-the-other so a "DR1VE" tag
+ * still catches a "DR1VE 45" / "DR1VE Express" class. Returns the matched
+ * template object, or null. Templates with a blank `glofox_program` are skipped.
+ */
+export function matchTemplateToClassName(templates, className) {
+  if (!Array.isArray(templates) || !className) return null
+  const target = String(className).trim().toLowerCase()
+  if (!target) return null
+  for (const t of templates) {
+    const prog = (t?.glofox_program || '').trim().toLowerCase()
+    if (!prog) continue
+    if (target === prog || target.includes(prog) || prog.includes(target)) return t
+  }
+  return null
+}
+
 /** Pure: the DB patch for a run control action. {} = no-op. */
 export function nextRunState(run, action, nowMs, { direction, timeline } = {}) {
   const nowIso = new Date(nowMs).toISOString()

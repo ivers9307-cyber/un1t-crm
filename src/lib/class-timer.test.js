@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   validateStructure, buildTimeline, computeEffectiveElapsedMs,
   resolveTimerState, applySkip, nextRunState, TIMER_SEGMENT_TYPES,
+  matchTemplateToClassName,
 } from './class-timer'
 
 // A template: 2s prep, then 2 rounds of (3s work, 1s rest), then 2s cool.
@@ -126,5 +127,38 @@ describe('class-timer: nextRunState', () => {
     const patch = nextRunState(run, 'skip', started + 3000, { direction: 'next', timeline: tl })
     expect(patch).toHaveProperty('elapsed_offset_ms')
     expect(computeEffectiveElapsedMs({ ...run, ...patch }, started + 3000)).toBe(5000)
+  })
+})
+
+describe('class-timer: matchTemplateToClassName (PR4 Glofox auto-link)', () => {
+  const templates = [
+    { id: 't1', name: 'DR1VE intervals', glofox_program: 'DR1VE' },
+    { id: 't2', name: 'Rhythm ride', glofox_program: 'RHYTHM' },
+    { id: 't3', name: 'Untagged', glofox_program: null },
+  ]
+  it('matches case-insensitively on exact program', () => {
+    expect(matchTemplateToClassName(templates, 'rhythm')?.id).toBe('t2')
+  })
+  it('matches when the live class name contains the program tag (DR1VE 45)', () => {
+    expect(matchTemplateToClassName(templates, 'DR1VE 45')?.id).toBe('t1')
+  })
+  it('matches when the program tag contains the live class name', () => {
+    expect(matchTemplateToClassName([{ id: 'x', glofox_program: 'DR1VE intervals' }], 'DR1VE')?.id).toBe('x')
+  })
+  it('returns the first match — templates are pre-ordered by preference', () => {
+    const ordered = [
+      { id: 'newer', glofox_program: 'DR1VE' },
+      { id: 'older', glofox_program: 'DR1VE' },
+    ]
+    expect(matchTemplateToClassName(ordered, 'DR1VE')?.id).toBe('newer')
+  })
+  it('skips blank-program templates and returns null when nothing matches', () => {
+    expect(matchTemplateToClassName(templates, 'Yoga')).toBeNull()
+    expect(matchTemplateToClassName([{ id: 'b', glofox_program: '   ' }], 'anything')).toBeNull()
+  })
+  it('returns null for empty / missing inputs', () => {
+    expect(matchTemplateToClassName(templates, '')).toBeNull()
+    expect(matchTemplateToClassName(templates, null)).toBeNull()
+    expect(matchTemplateToClassName(null, 'DR1VE')).toBeNull()
   })
 })

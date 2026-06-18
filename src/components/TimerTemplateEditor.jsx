@@ -16,6 +16,7 @@ import {
 
 export default function TimerTemplateEditor({ locationId, initial, onSaved, onCancel }) {
   const [name, setName] = useState(initial?.name || '')
+  const [glofoxProgram, setGlofoxProgram] = useState(initial?.glofox_program || '')
   const [structure, setStructure] = useState(
     initial?.structure?.length ? initial.structure : emptyStructure(),
   )
@@ -31,9 +32,10 @@ export default function TimerTemplateEditor({ locationId, initial, onSaved, onCa
     try {
       const isEdit = !!initial?.id
       const url = isEdit ? `/api/timer/templates/${initial.id}` : '/api/timer/templates'
+      const glofox_program = glofoxProgram.trim() || null
       const body = isEdit
-        ? { name: name.trim(), structure }
-        : { location_id: locationId, name: name.trim(), structure }
+        ? { name: name.trim(), structure, glofox_program }
+        : { location_id: locationId, name: name.trim(), structure, glofox_program }
       const r = await fetch(url, {
         method: isEdit ? 'PUT' : 'POST',
         headers: { 'content-type': 'application/json' },
@@ -62,6 +64,17 @@ export default function TimerTemplateEditor({ locationId, initial, onSaved, onCa
               value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. DR1VE intervals"
               className="mt-1 w-full rounded-md border border-un1t-border bg-white px-3 py-2 text-sm"
             />
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-un1t-subtle">Link to a Glofox class <span className="font-normal">(optional)</span></label>
+            <input
+              value={glofoxProgram} onChange={(e) => setGlofoxProgram(e.target.value)} placeholder="e.g. DR1VE"
+              className="mt-1 w-full rounded-md border border-un1t-border bg-white px-3 py-2 text-sm"
+            />
+            <p className="mt-1 text-xs text-un1t-subtle">
+              When a class whose name contains this is live, the timer screens offer to load this timer in one tap.
+            </p>
           </div>
 
           <div className="space-y-2">

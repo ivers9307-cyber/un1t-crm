@@ -35,6 +35,7 @@ const PRESETS = [
 export default function TimerControlClient({ locationId }) {
   const [templates, setTemplates] = useState([])
   const [run, setRun] = useState(null)
+  const [suggestion, setSuggestion] = useState(null) // { className, template } | null
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [editing, setEditing] = useState(null) // null | 'new' | template object
@@ -50,7 +51,12 @@ export default function TimerControlClient({ locationId }) {
     try {
       const r = await fetch(`/api/timer/active?location_id=${locationId}`, { cache: 'no-store' })
       const j = await r.json()
-      if (j.success) setRun(j.run || null)
+      if (j.success) {
+        setRun(j.run || null)
+        setSuggestion(!j.run && j.suggested_template
+          ? { className: j.live_class?.class_name, template: j.suggested_template }
+          : null)
+      }
     } catch { /* transient */ }
   }
 
@@ -119,6 +125,10 @@ export default function TimerControlClient({ locationId }) {
     <div className="space-y-6">
       {error && (
         <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p>
+      )}
+
+      {!run && suggestion && (
+        <SuggestionBanner suggestion={suggestion} busy={busy} onStart={() => start(suggestion.template.id)} />
       )}
 
       {run ? (
@@ -194,6 +204,37 @@ export default function TimerControlClient({ locationId }) {
   )
 }
 
+// Per-segment-type accent — mirrors the SEG_COLOR map on the TV banner + mobile
+// control so the coach's screen matches the wall.
+const SEG_COLOR = { prep: '#F59E0B', work: '#10B981', rest: '#3B82F6', station: '#A855F7', custom: '#64748B' }
+
+// CLASS-TIMER PR4 — "DR1VE is live → load its timer?" prompt shown when a class
+// is on now and a template is tagged for it (no run active).
+function SuggestionBanner({ suggestion, busy, onStart }) {
+  const { className, template } = suggestion
+  return (
+    <section className="rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-emerald-800">
+            <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-emerald-500 align-middle" />
+            {className} is on now
+          </p>
+          <p className="mt-0.5 text-xs text-emerald-700">
+            Load “{template.name}” ({fmtClock((template.total_seconds || 0) * 1000)})?
+          </p>
+        </div>
+        <button
+          type="button" disabled={busy} onClick={onStart}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
+        >
+          <Play size={14} /> Load timer
+        </button>
+      </div>
+    </section>
+  )
+}
+
 function RunControl({ run, busy, onControl }) {
   const timeline = useMemo(
     () => (run?.structure_snapshot ? buildTimeline(run.structure_snapshot) : null),
@@ -208,6 +249,7 @@ function RunControl({ run, busy, onControl }) {
   const nowMs = Date.now() // coach device clock is online + fine for control
   const st = resolveTimerState(timeline, computeEffectiveElapsedMs(run, nowMs))
   const paused = run.status === 'paused'
+  const tint = st.currentStep ? (SEG_COLOR[st.currentStep.type] || '#64748B') : '#64748B'
 
   return (
     <section className="rounded-2xl border border-un1t-border bg-white p-5">
@@ -217,7 +259,7 @@ function RunControl({ run, busy, onControl }) {
       </div>
 
       <div className="mt-3 flex items-baseline gap-3">
-        <span className="text-4xl font-bold tabular-nums">
+        <span className="text-4xl font-bold tabular-nums" style={{ color: st.finished ? undefined : tint }}>
           {st.finished ? 'Done' : fmtClock(st.segmentRemainingMs)}
         </span>
         {!st.finished && <span className="text-lg font-medium text-un1t-subtle">{st.currentStep?.label}</span>}
