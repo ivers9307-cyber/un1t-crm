@@ -48,7 +48,7 @@ export default function PresentViewer({ token, initial }) {
           style={{
             position: 'absolute', inset: 0, width: '100%', height: '100%',
             objectFit: 'contain', opacity: i === index ? 1 : 0,
-            transition: 'opacity 120ms ease', pointerEvents: 'none',
+            transition: 'opacity 300ms ease-in-out', pointerEvents: 'none',
           }}
         />
       ))}
