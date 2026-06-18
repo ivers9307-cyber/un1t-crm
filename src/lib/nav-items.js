@@ -138,10 +138,6 @@ export const ALL_NAV = [
     ],
   },
 
-  // PRESENT — run a slide deck across multiple screens from a laptop
-  // (workshops / events). Sits in the gym section alongside the live-floor tools.
-  { href: '/presentations', label: 'Presentations', icon: Projector, permission: 'presentations', section: 'gym' },
-
   // ── Automations ────────────────────────────────────────────────
   { href: '/automations', label: 'Automations', icon: Workflow, anyPermission: ['automations', 'email', 'whatsapp'], section: 'automations' },
 
@@ -167,6 +163,9 @@ export const ALL_NAV = [
       { href: '/admin/contracts',         label: 'Contracts',             icon: FileSignature, permission: 'contracts' },
       // TV.1 — TV display management. UC Cast Pro renders /tv/<token>.
       { href: '/admin/tv-displays',       label: 'TV Displays',           icon: Tv,            permission: 'tv_displays' },
+      // PRESENT — run a slide deck across multiple screens from a laptop
+      // (workshops / events). Its own `presentations` permission.
+      { href: '/presentations',           label: 'Presentations',         icon: Projector,     permission: 'presentations' },
       // Public landing page — preview link, opens in new tab. (The
       // edit form moved to Settings → Landing page in SIDEBAR-IA.1.)
       { href: '/welcome',                 label: 'Landing page',          icon: Globe,         permission: 'landing_page', openInNewTab: true },

@@ -93,8 +93,8 @@ describe('Sales', () => {
 })
 
 describe('Gym', () => {
-  it('contains the daily surfaces only: schedule, events, live HR, presentations', () => {
-    expect(hrefsIn('gym')).toEqual(['/schedule', '/events', '/live', '/presentations'])
+  it('contains the daily surfaces only: schedule, events, live HR', () => {
+    expect(hrefsIn('gym')).toEqual(['/schedule', '/events', '/live'])
   })
 
   it('keeps Live HR a top-level gym entry with Class timer nested under it', () => {
@@ -112,7 +112,7 @@ describe('Studio Management group', () => {
   it('keeps only studio surfaces as children — imports + landing-page settings moved to Settings', () => {
     const group = itemsIn('studio')[0]
     const childHrefs = group.children.map((c) => c.href)
-    expect(childHrefs).toEqual(['/admin/contracts', '/admin/tv-displays', '/welcome'])
+    expect(childHrefs).toEqual(['/admin/contracts', '/admin/tv-displays', '/presentations', '/welcome'])
     expect(childHrefs).not.toContain('/admin/glofox-import')
     expect(childHrefs).not.toContain('/admin/marketing-import')
     expect(childHrefs).not.toContain('/settings/landing-page')
