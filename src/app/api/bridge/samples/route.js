@@ -99,6 +99,16 @@ export async function POST(request) {
     .update({ last_seen_at: new Date().toISOString(), status: 'online' })
     .eq('id', bridge.bridgeId)
 
+  // HR-DETECT.1 — best-effort durable detection log. Records EVERY device_key in
+  // the batch (matched OR dropped_unpaired), so the coach "Detected" tab sees all
+  // HR activity. Wrapped so it can never slow or fail the bridge ack.
+  try {
+    const { recordDetections } = await import('@/lib/hr-detections')
+    await recordDetections(db, { locationId: bridge.locationId, bridgeId: bridge.bridgeId, samples })
+  } catch (e) {
+    logWarn('bridge-samples', 'detection recording threw', { err: e?.message || e })
+  }
+
   return NextResponse.json({
     ok: true,
     received: stats.received,

@@ -84,5 +84,14 @@ export async function POST(request) {
     return NextResponse.json({ ok: false, error: 'persist_failed' }, { status: 200 })
   }
 
+  // HR-DETECT.1 — best-effort: enrich the detection registry with strap name/RSSI
+  // from this snapshot. Never blocks the scan ack.
+  try {
+    const { recordScanMetadata } = await import('@/lib/hr-detections')
+    await recordScanMetadata(db, { locationId: bridge.locationId, bridgeId: bridge.bridgeId, straps: cleaned })
+  } catch (e) {
+    logWarn('bridge-scan', 'detection enrich threw', { err: e?.message || e })
+  }
+
   return NextResponse.json({ ok: true, accepted: cleaned.length })
 }
