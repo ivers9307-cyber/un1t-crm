@@ -23,7 +23,7 @@ import {
   LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare,
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
   Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
-  Workflow, Timer,
+  Workflow, Timer, Projector,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -137,6 +137,10 @@ export const ALL_NAV = [
       { href: '/studio-management/timer', label: 'Class timer', icon: Timer, permission: 'studio_management' },
     ],
   },
+
+  // PRESENT — run a slide deck across multiple screens from a laptop
+  // (workshops / events). Sits in the gym section alongside the live-floor tools.
+  { href: '/presentations', label: 'Presentations', icon: Projector, permission: 'presentations', section: 'gym' },
 
   // ── Automations ────────────────────────────────────────────────
   { href: '/automations', label: 'Automations', icon: Workflow, anyPermission: ['automations', 'email', 'whatsapp'], section: 'automations' },

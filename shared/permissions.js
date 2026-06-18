@@ -87,6 +87,7 @@ export const WEB_PERMISSIONS = Object.freeze([
   // glofox_import + preferences_import were master-only.
   { key: 'contracts',          label: '… Contracts',             hint: 'Digital staff/contractor contracts. Issue, sign, revoke. Owner + master by default.' },
   { key: 'tv_displays',        label: '… TV Displays',           hint: 'Register and push content to studio TVs via UC Cast Pro. Owner/master/manager by default — marketing surface.' },
+  { key: 'presentations',      label: '… Presentations',         hint: 'Run a slide deck across multiple screens from a laptop (workshops / events). Upload slide images, open a public viewer link per screen, advance from a presenter remote. Owner/master/manager/head_coach by default.' },
   { key: 'glofox_import',      label: '… Glofox import',         hint: 'Interactive Glofox member import + sync history. Master-only by default — touches every contact at the location.' },
   { key: 'preferences_import', label: '… Preferences import',    hint: 'Bulk import of marketing preferences from external platforms (Mailchimp / Klaviyo / CSV). Master-only by default — touches consent state across the contact base.' },
   // — Revenue —
@@ -166,6 +167,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,
     // Studio Management children (STUDIO-GROUP.1) — master has all.
     contracts: true, tv_displays: true, glofox_import: true, preferences_import: true,
+    presentations: true,
     orders: true, car_processing: true,
     card_receipts: true,
     invoices_inbox: true,
@@ -188,6 +190,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     schedule: true, attendance_reports: false, assistant: false, studio_management: false,
     // Studio Management children — all off for staff.
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
+    presentations: false,
     orders: false, car_processing: false,         // financial views off by default
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,                         // supplier-invoice approval is finance, not staff
@@ -211,6 +214,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     assistant: true, studio_management: false,    // explicit opt-in
     // Studio Management children — all off for head_coach (explicit opt-in by admin).
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
+    presentations: true,
     orders: false, car_processing: false,         // head coach doesn't need orders by default
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,
@@ -235,6 +239,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // surface they handle day-to-day). Contracts + imports stay
     // off — those are owner/master decisions.
     contracts: false, tv_displays: true, glofox_import: false, preferences_import: false,
+    presentations: true,
     orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
     card_receipts: true,                           // managers commonly hold a company card
     invoices_inbox: false,                         // manager isn't an approver — owner/master only
@@ -259,6 +264,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     // by default (mirroring the old role-only gates). Imports stay
     // master-only on first install; owners can opt-in per user.
     contracts: true, tv_displays: true, glofox_import: false, preferences_import: false,
+    presentations: true,
     orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
     card_receipts: true,                           // owners hold a company card
     invoices_inbox: true,                          // owner approves their location's supplier invoices
