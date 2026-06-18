@@ -29,8 +29,7 @@
 // run nor the live-class end-class button.
 
 import { sendTransactionalEmail } from '@/lib/postmark'
-import { buildSessionAnalytics } from '@/lib/hr-analytics'
-import { zoneBreakdown } from '@/lib/heart-rate'
+import { buildSessionReport } from '@/lib/hr-session-report'
 import { logInfo, logWarn, logError } from '@/lib/log'
 import { formatWeekdayShortDateTimeInTZ } from '@/lib/dates'
 
@@ -130,8 +129,28 @@ export async function loadContextForSession(db, sessionId) {
  */
 export function composeEmail(ctx, { nowMs = Date.now() } = {}) {
   const { session, thisSession, history, eventTypeName, contact } = ctx
-  const analytics = buildSessionAnalytics({ thisSession, history, eventTypeName, nowMs })
-  const breakdown = zoneBreakdown(session.zones_seconds)
+  const report = buildSessionReport({ session, thisSession, history, eventTypeName }, { nowMs })
+  // Adapt the report back to the shapes the existing renderers read, so
+  // the email's output is byte-identical while the numbers now flow from
+  // the one canonical builder.
+  const analytics = {
+    highlight: report.highlight,
+    classType: {
+      eventTypeName: report.comparisons.vs_this_class.event_type_name,
+      meanPoints: report.comparisons.vs_this_class.mean_points,
+      percentile: report.comparisons.vs_this_class.percentile,
+      recentCount: report.comparisons.vs_this_class.sample_size,
+      thisPoints: report.summary.effort_points,
+    },
+    overall: {
+      pointsTrend: trendFromReport(report.comparisons.vs_recent),
+      peakTrend: trendFromReport(report.comparisons.vs_recent_peak),
+    },
+  }
+  const breakdown = report.summary.zones.map((z) => ({
+    id: z.id, name: z.name, label: ZONE_LABELS[z.id], color: z.color,
+    seconds: z.seconds, percent: z.percent,
+  }))
 
   const firstName = (contact?.name || 'there').split(/\s+/)[0]
   const classLabel = eventTypeName ? eventTypeName : 'your workout'
@@ -365,6 +384,18 @@ function computeDurationMin(session) {
   const ms = new Date(session.ended_at).getTime() - new Date(session.started_at).getTime()
   if (!Number.isFinite(ms) || ms <= 0) return null
   return Math.max(1, Math.round(ms / 60_000))
+}
+
+const ZONE_LABELS = { 1: 'Z1', 2: 'Z2', 3: 'Z3', 4: 'Z4', 5: 'Z5' }
+
+function trendFromReport(t) {
+  return {
+    hasEnoughData: t.has_enough_data,
+    direction: t.direction,
+    deltaPct: t.delta_pct,
+    recentMean: t.recent_mean,
+    priorMean: t.prior_mean,
+  }
 }
 
 // ── (3) send ────────────────────────────────────────────────────
