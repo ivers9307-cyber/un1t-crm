@@ -76,6 +76,7 @@ const WEB_ONLY_OK = {
   // MOBILE_PERMISSIONS entry (webEquivalent: 'contacts'), so it's matched,
   // not exempted here. Create/edit stays on web for now.
   events:         'Booking-link / event-type management is admin-only and rare on mobile.',
+  presentations:  'Desktop authoring + present-from-laptop surface; the public viewer is a plain URL opened on a screen. No mobile screen.',
   // MOBILE-RADAR: churn_radar + lead_radar now have a read-only mobile
   // glance (More tab → Radar). The full triage dashboards stay
   // desktop-only, but the mobile glance is a real counterpart, so the
