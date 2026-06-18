@@ -62,6 +62,17 @@ export async function GET(_request, props) {
     .is('ended_at', null)
     .order('started_at', { ascending: true })
 
+  // CLASS-TIMER — the live timer run for the TV banner (structure + timestamps
+  // only, no PII; the TV computes the tick locally). Null when none is running.
+  const { data: timerRun } = await db
+    .from('class_timer_runs')
+    .select('id, name, status, started_at, paused_at, paused_accum_ms, elapsed_offset_ms, structure_snapshot')
+    .eq('location_id', locationId)
+    .in('status', ['running', 'paused'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
   if (!sessions || sessions.length === 0) {
     return NextResponse.json({
       ok: true,
@@ -69,6 +80,7 @@ export async function GET(_request, props) {
       location: { id: location.id, name: location.name },
       bridge,
       sessions: [],
+      timer: timerRun || null,
     })
   }
 
@@ -159,5 +171,6 @@ export async function GET(_request, props) {
     location: { id: location.id, name: location.name },
     bridge,
     sessions: tiles,
+    timer: timerRun || null,
   })
 }
