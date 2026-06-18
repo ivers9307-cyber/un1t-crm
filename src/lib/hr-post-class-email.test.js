@@ -151,6 +151,16 @@ describe('sendPostClassEmail', () => {
             })),
           }
         }
+        if (table === 'locations') {
+          // Return empty customer_agent settings — CTA will be null (no booking_url set).
+          return {
+            select: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                single: vi.fn(() => Promise.resolve({ data: { settings: {} }, error: null })),
+              })),
+            })),
+          }
+        }
         if (table === 'heart_rate_sessions') {
           return {
             select: vi.fn((cols) => {
@@ -265,13 +275,16 @@ describe('loadContextForSession', () => {
   it('returns alreadySent when email_sent_at is set', async () => {
     const session = { id: 's', ended_at: '2026-05-08T18:45:00Z', email_sent_at: '2026-05-08T18:50:00Z' }
     const db = {
-      from: vi.fn(() => ({
-        select: vi.fn(() => ({
-          eq: vi.fn(() => ({
-            single: vi.fn(() => Promise.resolve({ data: session, error: null })),
+      from: vi.fn((table) => {
+        // Only heart_rate_sessions is reached before the early-return on alreadySent
+        return {
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              single: vi.fn(() => Promise.resolve({ data: session, error: null })),
+            })),
           })),
-        })),
-      })),
+        }
+      }),
     }
     const out = await loadContextForSession(db, 's')
     expect(out).toEqual({ ok: false, error: 'already-sent', alreadySent: true })

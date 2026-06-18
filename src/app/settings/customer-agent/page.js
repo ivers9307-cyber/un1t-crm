@@ -60,6 +60,9 @@ export default function CustomerAgentSettingsPage() {
         booking_mode: settings.booking_mode === 'draft' ? 'draft' : 'auto',
         agent_name: (settings.agent_name || '').trim() || null,
         membership_signup_url: (settings.membership_signup_url || '').trim() || null,
+        booking_url: (settings.booking_url || '').trim() || null,
+        booking_cta_label: (settings.booking_cta_label || '').trim() || null,
+        membership_cta_label: (settings.membership_cta_label || '').trim() || null,
         handoff_cooldown_hours: settings.handoff_cooldown_hours ?? 12,
         consultation_event_type_id: settings.consultation_event_type_id || null,
         followups: {
@@ -243,6 +246,31 @@ export default function CustomerAgentSettingsPage() {
             Shared when someone wants to join — sign-up and payment happen on this page. Update it
             here any time (offers, new landing pages); leave blank and the agent hands membership
             sign-ups to the team instead.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Class booking link</label>
+          <input className={inputCls} maxLength={512} value={settings.booking_url || ''}
+            onChange={e => setField('booking_url', e.target.value)}
+            placeholder="https://…" />
+          <p className="text-xs text-un1t-subtle mt-1">
+            Where active members go to book their next class — used by the post-class report CTA. Leave blank and members see no booking button.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Post-class CTA wording</label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <input className={inputCls} maxLength={60} value={settings.booking_cta_label || ''}
+              onChange={e => setField('booking_cta_label', e.target.value)}
+              placeholder="Book your next class" />
+            <input className={inputCls} maxLength={60} value={settings.membership_cta_label || ''}
+              onChange={e => setField('membership_cta_label', e.target.value)}
+              placeholder="Become a member" />
+          </div>
+          <p className="text-xs text-un1t-subtle mt-1">
+            Button text shown to members (left, booking) and to trials / prospects (right, join). Leave blank to use the defaults shown.
           </p>
         </div>
 
