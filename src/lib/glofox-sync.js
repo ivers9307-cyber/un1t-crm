@@ -7,6 +7,8 @@
 
 import { fetchUserCredits, fetchMembership, fetchUserBookings, fetchUserInteractions } from './glofox.js'
 import { classifyContact } from './pipeline-classifier.js'
+import { upsertClassBookings } from './class-bookings.js'
+import { logWarn } from './log.js'
 //
 // Source-of-truth contract:
 //   Glofox owns:  glofox_member_id, glofox_membership_status,
@@ -1455,6 +1457,11 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     mapped.total_noshow_30d    = bookingAggs.total_noshow_30d
     // GLOFOX2.1.18 — last 10 bookings for the contact-page history view.
     mapped.recent_bookings = trimRecentBookings(bookingsList, 10)
+    // HR-CLASS-ALLOC.2 — stash the raw bookings (non-persisted) so applyMemberSync
+    // can refresh this member's class_bookings roster slice. applyMemberSync lifts
+    // it off + deletes it before any return, so it never leaks into a dry-run
+    // preview response, and the explicit-allowlist contacts write never persists it.
+    mapped.__bookings_list = bookingsList
   }
 
   // GLOFOX2.1.15 — interactions. Fetched alongside credits/bookings
@@ -1702,6 +1709,10 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
 export async function applyMemberSync(db, locationId, member, opts = {}) {
   const preview = await previewMemberSync(db, locationId, member, opts)
   if (preview.action === 'invalid' || preview.action === 'ambiguous') return preview
+  // HR-CLASS-ALLOC.2 — lift the stashed raw bookings off the preview before any
+  // further work so it can't ride along on a returned preview object.
+  const bookingsForRoster = Array.isArray(preview.mapped?.__bookings_list) ? preview.mapped.__bookings_list : null
+  if (preview.mapped) delete preview.mapped.__bookings_list
   const now = new Date().toISOString()
 
   // GLOFOX2.1.5 — capture previousStatus BEFORE we overwrite the
@@ -1790,6 +1801,23 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     const { error } = await db.from('contacts').update(updates).eq('id', preview.existing_id)
     if (error) return { ...preview, error: error.message }
     contactId = preview.existing_id
+  }
+
+  // HR-CLASS-ALLOC.2 — refresh this member's slice of the class_bookings roster
+  // from the same bookings list previewMemberSync fetched. Best-effort: a roster
+  // write must never roll back the member sync.
+  if (bookingsForRoster && bookingsForRoster.length) {
+    try {
+      await upsertClassBookings(db, {
+        locationId,
+        contactId,
+        glofoxMemberId: preview.mapped.glofox_member_id,
+        memberName: preview.mapped.name || null,
+        bookings: bookingsForRoster,
+      })
+    } catch (e) {
+      logWarn('glofox-sync', 'class_bookings upsert threw', { err: e?.message })
+    }
   }
 
   // PIPELINE5.4 — pipeline placement now comes from the unified
