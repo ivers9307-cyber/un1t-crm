@@ -13,6 +13,7 @@
 
 import { logWarn } from '@/lib/log'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
+import { lookupBookedMember, resolveClassLinkSource } from '@/lib/class-bookings'
 import { resolveMaxHr, summariseSession } from '@/lib/heart-rate'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { runDetectionForSession } from '@/lib/achievements'
@@ -44,7 +45,7 @@ const RECENT_SAMPLE_WINDOW_MS = 30 * 1000  // current-BPM averaging window
 export async function getLiveSessions(db, locationId, nowMs = Date.now()) {
   const { data: sessions, error } = await db
     .from('heart_rate_sessions')
-    .select('id, contact_id, booking_id, started_at, max_hr_used, device_identifier, last_sample_at, contacts!inner(id, name, location_id)')
+    .select('id, contact_id, booking_id, started_at, max_hr_used, device_identifier, last_sample_at, contacts!contact_id(id, name, location_id, glofox_member_id)')
     .eq('location_id', locationId)
     .is('ended_at', null)
     .order('started_at', { ascending: false })
@@ -78,12 +79,16 @@ export async function getLiveSessions(db, locationId, nowMs = Date.now()) {
     const currentBpm = recent.length > 0
       ? Math.round(recent.reduce((a, b) => a + b, 0) / recent.length)
       : null
-    const fullName = s.contacts?.name || 'Member'
+    // HR-CLASS-ALLOC.2 — anonymous (null-contact) walk-ins are labelled by their
+    // device id; glofoxMemberId lets the roster panel join sessions to bookings.
+    const isAnon = !s.contacts
+    const label = isAnon ? (s.device_identifier || 'Guest') : (s.contacts?.name || 'Member')
     return {
       id: s.id,
       contactId: s.contact_id,
-      contactName: fullName,
-      contactFirstName: fullName.split(' ')[0],
+      glofoxMemberId: s.contacts?.glofox_member_id ?? null,
+      contactName: label,
+      contactFirstName: isAnon ? label : label.split(' ')[0],
       bookingId: s.booking_id,
       startedAt: s.started_at,
       maxHrUsed: s.max_hr_used,
@@ -160,17 +165,22 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
   // Snapshot max HR for the session row.
   const { data: contact } = await db
     .from('contacts')
-    .select('id, max_hr_override, dob')
+    .select('id, max_hr_override, dob, glofox_member_id')
     .eq('id', contactId)
     .single()
   if (!contact) return { ok: false, error: 'Contact not found' }
   const maxHr = resolveMaxHr(contact, nowMs)
 
   // Which Glofox class is running right now? Stamp it on the session so
-  // coach-paired members get the same presence-based class link as the
-  // auto-ingest path (HR-CLASS-ALLOC.1). Best-effort — a strap paired
-  // outside any class still creates a session, just without a class link.
+  // coach-paired members get the same class link as the auto-ingest path
+  // (HR-CLASS-ALLOC.1/.2): 'booked' if the member was booked into this class,
+  // else 'presence'. Best-effort — a strap paired outside any class still
+  // creates a session, just without a class link.
   const liveClass = await resolveCurrentOccurrence(db, { locationId, nowMs })
+  const booked = liveClass ? await lookupBookedMember(db, {
+    locationId, glofoxEventId: liveClass.glofox_event_id, glofoxMemberId: contact?.glofox_member_id,
+  }) : false
+  const linkSource = resolveClassLinkSource({ liveClass, booked }) // 'booked' | 'presence' | null
 
   // Find or create a session.
   const { data: existing } = await db
@@ -197,7 +207,7 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
         max_hr_used: maxHr,
         glofox_event_id: liveClass?.glofox_event_id ?? null,
         class_name: liveClass?.class_name ?? null,
-        class_link_source: liveClass ? 'presence' : null,
+        class_link_source: linkSource,
       })
       .select('id')
       .single()
@@ -213,7 +223,7 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
     if (!existing.glofox_event_id && liveClass) {
       patch.glofox_event_id = liveClass.glofox_event_id
       patch.class_name = liveClass.class_name
-      patch.class_link_source = 'presence'
+      patch.class_link_source = linkSource
     }
     if (Object.keys(patch).length) {
       await db.from('heart_rate_sessions').update(patch).eq('id', sessionId)
@@ -281,29 +291,34 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
     .eq('heart_rate_session_id', sessionId)
     .is('ended_at', null)
 
-  // Best-effort post-class email. Doesn't propagate errors — the
-  // sender already swallows + logs everything internally. The
-  // session is finalised regardless of email outcome.
-  sendPostClassEmail(db, sessionId).catch((err) => {
-    logWarn('live-class', 'post-class email scheduling threw', { err, sessionId })
-  })
+  // HR-CLASS-ALLOC.2 — anonymous (null-contact) walk-in sessions still get
+  // zones/points from summariseSession above, but skip every contact-bound
+  // side-effect: no member to email, attach achievements to, or export for.
+  if (session.contact_id) {
+    // Best-effort post-class email. Doesn't propagate errors — the
+    // sender already swallows + logs everything internally. The
+    // session is finalised regardless of email outcome.
+    sendPostClassEmail(db, sessionId).catch((err) => {
+      logWarn('live-class', 'post-class email scheduling threw', { err, sessionId })
+    })
 
-  // Best-effort achievement detection. Internally swallows errors;
-  // unlocks land in contact_achievements with notified_at = null
-  // for the future native app's push-notification consumer.
-  runDetectionForSession(db, sessionId).catch((err) => {
-    logWarn('live-class', 'achievement detection threw', { err, sessionId })
-  })
+    // Best-effort achievement detection. Internally swallows errors;
+    // unlocks land in contact_achievements with notified_at = null
+    // for the future native app's push-notification consumer.
+    runDetectionForSession(db, sessionId).catch((err) => {
+      logWarn('live-class', 'achievement detection threw', { err, sessionId })
+    })
 
-  // Best-effort: queue external-system exports for this session.
-  // The actual upload happens out-of-band via the cron worker.
-  enqueueExportsForSession(db, {
-    id: sessionId,
-    contact_id: session.contact_id,
-    ended_at: endedAt,
-  }).catch((err) => {
-    logWarn('live-class', 'export enqueue threw', { err, sessionId })
-  })
+    // Best-effort: queue external-system exports for this session.
+    // The actual upload happens out-of-band via the cron worker.
+    enqueueExportsForSession(db, {
+      id: sessionId,
+      contact_id: session.contact_id,
+      ended_at: endedAt,
+    }).catch((err) => {
+      logWarn('live-class', 'export enqueue threw', { err, sessionId })
+    })
+  }
 
   return { ok: true, summary }
 }

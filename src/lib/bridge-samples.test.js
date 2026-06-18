@@ -16,6 +16,7 @@ import {
   latestBridgeSeenMs,
   BRIDGE_ONLINE_WINDOW_MS,
   dublinWallClockToMs,
+  resolveStrapsForBatch,
 } from './bridge-samples.js'
 
 // ── canonicaliseMac ──────────────────────────────────────────────
@@ -345,5 +346,56 @@ describe('dublinWallClockToMs', () => {
     expect(dublinWallClockToMs('2026-06-18', '6pm')).toBeNaN()
     expect(dublinWallClockToMs(null, null)).toBeNaN()
     expect(dublinWallClockToMs('2026-06-18', '')).toBeNaN()
+  })
+})
+
+// ── anonymous walk-in sessions (HR-CLASS-ALLOC.2) ────────────────
+describe('resolveStrapsForBatch: anonymous straps', () => {
+  const NOW = Date.parse('2026-06-18T05:30:00Z') // mid a 05:00–06:00Z class
+  const liveOcc = { glofox_event_id: 'ev1', name: 'WALKIN', starts_at: '2026-06-18T05:00:00Z', ends_at: '2026-06-18T06:00:00Z' }
+
+  // db mock: no overrides, no contact_devices, a live (or no) class, and a
+  // heart_rate_sessions branch handling the anon existing-lookup + insert.
+  const makeDb = ({ occRows, existingAnon = null, captureInsert } = {}) => ({
+    from: vi.fn((table) => {
+      if (table === 'strap_assignments') {
+        return { select: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => ({ not: vi.fn(() => Promise.resolve({ data: [] })) })) })) })) }
+      }
+      if (table === 'contact_devices') {
+        return { select: vi.fn(() => ({ in: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })) })) }
+      }
+      if (table === 'class_occurrences') {
+        return { select: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: occRows })) })) })) })) })) }
+      }
+      if (table === 'heart_rate_sessions') {
+        return {
+          select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => ({ is: vi.fn(() => ({ order: vi.fn(() => ({ limit: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: existingAnon })) })) })) })) })) })) })) })),
+          insert: vi.fn((row) => { if (captureInsert) captureInsert(row); return { select: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { id: 'anon-1' }, error: null })) })) } }),
+        }
+      }
+      throw new Error(`unexpected ${table}`)
+    }),
+  })
+
+  it('creates an anonymous session for an unmatched strap during a live class', async () => {
+    let inserted = null
+    const db = makeDb({ occRows: [liveOcc], captureInsert: (r) => { inserted = r } })
+    const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:999'], nowMs: NOW })
+    expect(map.get('ant:999')).toMatchObject({ sessionId: 'anon-1', contactId: null, via: 'anon' })
+    expect(inserted).toMatchObject({ contact_id: null, device_identifier: 'ant:999', glofox_event_id: 'ev1', class_link_source: 'presence' })
+  })
+
+  it('drops an unmatched strap when no class is live', async () => {
+    const db = makeDb({ occRows: [] })
+    const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:999'], nowMs: NOW })
+    expect(map.has('ant:999')).toBe(false)
+  })
+
+  it('reuses an existing open anon session (no duplicate)', async () => {
+    let inserted = null
+    const db = makeDb({ occRows: [liveOcc], existingAnon: { id: 'anon-existing' }, captureInsert: (r) => { inserted = r } })
+    const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:999'], nowMs: NOW })
+    expect(map.get('ant:999')).toMatchObject({ sessionId: 'anon-existing', via: 'anon' })
+    expect(inserted).toBeNull()
   })
 })

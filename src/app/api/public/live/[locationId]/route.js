@@ -57,7 +57,7 @@ export async function GET(_request, props) {
   // Open sessions at this location.
   const { data: sessions } = await db
     .from('heart_rate_sessions')
-    .select('id, contact_id, started_at, max_hr_used, last_sample_at, contacts!inner(id, name, location_id)')
+    .select('id, contact_id, device_identifier, started_at, max_hr_used, last_sample_at, contacts!contact_id(id, name, location_id)')
     .eq('location_id', locationId)
     .is('ended_at', null)
     .order('started_at', { ascending: true })
@@ -115,10 +115,15 @@ export async function GET(_request, props) {
     const samples = allBySession.get(sess.id) || []
     const summary = summariseSession(samples, sess.max_hr_used)
 
+    // HR-CLASS-ALLOC.2 — anonymous (null-contact) walk-in sessions are labelled
+    // by their device id (e.g. "ant:45075") instead of a name.
     const fullName = sess.contacts?.name || 'Member'
     const parts = fullName.trim().split(/\s+/)
     const firstName = parts[0] || 'Member'
     const lastInitial = parts.length > 1 ? parts[parts.length - 1][0] + '.' : ''
+    const displayName = sess.contacts
+      ? (lastInitial ? `${firstName} ${lastInitial}` : firstName)
+      : (sess.device_identifier || 'Guest')
 
     const stale = sess.last_sample_at
       ? (nowMs - new Date(sess.last_sample_at).getTime()) > STALE_AFTER_MS
@@ -126,7 +131,7 @@ export async function GET(_request, props) {
 
     return {
       id: sess.id,
-      displayName: lastInitial ? `${firstName} ${lastInitial}` : firstName,
+      displayName,
       currentBpm,
       currentZone: zone ? { id: zone.id, label: zone.label, color: zone.color } : null,
       zonesSeconds: summary.zonesSeconds,

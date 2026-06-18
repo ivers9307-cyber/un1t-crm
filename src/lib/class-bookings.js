@@ -60,3 +60,39 @@ export async function upsertClassBookings(db, { locationId, contactId = null, gl
   }
   return { upserted: rows.length }
 }
+
+// ── booked-vs-presence tag (HR-CLASS-ALLOC.2) ────────────────────
+
+/**
+ * Pure: the class_link_source stamp for a session. No live class → null (the
+ * session isn't tied to a class). Live class → 'booked' if the member had a
+ * booking for it, else 'presence'.
+ *
+ * @param {{ liveClass: object|null, booked: boolean }} args
+ * @returns {'booked'|'presence'|null}
+ */
+export function resolveClassLinkSource({ liveClass, booked }) {
+  if (!liveClass) return null
+  return booked ? 'booked' : 'presence'
+}
+
+/**
+ * IO: did this Glofox member have a non-cancelled booking for this event?
+ * Returns false fast (no query) when any id is missing — anon walk-ins and
+ * CRM-only contacts (no glofox_member_id) are never "booked".
+ *
+ * @param {object} db  service-role client
+ * @param {{ locationId: string, glofoxEventId: string, glofoxMemberId: string|null }} opts
+ */
+export async function lookupBookedMember(db, { locationId, glofoxEventId, glofoxMemberId } = {}) {
+  if (!db || !locationId || !glofoxEventId || !glofoxMemberId) return false
+  const { data } = await db
+    .from('class_bookings')
+    .select('id')
+    .eq('location_id', locationId)
+    .eq('glofox_event_id', glofoxEventId)
+    .eq('glofox_member_id', glofoxMemberId)
+    .not('status', 'eq', 'CANCELLED')
+    .limit(1)
+  return Array.isArray(data) && data.length > 0
+}
