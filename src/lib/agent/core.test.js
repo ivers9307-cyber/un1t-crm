@@ -13,6 +13,7 @@ import {
   autoVerifyContactId,
   isHandoffExpired,
   resolveRearmPatch,
+  resolveAgentEffort,
 } from './core'
 import { HANDOFF_PREFIX, OPTIONS_PREFIX } from './prompt'
 
@@ -364,5 +365,33 @@ describe('shouldAgentReply — voice notes', () => {
     expect(d.reply).toBe(false)
     expect(d.reason).toBe('unsupported_type')
     expect(d.onDuty).toBe(true)
+  })
+})
+
+// EFFORT.1 — output_config.effort defaults to `high` on the Messages API,
+// which is overkill for a short transactional WhatsApp reply. Operators tune
+// it per location via settings.customer_agent.effort; anything invalid or
+// unset falls back to a balanced default so the request can never carry an
+// effort value the API would 400 on.
+describe('resolveAgentEffort', () => {
+  it('passes through the four valid effort levels', () => {
+    expect(resolveAgentEffort('low')).toBe('low')
+    expect(resolveAgentEffort('medium')).toBe('medium')
+    expect(resolveAgentEffort('high')).toBe('high')
+    expect(resolveAgentEffort('max')).toBe('max')
+  })
+  it('normalises case and surrounding whitespace', () => {
+    expect(resolveAgentEffort('  LOW ')).toBe('low')
+    expect(resolveAgentEffort('High')).toBe('high')
+  })
+  it('defaults to medium for unset / null / blank', () => {
+    expect(resolveAgentEffort(undefined)).toBe('medium')
+    expect(resolveAgentEffort(null)).toBe('medium')
+    expect(resolveAgentEffort('')).toBe('medium')
+  })
+  it('defaults to medium for an unknown value (never emits an invalid enum)', () => {
+    expect(resolveAgentEffort('ultra')).toBe('medium')
+    expect(resolveAgentEffort('fast')).toBe('medium')
+    expect(resolveAgentEffort(42)).toBe('medium')
   })
 })

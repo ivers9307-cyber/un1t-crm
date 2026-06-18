@@ -319,3 +319,17 @@ export function isVerificationFresh(verifiedAt, now = new Date(), ttlMs = VERIFY
   if (Number.isNaN(t)) return false
   return now.getTime() - t < ttlMs
 }
+
+// EFFORT.1 — output_config.effort tuning for the inbound reply. The Messages
+// API defaults effort to `high`, which over-thinks a short transactional
+// WhatsApp reply (more tokens, more latency, longer preamble). Operators set
+// settings.customer_agent.effort per location; we clamp to a valid enum and
+// default to a balanced `medium` (one notch below the API default — `low` is
+// the chat-recommended floor for max savings). Pure, so the request can never
+// carry an effort value the API would 400 on.
+const AGENT_EFFORT_LEVELS = ['low', 'medium', 'high', 'max']
+export const DEFAULT_AGENT_EFFORT = 'medium'
+export function resolveAgentEffort(raw) {
+  const v = String(raw ?? '').trim().toLowerCase()
+  return AGENT_EFFORT_LEVELS.includes(v) ? v : DEFAULT_AGENT_EFFORT
+}

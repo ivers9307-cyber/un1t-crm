@@ -28,6 +28,7 @@ import {
   formatHistoryForClaude,
   parseAgentResponse,
   isVerificationFresh,
+  resolveAgentEffort,
   AGENT_MESSAGE_SOURCE,
   DEFAULT_HOLDING_MESSAGE,
   autoVerifyContactId,
@@ -276,6 +277,10 @@ async function runChannelAgentInner(db, adapter, ctx) {
       identityPreverified: !!preverifiedContactId,
     })
 
+    // EFFORT.1 — operator-tunable reasoning effort (defaults to `medium`, one
+    // notch below the API's `high` default) for this short transactional turn.
+    const agentEffort = resolveAgentEffort(settings?.effort)
+
     const messages = formatHistoryForClaude(history || [], { maxMessages: MAX_HISTORY })
     if (messages.length === 0) return { handled: false, reason: 'no_history' }
 
@@ -316,6 +321,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
           body: JSON.stringify({
             model: AGENT_MODEL,
             max_tokens: 600,
+            output_config: { effort: agentEffort },
             system,
             messages,
             tools: CACHED_ACCOUNT_TOOLS,
