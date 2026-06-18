@@ -208,6 +208,40 @@ describe('parseAgentResponse', () => {
   })
 })
 
+// HARDEN.1 — the model occasionally varies the sentinel: different case,
+// padding inside the brackets, or markdown emphasis wrapping it. An exact
+// indexOf misses those — which either leaks the raw sentinel to the customer
+// (handoff) or fails to render buttons + leaks markup into a label (options).
+// Match the sentinel loosely so a near-miss still routes deterministically.
+describe('parseAgentResponse — near-miss sentinel tolerance', () => {
+  it('detects a handoff sentinel regardless of case', () => {
+    expect(parseAgentResponse('[[handoff]] billing question').action).toBe('handoff')
+    expect(parseAgentResponse('[[Handoff]] billing question').reason).toBe('billing question')
+  })
+  it('tolerates whitespace inside the handoff brackets', () => {
+    const r = parseAgentResponse('[[ HANDOFF ]] wants to cancel')
+    expect(r.action).toBe('handoff')
+    expect(r.reason).toBe('wants to cancel')
+  })
+  it('never leaks a markdown-wrapped handoff sentinel to the customer', () => {
+    const r = parseAgentResponse('**[[HANDOFF]]** customer is upset')
+    expect(r.action).toBe('handoff')
+    expect(r.text).toBe('')
+    expect(r.reason).toBe('customer is upset')
+  })
+  it('detects an options line regardless of case / bracket padding', () => {
+    const r = parseAgentResponse('Tomorrow has 7am and 8am.\n[[ options ]] 7am | 8am')
+    expect(r.options).toEqual(['7am', '8am'])
+    expect(r.text).toBe('Tomorrow has 7am and 8am.')
+  })
+  it('strips a markdown-wrapped options line cleanly — no sentinel or markup in text or labels', () => {
+    const r = parseAgentResponse('Pick a time:\n**[[OPTIONS]]** 7am | 8am')
+    expect(r.options).toEqual(['7am', '8am'])
+    expect(r.text).toBe('Pick a time:')
+    expect(r.text).not.toMatch(/\[\[|\*/)
+  })
+})
+
 // AGENT-AUTH.1 — WhatsApp phone-number authentication. Meta has already
 // authenticated the sender's number (SIM-bound), so on WhatsApp a sender
 // whose number maps to EXACTLY ONE contact — the one the conversation is

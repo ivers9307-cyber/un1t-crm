@@ -232,28 +232,45 @@ export function normalizeAgentOptions(raw) {
   return out.length >= 2 ? out : null
 }
 
+// HARDEN.1 — match the sentinels LOOSELY: case-insensitive and tolerant of
+// padding inside the brackets ('[[ handoff ]]'). Built from the canonical
+// prefixes in prompt.js so the token stays single-sourced. The model
+// occasionally varies the exact format; an exact-substring match would then
+// leak the raw "[[HANDOFF]]" to the customer or silently drop the buttons.
+function looseSentinel(prefix) {
+  const token = prefix.replace(/^\[\[|\]\]$/g, '').trim()
+  return new RegExp(`\\[\\[\\s*${token}\\s*\\]\\]`, 'i')
+}
+const HANDOFF_RE = looseSentinel(HANDOFF_PREFIX)
+const OPTIONS_RE = looseSentinel(OPTIONS_PREFIX)
+// Markdown emphasis / whitespace that can wrap a sentinel or trail a line —
+// stripped at the edges so '**[[OPTIONS]]**' or '[[options]] 7am' don't drag
+// markup into the customer text or a button label.
+const SENTINEL_WRAP = /^[\s*_`~]+|[\s*_`~]+$/g
+
 export function parseAgentResponse(raw) {
   let text = String(raw || '').trim()
   // Detect the sentinel ANYWHERE, not just at the start — if the model
   // emits a sentence before it (occasionally happens), we must still hand
   // off rather than leak the raw "[[HANDOFF]] reason" to the customer.
-  const idx = text.indexOf(HANDOFF_PREFIX)
-  if (idx !== -1) {
-    return { action: 'handoff', text: '', reason: text.slice(idx + HANDOFF_PREFIX.length).trim() || 'unspecified' }
+  const h = text.match(HANDOFF_RE)
+  if (h) {
+    const reason = text.slice(h.index + h[0].length).replace(SENTINEL_WRAP, '').trim()
+    return { action: 'handoff', text: '', reason: reason || 'unspecified' }
   }
 
   // AGENT-UX.1 — a trailing [[OPTIONS]] a | b | c line becomes tap
   // buttons. Strip the sentinel from the text UNCONDITIONALLY (even if
   // the payload is unusable) so it can never leak to the customer.
   let options = null
-  const oIdx = text.indexOf(OPTIONS_PREFIX)
-  if (oIdx !== -1) {
-    const after = text.slice(oIdx + OPTIONS_PREFIX.length)
+  const o = text.match(OPTIONS_RE)
+  if (o) {
+    const after = text.slice(o.index + o[0].length)
     const newline = after.indexOf('\n')
-    const payload = newline === -1 ? after : after.slice(0, newline)
+    const payload = (newline === -1 ? after : after.slice(0, newline)).replace(SENTINEL_WRAP, '')
     const rest = newline === -1 ? '' : after.slice(newline + 1)
     options = normalizeAgentOptions(payload)
-    text = (text.slice(0, oIdx) + rest).trim()
+    text = (text.slice(0, o.index) + rest).replace(SENTINEL_WRAP, '').trim()
   }
 
   if (!text) return { action: 'handoff', text: '', reason: 'empty_model_response' }
