@@ -70,6 +70,7 @@ export default function TimerScreen() {
 
   const [templates, setTemplates] = useState([])
   const [run, setRun] = useState(null)
+  const [suggestion, setSuggestion] = useState(null) // { className, template } | null
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -84,7 +85,12 @@ export default function TimerScreen() {
   const loadActive = useCallback(async () => {
     if (!locationId) return
     const r = await getActiveTimer(locationId)
-    if (r.success) setRun(r.run || null)
+    if (r.success) {
+      setRun(r.run || null)
+      setSuggestion(!r.run && r.suggested_template
+        ? { className: r.live_class?.class_name, template: r.suggested_template }
+        : null)
+    }
   }, [locationId])
 
   useEffect(() => {
@@ -157,6 +163,25 @@ export default function TimerScreen() {
         <RunControl run={run} busy={busy} onControl={onControl} />
       ) : (
         <>
+          {suggestion && (
+            <Pressable
+              onPress={() => start(suggestion.template.id)} disabled={busy}
+              className="border-2 border-emerald-300 bg-emerald-50 rounded-2xl p-4 flex-row items-center justify-between active:opacity-80 disabled:opacity-50"
+            >
+              <View className="flex-1 min-w-0 pr-3">
+                <Text className="text-sm font-semibold text-emerald-800" numberOfLines={1}>
+                  {suggestion.className} is on now
+                </Text>
+                <Text className="text-xs text-emerald-700 mt-0.5" numberOfLines={1}>
+                  Load “{suggestion.template?.name}”?
+                </Text>
+              </View>
+              <View className="flex-row items-center bg-emerald-600 rounded-xl px-3 py-2">
+                <Ionicons name="play" size={14} color="#FFFFFF" />
+                <Text className="text-sm font-semibold text-white ml-1.5">Load</Text>
+              </View>
+            </Pressable>
+          )}
           <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4">
             <Text className="text-sm font-semibold text-un1t-text mb-1">Start a timer</Text>
             {templates.length === 0 ? (

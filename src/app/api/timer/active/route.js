@@ -5,6 +5,8 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { uuidLike } from '@/lib/schemas'
+import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
+import { matchTemplateToClassName } from '@/lib/class-timer'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -31,5 +33,27 @@ export async function GET(request) {
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
-  return NextResponse.json({ success: true, run: data || null })
+
+  // CLASS-TIMER PR4 — when nothing is running, surface the Glofox class that's
+  // live now (off the class_occurrences spine) and the template tagged for it,
+  // so the control UIs can offer a one-tap "DR1VE is live → load its timer?".
+  // Skipped while a run is active (the suggestion would be moot).
+  let liveClass = null
+  let suggestedTemplate = null
+  if (!data) {
+    const occ = await resolveCurrentOccurrence(db, { locationId })
+    if (occ?.class_name) {
+      liveClass = { class_name: occ.class_name }
+      const { data: templates } = await db
+        .from('class_timer_templates')
+        .select('id, name, total_seconds, glofox_program')
+        .eq('location_id', locationId)
+        .eq('is_active', true)
+        .order('updated_at', { ascending: false })
+      const match = matchTemplateToClassName(templates || [], occ.class_name)
+      if (match) suggestedTemplate = { id: match.id, name: match.name, total_seconds: match.total_seconds }
+    }
+  }
+
+  return NextResponse.json({ success: true, run: data || null, live_class: liveClass, suggested_template: suggestedTemplate })
 }
