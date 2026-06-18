@@ -97,6 +97,12 @@ export async function DELETE(request, props) {
   if (!deviceKey) return NextResponse.json({ ok: false, error: 'Invalid device_key' }, { status: 400 })
 
   const db = createServerClient()
+  // IDOR guard: the contact must belong to this location (mirror POST).
+  const { data: contact } = await db.from('contacts').select('id, location_id').eq('id', validation.data.contact_id).maybeSingle()
+  if (!contact || contact.location_id !== params.locationId) {
+    return NextResponse.json({ ok: false, error: 'Contact not at this location' }, { status: 404 })
+  }
+
   const { error } = await db
     .from('contact_devices')
     .update({ is_active: false })

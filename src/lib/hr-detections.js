@@ -103,6 +103,7 @@ export function planDetectionWrites({
           sample_count: e.count ?? 0,
           glofox_event_id: liveClass?.glofox_event_id ?? null,
           class_name: liveClass?.class_name ?? null,
+          updated_at: nowIso,
         })
       } else {
         visitRows.push({
@@ -114,6 +115,7 @@ export function planDetectionWrites({
           sample_count: (cur.sample_count ?? 0) + (e.count ?? 0),
           glofox_event_id: cur.glofox_event_id ?? null,
           class_name: cur.class_name ?? null,
+          updated_at: nowIso,
         })
       }
     }
