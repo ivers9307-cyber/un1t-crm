@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mapBookingToRosterRow, upsertClassBookings } from './class-bookings'
+import { mapBookingToRosterRow, upsertClassBookings, resolveClassLinkSource, lookupBookedMember } from './class-bookings'
 
 describe('class-bookings: mapBookingToRosterRow', () => {
   const base = {
@@ -56,5 +56,47 @@ describe('class-bookings: upsertClassBookings', () => {
     expect((await upsertClassBookings(db, { locationId: 'loc1', bookings: [] })).upserted).toBe(0)
     expect((await upsertClassBookings(db, { locationId: 'loc1' })).upserted).toBe(0)
     expect(db.from).not.toHaveBeenCalled()
+  })
+})
+
+describe('class-bookings: resolveClassLinkSource', () => {
+  it('null when no live class', () => {
+    expect(resolveClassLinkSource({ liveClass: null, booked: false })).toBeNull()
+    expect(resolveClassLinkSource({ liveClass: null, booked: true })).toBeNull()
+  })
+  it('booked vs presence under a live class', () => {
+    expect(resolveClassLinkSource({ liveClass: { glofox_event_id: 'e' }, booked: true })).toBe('booked')
+    expect(resolveClassLinkSource({ liveClass: { glofox_event_id: 'e' }, booked: false })).toBe('presence')
+  })
+})
+
+describe('class-bookings: lookupBookedMember', () => {
+  // Mock the .select().eq().eq().eq().not().limit() chain → { data }.
+  const db = (rows) => ({
+    from: vi.fn(() => ({
+      select: vi.fn(() => ({
+        eq: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              not: vi.fn(() => ({
+                limit: vi.fn(() => Promise.resolve({ data: rows })),
+              })),
+            })),
+          })),
+        })),
+      })),
+    })),
+  })
+  it('true when a non-cancelled booking row exists', async () => {
+    expect(await lookupBookedMember(db([{ id: 'x' }]), { locationId: 'l', glofoxEventId: 'e', glofoxMemberId: 'm' })).toBe(true)
+  })
+  it('false when none match', async () => {
+    expect(await lookupBookedMember(db([]), { locationId: 'l', glofoxEventId: 'e', glofoxMemberId: 'm' })).toBe(false)
+  })
+  it('false (no query) when member / event / location id missing', async () => {
+    const spy = db([{ id: 'x' }])
+    expect(await lookupBookedMember(spy, { locationId: 'l', glofoxEventId: 'e', glofoxMemberId: null })).toBe(false)
+    expect(await lookupBookedMember(spy, { locationId: 'l', glofoxMemberId: 'm' })).toBe(false)
+    expect(spy.from).not.toHaveBeenCalled()
   })
 })
