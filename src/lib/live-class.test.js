@@ -10,6 +10,13 @@ import {
   endSession,
   endAllAtLocation,
 } from './live-class.js'
+import { sendPostClassEmail } from '@/lib/hr-post-class-email'
+import { runDetectionForSession } from '@/lib/achievements'
+import { enqueueExportsForSession } from '@/lib/external-export'
+
+vi.mock('@/lib/hr-post-class-email', () => ({ sendPostClassEmail: vi.fn(() => Promise.resolve()) }))
+vi.mock('@/lib/achievements', () => ({ runDetectionForSession: vi.fn(() => Promise.resolve()) }))
+vi.mock('@/lib/external-export', () => ({ enqueueExportsForSession: vi.fn(() => Promise.resolve()) }))
 
 beforeEach(() => { vi.clearAllMocks() })
 
@@ -288,6 +295,32 @@ describe('pairOverride', () => {
 // ── endSession ─────────────────────────────────────────────────
 
 describe('endSession', () => {
+  it('skips contact-bound side-effects for an anonymous (null-contact) session', async () => {
+    const db = {
+      from: vi.fn((table) => {
+        if (table === 'heart_rate_sessions') {
+          return {
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { id: 'sess-anon', contact_id: null, max_hr_used: 180, ended_at: null }, error: null })) })) })),
+            update: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ error: null })) })),
+          }
+        }
+        if (table === 'hr_samples') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: [{ recorded_at: '2026-06-18T05:30:00Z', bpm: 150 }] })) })) })) }
+        }
+        if (table === 'strap_assignments') {
+          return { update: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ error: null })) })) })) }
+        }
+        throw new Error(`unexpected ${table}`)
+      }),
+    }
+    const out = await endSession(db, 'sess-anon')
+    expect(out.ok).toBe(true)
+    expect(out.summary).toBeTruthy()
+    expect(sendPostClassEmail).not.toHaveBeenCalled()
+    expect(runDetectionForSession).not.toHaveBeenCalled()
+    expect(enqueueExportsForSession).not.toHaveBeenCalled()
+  })
+
   it('returns { alreadyEnded: true } when session already has ended_at', async () => {
     const db = {
       from: vi.fn(() => ({

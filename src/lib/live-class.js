@@ -287,29 +287,34 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
     .eq('heart_rate_session_id', sessionId)
     .is('ended_at', null)
 
-  // Best-effort post-class email. Doesn't propagate errors — the
-  // sender already swallows + logs everything internally. The
-  // session is finalised regardless of email outcome.
-  sendPostClassEmail(db, sessionId).catch((err) => {
-    logWarn('live-class', 'post-class email scheduling threw', { err, sessionId })
-  })
+  // HR-CLASS-ALLOC.2 — anonymous (null-contact) walk-in sessions still get
+  // zones/points from summariseSession above, but skip every contact-bound
+  // side-effect: no member to email, attach achievements to, or export for.
+  if (session.contact_id) {
+    // Best-effort post-class email. Doesn't propagate errors — the
+    // sender already swallows + logs everything internally. The
+    // session is finalised regardless of email outcome.
+    sendPostClassEmail(db, sessionId).catch((err) => {
+      logWarn('live-class', 'post-class email scheduling threw', { err, sessionId })
+    })
 
-  // Best-effort achievement detection. Internally swallows errors;
-  // unlocks land in contact_achievements with notified_at = null
-  // for the future native app's push-notification consumer.
-  runDetectionForSession(db, sessionId).catch((err) => {
-    logWarn('live-class', 'achievement detection threw', { err, sessionId })
-  })
+    // Best-effort achievement detection. Internally swallows errors;
+    // unlocks land in contact_achievements with notified_at = null
+    // for the future native app's push-notification consumer.
+    runDetectionForSession(db, sessionId).catch((err) => {
+      logWarn('live-class', 'achievement detection threw', { err, sessionId })
+    })
 
-  // Best-effort: queue external-system exports for this session.
-  // The actual upload happens out-of-band via the cron worker.
-  enqueueExportsForSession(db, {
-    id: sessionId,
-    contact_id: session.contact_id,
-    ended_at: endedAt,
-  }).catch((err) => {
-    logWarn('live-class', 'export enqueue threw', { err, sessionId })
-  })
+    // Best-effort: queue external-system exports for this session.
+    // The actual upload happens out-of-band via the cron worker.
+    enqueueExportsForSession(db, {
+      id: sessionId,
+      contact_id: session.contact_id,
+      ended_at: endedAt,
+    }).catch((err) => {
+      logWarn('live-class', 'export enqueue threw', { err, sessionId })
+    })
+  }
 
   return { ok: true, summary }
 }
