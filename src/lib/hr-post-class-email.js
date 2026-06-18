@@ -177,17 +177,24 @@ export function composeEmail(ctx, { nowMs = Date.now() } = {}) {
 
   const sessionUrl = `${APP_URL}/sessions/${session.id}`
 
+  const vc = report.comparisons.vs_category
+  const vcLine = (vc && vc.percentile != null && vc.sample_size >= 2)
+    ? (Math.round(vc.percentile * 100) >= 50
+        ? `Top ${100 - Math.round(vc.percentile * 100)}% of your last ${vc.sample_size} ${vc.category} classes.`
+        : `Building back up in your ${vc.category} classes — avg ${vc.mean_points} pts over your last ${vc.sample_size}.`)
+    : null
+
   const subject = pickSubject({ firstName, classLabel, points, highlight: analytics.highlight })
 
   return {
     subject,
     text: renderText({
       firstName, classLabel, startedAt, points, peak, avg, durationMin,
-      breakdown, analytics, sessionUrl,
+      breakdown, analytics, vcLine, sessionUrl,
     }),
     html: renderHtml({
       firstName, classLabel, startedAt, points, peak, avg, durationMin,
-      breakdown, analytics, sessionUrl, contact, sessionId: session.id,
+      breakdown, analytics, vcLine, sessionUrl, contact, sessionId: session.id,
     }),
     analytics,
   }
@@ -224,7 +231,7 @@ function classTypeLabel(classType) {
   return `Lighter than your usual ${classType.eventTypeName || 'session'} — yours mean ${classType.meanPoints} pts.`
 }
 
-function renderText({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, sessionUrl }) {
+function renderText({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl }) {
   const lines = []
   lines.push(`Hi ${firstName},`)
   lines.push('')
@@ -249,6 +256,10 @@ function renderText({ firstName, classLabel, startedAt, points, peak, avg, durat
     lines.push('')
     lines.push(`Class trend — ${ctLabel}`)
   }
+  if (vcLine) {
+    lines.push('')
+    lines.push(`Category trend — ${vcLine}`)
+  }
 
   const tPoints = trendLabel(analytics.overall.pointsTrend)
   if (tPoints) {
@@ -261,7 +272,7 @@ function renderText({ firstName, classLabel, startedAt, points, peak, avg, durat
   return lines.join('\n')
 }
 
-function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, sessionUrl, contact, sessionId }) {
+function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, contact, sessionId }) {
   const ctLabel = classTypeLabel(analytics.classType)
   const tPoints = trendLabel(analytics.overall.pointsTrend)
   const tPeak = trendLabel(analytics.overall.peakTrend)
@@ -299,6 +310,7 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
 
   const insightLines = []
   if (ctLabel) insightLines.push(`<strong>${escapeHtml(classLabel)}:</strong> ${escapeHtml(ctLabel)}`)
+  if (vcLine) insightLines.push(`<strong>Category:</strong> ${escapeHtml(vcLine)}`)
   if (tPoints) {
     const arrow = tPoints.dir === 'up' ? '↑' : tPoints.dir === 'down' ? '↓' : '→'
     insightLines.push(`<strong>UN1T Points overall:</strong> ${arrow} ${escapeHtml(tPoints.label)}`)
