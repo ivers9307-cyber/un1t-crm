@@ -23,7 +23,7 @@ import {
   LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare,
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
   Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
-  Workflow,
+  Workflow, Timer,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -125,6 +125,12 @@ export const ALL_NAV = [
   // (live HR is a primary screen, not an admin task). Lived under
   // the Communications header before SIDEBAR-IA.1 — a misfile.
   { href: '/live', label: 'Live HR', icon: Heart, permission: 'studio_management', section: 'gym' },
+
+  // Class timer (CLASS-TIMER) — Myzone-style interval clock that runs on the
+  // studio TV alongside the Live HR board. Sits right under Live HR because
+  // it's the same studio-floor surface, not a Studio-Management admin task.
+  // Same `studio_management` gate as Live HR.
+  { href: '/studio-management/timer', label: 'Class timer', icon: Timer, permission: 'studio_management', section: 'gym' },
 
   // ── Automations ────────────────────────────────────────────────
   { href: '/automations', label: 'Automations', icon: Workflow, anyPermission: ['automations', 'email', 'whatsapp'], section: 'automations' },

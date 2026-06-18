@@ -93,8 +93,8 @@ describe('Sales', () => {
 })
 
 describe('Gym', () => {
-  it('contains the daily surfaces only: schedule, events, live HR', () => {
-    expect(hrefsIn('gym')).toEqual(['/schedule', '/events', '/live'])
+  it('contains the daily surfaces only: schedule, events, live HR, class timer', () => {
+    expect(hrefsIn('gym')).toEqual(['/schedule', '/events', '/live', '/studio-management/timer'])
   })
 
   it('keeps Live HR a top-level entry (primary coach screen, not an admin task)', () => {
