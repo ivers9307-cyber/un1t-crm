@@ -5,8 +5,9 @@
 // banner does. PR1 ships preset templates only; the rich segment editor is PR2.
 
 import { useEffect, useMemo, useState } from 'react'
-import { Play, Pause, Square, SkipForward, SkipBack, Plus } from 'lucide-react'
+import { Play, Pause, Square, SkipForward, SkipBack, Plus, Pencil, Trash2 } from 'lucide-react'
 import { buildTimeline, computeEffectiveElapsedMs, resolveTimerState } from '@/lib/class-timer'
+import TimerTemplateEditor from '@/components/TimerTemplateEditor'
 
 const POLL_MS = 2000
 
@@ -36,6 +37,7 @@ export default function TimerControlClient({ locationId }) {
   const [run, setRun] = useState(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  const [editing, setEditing] = useState(null) // null | 'new' | template object
 
   async function loadTemplates() {
     try {
@@ -100,6 +102,17 @@ export default function TimerControlClient({ locationId }) {
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
+  async function deleteTemplate(id) {
+    if (!confirm('Delete this timer?')) return
+    setBusy(true); setError(null)
+    try {
+      const r = await fetch(`/api/timer/templates/${id}`, { method: 'DELETE' })
+      const j = await r.json()
+      if (!j.success) throw new Error(j.error || 'Could not delete')
+      await loadTemplates()
+    } catch (e) { setError(e.message) } finally { setBusy(false) }
+  }
+
   const existingNames = new Set(templates.map((t) => t.name))
 
   return (
@@ -112,9 +125,15 @@ export default function TimerControlClient({ locationId }) {
         <RunControl run={run} busy={busy} onControl={control} />
       ) : (
         <section className="rounded-2xl border border-un1t-border bg-white p-5">
-          <h3 className="text-sm font-semibold">Start a timer</h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Start a timer</h3>
+            <button type="button" onClick={() => setEditing('new')}
+              className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border px-2.5 py-1 text-xs font-medium hover:bg-un1t-surface">
+              <Plus size={13} /> New timer
+            </button>
+          </div>
           {templates.length === 0 ? (
-            <p className="mt-1 text-sm text-un1t-subtle">No timers yet — add a preset below to get started.</p>
+            <p className="mt-1 text-sm text-un1t-subtle">No timers yet — build one, or quick-add a preset below.</p>
           ) : (
             <ul className="mt-3 divide-y divide-un1t-border">
               {templates.map((t) => (
@@ -123,12 +142,22 @@ export default function TimerControlClient({ locationId }) {
                     <p className="truncate text-sm font-medium">{t.name}</p>
                     <p className="text-xs text-un1t-subtle">{fmtClock((t.total_seconds || 0) * 1000)} total</p>
                   </div>
-                  <button
-                    type="button" disabled={busy} onClick={() => start(t.id)}
-                    className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
-                  >
-                    <Play size={14} /> Start
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button type="button" disabled={busy} onClick={() => setEditing(t)}
+                      className="rounded p-1.5 text-un1t-subtle hover:bg-un1t-surface" aria-label="Edit">
+                      <Pencil size={15} />
+                    </button>
+                    <button type="button" disabled={busy} onClick={() => deleteTemplate(t.id)}
+                      className="rounded p-1.5 text-un1t-subtle hover:bg-un1t-surface" aria-label="Delete">
+                      <Trash2 size={15} />
+                    </button>
+                    <button
+                      type="button" disabled={busy} onClick={() => start(t.id)}
+                      className="ml-1 inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
+                    >
+                      <Play size={14} /> Start
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -138,8 +167,8 @@ export default function TimerControlClient({ locationId }) {
 
       {!run && (
         <section className="rounded-2xl border border-un1t-border bg-white p-5">
-          <h3 className="text-sm font-semibold">Add a preset timer</h3>
-          <p className="mt-1 text-xs text-un1t-subtle">A full segment editor is coming; for now start from a preset.</p>
+          <h3 className="text-sm font-semibold">Quick add a preset</h3>
+          <p className="mt-1 text-xs text-un1t-subtle">Seed a common format, then tweak it with the editor.</p>
           <div className="mt-3 flex flex-wrap gap-2">
             {PRESETS.map((p) => (
               <button
@@ -151,6 +180,15 @@ export default function TimerControlClient({ locationId }) {
             ))}
           </div>
         </section>
+      )}
+
+      {editing && (
+        <TimerTemplateEditor
+          locationId={locationId}
+          initial={editing === 'new' ? null : editing}
+          onCancel={() => setEditing(null)}
+          onSaved={() => { setEditing(null); loadTemplates() }}
+        />
       )}
     </div>
   )
