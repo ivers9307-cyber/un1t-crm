@@ -47,8 +47,7 @@ export async function POST(request) {
   let members = 0
   let upserted = 0
   let pageStart = 0
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
+  for (;;) {
     const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, HARD_LIMIT - 1)
     const { data: page, error } = await db
       .from('contacts')
