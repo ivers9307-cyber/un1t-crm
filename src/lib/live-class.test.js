@@ -238,6 +238,51 @@ describe('pairOverride', () => {
       heart_rate_session_id: 'sess-existing',
     })
   })
+
+  it('stamps class_link_source=booked when the member is booked into the live class', async () => {
+    const NOW = Date.parse('2026-06-18T05:30:00Z') // mid a 05:00–06:00Z class
+    let insertedSession = null
+    const db = {
+      from: vi.fn((table) => {
+        if (table === 'contacts') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({
+            data: { id: 'c-1', max_hr_override: null, dob: '1990-05-08', glofox_member_id: 'm1' }, error: null,
+          })) })) })) }
+        }
+        if (table === 'class_occurrences') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => ({
+            order: vi.fn(() => Promise.resolve({ data: [
+              { glofox_event_id: 'ev1', name: 'DR1VE', starts_at: '2026-06-18T05:00:00Z', ends_at: '2026-06-18T06:00:00Z' },
+            ] })),
+          })) })) })) })) }
+        }
+        if (table === 'class_bookings') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({
+            not: vi.fn(() => ({ limit: vi.fn(() => Promise.resolve({ data: [{ id: 'bk1' }] })) })),
+          })) })) })) })) }
+        }
+        if (table === 'heart_rate_sessions') {
+          return {
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => ({ order: vi.fn(() => ({
+              limit: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: null, error: null })) })),
+            })) })) })) })) })),
+            insert: vi.fn((row) => { insertedSession = row; return { select: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { id: 'sess-new' }, error: null })) })) } }),
+          }
+        }
+        if (table === 'strap_assignments') {
+          return { insert: vi.fn(() => Promise.resolve({ error: null })) }
+        }
+        throw new Error(`unexpected ${table}`)
+      }),
+    }
+    const out = await pairOverride(db, {
+      locationId: 'loc-1', bridgeId: 'b-1', contactId: 'c-1', deviceKey: 'ble:AA:BB:CC:DD:EE:FF', nowMs: NOW,
+    })
+    expect(out.ok).toBe(true)
+    expect(out.sessionId).toBe('sess-new')
+    expect(insertedSession.class_link_source).toBe('booked')
+    expect(insertedSession.glofox_event_id).toBe('ev1')
+  })
 })
 
 // ── endSession ─────────────────────────────────────────────────

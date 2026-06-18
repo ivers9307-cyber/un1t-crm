@@ -29,6 +29,7 @@
 
 import { logWarn } from '@/lib/log'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
+import { lookupBookedMember, resolveClassLinkSource } from '@/lib/class-bookings'
 
 // 90 min covers an hour-long class plus 15min before + 15min after.
 const BOOKING_WINDOW_MS = 90 * 60 * 1000
@@ -289,8 +290,10 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
     if (!existing.glofox_event_id) {
       const occ = await resolveCurrentOccurrence(db, { locationId, nowMs })
       if (occ) {
+        const { data: c } = await db.from('contacts').select('glofox_member_id').eq('id', contactId).single()
+        const booked = await lookupBookedMember(db, { locationId, glofoxEventId: occ.glofox_event_id, glofoxMemberId: c?.glofox_member_id })
         await db.from('heart_rate_sessions')
-          .update({ glofox_event_id: occ.glofox_event_id, class_name: occ.class_name, class_link_source: 'presence' })
+          .update({ glofox_event_id: occ.glofox_event_id, class_name: occ.class_name, class_link_source: resolveClassLinkSource({ liveClass: occ, booked }) })
           .eq('id', existing.id)
       }
     }
@@ -300,7 +303,7 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
   // Snapshot the contact's max HR once (used by whichever create path runs).
   const { data: contact } = await db
     .from('contacts')
-    .select('max_hr_override, dob')
+    .select('max_hr_override, dob, glofox_member_id')
     .eq('id', contactId)
     .single()
   const maxHr = resolveMaxHrForBridgeInsert(contact)
@@ -311,6 +314,9 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
   // booking) get a session at all.
   const occ = await resolveCurrentOccurrence(db, { locationId, nowMs })
   if (occ) {
+    const booked = await lookupBookedMember(db, {
+      locationId, glofoxEventId: occ.glofox_event_id, glofoxMemberId: contact?.glofox_member_id,
+    })
     const { data: created, error: createErr } = await db
       .from('heart_rate_sessions')
       .insert({
@@ -323,7 +329,7 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
         max_hr_used: maxHr,
         glofox_event_id: occ.glofox_event_id,
         class_name: occ.class_name,
-        class_link_source: 'presence',
+        class_link_source: resolveClassLinkSource({ liveClass: occ, booked }),
       })
       .select('id')
       .single()

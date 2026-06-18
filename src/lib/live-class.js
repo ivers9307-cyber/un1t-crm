@@ -13,6 +13,7 @@
 
 import { logWarn } from '@/lib/log'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
+import { lookupBookedMember, resolveClassLinkSource } from '@/lib/class-bookings'
 import { resolveMaxHr, summariseSession } from '@/lib/heart-rate'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { runDetectionForSession } from '@/lib/achievements'
@@ -160,17 +161,22 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
   // Snapshot max HR for the session row.
   const { data: contact } = await db
     .from('contacts')
-    .select('id, max_hr_override, dob')
+    .select('id, max_hr_override, dob, glofox_member_id')
     .eq('id', contactId)
     .single()
   if (!contact) return { ok: false, error: 'Contact not found' }
   const maxHr = resolveMaxHr(contact, nowMs)
 
   // Which Glofox class is running right now? Stamp it on the session so
-  // coach-paired members get the same presence-based class link as the
-  // auto-ingest path (HR-CLASS-ALLOC.1). Best-effort — a strap paired
-  // outside any class still creates a session, just without a class link.
+  // coach-paired members get the same class link as the auto-ingest path
+  // (HR-CLASS-ALLOC.1/.2): 'booked' if the member was booked into this class,
+  // else 'presence'. Best-effort — a strap paired outside any class still
+  // creates a session, just without a class link.
   const liveClass = await resolveCurrentOccurrence(db, { locationId, nowMs })
+  const booked = liveClass ? await lookupBookedMember(db, {
+    locationId, glofoxEventId: liveClass.glofox_event_id, glofoxMemberId: contact?.glofox_member_id,
+  }) : false
+  const linkSource = resolveClassLinkSource({ liveClass, booked }) // 'booked' | 'presence' | null
 
   // Find or create a session.
   const { data: existing } = await db
@@ -197,7 +203,7 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
         max_hr_used: maxHr,
         glofox_event_id: liveClass?.glofox_event_id ?? null,
         class_name: liveClass?.class_name ?? null,
-        class_link_source: liveClass ? 'presence' : null,
+        class_link_source: linkSource,
       })
       .select('id')
       .single()
@@ -213,7 +219,7 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
     if (!existing.glofox_event_id && liveClass) {
       patch.glofox_event_id = liveClass.glofox_event_id
       patch.class_name = liveClass.class_name
-      patch.class_link_source = 'presence'
+      patch.class_link_source = linkSource
     }
     if (Object.keys(patch).length) {
       await db.from('heart_rate_sessions').update(patch).eq('id', sessionId)
