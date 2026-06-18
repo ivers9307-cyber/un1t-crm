@@ -5,11 +5,12 @@
 // of the web tv_displays feature):
 //   • Air conditioning → /ac     (Sensibo gym floor + LG ThinQ units)
 //   • Door unlock      → /doors  (UniFi Access)
+//   • Class timer      → /timer  (Myzone-style interval timer on the TV)
 //   • TV displays      → /tv     (view TVs + current content + clear)
 //
-// AC + Door gate on `studio_management` (cross-platform key, mig 093);
-// TV gates on the `tv_displays` mobile permission. Reached from the
-// Studio tile in More (or the bottom bar if pinned there).
+// AC + Door + Class timer gate on `studio_management` (cross-platform key,
+// mig 093); TV gates on the `tv_displays` mobile permission. Reached from
+// the Studio tile in More (or the bottom bar if pinned there).
 
 import { View, Text, Pressable, ScrollView } from 'react-native'
 import { useRouter } from 'expo-router'
@@ -78,6 +79,15 @@ export default function StudioHub() {
             title="Door unlock"
             subtitle="UniFi Access doors"
             onPress={() => router.push('/doors')}
+          />
+        )}
+        {canStudio && (
+          <ChoiceCard
+            icon="stopwatch-outline"
+            tint="#10B981"
+            title="Class timer"
+            subtitle="Run a Myzone-style interval timer on the TV"
+            onPress={() => router.push('/timer')}
           />
         )}
         {canTv && (
