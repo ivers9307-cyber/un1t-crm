@@ -88,6 +88,20 @@ describe('getLiveSessions', () => {
     const out = await getLiveSessions(dbWith({ sessions, samples: [] }), 'loc-1')
     expect(out[0].currentBpm).toBe(null)
   })
+
+  it('labels an anonymous (null-contact) session by its device id', async () => {
+    const sessions = [{
+      id: 'sess-anon', contact_id: null, booking_id: null,
+      started_at: '2026-06-18T05:30:00Z', max_hr_used: 180,
+      device_identifier: 'ant:45075', last_sample_at: null,
+      contacts: null,
+    }]
+    const out = await getLiveSessions(dbWith({ sessions, samples: [] }), 'loc-1')
+    expect(out[0].contactName).toBe('ant:45075')
+    expect(out[0].contactFirstName).toBe('ant:45075')
+    expect(out[0].contactId).toBeNull()
+    expect(out[0].glofoxMemberId).toBeNull()
+  })
 })
 
 // ── getAvailableStraps ─────────────────────────────────────────

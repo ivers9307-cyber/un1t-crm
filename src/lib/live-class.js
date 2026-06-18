@@ -45,7 +45,7 @@ const RECENT_SAMPLE_WINDOW_MS = 30 * 1000  // current-BPM averaging window
 export async function getLiveSessions(db, locationId, nowMs = Date.now()) {
   const { data: sessions, error } = await db
     .from('heart_rate_sessions')
-    .select('id, contact_id, booking_id, started_at, max_hr_used, device_identifier, last_sample_at, contacts!inner(id, name, location_id)')
+    .select('id, contact_id, booking_id, started_at, max_hr_used, device_identifier, last_sample_at, contacts!contact_id(id, name, location_id, glofox_member_id)')
     .eq('location_id', locationId)
     .is('ended_at', null)
     .order('started_at', { ascending: false })
@@ -79,12 +79,16 @@ export async function getLiveSessions(db, locationId, nowMs = Date.now()) {
     const currentBpm = recent.length > 0
       ? Math.round(recent.reduce((a, b) => a + b, 0) / recent.length)
       : null
-    const fullName = s.contacts?.name || 'Member'
+    // HR-CLASS-ALLOC.2 — anonymous (null-contact) walk-ins are labelled by their
+    // device id; glofoxMemberId lets the roster panel join sessions to bookings.
+    const isAnon = !s.contacts
+    const label = isAnon ? (s.device_identifier || 'Guest') : (s.contacts?.name || 'Member')
     return {
       id: s.id,
       contactId: s.contact_id,
-      contactName: fullName,
-      contactFirstName: fullName.split(' ')[0],
+      glofoxMemberId: s.contacts?.glofox_member_id ?? null,
+      contactName: label,
+      contactFirstName: isAnon ? label : label.split(' ')[0],
       bookingId: s.booking_id,
       startedAt: s.started_at,
       maxHrUsed: s.max_hr_used,
