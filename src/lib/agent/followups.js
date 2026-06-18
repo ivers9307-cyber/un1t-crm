@@ -21,7 +21,7 @@
 // (settings.customer_agent.followups.enabled). Every skip logs a
 // structured reason — silence must always be explainable (#478).
 
-import { buildCustomerSystemPrompt } from './prompt'
+import { buildCachedSystem } from './prompt'
 import { formatHistoryForClaude, parseAgentResponse, phoneMatchesAllowlist } from './core'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
@@ -266,7 +266,9 @@ async function stampStage(db, conversationId, stage, sent) {
 async function composeAgentText(location, settings, historyRows, instruction) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { error: 'no_api_key' }
-  const system = buildCustomerSystemPrompt({
+  // CACHE.2 — cache the stable prefix (no tools on this path, so it caches the
+  // stable system block directly); the date suffix stays uncached.
+  const system = buildCachedSystem({
     businessName: 'UN1T',
     locationName: location.name,
     agentName: settings?.agent_name || null,

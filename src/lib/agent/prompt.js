@@ -164,48 +164,98 @@ export function buildKnowledgeBlock(entries) {
 }
 
 /**
- * Assemble the full customer-agent system prompt. Pure.
+ * Split the customer-agent system prompt into a location-stable prefix and a
+ * per-request volatile suffix, for prompt caching (CACHE.2). Pure.
+ *
+ * `stable` holds everything that is byte-identical for a location until an
+ * operator edits it (identity + base rules + membership link + tone + extra
+ * rules + the KNOWLEDGE block) — this is the big chunk and the cache target.
+ * `volatile` holds what changes per request or per conversation (today's date
+ * and the WhatsApp phone-match identity override), which must render AFTER the
+ * cache breakpoint so it never busts the cached prefix. The cache key is a
+ * byte-prefix match, so the stable string MUST NOT vary with `today` /
+ * `identityPreverified` — see the cache-stability tests.
+ *
  * @param {object} opts
  * @param {string} [opts.businessName]
  * @param {string} [opts.locationName]
  * @param {string} [opts.tone]        operator-set personality/voice notes
  * @param {string} [opts.extraRules]  operator-set extra guardrails
  * @param {Array}  [opts.knowledge]   agent_knowledge rows
- * @param {string} [opts.today]       YYYY-MM-DD (for "today" awareness)
- * @returns {string}
+ * @param {string} [opts.today]       date string (for "today" awareness)
+ * @param {string} [opts.agentName]
+ * @param {string} [opts.membershipUrl]
+ * @param {boolean}[opts.identityPreverified]
+ * @returns {{ stable: string, volatile: string }}
  */
-export function buildCustomerSystemPrompt(opts = {}) {
+export function buildCustomerSystemPromptParts(opts = {}) {
   const { businessName, locationName, tone, extraRules, knowledge, today, agentName, membershipUrl } = opts
   const name = String(agentName || '').trim()
   const identity = name
     ? `You are ${name}, the AI assistant for ${businessName || 'UN1T'}, a boutique fitness studio.`
     : `You are the AI assistant for ${businessName || 'UN1T'}, a boutique fitness studio.`
-  const parts = [identity + ' ' + CUSTOMER_AGENT_BASE_PROMPT]
 
+  // STABLE — cache this prefix. Order: identity + base, then the operator-set
+  // blocks, then KNOWLEDGE last (the base prompt refers to "the KNOWLEDGE
+  // section below").
+  const stableParts = [identity + ' ' + CUSTOMER_AGENT_BASE_PROMPT]
+  if (membershipUrl) {
+    stableParts.push(
+      '## Joining the studio (membership sign-up link)\n' +
+      `When someone wants to JOIN or asks how to become a member, share the membership sign-up link: ${membershipUrl} — sign-up and payment happen securely there. Answer pricing questions only from the studio knowledge; if the knowledge doesn't cover it, share the link and offer the team. Never invent prices.`,
+    )
+  }
+  if (tone && tone.trim()) stableParts.push('## Tone & voice (from the studio)\n' + tone.trim())
+  if (extraRules && extraRules.trim()) stableParts.push('## Extra rules (from the studio)\n' + extraRules.trim())
+  stableParts.push(buildKnowledgeBlock(knowledge))
+
+  // VOLATILE — re-rendered every call, never cached. The whole Context block
+  // (incl. business/studio, which are stable but tiny) stays together so the
+  // base prompt's "Today's date from Context" reference resolves to a real
+  // Context section.
+  const volatileParts = []
   const ctx = []
   if (businessName) ctx.push(`- Business: ${businessName}`)
   if (locationName) ctx.push(`- Studio: ${locationName}`)
   if (today) ctx.push(`- Today's date: ${today}`)
-  if (ctx.length) parts.push('## Context\n' + ctx.join('\n'))
+  if (ctx.length) volatileParts.push('## Context\n' + ctx.join('\n'))
 
   // AGENT-AUTH.1 — WhatsApp phone match: the sender IS the member. This
-  // section overrides the verification steps in the base prompt above.
+  // section overrides the verification steps in the base prompt above. It's
+  // per-conversation, so it must stay out of the cached prefix.
   if (opts.identityPreverified) {
-    parts.push(
+    volatileParts.push(
       '## Identity — already verified\n' +
       'This customer is messaging from the phone number on their membership, so they are ALREADY VERIFIED — the studio system confirmed it. This overrides the verification steps above: do NOT ask for their email or surname, and do NOT call verify_identity. Use the account and booking tools directly and answer their own-account questions right away. (Everything else still applies: no billing details, no other people\'s accounts.)'
     )
   }
 
-  if (membershipUrl) {
-    parts.push(
-      '## Joining the studio (membership sign-up link)\n' +
-      `When someone wants to JOIN or asks how to become a member, share the membership sign-up link: ${membershipUrl} — sign-up and payment happen securely there. Answer pricing questions only from the studio knowledge; if the knowledge doesn't cover it, share the link and offer the team. Never invent prices.`,
-    )
-  }
-  if (tone && tone.trim()) parts.push('## Tone & voice (from the studio)\n' + tone.trim())
-  if (extraRules && extraRules.trim()) parts.push('## Extra rules (from the studio)\n' + extraRules.trim())
+  return { stable: stableParts.join('\n\n'), volatile: volatileParts.join('\n\n') }
+}
 
-  parts.push(buildKnowledgeBlock(knowledge))
-  return parts.join('\n\n')
+/**
+ * Assemble the full customer-agent system prompt as one string. Pure.
+ * Convenience wrapper over buildCustomerSystemPromptParts (stable + volatile);
+ * use buildCachedSystem when sending to the API so the stable prefix caches.
+ * @returns {string}
+ */
+export function buildCustomerSystemPrompt(opts = {}) {
+  const { stable, volatile } = buildCustomerSystemPromptParts(opts)
+  return volatile ? `${stable}\n\n${volatile}` : stable
+}
+
+/**
+ * Build the Anthropic `system` value as content blocks with a cache breakpoint
+ * on the location-stable prefix (CACHE.2). The stable block carries
+ * `cache_control: ephemeral`; the volatile block (today + identity override) is
+ * appended uncached and only when it has content. Render order is tools →
+ * system → messages, so on the inbound path this caches [tools + stable system]
+ * cumulatively; on the followups path (no tools) it caches [stable system].
+ * @returns {Array<{type:'text', text:string, cache_control?:object}>}
+ */
+export function buildCachedSystem(opts = {}) {
+  const { stable, volatile } = buildCustomerSystemPromptParts(opts)
+  const blocks = [{ type: 'text', text: stable, cache_control: { type: 'ephemeral' } }]
+  if (volatile) blocks.push({ type: 'text', text: volatile })
+  return blocks
 }

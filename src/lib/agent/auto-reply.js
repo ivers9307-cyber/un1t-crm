@@ -22,7 +22,7 @@
 import { sendTextMessage, sendInteractiveOptions } from '@/lib/whatsapp'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
-import { buildCustomerSystemPrompt } from './prompt'
+import { buildCachedSystem } from './prompt'
 import {
   shouldAgentReply,
   formatHistoryForClaude,
@@ -261,7 +261,10 @@ async function runChannelAgentInner(db, adapter, ctx) {
       .limit(MAX_HISTORY * 2)
     const history = (historyDesc || []).slice().reverse()
 
-    const systemPrompt = buildCustomerSystemPrompt({
+    // CACHE.2 — content blocks with a cache breakpoint on the location-stable
+    // prefix (base prompt + knowledge). Caches cumulatively after the tool
+    // block; the volatile suffix (today + identity override) stays uncached.
+    const system = buildCachedSystem({
       businessName: 'UN1T',
       locationName: loc?.name || null,
       agentName: settings?.agent_name || null,
@@ -313,7 +316,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
           body: JSON.stringify({
             model: AGENT_MODEL,
             max_tokens: 600,
-            system: systemPrompt,
+            system,
             messages,
             tools: CACHED_ACCOUNT_TOOLS,
           }),
