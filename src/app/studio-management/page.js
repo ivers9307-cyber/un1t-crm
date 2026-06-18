@@ -4,8 +4,6 @@
 // location. Future: alarm arm/disarm, camera live feeds, etc.
 // Single permission key (`studio_management`) gates the whole route.
 
-import Link from 'next/link'
-import { Timer } from 'lucide-react'
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
@@ -27,16 +25,6 @@ export default async function StudioManagementPage() {
         </p>
       </div>
       <StudioManagementPanel />
-
-      <div className="mt-6">
-        <Link
-          href="/studio-management/timer"
-          className="inline-flex items-center gap-2 rounded-lg border border-un1t-border bg-white px-4 py-3 text-sm font-medium hover:bg-un1t-surface"
-        >
-          <Timer size={16} className="text-un1t-subtle" />
-          Class timer
-        </Link>
-      </div>
     </div>
   )
 }
