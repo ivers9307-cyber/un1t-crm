@@ -37,7 +37,11 @@ export default function TimeOffNew() {
   const [submitting, setSubmitting] = useState(false)
 
   async function submit() {
-    if (start > end) {
+    // The calendar leaves `end` null after the first tap of a range (and for a
+    // single-day pick); coalesce to start so a one-tap pick still submits and a
+    // two-tap pick submits the full From–To range.
+    const endDate = end || start
+    if (start > endDate) {
       Alert.alert('Invalid dates', 'End date must be on or after start date.')
       return
     }
@@ -45,7 +49,7 @@ export default function TimeOffNew() {
     const res = await createTimeOffRequest({
       type,
       startDate: start,
-      endDate: end,
+      endDate,
       reason,
       locationId: activeLocation?.id,
     })
@@ -119,7 +123,7 @@ export default function TimeOffNew() {
             startDate={start}
             endDate={end}
             minDate={today}
-            onChange={({ start: s, end: e }) => { setStart(s); setEnd(e || s) }}
+            onChange={({ start: s, end: e }) => { setStart(s); setEnd(e) }}
           />
         </View>
 
