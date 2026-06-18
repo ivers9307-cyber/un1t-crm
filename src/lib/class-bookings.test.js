@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mapBookingToRosterRow, upsertClassBookings, resolveClassLinkSource, lookupBookedMember } from './class-bookings'
+import { mapBookingToRosterRow, upsertClassBookings, resolveClassLinkSource, lookupBookedMember, mergeRosterWithSessions } from './class-bookings'
 
 describe('class-bookings: mapBookingToRosterRow', () => {
   const base = {
@@ -98,5 +98,35 @@ describe('class-bookings: lookupBookedMember', () => {
     expect(await lookupBookedMember(spy, { locationId: 'l', glofoxEventId: 'e', glofoxMemberId: null })).toBe(false)
     expect(await lookupBookedMember(spy, { locationId: 'l', glofoxMemberId: 'm' })).toBe(false)
     expect(spy.from).not.toHaveBeenCalled()
+  })
+})
+
+describe('class-bookings: mergeRosterWithSessions', () => {
+  const roster = [
+    { glofox_member_id: 'm1', member_name: 'Jo B', status: 'BOOKED' },
+    { glofox_member_id: 'm2', member_name: 'Al C', status: 'BOOKED' },
+    { glofox_member_id: 'm3', member_name: 'Cancelled Cara', status: 'CANCELLED' },
+  ]
+  const sessions = [
+    { id: 's1', contactId: 'c1', glofoxMemberId: 'm1', contactName: 'Jo B', currentBpm: 140, deviceIdentifier: 'ant:1' },
+    { id: 's2', contactId: 'c9', glofoxMemberId: 'm9', contactName: 'Zed K', currentBpm: 130, deviceIdentifier: 'ant:2' },
+    { id: 's3', contactId: null, glofoxMemberId: null, contactName: 'ant:99', currentBpm: 120, deviceIdentifier: 'ant:99' },
+  ]
+  it('tags booked+hr, booked+no-hr, present-not-booked, and anon walk-in', () => {
+    const out = mergeRosterWithSessions(roster, sessions)
+    expect(out.find((r) => r.label === 'Jo B')).toMatchObject({ booked: true, hasHr: true, currentBpm: 140 })
+    expect(out.find((r) => r.label === 'Al C')).toMatchObject({ booked: true, hasHr: false, currentBpm: null })
+    // present but not booked (known member m9, no roster row)
+    expect(out.find((r) => r.label === 'Zed K')).toMatchObject({ booked: false, hasHr: true, anon: false })
+    // anon walk-in (session with no contact + no roster match)
+    expect(out.find((r) => r.label === 'ant:99')).toMatchObject({ booked: false, hasHr: true, anon: true })
+  })
+  it('excludes CANCELLED roster rows', () => {
+    const out = mergeRosterWithSessions(roster, [])
+    expect(out.find((r) => r.label === 'Cancelled Cara')).toBeUndefined()
+    expect(out).toHaveLength(2) // Jo B + Al C only
+  })
+  it('handles empty inputs', () => {
+    expect(mergeRosterWithSessions([], [])).toEqual([])
   })
 })

@@ -96,3 +96,48 @@ export async function lookupBookedMember(db, { locationId, glofoxEventId, glofox
     .limit(1)
   return Array.isArray(data) && data.length > 0
 }
+
+// ── live-class roster panel (HR-CLASS-ALLOC.2, PR3) ──────────────
+
+/**
+ * Pure: merge the class roster (class_bookings rows for the live occurrence)
+ * with the open HR sessions into one tagged list for the coach panel. Match key
+ * is glofox_member_id. Three kinds of entry result:
+ *   - booked + HR (member booked AND wearing a strap)
+ *   - booked + no HR (member booked, no strap)
+ *   - walk-in (a session with no roster match): anon=true when it has no contact
+ *
+ * @param {Array<{glofox_member_id, member_name, status}>} roster
+ * @param {Array<{id, contactId, glofoxMemberId, contactName, currentBpm, deviceIdentifier}>} sessions  (getLiveSessions shape)
+ */
+export function mergeRosterWithSessions(roster = [], sessions = []) {
+  const byMember = new Map()
+  for (const s of sessions) if (s.glofoxMemberId) byMember.set(String(s.glofoxMemberId), s)
+  const usedSessionIds = new Set()
+  const out = []
+  for (const r of roster) {
+    if (String(r.status || '').toUpperCase() === 'CANCELLED') continue
+    const s = r.glofox_member_id ? byMember.get(String(r.glofox_member_id)) : null
+    if (s) usedSessionIds.add(s.id)
+    out.push({
+      label: r.member_name || (s ? s.contactName : null) || '—',
+      booked: true,
+      hasHr: !!s,
+      anon: false,
+      currentBpm: s?.currentBpm ?? null,
+      sessionId: s?.id ?? null,
+    })
+  }
+  for (const s of sessions) {
+    if (usedSessionIds.has(s.id)) continue
+    out.push({
+      label: s.contactName || s.deviceIdentifier || '—',
+      booked: false,
+      hasHr: true,
+      anon: !s.contactId,
+      currentBpm: s.currentBpm ?? null,
+      sessionId: s.id,
+    })
+  }
+  return out
+}
