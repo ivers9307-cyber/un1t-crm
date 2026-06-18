@@ -57,7 +57,7 @@ export async function loadContextForSession(db, sessionId) {
       id, contact_id, location_id, booking_id, started_at, ended_at,
       max_hr_used, avg_hr_bpm, peak_hr_bpm, zones_seconds, effort_points,
       email_sent_at, source, device_identifier, class_name,
-      contact:contacts!heart_rate_sessions_contact_id_fkey ( id, name, email, hr_post_class_emails_enabled ),
+      contact:contacts!heart_rate_sessions_contact_id_fkey ( id, name, email, hr_post_class_emails_enabled, pipeline_stage_slug ),
       booking:bookings!heart_rate_sessions_booking_id_fkey ( id, booking_date, start_time,
         event_type:event_types!bookings_event_type_id_fkey ( id, name )
       )
@@ -85,6 +85,16 @@ export async function loadContextForSession(db, sessionId) {
     .eq('location_id', session.location_id)
   const catMap = new Map((catRows || []).map((c) => [c.class_name_normalized, c.category]))
   const categoryFor = (name) => catMap.get(normalizeClassName(name)) ?? null
+
+  const { data: loc } = await db.from('locations').select('settings').eq('id', session.location_id).single()
+  const ca = loc?.settings?.customer_agent || {}
+  const cta = {
+    stage: session.contact?.pipeline_stage_slug ?? null,
+    bookingUrl: ca.booking_url ?? null,
+    bookingLabel: ca.booking_cta_label ?? null,
+    membershipSignupUrl: ca.membership_signup_url ?? null,
+    membershipLabel: ca.membership_cta_label ?? null,
+  }
 
   // Pull 90 days of history for this contact, all class types.
   // Just the columns the analytics layer needs.
@@ -131,6 +141,7 @@ export async function loadContextForSession(db, sessionId) {
     thisSession,
     history,
     eventTypeName: className,
+    cta,
     contact: session.contact,
   }
 }
@@ -144,7 +155,7 @@ export async function loadContextForSession(db, sessionId) {
  */
 export function composeEmail(ctx, { nowMs = Date.now() } = {}) {
   const { session, thisSession, history, eventTypeName, contact } = ctx
-  const report = buildSessionReport({ session, thisSession, history, eventTypeName }, { nowMs })
+  const report = buildSessionReport({ session, thisSession, history, eventTypeName, cta: ctx.cta }, { nowMs })
   // Adapt the report back to the shapes the existing renderers read, so
   // the email's output is byte-identical while the numbers now flow from
   // the one canonical builder.
@@ -177,6 +188,8 @@ export function composeEmail(ctx, { nowMs = Date.now() } = {}) {
 
   const sessionUrl = `${APP_URL}/sessions/${session.id}`
 
+  const na = report.next_action
+
   const vc = report.comparisons.vs_category
   const vcLine = (vc && vc.percentile != null && vc.sample_size >= 2)
     ? (Math.round(vc.percentile * 100) >= 50
@@ -190,11 +203,11 @@ export function composeEmail(ctx, { nowMs = Date.now() } = {}) {
     subject,
     text: renderText({
       firstName, classLabel, startedAt, points, peak, avg, durationMin,
-      breakdown, analytics, vcLine, sessionUrl,
+      breakdown, analytics, vcLine, sessionUrl, na,
     }),
     html: renderHtml({
       firstName, classLabel, startedAt, points, peak, avg, durationMin,
-      breakdown, analytics, vcLine, sessionUrl, contact, sessionId: session.id,
+      breakdown, analytics, vcLine, sessionUrl, contact, sessionId: session.id, na,
     }),
     analytics,
   }
@@ -231,7 +244,7 @@ function classTypeLabel(classType) {
   return `Lighter than your usual ${classType.eventTypeName || 'session'} — yours mean ${classType.meanPoints} pts.`
 }
 
-function renderText({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl }) {
+function renderText({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, na }) {
   const lines = []
   lines.push(`Hi ${firstName},`)
   lines.push('')
@@ -269,10 +282,14 @@ function renderText({ firstName, classLabel, startedAt, points, peak, avg, durat
 
   lines.push('')
   lines.push(`See the full session: ${sessionUrl}`)
+  if (na) {
+    lines.push('')
+    lines.push(`${na.label}: ${na.url}`)
+  }
   return lines.join('\n')
 }
 
-function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, contact, sessionId }) {
+function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durationMin, breakdown, analytics, vcLine, sessionUrl, contact, sessionId, na }) {
   const ctLabel = classTypeLabel(analytics.classType)
   const tPoints = trendLabel(analytics.overall.pointsTrend)
   const tPeak = trendLabel(analytics.overall.peakTrend)
@@ -375,6 +392,12 @@ function renderHtml({ firstName, classLabel, startedAt, points, peak, avg, durat
         View the full session
       </a>
     </p>
+    ${na ? `
+    <p style="margin:16px 0 0 0;text-align:center;">
+      <a href="${escapeHtml(na.url)}" style="display:inline-block;background:#111;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;">
+        ${escapeHtml(na.label)}
+      </a>
+    </p>` : ''}
 
     <p style="margin:24px 0 0 0;font-size:11px;color:#9ca3af;text-align:center;">
       You're getting this because you trained with a heart-rate
