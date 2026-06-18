@@ -93,13 +93,14 @@ describe('Sales', () => {
 })
 
 describe('Gym', () => {
-  it('contains the daily surfaces only: schedule, events, live HR, class timer', () => {
-    expect(hrefsIn('gym')).toEqual(['/schedule', '/events', '/live', '/studio-management/timer'])
+  it('contains the daily surfaces only: schedule, events, live HR', () => {
+    expect(hrefsIn('gym')).toEqual(['/schedule', '/events', '/live'])
   })
 
-  it('keeps Live HR a top-level entry (primary coach screen, not an admin task)', () => {
+  it('keeps Live HR a top-level gym entry with Class timer nested under it', () => {
     const live = ALL_NAV.find((i) => i.href === '/live')
     expect(live.section).toBe('gym')
+    expect(live.children.map((c) => c.href)).toEqual(['/studio-management/timer'])
   })
 })
 

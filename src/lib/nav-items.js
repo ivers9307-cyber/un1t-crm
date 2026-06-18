@@ -119,18 +119,24 @@ export const ALL_NAV = [
   // Live class — coach view of in-studio HR (mig 110-113). Renders
   // attendees with current zone color, available straps panel, and
   // override-pairing flow. /live redirects to /live/<activeLocation>.
-  // Same permission gate as Studio Management — anyone running
-  // class can use it. Stays a top-level entry (not nested under
-  // Studio Management) because operationally it's its own surface
-  // (live HR is a primary screen, not an admin task). Lived under
-  // the Communications header before SIDEBAR-IA.1 — a misfile.
-  { href: '/live', label: 'Live HR', icon: Heart, permission: 'studio_management', section: 'gym' },
-
-  // Class timer (CLASS-TIMER) — Myzone-style interval clock that runs on the
-  // studio TV alongside the Live HR board. Sits right under Live HR because
-  // it's the same studio-floor surface, not a Studio-Management admin task.
-  // Same `studio_management` gate as Live HR.
-  { href: '/studio-management/timer', label: 'Class timer', icon: Timer, permission: 'studio_management', section: 'gym' },
+  // Same permission gate as Studio Management — anyone running class
+  // can use it. A top-level gym entry (not nested under Studio
+  // Management) because operationally it's its own surface — but it IS
+  // a parent: the Class timer (CLASS-TIMER) nests under it, since the
+  // timer runs on the studio TV alongside this HR board (same floor
+  // surface, not an admin task). Both share the `studio_management`
+  // gate. Lived under the Communications header before SIDEBAR-IA.1.
+  {
+    href: '/live',
+    label: 'Live HR',
+    icon: Heart,
+    permission: 'studio_management',
+    section: 'gym',
+    groupId: 'live',  // localStorage key for expand state
+    children: [
+      { href: '/studio-management/timer', label: 'Class timer', icon: Timer, permission: 'studio_management' },
+    ],
+  },
 
   // ── Automations ────────────────────────────────────────────────
   { href: '/automations', label: 'Automations', icon: Workflow, anyPermission: ['automations', 'email', 'whatsapp'], section: 'automations' },
