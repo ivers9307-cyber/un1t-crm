@@ -3,6 +3,8 @@ import { describe, it, expect } from 'vitest'
 import {
   buildKnowledgeBlock,
   buildCustomerSystemPrompt,
+  buildCustomerSystemPromptParts,
+  buildCachedSystem,
   HANDOFF_PREFIX,
   CUSTOMER_AGENT_BASE_PROMPT,
 } from './prompt'
@@ -124,5 +126,106 @@ describe('membership signup link', () => {
   it('omits the section when no link is configured', () => {
     const out = buildCustomerSystemPrompt({})
     expect(out).not.toMatch(/membership sign-up link/i)
+  })
+})
+
+// CACHE.2 — split the system prompt into a location-stable prefix (cacheable)
+// and a per-request volatile suffix (today's date + the per-conversation
+// identity override). The cache breakpoint lands on the stable prefix so the
+// big base prompt + knowledge cache across every inbound message for a
+// location; the volatile suffix re-renders each call WITHOUT busting the
+// cached prefix. buildCustomerSystemPrompt stays the joined-string convenience.
+describe('buildCustomerSystemPromptParts (cache split)', () => {
+  const opts = {
+    businessName: 'UN1T',
+    locationName: 'Stillorgan',
+    agentName: 'Mia',
+    membershipUrl: 'https://example.com/join',
+    tone: 'Friendly and brief',
+    extraRules: 'Never discuss competitors',
+    knowledge: [{ category: 'sales', title: 'Trial', content: 'First class free' }],
+    today: '2026-06-18',
+    identityPreverified: true,
+  }
+
+  it('keeps the big location-stable content in the stable part', () => {
+    const { stable } = buildCustomerSystemPromptParts(opts)
+    expect(stable).toContain(CUSTOMER_AGENT_BASE_PROMPT)
+    expect(stable).toContain('You are Mia')
+    expect(stable).toContain('First class free')          // knowledge
+    expect(stable).toContain('Friendly and brief')         // tone
+    expect(stable).toContain('Never discuss competitors')  // extra rules
+    expect(stable).toContain('https://example.com/join')   // membership link
+  })
+
+  it('keeps the volatile bits OUT of the stable part', () => {
+    const { stable } = buildCustomerSystemPromptParts(opts)
+    expect(stable).not.toContain('2026-06-18')       // today's date
+    expect(stable).not.toMatch(/already verified/i)  // per-conversation override
+  })
+
+  it('puts today and the identity override in the volatile part', () => {
+    const { volatile } = buildCustomerSystemPromptParts(opts)
+    expect(volatile).toContain('2026-06-18')
+    expect(volatile).toMatch(/already verified/i)
+  })
+
+  // The cache-correctness invariant: the stable prefix must NOT change when
+  // only per-request inputs change, or every inbound message is a cache miss.
+  it('stable part is byte-identical regardless of today (cache stability)', () => {
+    const a = buildCustomerSystemPromptParts({ ...opts, today: '2026-06-18' }).stable
+    const b = buildCustomerSystemPromptParts({ ...opts, today: '2027-01-01' }).stable
+    expect(a).toBe(b)
+  })
+
+  it('stable part is byte-identical regardless of identityPreverified (cache stability)', () => {
+    const a = buildCustomerSystemPromptParts({ ...opts, identityPreverified: true }).stable
+    const b = buildCustomerSystemPromptParts({ ...opts, identityPreverified: false }).stable
+    expect(a).toBe(b)
+  })
+
+  it('loses no section vs the joined-string builder', () => {
+    const { stable, volatile } = buildCustomerSystemPromptParts(opts)
+    const joined = buildCustomerSystemPrompt(opts)
+    for (const needle of [
+      CUSTOMER_AGENT_BASE_PROMPT, 'First class free', 'Friendly and brief',
+      'Never discuss competitors', 'https://example.com/join', '2026-06-18', 'Stillorgan',
+    ]) {
+      expect(joined).toContain(needle)
+      expect(`${stable}\n\n${volatile}`).toContain(needle)
+    }
+  })
+})
+
+describe('buildCachedSystem (Anthropic system blocks)', () => {
+  const opts = {
+    businessName: 'UN1T',
+    locationName: 'Stillorgan',
+    knowledge: [{ category: 'sales', title: 'Trial', content: 'First class free' }],
+    today: '2026-06-18',
+  }
+
+  it('returns an ephemeral-cached stable block followed by an uncached volatile block', () => {
+    const blocks = buildCachedSystem(opts)
+    expect(Array.isArray(blocks)).toBe(true)
+    expect(blocks[0]).toMatchObject({ type: 'text', cache_control: { type: 'ephemeral' } })
+    expect(blocks[0].text).toContain(CUSTOMER_AGENT_BASE_PROMPT)
+    const last = blocks[blocks.length - 1]
+    expect(last.type).toBe('text')
+    expect(last.cache_control).toBeUndefined()
+    expect(last.text).toContain('2026-06-18')
+  })
+
+  it('emits only the stable block (still cached) when there is no volatile content', () => {
+    // no today, no preverified, no business/studio → nothing volatile
+    const blocks = buildCachedSystem({ knowledge: [{ category: 'sales', content: 'x' }] })
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].cache_control).toEqual({ type: 'ephemeral' })
+  })
+
+  it('concatenated block text matches the joined-string builder (no content drift)', () => {
+    const blocks = buildCachedSystem(opts)
+    const concatenated = blocks.map(b => b.text).join('\n\n')
+    expect(concatenated).toBe(buildCustomerSystemPrompt(opts))
   })
 })
