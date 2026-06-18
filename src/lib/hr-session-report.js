@@ -7,7 +7,7 @@
 // existing HR helpers (it re-implements none of the maths) and adds
 // the version envelope + the null slots for later slices.
 //
-// KEEP IN SYNC with un1t-crm/src/lib/hr-session-report.js. Both repos
+// KEEP IN SYNC across champ-app + un1t-crm (champ-app is canon). Both repos
 // assert against src/lib/__fixtures__/session-report.fixture.json.
 
 import { zoneBreakdown } from './heart-rate.js'
