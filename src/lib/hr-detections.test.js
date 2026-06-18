@@ -137,3 +137,119 @@ describe('planDetectionWrites — scan enrich (touchVisits=false)', () => {
     expect(registryRows[0].last_bpm).toBe(100)                  // preserved
   })
 })
+
+import { recordDetections, recordScanMetadata, resolveDetectionLinks } from './hr-detections'
+import { vi } from 'vitest'
+
+// Minimal supabase-js builder fake. Every chain method returns the builder; the
+// builder is a thenable that resolves `handlers(ctx)`. Records upserts.
+function makeDb(handlers) {
+  return {
+    from(table) {
+      const ctx = { table, op: 'select', filters: {} }
+      const b = {
+        select(cols) { ctx.cols = cols; return b },
+        upsert(rows, opts) { ctx.op = 'upsert'; ctx.rows = rows; ctx.opts = opts; return b },
+        update(patch) { ctx.op = 'update'; ctx.patch = patch; return b },
+        insert(rows) { ctx.op = 'insert'; ctx.rows = rows; return b },
+        eq(c, v) { ctx.filters[c] = v; return b },
+        is(c, v) { ctx.filters[c] = v; return b },
+        in(c, v) { ctx.filters[c] = v; return b },
+        not() { return b },
+        gte() { return b },
+        lte() { return b },
+        order() { return b },
+        limit() { return b },
+        maybeSingle() { ctx.single = true; return b },
+        single() { ctx.single = true; return b },
+        then(resolve, reject) {
+          try { resolve(handlers(ctx) ?? { data: null, error: null }) } catch (e) { reject(e) }
+        },
+      }
+      return b
+    },
+  }
+}
+
+describe('recordDetections (IO)', () => {
+  it('reads registry + current visits, then upserts planned rows', async () => {
+    const calls = []
+    const db = makeDb((ctx) => {
+      calls.push({ table: ctx.table, op: ctx.op })
+      if (ctx.table === 'hr_detections' && ctx.op === 'select') return { data: [], error: null }
+      if (ctx.table === 'hr_detection_visits' && ctx.op === 'select') return { data: [], error: null }
+      if (ctx.table === 'class_occurrences') return { data: [], error: null }   // no live class
+      if (ctx.op === 'upsert') return { error: null }
+      return { data: null, error: null }
+    })
+    const out = await recordDetections(db, {
+      locationId: 'loc1', bridgeId: 'br1',
+      samples: [{ device_key: 'ant:45075', recorded_at: '2026-06-18T10:00:00Z', bpm: 150 }],
+      nowMs: NOW_MS,
+    })
+    expect(out).toMatchObject({ ok: true, recorded: 1 })
+    expect(calls.some((c) => c.table === 'hr_detections' && c.op === 'upsert')).toBe(true)
+    expect(calls.some((c) => c.table === 'hr_detection_visits' && c.op === 'upsert')).toBe(true)
+  })
+
+  it('no-ops on an empty batch', async () => {
+    const db = makeDb(() => ({ data: [], error: null }))
+    expect(await recordDetections(db, { locationId: 'loc1', bridgeId: 'br1', samples: [], nowMs: NOW_MS })).toEqual({ ok: true, recorded: 0 })
+  })
+
+  it('degrades gracefully (returns ok:false, does not throw) on a read error', async () => {
+    const db = makeDb((ctx) => {
+      if (ctx.table === 'hr_detections' && ctx.op === 'select') return { data: null, error: { message: 'boom' } }
+      return { data: [], error: null }
+    })
+    const out = await recordDetections(db, {
+      locationId: 'loc1', bridgeId: 'br1',
+      samples: [{ device_key: 'ant:1', bpm: 100, recorded_at: '2026-06-18T10:00:00Z' }], nowMs: NOW_MS,
+    })
+    expect(out).toEqual({ ok: false })
+  })
+})
+
+describe('recordScanMetadata (IO)', () => {
+  it('upserts registry only — never visits', async () => {
+    const tables = []
+    const db = makeDb((ctx) => {
+      if (ctx.op === 'upsert') tables.push(ctx.table)
+      if (ctx.table === 'hr_detections' && ctx.op === 'select') return { data: [], error: null }
+      return { data: null, error: null }
+    })
+    const out = await recordScanMetadata(db, {
+      locationId: 'loc1', bridgeId: 'br1',
+      straps: [{ device_key: 'ble:AA:BB:CC:DD:EE:FF', name: 'Polar', rssi: -50, last_bpm: 120, seen_at: NOW_ISO }],
+      nowMs: NOW_MS,
+    })
+    expect(out).toEqual({ ok: true })
+    expect(tables).toEqual(['hr_detections'])
+  })
+})
+
+describe('resolveDetectionLinks (IO)', () => {
+  it('attaches linked_contact + live_now', async () => {
+    const db = makeDb((ctx) => {
+      if (ctx.table === 'contact_devices') {
+        return { data: [{ identifier: 'ant:1', contact_id: 'c1', contacts: { id: 'c1', name: 'Jo B', location_id: 'loc1' } }], error: null }
+      }
+      if (ctx.table === 'heart_rate_sessions') {
+        return { data: [{ device_identifier: 'ant:2' }], error: null }
+      }
+      return { data: [], error: null }
+    })
+    const out = await resolveDetectionLinks(db, {
+      locationId: 'loc1',
+      detections: [{ device_key: 'ant:1' }, { device_key: 'ant:2' }, { device_key: 'ant:3' }],
+    })
+    expect(out[0]).toMatchObject({ device_key: 'ant:1', linked_contact: { id: 'c1', name: 'Jo B' }, live_now: false })
+    expect(out[1]).toMatchObject({ device_key: 'ant:2', linked_contact: null, live_now: true })
+    expect(out[2]).toMatchObject({ device_key: 'ant:3', linked_contact: null, live_now: false })
+  })
+
+  it('returns [] for no detections', async () => {
+    const db = makeDb(() => ({ data: [], error: null }))
+    expect(await resolveDetectionLinks(db, { locationId: 'loc1', detections: [] })).toEqual([])
+  })
+})
