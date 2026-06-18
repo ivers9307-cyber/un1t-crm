@@ -41,14 +41,7 @@ describe('PUT /api/settings/class-categories', () => {
     createServerClient.mockReturnValue({
       from: () => ({
         upsert: (rows, opts) => { upserts.push({ rows, opts }); return Promise.resolve({ error: null }) },
-        delete: () => ({ eq: () => ({ eq: () => Promise.resolve({ error: null }) }) }),
-      }),
-    })
-    // capture deletes via a from() that records the table op
-    createServerClient.mockReturnValue({
-      from: (t) => ({
-        upsert: (rows, opts) => { upserts.push({ rows, opts }); return Promise.resolve({ error: null }) },
-        delete: () => ({ eq: () => ({ eq: (col, val) => { deletes.push(val); return Promise.resolve({ error: null }) } }) }),
+        delete: () => ({ eq: () => ({ eq: (_col, val) => { deletes.push(val); return Promise.resolve({ error: null }) } }) }),
       }),
     })
     const res = await PUT(req('http://x/api/settings/class-categories', {
