@@ -15,6 +15,27 @@ import { buildSessionAnalytics } from './hr-analytics.js'
 
 export const SESSION_REPORT_VERSION = 1
 
+export const DEFAULT_BOOK_CTA = 'Book your next class'
+export const DEFAULT_JOIN_CTA = 'Become a member'
+const MEMBER_STAGES = ['active_member', 'at_risk_member']
+
+/**
+ * Context-aware post-class CTA. Active members → book; everyone else → join.
+ * Labels are operator-editable (cta.bookingLabel / cta.membershipLabel); the
+ * DEFAULT_* consts are placeholder fallbacks only. Returns null when the chosen
+ * branch's URL is unset (no broken/empty button). Pure.
+ */
+export function buildNextAction(cta) {
+  if (!cta) return null
+  const isMember = MEMBER_STAGES.includes(cta.stage)
+  if (isMember) {
+    if (!cta.bookingUrl) return null
+    return { type: 'book_class', label: cta.bookingLabel || DEFAULT_BOOK_CTA, url: cta.bookingUrl }
+  }
+  if (!cta.membershipSignupUrl) return null
+  return { type: 'join', label: cta.membershipLabel || DEFAULT_JOIN_CTA, url: cta.membershipSignupUrl }
+}
+
 function durationSeconds(startedAt, endedAt) {
   if (!startedAt || !endedAt) return null
   const ms = new Date(endedAt).getTime() - new Date(startedAt).getTime()
@@ -102,6 +123,6 @@ export function buildSessionReport(ctx, { nowMs = Date.now() } = {}) {
     },
     highlight: analytics.highlight || null,
     achievements: mapAchievements(ctx.achievements),
-    next_action: null,
+    next_action: buildNextAction(ctx.cta),
   }
 }

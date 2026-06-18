@@ -2,6 +2,13 @@
   "nowMs": 1781784000000,
   "ctx": {
     "eventTypeName": "RIDE",
+    "cta": {
+      "stage": "active_member",
+      "bookingUrl": "https://book.example/ride",
+      "bookingLabel": "Book your next class",
+      "membershipSignupUrl": "https://join.example",
+      "membershipLabel": "Become a member"
+    },
     "session": {
       "id": "s-now",
       "started_at": "2026-06-18T11:00:00.000Z",
