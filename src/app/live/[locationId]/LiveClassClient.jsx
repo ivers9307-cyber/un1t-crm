@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Heart, RefreshCw, Plug, Square, Users, Tv } from 'lucide-react'
 import { zoneForBpm } from '@/lib/heart-rate'
+import DetectedTab from './DetectedTab'
 
 const POLL_MS = 2000
 const STALE_MS = 2 * 60 * 1000  // strap silent for 2min → "stale"
@@ -18,6 +19,7 @@ export default function LiveClassClient({ locationId, locationName, contacts }) 
   const [error, setError] = useState(null)
   const [endingAll, setEndingAll] = useState(false)
   const [pairing, setPairing] = useState(null) // strap object being paired
+  const [tab, setTab] = useState('live')   // 'live' | 'detected'
   const lastTickRef = useRef(0)
 
   async function poll() {
@@ -137,7 +139,22 @@ export default function LiveClassClient({ locationId, locationName, contacts }) 
         </p>
       )}
 
-      {loading && data.sessions.length === 0 ? (
+      <div className="mt-4 flex items-center gap-2 border-b border-un1t-border">
+        {[['live', 'Live board'], ['detected', 'Detected']].map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setTab(key)}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium ${tab === key ? 'border-un1t-accent text-un1t-text' : 'border-transparent text-un1t-subtle hover:text-un1t-text'}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'detected' ? (
+        <DetectedTab locationId={locationId} contacts={contacts} />
+      ) : loading && data.sessions.length === 0 ? (
         <p className="mt-10 text-center text-sm text-un1t-subtle">Loading live class…</p>
       ) : (
         <>
