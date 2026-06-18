@@ -7,7 +7,7 @@
 // sync + every BOOKING_* webhook). It drives both the booked-vs-presence tag on
 // heart_rate_sessions and the coach-view live-class roster panel.
 
-import { toMillis } from '@/lib/class-occurrences'
+import { toMillis, resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { logWarn } from '@/lib/log'
 
 /**
@@ -140,4 +140,26 @@ export function mergeRosterWithSessions(roster = [], sessions = []) {
     })
   }
   return out
+}
+
+/**
+ * IO: the booking roster for the class running right now at a location (the
+ * class_bookings rows for that occurrence), or an empty roster when no class is
+ * live. The merge with HR sessions happens in the caller, which already has the
+ * sessions in hand (getLiveSessions).
+ *
+ * @param {object} db  service-role client
+ * @param {{ locationId: string, nowMs?: number }} opts
+ * @returns {Promise<{ occurrence: object|null, roster: object[] }>}
+ */
+export async function getClassRoster(db, { locationId, nowMs = Date.now() } = {}) {
+  if (!db || !locationId) return { occurrence: null, roster: [] }
+  const occ = await resolveCurrentOccurrence(db, { locationId, nowMs })
+  if (!occ) return { occurrence: null, roster: [] }
+  const { data } = await db
+    .from('class_bookings')
+    .select('glofox_member_id, member_name, status, attended, contact_id')
+    .eq('location_id', locationId)
+    .eq('glofox_event_id', occ.glofox_event_id)
+  return { occurrence: occ, roster: data || [] }
 }
