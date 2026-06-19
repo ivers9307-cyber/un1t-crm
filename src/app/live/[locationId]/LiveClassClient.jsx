@@ -4,7 +4,7 @@
 // renders the attendee grid + available-straps panel + override
 // pairing flow + end-class button.
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Heart, RefreshCw, Plug, Square, Users, Tv } from 'lucide-react'
 import { zoneForBpm } from '@/lib/heart-rate'
@@ -13,7 +13,7 @@ import DetectedTab from './DetectedTab'
 const POLL_MS = 2000
 const STALE_MS = 2 * 60 * 1000  // strap silent for 2min → "stale"
 
-export default function LiveClassClient({ locationId, locationName, contacts }) {
+export default function LiveClassClient({ locationId, locationName }) {
   const [data, setData] = useState({ sessions: [], available_straps: [], roster: [], occurrence: null })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -153,7 +153,7 @@ export default function LiveClassClient({ locationId, locationName, contacts }) 
       </div>
 
       {tab === 'detected' ? (
-        <DetectedTab locationId={locationId} contacts={contacts} />
+        <DetectedTab locationId={locationId} />
       ) : loading && data.sessions.length === 0 ? (
         <p className="mt-10 text-center text-sm text-un1t-subtle">Loading live class…</p>
       ) : (
@@ -173,7 +173,7 @@ export default function LiveClassClient({ locationId, locationName, contacts }) 
           {pairing && (
             <PairModal
               strap={pairing}
-              contacts={contacts}
+              locationId={locationId}
               onCancel={() => setPairing(null)}
               onConfirm={(contactId) => pair({ strap: pairing, contactId })}
             />
@@ -380,14 +380,22 @@ function AvailableStrapsPanel({ straps, onStartPair }) {
   )
 }
 
-function PairModal({ strap, contacts, onCancel, onConfirm }) {
+function PairModal({ strap, locationId, onCancel, onConfirm }) {
   const [query, setQuery] = useState('')
+  const [results, setResults] = useState([])
   const [busy, setBusy] = useState(false)
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return contacts.slice(0, 50)
-    return contacts.filter((c) => c.name?.toLowerCase().includes(q)).slice(0, 50)
-  }, [contacts, query])
+
+  useEffect(() => {
+    let cancelled = false
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/live/${locationId}/contacts?q=${encodeURIComponent(query.trim())}`)
+        const json = await res.json()
+        if (!cancelled) setResults(json.ok ? (json.contacts || []) : [])
+      } catch { if (!cancelled) setResults([]) }
+    }, 250)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [query, locationId])
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -410,10 +418,10 @@ function PairModal({ strap, contacts, onCancel, onConfirm }) {
         />
 
         <ul className="mt-2 max-h-60 overflow-auto rounded-md border border-un1t-border">
-          {filtered.length === 0 ? (
+          {results.length === 0 ? (
             <li className="p-3 text-center text-xs text-un1t-subtle">No matches</li>
           ) : (
-            filtered.map((c) => (
+            results.map((c) => (
               <li key={c.id}>
                 <button
                   type="button"

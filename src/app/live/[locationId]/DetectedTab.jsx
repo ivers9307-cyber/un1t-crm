@@ -10,7 +10,7 @@ import { Plug, ChevronDown, ChevronRight, Link2, Check } from 'lucide-react'
 
 const POLL_MS = 12000
 
-export default function DetectedTab({ locationId, contacts }) {
+export default function DetectedTab({ locationId }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -100,7 +100,6 @@ export default function DetectedTab({ locationId, contacts }) {
         <LinkModal
           row={linking}
           locationId={locationId}
-          contacts={contacts}
           onClose={() => setLinking(null)}
           onDone={() => { setLinking(null); load() }}
         />
@@ -177,18 +176,25 @@ function DetectionRow({ row, locationId, onLink }) {
   )
 }
 
-function LinkModal({ row, locationId, contacts, onClose, onDone }) {
+function LinkModal({ row, locationId, onClose, onDone }) {
   const [query, setQuery] = useState('')
+  const [results, setResults] = useState([])
   const [contactId, setContactId] = useState(null)
   const [deviceType, setDeviceType] = useState('chest_strap')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return contacts.slice(0, 50)
-    return contacts.filter((c) => c.name?.toLowerCase().includes(q)).slice(0, 50)
-  }, [contacts, query])
+  useEffect(() => {
+    let cancelled = false
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/live/${locationId}/contacts?q=${encodeURIComponent(query.trim())}`)
+        const json = await res.json()
+        if (!cancelled) setResults(json.ok ? (json.contacts || []) : [])
+      } catch { if (!cancelled) setResults([]) }
+    }, 250)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [query, locationId])
 
   async function pairForToday() {
     if (!contactId) return
@@ -233,10 +239,10 @@ function LinkModal({ row, locationId, contacts, onClose, onDone }) {
           className="mt-3 w-full rounded-md border border-un1t-border bg-white px-3 py-2 text-sm"
         />
         <ul className="mt-2 max-h-48 overflow-auto rounded-md border border-un1t-border">
-          {filtered.length === 0 ? (
+          {results.length === 0 ? (
             <li className="p-3 text-center text-xs text-un1t-subtle">No matches</li>
           ) : (
-            filtered.map((c) => (
+            results.map((c) => (
               <li key={c.id}>
                 <button
                   type="button"
