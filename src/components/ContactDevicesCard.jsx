@@ -113,6 +113,9 @@ export default function ContactDevicesCard({ contactId, canEdit }) {
                   {d.identifier}
                   {d.manufacturer && ` · ${d.manufacturer}`}
                   {d.added_by_contact && ' · self-added'}
+                  {d.owner_name && (
+                    <span className="ml-1 text-[10px] text-un1t-subtle">on {d.owner_name}</span>
+                  )}
                 </p>
               </div>
               {canEdit && (

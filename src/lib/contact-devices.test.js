@@ -2,7 +2,7 @@
 // listForContact use mocked Supabase chains.
 
 import { describe, it, expect, vi } from 'vitest'
-import { validateDeviceInput, lookupByIdentifier, listForContact } from './contact-devices.js'
+import { validateDeviceInput, lookupByIdentifier, listForContact, listForContacts } from './contact-devices.js'
 
 // ── validateDeviceInput ──────────────────────────────────────────
 
@@ -166,5 +166,76 @@ describe('listForContact', () => {
     const out = await listForContact(db, 'c-1')
     expect(out.devices).toEqual(rows)
     expect(out.error).toBe(null)
+  })
+})
+
+// ── listForContacts ─────────────────────────────────────────────
+
+describe('listForContacts', () => {
+  it('returns empty list immediately when no ids provided', async () => {
+    const db = { from: vi.fn() }
+    const out = await listForContacts(db, [])
+    expect(out.devices).toEqual([])
+    expect(out.error).toBe(null)
+    expect(db.from).not.toHaveBeenCalled()
+  })
+
+  it('accepts a single id (non-array) and queries via .in()', async () => {
+    const rows = [
+      { id: 'd-1', contact_id: 'c-1', device_type: 'chest_strap', identifier: 'ble:AA:BB:CC:DD:EE:FF', label: null, manufacturer: null, is_active: true, added_by_contact: false, created_at: '2026-05-08T16:00:00Z' },
+    ]
+    const db = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          in: vi.fn(() => ({
+            order: vi.fn(() => ({
+              order: vi.fn(() => Promise.resolve({ data: rows, error: null })),
+            })),
+          })),
+        })),
+      })),
+    }
+    const out = await listForContacts(db, 'c-1')
+    expect(out.devices).toEqual(rows)
+    expect(out.error).toBe(null)
+  })
+
+  it('queries with .in() for multiple contact ids', async () => {
+    const rows = [
+      { id: 'd-1', contact_id: 'c-1', device_type: 'chest_strap', identifier: 'ble:AA:BB:CC:DD:EE:FF', label: null, manufacturer: null, is_active: true, added_by_contact: false, created_at: '2026-05-08T16:00:00Z' },
+      { id: 'd-2', contact_id: 'c-2', device_type: 'chest_strap', identifier: 'ant:12345', label: null, manufacturer: null, is_active: true, added_by_contact: false, created_at: '2026-05-08T16:00:00Z' },
+    ]
+    const inFn = vi.fn(() => ({
+      order: vi.fn(() => ({
+        order: vi.fn(() => Promise.resolve({ data: rows, error: null })),
+      })),
+    }))
+    const db = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({ in: inFn })),
+      })),
+    }
+    const out = await listForContacts(db, ['c-1', 'c-2'])
+    expect(out.devices).toEqual(rows)
+    expect(out.error).toBe(null)
+    // Verify .in() was called with both ids
+    expect(inFn).toHaveBeenCalledWith('contact_id', ['c-1', 'c-2'])
+  })
+
+  it('returns empty list and the error on DB failure', async () => {
+    const db = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          in: vi.fn(() => ({
+            order: vi.fn(() => ({
+              order: vi.fn(() => Promise.resolve({ data: null, error: { message: 'rls' } })),
+            })),
+          })),
+        })),
+      })),
+    }
+    const out = await listForContacts(db, ['c-1'])
+    expect(out.devices).toEqual([])
+    expect(out.error).toBeTruthy()
   })
 })
