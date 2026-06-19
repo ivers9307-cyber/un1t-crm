@@ -398,8 +398,8 @@ function PairModal({ strap, locationId, onCancel, onConfirm }) {
   }, [query, locationId])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onCancel}>
+      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-semibold">Pair strap</h2>
         <p className="mt-1 font-mono text-sm text-un1t-subtle">{strap.device_key}</p>
         <p className="mt-3 text-sm">
