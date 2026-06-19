@@ -10,7 +10,8 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { validateDeviceInput, listForContact } from '@/lib/contact-devices'
+import { validateDeviceInput, listForContacts } from '@/lib/contact-devices'
+import { getPersonGroup } from '@/lib/person-links'
 import { logInfo, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -45,11 +46,32 @@ export async function GET(_request, props) {
     return NextResponse.json({ ok: false, error: 'Location not in your scope' }, { status: 403 })
   }
 
-  const { devices, error } = await listForContact(db, params.id)
+  // Aggregate devices across the entire person group (if the contact is
+  // linked to other profiles). Devices from linked contacts are annotated
+  // with owner_name so the UI can display a muted "on {name}" chip.
+  const group = await getPersonGroup(db, params.id)
+  const contactIds = group?.members?.length
+    ? group.members.map((m) => m.contact_id)
+    : [params.id]
+
+  const { devices, error } = await listForContacts(db, contactIds)
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 400 })
   }
-  return NextResponse.json({ ok: true, devices })
+
+  let ownerNames = {}
+  if (contactIds.length > 1) {
+    const { data: owners } = await db.from('contacts').select('id, name').in('id', contactIds)
+    ownerNames = Object.fromEntries((owners || []).map((c) => [c.id, c.name]))
+  }
+
+  const annotated = devices.map((d) => ({
+    ...d,
+    owner_contact_id: d.contact_id,
+    owner_name: d.contact_id === params.id ? null : (ownerNames[d.contact_id] || null),
+  }))
+
+  return NextResponse.json({ ok: true, devices: annotated })
 }
 
 export async function POST(request, props) {

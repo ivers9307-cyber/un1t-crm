@@ -127,3 +127,24 @@ export async function listForContact(db, contactId) {
   if (error) return { devices: [], error }
   return { devices: data || [], error: null }
 }
+
+/**
+ * List devices for multiple contacts (active first, then inactive).
+ * Includes contact_id on each row so callers can annotate which
+ * contact each device belongs to.
+ *
+ * Used by the GET route when a contact is in a person group — devices
+ * from all linked profiles are aggregated into one list.
+ */
+export async function listForContacts(db, contactIds) {
+  const ids = (Array.isArray(contactIds) ? contactIds : [contactIds]).filter(Boolean)
+  if (!ids.length) return { devices: [], error: null }
+  const { data, error } = await db
+    .from('contact_devices')
+    .select('id, contact_id, device_type, identifier, label, manufacturer, is_active, added_by_contact, created_at')
+    .in('contact_id', ids)
+    .order('is_active', { ascending: false })
+    .order('created_at', { ascending: false })
+  if (error) return { devices: [], error }
+  return { devices: data || [], error: null }
+}

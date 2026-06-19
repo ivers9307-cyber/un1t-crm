@@ -8,6 +8,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { getPersonGroup } from '@/lib/person-links'
 import { logInfo, logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -26,11 +27,16 @@ export async function DELETE(_request, props) {
   }
 
   const db = createServerClient()
+  // Scope the delete to all contacts in the person group so an operator
+  // can remove a device that belongs to a linked profile.
+  const group = await getPersonGroup(db, params.id)
+  const ids = group?.members?.length ? group.members.map((m) => m.contact_id) : [params.id]
+
   const { error } = await db
     .from('contact_devices')
     .delete()
     .eq('id', params.deviceId)
-    .eq('contact_id', params.id)
+    .in('contact_id', ids)
   if (error) {
     logWarn('contact-devices', 'delete failed', { err: error })
     return NextResponse.json({ ok: false, error: error.message }, { status: 400 })
@@ -62,11 +68,16 @@ export async function PATCH(request, props) {
   }
 
   const db = createServerClient()
+  // Scope the patch to all contacts in the person group so an operator
+  // can update a device that belongs to a linked profile.
+  const group = await getPersonGroup(db, params.id)
+  const ids = group?.members?.length ? group.members.map((m) => m.contact_id) : [params.id]
+
   const { data, error } = await db
     .from('contact_devices')
     .update(updates)
     .eq('id', params.deviceId)
-    .eq('contact_id', params.id)
+    .in('contact_id', ids)
     .select('id, device_type, identifier, label, manufacturer, is_active, added_by_contact, created_at')
     .single()
   if (error || !data) {
