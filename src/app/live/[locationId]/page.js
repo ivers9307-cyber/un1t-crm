@@ -21,17 +21,14 @@ export default async function LiveClassPage(props) {
     notFound()
   }
 
-  // Pull the location name + the contacts list for the override
-  // pairing dropdown. Active members at this location, capped 1000.
+  // Pull the location name. Member search is now server-side via
+  // /api/live/[locationId]/contacts so we no longer preload contacts here.
   const db = createServerClient()
-  const [{ data: location }, { data: contacts }] = await Promise.all([
-    db.from('locations').select('id, name').eq('id', locationId).single(),
-    db.from('contacts')
-      .select('id, name')
-      .eq('location_id', locationId)
-      .order('name', { ascending: true })
-      .limit(1000),
-  ])
+  const { data: location } = await db
+    .from('locations')
+    .select('id, name')
+    .eq('id', locationId)
+    .single()
 
   if (!location) notFound()
 
@@ -39,7 +36,6 @@ export default async function LiveClassPage(props) {
     <LiveClassClient
       locationId={locationId}
       locationName={location.name}
-      contacts={contacts || []}
     />
   )
 }
