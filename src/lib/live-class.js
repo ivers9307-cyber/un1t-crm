@@ -16,6 +16,7 @@ import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { lookupBookedMember, resolveClassLinkSource } from '@/lib/class-bookings'
 import { resolveMaxHr, summariseSession } from '@/lib/heart-rate'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
+import { sendCustomerPush } from '@/lib/customer-push'
 import { runDetectionForSession } from '@/lib/achievements'
 import { enqueueExportsForSession } from '@/lib/external-export'
 
@@ -256,7 +257,7 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
 export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
   const { data: session, error: sErr } = await db
     .from('heart_rate_sessions')
-    .select('id, contact_id, max_hr_used, ended_at')
+    .select('id, contact_id, max_hr_used, ended_at, class_name')
     .eq('id', sessionId)
     .single()
   if (sErr || !session) return { ok: false, error: 'Session not found' }
@@ -301,6 +302,13 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
     sendPostClassEmail(db, sessionId).catch((err) => {
       logWarn('live-class', 'post-class email scheduling threw', { err, sessionId })
     })
+
+    // Best-effort Session Report push to champ-app customer native.
+    sendCustomerPush(db, session.contact_id, {
+      title: 'Your session is ready',
+      body: `${Number.isFinite(summary.effortPoints) ? summary.effortPoints + ' UN1T Points' : 'Tap to see your stats'}${session.class_name ? ' · ' + session.class_name : ''}`,
+      data: { type: 'session_report', session_id: sessionId },
+    }).catch((err) => logWarn('live-class', 'customer push threw', { err, sessionId }))
 
     // Best-effort achievement detection. Internally swallows errors;
     // unlocks land in contact_achievements with notified_at = null

@@ -17,6 +17,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { endSession } from '@/lib/live-class'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
+import { sendCustomerPush } from '@/lib/customer-push'
 import { logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
@@ -80,7 +81,7 @@ export async function GET(request) {
   // where the inline trigger failed.
   const { data: pendingEmails } = await db
     .from('heart_rate_sessions')
-    .select('id')
+    .select('id, contact_id, effort_points, class_name')
     .not('ended_at', 'is', null)
     .is('email_sent_at', null)
     .order('ended_at', { ascending: true })
@@ -94,6 +95,15 @@ export async function GET(request) {
     if (out.ok && out.sent) emailsSent++
     else if (out.ok) emailsSkipped++
     else emailsFailed++
+
+    // Best-effort Session Report push to champ-app customer native.
+    if (row.contact_id) {
+      sendCustomerPush(db, row.contact_id, {
+        title: 'Your session is ready',
+        body: `${Number.isFinite(row.effort_points) ? row.effort_points + ' UN1T Points' : 'Tap to see your stats'}${row.class_name ? ' · ' + row.class_name : ''}`,
+        data: { type: 'session_report', session_id: row.id },
+      }).catch((err) => logWarn('cron-auto-end-hr', 'customer push threw', { err, sessionId: row.id }))
+    }
   }
 
   if (toEnd.size > 0 || (pendingEmails || []).length > 0) {
