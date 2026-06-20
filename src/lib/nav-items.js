@@ -23,7 +23,7 @@ import {
   LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare,
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
   Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
-  Workflow, Timer, Projector,
+  Workflow, Timer, Projector, Trophy,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -116,6 +116,9 @@ export const ALL_NAV = [
   // old /events/* URLs that hit the back-compat rewrite.
   { href: '/events',     label: 'Events',       icon: Flag,            permission: 'races',
     extraActivePaths: ['/events'], section: 'gym' },
+  // ENGAGEMENT-CHALLENGES — operator CRUD for member challenges.
+  // Manager+ by default (same as events). Backed by the challenges table.
+  { href: '/challenges', label: 'Challenges',   icon: Trophy,          permission: 'challenges', section: 'gym' },
   // Live class — coach view of in-studio HR (mig 110-113). Renders
   // attendees with current zone color, available straps panel, and
   // override-pairing flow. /live redirects to /live/<activeLocation>.

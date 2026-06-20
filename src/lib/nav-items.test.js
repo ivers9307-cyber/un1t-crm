@@ -93,8 +93,8 @@ describe('Sales', () => {
 })
 
 describe('Gym', () => {
-  it('contains the daily surfaces only: schedule, events, live HR', () => {
-    expect(hrefsIn('gym')).toEqual(['/schedule', '/events', '/live'])
+  it('contains the daily surfaces only: schedule, events, challenges, live HR', () => {
+    expect(hrefsIn('gym')).toEqual(['/schedule', '/events', '/challenges', '/live'])
   })
 
   it('keeps Live HR a top-level gym entry with Class timer nested under it', () => {
