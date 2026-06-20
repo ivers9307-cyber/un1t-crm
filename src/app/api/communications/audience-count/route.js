@@ -11,7 +11,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
-import { applyAudienceFilter } from '@/lib/audience-filter'
+import { applyAudienceFilterAsync } from '@/lib/audience-filter'
 
 export const runtime = 'nodejs'
 
@@ -34,9 +34,16 @@ export async function POST(request) {
   const db = createServerClient()
   try {
     // Count on the FIRST .select() (postgrest-js only reads head/count there).
-    let q = db.from('contacts').select('id', { count: 'exact', head: true }).eq('location_id', location_id)
-    q = applyAudienceFilter(q, audience_filter || { logic: 'and', filters: [] })
-    const { count, error } = await q
+    const baseQuery = db.from('contacts').select('id', { count: 'exact', head: true }).eq('location_id', location_id)
+    // Async path resolves virtual fields (event_registration + tag) into the
+    // contacts.id constraint before counting — the sync filter silently skips them.
+    const { query } = await applyAudienceFilterAsync({
+      db,
+      query: baseQuery,
+      filter: audience_filter || { logic: 'and', filters: [] },
+      locationId: location_id,
+    })
+    const { count, error } = await query
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
     return NextResponse.json({ success: true, count: count || 0 })
   } catch (e) {
