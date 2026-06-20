@@ -62,6 +62,11 @@ export default function ChallengeForm({ challenge, locationId, onSaved }) {
       }
     }
 
+    if (!isEditing && !locationId) {
+      setError('No active location — please reload and try again.')
+      return
+    }
+
     setSaving(true)
 
     const payload = {
