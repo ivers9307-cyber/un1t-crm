@@ -33,6 +33,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   const bodyRef = useRef(null)
   // Email
   const [subject, setSubject] = useState('')
+  const [emailType, setEmailType] = useState('marketing') // 'marketing' | 'utility'
   // WhatsApp
   const [templateId, setTemplateId] = useState('')
   const [variables, setVariables] = useState({})
@@ -179,7 +180,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         const action = scheduleMode === 'later' ? 'schedule' : 'send'
         const data = await postJson('/api/communications/email-draft', {
           name: defaultLabel(), subject, audience_filter: effectiveFilter, location_id: locationId,
-          html_content: html, design_json: design, action,
+          html_content: html, design_json: design, action, email_type: emailType,
           ...(action === 'schedule' ? { scheduled_at: scheduledIso } : {}),
         })
         setResult({
@@ -202,7 +203,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
       const { html, design } = await exportEmailHtml()
       const data = await postJson('/api/communications/email-draft', {
         name: defaultLabel(), subject, audience_filter: effectiveFilter, location_id: locationId,
-        html_content: html, design_json: design, action: 'draft',
+        html_content: html, design_json: design, action: 'draft', email_type: emailType,
       })
       router.push(`/email/campaigns/${data.id}?edit=1`)
     } catch (e) { setError(e?.message || 'Could not open the editor'); setBusy(false) }
@@ -369,6 +370,26 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           </>
         ) : (
           <>
+            <div className="mb-3">
+              <span className="block text-xs font-medium text-un1t-subtle mb-1">Email type</span>
+              <div className="inline-flex rounded-md border border-un1t-border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setEmailType('marketing')}
+                  className={`px-3 py-1.5 text-sm ${emailType === 'marketing' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
+                >Marketing</button>
+                <button
+                  type="button"
+                  onClick={() => setEmailType('utility')}
+                  className={`px-3 py-1.5 text-sm border-l border-un1t-border ${emailType === 'utility' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
+                >Utility</button>
+              </div>
+              {emailType === 'utility' && (
+                <p className="mt-1 text-xs text-amber-700">
+                  Booking/transactional only — ignores marketing opt-out. Using this for marketing breaches consent.
+                </p>
+              )}
+            </div>
             <label className="block mb-3">
               <span className="block text-xs font-medium text-un1t-subtle mb-1">Subject</span>
               <input className={fieldCls} value={subject} onChange={e => setSubject(e.target.value)} placeholder="Email subject" />
