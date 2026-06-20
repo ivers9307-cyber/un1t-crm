@@ -1,6 +1,20 @@
 // src/lib/whatsapp-audience.test.js
 import { describe, it, expect } from 'vitest'
-import { fetchAllWhatsAppAudience, fetchDripDoneContactIds } from './whatsapp.js'
+import { fetchAllWhatsAppAudience, fetchDripDoneContactIds, buildWhatsAppAudienceAsync } from './whatsapp.js'
+
+// Call-recording fluent fake (mirrors sms.test.js) — every method returns the
+// same builder so chains compose; `calls` captures method + args for gate
+// assertions. No `then`, so the builder itself is never awaited.
+function makeFakeQuery() {
+  const calls = []
+  const builder = new Proxy({}, {
+    get(_, method) {
+      if (method === 'then') return undefined
+      return (...args) => { calls.push({ method, args }); return builder }
+    },
+  })
+  return { builder, calls }
+}
 
 // Fluent fake whose terminal .range() resolves to the next configured page. Every
 // other method returns the builder so buildWhatsAppAudience's chain + applyAudienceFilter
@@ -48,5 +62,23 @@ describe('fetchDripDoneContactIds', () => {
     const db = fakeRecipientsDb([[{ contact_id: 'x' }, { contact_id: null }, { contact_id: 'y' }]])
     const ids = await fetchDripDoneContactIds(db, 'b1')
     expect(ids).toEqual(['x', 'y'])
+  })
+})
+
+describe('buildWhatsAppAudienceAsync', () => {
+  it('returns a wrapped { query }', async () => {
+    const { builder } = makeFakeQuery()
+    const db = { from: () => builder }
+    const result = await buildWhatsAppAudienceAsync(db, { logic: 'and', filters: [] }, 'loc-uuid')
+    expect(result).toHaveProperty('query')
+    expect(result.query).toBeDefined()
+  })
+
+  it('applies the WhatsApp eligibility gates', async () => {
+    const { builder, calls } = makeFakeQuery()
+    const db = { from: (t) => { calls.push({ method: 'from', args: [t] }); return builder } }
+    await buildWhatsAppAudienceAsync(db, { logic: 'and', filters: [] }, 'loc-uuid')
+    expect(calls).toContainEqual({ method: 'eq', args: ['contact_preferences.whatsapp_marketing', true] })
+    expect(calls).toContainEqual({ method: 'not', args: ['wa_phone', 'is', null] })
   })
 })
