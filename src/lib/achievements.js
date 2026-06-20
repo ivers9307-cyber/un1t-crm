@@ -71,6 +71,7 @@ function sessionMetric(session, field) {
     case 'z4_minutes':      return z4 / 60
     case 'z5_minutes':      return z5 / 60
     case 'z3plus_minutes':  return (z3 + z4 + z5) / 60
+    case 'z4plus_minutes': return (z4 + z5) / 60
     case 'total_minutes':   return (z1 + z2 + z3 + z4 + z5) / 60
     default:                return 0
   }
