@@ -329,6 +329,13 @@ export function runDetectors(rules, ctx) {
 
 // ── Orchestrator (only DB IO in this module) ──────────────────
 
+/** Map runDetectors() output to the push-friendly unlocked summary. */
+export function summariseUnlocked(fired) {
+  return (fired || []).map(({ rule }) => ({
+    slug: rule.slug, ruleId: rule.id, name: rule.name, icon: rule.icon,
+  }))
+}
+
 const HISTORY_LOOKBACK_DAYS = 365
 
 /**
@@ -370,7 +377,7 @@ export async function runDetectionForSession(db, sessionId, { nowMs = Date.now()
 
     // 3) Load active rules + already-earned rule_ids for this contact.
     const [{ data: rules }, { data: earned }] = await Promise.all([
-      db.from('achievement_rules').select('id, slug, rule_type, rule_config, is_active').eq('is_active', true),
+      db.from('achievement_rules').select('id, slug, name, icon, rule_type, rule_config, is_active').eq('is_active', true),
       db.from('contact_achievements').select('rule_id').eq('contact_id', session.contact_id),
     ])
     const earnedSet = new Set((earned || []).map((r) => r.rule_id))
@@ -414,7 +421,7 @@ export async function runDetectionForSession(db, sessionId, { nowMs = Date.now()
 
     return {
       ok: true,
-      unlocked: fired.map(({ rule }) => ({ slug: rule.slug, ruleId: rule.id })),
+      unlocked: summariseUnlocked(fired),
     }
   } catch (err) {
     logWarn('achievements', 'detection threw', { sessionId, err })
