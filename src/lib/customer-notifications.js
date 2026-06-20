@@ -87,6 +87,16 @@ export function periodKey(period, nowMs = Date.now()) {
   return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`
 }
 
+export function buildFriendRequestPush({ fromName }) {
+  return { title: 'New friend request', body: `${fromName} wants to be friends`, data: { type: 'friend_request' } }
+}
+export function buildFriendAcceptedPush({ name }) {
+  return { title: 'Friend request accepted', body: `${name} accepted your request`, data: { type: 'friend_request' } }
+}
+export function buildReactionPush({ fromName, reactionEmoji, context }) {
+  return { title: `${fromName} reacted ${reactionEmoji}`, body: `to your ${context}`, data: { type: 'feed' } }
+}
+
 /**
  * Streak-at-risk: returns the streak length if the member trained YESTERDAY
  * (not today) and the run ending yesterday is >= minStreak; else 0.

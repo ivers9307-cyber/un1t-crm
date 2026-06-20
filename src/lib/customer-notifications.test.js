@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildSessionPush, buildGoalPush, buildStreakAtRiskPush, buildTargetHitPush, buildTierUpPush, periodKey, streakAtRisk } from './customer-notifications.js'
+import { buildSessionPush, buildGoalPush, buildStreakAtRiskPush, buildTargetHitPush, buildTierUpPush, buildFriendRequestPush, buildFriendAcceptedPush, buildReactionPush, periodKey, streakAtRisk } from './customer-notifications.js'
 
 describe('buildSessionPush', () => {
   const base = { effortPoints: 280, className: 'Conditioning', sessionId: 'sess-1' }
@@ -99,5 +99,38 @@ describe('buildTierUpPush', () => {
     expect(r.title).toBe('You reached Gold 🏆')
     expect(r.body).toBe('6 months hit. Keep the run going.')
     expect(r.data).toEqual({ type: 'tier_up' })
+  })
+})
+
+describe('buildFriendRequestPush', () => {
+  it('names the requester and sets friend_request type', () => {
+    const r = buildFriendRequestPush({ fromName: 'Alex' })
+    expect(r.title).toBe('New friend request')
+    expect(r.body).toBe('Alex wants to be friends')
+    expect(r.data).toEqual({ type: 'friend_request' })
+  })
+})
+
+describe('buildFriendAcceptedPush', () => {
+  it('names the accepter and sets friend_request type', () => {
+    const r = buildFriendAcceptedPush({ name: 'Jordan' })
+    expect(r.title).toBe('Friend request accepted')
+    expect(r.body).toBe('Jordan accepted your request')
+    expect(r.data).toEqual({ type: 'friend_request' })
+  })
+})
+
+describe('buildReactionPush', () => {
+  it('formats from name + emoji + context and sets feed type', () => {
+    const r = buildReactionPush({ fromName: 'Sam', reactionEmoji: '💪', context: 'session' })
+    expect(r.title).toBe('Sam reacted 💪')
+    expect(r.body).toBe('to your session')
+    expect(r.data).toEqual({ type: 'feed' })
+  })
+  it('works with achievement context', () => {
+    const r = buildReactionPush({ fromName: 'Lee', reactionEmoji: '🔥', context: 'achievement' })
+    expect(r.title).toBe('Lee reacted 🔥')
+    expect(r.body).toBe('to your achievement')
+    expect(r.data).toEqual({ type: 'feed' })
   })
 })
