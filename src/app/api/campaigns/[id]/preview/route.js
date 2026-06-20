@@ -90,7 +90,13 @@ export async function POST(request, props) {
     ? body.filter
     : campaign.audience_filter
 
-  const r = await computeCount(db, filter, campaign.location_id, consentFieldForStream(campaign.postmark_stream))
+  // Reflect the in-flight Marketing/Utility toggle if the editor sent it,
+  // so the count updates before the campaign is saved; fall back to the
+  // saved postmark_stream otherwise.
+  const stream = body?.email_type === 'utility' ? 'outbound'
+    : body?.email_type === 'marketing' ? 'broadcast'
+    : campaign.postmark_stream
+  const r = await computeCount(db, filter, campaign.location_id, consentFieldForStream(stream))
   if (!r.ok) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
   return NextResponse.json({ success: true, audience_count: r.count })
 }

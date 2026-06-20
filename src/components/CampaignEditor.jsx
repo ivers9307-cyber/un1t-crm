@@ -470,7 +470,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
       const response = await fetch(`/api/campaigns/${campaignId}/preview`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filter: filterOverride ?? audienceFilter }),
+        body: JSON.stringify({ filter: filterOverride ?? audienceFilter, email_type: emailType }),
       })
       const result = await response.json().catch(() => ({}))
       if (!response.ok || !result.success) {
@@ -484,7 +484,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
       setAudienceState('error')
       setAudienceError(err?.message || 'Network error')
     }
-  }, [campaignId, audienceFilter])
+  }, [campaignId, audienceFilter, emailType])
 
   useEffect(() => {
     if (campaignId) refreshAudienceCount()
@@ -802,7 +802,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                     </div>
                     <div className="text-xs text-un1t-subtle">
                       {showCount
-                        ? `contact${audienceCount === 1 ? '' : 's'} will receive this campaign — already filtered for marketing opt-in, valid email, non-ClassPass.`
+                        ? `contact${audienceCount === 1 ? '' : 's'} will receive this campaign — already filtered for ${emailType === 'utility' ? 'transactional opt-in' : 'marketing opt-in'}, valid email, non-ClassPass.`
                         : isError
                           ? `Couldn't compute recipient count: ${audienceError || 'unknown error'}`
                           : isLoading
