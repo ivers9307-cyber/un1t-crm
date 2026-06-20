@@ -116,6 +116,12 @@ export const WEB_PERMISSIONS = Object.freeze([
   // no mobile counterpart (operator/admin surface only). Master +
   // owner + manager by default.
   { key: 'automations', label: 'Automations',                   hint: 'Operational-automation hub at /automations — toggle per-location automations like auto-creating new leads in Glofox. Master + owner + manager by default.' },
+  // ENGAGEMENT-CHALLENGES — operator CRUD for member challenges
+  // (individual or collective goals tracked against HR/class metrics).
+  // Web-only operator surface: create/edit/delete challenges at
+  // /challenges. No mobile counterpart — challenge *viewing* is in
+  // the champ app (member-facing). Master + owner + manager by default.
+  { key: 'challenges', label: 'Challenges' },
   // REPORT-ISSUE.2 — owner / master inbox for staff-reported
   // issues at the location. The submit + own-history surface
   // (REPORT-ISSUE.1) is open to all staff; THIS key gates the
@@ -173,6 +179,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     invoices_inbox: true,
     approvals_inbox: true,
     automations: true,
+    challenges: true,
     issues_inbox: true,
     bookkeeper: true,
     contact_linking: true,
@@ -196,6 +203,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     invoices_inbox: false,                         // supplier-invoice approval is finance, not staff
     approvals_inbox: false,                        // staff don't approve anything
     automations: false,                             // operator surface — not a staff concern
+    challenges: false,                              // operator challenge admin — not a staff concern
     issues_inbox: false,                            // staff submit; owner + master handle
     bookkeeper: false,                              // accountant sign-off — never the default
     contact_linking: false,                         // admin-level contact dedup action
@@ -220,6 +228,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     invoices_inbox: false,
     approvals_inbox: false,                        // head coach isn't an approver by default
     automations: false,                             // operator surface — head coach doesn't manage automations
+    challenges: false,                              // operator challenge admin — head coach doesn't create challenges
     issues_inbox: false,                            // owner + master only by default
     bookkeeper: false,
     contact_linking: true,
@@ -245,6 +254,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     invoices_inbox: false,                         // manager isn't an approver — owner/master only
     approvals_inbox: true,                         // managers approve schedule items (time-off, swaps)
     automations: true,                              // managers can toggle per-location automations
+    challenges: true,                               // managers can create/edit challenges
     issues_inbox: false,                            // owner + master only by default
     bookkeeper: false,                              // grant temporarily for month-end cover if needed
     contact_linking: true,
@@ -270,6 +280,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     invoices_inbox: true,                          // owner approves their location's supplier invoices
     approvals_inbox: true,                         // owner approves invoices, expenses, schedule items
     automations: true,                              // owner manages per-location automations
+    challenges: true,                               // owner manages member challenges
     issues_inbox: true,                             // owner IS the handler per the routing design
     bookkeeper: false,                              // owner approves at the source; accountant sign-off is master/dedicated only
     contact_linking: true,

@@ -169,6 +169,7 @@ const WEB_ONLY_OK = {
   // surface — coaches use the web CRM for structured consultation entry.
   consultations: 'coach/web surface; member-facing equivalent is the champ app (SP3), not the staff mobile app',
   automations: 'operational-automation admin hub; web/operator surface, no mobile counterpart',
+  challenges: 'operator challenge admin; web/operator surface, no mobile counterpart',
 }
 
 const webDrift = []
