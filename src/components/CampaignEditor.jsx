@@ -770,7 +770,10 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
           <div className="p-6 max-w-3xl">
             <h3 className="text-lg font-semibold mb-1">Audience</h3>
             <p className="text-sm text-un1t-subtle mb-4">
-              Define who receives this campaign. Only contacts who have opted in to email marketing will be included.
+              Define who receives this campaign.{' '}
+              {emailType === 'utility'
+                ? 'Utility (transactional) send — reaches contacts who have not opted out of transactional email; the marketing opt-out is ignored. Set the type in Settings.'
+                : 'Only contacts who have opted in to email marketing will be included.'}
             </p>
             {/* CAMPAIGN.1 — prominent recipient-count banner. Updates
                 whenever the audience filter changes. Excludes
