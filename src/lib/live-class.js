@@ -311,6 +311,13 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
     try {
       const det = await runDetectionForSession(db, sessionId)
       const unlocked = det && det.ok && Array.isArray(det.unlocked) ? det.unlocked : []
+      if (unlocked.length) {
+        await db
+          .from('contact_achievements')
+          .update({ notified_at: new Date(nowMs).toISOString() })
+          .eq('source_session_id', sessionId)
+          .is('notified_at', null)
+      }
       await sendCustomerPush(
         db,
         session.contact_id,
@@ -321,13 +328,6 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
           unlocked,
         })
       )
-      if (unlocked.length) {
-        await db
-          .from('contact_achievements')
-          .update({ notified_at: new Date(nowMs).toISOString() })
-          .eq('source_session_id', sessionId)
-          .is('notified_at', null)
-      }
     } catch (err) {
       logWarn('live-class', 'engagement notify threw', { err, sessionId })
     }
@@ -343,12 +343,13 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
         .is('archived_at', null)
       if (goals && goals.length) {
         const sinceIso = startOfMonth(new Date(nowMs)).toISOString()
-        const { data: gSessions } = await db
+        const { data: gSessions, error: gErr } = await db
           .from('heart_rate_sessions')
           .select('started_at, effort_points')
           .eq('contact_id', session.contact_id)
           .not('ended_at', 'is', null)
           .gte('started_at', sinceIso)
+        if (gErr) logWarn('live-class', 'goal sessions load failed', { gErr, sessionId })
         for (const goal of goals) {
           const def = GOAL_DEFS[goal.kind]
           if (!def) continue
