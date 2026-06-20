@@ -16,6 +16,7 @@ import {
   detectClassTypeCount,
   detectLocationVisit,
   runDetectionForSession,
+  summariseUnlocked,
 } from './achievements.js'
 
 const MS_DAY = 24 * 3600 * 1000
@@ -452,5 +453,15 @@ describe('runDetectionForSession', () => {
     const out = await runDetectionForSession(db, 'sess-1')
     expect(out.ok).toBe(true)
     expect(out.unlocked).toEqual([])
+  })
+})
+
+describe('summariseUnlocked', () => {
+  it('maps fired rules to {slug, ruleId, name, icon}', () => {
+    const fired = [{ rule: { id: 'r1', slug: 'first_z5', name: 'First Z5', icon: 'flame' }, metadata: {} }]
+    expect(summariseUnlocked(fired)).toEqual([{ slug: 'first_z5', ruleId: 'r1', name: 'First Z5', icon: 'flame' }])
+  })
+  it('returns [] for empty input', () => {
+    expect(summariseUnlocked([])).toEqual([])
   })
 })

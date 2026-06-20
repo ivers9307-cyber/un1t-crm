@@ -244,6 +244,61 @@ function computeStreak(thisSession, history) {
   return streak
 }
 
+/**
+ * Live consecutive-day training streak as of `nowMs`.
+ *
+ * `current` = the run of consecutive UTC days ending today OR yesterday
+ * (one-day gap tolerance, so a member who hasn't trained YET today still
+ * sees yesterday's streak). 0 if the most recent session is older than
+ * yesterday. `best` = the longest consecutive-day run anywhere in the input.
+ * `best` is 0 when there are no sessions and 1 for a single session.
+ *
+ * Distinct from the private `computeStreak(thisSession, history)` above:
+ * this takes a plain sessions array and is anchored on `nowMs`, not on a
+ * "this session" row.
+ *
+ * @param {Array<{started_at?:string, ended_at?:string}>} sessions
+ * @param {number} nowMs
+ * @returns {{current:number, best:number, lastDayMs:number|null}}
+ */
+export function currentStreak(sessions, nowMs = Date.now()) {
+  const DAY = 24 * 3600 * 1000
+  const dayMs = (iso) => {
+    const d = new Date(iso)
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+  }
+  const days = new Set()
+  for (const s of sessions || []) {
+    const iso = s && (s.started_at || s.ended_at)
+    if (iso) days.add(dayMs(iso))
+  }
+  if (days.size === 0) return { current: 0, best: 0, lastDayMs: null }
+
+  const sorted = [...days].sort((a, b) => b - a) // unique day-ms, most recent first
+  const lastDayMs = sorted[0]
+
+  const n = new Date(nowMs)
+  const todayMs = Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate())
+
+  let current = 0
+  if (lastDayMs === todayMs || lastDayMs === todayMs - DAY) {
+    current = 1
+    let cursor = lastDayMs
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i] === cursor - DAY) { current++; cursor -= DAY } else break
+    }
+  }
+
+  let best = 1
+  let run = 1
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] === sorted[i - 1] - DAY) { run++; if (run > best) best = run } else { run = 1 }
+  }
+  if (current > best) best = current
+
+  return { current, best, lastDayMs }
+}
+
 // ── public summary builder ──────────────────────────────────────
 
 /**

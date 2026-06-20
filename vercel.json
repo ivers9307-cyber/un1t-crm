@@ -135,6 +135,10 @@
     {
       "path": "/api/cron/class-climate",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/notify-streak-at-risk",
+      "schedule": "0 11 * * *"
     }
   ]
 }
