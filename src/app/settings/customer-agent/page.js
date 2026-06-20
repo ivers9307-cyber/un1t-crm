@@ -66,6 +66,7 @@ export default function CustomerAgentSettingsPage() {
         handoff_cooldown_hours: settings.handoff_cooldown_hours ?? 12,
         consultation_event_type_id: settings.consultation_event_type_id || null,
         monthly_points_target: settings.monthly_points_target ?? null,
+        social_enabled: !!settings.social_enabled,
         followups: {
           enabled: !!settings.followups?.enabled,
           nudge_after_hours: Number(settings.followups?.nudge_after_hours) || 3,
@@ -267,6 +268,15 @@ export default function CustomerAgentSettingsPage() {
             value={settings.monthly_points_target ?? ''}
             onChange={e => setField('monthly_points_target', e.target.value === '' ? null : Number(e.target.value))} />
         </div>
+
+        <label className="flex items-center gap-3">
+          <input type="checkbox" className="h-4 w-4" checked={!!settings.social_enabled}
+            onChange={e => setField('social_enabled', e.target.checked)} />
+          <span className="text-sm text-un1t-text font-medium">Member social (friends, feed &amp; kudos)</span>
+        </label>
+        <p className="text-xs text-un1t-muted -mt-3 pl-7">
+          Lets members at this location add friends, see each other&apos;s activity, and react.
+        </p>
 
         <div>
           <label className="block text-sm font-medium text-un1t-text mb-1">Post-class CTA wording</label>
