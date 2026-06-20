@@ -19,6 +19,8 @@ import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { sendCustomerPush } from '@/lib/customer-push'
 import { runDetectionForSession } from '@/lib/achievements'
 import { enqueueExportsForSession } from '@/lib/external-export'
+import { buildSessionPush, buildGoalPush, periodKey } from '@/lib/customer-notifications'
+import { GOAL_DEFS, computeProgress, startOfMonth } from '@/lib/goals'
 
 const RECENT_SAMPLE_WINDOW_MS = 30 * 1000  // current-BPM averaging window
 
@@ -303,19 +305,67 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
       logWarn('live-class', 'post-class email scheduling threw', { err, sessionId })
     })
 
-    // Best-effort Session Report push to champ-app customer native.
-    sendCustomerPush(db, session.contact_id, {
-      title: 'Your session is ready',
-      body: `${Number.isFinite(summary.effortPoints) ? summary.effortPoints + ' UN1T Points' : 'Tap to see your stats'}${session.class_name ? ' · ' + session.class_name : ''}`,
-      data: { type: 'session_report', session_id: sessionId },
-    }).catch((err) => logWarn('live-class', 'customer push threw', { err, sessionId }))
+    // Best-effort: achievement detection + ONE consolidated session push.
+    // Leads with any achievement unlocked this session, else the session-
+    // ready summary. Never blocks/fails finalisation.
+    try {
+      const det = await runDetectionForSession(db, sessionId)
+      const unlocked = det && det.ok && Array.isArray(det.unlocked) ? det.unlocked : []
+      await sendCustomerPush(
+        db,
+        session.contact_id,
+        buildSessionPush({
+          effortPoints: summary.effortPoints,
+          className: session.class_name,
+          sessionId,
+          unlocked,
+        })
+      )
+      if (unlocked.length) {
+        await db
+          .from('contact_achievements')
+          .update({ notified_at: new Date(nowMs).toISOString() })
+          .eq('source_session_id', sessionId)
+          .is('notified_at', null)
+      }
+    } catch (err) {
+      logWarn('live-class', 'engagement notify threw', { err, sessionId })
+    }
 
-    // Best-effort achievement detection. Internally swallows errors;
-    // unlocks land in contact_achievements with notified_at = null
-    // for the future native app's push-notification consumer.
-    runDetectionForSession(db, sessionId).catch((err) => {
-      logWarn('live-class', 'achievement detection threw', { err, sessionId })
-    })
+    // Best-effort: celebrate any active goal completed (this period) by this
+    // session. Idempotent per (goal, period) via customer_engagement_nudges.
+    try {
+      const { data: goals } = await db
+        .from('contact_goals')
+        .select('id, kind, target_value')
+        .eq('contact_id', session.contact_id)
+        .eq('is_active', true)
+        .is('archived_at', null)
+      if (goals && goals.length) {
+        const sinceIso = startOfMonth(new Date(nowMs)).toISOString()
+        const { data: gSessions } = await db
+          .from('heart_rate_sessions')
+          .select('started_at, effort_points')
+          .eq('contact_id', session.contact_id)
+          .not('ended_at', 'is', null)
+          .gte('started_at', sinceIso)
+        for (const goal of goals) {
+          const def = GOAL_DEFS[goal.kind]
+          if (!def) continue
+          const { current } = computeProgress(goal, gSessions || [], new Date(nowMs))
+          if (current < goal.target_value) continue
+          const dedupKey = `${goal.id}:${periodKey(def.period, nowMs)}`
+          const { data: ins, error: insErr } = await db
+            .from('customer_engagement_nudges')
+            .insert({ contact_id: session.contact_id, type: 'goal_complete', dedup_key: dedupKey })
+            .select('id')
+          if (insErr || !ins || !ins.length) continue // already celebrated this period, or insert failed
+          await sendCustomerPush(db, session.contact_id, buildGoalPush({ goal, def }))
+        }
+      }
+    } catch (err) {
+      logWarn('live-class', 'goal-completion notify threw', { err, sessionId })
+    }
 
     // Best-effort: queue external-system exports for this session.
     // The actual upload happens out-of-band via the cron worker.
