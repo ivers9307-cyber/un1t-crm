@@ -65,6 +65,7 @@ export default function CustomerAgentSettingsPage() {
         membership_cta_label: (settings.membership_cta_label || '').trim() || null,
         handoff_cooldown_hours: settings.handoff_cooldown_hours ?? 12,
         consultation_event_type_id: settings.consultation_event_type_id || null,
+        monthly_points_target: settings.monthly_points_target ?? null,
         followups: {
           enabled: !!settings.followups?.enabled,
           nudge_after_hours: Number(settings.followups?.nudge_after_hours) || 3,
@@ -257,6 +258,14 @@ export default function CustomerAgentSettingsPage() {
           <p className="text-xs text-un1t-subtle mt-1">
             Where active members go to book their next class — used by the post-class report CTA. Leave blank and members see no booking button.
           </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Monthly UN1T-Points target</label>
+          <p className="text-xs text-un1t-text-2 mb-1">Shared monthly goal that drives member tiers. Blank = tiers off.</p>
+          <input type="number" min={0} step={50} className={inputCls}
+            value={settings.monthly_points_target ?? ''}
+            onChange={e => setField('monthly_points_target', e.target.value === '' ? null : Number(e.target.value))} />
         </div>
 
         <div>

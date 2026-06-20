@@ -19,8 +19,11 @@ import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { sendCustomerPush } from '@/lib/customer-push'
 import { runDetectionForSession } from '@/lib/achievements'
 import { enqueueExportsForSession } from '@/lib/external-export'
-import { buildSessionPush, buildGoalPush, periodKey } from '@/lib/customer-notifications'
+import { buildSessionPush, buildGoalPush, buildTargetHitPush, buildTierUpPush, periodKey } from '@/lib/customer-notifications'
 import { GOAL_DEFS, computeProgress, startOfMonth, startOfIsoWeek } from '@/lib/goals'
+import { tierForMonths, nextTier } from '@/lib/tiers'
+
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
 const RECENT_SAMPLE_WINDOW_MS = 30 * 1000  // current-BPM averaging window
 
@@ -259,7 +262,7 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
 export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
   const { data: session, error: sErr } = await db
     .from('heart_rate_sessions')
-    .select('id, contact_id, max_hr_used, ended_at, class_name')
+    .select('id, contact_id, location_id, max_hr_used, ended_at, class_name')
     .eq('id', sessionId)
     .single()
   if (sErr || !session) return { ok: false, error: 'Session not found' }
@@ -373,6 +376,62 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
       }
     } catch (err) {
       logWarn('live-class', 'goal-completion notify threw', { err, sessionId })
+    }
+
+    // Best-effort: monthly target + tier banking. Banks the month the instant
+    // this-month points cross the gym target; tier is derived from the count of
+    // banked months. Idempotent per (contact, month) via the unique constraint.
+    try {
+      const { data: loc } = await db
+        .from('locations').select('settings').eq('id', session.location_id).maybeSingle()
+      const target = Number(loc?.settings?.customer_agent?.monthly_points_target) || 0
+      if (target > 0) {
+        const monthKey = periodKey('month', nowMs) // 'YYYY-MM'
+        const monthStartIso = startOfMonth(new Date(nowMs)).toISOString()
+        const { data: monthSessions } = await db
+          .from('heart_rate_sessions')
+          .select('effort_points')
+          .eq('contact_id', session.contact_id)
+          .eq('location_id', session.location_id)
+          .not('ended_at', 'is', null)
+          .gte('started_at', monthStartIso)
+        const monthPoints = (monthSessions || []).reduce((a, s) => a + (Number(s.effort_points) || 0), 0)
+        if (monthPoints >= target) {
+          const { data: banked, error: bankErr } = await db
+            .from('member_monthly_targets')
+            .insert({
+              contact_id: session.contact_id, location_id: session.location_id,
+              period_month: monthKey, points: monthPoints, target,
+            })
+            .select('id')
+          if (!bankErr && banked && banked.length) {
+            const { count } = await db
+              .from('member_monthly_targets')
+              .select('id', { count: 'exact', head: true })
+              .eq('contact_id', session.contact_id)
+            const monthsHit = count || 1
+            const newTier = tierForMonths(monthsHit)
+            const oldTier = tierForMonths(monthsHit - 1)
+            if (newTier && (!oldTier || newTier.slug !== oldTier.slug)) {
+              const { data: nins } = await db
+                .from('customer_engagement_nudges')
+                .insert({ contact_id: session.contact_id, type: 'tier_up', dedup_key: newTier.slug })
+                .select('id')
+              if (nins && nins.length) {
+                await sendCustomerPush(db, session.contact_id, buildTierUpPush({ tier: newTier, monthsHit }))
+              }
+            } else {
+              const monthLabel = MONTH_NAMES[new Date(nowMs).getUTCMonth()]
+              await sendCustomerPush(
+                db, session.contact_id,
+                buildTargetHitPush({ monthLabel, monthsHit, next: nextTier(monthsHit) })
+              )
+            }
+          }
+        }
+      }
+    } catch (err) {
+      logWarn('live-class', 'tier banking threw', { err, sessionId })
     }
 
     // Best-effort: queue external-system exports for this session.
