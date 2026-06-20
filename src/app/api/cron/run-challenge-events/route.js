@@ -34,7 +34,12 @@ export async function GET(request) {
   const stamp = new Date(nowMs).toISOString()
   const today = stamp.slice(0, 10)
 
-  const { data: challenges } = await db.from('challenges').select('*')
+  // Only challenges that still need an event: start or end not yet announced.
+  // (Active-collective target checks need end-null, so they're covered.)
+  const { data: challenges } = await db
+    .from('challenges')
+    .select('*')
+    .or('announced_start_at.is.null,announced_end_at.is.null')
   let started = 0, ended = 0, targets = 0
   for (const ch of challenges || []) {
     try {
