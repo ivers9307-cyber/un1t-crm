@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { buildAudienceQueryAsync } from '@/lib/postmark'
+import { buildAudienceQueryAsync, consentFieldForStream } from '@/lib/postmark'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
@@ -20,12 +20,13 @@ export const dynamic = 'force-dynamic'
 // `count || 0` always rendered 0. CAMPAIGN.6-9 each tried to fix a
 // nearby symptom (the embedded-resource filter) and didn't catch this
 // underlying bug because CLASSIFY.1's denormalisation came first.
-async function computeCount(db, filter, locationId) {
+async function computeCount(db, filter, locationId, consentField) {
   let query
   try {
     ;({ query } = await buildAudienceQueryAsync(db, filter, locationId, {
       columns: 'id',
       selectOpts: { count: 'exact', head: true },
+      consentField,
     }))
   } catch (err) {
     return { ok: false, status: 400, error: err.message }
@@ -43,7 +44,7 @@ export async function GET(_request, props) {
 
   const db = createServerClient()
   const { data: campaign } = await db.from('campaigns')
-    .select('audience_filter, location_id')
+    .select('audience_filter, location_id, postmark_stream')
     .eq('id', params.id)
     .single()
 
@@ -53,7 +54,7 @@ export async function GET(_request, props) {
   const guard = assertLocationAccess(user, campaign.location_id)
   if (guard) return guard
 
-  const r = await computeCount(db, campaign.audience_filter, campaign.location_id)
+  const r = await computeCount(db, campaign.audience_filter, campaign.location_id, consentFieldForStream(campaign.postmark_stream))
   if (!r.ok) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
   return NextResponse.json({ success: true, audience_count: r.count })
 }
@@ -72,7 +73,7 @@ export async function POST(request, props) {
 
   const db = createServerClient()
   const { data: campaign } = await db.from('campaigns')
-    .select('audience_filter, location_id')
+    .select('audience_filter, location_id, postmark_stream')
     .eq('id', params.id)
     .single()
 
@@ -89,7 +90,7 @@ export async function POST(request, props) {
     ? body.filter
     : campaign.audience_filter
 
-  const r = await computeCount(db, filter, campaign.location_id)
+  const r = await computeCount(db, filter, campaign.location_id, consentFieldForStream(campaign.postmark_stream))
   if (!r.ok) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
   return NextResponse.json({ success: true, audience_count: r.count })
 }

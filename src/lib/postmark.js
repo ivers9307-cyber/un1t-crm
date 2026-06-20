@@ -279,7 +279,24 @@ export function appendUnsubscribeFooter(html, unsubscribeUrl) {
  * Supported ops: eq, neq, gt, lt, gte, lte, contains, not_contains, is_null, is_not_null,
  *   days_since_gt, days_since_lt (for date fields)
  */
-export function buildAudienceQuery(db, filter, locationId, { columns = '*', selectOpts } = {}) {
+// Email consent columns the audience gate may filter on. Whitelisted so a
+// caller can never smuggle an arbitrary column into the .eq(). 'broadcast'
+// (marketing) gates on email_marketing; 'outbound' (transactional/Utility)
+// gates on email_administrative (denormalised onto contacts in mig 301).
+const ALLOWED_CONSENT_FIELDS = new Set(['email_marketing', 'email_administrative'])
+
+export function consentFieldForStream(stream) {
+  return stream === 'outbound' ? 'email_administrative' : 'email_marketing'
+}
+
+function assertConsentField(consentField) {
+  if (!ALLOWED_CONSENT_FIELDS.has(consentField)) {
+    throw new Error(`Invalid consentField: ${consentField}`)
+  }
+  return consentField
+}
+
+export function buildAudienceQuery(db, filter, locationId, { columns = '*', selectOpts, consentField = 'email_marketing' } = {}) {
   // CLASSIFY.1 — uses denormalised contacts.email_marketing instead of
   // an inner-join on contact_preferences. Single-table filtering kills
   // a long line of PostgREST embedded-resource bugs in the count path
@@ -302,7 +319,7 @@ export function buildAudienceQuery(db, filter, locationId, { columns = '*', sele
     .from('contacts')
     .select(columns, selectOpts)
     .eq('location_id', locationId)
-    .eq('email_marketing', true)
+    .eq(assertConsentField(consentField), true)
     .not('email_status', 'in', '("bounced","complained")')
 
   return applyAudienceFilter(query, filter)
@@ -322,12 +339,12 @@ export function buildAudienceQuery(db, filter, locationId, { columns = '*', sele
  * See buildAudienceQuery's CAMPAIGN.10 comment for the postgrest-js
  * select-overload gotcha.
  */
-export async function buildAudienceQueryAsync(db, filter, locationId, { columns = '*', selectOpts } = {}) {
+export async function buildAudienceQueryAsync(db, filter, locationId, { columns = '*', selectOpts, consentField = 'email_marketing' } = {}) {
   let query = db
     .from('contacts')
     .select(columns, selectOpts)
     .eq('location_id', locationId)
-    .eq('email_marketing', true)
+    .eq(assertConsentField(consentField), true)
     .not('email_status', 'in', '("bounced","complained")')
   // Returns { query } so the caller can destructure without the
   // thenable-protocol auto-unwrap firing the underlying HTTP call

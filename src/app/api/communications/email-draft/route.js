@@ -26,6 +26,10 @@ const Schema = z.object({
   design_json: z.unknown().optional(),
   action: z.enum(['draft', 'send', 'schedule']).optional(),
   scheduled_at: z.string().optional(),
+  // Marketing → broadcast stream (gates on email_marketing). Utility →
+  // outbound/transactional stream (gates on email_administrative, no
+  // unsubscribe footer). Maps to campaigns.postmark_stream below.
+  email_type: z.enum(['marketing', 'utility']).optional(),
 })
 
 export async function POST(request) {
@@ -34,7 +38,7 @@ export async function POST(request) {
 
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
-  const { location_id, name, subject, audience_filter, html_content, design_json, action = 'draft', scheduled_at } = validation.data
+  const { location_id, name, subject, audience_filter, html_content, design_json, action = 'draft', scheduled_at, email_type = 'marketing' } = validation.data
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard
@@ -55,6 +59,7 @@ export async function POST(request) {
     design_json: design_json ?? null,
     status,
     created_by: user.id,
+    postmark_stream: email_type === 'utility' ? 'outbound' : 'broadcast',
   }
   if (action === 'schedule') row.scheduled_at = scheduled_at
 

@@ -18,6 +18,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   const [previewText, setPreviewText] = useState(campaign?.preview_text || '')
   const [fromName, setFromName] = useState(campaign?.from_name || 'UN1T')
   const [fromEmail, setFromEmail] = useState(campaign?.from_email || '')
+  const [emailType, setEmailType] = useState(campaign?.postmark_stream === 'outbound' ? 'utility' : 'marketing')
   const [replyTo, setReplyTo] = useState(campaign?.reply_to || '')
   const [audienceFilter, setAudienceFilter] = useState(
     // Precedence: existing draft > deep-link preset (e.g. ?segment=race_completed
@@ -224,6 +225,10 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
         audience_filter: audienceFilter,
         location_id: locationId,
         created_by: userId,
+        // Marketing → broadcast stream; Utility → outbound (transactional)
+        // stream + email_administrative gate. Direct column write (this
+        // editor persists via the browser Supabase client, not the API).
+        postmark_stream: emailType === 'utility' ? 'outbound' : 'broadcast',
       }
 
       let result
@@ -830,6 +835,27 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                   placeholder="Your subject line — use {{first_name}} for personalisation"
                   className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm mb-1.5">Email type</label>
+                <div className="inline-flex rounded-md border border-un1t-border overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setEmailType('marketing')}
+                    className={`px-3 py-1.5 text-sm ${emailType === 'marketing' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
+                  >Marketing</button>
+                  <button
+                    type="button"
+                    onClick={() => setEmailType('utility')}
+                    className={`px-3 py-1.5 text-sm border-l border-un1t-border ${emailType === 'utility' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
+                  >Utility</button>
+                </div>
+                {emailType === 'utility' && (
+                  <p className="mt-1 text-xs text-amber-700">
+                    Booking/transactional only — ignores marketing opt-out. Using this for marketing breaches consent.
+                  </p>
+                )}
               </div>
 
               <div>

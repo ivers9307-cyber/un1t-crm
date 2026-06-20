@@ -18,6 +18,8 @@ const CampaignUpdateSchema = z.object({
   scheduled_at: z.string().datetime().nullable().optional(),
   template_id: uuidLike.nullable().optional(),
   status: z.enum(['draft', 'scheduled', 'sending', 'sent', 'cancelled']).optional(),
+  // API speaks email_type (marketing/utility); mapped to postmark_stream below.
+  email_type: z.enum(['marketing', 'utility']).optional(),
 })
 
 // GET /api/campaigns/[id] — Get campaign with metrics
@@ -50,6 +52,11 @@ export async function PUT(request, props) {
   const validation = await validateBody(request, CampaignUpdateSchema)
   if (!validation.ok) return validation.response
   const updates = { ...validation.data }
+  // API speaks email_type (marketing/utility); the column is postmark_stream.
+  if (updates.email_type !== undefined) {
+    updates.postmark_stream = updates.email_type === 'utility' ? 'outbound' : 'broadcast'
+    delete updates.email_type
+  }
   const db = createServerClient()
   const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'campaigns', id: params.id })
   if (scopeErr) return scopeErr
