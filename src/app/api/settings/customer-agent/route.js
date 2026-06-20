@@ -19,6 +19,7 @@ const DEFAULTS = {
   holding_message: null,
   quiet_hours: null,
   limits: null,
+  monthly_points_target: null,
   // AGENT-HANDS.1 — class-booking autonomy. 'auto' (default) books a
   // verified member's class immediately; 'draft' queues it for a
   // one-tap staff approval (which executes it). Consultations are
@@ -76,6 +77,7 @@ const SettingsSchema = z.object({
   }).nullable().optional(),
   handoff_cooldown_hours: z.number().min(0).max(168).nullable().optional(),
   consultation_event_type_id: z.string().max(64).nullable().optional(),
+  monthly_points_target: z.number().int().min(0).nullable().optional(),
 })
 
 export async function GET() {
@@ -133,6 +135,7 @@ export async function PUT(request) {
     followups: { ...DEFAULTS.followups, ...(v.data.followups || {}) },
     first_class_checkin: { ...DEFAULTS.first_class_checkin, ...(v.data.first_class_checkin || {}) },
     consultation_event_type_id: v.data.consultation_event_type_id || null,
+    monthly_points_target: v.data.monthly_points_target ?? null,
   }
 
   await db.from('locations').update({ settings }).eq('id', locationId).select('id').single()
