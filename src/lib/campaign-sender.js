@@ -29,7 +29,7 @@
 // Postmark's batch limits and well within the deferred-webhook
 // queue's drain rate.
 
-import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch } from './postmark.js'
+import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch, consentFieldForStream } from './postmark.js'
 import { getAppUrl } from './app-url.js'
 
 const CHUNK_SIZE = 500             // recipients per cron tick per campaign
@@ -45,6 +45,11 @@ const RECIPIENT_INSERT_CHUNK = 1000
  */
 export async function tickCampaignSend(db, campaign) {
   const campaignId = campaign.id
+
+  // Marketing (broadcast) vs Utility (outbound). Drives the consent gate,
+  // the Postmark stream, and whether an unsubscribe footer is appended.
+  const stream = campaign.postmark_stream === 'outbound' ? 'outbound' : 'broadcast'
+  const consentField = consentFieldForStream(stream)
 
   // Hard stop — cancel-while-sending.
   if (campaign.cancel_requested_at) {
@@ -70,7 +75,7 @@ export async function tickCampaignSend(db, campaign) {
   if ((existingCount || 0) === 0) {
     const contacts = []
     for (let from = 0; ; from += AUDIENCE_PAGE_SIZE) {
-      const { query } = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id)
+      const { query } = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id, { consentField })
       const { data, error } = await query.range(from, from + AUDIENCE_PAGE_SIZE - 1)
       if (error) return { phase: 'populate', error: `audience load failed: ${error.message}` }
       if (!data || data.length === 0) break
@@ -146,7 +151,9 @@ export async function tickCampaignSend(db, campaign) {
   const baseUrl = getAppUrl()
   const emailBatch = queuedRows.map(row => {
     const contact = row.contact
-    const unsubscribeUrl = buildUnsubscribeUrl(contact, baseUrl)
+    // Utility (outbound) emails carry no marketing chrome — no unsubscribe
+    // footer, no List-Unsubscribe header, empty {{unsubscribe_url}} merge tag.
+    const unsubscribeUrl = stream === 'broadcast' ? buildUnsubscribeUrl(contact, baseUrl) : null
     const prefs = contact.contact_preferences?.[0] || contact.contact_preferences
     const preferenceUrl = `${baseUrl}/preferences/${prefs?.unsubscribe_token || contact.id}`
 
@@ -155,7 +162,7 @@ export async function tickCampaignSend(db, campaign) {
       unsubscribe_url: unsubscribeUrl,
       preference_url: preferenceUrl,
     })
-    const personalizedHtml = appendUnsubscribeFooter(merged, unsubscribeUrl)
+    const personalizedHtml = unsubscribeUrl ? appendUnsubscribeFooter(merged, unsubscribeUrl) : merged
 
     return {
       to: contact.email,
@@ -165,7 +172,7 @@ export async function tickCampaignSend(db, campaign) {
         ? `${campaign.from_name} <${campaign.from_email || process.env.POSTMARK_FROM_EMAIL}>`
         : undefined,
       replyTo: campaign.reply_to,
-      stream: 'broadcast',
+      stream,
       tag: `campaign-${campaignId}`,
       metadata: {
         campaign_id: campaignId,
@@ -206,7 +213,7 @@ export async function tickCampaignSend(db, campaign) {
         from_email: campaign.from_email || process.env.POSTMARK_FROM_EMAIL,
         to_email: item.to,
         postmark_message_id: result.MessageID,
-        postmark_stream: 'broadcast',
+        postmark_stream: stream,
         status: 'sent',
       })
     } else {
