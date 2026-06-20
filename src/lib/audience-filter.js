@@ -152,6 +152,25 @@ export const AUDIENCE_FIELDS = Object.freeze({
   id:                        { type: 'id',      ops: ['in'] },
 })
 
+// EVENT-FILTER — registration statuses that count as a LIVE registration
+// for audience targeting. pending_payment = signed up, checkout not yet
+// completed; confirmed = paid (or a free event). Deliberately EXCLUDES
+// 'cancelled' (operator removed) and 'no_show' (post-event) — mirrors the
+// capacity predicate used at signup time (events/[slug]/register).
+export const LIVE_REGISTRATION_STATUSES = Object.freeze(['pending_payment', 'confirmed'])
+
+// Union a live event's registrants (race_registrations.contact_id) with
+// the linked teammates on those registrations' teams
+// (team_members.contact_id) into a de-duplicated array of contact ids.
+// NULL contact_ids (un-linked teammates) are dropped — no contact row,
+// unreachable by any channel.
+export function mergeRegistrationContactIds(registrations, teamMembers) {
+  const ids = new Set()
+  for (const r of registrations || []) if (r?.contact_id) ids.add(r.contact_id)
+  for (const m of teamMembers || []) if (m?.contact_id) ids.add(m.contact_id)
+  return Array.from(ids)
+}
+
 // Ops whose value is a day-count number ("more/less than N days ago").
 // Always numeric, whatever the field type.
 const DAYS_SINCE_OPS = new Set(['days_since_gt', 'days_since_lt'])
@@ -381,10 +400,95 @@ export async function resolveTagFilters({ db, query, filter, locationId }) {
 }
 
 /**
- * Convenience wrapper: resolve tag filters AND apply scalar filters
- * in one call. Use this in async contexts (most route handlers
- * already are). Existing sync callers continue using
- * applyAudienceFilter directly until they need tag support.
+ * Resolve any `event_registration` filters into a contacts.id constraint.
+ *
+ * "Registered for event X" = race_registrations rows for X whose status
+ * is a LIVE_REGISTRATION_STATUS (pending_payment or confirmed), taking the
+ * registrant (contact_id) UNION the linked teammates (team_members.contact_id)
+ * on those registrations' teams. cancelled + no_show are excluded.
+ *
+ * eq clauses (registered for) intersect (AND). neq clauses (not registered
+ * for) subtract via NOT IN. Empty positive set → unsatisfiable sentinel.
+ *
+ * Same wrapped { query } return as resolveTagFilters — defeats the
+ * thenable auto-unwrap (see that function's JSDoc). The chosen event id is
+ * itself location-bound and the base contacts query is location-scoped, so
+ * no extra location filter is needed here.
+ *
+ * @param {object} args
+ * @param {SupabaseClient} args.db
+ * @param {object} args.query      contacts query already scoped by location
+ * @param {object|null} args.filter
+ * @returns {Promise<{ query: object }>}
+ */
+export async function resolveEventFilters({ db, query, filter }) {
+  if (!filter?.filters?.length) return { query }
+
+  const positives = []
+  const negatives = []
+  for (const f of filter.filters) {
+    const cfg = AUDIENCE_FIELDS[f?.field]
+    if (!cfg || cfg.type !== 'event') continue
+    if (typeof f.value !== 'string' || !f.value.trim()) {
+      throw new InvalidAudienceFilterError('event filter requires a non-empty event id')
+    }
+    const eventId = f.value.trim()
+    if (f.op === 'eq') positives.push(eventId)
+    else if (f.op === 'neq') negatives.push(eventId)
+  }
+  if (positives.length === 0 && negatives.length === 0) return { query }
+
+  // contact_ids registered (live) for one event: registrants + teammates.
+  async function contactIdsForEvent(eventId) {
+    const { data: regs, error: rErr } = await db
+      .from('race_registrations')
+      .select('contact_id, team_id')
+      .eq('race_event_id', eventId)
+      .in('status', LIVE_REGISTRATION_STATUSES)
+    if (rErr) throw new InvalidAudienceFilterError(`event lookup failed: ${rErr.message}`)
+
+    const teamIds = Array.from(new Set((regs || []).map(r => r.team_id).filter(Boolean)))
+    let members = []
+    if (teamIds.length) {
+      const { data: mem, error: mErr } = await db
+        .from('team_members')
+        .select('contact_id')
+        .in('team_id', teamIds)
+        .not('contact_id', 'is', null)
+      if (mErr) throw new InvalidAudienceFilterError(`event teammate lookup failed: ${mErr.message}`)
+      members = mem || []
+    }
+    return mergeRegistrationContactIds(regs, members)
+  }
+
+  // Positives: intersect across all "registered for X" clauses (AND).
+  let allowed = null
+  for (const eventId of positives) {
+    const ids = await contactIdsForEvent(eventId)
+    allowed = allowed === null ? new Set(ids) : new Set([...allowed].filter(x => ids.includes(x)))
+    if (allowed.size === 0) {
+      return { query: query.eq('id', '00000000-0000-0000-0000-000000000000') }
+    }
+  }
+  if (allowed && allowed.size > 0) {
+    query = query.in('id', [...allowed])
+  }
+
+  // Negatives: subtract via NOT IN.
+  for (const eventId of negatives) {
+    const ids = await contactIdsForEvent(eventId)
+    if (ids.length === 0) continue
+    query = query.not('id', 'in', `(${ids.join(',')})`)
+  }
+
+  return { query }
+}
+
+/**
+ * Convenience wrapper: resolve tag + event virtual fields AND apply scalar
+ * filters in one call. Use this in async contexts (most route handlers
+ * already are). Existing sync callers continue using applyAudienceFilter
+ * directly until they need virtual-field support.
  *
  * Returns { query } — see resolveTagFilters above for the thenable-
  * unwrap reason. Callers must destructure:
@@ -394,5 +498,6 @@ export async function resolveTagFilters({ db, query, filter, locationId }) {
  */
 export async function applyAudienceFilterAsync({ db, query, filter, locationId }) {
   const tagResult = await resolveTagFilters({ db, query, filter, locationId })
-  return { query: applyAudienceFilter(tagResult.query, filter) }
+  const eventResult = await resolveEventFilters({ db, query: tagResult.query, filter })
+  return { query: applyAudienceFilter(eventResult.query, filter) }
 }
