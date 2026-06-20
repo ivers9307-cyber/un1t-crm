@@ -10,6 +10,7 @@ import {
   trendDelta,
   pickHighlight,
   buildSessionAnalytics,
+  currentStreak,
 } from './hr-analytics.js'
 
 const NOW = new Date('2026-05-08T18:00:00Z').getTime()
@@ -229,5 +230,36 @@ describe('buildSessionAnalytics — category grouping', () => {
     const thisSession = base({ id: 'now', started_at: day(0), category: null })
     const a = buildSessionAnalytics({ thisSession, history: [], eventTypeName: 'RIDE', nowMs: NOW })
     expect(a.category).toBeNull()
+  })
+})
+
+describe('currentStreak', () => {
+  const N = new Date('2026-06-20T18:00:00Z').getTime()
+  const dayAgo = (n) => new Date(N - n * 24 * 3600 * 1000).toISOString()
+
+  it('returns 0/0 for no sessions', () => {
+    expect(currentStreak([], N)).toEqual({ current: 0, best: 0, lastDayMs: null })
+  })
+  it('counts consecutive days ending today', () => {
+    const ss = [{ started_at: dayAgo(0) }, { started_at: dayAgo(1) }, { started_at: dayAgo(2) }]
+    expect(currentStreak(ss, N).current).toBe(3)
+  })
+  it('is live with a one-day gap (trained yesterday, not today)', () => {
+    const ss = [{ started_at: dayAgo(1) }, { started_at: dayAgo(2) }]
+    expect(currentStreak(ss, N).current).toBe(2)
+  })
+  it('is broken if last session is 2+ days ago', () => {
+    const ss = [{ started_at: dayAgo(2) }, { started_at: dayAgo(3) }]
+    expect(currentStreak(ss, N).current).toBe(0)
+  })
+  it('dedupes multiple sessions on the same day', () => {
+    const ss = [{ started_at: dayAgo(0) }, { started_at: dayAgo(0) }, { started_at: dayAgo(1) }]
+    expect(currentStreak(ss, N).current).toBe(2)
+  })
+  it('reports best run even when current streak is broken', () => {
+    const ss = [{ started_at: dayAgo(5) }, { started_at: dayAgo(6) }, { started_at: dayAgo(7) }, { started_at: dayAgo(8) }]
+    const r = currentStreak(ss, N)
+    expect(r.current).toBe(0)
+    expect(r.best).toBe(4)
   })
 })
