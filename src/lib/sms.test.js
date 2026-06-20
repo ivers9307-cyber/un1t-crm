@@ -4,7 +4,7 @@
 // so an accidental refactor of the audience contract is caught.
 
 import { describe, it, expect } from 'vitest'
-import { buildSmsAudience } from './sms.js'
+import { buildSmsAudience, buildSmsAudienceAsync } from './sms.js'
 
 // Minimal Supabase-like fluent builder fake so we can assert
 // which methods got called with which args. Each call returns the
@@ -68,5 +68,25 @@ describe('buildSmsAudience', () => {
     const db = { from: () => builder }
     const out = buildSmsAudience(db, null, 'loc-uuid')
     expect(out).toBeDefined()
+  })
+})
+
+describe('buildSmsAudienceAsync', () => {
+  it('returns a wrapped { query } (resolves virtual fields via the async path)', async () => {
+    const { builder } = makeFakeQuery()
+    const db = { from: () => builder }
+    const result = await buildSmsAudienceAsync(db, { logic: 'and', filters: [] }, 'loc-uuid')
+    expect(result).toHaveProperty('query')
+    expect(result.query).toBeDefined()
+  })
+
+  it('applies the same base eligibility gates as the sync builder', async () => {
+    const { builder, calls } = makeFakeQuery()
+    const db = { from: (t) => { calls.push({ method: 'from', args: [t] }); return builder } }
+    await buildSmsAudienceAsync(db, { logic: 'and', filters: [] }, 'loc-uuid')
+    expect(calls[0]).toEqual({ method: 'from', args: ['contacts'] })
+    expect(calls).toContainEqual({ method: 'eq', args: ['sms_status', 'active'] })
+    expect(calls).toContainEqual({ method: 'eq', args: ['contact_preferences.sms_marketing', true] })
+    expect(calls).toContainEqual({ method: 'not', args: ['phone', 'is', null] })
   })
 })
