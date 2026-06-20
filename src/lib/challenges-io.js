@@ -2,8 +2,10 @@
 // Paginated read of ended, contact-bound sessions in the window at the location;
 // aggregates the pure metricValue per contact; ranks + projects names.
 import { metricValue, rankStandings, shortName } from '@/lib/challenges'
+import { logWarn } from '@/lib/log'
 
 const PAGE = 1000
+const HARD_LIMIT = 20000
 
 async function loadWindowSessions(db, { locationId, fromIso, toIso }) {
   const out = []
@@ -18,9 +20,10 @@ async function loadWindowSessions(db, { locationId, fromIso, toIso }) {
       .lt('started_at', toIso)
       .order('contact_id', { ascending: true })
       .range(from, from + PAGE - 1)
-    if (error) break
+    if (error) { logWarn('challenges-io', 'window sessions read failed', { err: error, locationId }); break }
     out.push(...(data || []))
     if (!data || data.length < PAGE) break
+    if (out.length >= HARD_LIMIT) break
   }
   return out
 }
