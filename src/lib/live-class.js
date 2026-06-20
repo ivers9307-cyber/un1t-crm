@@ -392,6 +392,7 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
           .from('heart_rate_sessions')
           .select('effort_points')
           .eq('contact_id', session.contact_id)
+          .eq('location_id', session.location_id)
           .not('ended_at', 'is', null)
           .gte('started_at', monthStartIso)
         const monthPoints = (monthSessions || []).reduce((a, s) => a + (Number(s.effort_points) || 0), 0)
