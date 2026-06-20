@@ -55,6 +55,10 @@ const FIELD_OPTIONS = [
   // server-side via contact_tags. The select options are loaded
   // dynamically from /api/segments at mount time.
   { value: 'tag',                   label: 'Segment tag',           type: 'tag-select' },
+  // EVENT-FILTER — virtual field. Resolved server-side via
+  // resolveEventFilters (race_registrations → contacts.id). Options load
+  // dynamically from /api/communications/events. Value is a race_events id.
+  { value: 'event_registration',    label: 'Registered for event',  type: 'event-select' },
   { value: 'total_emails_sent',     label: 'Emails Sent',           type: 'number' },
   { value: 'total_emails_opened',   label: 'Emails Opened',         type: 'number' },
   { value: 'trial_credits_remaining', label: 'Trial Credits Left',  type: 'number' },
@@ -95,6 +99,11 @@ const OPS_BY_TYPE = {
   'tag-select': [
     { value: 'eq',  label: 'has tag' },
     { value: 'neq', label: 'does not have tag' },
+  ],
+  // event-select — registered / not registered for a specific event.
+  'event-select': [
+    { value: 'eq',  label: 'registered for' },
+    { value: 'neq', label: 'not registered for' },
   ],
   // plan-select — dynamic membership-plan dropdown. is_null / not_null
   // need no value (the value selector hides via needsValue()).
@@ -179,6 +188,20 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
     }).catch(() => { if (!cancelled) setPlanOptions([]) })
     return () => { cancelled = true }
   }, [usesPlanField, planOptions])
+
+  // EVENT-FILTER — event options, loaded once the user adds a
+  // "Registered for event" row. Mirrors the tag/plan dynamic loaders.
+  const [eventOptions, setEventOptions] = useState(null)
+  const usesEventField = filters.some(f => f.field === 'event_registration')
+  useEffect(() => {
+    if (!usesEventField || eventOptions !== null) return
+    let cancelled = false
+    fetch('/api/communications/events').then(r => r.json()).then(j => {
+      if (!cancelled && j?.success) setEventOptions(j.data || [])
+      else if (!cancelled) setEventOptions([])
+    }).catch(() => { if (!cancelled) setEventOptions([]) })
+    return () => { cancelled = true }
+  }, [usesEventField, eventOptions])
 
   function updateFilter(newFilters, newLogic) {
     onChange({ filters: newFilters, logic: newLogic || logic })
@@ -320,6 +343,22 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
                   </option>
                   {(planOptions || []).map(plan => (
                     <option key={plan} value={plan}>{plan}</option>
+                  ))}
+                </select>
+              ) : showValue && fieldConfig.type === 'event-select' ? (
+                <select
+                  value={f.value || ''}
+                  onChange={e => updateRow(index, { value: e.target.value })}
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
+                >
+                  <option value="">
+                    {eventOptions === null ? 'Loading events…' : '— pick an event —'}
+                  </option>
+                  {(eventOptions || []).map(ev => (
+                    <option key={ev.id} value={ev.id}>
+                      {ev.name} — {ev.kind} — {ev.race_date}
+                      {typeof ev.registration_count === 'number' ? ` (${ev.registration_count})` : ''}
+                    </option>
                   ))}
                 </select>
               ) : showValue && fieldConfig.type === 'number' ? (

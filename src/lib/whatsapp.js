@@ -1,5 +1,5 @@
 import { createServerClient } from './supabase'
-import { applyAudienceFilter } from './audience-filter'
+import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
 import { getWhatsAppConfig, META_API_URL } from './whatsapp-config'
 import {
   PER_TICK_MAX, AUTO_PAUSE_CONSECUTIVE_FAILURES,
@@ -420,8 +420,8 @@ export async function editTemplate(metaTemplateId, { category, components }, opt
  * Build audience query for WhatsApp broadcasts
  * Same pattern as email but checks whatsapp_marketing consent and wa_phone
  */
-export function buildWhatsAppAudience(db, filter, locationId) {
-  let query = db
+function whatsAppAudienceBase(db, locationId) {
+  return db
     .from('contacts')
     .select('*, contact_preferences!inner(*)')
     .eq('location_id', locationId)
@@ -429,10 +429,21 @@ export function buildWhatsAppAudience(db, filter, locationId) {
     .not('wa_phone', 'is', null)
     .neq('wa_status', 'blocked')
     .neq('wa_status', 'opted_out')
+}
 
+export function buildWhatsAppAudience(db, filter, locationId) {
   // Apply user-supplied filters via the whitelisted helper. Throws
   // InvalidAudienceFilterError on unknown field or unsupported op.
-  return applyAudienceFilter(query, filter)
+  // Sync path skips virtual fields (event_registration / tag).
+  return applyAudienceFilter(whatsAppAudienceBase(db, locationId), filter)
+}
+
+// Async sibling — resolves virtual fields (event_registration + tag) into
+// the contacts.id constraint, then applies scalar filters. Returns the
+// wrapped { query } so the caller can chain .order()/.range() (paged path)
+// or await it directly (single-shot).
+export async function buildWhatsAppAudienceAsync(db, filter, locationId) {
+  return applyAudienceFilterAsync({ db, query: whatsAppAudienceBase(db, locationId), filter, locationId })
 }
 
 // Paginate the full WhatsApp-eligible audience (consent + opt-out + wa_phone + the
@@ -447,7 +458,11 @@ export async function fetchAllWhatsAppAudience(db, filter, locationId) {
   let start = 0
   while (true) {
     const end = Math.min(start + PAGE - 1, HARD_LIMIT - 1)
-    const { data: page, error } = await buildWhatsAppAudience(db, filter, locationId)
+    // Rebuild the wrapped query each page (builders are single-use; mirrors
+    // segment-sync.js). Re-resolves virtual fields per page — cheap for the
+    // small registration/tag id sets, and keeps paging deterministic.
+    const { query } = await buildWhatsAppAudienceAsync(db, filter, locationId)
+    const { data: page, error } = await query
       .order('id', { ascending: true })
       .range(start, end)
     if (error) throw new Error(`Audience query failed: ${error.message}`)
@@ -511,8 +526,8 @@ export async function sendBroadcast(broadcastId) {
   // number even if someone reconfigures defaults mid-send.
   const broadcastConfig = await getWhatsAppConfig(broadcast.location_id)
 
-  // Get audience
-  const audienceQuery = buildWhatsAppAudience(db, broadcast.audience_filter, broadcast.location_id)
+  // Get audience (async — resolves event_registration / tag virtual fields)
+  const { query: audienceQuery } = await buildWhatsAppAudienceAsync(db, broadcast.audience_filter, broadcast.location_id)
   const { data: contacts, error: cErr } = await audienceQuery
 
   if (cErr) throw new Error(`Audience query failed: ${cErr.message}`)

@@ -15,7 +15,7 @@
 //     are freeform).
 
 import { createServerClient } from '@/lib/supabase'
-import { applyAudienceFilter } from '@/lib/audience-filter'
+import { applyAudienceFilter, applyAudienceFilterAsync } from '@/lib/audience-filter'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { applyMergeTags } from '@/lib/postmark'
 import { getAppUrl } from '@/lib/app-url'
@@ -47,22 +47,32 @@ function buildStatusCallback(broadcastId, contactId) {
  * @param {string} locationId
  * @returns {object} a Supabase query builder. Caller awaits it.
  */
-export function buildSmsAudience(db, filter, locationId) {
+function smsAudienceBase(db, locationId) {
   // Inner-join contact_preferences so we filter on sms_marketing in
   // the same query (mig 064). Mirrors buildWhatsAppAudience' use of
   // !inner. Contacts without a preferences row are excluded — same
   // semantics as the WA broadcast path; the trigger from mig 005
   // creates a row on every new contact so this only excludes legacy
   // rows that pre-date the preferences table.
-  let query = db
+  return db
     .from('contacts')
     .select('id, name, first_name, last_name, email, phone, pipeline_stage_slug, sms_status, location_id, contact_preferences!inner(sms_marketing)')
     .eq('location_id', locationId)
     .eq('sms_status', 'active')
     .eq('contact_preferences.sms_marketing', true)
     .not('phone', 'is', null)
+}
 
-  return applyAudienceFilter(query, filter)
+export function buildSmsAudience(db, filter, locationId) {
+  return applyAudienceFilter(smsAudienceBase(db, locationId), filter)
+}
+
+// Async sibling — resolves virtual fields (event_registration + tag) into
+// the contacts.id constraint before applying scalar filters. Returns the
+// wrapped { query } (thenable-unwrap guard); the caller destructures and
+// awaits it. SMS sends are single-shot, so no per-page rebuild is needed.
+export async function buildSmsAudienceAsync(db, filter, locationId) {
+  return applyAudienceFilterAsync({ db, query: smsAudienceBase(db, locationId), filter, locationId })
 }
 
 // Rate limiting — Twilio's published throughput for alpha sender IDs
@@ -132,10 +142,11 @@ export async function sendBroadcast(broadcastId, { maxRecipients = Infinity } = 
     await db.from('sms_broadcasts').update({ status: 'sending' }).eq('id', broadcastId)
   }
 
-  // Resolve audience.
-  const { data: contacts, error: cErr } = await buildSmsAudience(
+  // Resolve audience (async — resolves event_registration / tag virtual fields).
+  const { query: audienceQuery } = await buildSmsAudienceAsync(
     db, broadcast.audience_filter, broadcast.location_id,
   )
+  const { data: contacts, error: cErr } = await audienceQuery
   if (cErr) throw new Error(`Audience query failed: ${cErr.message}`)
 
   if (!contacts?.length) {

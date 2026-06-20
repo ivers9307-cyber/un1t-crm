@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { applyAudienceFilter, AUDIENCE_FIELDS, InvalidAudienceFilterError, resolveTagFilters } from './audience-filter.js'
+import { applyAudienceFilter, AUDIENCE_FIELDS, InvalidAudienceFilterError, resolveTagFilters, resolveEventFilters, applyAudienceFilterAsync, mergeRegistrationContactIds, LIVE_REGISTRATION_STATUSES } from './audience-filter.js'
 
 // Mock Supabase query builder — every method returns `this` and records the call.
 function makeMockQuery() {
@@ -238,6 +238,12 @@ describe('AUDIENCE_FIELDS allowlist', () => {
     expect(AUDIENCE_FIELDS.tag.type).toBe('tag')
     expect(AUDIENCE_FIELDS.tag.ops).toEqual(['eq', 'neq'])
   })
+
+  it('exposes the event_registration field with eq/neq operators', () => {
+    expect(AUDIENCE_FIELDS).toHaveProperty('event_registration')
+    expect(AUDIENCE_FIELDS.event_registration.type).toBe('event')
+    expect(AUDIENCE_FIELDS.event_registration.ops).toEqual(['eq', 'neq'])
+  })
 })
 
 // ─── tag virtual field — applyAudienceFilter skip behaviour ──────
@@ -260,6 +266,28 @@ describe('applyAudienceFilter — tag is a virtual field', () => {
     expect(() => applyAudienceFilter(q.query, {
       filters: [{ field: 'tag', op: 'contains', value: 'race' }],
     })).toThrow(/not allowed on field "tag"/)
+  })
+})
+
+// ─── event_registration virtual field — applyAudienceFilter skip ─
+
+describe('applyAudienceFilter — event_registration is a virtual field', () => {
+  it('skips event_registration clauses (resolveEventFilters does the work)', () => {
+    const q = makeMockQuery()
+    applyAudienceFilter(q.query, {
+      filters: [
+        { field: 'event_registration', op: 'eq', value: 'evt-1' },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' },
+      ],
+    })
+    expect(q.calls).toEqual([['eq', 'pipeline_stage_slug', 'active_member']])
+  })
+
+  it('still validates the operator allowlist for event_registration', () => {
+    const q = makeMockQuery()
+    expect(() => applyAudienceFilter(q.query, {
+      filters: [{ field: 'event_registration', op: 'contains', value: 'evt' }],
+    })).toThrow(/not allowed on field "event_registration"/)
   })
 })
 
@@ -314,5 +342,140 @@ describe('resolveTagFilters — fast checks (no DB)', () => {
       locationId: 'loc-1',
     })).rejects.toThrow(/non-empty string/)
     expect(dbCalled).toBe(false)
+  })
+})
+
+// ─── event_registration virtual field ───────────────────────────
+
+describe('LIVE_REGISTRATION_STATUSES', () => {
+  it('is exactly pending_payment + confirmed (excludes cancelled + no_show)', () => {
+    expect(LIVE_REGISTRATION_STATUSES).toEqual(['pending_payment', 'confirmed'])
+  })
+})
+
+describe('mergeRegistrationContactIds', () => {
+  it('unions registrants with teammates, dropping nulls and dupes', () => {
+    const regs = [
+      { contact_id: 'a', team_id: 't1' },
+      { contact_id: null, team_id: 't2' },
+      { contact_id: 'b', team_id: 't3' },
+    ]
+    const members = [{ contact_id: 'b' }, { contact_id: 'c' }, { contact_id: null }]
+    const out = mergeRegistrationContactIds(regs, members)
+    expect(new Set(out)).toEqual(new Set(['a', 'b', 'c']))
+    expect(out).toHaveLength(3)
+  })
+
+  it('handles empty / null inputs', () => {
+    expect(mergeRegistrationContactIds(null, null)).toEqual([])
+    expect(mergeRegistrationContactIds([], [])).toEqual([])
+  })
+})
+
+describe('resolveEventFilters — sync edges (no DB)', () => {
+  it('is exported as an async function', () => {
+    expect(typeof resolveEventFilters).toBe('function')
+    expect(resolveEventFilters({ db: {}, query: {}, filter: null })).toBeInstanceOf(Promise)
+  })
+
+  it('returns { query } unchanged when filter is null', async () => {
+    const dummyQuery = { id: 'unchanged' }
+    const result = await resolveEventFilters({
+      db: { from: () => { throw new Error('should not be called') } },
+      query: dummyQuery, filter: null,
+    })
+    expect(result.query).toBe(dummyQuery)
+  })
+
+  it('returns { query } unchanged when no event filters present', async () => {
+    const dummyQuery = { id: 'unchanged' }
+    const result = await resolveEventFilters({
+      db: { from: () => { throw new Error('should not be called') } },
+      query: dummyQuery,
+      filter: { filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' }] },
+    })
+    expect(result.query).toBe(dummyQuery)
+  })
+
+  it('rejects empty / whitespace event ids without hitting the DB', async () => {
+    let dbCalled = false
+    const db = { from: () => { dbCalled = true; return null } }
+    await expect(resolveEventFilters({
+      db, query: {},
+      filter: { filters: [{ field: 'event_registration', op: 'eq', value: '   ' }] },
+    })).rejects.toThrow(/non-empty/)
+    expect(dbCalled).toBe(false)
+  })
+})
+
+describe('resolveEventFilters — DB-backed (explicit mock)', () => {
+  // Explicit thenable chain per table (NOT a Proxy) — robust against the
+  // PromiseLike auto-unwrap that makes Supabase-builder mocking fragile.
+  function eventDb({ regs, members }) {
+    return {
+      from(table) {
+        if (table === 'race_registrations') {
+          const chain = {
+            select: () => chain, eq: () => chain, in: () => chain,
+            then: (resolve) => Promise.resolve({ data: regs, error: null }).then(resolve),
+          }
+          return chain
+        }
+        if (table === 'team_members') {
+          const chain = {
+            select: () => chain, in: () => chain, not: () => chain,
+            then: (resolve) => Promise.resolve({ data: members, error: null }).then(resolve),
+          }
+          return chain
+        }
+        throw new Error(`unexpected table ${table}`)
+      },
+    }
+  }
+  function captureQuery() {
+    const calls = []
+    const query = {
+      in: (...a) => { calls.push(['in', ...a]); return query },
+      eq: (...a) => { calls.push(['eq', ...a]); return query },
+      not: (...a) => { calls.push(['not', ...a]); return query },
+    }
+    return { query, calls }
+  }
+
+  it('eq → query.in(id, registrants ∪ teammates)', async () => {
+    const { query, calls } = captureQuery()
+    const db = eventDb({ regs: [{ contact_id: 'a', team_id: 't1' }], members: [{ contact_id: 'b' }] })
+    await resolveEventFilters({ db, query, filter: { filters: [{ field: 'event_registration', op: 'eq', value: 'evt-1' }] } })
+    const inCall = calls.find(c => c[0] === 'in' && c[1] === 'id')
+    expect(inCall).toBeTruthy()
+    expect(new Set(inCall[2])).toEqual(new Set(['a', 'b']))
+  })
+
+  it('eq with no live registrations → unsatisfiable sentinel', async () => {
+    const { query, calls } = captureQuery()
+    const db = eventDb({ regs: [], members: [] })
+    await resolveEventFilters({ db, query, filter: { filters: [{ field: 'event_registration', op: 'eq', value: 'evt-1' }] } })
+    expect(calls).toContainEqual(['eq', 'id', '00000000-0000-0000-0000-000000000000'])
+  })
+
+  it('neq → query.not(id, in, (...))', async () => {
+    const { query, calls } = captureQuery()
+    const db = eventDb({ regs: [{ contact_id: 'a', team_id: 't1' }], members: [] })
+    await resolveEventFilters({ db, query, filter: { filters: [{ field: 'event_registration', op: 'neq', value: 'evt-1' }] } })
+    const notCall = calls.find(c => c[0] === 'not')
+    expect(notCall).toBeTruthy()
+    expect(notCall[1]).toBe('id')
+    expect(notCall[2]).toBe('in')
+    expect(notCall[3]).toContain('a')
+  })
+
+  it('applyAudienceFilterAsync resolves an event filter end to end', async () => {
+    const { query, calls } = captureQuery()
+    const db = eventDb({ regs: [{ contact_id: 'a', team_id: 't1' }], members: [] })
+    await applyAudienceFilterAsync({
+      db, query, locationId: 'loc-1',
+      filter: { filters: [{ field: 'event_registration', op: 'eq', value: 'evt-1' }] },
+    })
+    expect(calls.some(c => c[0] === 'in' && c[1] === 'id')).toBe(true)
   })
 })
