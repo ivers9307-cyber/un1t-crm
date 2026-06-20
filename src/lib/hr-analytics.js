@@ -251,6 +251,7 @@ function computeStreak(thisSession, history) {
  * (one-day gap tolerance, so a member who hasn't trained YET today still
  * sees yesterday's streak). 0 if the most recent session is older than
  * yesterday. `best` = the longest consecutive-day run anywhere in the input.
+ * `best` is 0 when there are no sessions and 1 for a single session.
  *
  * Distinct from the private `computeStreak(thisSession, history)` above:
  * this takes a plain sessions array and is anchored on `nowMs`, not on a

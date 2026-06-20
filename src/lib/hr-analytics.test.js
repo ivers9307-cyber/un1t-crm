@@ -262,4 +262,14 @@ describe('currentStreak', () => {
     expect(r.current).toBe(0)
     expect(r.best).toBe(4)
   })
+  it('single old session: current 0, best 1', () => {
+    const r = currentStreak([{ started_at: dayAgo(5) }], N)
+    expect(r.current).toBe(0)
+    expect(r.best).toBe(1)
+  })
+  it('single session today: current 1, best 1', () => {
+    const r = currentStreak([{ started_at: dayAgo(0) }], N)
+    expect(r.current).toBe(1)
+    expect(r.best).toBe(1)
+  })
 })
