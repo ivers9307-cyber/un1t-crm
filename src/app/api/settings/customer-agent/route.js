@@ -78,6 +78,7 @@ const SettingsSchema = z.object({
   handoff_cooldown_hours: z.number().min(0).max(168).nullable().optional(),
   consultation_event_type_id: z.string().max(64).nullable().optional(),
   monthly_points_target: z.number().int().min(0).nullable().optional(),
+  social_enabled: z.boolean().optional().default(false),
 })
 
 export async function GET() {
@@ -88,7 +89,12 @@ export async function GET() {
   if (!locationId) return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
 
   const { data: loc } = await db.from('locations').select('name, settings').eq('id', locationId).single()
-  const settings = { ...DEFAULTS, ...(loc?.settings?.customer_agent || {}) }
+  const settings = {
+    ...DEFAULTS,
+    ...(loc?.settings?.customer_agent || {}),
+    // social_enabled lives top-level on locations.settings (sibling of customer_agent)
+    social_enabled: loc?.settings?.social_enabled === true,
+  }
   return NextResponse.json({
     success: true,
     settings,
@@ -137,6 +143,9 @@ export async function PUT(request) {
     consultation_event_type_id: v.data.consultation_event_type_id || null,
     monthly_points_target: v.data.monthly_points_target ?? null,
   }
+  // social_enabled lives top-level on locations.settings (sibling of customer_agent),
+  // NOT nested inside customer_agent — written here so it's merged safely.
+  settings.social_enabled = !!v.data.social_enabled
 
   await db.from('locations').update({ settings }).eq('id', locationId).select('id').single()
   return NextResponse.json({ success: true, settings: settings.customer_agent })
