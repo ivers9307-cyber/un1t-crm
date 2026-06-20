@@ -69,10 +69,38 @@ export function buildSmsAudience(db, filter, locationId) {
 
 // Async sibling — resolves virtual fields (event_registration + tag) into
 // the contacts.id constraint before applying scalar filters. Returns the
-// wrapped { query } (thenable-unwrap guard); the caller destructures and
-// awaits it. SMS sends are single-shot, so no per-page rebuild is needed.
+// wrapped { query } (thenable-unwrap guard) so the caller can chain
+// .order()/.range() (paged path) or await it directly.
 export async function buildSmsAudienceAsync(db, filter, locationId) {
   return applyAudienceFilterAsync({ db, query: smsAudienceBase(db, locationId), filter, locationId })
+}
+
+// Paginate the full SMS-eligible audience (consent + sms_status + phone + the
+// operator's audience_filter). Awaiting buildSmsAudienceAsync once is capped at
+// the project's 1000-row PostgREST limit, so a broadcast to a large list MUST
+// page — the >1k pattern from pipeline-reclassify.js (and the WhatsApp sibling
+// fetchAllWhatsAppAudience). Deterministic order by id so paging is stable.
+// Rebuilds the wrapped query per page (builders are single-use; re-resolves the
+// virtual-field id sets each page, which is cheap).
+export async function fetchAllSmsAudience(db, filter, locationId) {
+  const PAGE = 1000
+  const HARD_LIMIT = 50_000
+  const rows = []
+  let start = 0
+  while (true) {
+    const end = Math.min(start + PAGE - 1, HARD_LIMIT - 1)
+    const { query } = await buildSmsAudienceAsync(db, filter, locationId)
+    const { data: page, error } = await query
+      .order('id', { ascending: true })
+      .range(start, end)
+    if (error) throw new Error(`Audience query failed: ${error.message}`)
+    if (!Array.isArray(page) || page.length === 0) break
+    rows.push(...page)
+    if (page.length < PAGE) break
+    if (rows.length >= HARD_LIMIT) break
+    start += PAGE
+  }
+  return rows
 }
 
 // Rate limiting — Twilio's published throughput for alpha sender IDs
@@ -142,12 +170,12 @@ export async function sendBroadcast(broadcastId, { maxRecipients = Infinity } = 
     await db.from('sms_broadcasts').update({ status: 'sending' }).eq('id', broadcastId)
   }
 
-  // Resolve audience (async — resolves event_registration / tag virtual fields).
-  const { query: audienceQuery } = await buildSmsAudienceAsync(
+  // Resolve audience — paged so broadcasts to >1000 eligible contacts aren't
+  // silently truncated at the PostgREST 1k cap (resolves event_registration /
+  // tag virtual fields per page). fetchAllSmsAudience throws on query error.
+  const contacts = await fetchAllSmsAudience(
     db, broadcast.audience_filter, broadcast.location_id,
   )
-  const { data: contacts, error: cErr } = await audienceQuery
-  if (cErr) throw new Error(`Audience query failed: ${cErr.message}`)
 
   if (!contacts?.length) {
     await db.from('sms_broadcasts').update({

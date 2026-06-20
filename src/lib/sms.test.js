@@ -4,7 +4,7 @@
 // so an accidental refactor of the audience contract is caught.
 
 import { describe, it, expect } from 'vitest'
-import { buildSmsAudience, buildSmsAudienceAsync } from './sms.js'
+import { buildSmsAudience, buildSmsAudienceAsync, fetchAllSmsAudience } from './sms.js'
 
 // Minimal Supabase-like fluent builder fake so we can assert
 // which methods got called with which args. Each call returns the
@@ -88,5 +88,36 @@ describe('buildSmsAudienceAsync', () => {
     expect(calls).toContainEqual({ method: 'eq', args: ['sms_status', 'active'] })
     expect(calls).toContainEqual({ method: 'eq', args: ['contact_preferences.sms_marketing', true] })
     expect(calls).toContainEqual({ method: 'not', args: ['phone', 'is', null] })
+  })
+})
+
+describe('fetchAllSmsAudience', () => {
+  // Fluent fake whose terminal .range() resolves to the next configured page;
+  // every other method returns the builder so the base gates + applyAudienceFilter
+  // chain composes. No `then`, so the builder itself is never auto-awaited.
+  function fakeAudienceDb(pages) {
+    let i = 0
+    const builder = new Proxy({}, {
+      get(_, prop) {
+        if (prop === 'range') return () => Promise.resolve({ data: pages[i++] ?? [], error: null })
+        if (prop === 'then') return undefined
+        return () => builder
+      },
+    })
+    return { from: () => builder }
+  }
+
+  it('returns a single short page without paging again', async () => {
+    const db = fakeAudienceDb([[{ id: 'a' }, { id: 'b' }]])
+    const rows = await fetchAllSmsAudience(db, { logic: 'and', filters: [] }, 'loc')
+    expect(rows.map(r => r.id)).toEqual(['a', 'b'])
+  })
+
+  it('pages until a short page ends the loop', async () => {
+    const full = Array.from({ length: 1000 }, (_, i) => ({ id: `p1-${i}` }))
+    const db = fakeAudienceDb([full, [{ id: 'p2-0' }]]) // 1000 then 1 → stop after page 2
+    const rows = await fetchAllSmsAudience(db, { logic: 'and', filters: [] }, 'loc')
+    expect(rows).toHaveLength(1001)
+    expect(rows[1000].id).toBe('p2-0')
   })
 })
