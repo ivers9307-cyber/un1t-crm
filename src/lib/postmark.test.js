@@ -19,7 +19,21 @@ import {
   buildUnsubscribeUrl,
   appendUnsubscribeFooter,
   toListUnsubscribeUrl,
+  buildAudienceQuery,
+  consentFieldForStream,
 } from './postmark.js'
+
+// Fluent fake recording method calls (mirrors sms.test.js).
+function makeFakeQuery() {
+  const calls = []
+  const builder = new Proxy({}, {
+    get(_, method) {
+      if (method === 'then') return undefined
+      return (...args) => { calls.push({ method, args }); return builder }
+    },
+  })
+  return { builder, calls }
+}
 
 describe('applyMergeTags', () => {
   // ── falsy / pass-through ────────────────────────────────────────
@@ -289,5 +303,38 @@ describe('toListUnsubscribeUrl', () => {
     expect(toListUnsubscribeUrl('')).toBe('')
     expect(toListUnsubscribeUrl(null)).toBeNull()
     expect(toListUnsubscribeUrl(undefined)).toBeUndefined()
+  })
+})
+
+describe('consentFieldForStream', () => {
+  it('maps outbound → email_administrative, everything else → email_marketing', () => {
+    expect(consentFieldForStream('outbound')).toBe('email_administrative')
+    expect(consentFieldForStream('broadcast')).toBe('email_marketing')
+    expect(consentFieldForStream(undefined)).toBe('email_marketing')
+  })
+})
+
+describe('buildAudienceQuery — consent gate', () => {
+  it('defaults to gating on email_marketing', () => {
+    const { builder, calls } = makeFakeQuery()
+    const db = { from: () => builder }
+    buildAudienceQuery(db, { logic: 'and', filters: [] }, 'loc-uuid')
+    expect(calls).toContainEqual({ method: 'eq', args: ['email_marketing', true] })
+    expect(calls).toContainEqual({ method: 'not', args: ['email_status', 'in', '("bounced","complained")'] })
+  })
+
+  it('gates on email_administrative when consentField is passed', () => {
+    const { builder, calls } = makeFakeQuery()
+    const db = { from: () => builder }
+    buildAudienceQuery(db, { logic: 'and', filters: [] }, 'loc-uuid', { consentField: 'email_administrative' })
+    expect(calls).toContainEqual({ method: 'eq', args: ['email_administrative', true] })
+    expect(calls).not.toContainEqual({ method: 'eq', args: ['email_marketing', true] })
+  })
+
+  it('rejects an unknown consentField (no arbitrary columns)', () => {
+    const { builder } = makeFakeQuery()
+    const db = { from: () => builder }
+    expect(() => buildAudienceQuery(db, { logic: 'and', filters: [] }, 'loc-uuid', { consentField: 'profiles.role' }))
+      .toThrow(/consentField/)
   })
 })
