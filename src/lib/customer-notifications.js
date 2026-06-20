@@ -46,6 +46,23 @@ export function buildGoalPush({ goal, def }) {
   }
 }
 
+/** Monthly-target-hit push (no tier change this bank). `next` is the next tier or null. */
+export function buildTargetHitPush({ monthLabel, monthsHit, next }) {
+  const tail = next
+    ? `Month ${monthsHit} banked — ${next.months - monthsHit} to ${next.name}.`
+    : `Month ${monthsHit} banked — your best run yet.`
+  return { title: `${monthLabel} target hit 🎯`, body: tail, data: { type: 'monthly_target_hit' } }
+}
+
+/** Tier-up push — this bank advanced the belt. */
+export function buildTierUpPush({ tier, monthsHit }) {
+  return {
+    title: `You reached ${tier.name} 🏆`,
+    body: `${monthsHit} months hit. Keep the run going.`,
+    data: { type: 'tier_up' },
+  }
+}
+
 /** Streak-at-risk nudge push. */
 export function buildStreakAtRiskPush({ streak }) {
   return {

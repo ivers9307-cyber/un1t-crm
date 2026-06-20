@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildSessionPush, buildGoalPush, buildStreakAtRiskPush, periodKey, streakAtRisk } from './customer-notifications.js'
+import { buildSessionPush, buildGoalPush, buildStreakAtRiskPush, buildTargetHitPush, buildTierUpPush, periodKey, streakAtRisk } from './customer-notifications.js'
 
 describe('buildSessionPush', () => {
   const base = { effortPoints: 280, className: 'Conditioning', sessionId: 'sess-1' }
@@ -77,5 +77,27 @@ describe('streakAtRisk', () => {
   it('does not flag a streak already broken (last session 2 days ago)', () => {
     const ss = [{ started_at: dayAgo(2) }, { started_at: dayAgo(3) }, { started_at: dayAgo(4) }]
     expect(streakAtRisk(ss, N, 3)).toBe(0)
+  })
+})
+
+describe('buildTargetHitPush', () => {
+  it('names the month + months-to-next', () => {
+    const r = buildTargetHitPush({ monthLabel: 'June', monthsHit: 5, next: { name: 'Gold', months: 6 } })
+    expect(r.title).toBe('June target hit 🎯')
+    expect(r.body).toBe('Month 5 banked — 1 to Gold.')
+    expect(r.data).toEqual({ type: 'monthly_target_hit' })
+  })
+  it('handles the top of the ladder (no next tier)', () => {
+    const r = buildTargetHitPush({ monthLabel: 'June', monthsHit: 30, next: null })
+    expect(r.body).toBe('Month 30 banked — your best run yet.')
+  })
+})
+
+describe('buildTierUpPush', () => {
+  it('announces the new tier', () => {
+    const r = buildTierUpPush({ tier: { name: 'Gold' }, monthsHit: 6 })
+    expect(r.title).toBe('You reached Gold 🏆')
+    expect(r.body).toBe('6 months hit. Keep the run going.')
+    expect(r.data).toEqual({ type: 'tier_up' })
   })
 })
