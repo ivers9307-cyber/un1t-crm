@@ -20,7 +20,7 @@ import { sendCustomerPush } from '@/lib/customer-push'
 import { runDetectionForSession } from '@/lib/achievements'
 import { enqueueExportsForSession } from '@/lib/external-export'
 import { buildSessionPush, buildGoalPush, periodKey } from '@/lib/customer-notifications'
-import { GOAL_DEFS, computeProgress, startOfMonth } from '@/lib/goals'
+import { GOAL_DEFS, computeProgress, startOfMonth, startOfIsoWeek } from '@/lib/goals'
 
 const RECENT_SAMPLE_WINDOW_MS = 30 * 1000  // current-BPM averaging window
 
@@ -342,7 +342,14 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
         .eq('is_active', true)
         .is('archived_at', null)
       if (goals && goals.length) {
-        const sinceIso = startOfMonth(new Date(nowMs)).toISOString()
+        // Lower bound must cover BOTH the current ISO week and the current
+        // month: computeProgress filters weekly goals to the ISO-week start,
+        // which can fall in the PREVIOUS month near a boundary. Fetch from
+        // whichever anchor is earlier; computeProgress re-filters per goal.
+        const goalRef = new Date(nowMs)
+        const sinceIso = new Date(
+          Math.min(startOfIsoWeek(goalRef).getTime(), startOfMonth(goalRef).getTime())
+        ).toISOString()
         const { data: gSessions, error: gErr } = await db
           .from('heart_rate_sessions')
           .select('started_at, effort_points')
