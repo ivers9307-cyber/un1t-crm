@@ -136,6 +136,14 @@ export const AUDIENCE_FIELDS = Object.freeze({
   // constraint on the contacts query.
   tag:                       { type: 'tag',     ops: ['eq', 'neq'] },
 
+  // EVENT-FILTER — virtual field. 'event_registration' is not a
+  // contacts column; resolveEventFilters() pre-fetches the contact_ids
+  // registered for the chosen event (race_registrations.status IN
+  // pending_payment/confirmed, registrants + linked teammates) and the
+  // caller injects them as an id IN (…) constraint. The builder's value
+  // is a race_events UUID. eq = registered for; neq = not registered for.
+  event_registration:        { type: 'event',   ops: ['eq', 'neq'] },
+
   // PILLAR2 — explicit recipients. Deliberately NOT in AudienceBuilder's
   // FIELD_OPTIONS (operators don't filter on raw UUIDs): the unified send
   // composer's "pick people" mode constructs `{ field:'id', op:'in',
@@ -197,6 +205,11 @@ export function applyAudienceFilter(query, filter) {
     // so the scalar-filter loop doesn't try to apply them as
     // `query.eq('tag', ...)`.
     if (fieldConfig.type === 'tag') continue
+
+    // 'event' is a virtual field (event_registration) resolved by
+    // resolveEventFilters into a contacts.id IN (…) constraint — skip
+    // it in the scalar-filter loop, exactly like 'tag'.
+    if (fieldConfig.type === 'event') continue
 
     // Parse + validate value where required.
     let v = value

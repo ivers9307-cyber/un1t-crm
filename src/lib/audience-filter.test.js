@@ -238,6 +238,12 @@ describe('AUDIENCE_FIELDS allowlist', () => {
     expect(AUDIENCE_FIELDS.tag.type).toBe('tag')
     expect(AUDIENCE_FIELDS.tag.ops).toEqual(['eq', 'neq'])
   })
+
+  it('exposes the event_registration field with eq/neq operators', () => {
+    expect(AUDIENCE_FIELDS).toHaveProperty('event_registration')
+    expect(AUDIENCE_FIELDS.event_registration.type).toBe('event')
+    expect(AUDIENCE_FIELDS.event_registration.ops).toEqual(['eq', 'neq'])
+  })
 })
 
 // ─── tag virtual field — applyAudienceFilter skip behaviour ──────
@@ -260,6 +266,28 @@ describe('applyAudienceFilter — tag is a virtual field', () => {
     expect(() => applyAudienceFilter(q.query, {
       filters: [{ field: 'tag', op: 'contains', value: 'race' }],
     })).toThrow(/not allowed on field "tag"/)
+  })
+})
+
+// ─── event_registration virtual field — applyAudienceFilter skip ─
+
+describe('applyAudienceFilter — event_registration is a virtual field', () => {
+  it('skips event_registration clauses (resolveEventFilters does the work)', () => {
+    const q = makeMockQuery()
+    applyAudienceFilter(q.query, {
+      filters: [
+        { field: 'event_registration', op: 'eq', value: 'evt-1' },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' },
+      ],
+    })
+    expect(q.calls).toEqual([['eq', 'pipeline_stage_slug', 'active_member']])
+  })
+
+  it('still validates the operator allowlist for event_registration', () => {
+    const q = makeMockQuery()
+    expect(() => applyAudienceFilter(q.query, {
+      filters: [{ field: 'event_registration', op: 'contains', value: 'evt' }],
+    })).toThrow(/not allowed on field "event_registration"/)
   })
 })
 
