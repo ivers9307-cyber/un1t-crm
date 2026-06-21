@@ -36,6 +36,31 @@ export const ZONE_DEFS = [
   { id: 5, label: 'Z5', name: 'Max',      pctMin: 0.90, pctMax: 1.10, color: '#EF4444', points: 5 },
 ]
 
+// Operator-configurable scoring defaults. zone_points mirror the
+// per-zone `points` on ZONE_DEFS above (1..5) so that the default
+// resolved config reproduces the hardcoded behaviour exactly — keep
+// these two in sync. participation_points is awarded for attending a
+// class with no HR data (no strap), so it isn't on ZONE_DEFS.
+export const SCORING_DEFAULTS = { zone_points: { 1: 1, 2: 2, 3: 3, 4: 4, 5: 5 }, participation_points: 50 }
+
+/**
+ * Resolve the effective scoring config for a location. Reads the
+ * operator overrides from `location.settings.scoring` (a future admin
+ * surface writes these) and partial-merges them over SCORING_DEFAULTS,
+ * coercing each value to a finite number and falling back to the
+ * default for anything missing or non-numeric.
+ *
+ * @param {object} location  locations row — may have settings.scoring.
+ * @returns {{ zonePoints: { 1:number,2:number,3:number,4:number,5:number }, participationPoints: number }}
+ */
+export function resolveScoringConfig(location) {
+  const s = location?.settings?.scoring || {}
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d)
+  const zonePoints = {}
+  for (const id of [1, 2, 3, 4, 5]) zonePoints[id] = num(s?.zone_points?.[id], SCORING_DEFAULTS.zone_points[id])
+  return { zonePoints, participationPoints: num(s?.participation_points, SCORING_DEFAULTS.participation_points) }
+}
+
 /**
  * Resolve effective max HR for a contact.
  *
@@ -84,6 +109,10 @@ export function zoneForBpm(bpm, maxHr) {
  *
  * @param {Array<{recorded_at: string|Date, bpm: number}>} samples
  * @param {number} maxHr
+ * @param {{ zonePoints?: { [zoneId: number]: number } }} [opts]
+ *   Optional per-zone points override (from resolveScoringConfig). When
+ *   omitted, the hardcoded ZONE_DEFS points are used so behaviour is
+ *   byte-identical to before this argument existed.
  * @returns {{
  *   zonesSeconds: { 1: number, 2: number, 3: number, 4: number, 5: number },
  *   effortPoints: number,
@@ -92,7 +121,7 @@ export function zoneForBpm(bpm, maxHr) {
  *   totalSeconds: number,
  * }}
  */
-export function summariseSession(samples, maxHr) {
+export function summariseSession(samples, maxHr, opts = {}) {
   const zonesSeconds = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
   if (!Array.isArray(samples) || samples.length === 0) {
     return { zonesSeconds, effortPoints: 0, avgHrBpm: null, peakHrBpm: null, totalSeconds: 0 }
@@ -126,8 +155,13 @@ export function summariseSession(samples, maxHr) {
   const totalSeconds = Object.values(zonesSeconds).reduce((a, b) => a + b, 0)
   // UN1T Points: per-second weight is points/60 (so a minute in Z3
   // = 3 points). Floored at the end so partial sub-second contributions
-  // round consistently rather than per-zone.
-  const rawPoints = ZONE_DEFS.reduce((acc, z) => acc + (zonesSeconds[z.id] || 0) * (z.points / 60), 0)
+  // round consistently rather than per-zone. The per-zone points rate
+  // comes from opts.zonePoints (operator-configurable) when supplied,
+  // else the hardcoded ZONE_DEFS points.
+  const rawPoints = ZONE_DEFS.reduce(
+    (acc, z) => acc + (zonesSeconds[z.id] || 0) * ((opts.zonePoints?.[z.id] ?? z.points) / 60),
+    0,
+  )
   const effortPoints = Math.floor(rawPoints)
 
   return {
