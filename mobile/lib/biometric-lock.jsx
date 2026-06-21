@@ -10,6 +10,7 @@ import {
 } from './biometric'
 import { shouldRelock, biometricLabel, RELOCK_GRACE_MS } from './biometric-lock-logic'
 import LockScreen from '../components/LockScreen'
+import { useStudioPin } from './studio-pin'
 
 const BiometricLockContext = createContext(null)
 
@@ -22,6 +23,7 @@ export function useBiometricLock() {
 
 export function BiometricLockProvider({ children }) {
   const { session } = useAuth()
+  const { paired } = useStudioPin()
   const [available, setAvailable] = useState(false)
   const [typeLabel, setTypeLabel] = useState('biometrics')
   const [enabled, setEnabledState] = useState(false)
@@ -50,7 +52,7 @@ export function BiometricLockProvider({ children }) {
   // Cold-start: decide the lock state from the stored pref the first time a
   // session is present. Resets on sign-out so a later sign-in re-evaluates.
   useEffect(() => {
-    if (!session) { booted.current = false; setLockState('unlocked'); return }
+    if (!session || paired) { booted.current = false; setLockState('unlocked'); return }
     if (booted.current) return
     booted.current = true
     setLockState('checking')
@@ -60,7 +62,7 @@ export function BiometricLockProvider({ children }) {
       if (on) { setLockState('locked'); promptUnlock() }
       else setLockState('unlocked')
     })()
-  }, [session, promptUnlock])
+  }, [session, paired, promptUnlock])
 
   // Re-lock on resume after the grace window.
   useEffect(() => {
@@ -68,7 +70,7 @@ export function BiometricLockProvider({ children }) {
       if (next === 'background' || next === 'inactive') {
         lastBg.current = Date.now()
       } else if (next === 'active') {
-        if (enabled && session && shouldRelock(lastBg.current, Date.now(), RELOCK_GRACE_MS)) {
+        if (enabled && session && !paired && shouldRelock(lastBg.current, Date.now(), RELOCK_GRACE_MS)) {
           setLockState('locked')
           promptUnlock()
         }
@@ -76,15 +78,15 @@ export function BiometricLockProvider({ children }) {
       }
     })
     return () => sub.remove()
-  }, [enabled, session, promptUnlock])
+  }, [enabled, session, paired, promptUnlock])
 
   // One-time enable prompt — first eligible foreground.
   useEffect(() => {
-    if (!session || !available || enabled || lockState !== 'unlocked') return
+    if (!session || paired || !available || enabled || lockState !== 'unlocked') return
     let alive = true
     wasPromptAsked().then((asked) => { if (alive && !asked) setPromptVisible(true) })
     return () => { alive = false }
-  }, [session, available, enabled, lockState])
+  }, [session, available, paired, enabled, lockState])
 
   // Toggle from settings — re-auth before changing the pref.
   const setEnabled = useCallback(async (on) => {

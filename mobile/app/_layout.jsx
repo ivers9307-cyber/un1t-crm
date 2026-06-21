@@ -26,6 +26,7 @@ import { useEffect } from 'react'
 import * as Notifications from 'expo-notifications'
 import { AuthProvider, useAuth } from '../lib/auth-context'
 import { BiometricLockProvider } from '../lib/biometric-lock'
+import { StudioPinProvider } from '../lib/studio-pin'
 import RootErrorBoundary from '../components/RootErrorBoundary'
 
 // Keep the splash screen up until auth bootstrap finishes — avoids a
@@ -93,6 +94,7 @@ export default function RootLayout() {
       <RootErrorBoundary>
       <SafeAreaProvider>
         <AuthProvider>
+          <StudioPinProvider>
           <BiometricLockProvider>
             <StatusBar style="dark" />
             <SplashGate />
@@ -119,6 +121,7 @@ export default function RootLayout() {
               <Stack.Screen name="events" options={{ headerShown: false }} />
             </Stack>
           </BiometricLockProvider>
+          </StudioPinProvider>
         </AuthProvider>
       </SafeAreaProvider>
       </RootErrorBoundary>
