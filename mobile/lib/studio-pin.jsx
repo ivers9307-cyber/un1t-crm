@@ -32,6 +32,7 @@ export function StudioPinProvider({ children }) {
   const [pairingLoaded, setPairingLoaded] = useState(false)
   const [locked, setLocked] = useState(false)
   const lastActivity = useRef(Date.now())
+  const coldStartHandled = useRef(false)
 
   const refreshPairing = useCallback(async () => {
     const p = await getPairing()
@@ -73,6 +74,17 @@ export function StudioPinProvider({ children }) {
     }, 20_000)
     return () => clearInterval(iv)
   }, [paired, session, lock])
+
+  // Shared-device safety: a cold start (relaunch / iOS kill / force-quit)
+  // on a paired device must require a fresh PIN even if a session was
+  // restored from SecureStore — we can't assume the same staffer is
+  // picking up a shared device. Fires once, after pairing state is known.
+  // lock() clears the restored session AND shows the pad.
+  useEffect(() => {
+    if (!pairingLoaded || coldStartHandled.current) return
+    coldStartHandled.current = true
+    if (paired) lock()
+  }, [pairingLoaded, paired, lock])
 
   // Avoid flashing the app/login before we know whether we're paired.
   if (!pairingLoaded) return null
