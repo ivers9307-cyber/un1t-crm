@@ -14,7 +14,7 @@
 import { logWarn } from '@/lib/log'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { lookupBookedMember, resolveClassLinkSource } from '@/lib/class-bookings'
-import { resolveMaxHr, summariseSession } from '@/lib/heart-rate'
+import { resolveMaxHr, summariseSession, resolveScoringConfig } from '@/lib/heart-rate'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { sendCustomerPush } from '@/lib/customer-push'
 import { runDetectionForSession } from '@/lib/achievements'
@@ -268,6 +268,13 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
   if (sErr || !session) return { ok: false, error: 'Session not found' }
   if (session.ended_at) return { ok: true, alreadyEnded: true }
 
+  // Load the location once so points use the operator-configurable scoring
+  // config. When settings.scoring is unset, resolveScoringConfig returns the
+  // code defaults (== ZONE_DEFS points) so live-session output is unchanged.
+  const { data: location } = await db
+    .from('locations').select('id, settings').eq('id', session.location_id).maybeSingle()
+  const { zonePoints } = resolveScoringConfig(location)
+
   // Pull all samples for this session and summarise.
   const { data: samples } = await db
     .from('hr_samples')
@@ -275,7 +282,7 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
     .eq('session_id', sessionId)
     .order('recorded_at', { ascending: true })
 
-  const summary = summariseSession(samples || [], session.max_hr_used)
+  const summary = summariseSession(samples || [], session.max_hr_used, { zonePoints })
   const endedAt = new Date(nowMs).toISOString()
 
   const { error: updErr } = await db
@@ -299,153 +306,192 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
 
   // HR-CLASS-ALLOC.2 — anonymous (null-contact) walk-in sessions still get
   // zones/points from summariseSession above, but skip every contact-bound
-  // side-effect: no member to email, attach achievements to, or export for.
-  if (session.contact_id) {
-    // Best-effort post-class email. Doesn't propagate errors — the
-    // sender already swallows + logs everything internally. The
-    // session is finalised regardless of email outcome.
-    sendPostClassEmail(db, sessionId).catch((err) => {
-      logWarn('live-class', 'post-class email scheduling threw', { err, sessionId })
-    })
+  // side-effect (handled inside finalizeSessionRewards via its own contact_id
+  // gate). The reward cascade is shared with the auto-credit job (T4) so it can
+  // run the same post-session rewards for attendance-credited participation
+  // sessions.
+  await finalizeSessionRewards(db, sessionId, { nowMs })
 
-    // Best-effort: achievement detection + ONE consolidated session push.
-    // Leads with any achievement unlocked this session, else the session-
-    // ready summary. Never blocks/fails finalisation.
-    try {
-      const det = await runDetectionForSession(db, sessionId)
-      const unlocked = det && det.ok && Array.isArray(det.unlocked) ? det.unlocked : []
-      if (unlocked.length) {
-        await db
-          .from('contact_achievements')
-          .update({ notified_at: new Date(nowMs).toISOString() })
-          .eq('source_session_id', sessionId)
-          .is('notified_at', null)
-      }
-      await sendCustomerPush(
-        db,
-        session.contact_id,
-        buildSessionPush({
-          effortPoints: summary.effortPoints,
-          className: session.class_name,
-          sessionId,
-          unlocked,
-        })
-      )
-    } catch (err) {
-      logWarn('live-class', 'engagement notify threw', { err, sessionId })
+  return { ok: true, summary }
+}
+
+/**
+ * Run the full post-session "reward cascade" for a finalised session:
+ * post-class email, achievement detection + consolidated session push,
+ * goal-completion celebration, monthly-target/tier banking, and external-
+ * system export enqueue. Loads the session row fresh so it can be invoked
+ * standalone (e.g. by the attendance auto-credit job) as well as inline from
+ * endSession.
+ *
+ * Every step is best-effort — failures are logged, never propagated, so the
+ * underlying session finalisation is authoritative regardless of reward
+ * outcomes. Returns early (no side-effects) for a session with no contact_id:
+ * anonymous walk-ins have no member to email, attach achievements to, or
+ * export for. Participation sessions (attendance credits, no HR samples) skip
+ * the external-export step — there's nothing to push to an external provider.
+ *
+ * @param {SupabaseClient} db
+ * @param {string} sessionId
+ * @param {{ nowMs?: number }} [opts]
+ */
+export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now() } = {}) {
+  const { data: session } = await db
+    .from('heart_rate_sessions')
+    .select('id, contact_id, location_id, effort_points, ended_at, source, glofox_event_id, class_name')
+    .eq('id', sessionId)
+    .single()
+  // No contact → nothing to reward (anonymous walk-in). Preserves the
+  // "walk-ins skip rewards" behaviour that endSession used to gate inline.
+  if (!session || !session.contact_id) return
+
+  const effortPoints = Number(session.effort_points) || 0
+
+  // Best-effort post-class email. Doesn't propagate errors — the
+  // sender already swallows + logs everything internally. The
+  // session is finalised regardless of email outcome.
+  sendPostClassEmail(db, sessionId).catch((err) => {
+    logWarn('live-class', 'post-class email scheduling threw', { err, sessionId })
+  })
+
+  // Best-effort: achievement detection + ONE consolidated session push.
+  // Leads with any achievement unlocked this session, else the session-
+  // ready summary. Never blocks/fails finalisation.
+  try {
+    const det = await runDetectionForSession(db, sessionId)
+    const unlocked = det && det.ok && Array.isArray(det.unlocked) ? det.unlocked : []
+    if (unlocked.length) {
+      await db
+        .from('contact_achievements')
+        .update({ notified_at: new Date(nowMs).toISOString() })
+        .eq('source_session_id', sessionId)
+        .is('notified_at', null)
     }
+    await sendCustomerPush(
+      db,
+      session.contact_id,
+      buildSessionPush({
+        effortPoints,
+        className: session.class_name,
+        sessionId,
+        unlocked,
+      })
+    )
+  } catch (err) {
+    logWarn('live-class', 'engagement notify threw', { err, sessionId })
+  }
 
-    // Best-effort: celebrate any active goal completed (this period) by this
-    // session. Idempotent per (goal, period) via customer_engagement_nudges.
-    try {
-      const { data: goals } = await db
-        .from('contact_goals')
-        .select('id, kind, target_value')
+  // Best-effort: celebrate any active goal completed (this period) by this
+  // session. Idempotent per (goal, period) via customer_engagement_nudges.
+  try {
+    const { data: goals } = await db
+      .from('contact_goals')
+      .select('id, kind, target_value')
+      .eq('contact_id', session.contact_id)
+      .eq('is_active', true)
+      .is('archived_at', null)
+    if (goals && goals.length) {
+      // Lower bound must cover BOTH the current ISO week and the current
+      // month: computeProgress filters weekly goals to the ISO-week start,
+      // which can fall in the PREVIOUS month near a boundary. Fetch from
+      // whichever anchor is earlier; computeProgress re-filters per goal.
+      const goalRef = new Date(nowMs)
+      const sinceIso = new Date(
+        Math.min(startOfIsoWeek(goalRef).getTime(), startOfMonth(goalRef).getTime())
+      ).toISOString()
+      const { data: gSessions, error: gErr } = await db
+        .from('heart_rate_sessions')
+        .select('started_at, effort_points')
         .eq('contact_id', session.contact_id)
-        .eq('is_active', true)
-        .is('archived_at', null)
-      if (goals && goals.length) {
-        // Lower bound must cover BOTH the current ISO week and the current
-        // month: computeProgress filters weekly goals to the ISO-week start,
-        // which can fall in the PREVIOUS month near a boundary. Fetch from
-        // whichever anchor is earlier; computeProgress re-filters per goal.
-        const goalRef = new Date(nowMs)
-        const sinceIso = new Date(
-          Math.min(startOfIsoWeek(goalRef).getTime(), startOfMonth(goalRef).getTime())
-        ).toISOString()
-        const { data: gSessions, error: gErr } = await db
-          .from('heart_rate_sessions')
-          .select('started_at, effort_points')
-          .eq('contact_id', session.contact_id)
-          .not('ended_at', 'is', null)
-          .gte('started_at', sinceIso)
-        if (gErr) logWarn('live-class', 'goal sessions load failed', { gErr, sessionId })
-        for (const goal of goals) {
-          const def = GOAL_DEFS[goal.kind]
-          if (!def) continue
-          const { current } = computeProgress(goal, gSessions || [], new Date(nowMs))
-          if (current < goal.target_value) continue
-          const dedupKey = `${goal.id}:${periodKey(def.period, nowMs)}`
-          const { data: ins, error: insErr } = await db
-            .from('customer_engagement_nudges')
-            .insert({ contact_id: session.contact_id, type: 'goal_complete', dedup_key: dedupKey })
-            .select('id')
-          if (insErr || !ins || !ins.length) continue // already celebrated this period, or insert failed
-          await sendCustomerPush(db, session.contact_id, buildGoalPush({ goal, def }))
-        }
+        .not('ended_at', 'is', null)
+        .gte('started_at', sinceIso)
+      if (gErr) logWarn('live-class', 'goal sessions load failed', { gErr, sessionId })
+      for (const goal of goals) {
+        const def = GOAL_DEFS[goal.kind]
+        if (!def) continue
+        const { current } = computeProgress(goal, gSessions || [], new Date(nowMs))
+        if (current < goal.target_value) continue
+        const dedupKey = `${goal.id}:${periodKey(def.period, nowMs)}`
+        const { data: ins, error: insErr } = await db
+          .from('customer_engagement_nudges')
+          .insert({ contact_id: session.contact_id, type: 'goal_complete', dedup_key: dedupKey })
+          .select('id')
+        if (insErr || !ins || !ins.length) continue // already celebrated this period, or insert failed
+        await sendCustomerPush(db, session.contact_id, buildGoalPush({ goal, def }))
       }
-    } catch (err) {
-      logWarn('live-class', 'goal-completion notify threw', { err, sessionId })
     }
+  } catch (err) {
+    logWarn('live-class', 'goal-completion notify threw', { err, sessionId })
+  }
 
-    // Best-effort: monthly target + tier banking. Banks the month the instant
-    // this-month points cross the gym target; tier is derived from the count of
-    // banked months. Idempotent per (contact, month) via the unique constraint.
-    try {
-      const { data: loc } = await db
-        .from('locations').select('settings').eq('id', session.location_id).maybeSingle()
-      const target = Number(loc?.settings?.customer_agent?.monthly_points_target) || 0
-      if (target > 0) {
-        const monthKey = periodKey('month', nowMs) // 'YYYY-MM'
-        const monthStartIso = startOfMonth(new Date(nowMs)).toISOString()
-        const { data: monthSessions } = await db
-          .from('heart_rate_sessions')
-          .select('effort_points')
-          .eq('contact_id', session.contact_id)
-          .eq('location_id', session.location_id)
-          .not('ended_at', 'is', null)
-          .gte('started_at', monthStartIso)
-        const monthPoints = (monthSessions || []).reduce((a, s) => a + (Number(s.effort_points) || 0), 0)
-        if (monthPoints >= target) {
-          const { data: banked, error: bankErr } = await db
+  // Best-effort: monthly target + tier banking. Banks the month the instant
+  // this-month points cross the gym target; tier is derived from the count of
+  // banked months. Idempotent per (contact, month) via the unique constraint.
+  try {
+    const { data: loc } = await db
+      .from('locations').select('settings').eq('id', session.location_id).maybeSingle()
+    const target = Number(loc?.settings?.customer_agent?.monthly_points_target) || 0
+    if (target > 0) {
+      const monthKey = periodKey('month', nowMs) // 'YYYY-MM'
+      const monthStartIso = startOfMonth(new Date(nowMs)).toISOString()
+      const { data: monthSessions } = await db
+        .from('heart_rate_sessions')
+        .select('effort_points')
+        .eq('contact_id', session.contact_id)
+        .eq('location_id', session.location_id)
+        .not('ended_at', 'is', null)
+        .gte('started_at', monthStartIso)
+      const monthPoints = (monthSessions || []).reduce((a, s) => a + (Number(s.effort_points) || 0), 0)
+      if (monthPoints >= target) {
+        const { data: banked, error: bankErr } = await db
+          .from('member_monthly_targets')
+          .insert({
+            contact_id: session.contact_id, location_id: session.location_id,
+            period_month: monthKey, points: monthPoints, target,
+          })
+          .select('id')
+        if (!bankErr && banked && banked.length) {
+          const { count } = await db
             .from('member_monthly_targets')
-            .insert({
-              contact_id: session.contact_id, location_id: session.location_id,
-              period_month: monthKey, points: monthPoints, target,
-            })
-            .select('id')
-          if (!bankErr && banked && banked.length) {
-            const { count } = await db
-              .from('member_monthly_targets')
-              .select('id', { count: 'exact', head: true })
-              .eq('contact_id', session.contact_id)
-            const monthsHit = count || 1
-            const newTier = tierForMonths(monthsHit)
-            const oldTier = tierForMonths(monthsHit - 1)
-            if (newTier && (!oldTier || newTier.slug !== oldTier.slug)) {
-              const { data: nins } = await db
-                .from('customer_engagement_nudges')
-                .insert({ contact_id: session.contact_id, type: 'tier_up', dedup_key: newTier.slug })
-                .select('id')
-              if (nins && nins.length) {
-                await sendCustomerPush(db, session.contact_id, buildTierUpPush({ tier: newTier, monthsHit }))
-              }
-            } else {
-              const monthLabel = MONTH_NAMES[new Date(nowMs).getUTCMonth()]
-              await sendCustomerPush(
-                db, session.contact_id,
-                buildTargetHitPush({ monthLabel, monthsHit, next: nextTier(monthsHit) })
-              )
+            .select('id', { count: 'exact', head: true })
+            .eq('contact_id', session.contact_id)
+          const monthsHit = count || 1
+          const newTier = tierForMonths(monthsHit)
+          const oldTier = tierForMonths(monthsHit - 1)
+          if (newTier && (!oldTier || newTier.slug !== oldTier.slug)) {
+            const { data: nins } = await db
+              .from('customer_engagement_nudges')
+              .insert({ contact_id: session.contact_id, type: 'tier_up', dedup_key: newTier.slug })
+              .select('id')
+            if (nins && nins.length) {
+              await sendCustomerPush(db, session.contact_id, buildTierUpPush({ tier: newTier, monthsHit }))
             }
+          } else {
+            const monthLabel = MONTH_NAMES[new Date(nowMs).getUTCMonth()]
+            await sendCustomerPush(
+              db, session.contact_id,
+              buildTargetHitPush({ monthLabel, monthsHit, next: nextTier(monthsHit) })
+            )
           }
         }
       }
-    } catch (err) {
-      logWarn('live-class', 'tier banking threw', { err, sessionId })
     }
+  } catch (err) {
+    logWarn('live-class', 'tier banking threw', { err, sessionId })
+  }
 
-    // Best-effort: queue external-system exports for this session.
-    // The actual upload happens out-of-band via the cron worker.
+  // Best-effort: queue external-system exports for this session.
+  // The actual upload happens out-of-band via the cron worker.
+  // Participation sessions (attendance credits) have no HR samples to push to
+  // an external provider, so skip the enqueue for them.
+  if (session.source !== 'participation') {
     enqueueExportsForSession(db, {
       id: sessionId,
       contact_id: session.contact_id,
-      ended_at: endedAt,
+      ended_at: session.ended_at ?? null,
     }).catch((err) => {
       logWarn('live-class', 'export enqueue threw', { err, sessionId })
     })
   }
-
-  return { ok: true, summary }
 }
 
 /**
@@ -467,4 +513,60 @@ export async function endAllAtLocation(db, locationId, { nowMs = Date.now() } = 
     if (out.ok && !out.alreadyEnded) ended++
   }
   return { ok: true, ended }
+}
+
+/**
+ * Create a "participation" heart_rate_sessions row — an attendance credit for a
+ * member who attended a Glofox class with no HR strap (so no samples, no zones).
+ * Awards a flat participationPoints score. The row is born already-ended
+ * (started_at + ended_at both required) because challenge standings + monthly
+ * banking filter on `ended_at IS NOT NULL`; an open participation row would be
+ * invisible to them and would also look like a live session on the coach board.
+ *
+ * Used by the attendance auto-credit job (T4). The caller is responsible for
+ * idempotency (one credit per member per class) and for running the reward
+ * cascade afterwards via finalizeSessionRewards(db, newId).
+ *
+ * @param {SupabaseClient} db
+ * @param {{
+ *   contactId: string,
+ *   locationId: string,
+ *   glofoxEventId: string|null,
+ *   className: string|null,
+ *   startedAtIso: string,
+ *   endedAtIso: string,
+ *   participationPoints: number,
+ *   maxHr: number,
+ * }} args
+ * @returns {Promise<string|null>}  the new session id, or null on insert failure
+ */
+export async function createParticipationSession(db, {
+  contactId, locationId, glofoxEventId, className, startedAtIso, endedAtIso, participationPoints, maxHr,
+}) {
+  const { data: created, error } = await db
+    .from('heart_rate_sessions')
+    .insert({
+      contact_id: contactId,
+      location_id: locationId,
+      source: 'participation',
+      device_identifier: null,
+      started_at: startedAtIso,
+      ended_at: endedAtIso, // REQUIRED — standings/banking filter ended_at IS NOT NULL
+      max_hr_used: maxHr,
+      zones_seconds: {},
+      effort_points: participationPoints,
+      glofox_event_id: glofoxEventId,
+      class_name: className,
+      // CHECK constraint allows only 'booked' | 'presence'. A participation
+      // credit comes from an attended booking → 'booked' (NOT 'attended',
+      // which would violate the constraint and fail the insert).
+      class_link_source: 'booked',
+    })
+    .select('id')
+    .single()
+  if (error || !created) {
+    logWarn('live-class', 'createParticipationSession insert failed', { err: error, contactId, glofoxEventId })
+    return null
+  }
+  return created.id
 }

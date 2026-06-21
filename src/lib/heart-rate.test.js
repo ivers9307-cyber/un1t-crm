@@ -4,6 +4,8 @@ import { describe, it, expect } from 'vitest'
 import {
   ZONE_DEFS,
   resolveMaxHr,
+  resolveScoringConfig,
+  SCORING_DEFAULTS,
   zoneForBpm,
   summariseSession,
   zoneBreakdown,
@@ -192,5 +194,43 @@ describe('zoneBreakdown', () => {
     const out = zoneBreakdown({ 1: 100, 2: 200, 3: 300, 4: 400, 5: 500 })
     const total = out.reduce((a, b) => a + b.percent, 0)
     expect(total).toBeCloseTo(1, 5)
+  })
+})
+
+// ── resolveScoringConfig ─────────────────────────────────────────
+
+describe('resolveScoringConfig', () => {
+  it('returns defaults when settings absent', () => {
+    const c = resolveScoringConfig({})
+    expect(c.participationPoints).toBe(50)
+    expect(c.zonePoints).toEqual({ 1: 1, 2: 2, 3: 3, 4: 4, 5: 5 })
+    // Defaults track the exported SCORING_DEFAULTS contract.
+    expect(c.participationPoints).toBe(SCORING_DEFAULTS.participation_points)
+    expect(c.zonePoints).toEqual(SCORING_DEFAULTS.zone_points)
+  })
+  it('overrides from locations.settings.scoring, partial-merges', () => {
+    const c = resolveScoringConfig({ settings: { scoring: { participation_points: 25, zone_points: { 5: 8 } } } })
+    expect(c.participationPoints).toBe(25)
+    expect(c.zonePoints[5]).toBe(8)
+    expect(c.zonePoints[1]).toBe(1)
+  })
+  it('ignores non-numeric garbage and falls back to defaults', () => {
+    const c = resolveScoringConfig({ settings: { scoring: { participation_points: 'x', zone_points: { 3: 'y' } } } })
+    expect(c.participationPoints).toBe(50)
+    expect(c.zonePoints[3]).toBe(3)
+  })
+})
+
+describe('summariseSession with configurable zonePoints', () => {
+  const minuteInZ5 = Array.from({ length: 61 }, (_, i) => ({ recorded_at: new Date(Date.parse('2026-06-21T10:00:00Z') + i * 1000).toISOString(), bpm: 190 }))
+  it('uses default zone points when no opts (byte-identical behaviour)', () => {
+    const a = summariseSession(minuteInZ5, 200)
+    const b = summariseSession(minuteInZ5, 200, { zonePoints: { 1:1,2:2,3:3,4:4,5:5 } })
+    expect(a.effortPoints).toBe(b.effortPoints)
+  })
+  it('honours custom zone points (double Z5 → more points)', () => {
+    const base = summariseSession(minuteInZ5, 200, { zonePoints: { 1:1,2:2,3:3,4:4,5:5 } })
+    const dbl = summariseSession(minuteInZ5, 200, { zonePoints: { 1:1,2:2,3:3,4:4,5:10 } })
+    expect(dbl.effortPoints).toBeGreaterThan(base.effortPoints)
   })
 })
