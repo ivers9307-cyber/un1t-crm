@@ -162,12 +162,18 @@ both callers, DRY.
 > not the docs" lesson). If it misbehaves, the fallback is a dedicated
 > Supabase admin session-mint, but generate+verify is the standard path.
 
-**Speed — fold the profile into the response (baked in regardless of
-caching).** The server already loaded the staffer to mint the session,
-so returning their profile + permissions + locations in the *same*
-response means the app populates everything from one round-trip. The
-later `/api/mobile/me` call becomes a *background revalidation*, not a
-blocker on first paint.
+**Speed — superseded by the per-user menu cache (§4).** An earlier draft
+folded the full profile + permissions + locations into this response to
+save a round-trip. Building that cleanly would mean either duplicating
+the `/api/mobile/me` locations+permissions loader (a documented drift
+hazard — the codebase has been bitten repeatedly by two loaders going
+out of sync) or refactoring `getCurrentUser()` (the highest-blast-radius
+function in the app). The per-user menu cache (§4) delivers the same
+instant tap-in for the common case (returning staff) without either
+risk, so **pin-login returns tokens only** plus the existing
+`profile { id, full_name, home_screen_path }`; the app does its normal
+`setSession` → `onAuthStateChange` → `/api/mobile/me` flow, with the
+cache painting the menu before `/me` returns.
 
 ### 3. App boot & routing
 
