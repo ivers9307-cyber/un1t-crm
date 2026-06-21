@@ -79,11 +79,17 @@ export async function GET(request) {
   // ended_at = not null AND email_sent_at = null. That includes the
   // ones we just closed AND any that were closed via /end-class
   // where the inline trigger failed.
+  // Exclude source='participation' (attendance credits): they have no HR
+  // data, so the post-class email always skips them WITHOUT stamping
+  // email_sent_at — which would leave them matching this sweep forever and
+  // re-fire the "session ready" push every tick. They're already finalised
+  // + pushed once by credit-attendance's finalizeSessionRewards.
   const { data: pendingEmails } = await db
     .from('heart_rate_sessions')
     .select('id, contact_id, effort_points, class_name')
     .not('ended_at', 'is', null)
     .is('email_sent_at', null)
+    .neq('source', 'participation')
     .order('ended_at', { ascending: true })
     .limit(50)
 
