@@ -151,9 +151,15 @@ describe('attendanceDrop', () => {
   it('does NOT fire for a non-regular (baseline below threshold)', () => {
     expect(attendanceDrop([_sAt(20), _sAt(40), _sAt(10)], _now).dropping).toBe(false)
   })
-  it('does NOT fire when long-gone (no session within stillCurrentDays)', () => {
-    const base = []; for (let d = 15; d <= 83; d += 3) base.push(_sAt(d))
+  it('does NOT fire when long-gone (last session beyond stillCurrentDays)', () => {
+    // strong baseline, but the most recent session is 50d ago (> 42) → not current
+    const base = []; for (let d = 50; d <= 110; d += 3) base.push(_sAt(d))
     expect(attendanceDrop(base, _now).dropping).toBe(false)
+  })
+  it('FIRES for a regular who went fully quiet recently but is still current (core win-back case)', () => {
+    // trained ~2x/wk through ~3 weeks ago, nothing in the last 14d, last session 18d ago (< 42)
+    const base = []; for (let d = 18; d <= 83; d += 3.5) base.push(_sAt(d))
+    expect(attendanceDrop(base, _now).dropping).toBe(true)
   })
   it('empty + future-dated sessions are safe', () => {
     expect(attendanceDrop([], _now).dropping).toBe(false)

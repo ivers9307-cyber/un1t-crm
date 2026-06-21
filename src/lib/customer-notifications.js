@@ -129,9 +129,12 @@ export function attendanceDrop(sessions, nowMs = Date.now(), {
   }
   const baselineRate = baselineCount / ((baselineDays - recentDays) / 7)
   const recentRate = recentCount / (recentDays / 7)
+  // A regular who fully stopped in the recent window (recentRate === 0) is the
+  // PRIMARY win-back case — do NOT exclude them. `stillCurrentDays` (last
+  // session within the window) is what separates a recent slowdown from a
+  // long-gone member; recentRate === 0 + still-current = exactly who to nudge.
   const dropping =
     baselineRate >= minBaselinePerWeek &&
-    recentRate > 0 &&
     recentRate <= dropFraction * baselineRate &&
     lastMs >= nowMs - stillCurrentDays * DAY
   return {
