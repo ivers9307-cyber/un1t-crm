@@ -109,3 +109,41 @@ export function streakAtRisk(sessions, nowMs = Date.now(), minStreak = 3) {
   if (st.lastDayMs === today - DAY && st.current >= minStreak) return st.current
   return 0
 }
+
+// Personalized HR-attendance drop detector for win-back nudges.
+// baseline window [now-baselineDays, now-recentDays); recent window [now-recentDays, now).
+export function attendanceDrop(sessions, nowMs = Date.now(), {
+  baselineDays = 84, recentDays = 14, minBaselinePerWeek = 1.0,
+  dropFraction = 0.5, stillCurrentDays = 42,
+} = {}) {
+  const DAY = 24 * 3600 * 1000
+  const recentStart = nowMs - recentDays * DAY
+  const baselineStart = nowMs - baselineDays * DAY
+  let recentCount = 0, baselineCount = 0, lastMs = 0
+  for (const s of sessions || []) {
+    const t = Date.parse(s?.started_at)
+    if (!Number.isFinite(t) || t >= nowMs) continue
+    if (t > lastMs) lastMs = t
+    if (t >= recentStart) recentCount++
+    else if (t >= baselineStart) baselineCount++
+  }
+  const baselineRate = baselineCount / ((baselineDays - recentDays) / 7)
+  const recentRate = recentCount / (recentDays / 7)
+  // A regular who fully stopped in the recent window (recentRate === 0) is the
+  // PRIMARY win-back case — do NOT exclude them. `stillCurrentDays` (last
+  // session within the window) is what separates a recent slowdown from a
+  // long-gone member; recentRate === 0 + still-current = exactly who to nudge.
+  const dropping =
+    baselineRate >= minBaselinePerWeek &&
+    recentRate <= dropFraction * baselineRate &&
+    lastMs >= nowMs - stillCurrentDays * DAY
+  return {
+    dropping,
+    baselineRate: Math.round(baselineRate * 100) / 100,
+    recentRate: Math.round(recentRate * 100) / 100,
+  }
+}
+
+export function buildWinbackPush() {
+  return { title: "We've missed you 👋", body: 'Fancy getting back in this week?', data: { type: 'winback' } }
+}
