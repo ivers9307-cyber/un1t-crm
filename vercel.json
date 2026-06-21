@@ -137,6 +137,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/credit-attendance",
+      "schedule": "0 3 * * *"
+    },
+    {
       "path": "/api/cron/notify-streak-at-risk",
       "schedule": "0 11 * * *"
     },
