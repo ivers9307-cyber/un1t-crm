@@ -20,7 +20,10 @@ the work back up.
 - [x] **Phase 0 — Studio-device PIN auth.** ✅ Shipped (#138 #139 #140).
       Schema + helpers, APIs + admin pairing UI, user surface +
       session cookie + idle lock. Cross-cutting foundation for
-      Phases 1, 2, and 3.
+      Phases 1, 2, and 3. **Note:** Phase 0 shipped web-only (the
+      `/studio-login` cookie kiosk). Bringing token pairing + PIN
+      tap-in into the **native** CF Studio app is its own design:
+      [STUDIO_NATIVE_PIN_LOGIN_DESIGN.md](STUDIO_NATIVE_PIN_LOGIN_DESIGN.md).
 - [x] **Phase 1 — CF Studio universal binary + iPad layouts.**
       ✅ In a shippable state (#141 #142 #143). Universal binary
       foundation, Schedule 7-column week grid, TabletConstrained

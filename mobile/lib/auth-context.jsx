@@ -42,9 +42,39 @@ export function AuthProvider({ children }) {
       setActiveLocation(result.data.activeLocation || null)
       setImpersonatingFrom(result.data.impersonatingFrom || null)
       setError(null)
+      // STUDIO-NATIVE-PIN — on a paired studio device, cache this user's
+      // menu so their next tap-in paints instantly. Best-effort; never
+      // blocks or throws into the auth path.
+      try {
+        const { getPairing, writeMenuCache } = await import('./studio-device')
+        if (await getPairing()) {
+          writeMenuCache(result.data.profile.id, {
+            profile: result.data.profile,
+            locations: result.data.locations || [],
+            activeLocation: result.data.activeLocation || null,
+          })
+        }
+      } catch { /* best-effort cache */ }
     } else {
       setError(result.error || 'Failed to load profile')
     }
+  }, [])
+
+  // STUDIO-NATIVE-PIN — paint a returning staffer's menu from the
+  // encrypted per-user cache the instant their session lands, before the
+  // network /me returns (stale-while-revalidate). Paired devices only.
+  const hydrateFromCache = useCallback(async (userId) => {
+    if (!userId) return
+    try {
+      const { getPairing, readMenuCache } = await import('./studio-device')
+      if (!(await getPairing())) return
+      const cached = await readMenuCache(userId)
+      if (cached?.profile) {
+        setProfile(cached.profile)
+        setLocations(cached.locations || [])
+        setActiveLocation(cached.activeLocation || null)
+      }
+    } catch { /* best-effort */ }
   }, [])
 
   // Bootstrap on mount.
@@ -83,7 +113,8 @@ export function AuthProvider({ children }) {
       if (!mounted) return
       setSession(newSession)
       if (newSession) {
-        refresh().catch(() => {})
+        // Paint from cache (instant), then revalidate over the network.
+        hydrateFromCache(newSession.user?.id).finally(() => { refresh().catch(() => {}) })
       } else {
         setProfile(null)
         setLocations([])
@@ -95,7 +126,7 @@ export function AuthProvider({ children }) {
       mounted = false
       sub?.subscription?.unsubscribe?.()
     }
-  }, [refresh])
+  }, [refresh, hydrateFromCache])
 
   const signIn = useCallback(async (email, password) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })

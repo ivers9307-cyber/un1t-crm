@@ -50,6 +50,9 @@ export const dynamic = 'force-dynamic'
 const Body = z.object({
   device_token: z.string().min(16).max(256),
   pin: z.string().refine(isValidPinFormat, 'PIN must be exactly 4 digits'),
+  // STUDIO-NATIVE-PIN — native callers set this to also receive a real
+  // Supabase session (access+refresh) in the response body. Web omits it.
+  mint_session: z.boolean().optional(),
 })
 
 async function logAttempt(db, {
@@ -84,7 +87,7 @@ export async function POST(request) {
   // -- 1. Body shape.
   const validation = await validateBody(request, Body)
   if (!validation.ok) return validation.response
-  const { device_token, pin } = validation.data
+  const { device_token, pin, mint_session } = validation.data
 
   // -- 2. Device token must resolve to a paired, non-revoked device.
   let device
@@ -219,7 +222,7 @@ export async function POST(request) {
     locationId: device.location_id,
   })
 
-  const response = NextResponse.json({
+  const payload = {
     success: true,
     profile: {
       id: matched.id,
@@ -232,7 +235,29 @@ export async function POST(request) {
       label: device.label,
       location_id: device.location_id,
     },
-  })
+  }
+
+  // STUDIO-NATIVE-PIN — native (iPad) callers can't use the studio_session
+  // cookie (no cookie jar; they read Supabase directly), so when
+  // mint_session is set we ALSO mint a real Supabase session and return
+  // the tokens in the body. The web kiosk omits the flag and the response
+  // is byte-identical to before (cookie only).
+  if (mint_session) {
+    try {
+      const { mintSupabaseSession } = await import('@/lib/studio-session-mint')
+      const tokens = await mintSupabaseSession({ admin: db, profileId: matched.id })
+      payload.access_token = tokens.access_token
+      payload.refresh_token = tokens.refresh_token
+    } catch (err) {
+      logWarn('pin-login', 'session mint failed', { err })
+      return NextResponse.json(
+        { success: false, error: 'Could not start session. Try again.' },
+        { status: 500 },
+      )
+    }
+  }
+
+  const response = NextResponse.json(payload)
   response.headers.append(
     'Set-Cookie',
     `${STUDIO_COOKIE_NAME}=${cookie}; ${cookieAttributes()}`,
