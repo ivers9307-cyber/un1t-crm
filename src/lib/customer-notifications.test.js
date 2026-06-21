@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildSessionPush, buildGoalPush, buildStreakAtRiskPush, buildTargetHitPush, buildTierUpPush, buildFriendRequestPush, buildFriendAcceptedPush, buildReactionPush, periodKey, streakAtRisk } from './customer-notifications.js'
+import { attendanceDrop, buildWinbackPush } from './customer-notifications.js'
 
 describe('buildSessionPush', () => {
   const base = { effortPoints: 280, className: 'Conditioning', sessionId: 'sess-1' }
@@ -132,5 +133,36 @@ describe('buildReactionPush', () => {
     expect(r.title).toBe('Lee reacted 🔥')
     expect(r.body).toBe('to your achievement')
     expect(r.data).toEqual({ type: 'feed' })
+  })
+})
+const _DAY = 24*3600*1000
+const _now = Date.parse('2026-06-21T12:00:00Z')
+const _sAt = (daysAgo) => ({ started_at: new Date(_now - daysAgo*_DAY).toISOString() })
+
+describe('attendanceDrop', () => {
+  it('fires when a regular halves their rate but is still current', () => {
+    const base = []; for (let d = 15; d <= 83; d += 3.5) base.push(_sAt(d))
+    expect(attendanceDrop([...base, _sAt(10)], _now).dropping).toBe(true)
+  })
+  it('does NOT fire when attendance is steady', () => {
+    const all = []; for (let d = 1; d <= 83; d += 3.5) all.push(_sAt(d))
+    expect(attendanceDrop(all, _now).dropping).toBe(false)
+  })
+  it('does NOT fire for a non-regular (baseline below threshold)', () => {
+    expect(attendanceDrop([_sAt(20), _sAt(40), _sAt(10)], _now).dropping).toBe(false)
+  })
+  it('does NOT fire when long-gone (no session within stillCurrentDays)', () => {
+    const base = []; for (let d = 15; d <= 83; d += 3) base.push(_sAt(d))
+    expect(attendanceDrop(base, _now).dropping).toBe(false)
+  })
+  it('empty + future-dated sessions are safe', () => {
+    expect(attendanceDrop([], _now).dropping).toBe(false)
+    expect(attendanceDrop([{ started_at: new Date(_now + _DAY).toISOString() }], _now).dropping).toBe(false)
+  })
+})
+describe('buildWinbackPush', () => {
+  it('returns the winback push shape', () => {
+    const p = buildWinbackPush()
+    expect(p.data.type).toBe('winback'); expect(p.title).toBeTruthy(); expect(p.body).toBeTruthy()
   })
 })
