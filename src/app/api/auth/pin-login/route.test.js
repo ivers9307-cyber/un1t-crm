@@ -260,3 +260,53 @@ describe('pin-login — response uniformity', () => {
     expect(j2.error).toBe(j3.error)
   })
 })
+
+// --- mint_session (native) ---------------------------------------------
+// The helper has its own unit test; here we mock it and lock the route
+// contract: tokens appear in the body ONLY when mint_session is set, and
+// the web cookie path is unchanged when it's absent.
+vi.mock('@/lib/studio-session-mint', () => ({ mintSupabaseSession: vi.fn() }))
+const { mintSupabaseSession } = await import('@/lib/studio-session-mint')
+
+describe('pin-login — mint_session (native)', () => {
+  beforeEach(() => {
+    findDeviceByToken.mockResolvedValue(DEVICE)
+    isTrustedIpForLocation.mockResolvedValue(true)
+    getDeviceLockoutState.mockResolvedValue({ locked: false, recentFailures: 0 })
+    findProfileByPin.mockResolvedValue(PROFILE)
+    mintSupabaseSession.mockReset()
+  })
+
+  it('returns access+refresh tokens when mint_session is true', async () => {
+    mintSupabaseSession.mockResolvedValue({ access_token: 'at-9', refresh_token: 'rt-9' })
+    const res = await POST(buildRequest({
+      body: { device_token: VALID_TOKEN, pin: VALID_PIN, mint_session: true },
+    }))
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.access_token).toBe('at-9')
+    expect(json.refresh_token).toBe('rt-9')
+    expect(json.profile.id).toBe(PROFILE.id)
+    expect(mintSupabaseSession).toHaveBeenCalledWith({ admin: expect.anything(), profileId: PROFILE.id })
+    // Cookie still set (kept for parity; native ignores it).
+    expect(res.headers.get('set-cookie') || '').toMatch(/^studio_session=/)
+  })
+
+  it('omits tokens entirely on the web path (no mint_session)', async () => {
+    const res = await POST(buildRequest({ body: { device_token: VALID_TOKEN, pin: VALID_PIN } }))
+    const json = await res.json()
+    expect(json.access_token).toBeUndefined()
+    expect(json.refresh_token).toBeUndefined()
+    expect(mintSupabaseSession).not.toHaveBeenCalled()
+  })
+
+  it('500s with a clean message when the mint fails', async () => {
+    mintSupabaseSession.mockRejectedValue(new Error('boom'))
+    const res = await POST(buildRequest({
+      body: { device_token: VALID_TOKEN, pin: VALID_PIN, mint_session: true },
+    }))
+    expect(res.status).toBe(500)
+    const json = await res.json()
+    expect(json.success).toBe(false)
+  })
+})
