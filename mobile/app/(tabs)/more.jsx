@@ -25,6 +25,7 @@ import { listInvoices } from '../../lib/invoices-api'
 import { accountingLanding, ACCOUNTING_ROUTES } from '../../lib/accounting'
 import { buildSummary } from '../../lib/build-info'
 import { useBiometricLock } from '../../lib/biometric-lock'
+import { useStudioPin } from '../../lib/studio-pin'
 
 function Tile({ icon, label, badge, onPress }) {
   return (
@@ -68,6 +69,17 @@ export default function More() {
   // FACE-ID — biometric app-lock toggle (shown only when biometrics are
   // available + enrolled). Enabling/disabling both re-auth first.
   const biometric = useBiometricLock()
+  const { paired, lock: studioLock, unpair } = useStudioPin()
+  function confirmUnpair() {
+    Alert.alert(
+      'Forget this studio device?',
+      'This iPad will go back to normal email + password sign-in. Staff PINs will no longer work here until it is paired again.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Forget device', style: 'destructive', onPress: unpair },
+      ],
+    )
+  }
   async function onToggleBiometric(next) {
     const res = await biometric.setEnabled(next)
     if (!res.success) {
@@ -258,6 +270,24 @@ export default function More() {
             <Text className="text-xs text-un1t-subtle mt-0.5">Locks the app on open and after 5 min away.</Text>
           </View>
           <Switch value={biometric.enabled} onValueChange={onToggleBiometric} />
+        </View>
+      )}
+
+      {paired && (
+        <View className="mt-4">
+          <Pressable
+            onPress={studioLock}
+            className="flex-row items-center justify-between bg-un1t-surface rounded-2xl border border-un1t-border px-4 py-3.5 active:opacity-80"
+          >
+            <Text className="text-base text-un1t-text">Return to PIN</Text>
+            <Text className="text-sm text-un1t-subtle">Hand off to the next staffer</Text>
+          </Pressable>
+          <Pressable
+            onPress={confirmUnpair}
+            className="flex-row items-center justify-between bg-un1t-surface rounded-2xl border border-un1t-border px-4 py-3.5 mt-2 active:opacity-80"
+          >
+            <Text className="text-base text-red-500">Forget this studio device</Text>
+          </Pressable>
         </View>
       )}
 
