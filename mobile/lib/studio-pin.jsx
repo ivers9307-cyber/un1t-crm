@@ -9,7 +9,7 @@
 //   - "Return to PIN" (More) → lock()
 //   - a correct PIN mints a fresh Supabase session → the whole app swaps
 //     to that staffer via auth-context's onAuthStateChange.
-import { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react'
+import { createContext, useContext, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import { View } from 'react-native'
 import { useAuth } from './auth-context'
 import { getPairing, clearPairing } from './studio-device'
@@ -79,8 +79,10 @@ export function StudioPinProvider({ children }) {
   // on a paired device must require a fresh PIN even if a session was
   // restored from SecureStore — we can't assume the same staffer is
   // picking up a shared device. Fires once, after pairing state is known.
-  // lock() clears the restored session AND shows the pad.
-  useEffect(() => {
+  // lock() clears the restored session AND shows the pad. useLayoutEffect
+  // (not useEffect) so the lock lands BEFORE paint — the previous
+  // staffer's screen never flashes on a shared device's relaunch.
+  useLayoutEffect(() => {
     if (!pairingLoaded || coldStartHandled.current) return
     coldStartHandled.current = true
     if (paired) lock()
