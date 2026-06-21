@@ -9,6 +9,8 @@ import {
   pairOverride,
   endSession,
   endAllAtLocation,
+  finalizeSessionRewards,
+  createParticipationSession,
 } from './live-class.js'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { runDetectionForSession } from '@/lib/achievements'
@@ -17,6 +19,7 @@ import { enqueueExportsForSession } from '@/lib/external-export'
 vi.mock('@/lib/hr-post-class-email', () => ({ sendPostClassEmail: vi.fn(() => Promise.resolve()) }))
 vi.mock('@/lib/achievements', () => ({ runDetectionForSession: vi.fn(() => Promise.resolve()) }))
 vi.mock('@/lib/external-export', () => ({ enqueueExportsForSession: vi.fn(() => Promise.resolve()) }))
+vi.mock('@/lib/customer-push', () => ({ sendCustomerPush: vi.fn(() => Promise.resolve({ sent: 0, invalidated: 0 })) }))
 
 beforeEach(() => { vi.clearAllMocks() })
 
@@ -314,9 +317,12 @@ describe('endSession', () => {
       from: vi.fn((table) => {
         if (table === 'heart_rate_sessions') {
           return {
-            select: vi.fn(() => ({ eq: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { id: 'sess-anon', contact_id: null, max_hr_used: 180, ended_at: null }, error: null })) })) })),
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { id: 'sess-anon', contact_id: null, location_id: 'loc-1', max_hr_used: 180, ended_at: null }, error: null })) })) })),
             update: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ error: null })) })),
           }
+        }
+        if (table === 'locations') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'loc-1', settings: {} }, error: null })) })) })) }
         }
         if (table === 'hr_samples') {
           return { select: vi.fn(() => ({ eq: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: [{ recorded_at: '2026-06-18T05:30:00Z', bpm: 150 }] })) })) })) }
@@ -366,7 +372,7 @@ describe('endSession', () => {
             select: vi.fn(() => ({
               eq: vi.fn(() => ({
                 single: vi.fn(() => Promise.resolve({
-                  data: { id: 'sess-1', max_hr_used: 200, ended_at: null },
+                  data: { id: 'sess-1', contact_id: null, location_id: 'loc-1', max_hr_used: 200, ended_at: null },
                   error: null,
                 })),
               })),
@@ -376,6 +382,9 @@ describe('endSession', () => {
               return { eq: vi.fn(() => Promise.resolve({ error: null })) }
             }),
           }
+        }
+        if (table === 'locations') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'loc-1', settings: {} }, error: null })) })) })) }
         }
         if (table === 'hr_samples') {
           return {
@@ -424,5 +433,158 @@ describe('endAllAtLocation', () => {
       })),
     }
     expect(await endAllAtLocation(db, 'loc-1')).toEqual({ ok: true, ended: 0 })
+  })
+})
+
+// ── createParticipationSession ─────────────────────────────────
+
+describe('createParticipationSession', () => {
+  it('builds the participation insert payload and returns the new id', async () => {
+    let insertedRow = null
+    const db = {
+      from: vi.fn((table) => {
+        if (table !== 'heart_rate_sessions') throw new Error(`unexpected ${table}`)
+        return {
+          insert: vi.fn((row) => {
+            insertedRow = row
+            return { select: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { id: 'sess-part' }, error: null })) })) }
+          }),
+        }
+      }),
+    }
+    const id = await createParticipationSession(db, {
+      contactId: 'c-1',
+      locationId: 'loc-1',
+      glofoxEventId: 'ev-1',
+      className: 'DR1VE',
+      startedAtIso: '2026-06-20T05:00:00Z',
+      endedAtIso: '2026-06-20T06:00:00Z',
+      participationPoints: 50,
+      maxHr: 180,
+    })
+    expect(id).toBe('sess-part')
+    expect(insertedRow).toMatchObject({
+      contact_id: 'c-1',
+      location_id: 'loc-1',
+      source: 'participation',
+      device_identifier: null,
+      started_at: '2026-06-20T05:00:00Z',
+      ended_at: '2026-06-20T06:00:00Z',
+      max_hr_used: 180,
+      zones_seconds: {},
+      effort_points: 50,
+      glofox_event_id: 'ev-1',
+      class_name: 'DR1VE',
+      class_link_source: 'booked',
+    })
+    // ended_at must be set (standings filter on ended_at IS NOT NULL) and the
+    // CHECK-constrained link source must be 'booked', never 'attended'.
+    expect(insertedRow.ended_at).toBeTruthy()
+    expect(insertedRow.class_link_source).not.toBe('attended')
+  })
+
+  it('returns null on insert failure', async () => {
+    const db = {
+      from: vi.fn(() => ({
+        insert: vi.fn(() => ({ select: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: null, error: { message: 'boom' } })) })) })),
+      })),
+    }
+    const id = await createParticipationSession(db, {
+      contactId: 'c-1', locationId: 'loc-1', glofoxEventId: null, className: null,
+      startedAtIso: '2026-06-20T05:00:00Z', endedAtIso: '2026-06-20T06:00:00Z',
+      participationPoints: 50, maxHr: 180,
+    })
+    expect(id).toBeNull()
+  })
+})
+
+// ── finalizeSessionRewards ─────────────────────────────────────
+
+describe('finalizeSessionRewards', () => {
+  // Permissive db: returns the given session row for the first
+  // heart_rate_sessions select, and empty/null for everything the cascade
+  // touches afterward (goals, locations, monthSessions) so it flows straight
+  // through to the export-enqueue decision without side-effects.
+  function dbForSession(sessionRow) {
+    // Project sessionRow down to exactly the columns named in the SELECT
+    // string — mirrors PostgREST, so a column the production code forgets to
+    // select comes back `undefined` here too. This is what makes the
+    // export-enqueue regression (missing `ended_at` in the SELECT) detectable:
+    // a column-blind mock would always return ended_at and hide the bug.
+    const project = (columns) => {
+      if (typeof columns !== 'string') return sessionRow
+      const fields = columns.split(',').map((c) => c.trim())
+      const out = {}
+      for (const f of fields) if (f in sessionRow) out[f] = sessionRow[f]
+      return out
+    }
+    return {
+      from: vi.fn((table) => {
+        if (table === 'heart_rate_sessions') {
+          return {
+            // session load (.select().eq().single()) AND the goal/month
+            // sessions reads (.select().eq().not().gte() / .eq().eq().not().gte())
+            select: vi.fn((columns) => ({
+              eq: vi.fn(() => ({
+                single: vi.fn(() => Promise.resolve({ data: project(columns), error: null })),
+                not: vi.fn(() => ({ gte: vi.fn(() => Promise.resolve({ data: [], error: null })) })),
+                eq: vi.fn(() => ({ not: vi.fn(() => ({ gte: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })),
+              })),
+            })),
+          }
+        }
+        if (table === 'contact_goals') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })) })) }
+        }
+        if (table === 'locations') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'loc-1', settings: {} }, error: null })) })) })) }
+        }
+        throw new Error(`unexpected ${table}`)
+      }),
+    }
+  }
+
+  it('returns early with no side-effects when the session has no contact_id', async () => {
+    const db = {
+      from: vi.fn((table) => {
+        if (table !== 'heart_rate_sessions') throw new Error(`unexpected ${table}`)
+        return { select: vi.fn(() => ({ eq: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { id: 'sess-anon', contact_id: null, source: 'ble_bridge' }, error: null })) })) })) }
+      }),
+    }
+    await finalizeSessionRewards(db, 'sess-anon')
+    expect(sendPostClassEmail).not.toHaveBeenCalled()
+    expect(runDetectionForSession).not.toHaveBeenCalled()
+    expect(enqueueExportsForSession).not.toHaveBeenCalled()
+  })
+
+  it('enqueues the external export for a normal (HR) session', async () => {
+    const db = dbForSession({
+      id: 'sess-1', contact_id: 'c-1', location_id: 'loc-1',
+      effort_points: 42, ended_at: '2026-06-20T06:00:00Z',
+      source: 'ble_bridge', glofox_event_id: 'ev-1', class_name: 'DR1VE',
+    })
+    await finalizeSessionRewards(db, 'sess-1')
+    expect(enqueueExportsForSession).toHaveBeenCalledTimes(1)
+    // Regression guard: the export MUST receive a truthy ended_at — without it
+    // enqueueExportsForSession early-returns and the Strava auto-export is
+    // silently skipped for every session. The SELECT in finalizeSessionRewards
+    // must include ended_at for this to resolve.
+    expect(enqueueExportsForSession).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ id: 'sess-1', contact_id: 'c-1', ended_at: expect.any(String) })
+    )
+  })
+
+  it('skips the external export for a participation session', async () => {
+    const db = dbForSession({
+      id: 'sess-part', contact_id: 'c-1', location_id: 'loc-1',
+      effort_points: 50, started_at: '2026-06-20T05:00:00Z',
+      source: 'participation', glofox_event_id: 'ev-1', class_name: 'DR1VE',
+    })
+    await finalizeSessionRewards(db, 'sess-part')
+    // The contact-bound cascade still runs (it has a contact_id) ...
+    expect(sendPostClassEmail).toHaveBeenCalledTimes(1)
+    // ... but participation rows have no HR samples to push externally.
+    expect(enqueueExportsForSession).not.toHaveBeenCalled()
   })
 })
