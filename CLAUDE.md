@@ -399,6 +399,9 @@ OPENWEARABLES_API_KEY=           # developer API key (sent as X-Open-Wearables-A
 OPENWEARABLES_APP_ID=            # from an OW application (POST /api/v1/applications) — per-user token minting
 OPENWEARABLES_APP_SECRET=        # app secret paired with OPENWEARABLES_APP_ID
 OPENWEARABLES_WEBHOOK_SECRET=    # Svix endpoint signing secret (whsec_...) for /api/webhooks/openwearables; route 401s if unset
+
+# InBody / Lookin'Body WebAPI (CONSULTATIONS SP2) — see src/lib/inbody-webhook.js
+INBODY_WEBHOOK_SECRET=           # shared secret we set as a custom header (x-inbody-secret) in the InBody portal Step 3; /api/webhooks/inbody 500s if unset, 403s on mismatch
 ```
 
 ## Xero integration
