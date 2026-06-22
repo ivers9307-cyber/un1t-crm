@@ -16,6 +16,7 @@
 
 import dynamic from 'next/dynamic'
 import { Card } from '@/components/ui'
+import InBodySyncButton from './InBodySyncButton'
 import { latestScan, scanSeries } from '@/lib/consultations-view'
 
 const InBodyCharts = dynamic(() => import('./InBodyCharts'), {
@@ -36,13 +37,14 @@ function Stat({ label, value, unit }) {
   )
 }
 
-export default function InBodyProgress({ scans = [] }) {
+export default function InBodyProgress({ scans = [], contactId }) {
   if (!scans || scans.length === 0) {
     return (
       <Card title="InBody">
         <p className="text-sm text-un1t-muted">
-          InBody not connected yet — body-composition scans will appear here once the integration is set up.
+          No InBody scans yet. If this member has been scanned on the machine, pull their history now.
         </p>
+        {contactId && <InBodySyncButton contactId={contactId} />}
       </Card>
     )
   }
@@ -70,6 +72,8 @@ export default function InBodyProgress({ scans = [] }) {
           { key: 'smm_kg', label: 'Muscle (kg)', color: '#3b82f6', data: scanSeries(scans, 'smm_kg') },
         ]}
       />
+
+      {contactId && <InBodySyncButton contactId={contactId} />}
     </Card>
   )
 }
