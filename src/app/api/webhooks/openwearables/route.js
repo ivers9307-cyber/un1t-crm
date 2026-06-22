@@ -23,13 +23,13 @@
 //
 // Svix delivery. OW delivers via Svix, so the request carries
 //   svix-id, svix-timestamp, svix-signature
-// headers and a JSON body shaped like a Svix message:
-//   { id, eventType: 'workout.created', eventId?, timestamp, payload: {...} }
-// (confirmed against the live OW server: GET /openapi.json
-// WebhookMessageResponse + GET /api/v1/webhooks/event-types lists
-// `workout.created` = "A new workout session was saved.", and the
-// endpoint secret is a Svix `whsec_...` key — GET
-// /api/v1/webhooks/endpoints/{id}/secret → EndpointSecretResponse.key).
+// headers. Svix Cloud delivers the message PAYLOAD as the raw body
+// directly — for a workout event that is `{ type: 'workout.created',
+// data: { id, user_id, source: { provider }, ... } }` — NOT wrapped
+// under a top-level `payload` key. (Older/self-hosted Svix wrapped it as
+// `{ id, eventType, timestamp, payload: {...} }`; we accept both shapes.)
+// The endpoint secret is a Svix `whsec_...` key — GET
+// /api/v1/webhooks/endpoints/{id}/secret → EndpointSecretResponse.key.
 //
 // Signature scheme (Svix): HMAC-SHA256, key = base64-decode of the
 // endpoint secret with its `whsec_` prefix stripped, over the exact
@@ -160,8 +160,12 @@ export function extractWorkoutRef(payload) {
     }
     return null
   }
+  // OW's real payload carries the provider at `data.source.provider`
+  // (e.g. 'apple'), not a top-level `provider` key — so also reach into
+  // `inner.source.provider`.
+  const innerSource = inner.source && typeof inner.source === 'object' ? inner.source : {}
   return {
-    provider: pick(p.provider, p.provider_name, inner.provider, inner.provider_name),
+    provider: pick(p.provider, p.provider_name, inner.provider, inner.provider_name, innerSource.provider, innerSource.provider_name),
     userId: pick(p.user_id, p.userId, inner.user_id, inner.userId),
     workoutId: pick(p.workout_id, p.workoutId, inner.workout_id, inner.workoutId, inner.id),
   }
@@ -203,7 +207,11 @@ export async function POST(request) {
     return NextResponse.json({ success: true, ignored: eventType || 'unknown' })
   }
 
-  const { provider, userId, workoutId } = extractWorkoutRef(message?.payload)
+  // Svix Cloud delivers the message PAYLOAD as the raw request body
+  // (`{ data, type }`), NOT wrapped under a top-level `payload` key. Older
+  // self-hosted Svix wrapped it. Accept both: prefer `payload` if present,
+  // else treat the whole message as the payload.
+  const { provider, userId, workoutId } = extractWorkoutRef(message?.payload || message)
   if (!userId || !workoutId) {
     console.warn('[ow-webhook] workout event missing user_id/workout_id — skipping')
     return NextResponse.json({ success: true, skipped: 'incomplete_payload' })
