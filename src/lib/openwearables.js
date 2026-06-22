@@ -270,6 +270,38 @@ export function createOpenWearablesClient() {
     },
 
     /**
+     * Fetches arbitrary timeseries samples for a user over [startIso,
+     * endIso] for a given set of metric types. Transparently follows cursor
+     * pagination and returns the flat array of all TimeSeriesSample rows.
+     * Unlike getHeartRateTimeseries (which always requests type=heart_rate),
+     * this method passes the caller-supplied types array as repeated `types`
+     * query params so the caller can pull resting_heart_rate, hrv, vo2_max
+     * (etc.) in one paginated sweep.
+     */
+    async getTimeseries({ userId, types, startIso, endIso } = {}) {
+      if (!userId || !Array.isArray(types) || types.length === 0 || !startIso || !endIso) {
+        throw new Error('getTimeseries requires userId, non-empty types[], startIso, endIso')
+      }
+      const HARD_PAGE_LIMIT = 1000
+      const samples = []
+      let cursor
+      let more = true
+      let pages = 0
+      while (more && pages < HARD_PAGE_LIMIT) {
+        const res = await request(`/api/v1/users/${encodeURIComponent(userId)}/timeseries`, {
+          query: { start_time: startIso, end_time: endIso, types, cursor },
+        })
+        const page = Array.isArray(res?.data) ? res.data : []
+        samples.push(...page)
+        pages += 1
+        const pagination = res?.pagination || {}
+        cursor = pagination.next_cursor
+        more = Boolean(pagination.has_more && cursor)
+      }
+      return samples
+    },
+
+    /**
      * Registers (idempotently, from the caller's perspective) a webhook
      * endpoint so OW will POST events to our callback URL. `eventTypes`
      * filters which events fire (omit / empty = all). Returns the
