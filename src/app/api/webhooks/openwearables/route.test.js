@@ -60,36 +60,25 @@ function makeRequest({ body, svixId = 'msg_1', svixTimestamp, signature } = {}) 
   }
 }
 
-const WORKOUT_BODY = JSON.stringify({
-  id: 'msg_1',
-  eventType: 'workout.created',
-  eventId: 'evt_1',
-  timestamp: '2026-06-20T10:30:00Z',
-  payload: { provider: 'apple', user_id: 'ow-user-42', workout_id: 'wk-123' },
-})
-
-// The shape Svix Cloud ACTUALLY delivers: the message payload AS the raw
-// body — `{ type, data: {...} }`, no `payload` wrapper, provider nested at
-// data.source.provider. This is the real production shape that the
-// payload-fix handles.
-const FLAT_WORKOUT_BODY = JSON.stringify({
-  type: 'workout.created',
-  data: {
-    id: 'wk-123',
-    user_id: 'ow-user-42',
-    source: { provider: 'apple', name: 'Apple Watch' },
-  },
-})
-
+// The full Apple workout, exactly as it arrives IN the webhook payload's
+// `data`. OW is PUSH-ONLY for Apple (no workout-detail API — the fetch-back
+// raises NotImplementedError), so the handler maps this directly and never
+// calls getWorkout for apple_health.
 const WORKOUT = {
   id: 'wk-123',
+  user_id: 'ow-user-42',
   type: 'functional_strength_training',
   start_time: '2026-06-20T10:00:00Z',
   end_time: '2026-06-20T10:45:00Z',
   avg_heart_rate_bpm: 140,
   max_heart_rate_bpm: 175,
-  source: { name: 'Apple Watch' },
+  calories_kcal: 320,
+  source: { provider: 'apple', device: 'Apple Watch' },
 }
+
+// Svix Cloud delivers the message payload AS the raw body: `{ type, data }`
+// (no `payload` wrapper; provider nested at data.source.provider).
+const WORKOUT_BODY = JSON.stringify({ type: 'workout.created', data: WORKOUT })
 
 // In-memory Supabase mock. Per-table queued responses + records inserts.
 function makeDb({ connection, contact, location, existingWorkout, richer } = {}) {
@@ -133,13 +122,20 @@ function makeDb({ connection, contact, location, existingWorkout, richer } = {})
   return { from, _inserts: inserts }
 }
 
+let getWorkoutSpy
+let getHrSpy
 beforeEach(() => {
   vi.clearAllMocks()
   process.env.OPENWEARABLES_WEBHOOK_SECRET = SECRET
   resolveCurrentOccurrence.mockResolvedValue(null)
+  // getWorkout should NEVER be called for apple_health (push-only) — it's
+  // here only for the pull-provider path. getHeartRateTimeseries IS tried
+  // for apple (tolerantly), defaulting to no samples.
+  getWorkoutSpy = vi.fn(async () => WORKOUT)
+  getHrSpy = vi.fn(async () => [])
   createOpenWearablesClient.mockReturnValue({
-    getWorkout: vi.fn(async () => WORKOUT),
-    getHeartRateTimeseries: vi.fn(async () => []),
+    getWorkout: getWorkoutSpy,
+    getHeartRateTimeseries: getHrSpy,
   })
 })
 
@@ -317,16 +313,26 @@ describe('POST /api/webhooks/openwearables', () => {
     expect(row.location_id).toBe('loc-1')
     expect(row.max_hr_used).toBe(185)
     expect(row.raw_metadata.ow_workout_id).toBe('wk-123')
+    // Apple maps the payload directly — getWorkout is NEVER called (the OW
+    // detail endpoint raises NotImplementedError for apple); the timeseries
+    // IS tried (tolerantly).
+    expect(getWorkoutSpy).not.toHaveBeenCalled()
+    expect(getHrSpy).toHaveBeenCalled()
+    // No HR samples → no-HR path → avg/peak come from the payload aggregates.
+    expect(row.avg_hr_bpm).toBe(140)
+    expect(row.peak_hr_bpm).toBe(175)
     // No live class arranged → not class-linked.
     expect(json.classLinked).toBe(false)
     expect(finalizeSessionRewards).toHaveBeenCalledWith(db, 'sess-new', expect.objectContaining({ nowMs: expect.any(Number) }))
   })
 
-  it('flat Svix Cloud body (no payload wrapper) → resolves ids + inserts', async () => {
-    // Regression for the real production delivery shape: Svix Cloud sends
-    // `{ type, data: {...} }` directly as the body. Before the payload-fix
-    // the handler read message.payload (undefined) → skipped as
-    // incomplete_payload with no insert. It must now insert.
+  it('apple is push-only — maps the payload even when getWorkout would 500 (NotImplemented)', async () => {
+    // The whole bug: IB5 used to call getWorkout for apple, which OW answers
+    // with NotImplementedError ("Apple Health does not support API-based
+    // workout detail fetching") → ow_fetch_failed, no session. The handler
+    // must NOT call getWorkout for apple at all — prove it by making the spy
+    // throw and asserting a session still lands.
+    getWorkoutSpy.mockRejectedValue(new Error('NotImplementedError: Apple Health does not support API-based workout detail fetching'))
     const db = makeDb({
       connection: { id: 'conn-1', contact_id: 'c-1' },
       contact: { id: 'c-1', location_id: 'loc-1', max_hr_override: null, dob: null },
@@ -334,14 +340,32 @@ describe('POST /api/webhooks/openwearables', () => {
       existingWorkout: null,
     })
     createServerClient.mockReturnValue(db)
-    const res = await POST(makeRequest({ body: FLAT_WORKOUT_BODY }))
+    const res = await POST(makeRequest({ body: WORKOUT_BODY }))
     const json = await res.json()
     expect(res.status).toBe(200)
     expect(json.skipped).toBeUndefined()
     expect(json.inserted).toBe('sess-new')
-    expect(db._inserts).toHaveLength(1)
+    expect(getWorkoutSpy).not.toHaveBeenCalled()
     expect(db._inserts[0].payload.source).toBe('apple_health')
-    expect(finalizeSessionRewards).toHaveBeenCalled()
+  })
+
+  it('apple HR-timeseries failure is tolerated → still inserts via aggregates', async () => {
+    // The timeseries endpoint may also be unavailable for apple; that must
+    // NOT fail the session — fall back to the workout's avg/max aggregates.
+    getHrSpy.mockRejectedValue(new Error('NotImplementedError'))
+    const db = makeDb({
+      connection: { id: 'conn-1', contact_id: 'c-1' },
+      contact: { id: 'c-1', location_id: 'loc-1', max_hr_override: null, dob: null },
+      location: { id: 'loc-1', settings: {} },
+      existingWorkout: null,
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(makeRequest({ body: WORKOUT_BODY }))
+    const json = await res.json()
+    expect(res.status).toBe(200)
+    expect(json.inserted).toBe('sess-new')
+    expect(db._inserts[0].payload.avg_hr_bpm).toBe(140)
+    expect(db._inserts[0].payload.peak_hr_bpm).toBe(175)
   })
 
   it('class-correlated fresh workout → stamps glofox_event_id + booked link', async () => {
@@ -384,10 +408,14 @@ describe('POST /api/webhooks/openwearables', () => {
     expect(finalizeSessionRewards).not.toHaveBeenCalled()
   })
 
-  it('OW fetch failure → 200, no insert (Svix retries)', async () => {
-    createOpenWearablesClient.mockReturnValue({
-      getWorkout: vi.fn(async () => { throw new Error('OW down') }),
-      getHeartRateTimeseries: vi.fn(),
+  it('pull-provider (fitbit) OW fetch failure → 200, no insert (Svix retries)', async () => {
+    // Pull-based providers DO fetch the detail from OW; a fetch failure is a
+    // transient skip so Svix retries. (Apple never reaches this path — it's
+    // push-only and maps the payload directly.)
+    getWorkoutSpy.mockRejectedValue(new Error('OW down'))
+    const fitbitBody = JSON.stringify({
+      type: 'workout.created',
+      data: { id: 'wk-fit', user_id: 'ow-user-9', source: { provider: 'fitbit' } },
     })
     const db = makeDb({
       connection: { id: 'conn-1', contact_id: 'c-1' },
@@ -395,10 +423,11 @@ describe('POST /api/webhooks/openwearables', () => {
       location: { id: 'loc-1', settings: {} },
     })
     createServerClient.mockReturnValue(db)
-    const res = await POST(makeRequest({ body: WORKOUT_BODY }))
+    const res = await POST(makeRequest({ body: fitbitBody }))
     const json = await res.json()
     expect(res.status).toBe(200)
     expect(json.skipped).toBe('ow_fetch_failed')
+    expect(getWorkoutSpy).toHaveBeenCalled()
     expect(db._inserts).toHaveLength(0)
   })
 })
