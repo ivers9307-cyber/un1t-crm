@@ -68,6 +68,19 @@ const WORKOUT_BODY = JSON.stringify({
   payload: { provider: 'apple', user_id: 'ow-user-42', workout_id: 'wk-123' },
 })
 
+// The shape Svix Cloud ACTUALLY delivers: the message payload AS the raw
+// body — `{ type, data: {...} }`, no `payload` wrapper, provider nested at
+// data.source.provider. This is the real production shape that the
+// payload-fix handles.
+const FLAT_WORKOUT_BODY = JSON.stringify({
+  type: 'workout.created',
+  data: {
+    id: 'wk-123',
+    user_id: 'ow-user-42',
+    source: { provider: 'apple', name: 'Apple Watch' },
+  },
+})
+
 const WORKOUT = {
   id: 'wk-123',
   type: 'functional_strength_training',
@@ -218,6 +231,16 @@ describe('extractWorkoutRef', () => {
     expect(extractWorkoutRef({ workout: { provider: 'apple', userId: 'u2', id: 'w2' } }))
       .toEqual({ provider: 'apple', userId: 'u2', workoutId: 'w2' })
   })
+  it('pulls ids from a flat Svix Cloud body (data + source.provider)', () => {
+    // Svix Cloud delivers the payload AS the body: { type, data: {...} },
+    // provider nested at data.source.provider — no top-level provider, no
+    // `payload` wrapper. The handler passes the whole message in (its
+    // `payload` key is undefined), so all three ids must resolve here.
+    expect(extractWorkoutRef({
+      type: 'workout.created',
+      data: { id: 'w3', user_id: 'u3', source: { provider: 'apple', name: 'Apple Watch' } },
+    })).toEqual({ provider: 'apple', userId: 'u3', workoutId: 'w3' })
+  })
   it('returns nulls when ids are absent', () => {
     expect(extractWorkoutRef({})).toEqual({ provider: null, userId: null, workoutId: null })
     expect(extractWorkoutRef(null)).toEqual({ provider: null, userId: null, workoutId: null })
@@ -297,6 +320,28 @@ describe('POST /api/webhooks/openwearables', () => {
     // No live class arranged → not class-linked.
     expect(json.classLinked).toBe(false)
     expect(finalizeSessionRewards).toHaveBeenCalledWith(db, 'sess-new', expect.objectContaining({ nowMs: expect.any(Number) }))
+  })
+
+  it('flat Svix Cloud body (no payload wrapper) → resolves ids + inserts', async () => {
+    // Regression for the real production delivery shape: Svix Cloud sends
+    // `{ type, data: {...} }` directly as the body. Before the payload-fix
+    // the handler read message.payload (undefined) → skipped as
+    // incomplete_payload with no insert. It must now insert.
+    const db = makeDb({
+      connection: { id: 'conn-1', contact_id: 'c-1' },
+      contact: { id: 'c-1', location_id: 'loc-1', max_hr_override: null, dob: null },
+      location: { id: 'loc-1', settings: {} },
+      existingWorkout: null,
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(makeRequest({ body: FLAT_WORKOUT_BODY }))
+    const json = await res.json()
+    expect(res.status).toBe(200)
+    expect(json.skipped).toBeUndefined()
+    expect(json.inserted).toBe('sess-new')
+    expect(db._inserts).toHaveLength(1)
+    expect(db._inserts[0].payload.source).toBe('apple_health')
+    expect(finalizeSessionRewards).toHaveBeenCalled()
   })
 
   it('class-correlated fresh workout → stamps glofox_event_id + booked link', async () => {
