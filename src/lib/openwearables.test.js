@@ -378,6 +378,46 @@ describe('openwearables client', () => {
   })
 
   // -------------------------------------------------------------------------
+  // getTimeseries
+  // -------------------------------------------------------------------------
+
+  describe('getTimeseries', () => {
+    it('pages and returns typed samples', async () => {
+      const pages = [
+        { data: [{ type: 'resting_heart_rate', timestamp: '2026-06-20T00:00:00Z', value: 52, unit: 'count/min' }], pagination: { has_more: true, next_cursor: 'c1' } },
+        { data: [{ type: 'vo2_max', timestamp: '2026-06-21T00:00:00Z', value: 48.2, unit: 'mL/min·kg' }], pagination: { has_more: false } },
+      ]
+      global.fetch = vi.fn(async () => ({ ok: true, status: 200, text: async () => JSON.stringify(pages.shift()) }))
+      const client = createOpenWearablesClient()
+      const out = await client.getTimeseries({ userId: 'u1', types: ['resting_heart_rate', 'vo2_max'], startIso: '2026-06-01T00:00:00Z', endIso: '2026-06-30T00:00:00Z' })
+      expect(out).toHaveLength(2)
+      expect(out[0].type).toBe('resting_heart_rate')
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+    })
+
+    it('validates args — throws when types is empty array', async () => {
+      const client = createOpenWearablesClient()
+      await expect(client.getTimeseries({ userId: 'u1', types: [], startIso: 'a', endIso: 'b' })).rejects.toThrow()
+    })
+
+    it('validates args — throws when userId is missing', async () => {
+      const client = createOpenWearablesClient()
+      await expect(client.getTimeseries({ types: ['resting_heart_rate'], startIso: 'a', endIso: 'b' })).rejects.toThrow()
+    })
+
+    it('sends types as repeated query params', async () => {
+      global.fetch.mockResolvedValueOnce(jsonResponse({ data: [], pagination: { has_more: false } }))
+      const client = createOpenWearablesClient()
+      await client.getTimeseries({ userId: 'u1', types: ['resting_heart_rate', 'vo2_max'], startIso: '2026-06-01T00:00:00Z', endIso: '2026-06-30T00:00:00Z' })
+      const { url } = fetchCall()
+      const parsed = new URL(url)
+      expect(parsed.searchParams.getAll('types')).toEqual(['resting_heart_rate', 'vo2_max'])
+      expect(parsed.searchParams.get('start_time')).toBe('2026-06-01T00:00:00Z')
+      expect(parsed.searchParams.get('end_time')).toBe('2026-06-30T00:00:00Z')
+    })
+  })
+
+  // -------------------------------------------------------------------------
   // Error handling
   // -------------------------------------------------------------------------
 
