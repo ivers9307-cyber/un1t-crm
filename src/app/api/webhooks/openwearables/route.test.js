@@ -437,4 +437,24 @@ describe('POST /api/webhooks/openwearables', () => {
     expect(getWorkoutSpy).toHaveBeenCalled()
     expect(db._inserts).toHaveLength(0)
   })
+
+  it('strava event → upserts strava_activities, NEVER a session/points/class-link', async () => {
+    const stravaUpsert = vi.fn(() => Promise.resolve({ error: null }))
+    const db = makeDb({
+      connection: { id: 'conn-s', contact_id: 'c-1' },
+      contact: { id: 'c-1', location_id: 'loc-1', max_hr_override: null, dob: null },
+      location: { id: 'loc-1', settings: {} },
+    })
+    const origFrom = db.from
+    db.from = (table) => (table === 'strava_activities' ? { upsert: stravaUpsert } : origFrom(table))
+    createServerClient.mockReturnValue(db)
+    const body = JSON.stringify({ type: 'workout.created', data: { id: 'str-1', type: 'ride', user_id: 'ow-u', start_time: '2026-06-21T06:00:00Z', source: { provider: 'strava' } } })
+    const res = await POST(makeRequest({ body }))
+    const json = await res.json()
+    expect(res.status).toBe(200)
+    expect(json.strava).toBe('str-1')
+    expect(stravaUpsert).toHaveBeenCalledTimes(1)
+    expect(db._inserts).toHaveLength(0)                     // NO heart_rate_sessions insert
+    expect(finalizeSessionRewards).not.toHaveBeenCalled()  // NO points
+  })
 })
