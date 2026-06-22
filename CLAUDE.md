@@ -392,6 +392,13 @@ TWILIO_FROM=CCFautos             # alphanumeric ID (Ireland) OR E.164 number OR 
 DEPOSIT_BASE_URL=https://pay.ccfautos.com           # used server-side when generating deposit links
 NEXT_PUBLIC_DEPOSIT_BASE_URL=https://pay.ccfautos.com  # client-side mirror for operator preview links
 PAY_HOSTNAME=pay.ccfautos.com    # middleware uses this to gate which paths are public on the pay host
+
+# Open Wearables (Apple Watch ingestion, WEARABLE-INGEST) — see src/lib/openwearables.js
+OPENWEARABLES_BASE_URL=http://localhost:8000   # self-hosted OW server base URL
+OPENWEARABLES_API_KEY=           # developer API key (sent as X-Open-Wearables-API-Key + Bearer)
+OPENWEARABLES_APP_ID=            # from an OW application (POST /api/v1/applications) — per-user token minting
+OPENWEARABLES_APP_SECRET=        # app secret paired with OPENWEARABLES_APP_ID
+OPENWEARABLES_WEBHOOK_SECRET=    # Svix endpoint signing secret (whsec_...) for /api/webhooks/openwearables; route 401s if unset
 ```
 
 ## Xero integration
