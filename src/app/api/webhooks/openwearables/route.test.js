@@ -73,6 +73,8 @@ const WORKOUT = {
   avg_heart_rate_bpm: 140,
   max_heart_rate_bpm: 175,
   calories_kcal: 320,
+  distance_meters: 1200,
+  avg_pace_sec_per_km: 300,
   source: { provider: 'apple', device: 'Apple Watch' },
 }
 
@@ -313,6 +315,11 @@ describe('POST /api/webhooks/openwearables', () => {
     expect(row.location_id).toBe('loc-1')
     expect(row.max_hr_used).toBe(185)
     expect(row.raw_metadata.ow_workout_id).toBe('wk-123')
+    // Workout detail (mig 306) mapped straight from the payload.
+    expect(row.workout_type).toBe('functional_strength_training')
+    expect(row.calories_kcal).toBe(320)
+    expect(row.distance_meters).toBe(1200)
+    expect(row.avg_pace_sec_per_km).toBe(300)
     // Apple maps the payload directly — getWorkout is NEVER called (the OW
     // detail endpoint raises NotImplementedError for apple); the timeseries
     // IS tried (tolerantly).

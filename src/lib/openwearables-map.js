@@ -69,6 +69,8 @@ export function mapAppleWorkoutToSession({
   const w = workout || {}
   const s = scoring || {}
 
+  const num = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v))
+
   // Fields that hold regardless of whether we have HR samples.
   const base = {
     source: 'apple_health',
@@ -84,6 +86,10 @@ export function mapAppleWorkoutToSession({
       ow_provider: provider,
       ow_type: w.type ?? null,
     },
+    workout_type: w.type ?? null,
+    calories_kcal: num(w.calories_kcal),
+    distance_meters: num(w.distance_meters),
+    avg_pace_sec_per_km: num(w.avg_pace_sec_per_km),
   }
 
   // Convert OW samples → the shape summariseSession expects, dropping rows
