@@ -151,6 +151,10 @@
     {
       "path": "/api/cron/notify-winback",
       "schedule": "0 10 * * *"
+    },
+    {
+      "path": "/api/cron/sync-wearable-trends",
+      "schedule": "0 5 * * *"
     }
   ]
 }
