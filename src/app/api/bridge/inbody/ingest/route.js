@@ -18,36 +18,12 @@ import { NextResponse } from 'next/server'
 import { verifyBridgeToken } from '@/lib/bridge-auth'
 import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
-import { parseFullInBodyData } from '@/lib/inbody-scan'
-import { inbodyDatetimeToIso } from '@/lib/inbody-webhook'
-import { normalisePhone9 } from '@/lib/person-links'
+import { ingestScan } from '@/lib/inbody-ingest'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const SOURCE = 'lookinbody'
 const MAX_RESULTS = 50
-
-// Resolve the single contact whose phone matches `telHp` (last-9-digit), or
-// null if there's no unambiguous match. Pre-filters with an ilike on the digit
-// tail (the established phone-search pattern), then confirms with the
-// format-agnostic normalisePhone9 and requires exactly one distinct contact.
-async function matchContactId(db, telHp) {
-  const tail = normalisePhone9(telHp)
-  if (!tail) return null
-  const { data, error } = await db
-    .from('contacts')
-    .select('id, phone, wa_phone')
-    .or(`phone.ilike.%${tail}%,wa_phone.ilike.%${tail}%`)
-    .limit(20)
-  if (error || !data) return null
-  const ids = new Set(
-    data
-      .filter((c) => normalisePhone9(c.phone) === tail || normalisePhone9(c.wa_phone) === tail)
-      .map((c) => c.id),
-  )
-  return ids.size === 1 ? [...ids][0] : null
-}
 
 export async function POST(request) {
   const bridge = await verifyBridgeToken(request)
@@ -74,28 +50,17 @@ export async function POST(request) {
         .maybeSingle()
       if (!event || event.processed) continue
 
-      const scannedAt = inbodyDatetimeToIso(event.test_datetime)
-      if (!scannedAt || !event.tel_hp) continue // can't form a valid, idempotent scan
-
-      const externalId = `${event.tel_hp}_${event.test_datetime}`
-      const measurements = parseFullInBodyData(item.raw)
-      const contactId = await matchContactId(db, event.tel_hp)
-
-      const { error: upsertErr } = await db
-        .from('inbody_scans')
-        .upsert({
-          source: SOURCE,
-          external_id: externalId,
-          location_id: bridge.locationId,
-          contact_id: contactId,
-          matched_phone: event.tel_hp,
-          scanned_at: scannedAt,
-          ...measurements,
-          raw: item.raw ?? null,
-        }, { onConflict: 'source,external_id' })
-      if (upsertErr) {
-        logWarn('bridge-inbody-ingest', 'scan upsert failed', { err: upsertErr, eventId })
-        continue
+      const result = await ingestScan(db, {
+        telHp: event.tel_hp,
+        testDatetime: event.test_datetime,
+        raw: item.raw,
+        locationId: bridge.locationId,
+      })
+      if (!result.ok) {
+        if (result.reason === 'upsert_failed') {
+          logWarn('bridge-inbody-ingest', 'scan upsert failed', { err: result.error, eventId })
+        }
+        continue // bad_input / upsert_failed → leave unprocessed for a later retry
       }
 
       await db
@@ -103,13 +68,13 @@ export async function POST(request) {
         .update({
           processed: true,
           processed_at: new Date().toISOString(),
-          matched_contact_id: contactId,
+          matched_contact_id: result.contactId,
           location_id: bridge.locationId,
         })
         .eq('id', eventId)
 
       processed += 1
-      if (contactId) linked += 1
+      if (result.linked) linked += 1
     } catch (err) {
       logWarn('bridge-inbody-ingest', 'item failed', { err: err?.message || err, eventId })
     }

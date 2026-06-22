@@ -263,7 +263,7 @@ export default async function ContactDetailPage(props) {
           currentUserId={user.id}
         />
         <ProgressPhotos contactId={contact.id} photos={signedPhotos} />
-        <InBodyProgress scans={inbodyScans} />
+        <InBodyProgress scans={inbodyScans} contactId={contact.id} />
       </div>
     )
   }
