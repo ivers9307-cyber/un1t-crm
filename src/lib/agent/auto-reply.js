@@ -31,8 +31,10 @@ import {
   resolveAgentEffort,
   AGENT_MESSAGE_SOURCE,
   DEFAULT_HOLDING_MESSAGE,
-  autoVerifyContactId,
+  resolveAutoVerify,
+  resolveActingContactId,
 } from './core'
+import { personGroupResolver } from '@/lib/person-links'
 import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account-tools'
 import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
 import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
@@ -218,26 +220,45 @@ async function runChannelAgentInner(db, adapter, ctx) {
       return { handled: true, action: 'handoff', reason: 'rate_limited' }
     }
 
-    // AGENT-AUTH.1 — WhatsApp senders are pre-verified by their phone
-    // number when it maps to exactly ONE contact at this location and the
-    // thread is linked to that contact. The match is recomputed every
-    // turn from live data (no TTL concerns); the conversation stamp keeps
-    // draft-approval and audit paths consistent with question-based
-    // verification. Instagram has no phone — its adapter doesn't set
-    // trustsSenderIdentity, so the question flow stands there.
+    // AGENT-AUTH.1 + .2 — identity resolution. On a trusted channel (WhatsApp)
+    // the SIM-bound sender number pre-verifies the contact. AGENT-AUTH.2 makes
+    // that LINK-AWARE: a number on several contacts that are all ONE linked
+    // Person (incl. the thread's) verifies and resolves to the group PRIMARY
+    // rather than bailing to the email+surname quiz. A number genuinely shared
+    // by two different people stays ambiguous → quiz. Instagram has no phone,
+    // so its adapter doesn't set trustsSenderIdentity and the question flow
+    // stands there — but a still-fresh prior verification is honoured on both
+    // channels and ALWAYS resolves to the person's primary account (below).
     let preverifiedContactId = null
+    let phoneMatches = null
     if (adapter.trustsSenderIdentity && conv?.contact_id && recipient) {
       const bare = String(recipient).replace(/^\+/, '')
       const { data: matches } = await db.from('contacts')
         .select('id')
         .eq('location_id', locationId)
         .or(`wa_phone.eq.${bare},wa_phone.eq.+${bare},phone.eq.${bare},phone.eq.+${bare}`)
-        .limit(2)
-      preverifiedContactId = autoVerifyContactId({
+        .limit(20)
+      phoneMatches = matches || []
+    }
+
+    // Resolve person-group membership + primary for every contact id in play
+    // (thread contact, phone matches, any stored verification) in one batch, so
+    // linked duplicates collapse to a single identity + the canonical primary.
+    const { groupOf, primaryOf } = await personGroupResolver(db, [
+      conv?.contact_id,
+      conv?.agent_verified_contact_id,
+      ...(phoneMatches || []).map((m) => m.id),
+    ])
+
+    if (adapter.trustsSenderIdentity && conv?.contact_id && phoneMatches) {
+      const verdict = resolveAutoVerify({
         trusted: true,
         conversationContactId: conv.contact_id,
-        matches,
+        matches: phoneMatches,
+        groupOf,
+        primaryOf,
       })
+      preverifiedContactId = verdict?.actingContactId || null
       if (preverifiedContactId && conv.agent_verified_contact_id !== preverifiedContactId) {
         await db.from(adapter.conversationsTable).update({
           agent_verified_contact_id: preverifiedContactId,
@@ -274,7 +295,11 @@ async function runChannelAgentInner(db, adapter, ctx) {
       extraRules: settings?.extra_rules || null,
       knowledge: knowledge || [],
       today: new Date().toISOString().slice(0, 10),
-      identityPreverified: !!preverifiedContactId,
+      // Tell the model "already verified — don't re-ask" for a phone match OR a
+      // still-fresh prior (quiz) verification, so a returning member isn't
+      // re-quizzed inside the 30-day window. (Tools already honour the stored
+      // verification via toolCtx; this closes the prompt-side gap.)
+      identityPreverified: !!preverifiedContactId || isVerificationFresh(conv?.agent_verified_at),
     })
 
     // EFFORT.1 — operator-tunable reasoning effort (defaults to `medium`, one
@@ -297,7 +322,9 @@ async function runChannelAgentInner(db, adapter, ctx) {
       // Only honour a prior verification if it's still fresh — a stale one
       // (handle changed hands) forces the customer to re-verify.
       verifiedContactId: preverifiedContactId
-        || (isVerificationFresh(conv?.agent_verified_at) ? (conv?.agent_verified_contact_id || null) : null),
+        || (isVerificationFresh(conv?.agent_verified_at)
+          ? resolveActingContactId({ contactId: conv?.agent_verified_contact_id, groupOf, primaryOf })
+          : null),
       locationId,
       channel: adapter.name,
       nameHint: (nameCol && conv?.[nameCol]) || null,
@@ -351,7 +378,13 @@ async function runChannelAgentInner(db, adapter, ctx) {
                 .select('agent_verified_contact_id')
                 .eq('id', conversationId)
                 .single()
-              toolCtx.verifiedContactId = fresh?.agent_verified_contact_id || toolCtx.verifiedContactId
+              const rawVerified = fresh?.agent_verified_contact_id || toolCtx.verifiedContactId
+              // AGENT-AUTH.2 — act on the person's PRIMARY account, not whichever
+              // duplicate the email+surname quiz happened to match.
+              const r = await personGroupResolver(db, [rawVerified])
+              toolCtx.verifiedContactId = resolveActingContactId({
+                contactId: rawVerified, groupOf: r.groupOf, primaryOf: r.primaryOf,
+              }) || rawVerified
             }
             toolResults.push({
               type: 'tool_result',
