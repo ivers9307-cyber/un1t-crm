@@ -198,6 +198,32 @@ describe('mapAppleWorkoutToSession — garbage sample filtering', () => {
   })
 })
 
+// ── (6) workout detail fields (type / calories / distance / pace) ──
+
+describe('mapAppleWorkoutToSession — workout detail', () => {
+  it('maps workout detail (type/calories/distance/pace) from the payload', () => {
+    const row = mapAppleWorkoutToSession({
+      workout: {
+        id: 'w1', type: 'running', start_time: '2026-06-20T10:00:00Z', end_time: '2026-06-20T10:30:00Z',
+        calories_kcal: 320, distance_meters: 5200, avg_pace_sec_per_km: 346,
+      },
+      hrSamples: [], maxHr: 190, scoring: { participationPoints: 50 },
+    })
+    expect(row.workout_type).toBe('running')
+    expect(row.calories_kcal).toBe(320)
+    expect(row.distance_meters).toBe(5200)
+    expect(row.avg_pace_sec_per_km).toBe(346)
+  })
+
+  it('leaves workout detail null when absent', () => {
+    const row = mapAppleWorkoutToSession({ workout: { id: 'w2' }, hrSamples: [], maxHr: 190, scoring: {} })
+    expect(row.workout_type).toBeNull()
+    expect(row.calories_kcal).toBeNull()
+    expect(row.distance_meters).toBeNull()
+    expect(row.avg_pace_sec_per_km).toBeNull()
+  })
+})
+
 // ── defensive: never throws on a sparse / empty call ─────────────
 
 describe('mapAppleWorkoutToSession — defensive', () => {
