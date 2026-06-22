@@ -60,12 +60,19 @@ export async function POST(request) {
     return NextResponse.json({ ok: true, found: 0, ingested: 0 })
   }
 
+  // The Pi reports the usertoken it actually matched on (InBody stores the
+  // local format e.g. 0871234567, not the CRM's +353… E.164). Use it as the
+  // scan's phone/external_id so a backfilled scan dedupes against the same
+  // scan arriving later via the webhook (which carries InBody's TelHP too).
+  // Fall back to the CRM phone if the Pi didn't send one.
+  const telHp = (typeof body.usertoken === 'string' && body.usertoken) || req.phone
+
   const scans = Array.isArray(body.scans) ? body.scans.slice(0, MAX_SCANS) : []
   let ingested = 0
   for (const s of scans) {
     try {
       const result = await ingestScan(db, {
-        telHp: req.phone,
+        telHp,
         testDatetime: s?.datetimes,
         raw: s?.raw,
         locationId: bridge.locationId,
