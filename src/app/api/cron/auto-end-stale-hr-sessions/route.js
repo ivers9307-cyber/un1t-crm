@@ -79,17 +79,22 @@ export async function GET(request) {
   // ended_at = not null AND email_sent_at = null. That includes the
   // ones we just closed AND any that were closed via /end-class
   // where the inline trigger failed.
-  // Exclude source='participation' (attendance credits): they have no HR
-  // data, so the post-class email always skips them WITHOUT stamping
-  // email_sent_at — which would leave them matching this sweep forever and
-  // re-fire the "session ready" push every tick. They're already finalised
-  // + pushed once by credit-attendance's finalizeSessionRewards.
+  // Exclude source IN ('participation','apple_health') — sessions that are
+  // finalised once, out-of-band, and never stamp email_sent_at:
+  //   - participation (attendance credits): no HR data, the post-class email
+  //     always skips them.
+  //   - apple_health (off-site wearable imports): finalised once by the webhook
+  //     (IB5); non-class imports never email (finalizeSessionRewards gates the
+  //     email to class sessions), so they never stamp email_sent_at.
+  // Without this exclusion either kind would match this sweep forever and
+  // re-fire the "session ready" push every 5-min tick. Both are already
+  // finalised + pushed once by their own finalizeSessionRewards call.
   const { data: pendingEmails } = await db
     .from('heart_rate_sessions')
     .select('id, contact_id, effort_points, class_name')
     .not('ended_at', 'is', null)
     .is('email_sent_at', null)
-    .neq('source', 'participation')
+    .not('source', 'in', '("participation","apple_health")')
     .order('ended_at', { ascending: true })
     .limit(50)
 

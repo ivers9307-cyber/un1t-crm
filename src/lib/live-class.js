@@ -327,8 +327,16 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
  * underlying session finalisation is authoritative regardless of reward
  * outcomes. Returns early (no side-effects) for a session with no contact_id:
  * anonymous walk-ins have no member to email, attach achievements to, or
- * export for. Participation sessions (attendance credits, no HR samples) skip
- * the external-export step — there's nothing to push to an external provider.
+ * export for.
+ *
+ * Source-tailored cascade (points/achievements/goals/tiers ALWAYS apply — the
+ * workout earned them regardless of how it was captured):
+ *   - Post-class email: class sessions only — ble_bridge OR any session with a
+ *     glofox_event_id (class-correlated import). An off-site apple_health import
+ *     with no class link skips it (there's no class to report on).
+ *   - External export (Strava etc.): ble_bridge ONLY — our own bridge-captured
+ *     live sessions. Participation credits have nothing to push; apple_health
+ *     imports came FROM an external provider so re-export would be a duplicate.
  *
  * @param {SupabaseClient} db
  * @param {string} sessionId
@@ -346,12 +354,25 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
 
   const effortPoints = Number(session.effort_points) || 0
 
-  // Best-effort post-class email. Doesn't propagate errors — the
-  // sender already swallows + logs everything internally. The
-  // session is finalised regardless of email outcome.
-  sendPostClassEmail(db, sessionId).catch((err) => {
-    logWarn('live-class', 'post-class email scheduling threw', { err, sessionId })
-  })
+  // Is this a class session (vs an off-site wearable import)?
+  // A real class session is either bridge-captured live OR class-correlated
+  // (glofox_event_id stamped — set by the Apple webhook (IB5) when an imported
+  // workout falls inside a class window). An off-site apple_health import with
+  // no class link is NOT a class — it must not get the "your class is ready"
+  // email or get re-exported. ble_bridge always counts as a class session.
+  const isClassSession =
+    session.source === 'ble_bridge' || !!session.glofox_event_id
+
+  // Best-effort post-class email — class sessions only. Doesn't propagate
+  // errors — the sender already swallows + logs everything internally. The
+  // session is finalised regardless of email outcome. Skipped for an off-site
+  // import (apple_health with no glofox_event_id): there's no class to email
+  // a "ready" report for.
+  if (isClassSession) {
+    sendPostClassEmail(db, sessionId).catch((err) => {
+      logWarn('live-class', 'post-class email scheduling threw', { err, sessionId })
+    })
+  }
 
   // Best-effort: achievement detection + ONE consolidated session push.
   // Leads with any achievement unlocked this session, else the session-
@@ -481,9 +502,14 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
 
   // Best-effort: queue external-system exports for this session.
   // The actual upload happens out-of-band via the cron worker.
-  // Participation sessions (attendance credits) have no HR samples to push to
-  // an external provider, so skip the enqueue for them.
-  if (session.source !== 'participation') {
+  // ONLY our own bridge-captured live sessions (source='ble_bridge') get
+  // exported. This subsumes the old `!== 'participation'` skip (attendance
+  // credits have no HR samples to push) AND stops re-exporting imported
+  // wearable data: an apple_health session came FROM an external provider, so
+  // pushing it back out to Strava would be a round-trip duplicate.
+  // NB: this is an allow-list of one — any future source that SHOULD export
+  // must be added here explicitly.
+  if (session.source === 'ble_bridge') {
     enqueueExportsForSession(db, {
       id: sessionId,
       contact_id: session.contact_id,

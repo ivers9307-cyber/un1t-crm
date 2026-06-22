@@ -587,4 +587,60 @@ describe('finalizeSessionRewards', () => {
     // ... but participation rows have no HR samples to push externally.
     expect(enqueueExportsForSession).not.toHaveBeenCalled()
   })
+
+  // ── IB3: import-tailored finalisation ────────────────────────────
+  // Imported Apple workouts (source='apple_health') reuse the reward cascade
+  // (points/achievements/goals/tiers all earned), but two steps are tailored:
+  // the post-class email is class-only, and external-export is bridge-only.
+
+  it('sends the post-class email for a ble_bridge session (unchanged live path)', async () => {
+    const db = dbForSession({
+      id: 'sess-bridge', contact_id: 'c-1', location_id: 'loc-1',
+      effort_points: 42, ended_at: '2026-06-20T06:00:00Z',
+      source: 'ble_bridge', glofox_event_id: 'ev-1', class_name: 'DR1VE',
+    })
+    await finalizeSessionRewards(db, 'sess-bridge')
+    expect(sendPostClassEmail).toHaveBeenCalledTimes(1)
+    // ble_bridge is our own captured live session — it also exports.
+    expect(enqueueExportsForSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends the post-class email for an apple_health import WITH a glofox_event_id', async () => {
+    // An imported workout that fell inside a class window (IB5 stamps the
+    // glofox_event_id) IS a class session → it gets the post-class email.
+    const db = dbForSession({
+      id: 'sess-apple-class', contact_id: 'c-1', location_id: 'loc-1',
+      effort_points: 38, ended_at: '2026-06-20T06:00:00Z',
+      source: 'apple_health', glofox_event_id: 'ev-1', class_name: 'DR1VE',
+    })
+    await finalizeSessionRewards(db, 'sess-apple-class')
+    expect(sendPostClassEmail).toHaveBeenCalledTimes(1)
+    // ...but imported wearable data is never re-exported, even when class-linked.
+    expect(enqueueExportsForSession).not.toHaveBeenCalled()
+  })
+
+  it('SKIPS the post-class email for an apple_health import WITHOUT a glofox_event_id', async () => {
+    // An off-site run with no class link is not a class — no "your class is
+    // ready" email, and no re-export to Strava.
+    const db = dbForSession({
+      id: 'sess-apple-offsite', contact_id: 'c-1', location_id: 'loc-1',
+      effort_points: 71, ended_at: '2026-06-20T06:00:00Z',
+      source: 'apple_health', glofox_event_id: null, class_name: null,
+    })
+    await finalizeSessionRewards(db, 'sess-apple-offsite')
+    expect(sendPostClassEmail).not.toHaveBeenCalled()
+    expect(enqueueExportsForSession).not.toHaveBeenCalled()
+    // ...but the points-earning cascade still ran (achievement detection fired).
+    expect(runDetectionForSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT enqueue the external export for an apple_health import (class-linked or not)', async () => {
+    const db = dbForSession({
+      id: 'sess-apple', contact_id: 'c-1', location_id: 'loc-1',
+      effort_points: 60, ended_at: '2026-06-20T06:00:00Z',
+      source: 'apple_health', glofox_event_id: 'ev-9', class_name: 'DR1VE',
+    })
+    await finalizeSessionRewards(db, 'sess-apple')
+    expect(enqueueExportsForSession).not.toHaveBeenCalled()
+  })
 })
