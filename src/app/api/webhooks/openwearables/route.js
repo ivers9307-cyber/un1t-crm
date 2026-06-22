@@ -10,12 +10,15 @@
 // Flow (the prior IB tasks tie together here):
 //   1. Verify the Svix signature (the security boundary — see below).
 //   2. Filter to workout.created; pull { provider, user_id, workout_id }
-//      from the thin payload (Svix sends ids, not full data).
+//      from the payload.
 //   3. Resolve the member via hr_provider_connections (provider +
 //      provider_user_id + status='active' → contact_id). Unknown /
 //      disconnected user → 200 (never error).
-//   4. Fetch the workout + HR series via the OW client (IB1) and map
-//      to the session field set (IB2).
+//   4. Get the workout detail + HR series and map to the session field
+//      set (IB2). Apple Health is PUSH-ONLY in OW (no detail API — the
+//      fetch-back raises NotImplementedError + the workout-list is empty),
+//      so the webhook payload IS the workout; pull-based providers
+//      (fitbit/whoop/garmin) fetch it via the OW client (IB1).
 //   5. Class-correlate against the schedule spine (class_occurrences).
 //   6. Dedupe: skip if this workout already landed (re-delivery guard),
 //      or if a richer strap session already owns the class slot.
@@ -38,9 +41,10 @@
 // in svix-signature. Reject if none match or the timestamp is > 5 min
 // old (replay window). Secret from OPENWEARABLES_WEBHOOK_SECRET.
 //
-// We trust two things off the wire: the signature, and the ids in the
-// payload. Everything else (workout detail, HR series) is fetched fresh
-// via the OW client — the thin Svix payload can omit or stale-cache it.
+// We trust the signature, then the payload. For Apple the payload carries
+// the full workout (OW can't serve it back); for pull-based providers the
+// payload's ids drive a fresh fetch of the detail + HR series via the OW
+// client.
 
 import crypto from 'node:crypto'
 import { NextResponse } from 'next/server'
@@ -258,30 +262,68 @@ export async function POST(request) {
     .eq('id', locationId)
     .maybeSingle()
 
-  // ── 4. Fetch + map ──────────────────────────────────────────────────
+  // ── 4. Resolve the workout detail + HR series ───────────────────────
+  // Apple Health is PUSH-ONLY in Open Wearables: there is NO API to fetch a
+  // workout's detail back — GET /providers/apple/users/{u}/workouts/{w}
+  // raises NotImplementedError server-side ("Apple Health does not support
+  // API-based workout detail fetching"), and the workout-LIST is always
+  // empty for Apple (push-through, not stored as queryable rows). So for
+  // Apple the Svix webhook payload IS the full Workout-Output — map it
+  // directly. Pull-based providers (fitbit/whoop/garmin) keep the
+  // fetch-back path.
   let workout
-  let hrSamples
-  try {
-    const client = createOpenWearablesClient()
-    workout = await client.getWorkout({ provider: provider || 'apple', userId, workoutId })
+  let hrSamples = []
+  if (connectionProvider === 'apple_health') {
+    // The payload carries the full Workout-Output. Svix Cloud delivers it as
+    // the body (`{ type, data:{...} }`); older self-hosted Svix wrapped it
+    // under `payload`. Mirror extractWorkoutRef's nesting tolerance.
+    const root = message?.payload && typeof message.payload === 'object' ? message.payload : message
+    workout = (root?.workout && typeof root.workout === 'object' ? root.workout : null)
+      || (root?.data && typeof root.data === 'object' ? root.data : null)
+      || null
     if (!workout) {
-      return NextResponse.json({ success: true, skipped: 'workout_not_found' })
+      console.warn('[ow-webhook] apple workout event missing payload data — skipping')
+      return NextResponse.json({ success: true, skipped: 'incomplete_payload' })
     }
-    if (workout.start_time && workout.end_time) {
-      hrSamples = await client.getHeartRateTimeseries({
-        userId,
-        startIso: workout.start_time,
-        endIso: workout.end_time,
-      })
-    } else {
+    // Per-sample HR isn't on the workout payload (Apple pushes it as separate
+    // series events). Try the stored-timeseries endpoint for richer zone
+    // math, but tolerate its absence — the mapper falls back to the workout's
+    // avg/max aggregates (the no-HR participation path).
+    try {
+      if (workout.start_time && workout.end_time) {
+        const client = createOpenWearablesClient()
+        hrSamples = (await client.getHeartRateTimeseries({
+          userId,
+          startIso: workout.start_time,
+          endIso: workout.end_time,
+        })) || []
+      }
+    } catch (e) {
+      console.warn(`[ow-webhook] apple HR timeseries unavailable for ${workoutId} (using aggregates): ${e?.message || e}`)
       hrSamples = []
     }
-  } catch (e) {
-    // OW unreachable / config missing — let Svix retry (the event was
-    // valid). Don't 500: 200 keeps the endpoint healthy, and Svix's own
-    // retry schedule re-delivers; the workout-id dedup makes that safe.
-    console.warn(`[ow-webhook] OW fetch failed for workout ${workoutId}: ${e?.message || e}`)
-    return NextResponse.json({ success: true, skipped: 'ow_fetch_failed' })
+  } else {
+    // Pull-based providers — fetch the workout detail + HR series from OW.
+    try {
+      const client = createOpenWearablesClient()
+      workout = await client.getWorkout({ provider: provider || 'apple', userId, workoutId })
+      if (!workout) {
+        return NextResponse.json({ success: true, skipped: 'workout_not_found' })
+      }
+      if (workout.start_time && workout.end_time) {
+        hrSamples = await client.getHeartRateTimeseries({
+          userId,
+          startIso: workout.start_time,
+          endIso: workout.end_time,
+        })
+      }
+    } catch (e) {
+      // OW unreachable / config missing — let Svix retry (the event was
+      // valid). Don't 500: 200 keeps the endpoint healthy, and Svix's own
+      // retry schedule re-delivers; the workout-id dedup makes that safe.
+      console.warn(`[ow-webhook] OW fetch failed for workout ${workoutId}: ${e?.message || e}`)
+      return NextResponse.json({ success: true, skipped: 'ow_fetch_failed' })
+    }
   }
 
   const session = mapAppleWorkoutToSession({
