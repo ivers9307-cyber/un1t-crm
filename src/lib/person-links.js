@@ -348,3 +348,41 @@ export async function getPersonGroup(db, contactId) {
 
   return { group, members: members || [] }
 }
+
+/**
+ * personGroupResolver(db, contactIds) → { groupOf, primaryOf }
+ *
+ * AGENT-AUTH.2 — one batch lookup that resolves, for a set of contact ids,
+ * each contact's person-group id and each group's primary_contact_id, returned
+ * as pure closures. Feeds the link-aware agent verifier (`resolveAutoVerify` /
+ * `resolveActingContactId` in agent/core.js) so duplicate records of one person
+ * collapse to a single identity + the canonical (primary) account. IO-light:
+ * at most two SELECTs, both `.in()` over a tiny id set.
+ */
+export async function personGroupResolver(db, contactIds) {
+  const ids = [...new Set((contactIds || []).filter(Boolean))]
+  const groupByContact = new Map()
+  const primaryByGroup = new Map()
+
+  if (ids.length) {
+    const { data: members } = await db
+      .from('person_group_members')
+      .select('contact_id, group_id')
+      .in('contact_id', ids)
+    for (const m of members || []) groupByContact.set(m.contact_id, m.group_id)
+
+    const groupIds = [...new Set((members || []).map((m) => m.group_id).filter(Boolean))]
+    if (groupIds.length) {
+      const { data: groups } = await db
+        .from('person_groups')
+        .select('id, primary_contact_id')
+        .in('id', groupIds)
+      for (const g of groups || []) primaryByGroup.set(g.id, g.primary_contact_id)
+    }
+  }
+
+  return {
+    groupOf: (contactId) => groupByContact.get(contactId) || null,
+    primaryOf: (groupId) => primaryByGroup.get(groupId) || null,
+  }
+}

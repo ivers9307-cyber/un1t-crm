@@ -300,6 +300,65 @@ export function autoVerifyContactId({ trusted, conversationContactId, matches })
   return matches[0]?.id === conversationContactId ? conversationContactId : null
 }
 
+/**
+ * AGENT-AUTH.2 — link-aware extension of autoVerifyContactId. Pure.
+ *
+ * When the sender's number maps to MORE THAN ONE contact, the exactly-one rule
+ * bails — a number shared by two DIFFERENT people must never auto-verify into
+ * the wrong account. But duplicate records of the SAME person, linked into one
+ * person_group, should collapse to a single identity. This decides
+ * verification by PERSON (not raw contact row): it verifies when every matched
+ * contact is the same person as the conversation's contact — each match either
+ * IS the thread contact or shares its person-group. A match outside that group
+ * (or any second contact when the thread contact is ungrouped) means a real
+ * stranger could hold the number → returns null → falls back to the quiz.
+ *
+ * On success the acting account resolves to the group's PRIMARY (the canonical
+ * record) so bookings/lookups hit the right account, not a duplicate.
+ *
+ * Group data is injected as pure closures so this stays IO-free; the batch
+ * resolver that builds them lives in person-links.js (`personGroupResolver`).
+ *
+ * @param {object} args
+ * @param {boolean} args.trusted                 adapter.trustsSenderIdentity
+ * @param {string|null} args.conversationContactId
+ * @param {Array<{id:string}>|null} args.matches contacts matching the sender's number at this location
+ * @param {(contactId:string)=>string|null} args.groupOf   person-group id for a contact, or null
+ * @param {(groupId:string)=>string|null} args.primaryOf   the group's primary contact id, or null
+ * @returns {{ actingContactId: string } | null}
+ */
+export function resolveAutoVerify({ trusted, conversationContactId, matches, groupOf, primaryOf }) {
+  if (!trusted || !conversationContactId) return null
+  if (!Array.isArray(matches) || matches.length === 0) return null
+
+  const convGroup = (groupOf && groupOf(conversationContactId)) || null
+
+  // Every match must resolve to the SAME person as the conversation contact.
+  const allSamePerson = matches.every((m) => {
+    if (!m || !m.id) return false
+    if (m.id === conversationContactId) return true
+    if (!convGroup) return false  // an ungrouped thread contact can't collapse a 2nd contact
+    return ((groupOf && groupOf(m.id)) || null) === convGroup
+  })
+  if (!allSamePerson) return null
+
+  return { actingContactId: resolveActingContactId({ contactId: conversationContactId, groupOf, primaryOf }) }
+}
+
+/**
+ * Resolve the account the agent should ACT on for a verified contact. Pure.
+ * If the contact is part of a person_group, returns the group's primary (the
+ * canonical account); otherwise the contact itself. Applied everywhere the
+ * agent books or looks up an account so linked duplicates always resolve to
+ * one record — including the email+surname quiz path, not just phone matches.
+ */
+export function resolveActingContactId({ contactId, groupOf, primaryOf }) {
+  if (!contactId) return contactId
+  const g = (groupOf && groupOf(contactId)) || null
+  if (!g) return contactId
+  return (primaryOf && primaryOf(g)) || contactId
+}
+
 // How long a successful identity verification stays valid on a thread.
 // After this, the customer must re-verify before any account lookup or
 // pause/cancel request — so a phone/IG handle changing hands doesn't
