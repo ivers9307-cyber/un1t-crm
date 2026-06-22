@@ -49,6 +49,7 @@ import {
   setPrimary,
   getPersonGroup,
   linkContactPair,
+  personGroupResolver,
 } from './person-links'
 
 // Chainable Supabase mock — mirrors the pattern from churn-radar-data.test.js.
@@ -504,5 +505,45 @@ describe('linkContactPair', () => {
         locationId: 'loc-1',
       })
     ).rejects.toThrow('Both contacts are already linked to different people')
+  })
+})
+
+// AGENT-AUTH.2 — batch resolver feeding the link-aware agent verifier.
+describe('personGroupResolver', () => {
+  it('maps each contact to its group, and each group to its primary, in one resolver', async () => {
+    const db = makeDb({
+      person_group_members: [
+        { contact_id: 'a', group_id: 'G' },
+        { contact_id: 'b', group_id: 'G' },
+        { contact_id: 'x', group_id: 'H' },
+      ],
+      person_groups: [
+        { id: 'G', primary_contact_id: 'b' },
+        { id: 'H', primary_contact_id: 'x' },
+      ],
+    })
+    const { groupOf, primaryOf } = await personGroupResolver(db, ['a', 'b', 'x', 'ungrouped'])
+    expect(groupOf('a')).toBe('G')
+    expect(groupOf('b')).toBe('G')
+    expect(groupOf('x')).toBe('H')
+    expect(groupOf('ungrouped')).toBeNull()
+    expect(primaryOf('G')).toBe('b')
+    expect(primaryOf('H')).toBe('x')
+    expect(primaryOf('NOPE')).toBeNull()
+  })
+
+  it('returns empty resolvers when given no contact ids', async () => {
+    const { groupOf, primaryOf } = await personGroupResolver(makeDb({}), [])
+    expect(groupOf('a')).toBeNull()
+    expect(primaryOf('G')).toBeNull()
+  })
+
+  it('dedupes ids and ignores falsy entries', async () => {
+    const db = makeDb({
+      person_group_members: [{ contact_id: 'a', group_id: 'G' }],
+      person_groups: [{ id: 'G', primary_contact_id: 'a' }],
+    })
+    const { groupOf } = await personGroupResolver(db, ['a', 'a', null, undefined])
+    expect(groupOf('a')).toBe('G')
   })
 })

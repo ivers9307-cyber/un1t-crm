@@ -11,6 +11,8 @@ import {
   isVerificationFresh,
   DEFAULT_HOLDING_MESSAGE,
   autoVerifyContactId,
+  resolveAutoVerify,
+  resolveActingContactId,
   isHandoffExpired,
   resolveRearmPatch,
   resolveAgentEffort,
@@ -393,5 +395,78 @@ describe('resolveAgentEffort', () => {
     expect(resolveAgentEffort('ultra')).toBe('medium')
     expect(resolveAgentEffort('fast')).toBe('medium')
     expect(resolveAgentEffort(42)).toBe('medium')
+  })
+})
+
+// AGENT-AUTH.2 — link-aware phone verification. When the sender's number maps
+// to several contacts that are all ONE linked Person (incl. the thread's
+// contact), verify and act on the group's PRIMARY. A number shared by two
+// DIFFERENT people stays ambiguous → quiz. Pure: group data is fed in via
+// groupOf/primaryOf closures (the IO resolver lives in person-links.js).
+describe('resolveAutoVerify (link-aware)', () => {
+  const noGroups = { groupOf: () => null, primaryOf: () => null }
+
+  it('verifies a single ungrouped match that IS the thread contact → acts on it', () => {
+    expect(resolveAutoVerify({ trusted: true, conversationContactId: 'c1', matches: [{ id: 'c1' }], ...noGroups }))
+      .toEqual({ actingContactId: 'c1' })
+  })
+  it('returns null when the channel is not trusted (e.g. Instagram)', () => {
+    expect(resolveAutoVerify({ trusted: false, conversationContactId: 'c1', matches: [{ id: 'c1' }], ...noGroups })).toBeNull()
+  })
+  it('returns null with no conversation contact', () => {
+    expect(resolveAutoVerify({ trusted: true, conversationContactId: null, matches: [{ id: 'c1' }], ...noGroups })).toBeNull()
+  })
+  it('returns null on empty / null matches', () => {
+    expect(resolveAutoVerify({ trusted: true, conversationContactId: 'c1', matches: [], ...noGroups })).toBeNull()
+    expect(resolveAutoVerify({ trusted: true, conversationContactId: 'c1', matches: null, ...noGroups })).toBeNull()
+  })
+  it('returns null when the single match is a DIFFERENT ungrouped contact', () => {
+    expect(resolveAutoVerify({ trusted: true, conversationContactId: 'c1', matches: [{ id: 'c2' }], ...noGroups })).toBeNull()
+  })
+  it('returns null when two ungrouped contacts share the number (the couple case)', () => {
+    expect(resolveAutoVerify({ trusted: true, conversationContactId: 'c1', matches: [{ id: 'c1' }, { id: 'c2' }], ...noGroups })).toBeNull()
+  })
+
+  // All of c1/c2/c3 are one Person group "G" whose primary is c2.
+  const grouped = {
+    groupOf: (id) => (['c1', 'c2', 'c3'].includes(id) ? 'G' : null),
+    primaryOf: (g) => (g === 'G' ? 'c2' : null),
+  }
+  it('verifies when all matches + thread contact are one Person → acts on the group PRIMARY', () => {
+    expect(resolveAutoVerify({
+      trusted: true, conversationContactId: 'c1',
+      matches: [{ id: 'c1' }, { id: 'c2' }, { id: 'c3' }], ...grouped,
+    })).toEqual({ actingContactId: 'c2' }) // primary c2, not the thread contact c1
+  })
+  it('returns null when a match is OUTSIDE the thread contact’s group (a real stranger on the number)', () => {
+    const g = {
+      groupOf: (id) => (id === 'c1' || id === 'c2' ? 'G' : (id === 'x' ? 'H' : null)),
+      primaryOf: () => 'c1',
+    }
+    expect(resolveAutoVerify({ trusted: true, conversationContactId: 'c1', matches: [{ id: 'c1' }, { id: 'x' }], ...g })).toBeNull()
+  })
+  it('returns null when the thread contact is ungrouped but a grouped contact shares the number', () => {
+    const g = { groupOf: (id) => (id === 'c2' ? 'G' : null), primaryOf: () => 'c2' }
+    expect(resolveAutoVerify({ trusted: true, conversationContactId: 'c1', matches: [{ id: 'c1' }, { id: 'c2' }], ...g })).toBeNull()
+  })
+  it('falls back to the thread contact when the group has no primary set', () => {
+    const g = { groupOf: () => 'G', primaryOf: () => null }
+    expect(resolveAutoVerify({ trusted: true, conversationContactId: 'c1', matches: [{ id: 'c1' }, { id: 'c2' }], ...g }))
+      .toEqual({ actingContactId: 'c1' })
+  })
+})
+
+describe('resolveActingContactId', () => {
+  it('returns the group primary when the contact is grouped', () => {
+    expect(resolveActingContactId({ contactId: 'c1', groupOf: () => 'G', primaryOf: () => 'c2' })).toBe('c2')
+  })
+  it('returns the contact itself when ungrouped', () => {
+    expect(resolveActingContactId({ contactId: 'c1', groupOf: () => null, primaryOf: () => null })).toBe('c1')
+  })
+  it('falls back to the contact when the group has no primary', () => {
+    expect(resolveActingContactId({ contactId: 'c1', groupOf: () => 'G', primaryOf: () => null })).toBe('c1')
+  })
+  it('passes through a null/blank contact', () => {
+    expect(resolveActingContactId({ contactId: null, groupOf: () => null, primaryOf: () => null })).toBeNull()
   })
 })
