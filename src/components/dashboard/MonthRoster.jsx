@@ -572,7 +572,7 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation, onShiftClick
 // ── Toggle button ────────────────────────────────────────────────────────────
 
 // Internal mode value stays 'month' (the calendar-grid view); the label reads
-// "Upcoming" because that view now shows a rolling 5-week window, not a month.
+// "Upcoming" because that view now shows a rolling 7-week window, not a month.
 const MODE_LABELS = { week: 'Week', month: 'Upcoming' }
 
 function ModeToggle({ mode, onChange }) {
