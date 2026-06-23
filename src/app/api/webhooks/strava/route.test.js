@@ -10,9 +10,12 @@ beforeEach(() => { vi.clearAllMocks(); process.env.STRAVA_WEBHOOK_VERIFY_TOKEN =
 function req(url, body) {
   return { url, json: async () => body }
 }
-// db where the connection lookup resolves to `connection`
+// db where the connection lookup resolves to `connection`. The lookup chains
+// .eq().eq().is().order().limit().maybeSingle() — order+limit make it resilient
+// to stray duplicate active rows (mig 312 defence-in-depth).
 function db(connection) {
-  return { from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ is: () => ({ maybeSingle: async () => ({ data: connection }) }) }) }) }) }) }
+  const tail = { maybeSingle: async () => ({ data: connection }) }
+  return { from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ is: () => ({ order: () => ({ limit: () => tail }) }) }) }) }) }) }
 }
 
 describe('GET handshake', () => {
