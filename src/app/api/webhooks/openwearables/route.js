@@ -52,7 +52,6 @@ import { createServerClient } from '@/lib/supabase'
 import { safeEqual } from '@/lib/webhook-auth'
 import { createOpenWearablesClient } from '@/lib/openwearables'
 import { mapAppleWorkoutToSession } from '@/lib/openwearables-map'
-import { mapStravaActivity } from '@/lib/strava-activity-map'
 import { resolveMaxHr, resolveScoringConfig } from '@/lib/heart-rate'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { lookupBookedMember } from '@/lib/class-bookings'
@@ -246,25 +245,10 @@ export async function POST(request) {
     return NextResponse.json({ success: true, skipped: 'unknown_user' })
   }
 
-  // ── Strava: PERSONAL-ONLY (ToS §5.4). Land in strava_activities and return —
-  // never a heart_rate_sessions row, never finalizeSessionRewards, never a class
-  // link. So Strava data cannot reach any community/points surface.
+  // Strava is ingested DIRECTLY now (not via OW) — ignore any stray OW strava event
+  // so it can never fall through to the session/pull path.
   if (connectionProvider === 'strava') {
-    const root = message?.payload && typeof message.payload === 'object' ? message.payload : message
-    const activity = (root?.workout && typeof root.workout === 'object' ? root.workout : null)
-      || (root?.data && typeof root.data === 'object' ? root.data : null)
-    const stravaRow = mapStravaActivity({ contactId: connection.contact_id, activity })
-    if (!stravaRow.strava_activity_id) {
-      return NextResponse.json({ success: true, skipped: 'incomplete_payload' })
-    }
-    const { error: stravaErr } = await db
-      .from('strava_activities')
-      .upsert(stravaRow, { onConflict: 'contact_id,strava_activity_id' })
-    if (stravaErr) {
-      console.warn(`[ow-webhook] strava upsert failed for ${stravaRow.strava_activity_id}: ${stravaErr.message}`)
-      return NextResponse.json({ success: true, skipped: 'strava_upsert_failed' })
-    }
-    return NextResponse.json({ success: true, strava: stravaRow.strava_activity_id })
+    return NextResponse.json({ success: true, skipped: 'strava_handled_directly' })
   }
 
   const { data: contact } = await db

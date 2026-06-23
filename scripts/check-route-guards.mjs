@@ -77,6 +77,8 @@ const EXEMPT = {
     'Public one-click HR-email unsubscribe (flips a single boolean off) — public by design.',
   'src/app/api/webhooks/sequence/[token]/route.js':
     'URL token (32-hex, unguessable, per-sequence) + optional constant-time X-Webhook-Secret + 100/min rate limit — the token IS the credential.',
+  'src/app/api/webhooks/strava/route.js':
+    'Strava does not sign webhook POSTs; GET handshake verifies via STRAVA_WEBHOOK_VERIFY_TOKEN, POST acts only on known owner_ids + fetches with our own token',
 }
 
 function walk(dir, out = []) {
