@@ -140,3 +140,33 @@ export async function pollUpload({ accessToken, uploadId, maxAttempts = 6, gapMs
   }
   throw new Error('Strava upload still processing after polling window')
 }
+
+/**
+ * Fetch a single DETAILED activity (includes `calories`). Throws on non-2xx.
+ */
+export async function getActivity({ accessToken, activityId }) {
+  const res = await fetch(`${STRAVA_API_BASE}/activities/${encodeURIComponent(activityId)}`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+  })
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '')
+    throw new Error(`Strava activity fetch failed: ${res.status} ${txt.slice(0, 200)}`)
+  }
+  return res.json()
+}
+
+/**
+ * List the athlete's SUMMARY activities (for backfill). `afterEpoch` is a Unix
+ * seconds lower bound. Returns the array as-is. Throws on non-2xx.
+ */
+export async function listActivities({ accessToken, afterEpoch, perPage = 100 }) {
+  const u = new URL(`${STRAVA_API_BASE}/athlete/activities`)
+  if (afterEpoch) u.searchParams.set('after', String(afterEpoch))
+  u.searchParams.set('per_page', String(perPage))
+  const res = await fetch(u.toString(), { headers: { authorization: `Bearer ${accessToken}` } })
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '')
+    throw new Error(`Strava activities list failed: ${res.status} ${txt.slice(0, 200)}`)
+  }
+  return res.json()
+}
