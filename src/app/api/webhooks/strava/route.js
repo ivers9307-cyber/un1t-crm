@@ -24,12 +24,18 @@ export async function POST(request) {
   if (evt?.object_type !== 'activity') return NextResponse.json({ success: true, ignored: 'non_activity' })
 
   const db = createServerClient()
+  // Resolve the member by athlete id. Defence-in-depth against duplicate active
+  // rows: even though mig 312's unique index now prevents them, order
+  // newest-first + limit(1) so maybeSingle() can never throw on a stray dupe
+  // (the failure mode that silently killed real-time ingest pre-mig-312).
   const { data: connection } = await db
     .from('contact_external_integrations')
     .select('id, contact_id, external_athlete_id, access_token, refresh_token, expires_at')
     .eq('provider', 'strava')
     .eq('external_athlete_id', String(evt.owner_id))
     .is('disconnected_at', null)
+    .order('connected_at', { ascending: false })
+    .limit(1)
     .maybeSingle()
   if (!connection?.contact_id) return NextResponse.json({ success: true, skipped: 'unknown_athlete' })
 
