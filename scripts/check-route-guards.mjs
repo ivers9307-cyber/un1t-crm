@@ -53,6 +53,10 @@ const SESSION_GUARDS = [
   'loadBookkeeper(',
   'verifyBridgeToken(',
   "@/lib/studio-session",
+  // resolveCustomerContact validates the member's Supabase JWT (getUser) AND
+  // resolves + scopes to their contacts row — verified in src/lib/customer-auth.js.
+  // Used by the customer-authed direct Apple Health endpoints (members, not staff).
+  'resolveCustomerContact(',
 ]
 
 // Webhooks authenticate the SENDER (HMAC / shared secret / provider
