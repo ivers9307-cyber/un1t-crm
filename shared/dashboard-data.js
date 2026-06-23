@@ -12,7 +12,7 @@
 // safe to import from Metro (React Native) and from server / client
 // React components.
 
-import { monthBounds, summariseShifts } from './roster-month.js'
+import { upcomingWeeksBounds, summariseShifts } from './roster-month.js'
 
 // ============================================================
 // Date helpers (shared across all three fetchers)
@@ -137,8 +137,11 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
   const nextWeekStartIso = isoDate(nextWeekStart)
   const nextWeekEndIso = isoDate(nextWeekEnd)
 
-  // Month bounds anchored on the same "today" used for week dates.
-  const { monthStartIso, monthEndIso } = monthBounds(todayIso)
+  // Rolling 5-week roster window (this week + the next 4), anchored on the same
+  // "today" as the week dates. Kept under the monthStartIso/monthEndIso/monthShifts
+  // keys so the downstream pipeline + buildMonthMatrix consume it unchanged — the
+  // "Upcoming" toggle shows this window instead of a calendar month.
+  const { monthStartIso, monthEndIso } = upcomingWeeksBounds(todayIso, 5)
 
   const [shifts, monthShiftsResult, swapsTargetingMe, myPendingTimeOff, myConvos, myPostedSwapsResult] =
     await Promise.all([

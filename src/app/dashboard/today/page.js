@@ -157,7 +157,7 @@ export default async function PersonalDashboardPage() {
       <div className="mb-4 max-w-5xl">
         <MonthRoster
           weeks={buildMonthMatrix(monthStartIso, monthEndIso, monthShifts, isoDate(new Date()))}
-          monthLabel={new Date(monthStartIso + 'T00:00:00').toLocaleDateString('en-IE', { month: 'long', year: 'numeric' })}
+          monthLabel={`${new Date(monthStartIso + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })} – ${new Date(monthEndIso + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })}`}
           monthSummary={`${shiftsThisMonth} shift${shiftsThisMonth === 1 ? '' : 's'} · ${hoursThisMonth}h`}
           weekPanels={[
             { title: 'This week', startIso: weekStartIso, endIso: weekEndIso, shifts: weekShifts },
