@@ -141,7 +141,10 @@ describe('sendPostClassEmail', () => {
   // Build a minimal Supabase mock that returns canned shapes for
   // the three select calls + an update.
   function mockDb({ session, history = [], stampError = null }) {
-    return {
+    // Records every email_sent_at stamp (real send OR permanent-skip
+    // markProcessed) so tests can assert the row leaves the auto-end sweep.
+    const stamps = []
+    const db = {
       from: vi.fn((table) => {
         if (table === 'class_categories') {
           // No category mappings in test context — degrades gracefully to null categories.
@@ -182,14 +185,17 @@ describe('sendPostClassEmail', () => {
                 })),
               }
             }),
-            update: vi.fn(() => ({
-              eq: vi.fn(() => Promise.resolve({ error: stampError })),
-            })),
+            update: vi.fn((payload) => {
+              stamps.push(payload)
+              return { eq: vi.fn(() => Promise.resolve({ error: stampError })) }
+            }),
           }
         }
         throw new Error(`unexpected table ${table}`)
       }),
     }
+    db.__stamps = stamps
+    return db
   }
 
   function fullSessionRow(overrides = {}) {
@@ -227,6 +233,7 @@ describe('sendPostClassEmail', () => {
       contactId: 'c-1',
       locationId: 'loc-1',
     }))
+    expect(db.__stamps).toHaveLength(1) // email_sent_at stamped on send
   })
 
   it('skips when contact opted out', async () => {
@@ -236,6 +243,7 @@ describe('sendPostClassEmail', () => {
     const out = await sendPostClassEmail(db, 'sess-1', { nowMs: NOW })
     expect(out).toEqual({ ok: true, skipped: 'opted-out' })
     expect(sendTransactionalEmail).not.toHaveBeenCalled()
+    expect(db.__stamps).toHaveLength(1) // marked processed so it leaves the sweep
   })
 
   it('skips when contact has no email', async () => {
@@ -244,6 +252,7 @@ describe('sendPostClassEmail', () => {
     })
     const out = await sendPostClassEmail(db, 'sess-1', { nowMs: NOW })
     expect(out).toEqual({ ok: true, skipped: 'no-email' })
+    expect(db.__stamps).toHaveLength(1) // marked processed so it leaves the sweep
   })
 
   it('skips when email_sent_at is already set (idempotent)', async () => {
@@ -252,6 +261,7 @@ describe('sendPostClassEmail', () => {
     })
     const out = await sendPostClassEmail(db, 'sess-1', { nowMs: NOW })
     expect(out).toEqual({ ok: true, skipped: 'already-sent' })
+    expect(db.__stamps).toHaveLength(0) // already stamped; don't re-stamp
   })
 
   it('skips when zones_seconds adds up to <60s (data too thin)', async () => {
@@ -260,6 +270,7 @@ describe('sendPostClassEmail', () => {
     })
     const out = await sendPostClassEmail(db, 'sess-1', { nowMs: NOW })
     expect(out).toEqual({ ok: true, skipped: 'too-little-data' })
+    expect(db.__stamps).toHaveLength(1) // marked processed so it leaves the sweep (the spam fix)
   })
 
   it('reports error when session not found', async () => {

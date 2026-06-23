@@ -14,14 +14,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Capture the query chains the route builds, per from()-call.
 let builders = []
+// Rows the Phase-2 email sweep resolves. The sweep is the only query that
+// filters on email_sent_at, so we key off that to feed it (default empty).
+let sweepRows = []
 
 function makeBuilder() {
   // A thenable query-builder: every method records its name+args and returns
-  // `this`; awaiting resolves to an empty result so the route's loops no-op.
+  // `this`; awaiting resolves the Phase-2 sweep rows (when this is the sweep
+  // query) or an empty result so the route's other loops no-op.
   const calls = []
   const builder = {
     calls,
-    then(resolve) { return Promise.resolve({ data: [], error: null }).then(resolve) },
+    then(resolve) {
+      const isSweep = calls.some((c) => c.method === 'is' && c.args[0] === 'email_sent_at')
+      return Promise.resolve({ data: isSweep ? sweepRows : [], error: null }).then(resolve)
+    },
   }
   for (const method of ['select', 'eq', 'is', 'not', 'lt', 'order', 'limit', 'neq', 'gte']) {
     builder[method] = vi.fn((...args) => { calls.push({ method, args }); return builder })
@@ -46,6 +53,8 @@ vi.mock('@/lib/customer-push', () => ({ sendCustomerPush: vi.fn(() => Promise.re
 vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }))
 
 import { GET } from './route.js'
+import { sendPostClassEmail } from '@/lib/hr-post-class-email'
+import { sendCustomerPush } from '@/lib/customer-push'
 
 function req() {
   return { headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer test-secret' : null) } }
@@ -53,6 +62,7 @@ function req() {
 
 beforeEach(() => {
   builders = []
+  sweepRows = []
   vi.clearAllMocks()
   process.env.CRON_SECRET = 'test-secret'
 })
@@ -81,5 +91,23 @@ describe('auto-end-stale-hr-sessions — Phase 2 email-sweep query', () => {
   it('401s without the CRON_SECRET bearer', async () => {
     const res = await GET({ headers: { get: () => 'Bearer wrong' } })
     expect(res.status).toBe(401)
+  })
+
+  it('pushes for a real session but NOT for a too-little-data junk skip', async () => {
+    // Two contact-bearing rows hit the sweep this tick.
+    sweepRows = [
+      { id: 's-real', contact_id: 'c1', effort_points: 30, class_name: 'RIDE' },
+      { id: 's-junk', contact_id: 'c2', effort_points: 0, class_name: 'TEMPO - STRENGTH' },
+    ]
+    sendPostClassEmail
+      .mockResolvedValueOnce({ ok: true, sent: true })                  // s-real → emailed
+      .mockResolvedValueOnce({ ok: true, skipped: 'too-little-data' })  // s-junk → no real report
+
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+
+    const pushedIds = sendCustomerPush.mock.calls.map((c) => c[2].data.session_id)
+    expect(pushedIds).toContain('s-real')      // real session → push
+    expect(pushedIds).not.toContain('s-junk')  // junk session → no push (the spam fix)
   })
 })
