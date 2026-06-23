@@ -18,6 +18,22 @@ export function monthBounds(anchorIso) {
   return { monthStartIso: isoOf(start), monthEndIso: isoOf(end) }
 }
 
+// Rolling N-week window for the Today dashboard roster: the Monday of the week
+// containing `anchorIso`, spanning `weeks` Mon-start weeks (default 5 = this
+// week + the next 4). Returns the SAME { monthStartIso, monthEndIso } shape as
+// monthBounds so dashboard-data + buildMonthMatrix consume it unchanged — fed
+// contiguous Monday→Sunday bounds, buildMonthMatrix yields exactly `weeks` full
+// rows with every day inMonth (no calendar-month padding).
+export function upcomingWeeksBounds(anchorIso, weeks = 5) {
+  const d = new Date(anchorIso + 'T00:00:00Z')
+  const sinceMonday = (d.getUTCDay() + 6) % 7 // Mon=0 … Sun=6
+  const start = new Date(d)
+  start.setUTCDate(d.getUTCDate() - sinceMonday)
+  const end = new Date(start)
+  end.setUTCDate(start.getUTCDate() + weeks * 7 - 1)
+  return { monthStartIso: isoOf(start), monthEndIso: isoOf(end) }
+}
+
 // Effective minutes for a shift, honouring overrides; wraps past midnight.
 function durationMins(shift) {
   const start = shift.start_time_override || shift.shift_templates?.start_time

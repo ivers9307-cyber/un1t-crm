@@ -571,6 +571,10 @@ function WeekPanel({ title, startIso, endIso, shifts, showLocation, onShiftClick
 
 // ── Toggle button ────────────────────────────────────────────────────────────
 
+// Internal mode value stays 'month' (the calendar-grid view); the label reads
+// "Upcoming" because that view now shows a rolling 5-week window, not a month.
+const MODE_LABELS = { week: 'Week', month: 'Upcoming' }
+
 function ModeToggle({ mode, onChange }) {
   return (
     <div className="flex items-center rounded-lg border border-un1t-border bg-un1t-dark overflow-hidden text-xs font-medium">
@@ -579,13 +583,13 @@ function ModeToggle({ mode, onChange }) {
           key={m}
           type="button"
           onClick={() => onChange(m)}
-          className={`px-3 py-1 capitalize transition-colors ${
+          className={`px-3 py-1 transition-colors ${
             mode === m
               ? 'bg-un1t-accent/10 text-un1t-text font-semibold'
               : 'text-un1t-subtle hover:text-un1t-text'
           }`}
         >
-          {m.charAt(0).toUpperCase() + m.slice(1)}
+          {MODE_LABELS[m]}
         </button>
       ))}
     </div>

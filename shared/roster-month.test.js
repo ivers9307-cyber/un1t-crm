@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { monthBounds, shiftDurationHours, summariseShifts, buildMonthMatrix } from './roster-month.js'
+import { monthBounds, upcomingWeeksBounds, shiftDurationHours, summariseShifts, buildMonthMatrix } from './roster-month.js'
 
 describe('monthBounds', () => {
   it('returns the calendar month containing the anchor (Mon-start unaffected)', () => {
@@ -8,6 +8,21 @@ describe('monthBounds', () => {
   it('handles February + year edges', () => {
     expect(monthBounds('2026-02-15')).toEqual({ monthStartIso: '2026-02-01', monthEndIso: '2026-02-28' })
     expect(monthBounds('2026-12-31')).toEqual({ monthStartIso: '2026-12-01', monthEndIso: '2026-12-31' })
+  })
+})
+
+describe('upcomingWeeksBounds', () => {
+  // 2026-06-15 is a Monday; +34 days = 2026-07-19 (Sunday) = 5 full weeks.
+  it('starts on the Monday of the anchor week and spans 5 weeks by default', () => {
+    // Wednesday → back to Monday 06-15
+    expect(upcomingWeeksBounds('2026-06-17')).toEqual({ monthStartIso: '2026-06-15', monthEndIso: '2026-07-19' })
+    // Monday anchor → starts same day
+    expect(upcomingWeeksBounds('2026-06-15')).toEqual({ monthStartIso: '2026-06-15', monthEndIso: '2026-07-19' })
+    // Sunday → still snaps back to that week's Monday (06-15), not forward
+    expect(upcomingWeeksBounds('2026-06-21')).toEqual({ monthStartIso: '2026-06-15', monthEndIso: '2026-07-19' })
+  })
+  it('honours a custom week count', () => {
+    expect(upcomingWeeksBounds('2026-06-15', 1)).toEqual({ monthStartIso: '2026-06-15', monthEndIso: '2026-06-21' })
   })
 })
 

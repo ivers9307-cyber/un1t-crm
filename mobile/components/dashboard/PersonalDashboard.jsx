@@ -233,7 +233,7 @@ function MonthAgenda({ matrix, showLocation, onShiftPress }) {
   if (weekGroups.length === 0) {
     return (
       <View className="bg-un1t-surface border border-un1t-border rounded-2xl mb-3 px-4 py-5">
-        <Text className="text-sm text-un1t-subtle text-center">No shifts this month</Text>
+        <Text className="text-sm text-un1t-subtle text-center">No shifts in the next 5 weeks</Text>
       </View>
     )
   }
@@ -345,20 +345,24 @@ function MonthAgenda({ matrix, showLocation, onShiftPress }) {
   )
 }
 
-// Week|Month segmented toggle
+// Week | Upcoming segmented toggle. Internal value stays 'week'/'month'; the
+// 'month' label reads "Upcoming" because that view now shows a rolling 5-week
+// window (this week + next 4), not a calendar month.
+const ROSTER_OPTS = [{ value: 'week', label: 'Week' }, { value: 'month', label: 'Upcoming' }]
+
 function RosterToggle({ value, onChange }) {
   return (
     <View className="flex-row bg-un1t-dark border border-un1t-border rounded-lg p-0.5 self-start mb-3">
-      {['Week', 'Month'].map(opt => {
-        const active = value === opt.toLowerCase()
+      {ROSTER_OPTS.map(opt => {
+        const active = value === opt.value
         return (
           <Pressable
-            key={opt}
-            onPress={() => onChange(opt.toLowerCase())}
+            key={opt.value}
+            onPress={() => onChange(opt.value)}
             className={`px-3 py-1 rounded-md ${active ? 'bg-un1t-surface shadow-sm' : ''}`}
           >
             <Text className={`text-xs font-semibold ${active ? 'text-un1t-text' : 'text-un1t-subtle'}`}>
-              {opt}
+              {opt.label}
             </Text>
           </Pressable>
         )
