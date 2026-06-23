@@ -107,8 +107,14 @@ export async function GET(request) {
     else if (out.ok) emailsSkipped++
     else emailsFailed++
 
-    // Best-effort Session Report push to champ-app customer native.
-    if (row.contact_id) {
+    // Best-effort "session report ready" push to champ-app native. Fire only
+    // for a REAL session — emailed (out.sent), or skipped only because the
+    // member has no email / opted out of EMAIL (push is a separate channel).
+    // NOT for too-little-data junk sessions, already-sent, or transient errors.
+    // sendPostClassEmail now stamps email_sent_at on permanent skips too, so the
+    // row leaves this sweep after one tick → the push fires at most once.
+    const pushWorthy = out.ok && (out.sent || out.skipped === 'no-email' || out.skipped === 'opted-out')
+    if (row.contact_id && pushWorthy) {
       sendCustomerPush(db, row.contact_id, {
         title: 'Your session is ready',
         body: `${Number.isFinite(row.effort_points) ? row.effort_points + ' UN1T Points' : 'Tap to see your stats'}${row.class_name ? ' · ' + row.class_name : ''}`,

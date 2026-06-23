@@ -451,6 +451,27 @@ function trendFromReport(t) {
 // ── (3) send ────────────────────────────────────────────────────
 
 /**
+ * Mark a session post-class-PROCESSED without sending an email — used for the
+ * permanent skip reasons (no-email / opted-out / too-little-data). The email
+ * will NEVER send for these, so stamp the dedup column so the
+ * auto-end-stale-hr-sessions sweep stops re-selecting the row (and the cron
+ * stops re-firing the "session ready" push) on every 5-minute tick. Without
+ * this a permanently-unsendable session loops forever — that's what spammed a
+ * 10s junk session's push every few minutes for days.
+ *
+ * `email_sent_at` is the post-class dedup marker: read only here + by that
+ * sweep, never as proof an email was delivered. Best-effort — a failed stamp
+ * just means one more reprocess next tick, no worse than before.
+ */
+async function markProcessed(db, sessionId, nowMs) {
+  const { error } = await db
+    .from('heart_rate_sessions')
+    .update({ email_sent_at: new Date(nowMs).toISOString() })
+    .eq('id', sessionId)
+  if (error) logWarn('hr-post-class-email', 'mark-processed stamp failed', { sessionId, err: error })
+}
+
+/**
  * Top-level orchestrator. Returns:
  *   { ok: true, sent: true }                     — email went out
  *   { ok: true, skipped: '<reason>' }            — opted out / no email / already sent / no points
@@ -468,16 +489,22 @@ export async function sendPostClassEmail(db, sessionId, { nowMs = Date.now() } =
   }
 
   const { contact, session } = ctx
+  // The three permanent skips stamp the dedup column (markProcessed) so the
+  // session leaves the auto-end sweep after ONE pass — otherwise it re-matches
+  // and re-pushes every tick (the bug this fixes).
   if (!contact?.email) {
+    await markProcessed(db, sessionId, nowMs)
     return { ok: true, skipped: 'no-email' }
   }
   if (contact.hr_post_class_emails_enabled === false) {
+    await markProcessed(db, sessionId, nowMs)
     return { ok: true, skipped: 'opted-out' }
   }
   // Don't send for sessions that captured nothing — the email would
   // be embarrassingly empty. Threshold: at least 1min of any-zone data.
   const anyZoneSec = Object.values(session.zones_seconds || {}).reduce((a, b) => a + Number(b || 0), 0)
   if (anyZoneSec < 60) {
+    await markProcessed(db, sessionId, nowMs)
     return { ok: true, skipped: 'too-little-data' }
   }
 
