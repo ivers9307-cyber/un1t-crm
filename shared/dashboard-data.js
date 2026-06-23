@@ -137,11 +137,11 @@ export async function fetchPersonalDashboardData(supabase, profileId, locationId
   const nextWeekStartIso = isoDate(nextWeekStart)
   const nextWeekEndIso = isoDate(nextWeekEnd)
 
-  // Rolling 5-week roster window (this week + the next 4), anchored on the same
+  // Rolling 7-week roster window (this week + the next 6), anchored on the same
   // "today" as the week dates. Kept under the monthStartIso/monthEndIso/monthShifts
   // keys so the downstream pipeline + buildMonthMatrix consume it unchanged — the
   // "Upcoming" toggle shows this window instead of a calendar month.
-  const { monthStartIso, monthEndIso } = upcomingWeeksBounds(todayIso, 5)
+  const { monthStartIso, monthEndIso } = upcomingWeeksBounds(todayIso, 7)
 
   const [shifts, monthShiftsResult, swapsTargetingMe, myPendingTimeOff, myConvos, myPostedSwapsResult] =
     await Promise.all([
