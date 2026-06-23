@@ -438,7 +438,9 @@ describe('POST /api/webhooks/openwearables', () => {
     expect(db._inserts).toHaveLength(0)
   })
 
-  it('strava event → upserts strava_activities, NEVER a session/points/class-link', async () => {
+  it('strava event → ignored (handled directly now), no upsert / no session / no points', async () => {
+    // Strava is ingested DIRECTLY now (mig 311 / strava-direct-inbound), NOT via OW.
+    // A stray OW strava event must be ignored before it can reach any write path.
     const stravaUpsert = vi.fn(() => Promise.resolve({ error: null }))
     const db = makeDb({
       connection: { id: 'conn-s', contact_id: 'c-1' },
@@ -452,8 +454,8 @@ describe('POST /api/webhooks/openwearables', () => {
     const res = await POST(makeRequest({ body }))
     const json = await res.json()
     expect(res.status).toBe(200)
-    expect(json.strava).toBe('str-1')
-    expect(stravaUpsert).toHaveBeenCalledTimes(1)
+    expect(json.skipped).toBe('strava_handled_directly')
+    expect(stravaUpsert).not.toHaveBeenCalled()             // NO strava_activities upsert (handled directly)
     expect(db._inserts).toHaveLength(0)                     // NO heart_rate_sessions insert
     expect(finalizeSessionRewards).not.toHaveBeenCalled()  // NO points
   })
