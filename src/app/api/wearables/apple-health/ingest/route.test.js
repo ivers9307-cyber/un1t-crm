@@ -14,6 +14,8 @@ import { POST } from './route.js'
 import { createServerClient } from '@/lib/supabase'
 import { resolveCustomerContact } from '@/lib/customer-auth'
 import { finalizeSessionRewards } from '@/lib/live-class'
+import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
+import { lookupBookedMember } from '@/lib/class-bookings'
 
 const WORKOUT = {
   id: 'HK-UUID-1', type: 'running',
@@ -55,6 +57,10 @@ function makeDb({ location = { id: 'loc-1', settings: {} }, existingWorkout = nu
 beforeEach(() => {
   vi.clearAllMocks()
   resolveCustomerContact.mockResolvedValue({ contact: { id: 'c-1', location_id: 'loc-1', max_hr_override: 185, dob: null } })
+  // Defaults: no live class, not booked (mockResolvedValue survives clearAllMocks,
+  // so reset here to keep class-correlation cases from leaking into other tests).
+  resolveCurrentOccurrence.mockResolvedValue(null)
+  lookupBookedMember.mockResolvedValue(false)
 })
 
 describe('POST /api/wearables/apple-health/ingest', () => {
@@ -86,6 +92,32 @@ describe('POST /api/wearables/apple-health/ingest', () => {
     expect(row.raw_metadata.apple_workout_uuid).toBe('HK-UUID-1')
     expect(row.avg_hr_bpm).toBe(150) // no HR samples → aggregates
     expect(finalizeSessionRewards).toHaveBeenCalledWith(db, 'sess-new', expect.objectContaining({ nowMs: expect.any(Number) }))
+  })
+
+  it('class running but member NOT booked → session has NO class association (no name/points/email)', async () => {
+    const db = makeDb({ existingWorkout: null })
+    createServerClient.mockReturnValue(db)
+    resolveCurrentOccurrence.mockResolvedValue({ glofox_event_id: 'evt-1', class_name: 'PACE - STRENGTH' })
+    lookupBookedMember.mockResolvedValue(false)
+    const res = await POST(reqWith({ workouts: [{ workout: WORKOUT }] }))
+    expect((await res.json()).ingested).toBe(1)
+    const row = db._inserts[0].payload
+    expect(row.glofox_event_id ?? null).toBeNull()
+    expect(row.class_name ?? null).toBeNull()
+    expect(row.class_link_source ?? null).toBeNull()
+  })
+
+  it('class running AND member booked → session associated with the class', async () => {
+    const db = makeDb({ existingWorkout: null })
+    createServerClient.mockReturnValue(db)
+    resolveCurrentOccurrence.mockResolvedValue({ glofox_event_id: 'evt-1', class_name: 'PACE - STRENGTH' })
+    lookupBookedMember.mockResolvedValue(true)
+    const res = await POST(reqWith({ workouts: [{ workout: WORKOUT }] }))
+    expect((await res.json()).ingested).toBe(1)
+    const row = db._inserts[0].payload
+    expect(row.glofox_event_id).toBe('evt-1')
+    expect(row.class_name).toBe('PACE - STRENGTH')
+    expect(row.class_link_source).toBe('booked')
   })
 
   it('re-uploaded workout (already ingested) → deduped, no insert', async () => {
