@@ -73,8 +73,13 @@ export async function POST(request) {
     if (Number.isFinite(workoutStartMs)) {
       const occ = await resolveCurrentOccurrence(db, { locationId, nowMs: workoutStartMs })
       if (occ?.glofox_event_id) {
-        session.glofox_event_id = occ.glofox_event_id
-        session.class_name = occ.class_name ?? null
+        // An Apple Health workout can be recorded ANYWHERE (home, outdoors, another
+        // gym), so a class merely running at the member's location at that time is
+        // NOT evidence they attended it — unlike an in-studio strap, where physical
+        // presence is implied. Associate the session with the class ONLY when the
+        // member is actually booked into it; otherwise leave it a plain Apple Health
+        // session (no class name, no class points, and — since finalizeSessionRewards
+        // gates the post-class email to class sessions — no spurious email).
         let booked = false
         try {
           const { data: c } = await db.from('contacts').select('glofox_member_id').eq('id', contact.id).maybeSingle()
@@ -86,7 +91,11 @@ export async function POST(request) {
         } catch (e) {
           console.warn(`[apple-health-ingest] booking lookup failed for contact ${contact.id}: ${e?.message || e}`)
         }
-        session.class_link_source = booked ? 'booked' : null
+        if (booked) {
+          session.glofox_event_id = occ.glofox_event_id
+          session.class_name = occ.class_name ?? null
+          session.class_link_source = 'booked'
+        }
       }
     }
 
