@@ -18,6 +18,9 @@ mobile/keys/
 graphify-out/
 .superpowers/
 
+# Claude Code agent worktrees — transient subagent workspaces, never source
+.claude/worktrees/
+
 # ffmpeg.wasm core/worker — self-hosted at install time (~25MB), never committed
 public/ffmpeg/
 evals/output/

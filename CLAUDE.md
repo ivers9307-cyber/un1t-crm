@@ -393,12 +393,11 @@ DEPOSIT_BASE_URL=https://pay.ccfautos.com           # used server-side when gene
 NEXT_PUBLIC_DEPOSIT_BASE_URL=https://pay.ccfautos.com  # client-side mirror for operator preview links
 PAY_HOSTNAME=pay.ccfautos.com    # middleware uses this to gate which paths are public on the pay host
 
-# Open Wearables (Apple Watch ingestion, WEARABLE-INGEST) — see src/lib/openwearables.js
-OPENWEARABLES_BASE_URL=http://localhost:8000   # self-hosted OW server base URL
-OPENWEARABLES_API_KEY=           # developer API key (sent as X-Open-Wearables-API-Key + Bearer)
-OPENWEARABLES_APP_ID=            # from an OW application (POST /api/v1/applications) — per-user token minting
-OPENWEARABLES_APP_SECRET=        # app secret paired with OPENWEARABLES_APP_ID
-OPENWEARABLES_WEBHOOK_SECRET=    # Svix endpoint signing secret (whsec_...) for /api/webhooks/openwearables; route 401s if unset
+# Apple Health (Apple Watch ingestion) — DIRECT on-device HealthKit, no relay.
+# The champ-app native app reads HealthKit on-device and POSTs to
+# /api/wearables/apple-health/ingest (customer-authed). No env vars needed here.
+# (The old OpenWearables relay + its OPENWEARABLES_* env were removed once the
+# direct path was device-verified — 2026-06-24.)
 
 # InBody / Lookin'Body WebAPI (CONSULTATIONS SP2) — see src/lib/inbody-webhook.js
 INBODY_WEBHOOK_SECRET=           # shared secret we set as a custom header (x-inbody-secret) in the InBody portal Step 3; /api/webhooks/inbody 500s if unset, 403s on mismatch
