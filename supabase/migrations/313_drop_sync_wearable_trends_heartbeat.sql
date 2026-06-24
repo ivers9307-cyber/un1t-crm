@@ -1,0 +1,13 @@
+-- 313: Remove the sync-wearable-trends cron heartbeat row.
+--
+-- The OpenWearables relay — and its sync-wearable-trends cron, which pulled
+-- resting-HR / HRV / VO2max / active-energy timeseries for apple_health
+-- connections via the OW server — was decommissioned on 2026-06-24 once the
+-- DIRECT on-device HealthKit path was device-verified (the champ-app native app
+-- now uploads those metrics itself to /api/wearables/apple-health/ingest).
+--
+-- The cron route (src/app/api/cron/sync-wearable-trends) and its vercel.json
+-- entry are deleted in the same PR. This drops the heartbeat row so the
+-- cron_health view doesn't mark a now-nonexistent cron stale (which would make
+-- /api/cron/health-check return 503 ~30h after deploy). Idempotent.
+DELETE FROM cron_heartbeats WHERE name = 'sync-wearable-trends';
