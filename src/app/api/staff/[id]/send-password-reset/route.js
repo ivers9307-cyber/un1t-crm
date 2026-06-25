@@ -42,11 +42,24 @@ export async function POST(_request, props) {
   const db = createServerClient()
   const { data: target, error: lookupErr } = await db
     .from('profiles')
-    .select('id, email, full_name, active')
+    .select('id, email, full_name, active, profile_locations(location_id)')
     .eq('id', params.id)
     .single()
   if (lookupErr || !target) {
     return NextResponse.json({ success: false, error: 'Staff member not found' }, { status: 404 })
+  }
+  // Service-role read bypasses RLS — an admin must only be able to reset
+  // a staffer who shares one of their locations, else a manager could
+  // reset ANY user's password estate-wide. 404 (not 403) so the caller
+  // can't enumerate which profile ids exist at other locations. Masters
+  // bypass (platform-wide).
+  if (!user.isMaster) {
+    const callerLocations = new Set((user.locations || []).map(l => l.id))
+    const targetLocations = (target.profile_locations || []).map(l => l.location_id)
+    const overlap = targetLocations.some(l => callerLocations.has(l))
+    if (!overlap) {
+      return NextResponse.json({ success: false, error: 'Staff member not found' }, { status: 404 })
+    }
   }
   if (!target.email) {
     return NextResponse.json({

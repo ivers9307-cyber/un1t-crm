@@ -1,9 +1,8 @@
 // POST /api/admin/bridges  — register a new BLE bridge for a location.
 // GET  /api/admin/bridges  — list bridges visible to the caller.
 //
-// Master-only for create + rotate. Listing is open to staff at the
-// bridge's location (via existing RLS), but this admin route is the
-// canonical management surface.
+// Master-only for create + rotate AND for listing — this admin route
+// is the canonical management surface and runs as service-role (no RLS).
 //
 // Create response shape:
 //   { ok: true, bridge: { id, name, hardware_id, location_id, ... },
@@ -94,8 +93,11 @@ export async function GET() {
   if (!user) {
     return NextResponse.json({ ok: false, error: 'Unauthorised' }, { status: 401 })
   }
-  // Read goes through RLS — non-master users see only their location's
-  // bridges. Master sees everything.
+  // This route runs as service-role (RLS bypassed), so there is no
+  // DB-side filter — gate on master in app code, mirroring POST.
+  if (!user.isMaster) {
+    return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })
+  }
   const db = createServerClient()
   const { data, error } = await db
     .from('ble_bridges')

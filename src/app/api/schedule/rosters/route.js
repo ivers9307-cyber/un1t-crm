@@ -27,7 +27,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
 import { projectPublishImpact } from '@/lib/roster-publish'
@@ -72,7 +72,16 @@ export async function GET(request) {
     `)
     .order('created_at', { ascending: false })
 
-  if (locationId) query = query.eq('location_id', locationId)
+  if (locationId) {
+    query = query.eq('location_id', locationId)
+  } else {
+    // No specific location → scope to the caller's locations rather than
+    // returning every location's rosters (incl. budgets). Service-role
+    // bypasses RLS, so this fallback is the only thing filtering the read.
+    const userLocationIds = getUserLocationIds(user)
+    if (userLocationIds.length === 0) return NextResponse.json({ success: true, data: [] })
+    query = query.in('location_id', userLocationIds)
+  }
   if (status) query = query.eq('status', status)
 
   const { data, error } = await query

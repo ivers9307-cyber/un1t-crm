@@ -18,7 +18,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { sendEmail, applyMergeTags } from '@/lib/postmark'
 import { getAppUrl } from '@/lib/app-url'
@@ -65,6 +65,11 @@ export async function POST(request, props) {
   if (campErr || !campaign) {
     return NextResponse.json({ success: false, error: 'Campaign not found' }, { status: 404 })
   }
+  // Mirror the real send: a cross-location admin must not be able to
+  // fire a real test email for another location's campaign. Service-role
+  // bypasses RLS, so this app-layer check is the only scoping.
+  const guard = assertLocationAccess(user, campaign.location_id)
+  if (guard) return guard
   if (!campaign.subject || !campaign.html_content) {
     return NextResponse.json({
       success: false,

@@ -11,7 +11,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
 import { contractRevokeSchema } from '@/lib/schemas'
 import { canTransition } from '@/lib/contracts'
 import { sendContractRevokedEmail } from '@/lib/contracts-email'
@@ -43,11 +43,17 @@ export async function POST(request, props) {
   const db = createServerClient()
   const { data: contract, error: rErr } = await db
     .from('contracts')
-    .select('id, status')
+    .select('id, status, organization_id')
     .eq('id', params.id)
     .maybeSingle()
   if (rErr) return NextResponse.json({ success: false, error: rErr.message }, { status: 500 })
   if (!contract) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  // Service-role read bypasses RLS — an owner must only be able to
+  // revoke contracts in an org they own. 404 (not 403) so a non-owner
+  // can't enumerate which contract ids exist in another tenant.
+  if (!user.isMaster && !getOwnerOrganizationIds(user).includes(contract.organization_id)) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
   if (!canTransition(contract.status, 'revoked')) {
     return NextResponse.json({
       success: false,

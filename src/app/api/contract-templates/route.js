@@ -9,7 +9,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
 import { contractTemplateSchema } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
@@ -25,11 +25,26 @@ export async function GET() {
     return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
   }
 
+  // This route runs as service-role (RLS bypassed), so the mig 106
+  // "owner sees their org" model must be replicated in app code —
+  // otherwise any owner reads every org's templates (incl. comp body
+  // copy). Master sees all; a non-master is scoped to the orgs they
+  // own, and an owner of no org sees nothing.
   const db = createServerClient()
-  const { data, error } = await db
+  let query = db
     .from('contract_templates')
     .select('id, organization_id, name, description, body_markdown, variables_schema, employment_type, version, active, created_at, updated_at')
     .order('updated_at', { ascending: false })
+
+  if (!user.isMaster) {
+    const ownerOrgIds = getOwnerOrganizationIds(user)
+    if (ownerOrgIds.length === 0) {
+      return NextResponse.json({ success: true, data: [] })
+    }
+    query = query.in('organization_id', ownerOrgIds)
+  }
+
+  const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true, data })
 }
