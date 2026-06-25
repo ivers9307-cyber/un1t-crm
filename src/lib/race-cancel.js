@@ -12,7 +12,8 @@
 
 /**
  * Total paid cents recorded against a registration. Pure-ish read:
- * sums race_payments rows with status 'paid'.
+ * sums race_payments rows with status 'completed' (the DB CHECK
+ * forbids 'paid'; free + Revolut-completed entries both store 'completed').
  */
 export async function registrationPaidCents(db, registrationId) {
   const { data } = await db.from('race_payments')
@@ -20,7 +21,7 @@ export async function registrationPaidCents(db, registrationId) {
     .eq('race_registration_id', registrationId)
     .limit(10)
   return (data || [])
-    .filter((p) => String(p.status || '').toLowerCase() === 'paid')
+    .filter((p) => String(p.status || '').toLowerCase() === 'completed')
     .reduce((sum, p) => sum + (Number(p.amount_cents) || 0), 0)
 }
 

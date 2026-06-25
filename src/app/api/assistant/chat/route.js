@@ -233,7 +233,14 @@ export async function executeTool(toolName, input, context) {
     }
 
     case 'navigate_user': {
-      return { action: 'navigate', path: input.path, reason: input.reason }
+      // input.path is handed to the client which router.push()es it verbatim.
+      // Only allow internal app paths — an absolute or protocol-relative URL
+      // would be an open redirect driven by (potentially injected) prompt content.
+      const p = String(input.path || '')
+      if (!p.startsWith('/') || p.startsWith('//')) {
+        return { error: 'navigate_user: path must be an internal path starting with "/"' }
+      }
+      return { action: 'navigate', path: p, reason: input.reason }
     }
 
     case 'get_time_off': {
@@ -375,7 +382,9 @@ export async function POST(request) {
     userId: user.id,
     locationId: user.activeLocation?.id || null,
     locationName: user.activeLocation?.name || 'Unknown',
-    currentPage: clientContext?.currentPage || '/',
+    // Client-supplied — sanitise before it lands in the system prompt below
+    // (single line, length-capped) so a crafted value can't inject instructions.
+    currentPage: String(clientContext?.currentPage || '/').split('\n')[0].slice(0, 120),
     permissions: user.permissions || {},
   }
 

@@ -96,7 +96,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
   // a public signed-token endpoint (renders reliably in email clients); the
   // QR opens a staff-only scan page, so it's safe to expose.
   const appOrigin = (() => { try { return new URL(getAppUrl()).origin } catch { return '' } })()
-  const checkinSecret = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+  const checkinSecret = process.env.SUPABASE_SERVICE_ROLE_KEY || null
   const checkinEventId = race?.id || null
   const checkinRegistrationId = reg?.id || null
   const teamMembersWithQr = teamMembers.map((m) => {

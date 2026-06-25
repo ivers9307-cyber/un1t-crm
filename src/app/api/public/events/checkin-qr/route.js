@@ -14,8 +14,8 @@ export const dynamic = 'force-dynamic'
 export async function GET(request) {
   const url = new URL(request.url)
   const token = url.searchParams.get('t') || ''
-  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-  const payload = verifyCheckinToken(token, secret)
+  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY
+  const payload = secret ? verifyCheckinToken(token, secret) : null
   if (!payload) {
     return NextResponse.json({ success: false, error: 'Invalid check-in code' }, { status: 400 })
   }
