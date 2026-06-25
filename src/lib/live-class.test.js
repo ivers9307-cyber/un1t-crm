@@ -168,7 +168,9 @@ describe('pairOverride', () => {
       from: vi.fn(() => ({
         select: vi.fn(() => ({
           eq: vi.fn(() => ({
-            single: vi.fn(() => Promise.resolve({ data: null, error: { message: 'not found' } })),
+            eq: vi.fn(() => ({
+              maybeSingle: vi.fn(() => Promise.resolve({ data: null, error: null })),
+            })),
           })),
         })),
       })),
@@ -177,6 +179,32 @@ describe('pairOverride', () => {
       locationId: 'loc-1', bridgeId: 'b-1', contactId: 'c-1', deviceKey: 'ble:AA:BB:CC:DD:EE:FF',
     })
     expect(out.ok).toBe(false)
+  })
+
+  it('rejects a contact at a DIFFERENT location (IDOR guard)', async () => {
+    // The location_id .eq filter yields no row → maybeSingle returns null.
+    let queriedLocation = null
+    const db = {
+      from: vi.fn((table) => {
+        if (table !== 'contacts') throw new Error(`should not query ${table}`)
+        return {
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              eq: vi.fn((col, val) => {
+                if (col === 'location_id') queriedLocation = val
+                return { maybeSingle: vi.fn(() => Promise.resolve({ data: null, error: null })) }
+              }),
+            })),
+          })),
+        }
+      }),
+    }
+    const out = await pairOverride(db, {
+      locationId: 'loc-1', bridgeId: 'b-1', contactId: 'c-other-loc', deviceKey: 'ble:AA:BB:CC:DD:EE:FF',
+    })
+    expect(out.ok).toBe(false)
+    expect(out.error).toMatch(/this location/)
+    expect(queriedLocation).toBe('loc-1')
   })
 
   it('rejects a missing device_key before touching the DB', async () => {
@@ -196,9 +224,11 @@ describe('pairOverride', () => {
           return {
             select: vi.fn(() => ({
               eq: vi.fn(() => ({
-                single: vi.fn(() => Promise.resolve({
-                  data: { id: 'c-1', max_hr_override: null, dob: '1990-05-08' },
-                  error: null,
+                eq: vi.fn(() => ({
+                  maybeSingle: vi.fn(() => Promise.resolve({
+                    data: { id: 'c-1', max_hr_override: null, dob: '1990-05-08', location_id: 'loc-1' },
+                    error: null,
+                  })),
                 })),
               })),
             })),
@@ -269,9 +299,9 @@ describe('pairOverride', () => {
     const db = {
       from: vi.fn((table) => {
         if (table === 'contacts') {
-          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({
-            data: { id: 'c-1', max_hr_override: null, dob: '1990-05-08', glofox_member_id: 'm1' }, error: null,
-          })) })) })) }
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({
+            data: { id: 'c-1', max_hr_override: null, dob: '1990-05-08', glofox_member_id: 'm1', location_id: 'loc-1' }, error: null,
+          })) })) })) })) }
         }
         if (table === 'class_occurrences') {
           return { select: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => ({

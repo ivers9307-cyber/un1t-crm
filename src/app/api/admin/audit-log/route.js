@@ -33,7 +33,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/schemas'
 
@@ -81,6 +81,25 @@ export async function GET(request) {
 
   const db = createServerClient()
 
+  // Service-role client bypasses RLS, so the mig 106-style "owner sees
+  // their org" scoping has to live in app code. Non-master callers are
+  // constrained to the audit events at their own assigned locations; a
+  // caller with no locations sees nothing (don't run an unscoped query).
+  const isMaster = user.profileRole === 'master'
+  const scopeLocationIds = isMaster ? null : getUserLocationIds(user)
+  if (!isMaster && scopeLocationIds.length === 0) {
+    return NextResponse.json({
+      success: true,
+      data: [],
+      page: q.page,
+      page_size: q.page_size,
+      total: 0,
+      facets: q.page === 1 && q.format !== 'csv'
+        ? { categories: CATEGORIES, actions: [] }
+        : null,
+    })
+  }
+
   // Build the query. Foreign-key joins via PostgREST embed syntax.
   // actor_id and target_profile_id both reference profiles; the
   // explicit FK aliases avoid ambiguity. target_label /
@@ -98,6 +117,9 @@ export async function GET(request) {
       location:location_id ( id, name )
     `, { count: 'exact' })
     .order('occurred_at', { ascending: false })
+
+  // Non-master: hard-scope to the caller's locations (service-role has no RLS).
+  if (scopeLocationIds) query = query.in('location_id', scopeLocationIds)
 
   if (q.actor_id) query = query.eq('actor_id', q.actor_id)
   if (q.target_profile_id) query = query.eq('target_profile_id', q.target_profile_id)
@@ -128,7 +150,7 @@ export async function GET(request) {
   // the response tight.
   let facets = null
   if (!isCsv && q.page === 1) {
-    facets = await loadFacets(db, q)
+    facets = await loadFacets(db, q, scopeLocationIds)
   }
 
   if (isCsv) {
@@ -158,13 +180,16 @@ export async function GET(request) {
 // is auto-populated from the data instead of being hardcoded. Cheap
 // — the per-category indexes from migration 180 make this a quick
 // index scan.
-async function loadFacets(db, q) {
+async function loadFacets(db, q, scopeLocationIds = null) {
   try {
     let actionsQuery = db
       .from('audit_events')
       .select('action', { count: 'exact', head: false })
       .order('action', { ascending: true })
       .limit(500)
+    // Mirror the main query's non-master location scoping so the action
+    // picker can't leak the existence of actions from other tenants.
+    if (scopeLocationIds) actionsQuery = actionsQuery.in('location_id', scopeLocationIds)
     if (q.category) actionsQuery = actionsQuery.eq('category', q.category)
     const { data: actionRows } = await actionsQuery
     const actions = Array.from(new Set((actionRows || []).map((r) => r.action))).sort()

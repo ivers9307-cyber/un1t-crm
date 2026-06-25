@@ -168,13 +168,17 @@ export async function getAvailableStraps(db, locationId) {
 export async function pairOverride(db, { locationId, bridgeId, contactId, deviceKey, bookingId = null, nowMs = Date.now() }) {
   if (!deviceKey) return { ok: false, error: 'A strap device_key is required' }
 
-  // Snapshot max HR for the session row.
+  // Snapshot max HR for the session row. IDOR guard: the contact must
+  // belong to THIS location — otherwise a coach could pair a strap to a
+  // contact at another location and stamp a session under their own
+  // location_id (cross-tenant). Mirrors the register-device guard.
   const { data: contact } = await db
     .from('contacts')
-    .select('id, max_hr_override, dob, glofox_member_id')
+    .select('id, max_hr_override, dob, glofox_member_id, location_id')
     .eq('id', contactId)
-    .single()
-  if (!contact) return { ok: false, error: 'Contact not found' }
+    .eq('location_id', locationId)
+    .maybeSingle()
+  if (!contact) return { ok: false, error: 'Contact not at this location' }
   const maxHr = resolveMaxHr(contact, nowMs)
 
   // Which Glofox class is running right now? Stamp it on the session so
