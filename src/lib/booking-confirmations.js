@@ -28,7 +28,11 @@ import { logWarn } from './log'
 // said 18:00. Don't go through Date at all for the clock time;
 // derive only the weekday/date label from a Date and append the
 // stored time string verbatim.
-function fmtBookingTime(dateStr, timeStr) {
+//
+// Exported so the cancellation email (bookings/[id]/cancel) and the
+// reminder runner (event-reminders) render Dublin wall-clock the same
+// way instead of each re-deriving the (previously buggy) Date-Z parse.
+export function fmtBookingTime(dateStr, timeStr) {
   if (!dateStr) return ''
   const timePart = String(timeStr || '').slice(0, 5)  // "17:00"
   // Use noon UTC on the booking date to derive the weekday label —

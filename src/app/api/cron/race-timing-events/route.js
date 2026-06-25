@@ -17,6 +17,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { emitEvent, applyTagRules, EVENT_TYPES } from '@/lib/contact-events'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { localToUtc } from '@/lib/push-reminders'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -91,10 +92,18 @@ export async function GET(request) {
       stats.skipped += 1
       continue
     }
-    // Construct the wave's start instant in Europe/Dublin.
-    const waveStartIso = `${race.race_date}T${(reg.wave.start_time || '00:00:00').slice(0, 8)}+00:00`
-    const waveStart = new Date(waveStartIso)
-    if (Number.isNaN(waveStart.getTime())) {
+    // Construct the wave's start instant. race_date + wave.start_time
+    // are Dublin wall-clock (no TZ semantics). The old code suffixed a
+    // manual '+00:00', treating Dublin local AS UTC — so during BST the
+    // computed instant was an hour late and the 1h alert landed ~at the
+    // actual race start. localToUtc converts the wall-clock correctly
+    // (DST-aware), same helper the push-reminder cron uses.
+    const waveStart = localToUtc(
+      race.race_date,
+      (reg.wave.start_time || '00:00:00').slice(0, 8),
+      'Europe/Dublin',
+    )
+    if (!waveStart || Number.isNaN(waveStart.getTime())) {
       stats.skipped += 1
       continue
     }
