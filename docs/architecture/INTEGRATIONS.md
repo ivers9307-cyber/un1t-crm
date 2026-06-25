@@ -230,7 +230,7 @@ Returns `{ id, url, events, signing_secret }`. The `signing_secret` (starts `wsk
 
 Buyer-facing deposit pages live on a separate hostname from the CRM. Same Vercel project — multi-domain via hostname-aware middleware. The CRM stays at `crm.un1tdublin.com`; everything except the deposit pages + their backing public API is 404'd on the pay hostname so buyers never see CRM URLs.
 
-**Implementation.** `src/middleware.js` checks `request.headers.get('host')` first thing:
+**Implementation.** `src/proxy.js` checks `request.headers.get('host')` first thing:
 
 - If hostname matches `PAY_HOSTNAME` (env, defaults to `pay.ccfautos.com`):
   - Allow `/deposit/*` and `/api/public/deposit/*` through unauthenticated

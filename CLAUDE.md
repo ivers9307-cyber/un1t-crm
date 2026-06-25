@@ -13,7 +13,7 @@ The "if you miss one, you break prod or burn a session" list. Terse on purpose; 
 **Data access & security**
 - **Service-role routes get NO RLS.** Every `/api` route uses `createServerClient()` (service role, RLS-bypassing). RLS only binds `authenticated`/`anon` — it does **nothing** for a route. Enforce access in app code: `assertLocationAccess(user, locationId)` for location rows, an org-membership filter for org rows, owner/recipient/master checks for per-user rows. Detail routes return **404 not 403** so IDs can't be enumerated. Audit any read route by asking "what filters this if I delete the RLS policy?" — if "nothing", it's an IDOR.
 - **`enabled=true` + `test_mode=true` = LIVE FOR EVERYONE** (agent, WhatsApp numbers). A test allowlist needs `enabled=false`. Re-activating a `whatsapp_numbers` row needs a *permanent* System User token (a 24h temp token dying is what silently killed agent sends before).
-- **Migrations are forward-only**; apply via Supabase MCP (`apply_migration`) against the **un1t-crm** project (confirm ref via `list_projects` — NOT the sentinel project). Run `get_advisors` (type=security) after any DDL. Apply the migration *before* the code that depends on it deploys.
+- **Migrations are forward-only**; apply via Supabase MCP (`apply_migration`) against the **un1t-crm** project (ref `iyvtbjjxdggiadzwwvdj`; confirm via `list_projects` — NOT the sentinel project `tpttqakxmyxrwnqjepfm`). Run `get_advisors` (type=security) after any DDL. Apply the migration *before* the code that depends on it deploys.
 - **Supabase views default to SECURITY DEFINER** (bypass RLS). Always `WITH (security_invoker = on)`. The advisor flags it ERROR-level.
 - **RLS policies: wrap `auth.uid()` in `(SELECT auth.uid())`** (advisor `auth_rls_initplan` — per-row vs per-query eval).
 
@@ -104,7 +104,7 @@ React 19 + Next.js 16 (App Router) · Tailwind 3.4 · Supabase (Postgres + Auth 
 - **Input validation** via `validateBody(request, schema)` against Zod schemas in `src/lib/schemas.js`.
 - **Audience whitelist** — all sends go through `applyAudienceFilter()` (`AUDIENCE_FIELDS` registry); the canonical funnel field is `contacts.pipeline_stage_slug` (denormalised, trigger-maintained — operators never write it).
 
-**Key tables:** `locations`, `organizations`, `profiles`, `profile_locations`, `contacts`, `deals`/`pipeline_stages`, `bookings`/`event_types`, `campaigns`/`email_sequences`/`contact_preferences`, `whatsapp_conversations`/`_messages`/`_templates`, the roster v2 chain (`shift_templates`→`shift_blocks`→`shift_assignments`), `cars`, `cron_heartbeats`. ~305 migrations in `supabase/migrations/`. **RLS model + full table map: [`docs/architecture/REFERENCE.md`](docs/architecture/REFERENCE.md).**
+**Key tables:** `locations`, `organizations`, `profiles`, `profile_locations`, `contacts`, `deals`/`pipeline_stages`, `bookings`/`event_types`, `campaigns`/`email_sequences`/`contact_preferences`, `whatsapp_conversations`/`_messages`/`_templates`, the roster v2 chain (`shift_templates`→`shift_blocks`→`shift_assignments`), `cars`, `cron_heartbeats`. 310 migrations (numbered to 313) in `supabase/migrations/`. **RLS model + full table map: [`docs/architecture/REFERENCE.md`](docs/architecture/REFERENCE.md).**
 
 ---
 
