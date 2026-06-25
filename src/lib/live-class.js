@@ -12,6 +12,7 @@
 // the coach needs to handle in real time.
 
 import { logWarn } from '@/lib/log'
+import { selectAll } from '@/lib/select-all'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { lookupBookedMember, resolveClassLinkSource } from '@/lib/class-bookings'
 import { resolveMaxHr, summariseSession, resolveScoringConfig } from '@/lib/heart-rate'
@@ -280,13 +281,25 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
   const { zonePoints } = resolveScoringConfig(location)
 
   // Pull all samples for this session and summarise.
-  const { data: samples } = await db
-    .from('hr_samples')
-    .select('recorded_at, bpm')
-    .eq('session_id', sessionId)
-    .order('recorded_at', { ascending: true })
+  //
+  // MUST page: an un-paginated select caps at 1000 rows, which at the bridge's
+  // ~1Hz sample rate is only the FIRST ~17 minutes — every longer class had its
+  // zones/points/avg/peak computed off a truncated head of the session. Page
+  // the full set (ordered by recorded_at so the slice is chronological) and
+  // surface a query error instead of silently summarising an empty array.
+  let samples
+  try {
+    samples = await selectAll((from, to) => db
+      .from('hr_samples')
+      .select('recorded_at, bpm')
+      .eq('session_id', sessionId)
+      .order('recorded_at', { ascending: true })
+      .range(from, to))
+  } catch (e) {
+    return { ok: false, error: `sample load: ${e.message}` }
+  }
 
-  const summary = summariseSession(samples || [], session.max_hr_used, { zonePoints })
+  const summary = summariseSession(samples, session.max_hr_used, { zonePoints })
   const endedAt = new Date(nowMs).toISOString()
 
   const { error: updErr } = await db

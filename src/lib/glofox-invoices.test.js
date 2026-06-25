@@ -143,9 +143,16 @@ function fakeDb({ invoices = [], updateOk = true } = {}) {
     updates,
     from(table) {
       if (table === 'glofox_invoices') {
+        // recomputeContactLifetimeValue now pages via selectAll:
+        // .select().eq().order().range() → one short page resolves the
+        // whole fixture and the loop stops.
         return {
           select: () => ({
-            eq: () => Promise.resolve({ data: invoices, error: null }),
+            eq: () => ({
+              order: () => ({
+                range: () => Promise.resolve({ data: invoices, error: null }),
+              }),
+            }),
           }),
         }
       }

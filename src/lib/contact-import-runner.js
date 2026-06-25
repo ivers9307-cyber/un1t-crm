@@ -23,6 +23,7 @@
 
 import { validateRow, deriveName, fieldsTouchedByMapping } from './contact-import.js'
 import { logWarn } from './log.js'
+import { selectAllByKeys } from './select-all.js'
 
 export async function runImportCommit(db, {
   importId,
@@ -69,26 +70,29 @@ export async function runImportCommit(db, {
     plans.push({ rowNumber, action: 'pending', rawRow: rows[i], payload: r.payload, glofoxId })
   }
 
-  // Bulk lookup — both keys.
+  // Bulk lookup — both keys. CHUNKED + PAGED: an `.in(col, keys)` lookup has two
+  // independent 1000-caps — the match set caps at db-max-rows AND the key list
+  // overflows the URL. If either bites, a real match is MISSED and the row
+  // wrongly takes the INSERT branch → a DUPLICATE contact (the exact failure
+  // this PR fixes). selectAllByKeys chunks the keys (~300/query) and pages each
+  // chunk's matches.
   const lookupCols = ['id', 'email', 'glofox_member_id', ...touchedFields].filter(Boolean)
   const colExpr = [...new Set(lookupCols)].join(', ')
   const existingByEmail = new Map()
   const existingByGlofox = new Map()
-  const queries = []
-  if (emailsToLookup.size > 0) {
-    queries.push(db.from('contacts').select(colExpr)
-      .eq('location_id', locationId).in('email', [...emailsToLookup]))
-  }
-  if (glofoxToLookup.size > 0) {
-    queries.push(db.from('contacts').select(colExpr)
-      .eq('location_id', locationId).in('glofox_member_id', [...glofoxToLookup]))
-  }
-  const lookupResults = await Promise.all(queries)
-  for (const { data } of lookupResults) {
-    for (const c of (data || [])) {
-      if (c.email) existingByEmail.set(String(c.email).toLowerCase(), c)
-      if (c.glofox_member_id) existingByGlofox.set(c.glofox_member_id, c)
-    }
+  const [emailMatches, glofoxMatches] = await Promise.all([
+    selectAllByKeys([...emailsToLookup], (keys, from, to) => db
+      .from('contacts').select(colExpr)
+      .eq('location_id', locationId).in('email', keys)
+      .order('id', { ascending: true }).range(from, to)),
+    selectAllByKeys([...glofoxToLookup], (keys, from, to) => db
+      .from('contacts').select(colExpr)
+      .eq('location_id', locationId).in('glofox_member_id', keys)
+      .order('id', { ascending: true }).range(from, to)),
+  ])
+  for (const c of [...emailMatches, ...glofoxMatches]) {
+    if (c.email) existingByEmail.set(String(c.email).toLowerCase(), c)
+    if (c.glofox_member_id) existingByGlofox.set(c.glofox_member_id, c)
   }
 
   const counts = { created: 0, updated: 0, skipped: 0, errored: 0 }

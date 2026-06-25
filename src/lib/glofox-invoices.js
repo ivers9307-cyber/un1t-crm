@@ -15,6 +15,8 @@
 // upsert the same row, then re-aggregate from scratch. Out-of-
 // order delivery converges.
 
+import { selectAll } from '@/lib/select-all'
+
 /**
  * Parse a Glofox InvoiceEvent.Payload into the row shape we want
  * to write to glofox_invoices.
@@ -131,11 +133,21 @@ export async function upsertGlofoxInvoice(db, locationId, contactId, parsed, raw
  */
 export async function recomputeContactLifetimeValue(db, contactId) {
   if (!db || !contactId) return null
-  const { data: invoices, error } = await db
-    .from('glofox_invoices')
-    .select('amount_cents, currency, status, invoice_date')
-    .eq('contact_id', contactId)
-  if (error || !Array.isArray(invoices)) return null
+  // Page every invoice for the contact — an un-paginated select caps at 1000
+  // rows, which silently UNDERCOUNTS lifetime value for any long-tenure member
+  // past that many invoices. Order by id so paging is stable; mirrors
+  // churn-radar-data.js#fetchInvoicesByStatus. Best-effort: swallow + bail.
+  let invoices
+  try {
+    invoices = await selectAll((from, to) => db
+      .from('glofox_invoices')
+      .select('amount_cents, currency, status, invoice_date')
+      .eq('contact_id', contactId)
+      .order('id', { ascending: true })
+      .range(from, to))
+  } catch {
+    return null
+  }
 
   let lifetimeCents = 0
   let paidCount = 0

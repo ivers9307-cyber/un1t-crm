@@ -32,6 +32,7 @@ import { logInfo, logWarn, logError } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { localToUtc, formatLocalTime } from '@/lib/push-reminders'
 import { getEffectiveConfig, getEffectiveLeadTimesForUser } from '@/lib/notification-config'
+import { selectAll } from '@/lib/select-all'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -102,15 +103,24 @@ export async function GET(request) {
   // Bookings stay location-only (operator on-duty preference, not
   // personal).
   try {
-    const { data: tasks, error: tErr } = await db
-      .from('activities')
-      .select('id, subject, assignee_id, location_id, due_date, due_time')
-      .eq('kind', 'task')
-      .in('status', ['todo', 'in_progress'])
-      .not('assignee_id', 'is', null)
-      .not('due_date', 'is', null)
-      .gte('due_date', fetchLowerDay)
-      .lte('due_date', fetchUpperDay)
+    // PAGED: an un-paginated select caps at 1000, silently DROPPING every task
+    // reminder past the first 1000 due-window rows. Page the full set (order by
+    // id so paging is stable).
+    let tasks = null
+    let tErr = null
+    try {
+      tasks = await selectAll((from, to) => db
+        .from('activities')
+        .select('id, subject, assignee_id, location_id, due_date, due_time')
+        .eq('kind', 'task')
+        .in('status', ['todo', 'in_progress'])
+        .not('assignee_id', 'is', null)
+        .not('due_date', 'is', null)
+        .gte('due_date', fetchLowerDay)
+        .lte('due_date', fetchUpperDay)
+        .order('id', { ascending: true })
+        .range(from, to))
+    } catch (e) { tErr = e }
 
     if (tErr) {
       logError('cron-push-reminders', 'task fetch failed', { err: tErr })
@@ -196,16 +206,25 @@ export async function GET(request) {
 
   // -------------------------- BOOKINGS --------------------------
   try {
-    const { data: bookings, error: bErr } = await db
-      .from('bookings')
-      .select(`
-        id, customer_name, booking_date, start_time, status, location_id, skip_reminder,
-        event_type:event_types(name)
-      `)
-      .eq('status', 'confirmed')
-      .eq('skip_reminder', false)
-      .gte('booking_date', fetchLowerDay)
-      .lte('booking_date', fetchUpperDay)
+    // PAGED: an un-paginated select caps at 1000, silently DROPPING every
+    // booking reminder past the first 1000 due-window rows. Page the full set
+    // (order by id so paging is stable).
+    let bookings = null
+    let bErr = null
+    try {
+      bookings = await selectAll((from, to) => db
+        .from('bookings')
+        .select(`
+          id, customer_name, booking_date, start_time, status, location_id, skip_reminder,
+          event_type:event_types(name)
+        `)
+        .eq('status', 'confirmed')
+        .eq('skip_reminder', false)
+        .gte('booking_date', fetchLowerDay)
+        .lte('booking_date', fetchUpperDay)
+        .order('id', { ascending: true })
+        .range(from, to))
+    } catch (e) { bErr = e }
 
     // NOTIF.10 — loop inverted to support per-user lead-time
     // overrides. For each booking, resolve the role-set, fetch each
