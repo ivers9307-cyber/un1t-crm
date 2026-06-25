@@ -52,7 +52,11 @@ export default ({ config }) => ({
   // trackside race-day control. JS-ONLY — every one already shipped as an OTA
   // to the 1.3.0 runtime lane, so runtimeVersion stays '1.3.0' (no native
   // change; the fresh binary + existing 1.3.0 installs share one OTA lane).
-  version: '1.3.2',
+  //
+  // 1.4.0 (EVENT-CHECKIN.D) — adds the in-app QR scanner for event check-in
+  // (expo-camera, a NATIVE module). Ships only in a new EAS Build + store
+  // release, NOT over OTA; runtimeVersion bumps to 1.4.0 to isolate its lane.
+  version: '1.4.0',
   // We ship iOS + Android only. Without this, Expo defaults to
   // ['ios','android','web'] and `eas update` exports for web too —
   // which crashes the publish because react-native-web isn't installed.
@@ -168,6 +172,14 @@ export default ({ config }) => ({
       'expo-local-authentication',
       { faceIDPermission: 'Unlock CF Studio with Face ID.' },
     ],
+    // EVENT-CHECKIN.D — in-app QR scanner for event check-in. cameraPermission
+    // writes NSCameraUsageDescription (iOS); expo-camera adds the CAMERA
+    // permission (Android). NATIVE module → new EAS Build, NOT an OTA. We only
+    // decode QR codes — never record — and RECORD_AUDIO stays blocked above.
+    [
+      'expo-camera',
+      { cameraPermission: 'Scan attendee check-in QR codes at events.', recordAudioAndroid: false },
+    ],
   ],
   experiments: {
     typedRoutes: true,
@@ -214,7 +226,12 @@ export default ({ config }) => ({
   // lane: old binaries (exposdk:54.0.0) no longer receive OTAs — frozen, NOT
   // crashed — until users install the 1.3.0 binary that contains the module.
   // Bump this string on every future native change.
-  runtimeVersion: '1.3.0',
+  //
+  // 1.4.0 — EVENT-CHECKIN.D adds expo-camera (native). New lane: existing
+  // 1.3.x installs stop receiving OTAs (frozen, NOT crashed) until users
+  // install the 1.4.0 binary from the stores. Merge this PR only as part of
+  // that native release (see the Face ID release playbook).
+  runtimeVersion: '1.4.0',
   extra: {
     // Supabase URL + anon key are PUBLIC by design — the anon key is
     // protected by Row-Level Security on the database, not by secrecy

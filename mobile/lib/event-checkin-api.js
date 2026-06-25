@@ -28,3 +28,13 @@ export function checkInWholeTeam(eventId, { registrationId, locationId } = {}) {
     locationId,
   })
 }
+
+// Check in by scanning a per-attendee QR. The eventId + token come from the
+// scanned URL (parseCheckinQr); the server re-verifies the signed token.
+export function scanCheckin(eventId, { token, locationId } = {}) {
+  return api(`/api/events/${eventId}/checkin/scan`, {
+    method: 'POST',
+    body: { token },
+    locationId,
+  })
+}
