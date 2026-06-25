@@ -38,7 +38,7 @@ export async function POST(request, props) {
   const db = createServerClient()
   const { data: car } = await db
     .from('cars')
-    .select('*, car_documents(doc_type)')
+    .select('*, car_documents(doc_type, xero_sent_at)')
     .eq('id', params.id)
     .single()
   if (!car) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })

@@ -178,11 +178,24 @@ export async function findOrCreateGlofoxMember({
   // welcome-sequence merge tag {{glofox_passcode}} can read it
   // at send time. Cleared either by the welcome-sequence
   // enrolment hook or a future 30-day TTL cron.
-  await db.from('contacts').update({
+  const { error: linkErr } = await db.from('contacts').update({
     glofox_member_id: newGlofoxId,
     glofox_synced_at: new Date().toISOString(),
     glofox_passcode: passcode,
   }).eq('id', contact.id)
+  if (linkErr) {
+    // The Glofox member exists but the CRM link write failed — don't
+    // swallow it and proceed (that leaves a created-but-unlinked contact
+    // and pushes a trial onto an unlinked row). Surface for operator
+    // review; the next search-by-email run re-links without duplicating.
+    console.warn('[glofox-push] CRM link write after create failed:', linkErr.message)
+    const ev = await audit(db, {
+      contact_id: contact.id, location_id: locationId, source,
+      status: 'needs_review', glofox_member_id: newGlofoxId,
+      error_message: `Glofox member created but CRM link write failed: ${linkErr.message}`,
+    })
+    return { status: 'needs_review', glofox_member_id: newGlofoxId, error: linkErr.message, push_event_id: ev?.id }
+  }
 
   // Step 5 — optional trial-membership purchase. Per-location
   // config; if not set, skip with a warning.
@@ -268,10 +281,14 @@ export async function findOrCreateGlofoxMember({
  */
 async function linkExistingGlofoxMember({ db, locationId, contact, creds, glofoxMember }) {
   // Write the link (idempotent — safe to re-run).
-  await db.from('contacts').update({
+  const { error: linkErr } = await db.from('contacts').update({
     glofox_member_id: String(glofoxMember._id),
     glofox_synced_at: new Date().toISOString(),
   }).eq('id', contact.id)
+  if (linkErr) {
+    console.warn('[glofox-push] existing-member CRM link write failed:', linkErr.message)
+    return { error: `link write failed: ${linkErr.message}` }
+  }
   // Then fully sync from Glofox so the contact is populated.
   // Uses the canonical /2.0/members/{id} fetch via applyMemberSync
   // so credits, bookings, interactions etc. all land.

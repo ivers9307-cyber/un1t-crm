@@ -90,10 +90,15 @@ export async function enrolContacts({
   // Bump the cached counter on the parent sequence. Best-effort —
   // the runner doesn't depend on this counter for correctness, it's
   // just for the admin dashboard.
-  await db.rpc('increment_sequence_enrolled', {
-    p_sequence_id: sequenceId,
-    p_delta: toInsert.length,
-  }).catch(() => { /* RPC not present — no-op */ })
+  // NOTE: a supabase-js builder is a thenable, not a Promise — it has no
+  // `.catch`, so `db.rpc(...).catch(...)` throws a synchronous TypeError and
+  // the RPC never fires. Must be try/await/catch.
+  try {
+    await db.rpc('increment_sequence_enrolled', {
+      p_sequence_id: sequenceId,
+      p_delta: toInsert.length,
+    })
+  } catch { /* RPC not present / best-effort counter — no-op */ }
 
   return { enrolled: toInsert.length, skipped: alreadyActive.size }
 }

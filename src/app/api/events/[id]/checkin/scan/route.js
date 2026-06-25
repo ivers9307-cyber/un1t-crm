@@ -26,7 +26,8 @@ export async function POST(request, props) {
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
 
-  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!secret) return NextResponse.json({ success: false, error: 'Check-in temporarily unavailable' }, { status: 503 })
   const payload = verifyCheckinToken(validation.data.token, secret)
   if (!payload || payload.eventId !== params.id) {
     return NextResponse.json({ success: false, error: 'Invalid check-in code', code: 'bad_token' }, { status: 400 })

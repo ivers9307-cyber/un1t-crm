@@ -44,6 +44,13 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
   if (!contact?.email) {
     throw new Error('Contact has no email address — cannot send email step.')
   }
+  // Consent/deliverability gate — mirror the SMS step + event-reminders +
+  // booking-confirmations. Without it an active sequence keeps emailing a
+  // contact who has since unsubscribed/bounced/complained (Postmark
+  // reputation + GDPR). Throwing routes to the standard sequence error path.
+  if (contact.email_status && ['bounced', 'complained', 'unsubscribed'].includes(contact.email_status)) {
+    throw new Error(`Contact's email_status is '${contact.email_status}' — refusing to send sequence email.`)
+  }
 
   // Resolve content: inline OR via template_id reference.
   let subject = step.subject
