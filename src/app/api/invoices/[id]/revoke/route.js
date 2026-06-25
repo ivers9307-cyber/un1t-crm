@@ -31,9 +31,10 @@ export async function POST(_request, props) {
     return NextResponse.json({ success: false, error: 'Invoice not found' }, { status: 404 })
   }
 
-  // Only the contractor who submitted it can revoke.
+  // Only the contractor who submitted it can revoke. 404 (not 403) so a
+  // non-owner can't tell this invoice exists.
   if (inv.contractor_id !== user.id) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+    return NextResponse.json({ success: false, error: 'Invoice not found' }, { status: 404 })
   }
 
   if (inv.status !== 'submitted') {
