@@ -40,19 +40,22 @@ export async function POST(request, props) {
   if (loadErr || !inv) {
     return NextResponse.json({ success: false, error: 'Invoice not found' }, { status: 404 })
   }
+
+  // Auth FIRST — before the status check — so a non-owner can't probe an
+  // invoice's existence or state. 404 (not 403) to avoid the existence leak.
+  if (user.role !== 'master') {
+    const ownerLocations = Object.entries(user.rolesByLocation || {})
+      .filter(([, r]) => r === 'owner').map(([loc]) => loc)
+    if (!ownerLocations.includes(inv.location_id)) {
+      return NextResponse.json({ success: false, error: 'Invoice not found' }, { status: 404 })
+    }
+  }
+
   if (inv.status !== 'submitted') {
     return NextResponse.json(
       { success: false, error: `Cannot decline an invoice in '${inv.status}' state.` },
       { status: 409 }
     )
-  }
-
-  if (user.role !== 'master') {
-    const ownerLocations = Object.entries(user.rolesByLocation || {})
-      .filter(([, r]) => r === 'owner').map(([loc]) => loc)
-    if (!ownerLocations.includes(inv.location_id)) {
-      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-    }
   }
 
   const now = new Date().toISOString()

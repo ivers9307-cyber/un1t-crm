@@ -46,7 +46,9 @@ export async function GET(_request, props) {
       .filter(([, r]) => r === 'owner').map(([loc]) => loc)
     isOwnerHere = ownerLocations.includes(inv.location_id)
     if (!isOwnerHere) {
-      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+      // 404 (not 403) so a non-owner can't tell this invoice exists. The
+      // self/owner/master tiers above still get through.
+      return NextResponse.json({ success: false, error: 'Invoice not found' }, { status: 404 })
     }
   }
 

@@ -56,7 +56,10 @@ export async function loadInvoiceForUser(id) {
   const ownsLocation = Object.entries(user.rolesByLocation || {})
     .some(([loc, r]) => r === 'owner' && loc === row.location_id)
   if (!isMaster && !ownsLocation) {
-    return { response: NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 }) }
+    // 404 (not 403) so a cross-org caller can't distinguish "exists elsewhere"
+    // from "doesn't exist" — matches the not-found branch above. Covers every
+    // invoices-inbox/[id]/* route via this shared loader.
+    return { response: NextResponse.json({ success: false, error: 'Not found' }, { status: 404 }) }
   }
 
   return { user, db, row }
