@@ -23,27 +23,12 @@ import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { sendTransactionalEmail } from '@/lib/postmark'
 import { logWarn } from '@/lib/log'
+import { fmtBookingTime } from '@/lib/booking-confirmations'
 
 const CancelSchema = z.object({
   notify_customer: z.boolean().optional(),
   reason: z.string().max(500).nullable().optional(),
 })
-
-function formatBookingTime(dateStr, timeStr) {
-  try {
-    const dt = new Date(`${dateStr}T${timeStr}Z`)
-    return dt.toLocaleString('en-IE', {
-      timeZone: 'Europe/Dublin',
-      weekday: 'short',
-      day: 'numeric',
-      month: 'short',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  } catch {
-    return `${dateStr} ${timeStr}`
-  }
-}
 
 export async function POST(request, props) {
   const params = await props.params;
@@ -128,7 +113,7 @@ export async function POST(request, props) {
     } else {
       try {
         const eventName = booking.event_types?.name || 'your booking'
-        const when = formatBookingTime(booking.booking_date, booking.start_time)
+        const when = fmtBookingTime(booking.booking_date, booking.start_time)
         const reasonHtml = reason
           ? `<p>${escapeHtml(reason)}</p>`
           : ''

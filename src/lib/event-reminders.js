@@ -25,20 +25,20 @@ import { createServerClient } from '@/lib/supabase'
 import { sendTransactionalEmail, applyMergeTags } from '@/lib/postmark'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { logWarn } from '@/lib/log'
-import { formatWeekdayShortDateTimeInTZ } from '@/lib/dates'
+import { fmtBookingTime } from '@/lib/booking-confirmations'
 
 // ±1h covers Dublin DST drift cleanly. Operators set reminder time in
 // coarse units (24h, 2h) so a ±1h fire-time window is acceptable.
 const TOLERANCE_MS = 60 * 60 * 1000
 
-/**
- * Render an event-time string for the reminder body. Always Dublin local.
- */
-function fmtBookingTime(dateStr, timeStr) {
-  const dt = new Date(`${dateStr}T${timeStr}Z`)
-  // Dublin display, falls back to a raw concat if Intl is unavailable.
-  return formatWeekdayShortDateTimeInTZ(dt) || `${dateStr} ${timeStr}`
-}
+// BOOKING.2 — the reminder email + SMS body render the event time via
+// the shared fmtBookingTime (booking-confirmations). booking_date /
+// start_time are Dublin wall-clock; the old local copy did
+// `new Date(\`${date}T${time}Z\`)` then rendered in Europe/Dublin,
+// adding the BST hour (17:00 reminder said 18:00). The shared helper
+// anchors the day label on noon-UTC and uses the time string verbatim.
+// NOTE: this is the human-facing body only — the window-matching math
+// below (the bookingMs guard) is a SEPARATE concern and stays as-is.
 
 /**
  * Find each booking that needs a reminder right now and send it via
