@@ -1,0 +1,46 @@
+# un1t-crm — backlog & durable do-not-build decisions
+
+> Moved out of `CLAUDE.md` (2026-06-25). Not a project plan — a durable scratchpad of decisions (including deliberately-dropped ideas) and pointers to design docs, so they are not re-derived each session. Linked from the CLAUDE.md "Deep reference" index.
+
+## Roadmap & backlog
+
+The shipped-work changelog (numbered Done log, #215 → #28) lives in [docs/CHANGELOG.md](docs/CHANGELOG.md) — moved out of this file on 2026-06-01 to keep CLAUDE.md as working reference rather than history. When you ship a task, add its entry there and roll any reusable lesson into the relevant CLAUDE.md section.
+
+### Backlog — picked up when relevant
+
+These are not commitments, just durable notes so we don't re-derive them every session.
+
+**Deposits / payments** (dropped — durable do-not-build decisions, kept to avoid re-deriving)
+- ~~Refund UI on the car-detail Deposit section.~~ — **dropped**. CCF Autos deposits are non-refundable and that policy isn't changing, so the operator-facing button would be unused. The `refundOrder()` lib helper in `src/lib/revolut.js` stays — it's the right primitive to reach for if/when the gym side of the business introduces payments (memberships, class packs, retail) where partial/full refunds ARE part of the customer journey. Revisit the UI question then; the lib doesn't need touching now.
+- ~~Multi-currency support for deposits (today EUR-only). UK customers buying RHD stock would value GBP.~~ — **dropped**. Not selling to UK customers. Revisit if/when the customer geography changes.
+- ~~Surface the buyer-side payment-method icons (cards / Apple Pay / Google Pay / Revolut Pay) on the deposit page above the widget so the buyer knows what to expect before clicking pay.~~ — **dropped**. Not needed; the embedded checkout widget surfaces the icons inline once it mounts.
+
+**Invoice OCR (#180 follow-ups)**
+- Enable Anthropic prompt caching on the invoice extraction system prompt. The system prompt in `src/lib/invoice-extraction.js` is identical across every call (~500 tokens), so adding a `cache_control: { type: 'ephemeral' }` block to the system message would knock ~50% off the input cost per extraction. Anthropic caches for 5 min by default; at any realistic invoice cadence the cache stays warm. Implementation is ~10 lines in the Anthropic request body + a `anthropic-beta: prompt-caching-2024-07-31` header. Worth doing once monthly volume crosses ~200 invoices/month (cache savings start outweighing the cognitive cost of the beta header).
+- Monthly cost true-up review. After the first month of real extractions, pull actuals from `console.anthropic.com` → Usage and compare against the per-invoice estimates (~$0.017 single-page, ~$0.030 multi-page). If consistently higher: likely operators are re-extracting frequently, or operators are uploading huge raw phone photos that should be downsampled before send. Both are easy fixes; the trigger to investigate is "more than 2× the estimate".
+
+**Performance / infrastructure**
+- Move car photos to Supabase Storage signed URLs (today they're public-bucket URLs, fine for inventory but limits the option to gate gallery views).
+
+**Multi-brand / platform**
+- Brand-aware AppShell — pull header logo + favicon + theme tokens off the active location so CCF Autos visitors at `crm.un1tdublin.com` see car-brand chrome, not gym chrome, without separate deployments.
+
+**Platform roadmap (whole-platform review, 2026-05-23)**
+- A balanced whole-platform review — 19 opportunities across acquisition, retention, member experience, analytics, revenue, ops and platform — lives in `docs/PLATFORM_ROADMAP.md` (also a Cowork artifact, id `un1t-platform-roadmap`). It's a strategic shortlist, not committed work; pull individual items into numbered tasks when picked up. Headline: the platform surfaces who to act on (radars) but doesn't act — wiring one-click templated outreach into the radar "contacted" buttons (#1 in the doc) is the suggested first move. Whole-category gaps confirmed by code search: referral program, member NPS/feedback, reviews/reputation, marketing attribution, an analytics/BI layer.
+
+**Revolut authorised supplier payments (design, 2026-05-26 — under review)**
+- Full pre-build design at `docs/REVOLUT_PAYMENTS_DESIGN.md`. Closes the AP loop: ingest → Xero bill → **pay** → paid status synced back. No code yet — design only. **Decision captured**: use Revolut Business API's **payment-draft model** (CRM assembles, a human approves the actual money movement in the Revolut Business app), not direct `POST /pay` — the CRM is never the final authoriser. This also keeps PSD2/SCA inside the bank's app. **It's the Business API, not the Merchant API the repo already has** for inbound — separate cert/OAuth auth (JWT client assertion + X.509), separate credentials, periodic human re-consent. 4-phase sandbox-first build planned. Before any build, settle the §10 open questions in the doc (connection scope per-location vs per-org, who approves, can counterparties be created from the CRM or only selected, re-consent cadence). Resume notes section at the top of the doc — update it as decisions land.
+
+**Studio devices — Mac + iPad in-studio apps (designed 2026-05-27, all decisions locked)**
+- Pre-build design doc for Mac (Tauri shell wrapping un1t-crm) + iPad (universal CF Studio) in-studio apps lives in `docs/STUDIO_DEVICES_DESIGN.md`. Four phases: **Phase 0** studio-device PIN auth (4-digit globally-unique PIN, 5-min idle timeout, gated to studio wifi by IP + device pairing, per-device lockout 5 attempts → 15min cooldown), **Phase 1** universal iOS binary + iPad layouts (existing iPads on iOS 26 so deployment target can be generous), **Phase 2** Mac shell with auto-launch on boot + per-user `home_screen_path` setting, **Phase 3** Coach In-Class mode on iPad (v2 offline-first locked, expo-sqlite + sync engine). Phase 4 (self-service kiosk) parked. Every decision locked in the doc's "Locked decisions" subsection. Only remaining open item is Phase 4 kiosk scoping prereqs (member check-in flow). Effort ~17–25 days total across 4–6 PRs. **Phase 0 is foundation — Phase 1 and Phase 2 both consume it.** Start with PR 0 (PIN auth) when this is picked up; A and B can be built in parallel after that.
+
+**Sequencing — richer triggers, esp. membership-state changes — ✅ SHIPPED Phase 0 (2026-06-04, Pillar 2 of the sequencing redesign)**
+- **(a) DONE** — `membership_state_change` trigger ([#352](https://github.com/ivers9307-cyber/un1t-crm/pull/352)). `triggerSequencesForMembershipStateChange(contactId, oldState, newState)` in `src/lib/sequences/triggers.js` mirrors `pipeline_stage_change` (`trigger_config { from_state?, to_state? }` over active/paused/**locked**). Fires from `glofox-sync.js applyMemberSync` — reads `preview.changes.glofox_membership_state.{from,to}` (only set on a real single-member update; create/no-op never fires), alongside the trial-transition tags. In `schema.js TRIGGER_TYPES` + both `/api/sequences` enums + `SequenceSettings.jsx` (From/To state selects). The win-back/dunning primitive (→ locked).
+- **(b) DONE (editable-condition variant)** — rather than a parallel per-trigger filter, made the sequence's existing `audience_filter` **editable in the builder** ([#353](https://github.com/ivers9307-cyber/un1t-crm/pull/353)): `SequenceSettings.jsx` embeds `<AudienceBuilder/>`; `PUT /api/sequences/[id]` accepts `audience_filter`. The runner already enforced it (`contactMatchesSequenceAudience`); now any sequence is gateable by any attribute (incl. `glofox_membership_state`). Segment trigger also gained a "create one on Contacts" discoverability link.
+- Part of **Pillar 2** (unified ad-hoc send) — design at `docs/PILLAR2_UNIFIED_SEND_2026-06.md`. NEXT in Pillar 2 = Phase 1 (unified SMS + WhatsApp send surface, replacing the channel-first broadcast pages).
+
+### Process notes
+
+- Backlog items move to in-progress as a numbered task in Cowork before implementation starts.
+- Lessons learned from each shipped task get rolled into the relevant CLAUDE.md section (Coding conventions, Lessons learned, Multi-vendor comms, etc.) — not into this list.
+- This list is intentionally not a project plan — no dates, no commitments. It's a durable scratchpad.
