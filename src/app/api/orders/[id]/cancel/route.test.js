@@ -3,7 +3,7 @@
 // Same hoisted-mock pattern as ../route.test.js. Coverage:
 //   - 401 when no user
 //   - 403 when role isn't manager+
-//   - 403 when the order is in a different location (IDOR)
+//   - 404 when the order is in a different location (IDOR)
 //   - 404 when the order doesn't exist
 //   - 409 when the order isn't pending
 //   - happy path race_registration → status cancelled + source cascade
@@ -22,6 +22,17 @@ vi.mock('@/lib/auth', () => ({
     const allowed = (user.locations || []).some((l) => l.id === locationId)
     if (!allowed) {
       return new Response(JSON.stringify({ success: false, error: 'Forbidden' }), { status: 403 })
+    }
+    return null
+  },
+  assertLocationAccessOr404: (user, locationId) => {
+    if (!user) {
+      return new Response(JSON.stringify({ success: false, error: 'Unauthorized' }), { status: 401 })
+    }
+    if (!locationId) return null
+    const allowed = (user.locations || []).some((l) => l.id === locationId)
+    if (!allowed) {
+      return new Response(JSON.stringify({ success: false, error: 'Not found' }), { status: 404 })
     }
     return null
   },
@@ -123,13 +134,13 @@ describe('POST /api/orders/[id]/cancel', () => {
     expect(res.status).toBe(404)
   })
 
-  it('returns 403 when the order is in a different location (IDOR)', async () => {
+  it('returns 404 when the order is in a different location (IDOR)', async () => {
     getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
     createServerClient.mockReturnValue(mockDb({
       order: { id: 'o1', location_id: 'loc-B', status: 'pending', source_type: 'race_registration', source_id: 's1' },
     }))
     const res = await POST(req(), { params: { id: 'o1' } })
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
   })
 
   it('returns 409 when the order is not pending', async () => {

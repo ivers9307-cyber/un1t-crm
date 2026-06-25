@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { resolveSequenceGraph } from '@/lib/sequences/graph/persist'
 import { parseGraphShape } from '@/lib/sequences/graph/schema'
 
@@ -29,7 +29,7 @@ export async function GET(request, props) {
   const db = createServerClient()
   const sequence = await loadSequence(db, params.id)
   if (!sequence) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, sequence.location_id)
+  const guard = assertLocationAccessOr404(user, sequence.location_id)
   if (guard) return guard
 
   return NextResponse.json({
@@ -52,7 +52,7 @@ export async function PUT(request, props) {
   const { data: existing } = await db.from('email_sequences')
     .select('location_id').eq('id', params.id).single()
   if (!existing) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, existing.location_id)
+  const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
 
   const body = await request.json().catch(() => ({}))

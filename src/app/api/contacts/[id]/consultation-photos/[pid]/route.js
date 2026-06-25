@@ -8,7 +8,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
@@ -42,7 +42,7 @@ export async function DELETE(_request, props) {
     return NextResponse.json({ success: false, error: 'Photo not found' }, { status: 404 })
   }
 
-  const guard = assertLocationAccess(user, photo.location_id)
+  const guard = assertLocationAccessOr404(user, photo.location_id)
   if (guard) return guard
 
   // Remove storage object best-effort — swallow errors so a missing

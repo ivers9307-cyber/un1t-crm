@@ -14,7 +14,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { completionGaps } from '@/lib/cars'
@@ -43,7 +43,7 @@ export async function POST(request, props) {
     .single()
   if (!car) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
-  const guard = assertLocationAccess(user, car.location_id)
+  const guard = assertLocationAccessOr404(user, car.location_id)
   if (guard) return guard
 
   if (to === 'completed') {

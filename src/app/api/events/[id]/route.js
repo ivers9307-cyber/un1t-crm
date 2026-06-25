@@ -5,7 +5,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
@@ -89,8 +89,8 @@ export async function GET(_request, props) {
   if (error || !data) {
     return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, data.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, data.location_id)
+  if (guard) return guard
 
   return NextResponse.json({ success: true, data })
 }
@@ -116,8 +116,8 @@ export async function PUT(request, props) {
   if (lookupErr || !existing) {
     return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, existing.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, existing.location_id)
+  if (guard) return guard
 
   // Pull waves out before building the race_events update payload —
   // they go to a different table.
@@ -230,8 +230,8 @@ export async function DELETE(_request, props) {
     .eq('id', params.id)
     .single()
   if (!existing) return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, existing.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, existing.location_id)
+  if (guard) return guard
 
   const { error } = await db
     .from('race_events')

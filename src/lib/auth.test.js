@@ -3,6 +3,7 @@ import {
   buildRolesByLocation,
   resolveActiveLocationRole,
   assertLocationAccess,
+  assertLocationAccessOr404,
   getUserLocationIds,
 } from './auth.js'
 
@@ -261,6 +262,58 @@ describe('assertLocationAccess', () => {
     // The id-less entry should NOT match anything.
     const r = assertLocationAccess(odd, 'no-id')
     expect(r.status).toBe(403)
+  })
+})
+
+// ─── assertLocationAccessOr404 ──────────────────────────────────────────
+// Same membership logic as assertLocationAccess, but a forbidden location
+// returns 404 instead of 403. Used on DETAIL routes (fetch-by-id → 404 if
+// absent → guard the fetched row) so a cross-tenant id is indistinguishable
+// from a non-existent one — closes the existence/info-disclosure leak
+// (audit #17). Genuine role/permission 403s and list-route 403s are
+// untouched and keep using assertLocationAccess.
+
+describe('assertLocationAccessOr404', () => {
+  const userWithLocations = {
+    id: 'profile-1',
+    locations: [
+      { id: 'loc-hatch', name: 'Hatch Street' },
+      { id: 'loc-stillorgan', name: 'Stillorgan' },
+    ],
+  }
+
+  it('returns null (request continues) when the locationId is allowed', () => {
+    expect(assertLocationAccessOr404(userWithLocations, 'loc-hatch')).toBeNull()
+    expect(assertLocationAccessOr404(userWithLocations, 'loc-stillorgan')).toBeNull()
+  })
+
+  it('returns 404 (NOT 403) when the locationId belongs to another tenant', async () => {
+    // The whole point of this helper: a cross-tenant row must look exactly
+    // like a missing row so the caller can't tell the id exists elsewhere.
+    const r = assertLocationAccessOr404(userWithLocations, 'loc-some-other-tenant')
+    expect(r).not.toBeNull()
+    expect(r.status).toBe(404)
+    const body = await r.json()
+    expect(body).toEqual({ success: false, error: 'Not found' })
+  })
+
+  it('returns null when locationId is null/undefined (request continues)', () => {
+    expect(assertLocationAccessOr404(userWithLocations, null)).toBeNull()
+    expect(assertLocationAccessOr404(userWithLocations, undefined)).toBeNull()
+  })
+
+  it('returns 401 when the user is null', async () => {
+    const r = assertLocationAccessOr404(null, 'loc-hatch')
+    expect(r).not.toBeNull()
+    expect(r.status).toBe(401)
+    const body = await r.json()
+    expect(body).toEqual({ success: false, error: 'Unauthorized' })
+  })
+
+  it('returns 404 (not 403) when user has no locations at all', async () => {
+    const noLoc = { id: 'p2', locations: [] }
+    const r = assertLocationAccessOr404(noLoc, 'loc-anything')
+    expect(r.status).toBe(404)
   })
 })
 

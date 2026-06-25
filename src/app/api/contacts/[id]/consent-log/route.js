@@ -14,7 +14,7 @@
 // ip_address) by enumerating contact IDs.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 
 export const runtime = 'nodejs'
@@ -49,7 +49,7 @@ export async function GET(_request, props) {
   if (!contact) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, contact.location_id)
+  const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
 
   // Pull the rows + the acting profile name in one round-trip.

@@ -14,8 +14,9 @@
 //
 // The location-gate path under test:
 //   PUT /api/contacts/segments/[id] looks up the segment, then calls
-//   assertLocationAccess(user, existing.location_id). If the user
-//   isn't a member of the segment's location, the route returns 403.
+//   assertLocationAccessOr404(user, existing.location_id). If the user
+//   isn't a member of the segment's location, the route returns 404
+//   (so cross-tenant IDs can't be enumerated).
 //   The test we care most about is the IDOR case: a user authenticated
 //   to location A trying to mutate a segment in location B.
 //
@@ -47,6 +48,25 @@ vi.mock('@/lib/auth', () => ({
     if (!allowed) {
       return new Response(JSON.stringify({ success: false, error: 'Forbidden — location not in your assignments' }), {
         status: 403,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    return null
+  },
+  // assertLocationAccessOr404 — same gate but returns 404 on the
+  // forbidden branch so cross-tenant IDs can't be enumerated.
+  assertLocationAccessOr404: (user, locationId) => {
+    if (!user) {
+      return new Response(JSON.stringify({ success: false, error: 'Unauthorized' }), {
+        status: 401,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    if (!locationId) return null
+    const allowed = (user.locations || []).some((l) => l.id === locationId)
+    if (!allowed) {
+      return new Response(JSON.stringify({ success: false, error: 'Not found' }), {
+        status: 404,
         headers: { 'content-type': 'application/json' },
       })
     }
@@ -140,7 +160,7 @@ describe('PUT /api/contacts/segments/[id] — location gate', () => {
     expect(body.error).toMatch(/not found/i)
   })
 
-  it('returns 403 when the segment belongs to a location the user is NOT a member of (IDOR attempt)', async () => {
+  it('returns 404 when the segment belongs to a location the user is NOT a member of (IDOR attempt)', async () => {
     // The case we care about most. User is authenticated and assigned
     // to loc-a. They try to update a segment that lives in loc-b. Route
     // must reject.
@@ -154,7 +174,7 @@ describe('PUT /api/contacts/segments/[id] — location gate', () => {
     vi.mocked(createServerClient).mockReturnValue(db)
 
     const res = await PUT(makeRequest(validBody), { params: { id: 's1' } })
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
     // No update should have been attempted.
     expect(spies.updateUpdate).not.toHaveBeenCalled()
   })
@@ -207,7 +227,7 @@ describe('PUT /api/contacts/segments/[id] — location gate', () => {
 })
 
 describe('DELETE /api/contacts/segments/[id] — location gate', () => {
-  it('returns 403 on cross-tenant delete attempt (no DELETE issued)', async () => {
+  it('returns 404 on cross-tenant delete attempt (no DELETE issued)', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue({
       id: 'p1',
       locations: [{ id: 'loc-a' }],
@@ -221,7 +241,7 @@ describe('DELETE /api/contacts/segments/[id] — location gate', () => {
       new Request('http://test/api/contacts/segments/s1', { method: 'DELETE' }),
       { params: { id: 's1' } }
     )
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
     expect(spies.deleteDelete).not.toHaveBeenCalled()
   })
 

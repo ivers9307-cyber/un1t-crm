@@ -6,7 +6,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
@@ -43,7 +43,7 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Registration not found for this event' }, { status: 404 })
   }
   const locationId = reg.race_events?.location_id
-  const guard = assertLocationAccess(user, locationId)
+  const guard = assertLocationAccessOr404(user, locationId)
   if (guard) return guard
   const member = (reg.teams?.team_members || []).find((m) => m.id === payload.memberId)
   if (!member) return NextResponse.json({ success: false, error: 'That person is not on this registration' }, { status: 400 })

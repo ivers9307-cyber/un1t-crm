@@ -5,7 +5,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
@@ -41,8 +41,8 @@ export async function POST(request, props) {
   if (lookupErr || !team) {
     return NextResponse.json({ success: false, error: 'Team not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, team.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, team.location_id)
+  if (guard) return guard
 
   const normalisedEmail = body.email ? body.email.toLowerCase().trim() : null
   // Find-or-create the contact row so race results map to a

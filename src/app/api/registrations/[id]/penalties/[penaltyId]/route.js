@@ -15,7 +15,7 @@
 // Manager+ at the race's location.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 
@@ -39,8 +39,8 @@ export async function DELETE(_request, props) {
   if (regErr || !reg) {
     return NextResponse.json({ success: false, error: 'Registration not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, reg.race_events?.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, reg.race_events?.location_id)
+  if (guard) return guard
   if (reg.race_events?.kind && reg.race_events.kind !== 'race') {
     return NextResponse.json({
       success: false,

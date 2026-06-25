@@ -7,7 +7,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { audienceFilterSchema } from '@/lib/schemas'
@@ -47,7 +47,7 @@ export async function GET(request, props) {
   if (error || !broadcast) {
     return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, broadcast.location_id)
+  const guard = assertLocationAccessOr404(user, broadcast.location_id)
   if (guard) return guard
 
   // Include recipients summary so the detail page can render
@@ -79,7 +79,7 @@ export async function PATCH(request, props) {
   if (error || !broadcast) {
     return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, broadcast.location_id)
+  const guard = assertLocationAccessOr404(user, broadcast.location_id)
   if (guard) return guard
 
   // State machine. Editable from 'draft' or 'scheduled'. Going to
@@ -135,7 +135,7 @@ export async function DELETE(request, props) {
   if (error || !broadcast) {
     return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, broadcast.location_id)
+  const guard = assertLocationAccessOr404(user, broadcast.location_id)
   if (guard) return guard
 
   // Don't permanently delete sent / sending / scheduled broadcasts —

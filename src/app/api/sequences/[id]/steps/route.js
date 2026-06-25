@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -54,7 +54,7 @@ export async function GET(request, props) {
   const db = createServerClient()
   const seqLocation = await loadSequenceLocation(db, params.id)
   if (!seqLocation) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, seqLocation)
+  const guard = assertLocationAccessOr404(user, seqLocation)
   if (guard) return guard
 
   const { data, error } = await db.from('sequence_steps')
@@ -75,7 +75,7 @@ export async function POST(request, props) {
   const db = createServerClient()
   const seqLocation = await loadSequenceLocation(db, params.id)
   if (!seqLocation) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, seqLocation)
+  const guard = assertLocationAccessOr404(user, seqLocation)
   if (guard) return guard
 
   const validation = await validateBody(request, StepCreateSchema)
@@ -131,7 +131,7 @@ export async function PUT(request, props) {
   const db = createServerClient()
   const seqLocation = await loadSequenceLocation(db, params.id)
   if (!seqLocation) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, seqLocation)
+  const guard = assertLocationAccessOr404(user, seqLocation)
   if (guard) return guard
 
   const validation = await validateBody(request, StepBulkUpdateSchema)

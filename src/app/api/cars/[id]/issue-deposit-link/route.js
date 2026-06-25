@@ -16,7 +16,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
@@ -56,8 +56,8 @@ export async function POST(request, props) {
     .eq('id', params.id)
     .single()
   if (!car) return NextResponse.json({ success: false, error: 'Car not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, car.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, car.location_id)
+  if (guard) return guard
 
   // Hard requirement — SMS is the only channel now. No fallback to
   // email because the operator chose to standardise on one channel

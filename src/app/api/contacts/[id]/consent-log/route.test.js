@@ -5,7 +5,7 @@
 // caller could read ANY contact's GDPR consent history — including
 // ip_address and performed_by — just by enumerating contact IDs. These
 // tests pin the application-layer gate: resolve the contact's location,
-// then assertLocationAccess(). Cross-location callers get 403; a missing
+// then assertLocationAccess(). Cross-location callers get 404; a missing
 // contact gets 404.
 //
 // We use the REAL assertLocationAccess — only getCurrentUser + the
@@ -82,7 +82,7 @@ describe('GET /api/contacts/[id]/consent-log', () => {
     expect(res.status).toBe(404)
   })
 
-  it('returns 403 when the contact is in a location the caller is not assigned to (IDOR)', async () => {
+  it('returns 404 when the contact is in a location the caller is not assigned to (IDOR)', async () => {
     getCurrentUser.mockResolvedValue(userAtA) // assigned to LOC_A only
     createServerClient.mockReturnValue(mockDb({
       contact: { location_id: LOC_B },                 // contact lives at LOC_B
@@ -90,7 +90,7 @@ describe('GET /api/contacts/[id]/consent-log', () => {
     }))
     const res = await GET(FAKE_REQUEST, { params: { id: 'c1' } })
     const body = await res.json()
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
     expect(body.success).toBe(false)
     // The consent rows (with ip_address) must NOT be in the response.
     expect(body.rows).toBeUndefined()

@@ -15,6 +15,12 @@ vi.mock('@/lib/auth', () => ({
     if (ids.includes(locationId)) return null
     return new Response(JSON.stringify({ success: false, error: 'forbidden' }), { status: 403 })
   },
+  assertLocationAccessOr404: (user, locationId) => {
+    if (user?.role === 'master') return null
+    const ids = (user?.locations || []).map((l) => l.id)
+    if (ids.includes(locationId)) return null
+    return new Response(JSON.stringify({ success: false, error: 'forbidden' }), { status: 404 })
+  },
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 
@@ -80,12 +86,12 @@ describe('GET /api/whatsapp/conversations/[id] — authz gate', () => {
     expect(res.status).toBe(404)
   })
 
-  it('403 when the conversation is at another location — thread read blocked, unread count untouched', async () => {
+  it('404 when the conversation is at another location — thread read blocked, unread count untouched', async () => {
     getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-OTHER' }] })
     const db = mockDb({ conversation: { id: 'c1', location_id: 'loc-1' } })
     createServerClient.mockReturnValue(db)
     const res = await GET(req(), props)
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
     expect(db.updateEq).not.toHaveBeenCalled()
   })
 

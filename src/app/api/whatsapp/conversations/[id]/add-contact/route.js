@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { email as emailSchema, phone as phoneSchema } from '@/lib/schemas'
 
@@ -39,7 +39,7 @@ export async function POST(request, props) {
     }
 
     // Caller must belong to the conversation's location.
-    const guard = assertLocationAccess(user, conversation.location_id)
+    const guard = assertLocationAccessOr404(user, conversation.location_id)
     if (guard) return guard
 
     // If already linked to a contact, return that

@@ -4,7 +4,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 
 const PauseSchema = z.object({ paused: z.boolean() })
@@ -24,7 +24,7 @@ export async function POST(request, props) {
     .single()
   if (!broadcast) return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
 
-  const guard = assertLocationAccess(user, broadcast.location_id)
+  const guard = assertLocationAccessOr404(user, broadcast.location_id)
   if (guard) return guard
 
   const { data, error } = await db.from('whatsapp_broadcasts')

@@ -6,7 +6,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
@@ -18,7 +18,7 @@ async function loadDocAndCheckAccess(db, user, carId, docId) {
     .eq('car_id', carId)
     .single()
   if (!doc) return { error: NextResponse.json({ success: false, error: 'Not found' }, { status: 404 }) }
-  const guard = assertLocationAccess(user, doc.cars.location_id)
+  const guard = assertLocationAccessOr404(user, doc.cars.location_id)
   if (guard) return { error: guard }
   return { doc }
 }

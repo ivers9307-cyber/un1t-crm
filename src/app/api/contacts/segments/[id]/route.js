@@ -6,7 +6,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { audienceFilterSchema } from '@/lib/schemas'
 
@@ -31,8 +31,8 @@ export async function PUT(request, props) {
     .eq('id', params.id)
     .single()
   if (!existing) return NextResponse.json({ success: false, error: 'Segment not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, existing.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, existing.location_id)
+  if (guard) return guard
 
   const raw = await request.json().catch(() => ({}))
   const parsed = UpdateBody.safeParse(raw)
@@ -76,8 +76,8 @@ export async function DELETE(request, props) {
     .eq('id', params.id)
     .single()
   if (!existing) return NextResponse.json({ success: false, error: 'Segment not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, existing.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, existing.location_id)
+  if (guard) return guard
 
   const { error } = await db.from('contact_segments').delete().eq('id', params.id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })

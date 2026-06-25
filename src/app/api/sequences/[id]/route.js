@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 
 const SequenceUpdateSchema = z.object({
@@ -59,7 +59,7 @@ export async function GET(request, props) {
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 404 })
 
-  const guard = assertLocationAccess(user, data.location_id)
+  const guard = assertLocationAccessOr404(user, data.location_id)
   if (guard) return guard
 
   // Sort steps by step_order
@@ -84,7 +84,7 @@ export async function PUT(request, props) {
     .eq('id', params.id)
     .single()
   if (!existing) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, existing.location_id)
+  const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
 
   const validation = await validateBody(request, SequenceUpdateSchema)
@@ -135,7 +135,7 @@ export async function DELETE(request, props) {
     .eq('id', params.id)
     .single()
   if (!existing) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, existing.location_id)
+  const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
 
   // Delete steps first

@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { sendInstagramMessage } from '@/lib/agent/instagram'
 import { resolveChannelConnection } from '@/lib/agent/channels'
@@ -36,7 +36,7 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Conversation not found' }, { status: 404 })
   }
 
-  const guard = assertLocationAccess(user, conversation.location_id)
+  const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
 
   if (!conversation.ig_user_id) {

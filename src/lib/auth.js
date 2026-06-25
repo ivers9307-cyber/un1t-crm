@@ -535,3 +535,44 @@ export function assertLocationAccess(user, locationId) {
   }
   return null
 }
+
+/**
+ * Like `assertLocationAccess`, but a forbidden location returns **404**
+ * instead of 403.
+ *
+ * Use on DETAIL routes — a single resource fetched by a path-param id —
+ * where the `location_id` comes from the *fetched row* and the guard runs
+ * after a "fetch-by-id → 404 if absent" check. There, a 403 on a
+ * cross-tenant row (vs a 404 on a missing one) lets an authenticated user
+ * distinguish "this id exists at another tenant" from "this id doesn't
+ * exist" — an existence/info-disclosure leak. Returning 404 for both
+ * collapses the two cases, satisfying the repo's "detail routes return 404
+ * not 403" invariant. Do NOT use this for list/collection routes or where
+ * the location comes from a caller-supplied query/body param — those keep
+ * the explicit 403 (see `assertLocationAccess`).
+ *
+ * Behaviour:
+ *   - user is null              → 401
+ *   - locationId is null/undef  → null (request continues)
+ *   - locationId is allowed     → null (request continues)
+ *   - locationId is forbidden   → 404 (identical to not-found)
+ *
+ * Usage:
+ *   const guard = assertLocationAccessOr404(user, row.location_id)
+ *   if (guard) return guard
+ *
+ * @param {{ locations?: Array<{id: string}> } | null} user
+ * @param {string | null | undefined} locationId
+ * @returns {NextResponse | null}
+ */
+export function assertLocationAccessOr404(user, locationId) {
+  if (!user) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!locationId) return null
+  const allowed = (user.locations || []).some(l => l.id === locationId)
+  if (!allowed) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  return null
+}

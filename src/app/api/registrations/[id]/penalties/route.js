@@ -16,7 +16,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
@@ -54,8 +54,8 @@ export async function POST(request, props) {
   if (lookupErr || !reg) {
     return NextResponse.json({ success: false, error: 'Registration not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, reg.race_events?.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, reg.race_events?.location_id)
+  if (guard) return guard
   if (reg.race_events?.kind && reg.race_events.kind !== 'race') {
     return NextResponse.json({
       success: false,

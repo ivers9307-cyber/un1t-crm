@@ -22,7 +22,7 @@
 // stats.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
@@ -50,8 +50,8 @@ export async function POST(_request, props) {
   if (!sequence) {
     return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, sequence.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, sequence.location_id)
+  if (guard) return guard
 
   // Find or create the operator's contact at this location. Reuses
   // the race-contact-linking helper for consistency — it gracefully

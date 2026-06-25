@@ -17,7 +17,7 @@
 
 import { NextResponse } from 'next/server'
 import QRCode from 'qrcode'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { getAppUrl } from '@/lib/app-url'
@@ -42,8 +42,8 @@ export async function GET(_request, props) {
   if (error || !event) {
     return NextResponse.json({ success: false, error: 'Event not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, event.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, event.location_id)
+  if (guard) return guard
 
   // Build the public signup URL. Origin-only from getAppUrl so a
   // misconfigured env var (full URL with path/query pasted in) can't

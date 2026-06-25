@@ -15,7 +15,7 @@
 // car's location. service-role write goes through createServerClient.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { hasPermission } from '@/lib/permissions'
 import { getBcaConfig, BCA_STORAGE } from '@/lib/bca'
@@ -42,7 +42,7 @@ async function preflight(db, params, user) {
   if (carErr || !car) {
     return { error: NextResponse.json({ success: false, error: 'Car not found' }, { status: 404 }) }
   }
-  const guard = assertLocationAccess(user, car.location_id)
+  const guard = assertLocationAccessOr404(user, car.location_id)
   if (guard) return { error: guard }
 
   const { data: location } = await db

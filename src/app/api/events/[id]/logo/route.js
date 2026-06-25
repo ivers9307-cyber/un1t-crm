@@ -16,7 +16,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 
 export const runtime = 'nodejs'
@@ -53,7 +53,7 @@ export async function POST(request, props) {
   if (raceErr || !race) {
     return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, race.location_id)
+  const guard = assertLocationAccessOr404(user, race.location_id)
   if (guard) return guard
 
   const form = await request.formData()
@@ -139,7 +139,7 @@ export async function DELETE(request, props) {
     .eq('id', params.id)
     .single()
   if (!race) return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, race.location_id)
+  const guard = assertLocationAccessOr404(user, race.location_id)
   if (guard) return guard
 
   // List + delete every file in race-logos/<id>/ that begins with
