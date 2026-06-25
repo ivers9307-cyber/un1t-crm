@@ -10,7 +10,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 
@@ -37,8 +37,8 @@ export async function GET(_request, props) {
   const db = createServerClient()
   const car = await loadCar(db, params.id)
   if (!car) return NextResponse.json({ success: false, error: 'Car not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, car.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, car.location_id)
+  if (guard) return guard
 
   const { data, error } = await db
     .from('car_notes')
@@ -72,8 +72,8 @@ export async function POST(request, props) {
   const db = createServerClient()
   const car = await loadCar(db, params.id)
   if (!car) return NextResponse.json({ success: false, error: 'Car not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, car.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, car.location_id)
+  if (guard) return guard
 
   const { data, error } = await db
     .from('car_notes')

@@ -9,7 +9,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -50,7 +50,7 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
 
-  const guard = assertLocationAccess(user, contact.location_id)
+  const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
 
   const validation = await validateBody(request, UpdateConsultationSchema)
@@ -107,7 +107,7 @@ export async function DELETE(request, props) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
 
-  const guard = assertLocationAccess(user, contact.location_id)
+  const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
 
   const { error } = await db

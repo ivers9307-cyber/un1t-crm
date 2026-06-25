@@ -18,7 +18,7 @@
 // path with the same extension).
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { hasPermission } from '@/lib/permissions'
 import { getBcaConfig, BCA_STORAGE, buildBcaDownloadUrl } from '@/lib/bca'
@@ -42,7 +42,7 @@ export async function GET(_request, props) {
     .eq('id', params.id)
     .single()
   if (carErr || !car) return NextResponse.json({ success: false, error: 'Car not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, car.location_id)
+  const guard = assertLocationAccessOr404(user, car.location_id)
   if (guard) return guard
 
   const { data: location } = await db

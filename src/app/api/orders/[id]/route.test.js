@@ -7,7 +7,7 @@
 // Coverage:
 //   - 401 when no user
 //   - 403 when user role isn't manager+
-//   - 403 when user is manager+ but at the wrong location (IDOR)
+//   - 404 when user is manager+ but at the wrong location (IDOR)
 //   - 404 when the order doesn't exist
 //   - happy path: race_registration source — order + chain + events
 //   - happy path: car_deposit source — car summary in source
@@ -24,6 +24,17 @@ vi.mock('@/lib/auth', () => ({
     const allowed = (user.locations || []).some((l) => l.id === locationId)
     if (!allowed) {
       return new Response(JSON.stringify({ success: false, error: 'Forbidden' }), { status: 403 })
+    }
+    return null
+  },
+  assertLocationAccessOr404: (user, locationId) => {
+    if (!user) {
+      return new Response(JSON.stringify({ success: false, error: 'Unauthorized' }), { status: 401 })
+    }
+    if (!locationId) return null
+    const allowed = (user.locations || []).some((l) => l.id === locationId)
+    if (!allowed) {
+      return new Response(JSON.stringify({ success: false, error: 'Not found' }), { status: 404 })
     }
     return null
   },
@@ -130,13 +141,13 @@ describe('GET /api/orders/[id]', () => {
     expect(res.status).toBe(404)
   })
 
-  it('returns 403 when user is manager+ but order is in a different location (IDOR)', async () => {
+  it('returns 404 when user is manager+ but order is in a different location (IDOR)', async () => {
     getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
     createServerClient.mockReturnValue(mockDb({
       order: { id: 'order-1', location_id: 'loc-B', source_type: 'race_registration', source_id: 's1' },
     }))
     const res = await GET(FAKE_REQUEST, { params: { id: 'order-1' } })
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
   })
 
   it('returns the order + chain + events + race source on the happy path', async () => {

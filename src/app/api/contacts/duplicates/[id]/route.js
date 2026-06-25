@@ -18,7 +18,7 @@
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { linkContactPair } from '@/lib/person-links'
@@ -64,7 +64,7 @@ export async function PATCH(request, { params }) {
   }
 
   // Location access guard
-  const guard = assertLocationAccess(user, suggestion.location_id)
+  const guard = assertLocationAccessOr404(user, suggestion.location_id)
   if (guard) return guard
 
   const decidedAt = new Date().toISOString()

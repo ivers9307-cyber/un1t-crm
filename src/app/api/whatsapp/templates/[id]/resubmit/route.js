@@ -6,7 +6,7 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { editTemplate } from '@/lib/whatsapp'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
@@ -27,7 +27,7 @@ export async function POST(request, props) {
     .single()
   if (!tmpl) return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
 
-  const guard = assertLocationAccess(user, tmpl.location_id)
+  const guard = assertLocationAccessOr404(user, tmpl.location_id)
   if (guard) return guard
   if (!MANAGER_ROLES.includes(user.role)) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })

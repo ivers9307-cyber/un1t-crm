@@ -6,7 +6,7 @@
 //   - 401 when no user
 //   - 403 when neither web nor mobile `email` permission is held
 //   - 404 when the contact doesn't exist
-//   - 403 when the contact is in a different location (IDOR)
+//   - 404 when the contact is in a different location (IDOR)
 //   - 400 when the contact has no email
 //   - 400 when the contact's email_status is blocked
 //   - happy path → sends via Postmark + logs an activity
@@ -20,6 +20,13 @@ vi.mock('@/lib/auth', () => ({
     if (!locationId) return null
     const allowed = (user.locations || []).some((l) => l.id === locationId)
     if (!allowed) return new Response(JSON.stringify({ success: false, error: 'Forbidden' }), { status: 403 })
+    return null
+  },
+  assertLocationAccessOr404: (user, locationId) => {
+    if (!user) return new Response(JSON.stringify({ success: false, error: 'Unauthorized' }), { status: 401 })
+    if (!locationId) return null
+    const allowed = (user.locations || []).some((l) => l.id === locationId)
+    if (!allowed) return new Response(JSON.stringify({ success: false, error: 'Not found' }), { status: 404 })
     return null
   },
 }))
@@ -101,11 +108,11 @@ describe('POST /api/contacts/[id]/email', () => {
     expect(res.status).toBe(404)
   })
 
-  it('returns 403 when the contact is in a different location (IDOR)', async () => {
+  it('returns 404 when the contact is in a different location (IDOR)', async () => {
     getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
     createServerClient.mockReturnValue(mockDb({ contact: { ...CONTACT, location_id: 'loc-B' } }))
     const res = await POST(req(), { params: { id: 'c1' } })
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
   })
 
   it('returns 400 when the contact has no email', async () => {

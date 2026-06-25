@@ -17,6 +17,13 @@ vi.mock('@/lib/auth', () => ({
     if (!allowed) return new Response(JSON.stringify({ success: false, error: 'Forbidden' }), { status: 403 })
     return null
   },
+  assertLocationAccessOr404: (user, locationId) => {
+    if (!user) return new Response(JSON.stringify({ success: false, error: 'Unauthorized' }), { status: 401 })
+    if (!locationId) return null
+    const allowed = (user.locations || []).some((l) => l.id === locationId)
+    if (!allowed) return new Response(JSON.stringify({ success: false, error: 'Not found' }), { status: 404 })
+    return null
+  },
 }))
 
 vi.mock('@/lib/permissions', () => ({

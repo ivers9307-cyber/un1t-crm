@@ -13,7 +13,7 @@
 // The old number remains in Xero's audit trail.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { issueCarInvoice, voidCarInvoice, validateInvoiceFields } from '@/lib/xero/invoices'
@@ -50,8 +50,8 @@ export async function POST(request, props) {
   if (loadErr || !car) {
     return NextResponse.json({ success: false, error: 'Car not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, car.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, car.location_id)
+  if (guard) return guard
 
   if (!car.xero_invoice_id) {
     return NextResponse.json({ success: false, error: 'No invoice to void.' }, { status: 400 })

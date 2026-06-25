@@ -11,7 +11,7 @@
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -58,7 +58,7 @@ export async function POST(request, props) {
   const db = createServerClient()
   const r = await resolve(db, params.id, race_registration_id, team_member_id)
   if (r.error) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
-  const guard = assertLocationAccess(user, r.locationId)
+  const guard = assertLocationAccessOr404(user, r.locationId)
   if (guard) return guard
 
   const { error } = await db.from('race_checkins').insert({
@@ -107,7 +107,7 @@ export async function DELETE(request, props) {
   const db = createServerClient()
   const r = await resolve(db, params.id, race_registration_id, team_member_id)
   if (r.error) return NextResponse.json({ success: false, error: r.error }, { status: r.status })
-  const guard = assertLocationAccess(user, r.locationId)
+  const guard = assertLocationAccessOr404(user, r.locationId)
   if (guard) return guard
 
   const { error } = await db
@@ -145,7 +145,7 @@ export async function GET(_request, props) {
     .eq('id', params.id)
     .single()
   if (!race) return NextResponse.json({ success: false, error: 'Event not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, race.location_id)
+  const guard = assertLocationAccessOr404(user, race.location_id)
   if (guard) return guard
 
   const confirmed = (race.registrations || []).filter((r) => r.status === 'confirmed')

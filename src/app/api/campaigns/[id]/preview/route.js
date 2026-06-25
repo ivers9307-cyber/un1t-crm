@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { buildAudienceQueryAsync, consentFieldForStream } from '@/lib/postmark'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -51,7 +51,7 @@ export async function GET(_request, props) {
   if (!campaign) {
     return NextResponse.json({ success: false, error: 'Campaign not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, campaign.location_id)
+  const guard = assertLocationAccessOr404(user, campaign.location_id)
   if (guard) return guard
 
   const r = await computeCount(db, campaign.audience_filter, campaign.location_id, consentFieldForStream(campaign.postmark_stream))
@@ -80,7 +80,7 @@ export async function POST(request, props) {
   if (!campaign) {
     return NextResponse.json({ success: false, error: 'Campaign not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, campaign.location_id)
+  const guard = assertLocationAccessOr404(user, campaign.location_id)
   if (guard) return guard
 
   // Use the filter the operator is editing, fall back to the saved one.

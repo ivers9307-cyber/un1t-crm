@@ -4,7 +4,7 @@
 // per-row outcome. Manager+ at the batch's location.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
@@ -27,7 +27,7 @@ export async function GET(_request, props) {
     .single()
   if (!batch) return NextResponse.json({ success: false, error: 'Import not found' }, { status: 404 })
 
-  const guard = assertLocationAccess(user, batch.location_id)
+  const guard = assertLocationAccessOr404(user, batch.location_id)
   if (guard) return guard
 
   const { data: rows } = await db

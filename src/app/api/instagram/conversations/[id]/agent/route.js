@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 
 const ToggleSchema = z.object({ active: z.boolean() })
@@ -27,7 +27,7 @@ export async function PATCH(request, props) {
     return NextResponse.json({ success: false, error: 'Conversation not found' }, { status: 404 })
   }
 
-  const guard = assertLocationAccess(user, conversation.location_id)
+  const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
 
   const now = new Date().toISOString()

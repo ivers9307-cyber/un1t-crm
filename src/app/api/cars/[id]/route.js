@@ -3,7 +3,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { money } from '@/lib/schemas'
@@ -54,7 +54,7 @@ export async function GET(_request, props) {
   const { data: car, error } = await loadCar(db, params.id)
   if (error || !car) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
-  const guard = assertLocationAccess(user, car.location_id)
+  const guard = assertLocationAccessOr404(user, car.location_id)
   if (guard) return guard
   return NextResponse.json({ success: true, data: car })
 }
@@ -74,7 +74,7 @@ export async function PATCH(request, props) {
   const db = createServerClient()
   const { data: existing } = await loadCar(db, params.id)
   if (!existing) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, existing.location_id)
+  const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
 
   // Stamp uk_vat_refund_received_at on the transition to true so we
@@ -102,7 +102,7 @@ export async function DELETE(_request, props) {
   const db = createServerClient()
   const { data: existing } = await loadCar(db, params.id)
   if (!existing) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, existing.location_id)
+  const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
 
   // Hard-delete on purpose for now — there's no archived view yet.

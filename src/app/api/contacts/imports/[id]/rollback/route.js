@@ -18,7 +18,7 @@
 // edited by hand won't fail the whole rollback.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { redactWhatsAppForContact } from '@/lib/contact-merge'
 import { logWarn } from '@/lib/log'
@@ -49,7 +49,7 @@ export async function POST(_request, props) {
     return NextResponse.json({ success: false, error: 'This import has already been rolled back.' }, { status: 400 })
   }
 
-  const guard = assertLocationAccess(user, batch.location_id)
+  const guard = assertLocationAccessOr404(user, batch.location_id)
   if (guard) return guard
 
   // Mark in-progress so concurrent rollback attempts noop.

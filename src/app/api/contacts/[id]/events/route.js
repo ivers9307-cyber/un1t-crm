@@ -6,7 +6,7 @@
 // Manager+ at the contact's location.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
@@ -30,8 +30,8 @@ export async function GET(_request, props) {
   if (contactErr || !contact) {
     return NextResponse.json({ success: false, error: 'Contact not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, contact.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, contact.location_id)
+  if (guard) return guard
 
   // Find every team_members row for this contact, joined to its team
   // and the race_registrations the team is part of, joined to the

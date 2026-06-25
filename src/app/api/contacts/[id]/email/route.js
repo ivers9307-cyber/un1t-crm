@@ -26,7 +26,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission, hasMobilePermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { applyMergeTags, sendTransactionalEmail } from '@/lib/postmark'
@@ -85,7 +85,7 @@ export async function POST(request, props) {
   }
 
   // IDOR guard — caller must be assigned to the contact's location.
-  const guard = assertLocationAccess(user, contact.location_id)
+  const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
 
   if (!contact.email) {

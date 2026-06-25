@@ -16,6 +16,12 @@ vi.mock('@/lib/auth', () => ({
     if (ids.includes(locationId)) return null
     return new Response(JSON.stringify({ success: false, error: 'forbidden' }), { status: 403 })
   },
+  assertLocationAccessOr404: (user, locationId) => {
+    if (user?.role === 'master') return null
+    const ids = (user?.locations || []).map((l) => l.id)
+    if (ids.includes(locationId)) return null
+    return new Response(JSON.stringify({ success: false, error: 'forbidden' }), { status: 404 })
+  },
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn() }))
@@ -79,11 +85,11 @@ describe('POST /api/whatsapp/broadcasts/[id]/send — authz gate', () => {
     expect(sendBroadcast).not.toHaveBeenCalled()
   })
 
-  it('403 when the broadcast belongs to another location — cross-tenant send blocked', async () => {
+  it('404 when the broadcast belongs to another location — cross-tenant send blocked', async () => {
     getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-OTHER' }] })
     createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1' } }))
     const res = await POST(req(), props)
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
     expect(sendBroadcast).not.toHaveBeenCalled()
   })
 

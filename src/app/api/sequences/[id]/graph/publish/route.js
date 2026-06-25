@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { compileForPublish } from '@/lib/sequences/graph/persist'
 import { parseGraphShape } from '@/lib/sequences/graph/schema'
 
@@ -27,7 +27,7 @@ export async function POST(request, props) {
   const { data: existing } = await db.from('email_sequences')
     .select('location_id, graph, draft_graph').eq('id', params.id).single()
   if (!existing) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, existing.location_id)
+  const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
 
   // Publish the graph in the request body, else the saved draft, else the

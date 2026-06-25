@@ -4,7 +4,7 @@
 // want to clean up after testing.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 
@@ -28,8 +28,8 @@ export async function DELETE(_request, props) {
     .eq('car_id', params.id)
     .maybeSingle()
   if (!note) return NextResponse.json({ success: false, error: 'Note not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, note.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, note.location_id)
+  if (guard) return guard
 
   const { error } = await db.from('car_notes').delete().eq('id', params.noteId)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })

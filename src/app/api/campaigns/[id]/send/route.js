@@ -7,7 +7,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,7 +25,7 @@ export async function POST(_request, props) {
   if (error || !campaign) {
     return NextResponse.json({ success: false, error: 'Campaign not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, campaign.location_id)
+  const guard = assertLocationAccessOr404(user, campaign.location_id)
   if (guard) return guard
 
   // Only draft / scheduled campaigns can be sent. 'sending' /

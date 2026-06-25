@@ -1,6 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { resolveRearmPatch } from '@/lib/agent/core'
 
 // GET /api/instagram/conversations/[id] — conversation + messages thread.
@@ -24,7 +24,7 @@ export async function GET(request, props) {
   }
 
   // Caller must belong to the conversation's location.
-  const guard = assertLocationAccess(user, conversation.location_id)
+  const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
 
   // Newest rows first then reversed for display — ascending+limit returns
@@ -70,7 +70,7 @@ export async function PATCH(request, props) {
   if (error || !conversation) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, conversation.location_id)
+  const guard = assertLocationAccessOr404(user, conversation.location_id)
   if (guard) return guard
 
   // AGENT-REARM.1 — resolving a handed-off thread hands it straight back

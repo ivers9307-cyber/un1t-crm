@@ -7,7 +7,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { sendBroadcast } from '@/lib/sms'
 
@@ -32,7 +32,7 @@ export async function POST(request, props) {
   const db = createServerClient()
   const { data: row } = await db.from('sms_broadcasts').select('location_id').eq('id', params.id).single()
   if (!row) return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, row.location_id)
+  const guard = assertLocationAccessOr404(user, row.location_id)
   if (guard) return guard
 
   try {

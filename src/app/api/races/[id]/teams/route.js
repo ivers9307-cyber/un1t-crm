@@ -7,7 +7,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
@@ -51,8 +51,8 @@ export async function GET(_request, props) {
   const db = createServerClient()
   const { data: race, error: raceErr } = await loadRaceForAccess(db, params.id)
   if (raceErr || !race) return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, race.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, race.location_id)
+  if (guard) return guard
 
   const { data: registrations, error } = await db
     .from('race_registrations')
@@ -92,8 +92,8 @@ export async function POST(request, props) {
   const db = createServerClient()
   const { data: race, error: raceErr } = await loadRaceForAccess(db, params.id)
   if (raceErr || !race) return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, race.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, race.location_id)
+  if (guard) return guard
 
   // Validate team size against allowed sizes.
   if (Array.isArray(race.allowed_team_sizes) && !race.allowed_team_sizes.includes(body.team_size)) {

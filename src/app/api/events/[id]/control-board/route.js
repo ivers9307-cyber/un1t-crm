@@ -8,7 +8,7 @@
 // Manager+ at the race's location.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 
@@ -35,8 +35,8 @@ export async function GET(_request, props) {
   if (raceErr || !race) {
     return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, race.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, race.location_id)
+  if (guard) return guard
 
   // Mig 122 (E7): the race-day control panel is race-specific by
   // design — it shows the start/finish/reset workflow for live race

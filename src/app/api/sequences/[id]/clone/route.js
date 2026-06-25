@@ -13,7 +13,7 @@
 
 import { NextResponse } from 'next/server'
 import { randomBytes } from 'node:crypto'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/schemas'
@@ -49,8 +49,8 @@ export async function POST(_request, props) {
   }
 
   // Membership check — operator must be assigned to the source's
-  // location. Master bypasses via assertLocationAccess.
-  const guard = assertLocationAccess(user, source.location_id)
+  // location. Master bypasses via assertLocationAccessOr404.
+  const guard = assertLocationAccessOr404(user, source.location_id)
   if (guard) return guard
 
   // 2. Insert the new sequence as a draft. Pull every config /

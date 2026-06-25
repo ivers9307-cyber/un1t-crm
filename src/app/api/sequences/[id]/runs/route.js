@@ -2,7 +2,7 @@
 // for the automation Performance view's "Recent activity". Manager+ at the
 // sequence's location. Mirrors the /stats route's guards.
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { summariseEnrolmentRun } from '@/lib/sequences/run-history'
@@ -27,7 +27,7 @@ export async function GET(_request, props) {
   if (seqErr || !seq) {
     return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, seq.location_id)
+  const guard = assertLocationAccessOr404(user, seq.location_id)
   if (guard) return guard
 
   // Total step count for the "Step X of N" label.

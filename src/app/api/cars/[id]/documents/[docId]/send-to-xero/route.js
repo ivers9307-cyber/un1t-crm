@@ -15,7 +15,7 @@
 // works on every Xero org by default.
 
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { sendCarDocumentBillEmail } from '@/lib/xero/bills-email'
@@ -43,8 +43,8 @@ export async function POST(_request, props) {
   if (doc.car_id !== params.id) {
     return NextResponse.json({ success: false, error: 'Document does not belong to this car' }, { status: 400 })
   }
-  const guard = assertLocationAccess(user, doc.cars.location_id)
-  if (guard) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  const guard = assertLocationAccessOr404(user, doc.cars.location_id)
+  if (guard) return guard
 
   try {
     const result = await sendCarDocumentBillEmail(params.docId)

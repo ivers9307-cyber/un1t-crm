@@ -2,7 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { deleteTemplate as deleteMetaTemplate } from '@/lib/whatsapp'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 
 const TemplateUpdateSchema = z.object({
@@ -40,7 +40,7 @@ export async function GET(request, props) {
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 404 })
 
-  const guard = assertLocationAccess(user, data.location_id)
+  const guard = assertLocationAccessOr404(user, data.location_id)
   if (guard) return guard
 
   const { data: events } = await db.from('whatsapp_template_events')
@@ -61,7 +61,7 @@ export async function PUT(request, props) {
   const db = createServerClient()
   const loc = await loadTemplateLocation(db, params.id)
   if (!loc) return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, loc)
+  const guard = assertLocationAccessOr404(user, loc)
   if (guard) return guard
 
   const validation = await validateBody(request, TemplateUpdateSchema)
@@ -93,7 +93,7 @@ export async function DELETE(request, props) {
     .single()
   if (!template) return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
 
-  const guard = assertLocationAccess(user, template.location_id)
+  const guard = assertLocationAccessOr404(user, template.location_id)
   if (guard) return guard
 
   if (template.name) {

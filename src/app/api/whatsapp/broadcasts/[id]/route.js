@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, audienceFilterSchema, url } from '@/lib/schemas'
 
@@ -33,7 +33,7 @@ export async function GET(request, props) {
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 404 })
 
-  const guard = assertLocationAccess(user, data.location_id)
+  const guard = assertLocationAccessOr404(user, data.location_id)
   if (guard) return guard
 
   return NextResponse.json({ success: true, broadcast: data })
@@ -48,7 +48,7 @@ export async function PUT(request, props) {
   const db = createServerClient()
   const loc = await loadBroadcastLocation(db, params.id)
   if (!loc) return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, loc)
+  const guard = assertLocationAccessOr404(user, loc)
   if (guard) return guard
 
   const validation = await validateBody(request, BroadcastUpdateSchema)
@@ -74,7 +74,7 @@ export async function DELETE(request, props) {
   const db = createServerClient()
   const loc = await loadBroadcastLocation(db, params.id)
   if (!loc) return NextResponse.json({ success: false, error: 'Broadcast not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, loc)
+  const guard = assertLocationAccessOr404(user, loc)
   if (guard) return guard
 
   await db.from('whatsapp_broadcast_recipients').delete().eq('broadcast_id', params.id)

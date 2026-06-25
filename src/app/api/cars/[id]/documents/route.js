@@ -6,7 +6,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { ALL_DOCUMENT_TYPES } from '@/lib/cars'
 import { enqueueFromCarDocument } from '@/lib/invoices-queue/enqueue'
@@ -28,7 +28,7 @@ export async function POST(request, props) {
   const db = createServerClient()
   const { data: car } = await db.from('cars').select('id, location_id').eq('id', params.id).single()
   if (!car) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  const guard = assertLocationAccess(user, car.location_id)
+  const guard = assertLocationAccessOr404(user, car.location_id)
   if (guard) return guard
 
   const formData = await request.formData()
