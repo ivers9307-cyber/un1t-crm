@@ -35,6 +35,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { validateRow, fieldsTouchedByMapping } from '@/lib/contact-import'
+import { selectAllByKeys } from '@/lib/select-all'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -129,24 +130,25 @@ export async function POST(request) {
   const existingByEmail = new Map()
   const existingByGlofox = new Map()
   if (emailsToLookup.size > 0 || glofoxToLookup.size > 0) {
-    // Two queries — one by email, one by glofox id. We could do
-    // an OR in a single query but it's harder to reason about and
-    // the numbers here are small (≤5k each).
-    const queries = []
-    if (emailsToLookup.size > 0) {
-      queries.push(db.from('contacts').select(colExpr)
-        .eq('location_id', targetLocationId).in('email', [...emailsToLookup]))
-    }
-    if (glofoxToLookup.size > 0) {
-      queries.push(db.from('contacts').select(colExpr)
-        .eq('location_id', targetLocationId).in('glofox_member_id', [...glofoxToLookup]))
-    }
-    const results = await Promise.all(queries)
-    for (const { data } of results) {
-      for (const c of (data || [])) {
-        if (c.email) existingByEmail.set(String(c.email).toLowerCase(), c)
-        if (c.glofox_member_id) existingByGlofox.set(c.glofox_member_id, c)
-      }
+    // Two lookups — one by email, one by glofox id. CHUNKED + PAGED: an
+    // `.in(col, keys)` lookup caps both the match set (db-max-rows, 1000) AND
+    // the key list (URL length). If the existing base past the cap isn't
+    // returned, the preview shows a row as "created" when it's really an
+    // "updated" — and committing then INSERTs a duplicate. selectAllByKeys
+    // chunks the keys (~300/query) and pages each chunk.
+    const [emailMatches, glofoxMatches] = await Promise.all([
+      selectAllByKeys([...emailsToLookup], (keys, from, to) => db
+        .from('contacts').select(colExpr)
+        .eq('location_id', targetLocationId).in('email', keys)
+        .order('id', { ascending: true }).range(from, to)),
+      selectAllByKeys([...glofoxToLookup], (keys, from, to) => db
+        .from('contacts').select(colExpr)
+        .eq('location_id', targetLocationId).in('glofox_member_id', keys)
+        .order('id', { ascending: true }).range(from, to)),
+    ])
+    for (const c of [...emailMatches, ...glofoxMatches]) {
+      if (c.email) existingByEmail.set(String(c.email).toLowerCase(), c)
+      if (c.glofox_member_id) existingByGlofox.set(c.glofox_member_id, c)
     }
   }
 

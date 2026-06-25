@@ -19,6 +19,7 @@ import { applyAudienceFilter, applyAudienceFilterAsync } from '@/lib/audience-fi
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { applyMergeTags } from '@/lib/postmark'
 import { getAppUrl } from '@/lib/app-url'
+import { selectAll } from '@/lib/select-all'
 
 // Build the URL Twilio will POST status updates to. Includes broadcast
 // + recipient identifiers as query params so the webhook can locate
@@ -191,14 +192,19 @@ export async function sendBroadcast(broadcastId, { maxRecipients = Infinity } = 
   // Exclude contacts already processed (sent OR failed) from a
   // previous chunk — the unique (broadcast_id, contact_id)
   // constraint would reject duplicates anyway, but skipping them
-  // up-front saves the Twilio call. The recipients table is
-  // typically small (only THIS broadcast's rows), so this query
-  // is cheap.
-  const { data: alreadyDone } = await db
+  // up-front saves the Twilio call.
+  //
+  // LOAD-BEARING: this set is what prevents a re-run from re-sending. On a
+  // broadcast >1000 already-processed recipients an un-paginated select caps
+  // at 1000 contact_ids, so everyone past row 1000 falls OUT of doneSet and
+  // gets a DUPLICATE SMS on the next chunk/retry. Page the full set.
+  const alreadyDone = await selectAll((from, to) => db
     .from('sms_broadcast_recipients')
     .select('contact_id')
     .eq('broadcast_id', broadcastId)
-  const doneSet = new Set((alreadyDone || []).map(r => r.contact_id))
+    .order('contact_id', { ascending: true })
+    .range(from, to))
+  const doneSet = new Set(alreadyDone.map(r => r.contact_id))
   const remaining = contacts.filter(c => !doneSet.has(c.id))
 
   // Cap by chunk size. The cap defaults to Infinity for sync
@@ -281,13 +287,17 @@ export async function sendBroadcast(broadcastId, { maxRecipients = Infinity } = 
   }
 
   // Recompute totals from the table — the chunk we just processed
-  // adds to whatever previous chunks already wrote.
-  const { data: allDone } = await db
+  // adds to whatever previous chunks already wrote. Paged: an
+  // un-paginated select caps at 1000, so on a broadcast >1000 recipients
+  // total_sent/total_failed would under-report by every row past the cap.
+  const allDone = await selectAll((from, to) => db
     .from('sms_broadcast_recipients')
     .select('status')
     .eq('broadcast_id', broadcastId)
-  const cumulativeSent = (allDone || []).filter(r => r.status === 'sent').length
-  const cumulativeFailed = (allDone || []).filter(r => r.status === 'failed').length
+    .order('contact_id', { ascending: true })
+    .range(from, to))
+  const cumulativeSent = allDone.filter(r => r.status === 'sent').length
+  const cumulativeFailed = allDone.filter(r => r.status === 'failed').length
 
   // Decide finalisation: if we exhausted the audience, mark sent.
   // Otherwise leave in 'sending' for the next tick to continue.

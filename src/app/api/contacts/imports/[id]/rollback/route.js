@@ -22,6 +22,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { redactWhatsAppForContact } from '@/lib/contact-merge'
 import { logWarn } from '@/lib/log'
+import { selectAll } from '@/lib/select-all'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -62,11 +63,16 @@ export async function POST(_request, props) {
   let failed = 0
 
   // 1. Delete created contacts (with the existing GDPR scrub).
-  const { data: createdContacts } = await db
+  //    PAGED: an un-paginated select caps at 1000, so a rollback of a
+  //    >1000-row import would delete only the first 1000 created contacts yet
+  //    still report success — leaving the rest orphaned. Page the full set.
+  const createdContacts = await selectAll((from, to) => db
     .from('contacts')
     .select('id')
     .eq('created_via_import_id', params.id)
-  for (const c of (createdContacts || [])) {
+    .order('id', { ascending: true })
+    .range(from, to))
+  for (const c of createdContacts) {
     try {
       await redactWhatsAppForContact(db, c.id)
       const { error } = await db.from('contacts').delete().eq('id', c.id)
@@ -79,13 +85,18 @@ export async function POST(_request, props) {
   }
 
   // 2. Restore updated contacts from before_snapshot.
-  const { data: updatedRows } = await db
+  //    PAGED: same 1000-row cap — a large import's updated rows past 1000 would
+  //    never be restored to their pre-import values yet the rollback returns
+  //    success:true. Page the full set; the per-row restore loop is unchanged.
+  const updatedRows = await selectAll((from, to) => db
     .from('contact_import_rows')
     .select('id, contact_id, before_snapshot')
     .eq('import_id', params.id)
     .eq('action', 'updated')
     .not('before_snapshot', 'is', null)
-  for (const r of (updatedRows || [])) {
+    .order('id', { ascending: true })
+    .range(from, to))
+  for (const r of updatedRows) {
     if (!r.contact_id || !r.before_snapshot) continue
     try {
       const { error } = await db

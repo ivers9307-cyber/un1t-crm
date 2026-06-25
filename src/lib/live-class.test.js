@@ -325,7 +325,8 @@ describe('endSession', () => {
           return { select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'loc-1', settings: {} }, error: null })) })) })) }
         }
         if (table === 'hr_samples') {
-          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: [{ recorded_at: '2026-06-18T05:30:00Z', bpm: 150 }] })) })) })) }
+          // endSession now pages samples: .select().eq().order().range().
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ order: vi.fn(() => ({ range: vi.fn(() => Promise.resolve({ data: [{ recorded_at: '2026-06-18T05:30:00Z', bpm: 150 }], error: null })) })) })) })) }
         }
         if (table === 'strap_assignments') {
           return { update: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ error: null })) })) })) }
@@ -387,10 +388,13 @@ describe('endSession', () => {
           return { select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'loc-1', settings: {} }, error: null })) })) })) }
         }
         if (table === 'hr_samples') {
+          // endSession now pages samples: .select().eq().order().range().
           return {
             select: vi.fn(() => ({
               eq: vi.fn(() => ({
-                order: vi.fn(() => Promise.resolve({ data: samples, error: null })),
+                order: vi.fn(() => ({
+                  range: vi.fn(() => Promise.resolve({ data: samples, error: null })),
+                })),
               })),
             })),
           }
