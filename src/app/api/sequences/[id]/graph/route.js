@@ -1,8 +1,16 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { resolveSequenceGraph } from '@/lib/sequences/graph/persist'
 import { parseGraphShape } from '@/lib/sequences/graph/schema'
+import { validateBody } from '@/lib/validate'
+
+// Permissive — graph is a free-form object validated by parseGraphShape.
+const GraphDraftSchema = z.object({
+  graph: z.any().optional(),
+  graph_version: z.number().int().optional(),
+}).passthrough()
 
 // FLOW-GRAPH Phase 2 — the graph read/draft surface the builder (and, in
 // Phase 3, the AI agent) talks to.
@@ -55,7 +63,9 @@ export async function PUT(request, props) {
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
 
-  const body = await request.json().catch(() => ({}))
+  const validation = await validateBody(request, GraphDraftSchema, { allowEmpty: true })
+  if (!validation.ok) return validation.response
+  const body = validation.data
   // A draft is allowed to be semantically incomplete (mid-edit), but it must
   // still be a *graph* — reject anything not shaped like one so we never
   // persist garbage into draft_graph.

@@ -10,10 +10,16 @@
 // drops back to 'pending' and clears completed_at.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { tickItem } from '@/lib/checklist-instances'
 import { logAuditEvent } from '@/lib/audit'
+import { validateBody } from '@/lib/validate'
+
+const TickSchema = z.object({
+  checked: z.boolean().optional(),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -33,12 +39,9 @@ async function applyTick(request, params, checkedDefault) {
 
   let checked = checkedDefault
   if (request.method === 'POST') {
-    try {
-      const body = await request.json()
-      if (typeof body?.checked === 'boolean') checked = body.checked
-    } catch {
-      // No body / non-JSON — fall back to checkedDefault (true).
-    }
+    const validation = await validateBody(request, TickSchema, { allowEmpty: true })
+    if (!validation.ok) return validation.response
+    if (typeof validation.data?.checked === 'boolean') checked = validation.data.checked
   }
 
   const db = createServerClient()

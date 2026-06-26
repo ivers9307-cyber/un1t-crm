@@ -10,9 +10,22 @@
 //            past sessions.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { withAuth } from '@/lib/with-auth'
 import { getState as dispatchGetState, loadDeviceForUser } from '@/lib/ac-devices'
 import { AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
+import { validateBody } from '@/lib/validate'
+
+const AcDevicePatchSchema = z.object({
+  label: z.string().optional(),
+  device_group: z.string().nullable().optional(),
+  default_mode: z.string().optional(),
+  default_temp_c: z.union([z.number(), z.string()]).optional(),
+  default_fan: z.string().optional(),
+  session_minutes: z.union([z.number(), z.string()]).optional(),
+  external_auto_off_minutes: z.union([z.number(), z.string()]).nullable().optional(),
+  enabled: z.boolean().optional(),
+}).passthrough()
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -92,9 +105,9 @@ export const PATCH = withAuth(
       )
     }
 
-    let body
-    try { body = await request.json() }
-    catch { return NextResponse.json({ success: false, error: 'Invalid JSON body.' }, { status: 400 }) }
+    const validation = await validateBody(request, AcDevicePatchSchema)
+    if (!validation.ok) return validation.response
+    const body = validation.data
 
     // Whitelist of editable columns. Anything not in here is silently
     // ignored — we never let the operator overwrite provider /

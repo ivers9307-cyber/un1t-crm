@@ -17,10 +17,21 @@
 // feedback.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { canEditLocationFeatures } from '@/lib/staff-access'
 import { getBcaConfig, validateBcaConfig, isBcaSubmitEnabled } from '@/lib/bca'
+import { validateBody } from '@/lib/validate'
+
+// Permissive shape — domain validation is done by validateBcaConfig().
+const BcaConfigSchema = z.object({
+  send_from: z.string().optional(),
+  send_to: z.string().optional(),
+  subject_template: z.string().optional(),
+  body_template: z.string().optional(),
+  documents: z.array(z.any()).optional(),
+}).passthrough()
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -63,8 +74,9 @@ export async function PUT(request, props) {
     }, { status: 403 })
   }
 
-  const body = await request.json().catch(() => null)
-  if (!body) return NextResponse.json({ success: false, error: 'Invalid JSON' }, { status: 400 })
+  const validation = await validateBody(request, BcaConfigSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
 
   const v = validateBcaConfig(body)
   if (!v.ok) {

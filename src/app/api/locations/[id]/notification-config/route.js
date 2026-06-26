@@ -23,11 +23,18 @@
 // so the settings UI can use the same checker for instant feedback.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import {
   getEffectiveConfig, validateConfig,
 } from '@/lib/notification-config'
+import { validateBody } from '@/lib/validate'
+
+// Permissive shape — domain validation is done by validateConfig().
+const NotificationConfigSchema = z.object({
+  categories: z.record(z.any()).optional(),
+}).passthrough()
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -79,10 +86,9 @@ export async function PUT(request, props) {
     }, { status: 403 })
   }
 
-  const body = await request.json().catch(() => null)
-  if (body === null) {
-    return NextResponse.json({ success: false, error: 'Invalid JSON' }, { status: 400 })
-  }
+  const validation = await validateBody(request, NotificationConfigSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
 
   const v = validateConfig(body)
   if (!v.ok) {

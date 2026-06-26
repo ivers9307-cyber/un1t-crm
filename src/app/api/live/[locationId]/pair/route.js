@@ -14,11 +14,20 @@
 // location. Lower roles can't pair.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { pairOverride } from '@/lib/live-class'
 import { canonicaliseDeviceKey } from '@/lib/bridge-samples'
 import { logInfo } from '@/lib/log'
+import { validateBody } from '@/lib/validate'
+
+const PairSchema = z.object({
+  device_key: z.string().optional(),
+  contact_id: z.string().optional(),
+  bridge_id: z.string().optional(),
+  booking_id: z.string().nullable().optional(),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -39,8 +48,9 @@ export async function POST(request, props) {
     return NextResponse.json({ ok: false, error: 'Location not in your scope' }, { status: 403 })
   }
 
-  let body
-  try { body = await request.json() } catch { body = {} }
+  const validation = await validateBody(request, PairSchema, { allowEmpty: true })
+  if (!validation.ok) return validation.response
+  const body = validation.data
 
   const deviceKey = canonicaliseDeviceKey(body?.device_key)
   const contactId = String(body?.contact_id || '').trim()
