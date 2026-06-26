@@ -28,25 +28,36 @@ export const uuidLike = z.string().regex(
  *   if (!result.ok) return result.response
  *   const body = result.data
  *
+ * Options:
+ *   allowEmpty (default false): when true, an absent or empty body is
+ *     treated as {} rather than a 400 error. Use for routes where all
+ *     schema fields are optional and an empty POST is a valid no-op.
+ *
  * The returned NextResponse has shape:
  *   { success: false, error: 'Invalid request body', issues: [{ path, message }, ...] }
  *
  * @template T
  * @param {Request} request
  * @param {import('zod').ZodType<T>} schema
+ * @param {{ allowEmpty?: boolean }} [opts]
  * @returns {Promise<{ ok: true, data: T } | { ok: false, response: NextResponse }>}
  */
-export async function validateBody(request, schema) {
+export async function validateBody(request, schema, opts = {}) {
+  const { allowEmpty = false } = opts
   let raw
   try {
     raw = await request.json()
   } catch {
-    return {
-      ok: false,
-      response: NextResponse.json(
-        { success: false, error: 'Request body is not valid JSON' },
-        { status: 400 }
-      ),
+    if (allowEmpty) {
+      raw = {}
+    } else {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { success: false, error: 'Request body is not valid JSON' },
+          { status: 400 }
+        ),
+      }
     }
   }
 

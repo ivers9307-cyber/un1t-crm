@@ -1,8 +1,22 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { maskConnectionRow, buildConnectionPatch, SUPPORTED_PLATFORMS } from '@/lib/agent/channels'
+import { validateBody } from '@/lib/validate'
+
+const ChannelConnectionSchema = z.object({
+  platform: z.string().min(1),
+  label: z.string().max(200).optional(),
+  external_account_id: z.string().max(200).optional(),
+  page_id: z.string().max(200).optional(),
+  app_id: z.string().max(200).optional(),
+  display_name: z.string().max(200).optional(),
+  is_active: z.boolean().optional(),
+  access_token: z.string().max(2000).optional(),
+  app_secret: z.string().max(500).optional(),
+})
 
 // GET /api/locations/[id]/channels — list channel connections for a
 // location. Masks secrets (access_token, app_secret). Mirrors the
@@ -37,7 +51,9 @@ export async function POST(request, props) {
   const allowed = user.role === 'master' || (MANAGER_ROLES.includes(user.role) && (user.locations || []).some(l => l.id === locationId))
   if (!allowed) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
-  const body = await request.json()
+  const validation = await validateBody(request, ChannelConnectionSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   if (!SUPPORTED_PLATFORMS.includes(body.platform)) {
     return NextResponse.json({ success: false, error: `platform must be one of: ${SUPPORTED_PLATFORMS.join(', ')}` }, { status: 400 })
   }

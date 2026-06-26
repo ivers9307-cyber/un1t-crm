@@ -20,6 +20,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -101,14 +102,9 @@ export async function POST(request, props) {
   const roleGuard = guardMasterOrOwner(user, params.id)
   if (roleGuard) return roleGuard
 
-  const raw = await request.json().catch(() => ({}))
-  const parsed = CreateBody.safeParse(raw)
-  if (!parsed.success) {
-    return NextResponse.json({
-      success: false,
-      error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
-    }, { status: 400 })
-  }
+  const validation = await validateBody(request, CreateBody)
+  if (!validation.ok) return validation.response
+  const parsed = { data: validation.data }
 
   const db = createServerClient()
 
