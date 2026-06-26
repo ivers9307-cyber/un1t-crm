@@ -48,6 +48,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifySharedSecret } from '@/lib/webhook-auth'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
+import { resolveUnifiLocation, unifiControllerId } from '@/lib/unifi-webhook'
 import {
   resolveScheduledAt,
   matchArrivalToShift,
@@ -165,7 +166,7 @@ export async function POST(request) {
     .select('id, name, timezone, settings')
     .not('settings->unifi', 'is', null)
   const candidateLocations = (locs || []).filter((l) => l.settings?.unifi?.host)
-  const location = candidateLocations.length === 1 ? candidateLocations[0] : null
+  const location = resolveUnifiLocation(candidateLocations, unifiControllerId(payload))
   if (!location) {
     logWarn('webhook-unifi-access', 'cannot resolve location (multi-tenant deploy needs controller mapping)', {
       candidates: candidateLocations.length,
