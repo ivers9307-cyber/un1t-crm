@@ -1,0 +1,129 @@
+// Tests for the contractor invoice approval/decline emails.
+//
+// The branded header (logo + company name) must come from
+// company_settings via getLocationBranding — NOT from the locations
+// table, which has no logo_url/company_name columns (mig 004 vs the
+// company_settings table in mig 013). These tests lock that in:
+// branding is sourced from company_settings, and a missing branding
+// row falls back to the neutral "UN1T" wordmark.
+//
+// createServerClient + the Postmark fetch are mocked so we can assert
+// on the composed HtmlBody without standing up Supabase or Postmark.
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+
+import { sendInvoiceApprovedEmail, sendInvoiceDeclinedEmail } from './contractor-invoice-email.js'
+import { createServerClient } from '@/lib/supabase'
+
+const INVOICE = {
+  id: 'inv-1',
+  period_start: '2026-06-01',
+  period_end: '2026-06-30',
+  invoice_amount: 1234.5,
+  status: 'approved',
+  decline_reason: 'Please itemise the extra sessions.',
+  approved_at: '2026-06-26T10:00:00Z',
+  reviewed_by: 'rev-1',
+  location_id: 'loc-1',
+  contractor: { id: 'con-1', full_name: 'Pat Coach', email: 'pat@example.com' },
+  reviewer: { full_name: 'Mia Manager' },
+}
+
+// Mock createServerClient: contractor_invoices.select().eq().single()
+// resolves to `invoice`; company_settings.select().eq().limit() resolves
+// to `companySettings` (the array shape getLocationBranding expects).
+function mockClient({ invoice = INVOICE, companySettings = [] } = {}) {
+  return {
+    from(table) {
+      if (table === 'contractor_invoices') {
+        return {
+          select() { return this },
+          eq() { return this },
+          single() { return Promise.resolve({ data: invoice, error: null }) },
+        }
+      }
+      if (table === 'company_settings') {
+        return {
+          select() { return this },
+          eq() { return this },
+          limit() { return Promise.resolve({ data: companySettings, error: null }) },
+        }
+      }
+      throw new Error(`unexpected table in test: ${table}`)
+    },
+  }
+}
+
+// Capture the Postmark request body from the mocked fetch.
+function stubPostmark() {
+  const fetchMock = vi.fn(async () => ({
+    ok: true,
+    json: async () => ({ MessageID: 'mid-1' }),
+  }))
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+function sentHtml(fetchMock) {
+  return JSON.parse(fetchMock.mock.calls[0][1].body).HtmlBody
+}
+
+beforeEach(() => {
+  vi.stubEnv('POSTMARK_API_KEY', 'test-token')
+})
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
+  vi.clearAllMocks()
+})
+
+describe('sendInvoiceApprovedEmail — branding from company_settings', () => {
+  it('renders the company_settings logo in the email header', async () => {
+    vi.mocked(createServerClient).mockReturnValue(
+      mockClient({
+        companySettings: [{ company_name: 'UN1T Stillorgan', logo_url: 'https://cdn.example.com/logo.png', favicon_url: null }],
+      })
+    )
+    const fetchMock = stubPostmark()
+
+    const res = await sendInvoiceApprovedEmail('inv-1')
+
+    expect(res.messageId).toBe('mid-1')
+    const html = sentHtml(fetchMock)
+    expect(html).toContain('src="https://cdn.example.com/logo.png"')
+    // alt text uses the operator-configured company name
+    expect(html).toContain('UN1T Stillorgan')
+  })
+
+  it('falls back to the UN1T wordmark when no branding row exists (no logo img)', async () => {
+    vi.mocked(createServerClient).mockReturnValue(mockClient({ companySettings: [] }))
+    const fetchMock = stubPostmark()
+
+    await sendInvoiceApprovedEmail('inv-1')
+
+    const html = sentHtml(fetchMock)
+    expect(html).not.toContain('<img')
+    expect(html).toContain('UN1T')
+  })
+})
+
+describe('sendInvoiceDeclinedEmail — branding from company_settings', () => {
+  it('uses the configured company name when one is set but no logo', async () => {
+    vi.mocked(createServerClient).mockReturnValue(
+      mockClient({
+        companySettings: [{ company_name: 'CCF Autos', logo_url: null, favicon_url: null }],
+      })
+    )
+    const fetchMock = stubPostmark()
+
+    await sendInvoiceDeclinedEmail('inv-1')
+
+    const html = sentHtml(fetchMock)
+    expect(html).not.toContain('<img')
+    expect(html).toContain('CCF Autos')
+    // the decline reason still renders alongside the branding
+    expect(html).toContain('Please itemise the extra sessions.')
+  })
+})
