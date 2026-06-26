@@ -28,9 +28,9 @@ export async function POST(request, { params }) {
   const { count } = await db.from('presentation_slides')
     .select('id', { count: 'exact', head: true }).eq('presentation_id', id)
   const next = clampIndex(validation.data.index, count || 0)
-  const { data, error } = await db.from('presentations')
-    .update({ current_index: next, version: deck.version + 1, updated_at: new Date().toISOString() })
-    .eq('id', id).select('current_index, version').single()
+  const { data, error } = await db
+    .rpc('bump_presentation_version', { p_presentation_id: id, p_current_index: next })
+    .single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true, current_index: data.current_index, version: data.version })
 }

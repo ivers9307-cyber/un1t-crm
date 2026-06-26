@@ -24,6 +24,6 @@ export async function DELETE(_request, { params }) {
   try { await db.storage.from('presentation-slides').remove([slide.image_path]) } catch { /* best effort */ }
   const { error } = await db.from('presentation_slides').delete().eq('id', slideId)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  await db.from('presentations').update({ version: deck.version + 1, updated_at: new Date().toISOString() }).eq('id', id)
+  await db.rpc('bump_presentation_version', { p_presentation_id: id })
   return NextResponse.json({ success: true })
 }

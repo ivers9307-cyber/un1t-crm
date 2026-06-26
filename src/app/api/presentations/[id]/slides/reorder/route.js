@@ -30,6 +30,6 @@ export async function PUT(request, { params }) {
   for (let i = 0; i < order.length; i++) {
     await db.from('presentation_slides').update({ position: i }).eq('id', order[i]).eq('presentation_id', id)
   }
-  await db.from('presentations').update({ version: deck.version + 1, updated_at: new Date().toISOString() }).eq('id', id)
+  await db.rpc('bump_presentation_version', { p_presentation_id: id })
   return NextResponse.json({ success: true })
 }
