@@ -251,6 +251,7 @@ export async function POST(request, props) {
     const mode = race.capacity_mode === 'people' ? 'people' : 'teams'
     const waveLabel = wave.label || wave.start_time.slice(0, 5)
     if (mode === 'people') {
+      // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- wave-capacity gate; a single race wave never holds >1000 registrations
       const { data: waveRegs } = await db
         .from('race_registrations')
         .select('status, team:teams ( size )')

@@ -57,6 +57,7 @@ export async function registerSoloEventEntry(db, { race, waveId, contact }) {
     // of team sizes. A solo entry adds exactly one of whichever unit.
     // Mirrors the public register route's gate.
     const mode = race.capacity_mode === 'people' ? 'people' : 'teams'
+    // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- wave-capacity gate; a single race wave never holds >1000 registrations
     const { data: waveRegs } = await db.from('race_registrations')
       .select('status, team:teams ( size )')
       .eq('wave_id', wave.id)

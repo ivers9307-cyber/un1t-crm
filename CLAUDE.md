@@ -64,9 +64,9 @@ npm test             # vitest run (~2950 pure-lib tests, no DB)
 npm run lint         # eslint .
 ```
 
-**CI mirror — run all five before pushing:**
+**CI mirror — run all six before pushing:**
 ```bash
-npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:route-guards
+npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:route-guards && npm run check:guardrails
 ```
 
 - **`next build` is NOT in the CI mirror.** Green vitest + eslint does **not** mean the build passes — tests run on mocked imports, so a missing/renamed export or unresolvable import sails through and only fails in Vercel's Turbopack build. For any change adding an import or a new route/page, run `npm run build` locally before pushing. If a real `next build` isn't possible, the **Vercel check on the PR is the real gate**, not the CI "Test & lint" check.

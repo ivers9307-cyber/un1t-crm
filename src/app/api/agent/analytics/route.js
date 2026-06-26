@@ -58,6 +58,7 @@ export async function GET(request) {
   // AGENT-ANALYTICS.2 — outcomes: what the agent actually DID
   // (bookings/cancellations from the audit trail) + proactive sends.
   const [{ data: actionRows }, { count: followupsSent }, { count: checkinsSent }] = await Promise.all([
+    // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- analytics tally; per location/period stays well under 1000 at current scale
     db.from('agent_membership_requests')
       .select('kind, status')
       .eq('location_id', locationId)

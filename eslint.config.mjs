@@ -25,6 +25,7 @@
 
 import nextCoreWebVitals from 'eslint-config-next/core-web-vitals'
 import globals from 'globals'
+import guardrails from './eslint-rules/index.mjs'
 
 const config = [
   {
@@ -44,6 +45,19 @@ const config = [
   },
   ...nextCoreWebVitals,
   {
+    // Register the local `guardrails` plugin here with NO rules enabled.
+    // The two guardrails rules run ONLY via the scoped
+    // eslint.guardrails.config.mjs (`npm run check:guardrails`) — the main
+    // lint posture is deliberately unchanged. But the deliberate-cap sites
+    // carry inline `// eslint-disable(-next)-line guardrails/no-uncapped-
+    // supabase-limit` comments; without the plugin registered, `eslint .`
+    // errors "Definition for rule 'guardrails/…' was not found" on every
+    // one. Registering the plugin (rules left off) makes those directives
+    // resolve. Same trick the guardrails config uses for react-hooks/@next.
+    // (The directives read as "unused" under THIS config since the rule is
+    // off here — that's silenced for just those files in the entry below,
+    // so the global unused-disable signal is preserved everywhere else.)
+    plugins: { guardrails },
     languageOptions: {
       globals: {
         ...globals.browser,
@@ -103,6 +117,28 @@ const config = [
       'react-hooks/purity':              'off',
       'react-hooks/exhaustive-deps':     'warn',
     },
+  },
+  {
+    // The deliberate-cap sites carry an inline `guardrails/no-uncapped-
+    // supabase-limit` disable that fires under the SCOPED guardrails config
+    // (where the rule is on) but reads as "unused" under THIS main config
+    // (where it's off). Silence the unused-directive report for exactly these
+    // files so the cross-config directive isn't flagged here — without
+    // disabling the report globally (the pre-existing unused-disable signal
+    // elsewhere, e.g. src/lib/person-aggregate.js, stays intact). Keep this
+    // list in sync with the eslint-disable comments for that rule.
+    files: [
+      'src/app/api/agent/analytics/route.js',
+      // `[slug]` brackets are minimatch character-classes — escape them so the
+      // pattern matches the literal directory name, not one of s/l/u/g.
+      'src/app/api/public/events/\\[slug\\]/register/route.js',
+      'src/app/api/public/events/\\[slug\\]/route.js',
+      'src/lib/agent/event-tools.js',
+      'src/lib/class-categories.js',
+      'src/lib/contact-events.js',
+      'src/lib/race-register-solo.js',
+    ],
+    linterOptions: { reportUnusedDisableDirectives: 'off' },
   },
 ]
 

@@ -10,6 +10,7 @@ import { ArrowLeft, Download } from 'lucide-react'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { selectAll } from '@/lib/select-all'
 import ImportRollbackButton from '@/components/ImportRollbackButton'
 
 export const dynamic = 'force-dynamic'
@@ -38,12 +39,23 @@ export default async function ImportDetailPage(props) {
   const guard = assertLocationAccess(user, batch.location_id)
   if (guard) redirect('/contacts/imports')
 
-  const { data: rows } = await db
-    .from('contact_import_rows')
-    .select('id, row_number, action, contact_id, raw_row, error_message')
-    .eq('import_id', params.id)
-    .order('row_number', { ascending: true })
-    .limit(5000)
+  // Paginated via selectAll — the old .limit(5000) was silently capped at
+  // the 1000-row PostgREST ceiling, so a >1000-row import only rendered its
+  // first 1000 rows. Ordered by row_number (the display order) with id as a
+  // deterministic tiebreaker so paging never skips/double-counts. Best-effort:
+  // an error here shouldn't crash the page, so fall back to [].
+  let rows = []
+  try {
+    rows = await selectAll((from, to) => db
+      .from('contact_import_rows')
+      .select('id, row_number, action, contact_id, raw_row, error_message')
+      .eq('import_id', params.id)
+      .order('row_number', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to))
+  } catch {
+    rows = []
+  }
 
   const canRollback = (user.isMaster || user.role === 'master') && batch.status === 'completed'
   const hasFailedRows = (batch.errored_count + batch.skipped_count) > 0
