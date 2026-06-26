@@ -15,6 +15,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { logInfo, logWarn } from '@/lib/log'
 import { buildAchievementContext, runDetectors } from '@/lib/achievements'
+import { selectAll } from '@/lib/select-all'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -49,19 +50,32 @@ export async function POST(request, props) {
   const since = new Date(Date.now() - HISTORY_LOOKBACK_DAYS * 24 * 3600 * 1000).toISOString()
 
   // 1) Distinct contact_ids with at least one ended session in window.
-  const { data: contactRows } = await db
+  // AUDIT P1-2 — paginated. This scans EVERY ended session across all
+  // members in the 365-day window — far more than 1000 rows. An un-paginated
+  // select would silently cap the candidate set, so the backfill would skip
+  // everyone past row 1000. Correctness-critical, so let selectAll throw on a
+  // DB error (a 500 beats a silently partial backfill). Order by id is
+  // deterministic; `recorded_at`-style ties don't apply to a uuid pk.
+  const contactRows = await selectAll((from, to) => db
     .from('heart_rate_sessions')
-    .select('contact_id')
+    .select('contact_id, id')
     .not('ended_at', 'is', null)
     .gte('started_at', since)
-  const contactIds = [...new Set((contactRows || []).map((r) => r.contact_id))]
+    .order('id', { ascending: true })
+    .range(from, to))
+  const contactIds = [...new Set(contactRows.map((r) => r.contact_id))]
 
-  // 2) Already-earned: skip these contacts.
-  const { data: alreadyEarned } = await db
+  // 2) Already-earned: skip these contacts. Paginated for the same reason —
+  // a popular rule's earned set can exceed 1000, and a truncated set would
+  // re-grant (upsert ignores dupes, so harmless) but more importantly the
+  // candidate filter would be wrong.
+  const alreadyEarned = await selectAll((from, to) => db
     .from('contact_achievements')
     .select('contact_id')
     .eq('rule_id', id)
-  const earnedSet = new Set((alreadyEarned || []).map((r) => r.contact_id))
+    .order('id', { ascending: true })
+    .range(from, to))
+  const earnedSet = new Set(alreadyEarned.map((r) => r.contact_id))
   const candidates = contactIds.filter((cid) => !earnedSet.has(cid))
 
   let granted = 0

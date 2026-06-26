@@ -526,11 +526,14 @@ export async function sendBroadcast(broadcastId) {
   // number even if someone reconfigures defaults mid-send.
   const broadcastConfig = await getWhatsAppConfig(broadcast.location_id)
 
-  // Get audience (async — resolves event_registration / tag virtual fields)
-  const { query: audienceQuery } = await buildWhatsAppAudienceAsync(db, broadcast.audience_filter, broadcast.location_id)
-  const { data: contacts, error: cErr } = await audienceQuery
+  // Get audience — AUDIT P1-2: route the blast through the paginated
+  // fetchAllWhatsAppAudience (the drip path already does) instead of awaiting
+  // the builder once. Awaiting buildWhatsAppAudienceAsync directly capped the
+  // blast at the PostgREST 1000-row limit, so a broadcast to a >1k audience
+  // silently sent to only the first 1000 contacts. Same builder + columns, so
+  // the per-contact shape (wa_phone, id) is unchanged. Throws on query error.
+  const contacts = await fetchAllWhatsAppAudience(db, broadcast.audience_filter, broadcast.location_id)
 
-  if (cErr) throw new Error(`Audience query failed: ${cErr.message}`)
   if (!contacts?.length) {
     await db.from('whatsapp_broadcasts').update({
       status: 'sent',

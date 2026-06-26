@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { buildAchievementContext, runDetectors } from '@/lib/achievements'
+import { selectAll } from '@/lib/select-all'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,16 +41,24 @@ export async function POST(request) {
   const db = createServerClient()
 
   // Load contact's sessions.
+  // AUDIT P1-2 — paginated (mirrors achievements.js runDetectionForSession):
+  // the same 365-day history fetch, which can exceed the 1000-row cap for a
+  // frequent member and silently truncate the preview. selectAll throws on a
+  // DB error; map it back to the existing 500-with-message path.
   const since = new Date(Date.now() - HISTORY_LOOKBACK_DAYS * 24 * 3600 * 1000).toISOString()
-  const { data: sessions, error: sErr } = await db
-    .from('heart_rate_sessions')
-    .select('id, contact_id, location_id, booking_id, started_at, ended_at, effort_points, peak_hr_bpm, avg_hr_bpm, zones_seconds, max_hr_used, bookings:bookings(event_type_id)')
-    .eq('contact_id', contactId)
-    .not('ended_at', 'is', null)
-    .gte('started_at', since)
-    .order('started_at', { ascending: true })
-  if (sErr) {
-    return NextResponse.json({ ok: false, error: sErr.message }, { status: 500 })
+  let sessions
+  try {
+    sessions = await selectAll((from, to) => db
+      .from('heart_rate_sessions')
+      .select('id, contact_id, location_id, booking_id, started_at, ended_at, effort_points, peak_hr_bpm, avg_hr_bpm, zones_seconds, max_hr_used, bookings:bookings(event_type_id)')
+      .eq('contact_id', contactId)
+      .not('ended_at', 'is', null)
+      .gte('started_at', since)
+      .order('started_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to))
+  } catch (err) {
+    return NextResponse.json({ ok: false, error: err.message }, { status: 500 })
   }
   if (!sessions || sessions.length === 0) {
     return NextResponse.json({ ok: true, fired: [], reason: 'no sessions in window' })

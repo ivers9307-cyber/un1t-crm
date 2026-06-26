@@ -40,16 +40,34 @@ export async function ingestActivity(db, { connection, activityId, config }) {
   return { ingested: row.strava_activity_id }
 }
 
+// Backfill an athlete's recent Strava activities. AUDIT P1-2 — this is an
+// EXTERNAL-API fan-out (not a Supabase select), so selectAll doesn't apply:
+// the Strava activities endpoint returns at most `perPage` per call, so a
+// single fetch silently capped the backfill at 100 activities. Page through
+// (1-based) while a full page comes back — a short page means we've reached
+// the end of the window. Capped at MAX_PAGES so a misconfigured `sinceMs`
+// (e.g. epoch 0) can't walk the athlete's entire history / exhaust the rate
+// limit; 10 × 100 = 1000 activities is plenty for any realistic reconnect.
+const BACKFILL_PER_PAGE = 100
+const BACKFILL_MAX_PAGES = 10
+
 export async function backfillConnection(db, { connection, config, sinceMs }) {
   const token = await ensureFreshToken(db, connection, config)
   const afterEpoch = Math.floor(sinceMs / 1000)
-  const activities = await listActivities({ accessToken: token, afterEpoch, perPage: 100 })
   let n = 0
-  for (const activity of activities || []) {
-    const row = mapStravaApiActivity({ contactId: connection.contact_id, activity, athleteId: connection.external_athlete_id })
-    if (!row.strava_activity_id) continue
-    const { error } = await db.from('strava_activities').upsert(row, { onConflict: 'contact_id,strava_activity_id' })
-    if (!error) n += 1
+  for (let page = 1; page <= BACKFILL_MAX_PAGES; page += 1) {
+    const activities = await listActivities({
+      accessToken: token, afterEpoch, perPage: BACKFILL_PER_PAGE, page,
+    })
+    const batch = activities || []
+    for (const activity of batch) {
+      const row = mapStravaApiActivity({ contactId: connection.contact_id, activity, athleteId: connection.external_athlete_id })
+      if (!row.strava_activity_id) continue
+      const { error } = await db.from('strava_activities').upsert(row, { onConflict: 'contact_id,strava_activity_id' })
+      if (!error) n += 1
+    }
+    // A page shorter than the requested size is the last page.
+    if (batch.length < BACKFILL_PER_PAGE) break
   }
   return { backfilled: n }
 }

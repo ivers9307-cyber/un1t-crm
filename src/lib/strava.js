@@ -157,12 +157,14 @@ export async function getActivity({ accessToken, activityId }) {
 
 /**
  * List the athlete's SUMMARY activities (for backfill). `afterEpoch` is a Unix
- * seconds lower bound. Returns the array as-is. Throws on non-2xx.
+ * seconds lower bound. `page` is 1-based (Strava paginates `/athlete/activities`
+ * via page + per_page). Returns the array as-is. Throws on non-2xx.
  */
-export async function listActivities({ accessToken, afterEpoch, perPage = 100 }) {
+export async function listActivities({ accessToken, afterEpoch, perPage = 100, page = 1 }) {
   const u = new URL(`${STRAVA_API_BASE}/athlete/activities`)
   if (afterEpoch) u.searchParams.set('after', String(afterEpoch))
   u.searchParams.set('per_page', String(perPage))
+  u.searchParams.set('page', String(page))
   const res = await fetch(u.toString(), { headers: { authorization: `Bearer ${accessToken}` } })
   if (!res.ok) {
     const txt = await res.text().catch(() => '')
