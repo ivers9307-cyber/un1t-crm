@@ -50,6 +50,22 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { INVOICE_CATEGORIES } from './invoice-categories'
 
+/**
+ * Convert a HEIC/HEIF image (HEVC-encoded — the iPhone default) to JPEG so
+ * Claude vision can read it. sharp's prebuilt libvips has NO HEVC decoder
+ * (AVIF only — `sharp.format.heif.input.fileSuffix` is `['.avif']`), so this
+ * uses heic-convert (libheif-js WASM). Lazy-imported; heic-convert + libheif-js
+ * are in next.config `serverExternalPackages` so the WASM ships to the Vercel
+ * runtime instead of being bundled.
+ * @param {Buffer|Uint8Array} bytes  HEIC/HEIF bytes
+ * @returns {Promise<Buffer>} JPEG bytes
+ */
+export async function heicToJpeg(bytes) {
+  const convert = (await import('heic-convert')).default
+  const out = await convert({ buffer: Buffer.from(bytes), format: 'JPEG', quality: 0.85 })
+  return Buffer.from(out)
+}
+
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const ANTHROPIC_VERSION = '2023-06-01'
 const MODEL = 'claude-sonnet-4-6'
@@ -256,15 +272,13 @@ export async function extractInvoiceFieldsFromBytes(bytes, mime) {
   if (!bytes || !bytes.length) {
     return { ok: false, error: 'No file bytes provided to extractor.' }
   }
-  // iPhone receipts default to HEIC, which Claude vision can't parse — the
-  // queue item would otherwise stall silently in the background. Convert to
-  // JPEG with sharp (already a dependency; lazy-imported so it only loads for
-  // HEIC). On any conversion failure, return a clear, actionable error rather
-  // than a silent stall.
+  // iPhone receipts default to HEIC (HEVC-encoded), which Claude vision can't
+  // parse. sharp's prebuilt libvips has no HEVC decoder, so heicToJpeg() uses
+  // heic-convert (libheif-js WASM). On any conversion failure, return a clear,
+  // actionable error rather than a silent stall.
   if (mime === 'image/heic' || mime === 'image/heif') {
     try {
-      const sharp = (await import('sharp')).default
-      bytes = await sharp(bytes).jpeg({ quality: 85 }).toBuffer()
+      bytes = await heicToJpeg(bytes)
       mime = 'image/jpeg'
     } catch {
       return { ok: false, error: 'This looks like a HEIC image (iPhone default) we could not convert. Please re-upload the receipt as JPEG or PDF.' }

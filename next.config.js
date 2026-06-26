@@ -1,5 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // heic-convert (libheif-js WASM) decodes iPhone HEIC receipts — sharp's
+  // prebuilt libvips has NO HEVC decoder. Keep it + its WASM dep external so
+  // they load from node_modules at runtime on Vercel instead of being bundled
+  // (bundling drops the .wasm and the decode fails). sharp is auto-externalised
+  // by Next already.
+  serverExternalPackages: ['heic-convert', 'libheif-js'],
+
   // ─── Back-compat rewrites for relocated URL spaces ───────────────
   //
   // The events expansion moved two URL spaces:
