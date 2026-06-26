@@ -40,6 +40,47 @@ const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 const BATCH_SIZE = 100 // Expo accepts up to 100 messages per request
 
 /**
+ * Resolve which of `ids` may receive a push for `category`, reading the LIVE
+ * permission source — `profile_locations.permissions` (per mig 058).
+ *
+ * IMPORTANT: `profiles.permissions` is stale post-058 and is intentionally NOT
+ * read here — reading it was the regression that silently ignored every
+ * admin-set per-category opt-out. A user is suppressed if inactive, or if ANY
+ * of their location assignments has the master switch (`push_notifications`)
+ * or the per-category toggle (`notify_<category>`) explicitly `false` —
+ * conservative, so an opt-out set at any location is honoured. (When staff
+ * span multiple locations and per-location granularity is wanted, thread the
+ * notification's locationId into this check.)
+ *
+ * @param {object} db        service-role supabase client
+ * @param {string[]} ids     profile ids to consider
+ * @param {string} [category]  notify_<category> to gate on (omit = master only)
+ * @returns {Promise<Set<string>>} the allowed profile ids
+ */
+export async function resolvePushAllowedIds(db, ids, category) {
+  const allowed = new Set()
+  if (!ids?.length) return allowed
+  const { data: profiles } = await db.from('profiles').select('id, active').in('id', ids)
+  const { data: links } = await db
+    .from('profile_locations').select('profile_id, permissions').in('profile_id', ids)
+  const activeById = new Map((profiles || []).map(p => [p.id, p.active === true]))
+  const mobilesByUser = new Map()
+  for (const l of links || []) {
+    const arr = mobilesByUser.get(l.profile_id) || []
+    arr.push(l.permissions?.mobile || {})
+    mobilesByUser.set(l.profile_id, arr)
+  }
+  for (const id of ids) {
+    if (!activeById.get(id)) continue
+    const mobiles = mobilesByUser.get(id) || []
+    if (mobiles.some(m => m.push_notifications === false)) continue
+    if (category && mobiles.some(m => m[`notify_${category}`] === false)) continue
+    allowed.add(id)
+  }
+  return allowed
+}
+
+/**
  * Fan out a push notification to one or more users.
  *
  * @param {string|string[]} userIds  Profile id(s) to notify.
@@ -68,23 +109,11 @@ export async function sendPush(userIds, payload) {
   // per-user master switch + per-category opt-out before we even fetch
   // tokens. That avoids spending an Expo round-trip on users who would
   // immediately be filtered out anyway.
-  const { data: profiles } = await db
-    .from('profiles')
-    .select('id, permissions, active')
-    .in('id', ids)
-
-  const allowedIds = []
-  let skipped = 0
-  for (const p of profiles || []) {
-    if (!p.active) { skipped++; continue }
-    const m = p.permissions?.mobile || {}
-    if (m.push_notifications === false) { skipped++; continue }
-    if (payload.category && m[`notify_${payload.category}`] === false) {
-      skipped++
-      continue
-    }
-    allowedIds.push(p.id)
-  }
+  // Per-category opt-out lives on profile_locations.permissions (mig 058);
+  // profiles.permissions is stale and must NOT be read here.
+  const allowedSet = await resolvePushAllowedIds(db, ids, payload.category)
+  const allowedIds = ids.filter(id => allowedSet.has(id))
+  let skipped = ids.length - allowedIds.length
 
   if (!allowedIds.length) return { sent: 0, skipped, invalidated: 0 }
 
