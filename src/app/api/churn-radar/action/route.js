@@ -50,6 +50,8 @@ import { enrolContacts } from '@/lib/sequences'
 import { paymentTroubleKind } from '@/lib/churn-radar'
 import { invalidateRadar } from '@/lib/radar-cache'
 import { logWarn, logInfo } from '@/lib/log'
+import { getLocationBranding } from '@/lib/location-branding'
+import { defaultWinbackMessage } from '@/lib/churn-winback'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -132,10 +134,10 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'This member has no phone number on file.' }, { status: 400 })
     }
     const firstName = contact.first_name || (contact.name || '').split(' ')[0] || 'there'
+    const branding = await getLocationBranding(db, locationId)
     const message = body?.message
       ? String(body.message).slice(0, 1000)
-      : `Hi ${firstName}, it's the team at UN1T — we've noticed you've not been in for a bit and wanted to check in. ` +
-        'Anything we can do to help you get back to it? We\'d love to see you in class soon.'
+      : defaultWinbackMessage(firstName, branding.companyName)
     try {
       await sendTextMessage(to, message, { locationId })
     } catch (e) {
