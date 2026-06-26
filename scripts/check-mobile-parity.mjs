@@ -152,12 +152,9 @@ const WEB_ONLY_OK = {
   // handler inbox (claim / resolve / close, with photos) now ships on
   // mobile via the `issue_triage` MOBILE_PERMISSIONS entry
   // (webEquivalent: 'issues_inbox'), so it's matched, not exempted here.
-  // MOBILE-PERMS — the mobile `assistant` toggle was removed: there is
-  // no assistant screen in the iOS app yet, so the toggle controlled
-  // nothing. Re-add a MOBILE_PERMISSIONS entry with
-  // webEquivalent: 'assistant' (and drop this line) when a mobile
-  // assistant actually ships.
-  assistant: 'In-app AI assistant chat (web /assistant). No mobile assistant screen exists yet — the dead mobile toggle was removed (MOBILE-PERMS). Re-pair when a mobile assistant ships.',
+  // MOBILE-ASSISTANT.1 (P2-8) — the mobile assistant screen now ships
+  // (mobile/app/assistant/*), paired via the `assistant` MOBILE_PERMISSIONS
+  // entry (webEquivalent: 'assistant'), so it's matched, not exempted here.
   // PERSON-LINK.1 — identity-link API (link/unlink/set-primary).
   // The full dedup workflow (choosing which contacts are duplicates,
   // reviewing a person group, editing the primary) needs the desktop

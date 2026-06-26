@@ -312,6 +312,14 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // every role, same as web — front-of-house staff look members up too.
   { key: 'contacts',           label: 'Contacts',                 hint: 'Search the member directory and open a contact to call / message them. Read-only on mobile; editing stays on web.', webEquivalent: 'contacts' },
   { key: 'whatsapp',           label: 'WhatsApp Inbox',           hint: 'Reply to inbound WhatsApp messages on the go',                  webEquivalent: 'whatsapp' },
+  // MOBILE-ASSISTANT.1 (P2-8) — the in-app AI assistant chat on mobile,
+  // mirroring the web /assistant bubble. Buffered (non-streaming) path
+  // first; streaming is a fast-follow. webEquivalent links it to the web
+  // `assistant` key for the parity linter, so `assistant` drops out of
+  // WEB_ONLY_OK now that the mobile screen ships. Defaults mirror the web
+  // assistant role defaults exactly (master/owner/manager on, head_coach
+  // explicit opt-in on, staff off).
+  { key: 'assistant',          label: 'AI Assistant',             hint: 'Chat with the in-app assistant — navigate the CRM and ask questions. Mirrors the web assistant.', webEquivalent: 'assistant' },
   // MOBILE-CONTACT-SEND.1 — ad-hoc one-to-one send from the mobile
   // contact card, via the platform's linked service (Twilio / Postmark)
   // so the message comes from the company, not the staffer's personal
@@ -463,7 +471,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   // Platform super-admin (mig 033) — every mobile feature on. canMobile
   // also short-circuits true for master regardless of these values.
   master: {
-    schedule: true, pipeline: true, whatsapp: true,
+    schedule: true, pipeline: true, whatsapp: true, assistant: true,
     sms: true, email: true,
     tv_displays: true,
     contacts: true,
@@ -490,7 +498,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_issue_submitted: true, notify_issue_resolved: true,
   },
   staff: {
-    schedule: true, pipeline: false, whatsapp: false,
+    schedule: true, pipeline: false, whatsapp: false, assistant: false,
     sms: false, email: false,
     tv_displays: false,
     contacts: true,
@@ -524,7 +532,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_issue_submitted: false, notify_issue_resolved: true,
   },
   head_coach: {
-    schedule: true, pipeline: true, whatsapp: true,
+    schedule: true, pipeline: true, whatsapp: true, assistant: true,    // explicit opt-in, mirrors web
     sms: true, email: true,
     tv_displays: false,
     contacts: true,
@@ -555,7 +563,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_issue_submitted: false, notify_issue_resolved: true,
   },
   manager: {
-    schedule: true, pipeline: true, whatsapp: true,
+    schedule: true, pipeline: true, whatsapp: true, assistant: true,
     sms: true, email: true,
     tv_displays: true,
     contacts: true,
@@ -588,7 +596,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_issue_submitted: false, notify_issue_resolved: true,
   },
   owner: {
-    schedule: true, pipeline: true, whatsapp: true,
+    schedule: true, pipeline: true, whatsapp: true, assistant: true,
     sms: true, email: true,
     tv_displays: true,
     contacts: true,
