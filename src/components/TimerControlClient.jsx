@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Play, Pause, Square, SkipForward, SkipBack, Plus, Pencil, Trash2 } from 'lucide-react'
-import { buildTimeline, computeEffectiveElapsedMs, resolveTimerState } from '@/lib/class-timer'
+import { buildTimeline, computeEffectiveElapsedMs, resolveTimerState, SEG_COLOR } from '@/lib/class-timer'
 import TimerTemplateEditor from '@/components/TimerTemplateEditor'
 
 const POLL_MS = 2000
@@ -203,10 +203,6 @@ export default function TimerControlClient({ locationId }) {
     </div>
   )
 }
-
-// Per-segment-type accent — mirrors the SEG_COLOR map on the TV banner + mobile
-// control so the coach's screen matches the wall.
-const SEG_COLOR = { prep: '#F59E0B', work: '#10B981', rest: '#3B82F6', station: '#A855F7', custom: '#64748B' }
 
 // CLASS-TIMER PR4 — "DR1VE is live → load its timer?" prompt shown when a class
 // is on now and a template is tagged for it (no run active).

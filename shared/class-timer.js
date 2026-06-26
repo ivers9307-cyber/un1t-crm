@@ -9,6 +9,18 @@
 
 export const TIMER_SEGMENT_TYPES = ['prep', 'work', 'rest', 'station', 'custom']
 
+// Canonical per-segment-type accent colour — ONE source of truth so the TV
+// wall, the coach control screen, and the mobile timer never diverge (each
+// used to keep its own map). work=red (push), rest=green (recover): the
+// convention members read on the TV wall.
+export const SEG_COLOR = {
+  prep: '#9CA3AF',    // grey
+  work: '#EF4444',    // red — push
+  rest: '#10B981',    // green — recover
+  station: '#3B82F6', // blue
+  custom: '#A78BFA',  // violet
+}
+
 const MAX_BLOCKS = 50
 const MAX_ROUND_SEGMENTS = 20
 const MAX_SECONDS = 3600

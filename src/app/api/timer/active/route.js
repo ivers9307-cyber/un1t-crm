@@ -6,7 +6,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { uuidLike } from '@/lib/schemas'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
-import { matchTemplateToClassName } from '@/lib/class-timer'
+import { matchTemplateToClassName, buildTimeline, computeEffectiveElapsedMs, resolveTimerState } from '@/lib/class-timer'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -34,13 +34,24 @@ export async function GET(request) {
     .limit(1)
     .maybeSingle()
 
+  // Auto-stop a finished run so the TV doesn't stick on "Complete" forever.
+  let activeRun = data
+  if (activeRun && activeRun.status === 'running' && activeRun.structure_snapshot) {
+    const timeline = buildTimeline(activeRun.structure_snapshot)
+    const st = resolveTimerState(timeline, computeEffectiveElapsedMs(activeRun, Date.now()))
+    if (st.finished) {
+      await db.from('class_timer_runs').update({ status: 'finished' }).eq('id', activeRun.id)
+      activeRun = null
+    }
+  }
+
   // CLASS-TIMER PR4 — when nothing is running, surface the Glofox class that's
   // live now (off the class_occurrences spine) and the template tagged for it,
   // so the control UIs can offer a one-tap "DR1VE is live → load its timer?".
   // Skipped while a run is active (the suggestion would be moot).
   let liveClass = null
   let suggestedTemplate = null
-  if (!data) {
+  if (!activeRun) {
     const occ = await resolveCurrentOccurrence(db, { locationId })
     if (occ?.class_name) {
       liveClass = { class_name: occ.class_name }
@@ -55,5 +66,5 @@ export async function GET(request) {
     }
   }
 
-  return NextResponse.json({ success: true, run: data || null, live_class: liveClass, suggested_template: suggestedTemplate })
+  return NextResponse.json({ success: true, run: activeRun, live_class: liveClass, suggested_template: suggestedTemplate })
 }

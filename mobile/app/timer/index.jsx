@@ -19,6 +19,7 @@ import {
   buildTimeline,
   computeEffectiveElapsedMs,
   resolveTimerState,
+  SEG_COLOR,
 } from '../../../shared/class-timer'
 import {
   listTimerTemplates,
@@ -29,16 +30,6 @@ import {
 } from '../../lib/timer-api'
 
 const POLL_MS = 2000
-
-// Per-segment-type accent — mirrors the SEG_COLOR map on the TV banner so the
-// coach's phone matches what's on the wall.
-const SEG_COLOR = {
-  prep: '#F59E0B',
-  work: '#10B981',
-  rest: '#3B82F6',
-  station: '#A855F7',
-  custom: '#64748B',
-}
 
 // Same seed structures as the web control (TimerControlClient PRESETS) so a
 // coach can run a common format before authoring a custom one on the web editor.
