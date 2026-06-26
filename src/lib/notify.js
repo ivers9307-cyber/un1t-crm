@@ -31,7 +31,7 @@
 // Best-effort throughout — never throws.
 
 import { createServerClient } from './supabase'
-import { sendPush } from './push'
+import { sendPush, resolvePushAllowedIds } from './push'
 import { sendEmail } from './postmark'
 import { getNotificationCategory } from './notifications-registry'
 import { logInfo, logWarn } from './log'
@@ -85,20 +85,14 @@ export async function notifyUsers(userIds, payload) {
   // We also respect notify_<category> at this level — if a user has
   // explicitly turned the category off, we don't go around their back
   // by emailing them.
+  // Mirror push.js's gate against the LIVE source (profile_locations.permissions,
+  // mig 058 — profiles.permissions is stale). Don't email around an opt-out.
   const { data: profiles } = await db
     .from('profiles')
-    .select('id, full_name, email, permissions, active')
+    .select('id, full_name, email')
     .in('id', noTokenIds)
-
-  const fallbackTargets = []
-  for (const p of profiles || []) {
-    if (!p.active) continue
-    if (!p.email) continue
-    const m = p.permissions?.mobile || {}
-    if (m.push_notifications === false) continue
-    if (m[`notify_${category}`] === false) continue
-    fallbackTargets.push(p)
-  }
+  const allowed = await resolvePushAllowedIds(db, noTokenIds, category)
+  const fallbackTargets = (profiles || []).filter(p => p.email && allowed.has(p.id))
   if (!fallbackTargets.length) return totals
 
   const subject = payload.emailSubject || registry.emailSubject || payload.title || 'UN1T notification'
