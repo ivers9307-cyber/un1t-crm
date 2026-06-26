@@ -48,6 +48,7 @@
 
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
+import { INVOICE_CATEGORIES } from './invoice-categories'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const ANTHROPIC_VERSION = '2023-06-01'
@@ -103,22 +104,6 @@ const lineItem = z.object({
 // lib so the OCR is org-agnostic). The forwarded email body
 // includes the category as a hint to the bookkeeper finishing the
 // draft in Xero.
-export const INVOICE_CATEGORIES = Object.freeze([
-  'utilities',
-  'cleaning',
-  'equipment',
-  'marketing',
-  'insurance',
-  'rent',
-  'maintenance',
-  'professional_services',
-  'staff_training',
-  'office_supplies',
-  'software',
-  'bank_fees',
-  'other',
-])
-
 const invoiceFields = z.object({
   supplier_name: z.string().min(1).max(300),
   supplier_address: z.string().max(1000).nullable().optional(),
@@ -270,6 +255,20 @@ export async function extractInvoiceFieldsFromBytes(bytes, mime) {
   }
   if (!bytes || !bytes.length) {
     return { ok: false, error: 'No file bytes provided to extractor.' }
+  }
+  // iPhone receipts default to HEIC, which Claude vision can't parse — the
+  // queue item would otherwise stall silently in the background. Convert to
+  // JPEG with sharp (already a dependency; lazy-imported so it only loads for
+  // HEIC). On any conversion failure, return a clear, actionable error rather
+  // than a silent stall.
+  if (mime === 'image/heic' || mime === 'image/heif') {
+    try {
+      const sharp = (await import('sharp')).default
+      bytes = await sharp(bytes).jpeg({ quality: 85 }).toBuffer()
+      mime = 'image/jpeg'
+    } catch {
+      return { ok: false, error: 'This looks like a HEIC image (iPhone default) we could not convert. Please re-upload the receipt as JPEG or PDF.' }
+    }
   }
   if (!SUPPORTED_MIME.has(mime || '')) {
     return {
