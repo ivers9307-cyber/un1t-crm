@@ -24,6 +24,7 @@ import { getDepositBaseUrl, getRequestOrigin } from '@/lib/app-url'
 import { syncOrderFromCarDeposit } from '@/lib/orders'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { logWarn } from '@/lib/log'
+import { buildDepositSmsBody } from '@/lib/deposit-receipts'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -110,13 +111,13 @@ export async function POST(request, props) {
   let baseUrl
   try { baseUrl = getDepositBaseUrl() } catch { baseUrl = getRequestOrigin(request) }
   const link = `${baseUrl}/deposit/${token}`
-  const carLabel = [car.make, car.model, car.irish_reg].filter(Boolean).join(' ').trim() || 'your Tesla'
+  const carLabel = [car.make, car.model, car.irish_reg].filter(Boolean).join(' ').trim() || 'your car'
   const buyerFirstName = (car.buyer_name || '').split(' ')[0] || 'there'
 
   // SMS body — kept under 160 chars to fit a single segment where
   // possible (varies with car name length). Twilio bills per segment;
   // operators care about cost.
-  const smsBody = `Hi ${buyerFirstName}, your €${amount.toFixed(2)} Tesla Car Deposit for ${carLabel}: ${link} (link valid 24h)`
+  const smsBody = buildDepositSmsBody({ firstName: buyerFirstName, amount, carLabel, link })
 
   // Sender is resolved from car.locations.twilio_alpha_sender_id
   // (mig 059) — falls back to TWILIO_FROM env then the literal

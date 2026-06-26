@@ -128,7 +128,7 @@ export async function POST(request, props) {
     let baseUrl
     try { baseUrl = getDepositBaseUrl() } catch { baseUrl = getRequestOrigin(request) }
     const amountMinor = Math.round(Number(car.deposit_amount || 500) * 100)
-    const carLabel = [car.make, car.model].filter(Boolean).join(' ') || 'Tesla'
+    const carLabel = [car.make, car.model].filter(Boolean).join(' ') || 'your car'
     try {
       const order = await createOrder({
         amount: amountMinor,

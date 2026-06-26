@@ -132,7 +132,7 @@ export function buildReceiptBody({ car, location }) {
   const firstName = (car.buyer_name || '').trim().split(/\s+/)[0] || 'there'
   const carLabel =
     [car.make, car.model, car.irish_reg].map((p) => (p || '').trim()).filter(Boolean).join(' ') ||
-    'your Tesla'
+    'your car'
 
   // Prefer the actual captured amount (set by the webhook from Revolut's
   // order.amount). Falls back to the configured deposit_amount if for
@@ -150,4 +150,14 @@ export function buildReceiptBody({ car, location }) {
     `Hi ${firstName}, we've received your ${amountLabel}deposit for ${carLabel}. ` +
     `Thanks — we'll be in touch shortly to arrange next steps. ${brand}.`
   )
+}
+
+/**
+ * Buyer-facing deposit-link SMS. Uses the actual car label (make/model/reg)
+ * the caller already computed — no hard-coded make. Kept short for a single
+ * Twilio segment where the label allows.
+ * @param {object} args { firstName, amount, carLabel, link }
+ */
+export function buildDepositSmsBody({ firstName, amount, carLabel, link }) {
+  return `Hi ${firstName}, your €${Number(amount).toFixed(2)} deposit for ${carLabel}: ${link} (link valid 24h)`
 }

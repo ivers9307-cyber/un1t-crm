@@ -25,7 +25,7 @@ vi.mock('./twilio', () => {
   }
 })
 
-import { sendDepositReceiptSms, buildReceiptBody } from './deposit-receipts'
+import { sendDepositReceiptSms, buildReceiptBody, buildDepositSmsBody } from './deposit-receipts'
 import { sendLocationSms, TwilioError } from './twilio'
 
 function mockDb({
@@ -248,12 +248,13 @@ describe('buildReceiptBody', () => {
     expect(body).toMatch(/Tesla Model Y 252-D-9999/)
   })
 
-  it("falls back to 'your Tesla' when make/model/reg are all empty", () => {
+  it("falls back to 'your car' when make/model/reg are all empty", () => {
     const body = buildReceiptBody({
       car: { ...baseCar, make: null, model: null, irish_reg: null },
       location: baseLocation,
     })
-    expect(body).toMatch(/your Tesla/)
+    expect(body).toMatch(/your car/)
+    expect(body).not.toContain('Tesla')
   })
 
   it('prefers deposit_paid_amount over deposit_amount when both present', () => {
@@ -296,5 +297,28 @@ describe('buildReceiptBody', () => {
       location: { name: '' },
     })
     expect(body).toMatch(/CCF Autos\.$/)
+  })
+})
+
+describe('buildReceiptBody — no hard-coded make', () => {
+  it('uses "your car" when the make is missing', () => {
+    const body = buildReceiptBody({ car: { buyer_name: 'Sam Lee', deposit_amount: 500 }, location: { name: 'CCF Autos' } })
+    expect(body).toContain('your car')
+    expect(body).not.toContain('Tesla')
+  })
+
+  it('uses the actual make and model when present', () => {
+    const body = buildReceiptBody({ car: { buyer_name: 'Sam', make: 'BMW', model: '3 Series', deposit_amount: 500 }, location: {} })
+    expect(body).toContain('BMW 3 Series')
+  })
+})
+
+describe('buildDepositSmsBody', () => {
+  it('has no hard-coded Tesla and includes the real car label + amount', () => {
+    const sms = buildDepositSmsBody({ firstName: 'Sam', amount: 500, carLabel: 'BMW 3 Series', link: 'https://pay/x' })
+    expect(sms).not.toContain('Tesla')
+    expect(sms).toContain('BMW 3 Series')
+    expect(sms).toContain('€500.00')
+    expect(sms).toContain('https://pay/x')
   })
 })
