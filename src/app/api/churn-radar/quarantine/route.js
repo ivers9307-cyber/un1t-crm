@@ -12,12 +12,19 @@
 // Access: churn_radar permission (owner + head_coach by default).
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadQuarantine } from '@/lib/churn-radar-data'
 import { radarCache, invalidateRadar } from '@/lib/radar-cache'
 import { logWarn } from '@/lib/log'
+import { validateBody } from '@/lib/validate'
+
+const QuarantineTriageSchema = z.object({
+  decision:    z.enum(['stale', 'keep']),
+  contact_ids: z.array(z.string()).min(1),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -57,13 +64,10 @@ export async function POST(request) {
   if (access.error) return access.error
   const { user, locationId } = access
 
-  let body
-  try { body = await request.json() } catch { body = {} }
-  const decision = body?.decision
-  const contactIds = Array.isArray(body?.contact_ids) ? body.contact_ids.filter(Boolean) : []
-  if (decision !== 'stale' && decision !== 'keep') {
-    return NextResponse.json({ success: false, error: 'decision must be "stale" or "keep"' }, { status: 400 })
-  }
+  const v = await validateBody(request, QuarantineTriageSchema)
+  if (!v.ok) return v.response
+  const { decision, contact_ids: rawIds } = v.data
+  const contactIds = rawIds.filter(Boolean)
   if (contactIds.length === 0) {
     return NextResponse.json({ success: false, error: 'contact_ids is required' }, { status: 400 })
   }

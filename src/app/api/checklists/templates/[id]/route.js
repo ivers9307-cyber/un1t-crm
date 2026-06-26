@@ -10,9 +10,18 @@
 //            id and we don't want orphans.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { withAuth } from '@/lib/with-auth'
 import { getTemplate, updateTemplate, disableTemplate } from '@/lib/checklists'
 import { logAuditEvent } from '@/lib/audit'
+import { validateBody } from '@/lib/validate'
+
+// role + day_of_week are intentionally not patchable (see route header)
+const ChecklistTemplatePatchSchema = z.object({
+  name:    z.string().optional(),
+  items:   z.array(z.unknown()).optional(),
+  enabled: z.boolean().optional(),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -71,21 +80,16 @@ export const PATCH = withAuth(
       return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
     }
 
-    let body
-    try { body = await request.json() }
-    catch {
-      return NextResponse.json(
-        { success: false, error: 'Invalid JSON body.' },
-        { status: 400 }
-      )
-    }
+    const v = await validateBody(request, ChecklistTemplatePatchSchema)
+    if (!v.ok) return v.response
+    const body = v.data
 
     const out = await updateTemplate(db, id, {
       // Whitelist — `role` + `day_of_week` + `location_id` are not
       // patchable. See header.
-      ...(body && 'name' in body ? { name: body.name } : {}),
-      ...(body && 'items' in body ? { items: body.items } : {}),
-      ...(body && 'enabled' in body ? { enabled: body.enabled } : {}),
+      ...('name' in body ? { name: body.name } : {}),
+      ...('items' in body ? { items: body.items } : {}),
+      ...('enabled' in body ? { enabled: body.enabled } : {}),
     })
     if (!out.ok) {
       return NextResponse.json(

@@ -4,10 +4,15 @@
 // Edit/delete/backfill/test live on dedicated sub-routes for clarity.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { logWarn } from '@/lib/log'
 import { selectAll } from '@/lib/select-all'
+import { validateBody } from '@/lib/validate'
+
+// Permissive schema — real field validation is done by validateRulePayload
+const AchievementCreateSchema = z.record(z.unknown())
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -66,9 +71,9 @@ export async function POST(request) {
   const user = await requireMaster()
   if (!user) return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })
 
-  let body
-  try { body = await request.json() }
-  catch { return NextResponse.json({ ok: false, error: 'Invalid JSON' }, { status: 400 }) }
+  const v = await validateBody(request, AchievementCreateSchema)
+  if (!v.ok) return v.response
+  const body = v.data
 
   const validation = validateRulePayload(body, { isCreate: true })
   if (!validation.ok) {

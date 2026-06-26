@@ -18,6 +18,7 @@
 // NOT reuse (wrong auth tier, GET/dry-run debug shape, Glofox-id input).
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
@@ -26,6 +27,12 @@ import { applyMemberSync } from '@/lib/glofox-sync'
 import { classifyContact, paymentTroubleKind } from '@/lib/churn-radar'
 import { invalidateRadar } from '@/lib/radar-cache'
 import { logWarn, logInfo } from '@/lib/log'
+import { validateBody } from '@/lib/validate'
+import { uuidLike } from '@/lib/schemas'
+
+const RefreshMemberSchema = z.object({
+  contact_id: uuidLike,
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -50,12 +57,9 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
   }
 
-  let body
-  try { body = await request.json() } catch { body = {} }
-  const contactId = String(body?.contact_id || '').trim()
-  if (!contactId) {
-    return NextResponse.json({ success: false, error: 'contact_id is required' }, { status: 400 })
-  }
+  const v = await validateBody(request, RefreshMemberSchema)
+  if (!v.ok) return v.response
+  const contactId = v.data.contact_id
 
   const db = createServerClient()
 

@@ -7,9 +7,16 @@
 // Access: churn_radar permission (owner + head_coach by default).
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { validateBody } from '@/lib/validate'
+
+// recipients is optional — an empty array is valid (disables the digest)
+const DigestSettingsSchema = z.object({
+  recipients: z.array(z.string()).optional(),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,8 +63,9 @@ export async function PUT(request) {
   const g = await guard()
   if (g.error) return g.error
 
-  let body
-  try { body = await request.json() } catch { body = {} }
+  const v = await validateBody(request, DigestSettingsSchema, { allowEmpty: true })
+  if (!v.ok) return v.response
+  const body = v.data
   const raw = Array.isArray(body?.recipients) ? body.recipients : []
 
   // Sanitise: trim, lowercase, validate shape, dedupe.

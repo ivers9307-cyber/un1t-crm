@@ -15,9 +15,16 @@
 // regular-staff info either.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { sendPush } from '@/lib/push'
+import { validateBody } from '@/lib/validate'
+import { uuidLike } from '@/lib/schemas'
+
+const PushTestSchema = z.object({
+  recipient_id: uuidLike,
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -31,11 +38,9 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
-  const body = await request.json().catch(() => null)
-  const recipientId = body?.recipient_id
-  if (!recipientId || typeof recipientId !== 'string') {
-    return NextResponse.json({ success: false, error: 'recipient_id required' }, { status: 400 })
-  }
+  const v = await validateBody(request, PushTestSchema)
+  if (!v.ok) return v.response
+  const recipientId = v.data.recipient_id
 
   const db = createServerClient()
   const { data: target, error } = await db

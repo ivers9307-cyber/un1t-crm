@@ -10,10 +10,18 @@
 //   rule_id absent   → run every active rule and return the full set
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { buildAchievementContext, runDetectors } from '@/lib/achievements'
 import { selectAll } from '@/lib/select-all'
+import { validateBody } from '@/lib/validate'
+import { uuidLike } from '@/lib/schemas'
+
+const AchievementTestSchema = z.object({
+  contact_id: uuidLike,
+  rule_id: uuidLike.optional(),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -30,13 +38,12 @@ export async function POST(request) {
   const user = await requireMaster()
   if (!user) return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })
 
-  let body
-  try { body = await request.json() }
-  catch { return NextResponse.json({ ok: false, error: 'Invalid JSON' }, { status: 400 }) }
+  const v = await validateBody(request, AchievementTestSchema)
+  if (!v.ok) return v.response
+  const body = v.data
 
-  const contactId = String(body?.contact_id || '').trim()
-  if (!contactId) return NextResponse.json({ ok: false, error: 'contact_id required' }, { status: 400 })
-  const ruleId = body?.rule_id ? String(body.rule_id) : null
+  const contactId = body.contact_id
+  const ruleId = body.rule_id ?? null
 
   const db = createServerClient()
 

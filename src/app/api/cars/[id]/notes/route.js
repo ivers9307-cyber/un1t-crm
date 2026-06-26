@@ -13,6 +13,7 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -63,11 +64,8 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
-  const raw = await request.json().catch(() => ({}))
-  const parsed = PostBody.safeParse(raw)
-  if (!parsed.success) {
-    return NextResponse.json({ success: false, error: 'content is required' }, { status: 400 })
-  }
+  const v = await validateBody(request, PostBody)
+  if (!v.ok) return v.response
 
   const db = createServerClient()
   const car = await loadCar(db, params.id)
@@ -80,7 +78,7 @@ export async function POST(request, props) {
     .insert({
       car_id: car.id,
       location_id: car.location_id,
-      content: parsed.data.content.trim(),
+      content: v.data.content.trim(),
       kind: 'manual',
       created_by: user.id,
     })

@@ -16,6 +16,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { uuidLike } from '@/lib/schemas'
 import { PUBLISH_STATES } from '@/lib/landing-page-visibility'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -75,9 +76,9 @@ export async function PUT(request) {
   if (!canEdit(user)) {
     return NextResponse.json({ success: false, error: 'Master or owner required' }, { status: 403 })
   }
-  let body
-  try { body = PutSchema.parse(await request.json()) }
-  catch (e) { return NextResponse.json({ success: false, error: e.errors?.[0]?.message || 'Invalid body' }, { status: 400 }) }
+  const v = await validateBody(request, PutSchema)
+  if (!v.ok) return v.response
+  const body = v.data
 
   const db = createServerClient()
 

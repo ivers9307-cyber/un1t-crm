@@ -35,11 +35,23 @@
 //   404: { success: false, error: 'target_not_found' | 'no_auth_account' }
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createClient } from '@supabase/supabase-js'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { canOverrideStaffPassword } from '@/lib/staff-access'
 import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit'
+import { validateBody } from '@/lib/validate'
+
+// Validate body SHAPE only — auth/permission logic is unchanged.
+// newPassword is optional (server generates if missing/generateRandom=true).
+const PasswordOverrideSchema = z.object({
+  targetType:      z.string().optional(),
+  targetId:        z.string().optional(),
+  newPassword:     z.string().optional(),
+  generateRandom:  z.boolean().optional(),
+  reason:          z.string().max(1000).optional(),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -83,12 +95,11 @@ export async function POST(request) {
   const rl = await checkRateLimit(db, `pw-override:${user.id}`, { max: 20, windowMs: 15 * 60_000 })
   if (!rl.allowed) return rateLimitResponse(rl)
 
-  let body
-  try { body = await request.json() } catch {
-    return NextResponse.json({ success: false, error: 'invalid_json' }, { status: 400 })
-  }
+  const v = await validateBody(request, PasswordOverrideSchema)
+  if (!v.ok) return v.response
+  const body = v.data
 
-  const { targetType, targetId, newPassword, generateRandom, reason } = body || {}
+  const { targetType, targetId, newPassword, generateRandom, reason } = body
 
   if (!['staff', 'member'].includes(targetType)) {
     return NextResponse.json({ success: false, error: 'bad_targetType' }, { status: 400 })
