@@ -23,6 +23,8 @@
 // only renders + validates. The API route is responsible for
 // persisting the issued row and for state-machine transitions.
 
+import { dublinTodayStr } from '@/lib/dublin-time'
+
 /**
  * Build the auto-fill variable map from a profile row.
  *
@@ -71,7 +73,7 @@ export function profileVariables(profile) {
 
   // Today, pre-computed for templates that want a default
   // {{today}} when the issuer doesn't override start_date.
-  v.today = new Date().toISOString().slice(0, 10)
+  v.today = dublinTodayStr()
 
   return v
 }

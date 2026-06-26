@@ -2,6 +2,7 @@
 // See src/app/bookings/event-types/page.js header for context.
 
 import { createServerClient } from '@/lib/supabase'
+import { dublinTodayStr } from '@/lib/dublin-time'
 import Link from 'next/link'
 import { ArrowLeft, Edit } from 'lucide-react'
 import EventActions from '@/components/EventActions'
@@ -44,7 +45,7 @@ export default async function BookingTypeDetailPage(props) {
     )
   }
 
-  const upcoming = bookings.filter(b => b.status === 'confirmed' && b.booking_date >= new Date().toISOString().split('T')[0])
+  const upcoming = bookings.filter(b => b.status === 'confirmed' && b.booking_date >= dublinTodayStr())
 
   return (
     <div className="p-8">

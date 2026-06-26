@@ -130,9 +130,77 @@ const noUncappedSupabaseLimit = {
   },
 }
 
+// new Date(`...T...Z`) — appending Z parses the (interpolated) string as UTC.
+// On a Dublin wall-clock date/time that silently adds the BST (+1h) offset.
+const noZuluTemplateDate = {
+  meta: {
+    type: 'problem',
+    docs: { description: 'Disallow new Date(`...T...Z`) — parses an interpolated wall-clock string as UTC (adds the BST offset).' },
+    schema: [],
+    messages: {
+      z: 'new Date(`…T…Z`) parses the string as UTC — on a Dublin wall-clock date/time this silently adds the BST (+1h) offset. Use localToUtc()/dublinWallClockToMs(), or the noon-UTC date-label pattern. If the components are genuinely UTC, annotate with an eslint-disable + reason.',
+    },
+  },
+  create(context) {
+    return {
+      'NewExpression[callee.name="Date"]'(node) {
+        const arg = node.arguments && node.arguments[0]
+        if (!arg || arg.type !== 'TemplateLiteral') return
+        const quasis = arg.quasis || []
+        if (!quasis.length) return
+        const lastQ = quasis[quasis.length - 1]
+        const lastCooked = (lastQ.value && lastQ.value.cooked) || ''
+        const hasT = quasis.some((q) => ((q.value && q.value.cooked) || '').includes('T'))
+        // High precision: only flag `...T${time}Z` — an interpolation directly
+        // before a lone trailing `Z` (the wall-clock-TIME-as-UTC bug). This
+        // deliberately does NOT flag legit literal-time forms: `${d}T12:00:00Z`
+        // (noon date-label anchor) or `${d}T00:00:00Z` (UTC date math, e.g.
+        // addDaysISO) — there the time sits in the literal, not an expression.
+        if (hasT && lastCooked.trim() === 'Z') {
+          context.report({ node, messageId: 'z' })
+        }
+      },
+    }
+  },
+}
+
+// new Date().toISOString().slice/split — the UTC date of "now", which differs
+// from the Dublin date around midnight during BST (off-by-one for a business
+// "today"). Bare new Date().toISOString() (a UTC timestamp) is fine and NOT
+// flagged — only the date-extraction via .slice/.split is.
+const noUtcToday = {
+  meta: {
+    type: 'problem',
+    docs: { description: "Disallow new Date().toISOString().slice/split — the UTC date of now; use dublinTodayStr() for a business 'today'." },
+    schema: [],
+    messages: {
+      utcToday: "new Date().toISOString() is the UTC date of now — during BST it differs from the Dublin date around midnight, an off-by-one for a business 'today'. Use dublinTodayStr() from @/lib/dublin-time. If you genuinely need the UTC date (filename/storage key), annotate with an eslint-disable + reason.",
+    },
+  },
+  create(context) {
+    return {
+      'CallExpression[callee.type="MemberExpression"]'(node) {
+        const prop = node.callee.property && node.callee.property.name
+        if (prop !== 'slice' && prop !== 'split') return
+        const inner = node.callee.object
+        if (!inner || inner.type !== 'CallExpression') return
+        const ic = inner.callee
+        if (!ic || ic.type !== 'MemberExpression' || !ic.property || ic.property.name !== 'toISOString') return
+        const dateNode = ic.object
+        if (!dateNode || dateNode.type !== 'NewExpression') return
+        if (!dateNode.callee || dateNode.callee.name !== 'Date') return
+        if (dateNode.arguments && dateNode.arguments.length > 0) return // new Date(x) — not "now"
+        context.report({ node, messageId: 'utcToday' })
+      },
+    }
+  },
+}
+
 export default {
   rules: {
     'no-catch-on-supabase-builder': noCatchOnSupabaseBuilder,
     'no-uncapped-supabase-limit': noUncappedSupabaseLimit,
+    'no-zulu-template-date': noZuluTemplateDate,
+    'no-utc-today': noUtcToday,
   },
 }

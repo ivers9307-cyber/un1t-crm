@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { CalendarOff, Plus, Check, X, Palmtree, ThermometerSun, Ban, Wallet, CircleEllipsis } from 'lucide-react'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { dublinTodayStr } from '@/lib/dublin-time'
 import { TIME_OFF_TYPES } from '@shared/time-off'
 
 // All five time-off types (mig 283). The manager screen renders every type
@@ -413,7 +414,7 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
                   setStartDate(e.target.value)
                   if (!endDate || e.target.value > endDate) setEndDate(e.target.value)
                 }}
-                min={new Date().toISOString().split('T')[0]}
+                min={dublinTodayStr()}
                 className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
             </div>
@@ -424,7 +425,7 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
                 required
                 value={endDate}
                 onChange={e => setEndDate(e.target.value)}
-                min={startDate || new Date().toISOString().split('T')[0]}
+                min={startDate || dublinTodayStr()}
                 className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
             </div>

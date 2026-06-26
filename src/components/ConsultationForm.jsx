@@ -21,12 +21,13 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AlertCircle } from 'lucide-react'
 import { Button, Field } from '@/components/ui'
+import { dublinTodayStr } from '@/lib/dublin-time'
 
 // timestamptz → "YYYY-MM-DD" for a <input type="date"> default.
 function toDateInput(iso) {
-  if (!iso) return new Date().toISOString().slice(0, 10)
+  if (!iso) return dublinTodayStr()
   const d = new Date(iso)
-  if (!Number.isFinite(d.getTime())) return new Date().toISOString().slice(0, 10)
+  if (!Number.isFinite(d.getTime())) return dublinTodayStr()
   return d.toISOString().slice(0, 10)
 }
 

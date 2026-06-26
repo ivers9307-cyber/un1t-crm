@@ -56,7 +56,7 @@ export async function GET(request) {
   }
 
   const startOfYear = new Date(new Date().getFullYear(), 0, 1).toISOString()
-  const today = new Date().toISOString().slice(0, 10)
+  const today = new Date().toISOString().slice(0, 10) // eslint-disable-line guardrails/no-utc-today -- CSV export filename suffix (cars-*-${today}.csv); a UTC date key, not a business date
 
   let csv = ''
   let filename = ''

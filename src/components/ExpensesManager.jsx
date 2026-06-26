@@ -9,6 +9,7 @@
 // hours snapshots (those are contractor-specific).
 
 import { useEffect, useMemo, useState } from 'react'
+import { dublinTodayStr } from '@/lib/dublin-time'
 import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_LABELS } from '@/lib/fte-expenses'
 import {
   Plus, Loader2, AlertCircle, X, ChevronRight,
@@ -474,7 +475,7 @@ function NewClaimModal({ locations, onClose, onCreated }) {
 // Add item form — inline under a claim. Multipart upload.
 // -------------------------------------------------------------------
 function AddItemForm({ claimId, onCancel, onSaved }) {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = dublinTodayStr()
   const [form, setForm] = useState({
     expense_date: today, category: 'travel', vendor: '', description: '',
     amount: '', vat_amount: '', receipt: null,

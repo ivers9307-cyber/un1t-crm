@@ -119,14 +119,15 @@ const config = [
     },
   },
   {
-    // The deliberate-cap sites carry an inline `guardrails/no-uncapped-
-    // supabase-limit` disable that fires under the SCOPED guardrails config
-    // (where the rule is on) but reads as "unused" under THIS main config
-    // (where it's off). Silence the unused-directive report for exactly these
+    // The deliberate-cap / deliberate-UTC-key / deliberate-zulu sites carry an
+    // inline `guardrails/*` disable (no-uncapped-supabase-limit, no-utc-today,
+    // no-zulu-template-date) that fires under the SCOPED guardrails config
+    // (where the rules are on) but reads as "unused" under THIS main config
+    // (where they're off). Silence the unused-directive report for exactly these
     // files so the cross-config directive isn't flagged here — without
     // disabling the report globally (the pre-existing unused-disable signal
     // elsewhere, e.g. src/lib/person-aggregate.js, stays intact). Keep this
-    // list in sync with the eslint-disable comments for that rule.
+    // list in sync with the eslint-disable comments for those rules.
     files: [
       'src/app/api/agent/analytics/route.js',
       // `[slug]` brackets are minimatch character-classes — escape them so the
@@ -137,6 +138,13 @@ const config = [
       'src/lib/class-categories.js',
       'src/lib/contact-events.js',
       'src/lib/race-register-solo.js',
+      // no-utc-today deliberate-UTC-key sites (CSV filename / storage path):
+      'src/app/api/admin/audit-log/route.js',
+      'src/app/api/cars/reports/export/route.js',
+      'src/app/api/card-receipts/upload-sign/route.js',
+      // no-zulu-template-date reminder window-match sites (#650 verification):
+      'src/lib/event-reminders.js',
+      'src/lib/sequences/cron-triggers.js',
     ],
     linterOptions: { reportUnusedDisableDirectives: 'off' },
   },

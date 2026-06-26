@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
+import { dublinTodayStr } from '@/lib/dublin-time'
 import { fetchScheduledShiftRows } from '@/lib/report-generator'
 import { upsertShiftAssignment } from '@/lib/roster-write'
 import { SYSTEM_PROMPT, TOOLS } from '@/lib/assistant-prompt'
@@ -396,7 +397,7 @@ export async function POST(request) {
 - Location: ${userContext.locationName}
 - Location ID: ${userContext.locationId || 'none'}
 - Permissions: ${JSON.stringify(userContext.permissions)}
-- Today: ${new Date().toISOString().split('T')[0]}
+- Today: ${dublinTodayStr()}
 `
 
   // Prompt caching (CACHE.1): the static SYSTEM_PROMPT (~3.1k tokens) and the
