@@ -15,6 +15,7 @@ import {
   computeLeadTrend,
   NON_MEMBER_STATUSES,
 } from '@/lib/lead-radar'
+import { selectAll } from '@/lib/select-all'
 
 // Columns the scorer + UI need from contacts. Narrow on purpose —
 // the non-member base is ~7,000 rows, so every column counts.
@@ -50,16 +51,25 @@ async function fetchNonMembers(db, locationId) {
 async function fetchActions(db, locationId) {
   // 90-day window: snoozes are capped at 90 days and "last contacted"
   // only needs the most recent action per contact, so nothing older
-  // can affect the radar. The bound also keeps this query well under
-  // Supabase's 1000-row response cap without needing to paginate.
+  // can affect the radar.
+  // AUDIT P1-2 — paginated (mirrors fetchNonMembers above). The non-member
+  // base is ~7,000 rows and each can accrue multiple actions, so a 90-day
+  // action log can exceed the 1000-row cap; a truncated log silently loses
+  // snooze / contacted state for contacts past row 1000. Keep best-effort
+  // (the original swallowed errors and returned []) so the radar renders.
   const since = new Date(Date.now() - 90 * 86_400_000).toISOString()
-  const { data } = await db
-    .from('lead_radar_actions')
-    .select('contact_id, action, snooze_until, created_at')
-    .eq('location_id', locationId)
-    .gte('created_at', since)
-    .order('created_at', { ascending: false })
-  return data || []
+  try {
+    return await selectAll((from, to) => db
+      .from('lead_radar_actions')
+      .select('contact_id, action, snooze_until, created_at')
+      .eq('location_id', locationId)
+      .gte('created_at', since)
+      .order('created_at', { ascending: false })
+      .order('contact_id', { ascending: true })
+      .range(from, to))
+  } catch {
+    return []
+  }
 }
 
 // Reduce the action log to per-contact maps: most-recent contacting

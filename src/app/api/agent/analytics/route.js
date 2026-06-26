@@ -3,6 +3,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { summariseChannel, mergeSummaries, containmentRate, rankTopics, summariseActions } from '@/lib/agent/analytics'
+import { selectAll } from '@/lib/select-all'
 
 // RADAR-AGENT — operator analytics feed (plan §4e). Manager+ at the
 // active location. Read-only: aggregates the agent's own WhatsApp +
@@ -34,17 +35,27 @@ export async function GET(request) {
   const db = createServerClient()
 
   async function loadChannel(convTable, msgTable) {
-    const { data: conversations } = await db.from(convTable)
+    // AUDIT P1-2 — both selects paginated. Over a 30-90 day window a busy
+    // location's message volume easily exceeds the 1000-row cap; a truncated
+    // set would silently under-report every headline number (containment
+    // rate, topics) and could drop escalated conversations from the review
+    // list. Order by id (both tables have a uuid pk). Best-effort: a fetch
+    // error degrades to [] rather than 500ing the whole analytics feed.
+    const conversations = await selectAll((from, to) => db.from(convTable)
       .select('id, agent_handed_off_at, agent_verified_contact_id, last_message_at')
       .eq('location_id', locationId)
       .gte('last_message_at', since)
-    const { data: messages } = await db.from(msgTable)
+      .order('id', { ascending: true })
+      .range(from, to)).catch(() => [])
+    const messages = await selectAll((from, to) => db.from(msgTable)
       .select('conversation_id, direction, source, body, created_at')
       .eq('location_id', locationId)
       .gte('created_at', since)
+      .order('id', { ascending: true })
+      .range(from, to)).catch(() => [])
     return {
-      summary: summariseChannel(conversations || [], messages || []),
-      conversations: conversations || [],
+      summary: summariseChannel(conversations, messages),
+      conversations,
     }
   }
 

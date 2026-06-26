@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { logWarn } from '@/lib/log'
+import { selectAll } from '@/lib/select-all'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -30,13 +31,21 @@ export async function GET() {
   if (!user) return NextResponse.json({ ok: false, error: 'Forbidden' }, { status: 403 })
 
   const db = createServerClient()
-  const [{ data: rules }, { data: counts }] = await Promise.all([
+  // AUDIT P1-2 — the earned-count tally walks the WHOLE contact_achievements
+  // table (every contact × every rule they've earned), which at Stillorgan's
+  // scale far exceeds the 1000-row cap — an un-paginated select would
+  // under-count every rule's earned_count. Paginate via selectAll; keep it
+  // best-effort (the original swallowed errors) so a count failure doesn't
+  // 500 the whole rules list. id is the deterministic paging order.
+  const [{ data: rules }, counts] = await Promise.all([
     db.from('achievement_rules')
       .select('*')
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true }),
-    db.from('contact_achievements')
-      .select('rule_id'),
+    selectAll((from, to) => db.from('contact_achievements')
+      .select('rule_id')
+      .order('id', { ascending: true })
+      .range(from, to)).catch(() => []),
   ])
 
   // Tally earned-count per rule for the admin UI (helpful when

@@ -417,7 +417,7 @@ export async function fetchStudioDashboardData(supabase, locationId) {
 
   const [
     pendingTimeOff, pendingSwaps,
-    newLeadsThisWeek, contactsByStatus, unreadConvos,
+    newLeadsThisWeek, unreadConvos,
   ] = await Promise.all([
     supabase
       .from('time_off_requests')
@@ -439,23 +439,44 @@ export async function fetchStudioDashboardData(supabase, locationId) {
       .gte('lead_created_at', weekStartIso),
 
     supabase
-      .from('contacts')
-      .select('pipeline_stage_slug')
-      .eq('location_id', locationId),
-
-    supabase
       .from('whatsapp_conversations')
       .select('unread_count')
       .eq('location_id', locationId)
       .gt('unread_count', 0),
   ])
 
+  // AUDIT P1-2 — the funnel reads pipeline_stage_slug for EVERY contact at the
+  // location (Stillorgan is 8,000+), so a bare .select() silently truncated at
+  // the PostgREST 1000-row cap — the funnel + totalContacts under-counted by
+  // ~7,000. This file is the shared web↔mobile seam and CANNOT import
+  // src/lib/select-all (check:mobile-imports forbids it), so we inline a
+  // .range() page loop (no import) instead. Kept faithful to the original
+  // return shape: a per-slug funnel map (including an 'unknown' bucket for
+  // NULL / off-list slugs) plus an EXACT totalContacts = sum of all rows. The
+  // narrow single-column projection makes the ~8 pages cheap.
   const funnel = {}
-  for (const c of contactsByStatus.data || []) {
-    const k = c.pipeline_stage_slug || 'unknown'
-    funnel[k] = (funnel[k] || 0) + 1
+  let totalContacts = 0
+  const PAGE = 1000
+  const HARD_LIMIT = 200_000
+  for (let from = 0; from < HARD_LIMIT; from += PAGE) {
+    const { data: page, error } = await supabase
+      .from('contacts')
+      .select('pipeline_stage_slug')
+      .eq('location_id', locationId)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    // Best-effort, matching the original (which never checked .error): on a
+    // mid-pagination failure, stop and render the funnel built so far rather
+    // than blanking the whole dashboard (the other cards loaded fine).
+    if (error) break
+    if (!Array.isArray(page) || page.length === 0) break
+    for (const c of page) {
+      const k = c.pipeline_stage_slug || 'unknown'
+      funnel[k] = (funnel[k] || 0) + 1
+    }
+    totalContacts += page.length
+    if (page.length < PAGE) break
   }
-  const totalContacts = (contactsByStatus.data || []).length
   const totalUnread = (unreadConvos.data || []).reduce((s, c) => s + (c.unread_count || 0), 0)
 
   return {

@@ -412,11 +412,17 @@ describe('resolveEventFilters — DB-backed (explicit mock)', () => {
   // Explicit thenable chain per table (NOT a Proxy) — robust against the
   // PromiseLike auto-unwrap that makes Supabase-builder mocking fragile.
   function eventDb({ regs, members }) {
+    // AUDIT P1-2 — both lookups now page through selectAll, so each chain ends
+    // in .order().range(); the chain must answer those without breaking the
+    // PromiseLike thenable. selectAll calls buildQuery(from,to) once and stops
+    // when the page (regs/members, < pageSize) is short, so the data resolves
+    // on the first page exactly as before.
     return {
       from(table) {
         if (table === 'race_registrations') {
           const chain = {
             select: () => chain, eq: () => chain, in: () => chain,
+            order: () => chain, range: () => chain,
             then: (resolve) => Promise.resolve({ data: regs, error: null }).then(resolve),
           }
           return chain
@@ -424,6 +430,7 @@ describe('resolveEventFilters — DB-backed (explicit mock)', () => {
         if (table === 'team_members') {
           const chain = {
             select: () => chain, in: () => chain, not: () => chain,
+            order: () => chain, range: () => chain,
             then: (resolve) => Promise.resolve({ data: members, error: null }).then(resolve),
           }
           return chain
@@ -477,5 +484,80 @@ describe('resolveEventFilters — DB-backed (explicit mock)', () => {
       filter: { filters: [{ field: 'event_registration', op: 'eq', value: 'evt-1' }] },
     })
     expect(calls.some(c => c[0] === 'in' && c[1] === 'id')).toBe(true)
+  })
+})
+
+// ─── AUDIT P1-2 — pagination: the virtual-field resolvers must read the
+// FULL match set, not the first 1000 rows. Before the retrofit, a popular
+// tag / large event silently truncated the audience at the PostgREST cap.
+describe('resolveTagFilters / resolveEventFilters — paginate past the 1000-row cap', () => {
+  // A PostgREST-style paged table: .range(from,to) returns rows[from..to],
+  // capping each page at 1000 (the real db-max-rows) so a single page can
+  // never exceed it. Records every page's [from,to] so the test can assert
+  // the resolver kept paging until a short page.
+  function pagedTable(rows, pages) {
+    let from = 0, to = 0
+    const chain = {
+      select: () => chain, eq: () => chain, is: () => chain, in: () => chain, not: () => chain,
+      order: () => chain,
+      range: (f, t) => { from = f; to = t; pages.push([f, t]); return chain },
+      then: (resolve) => {
+        const slice = rows.slice(from, Math.min(to + 1, from + 1000))
+        return Promise.resolve({ data: slice, error: null }).then(resolve)
+      },
+    }
+    return chain
+  }
+  function captureQuery() {
+    const calls = []
+    const query = {
+      in: (...a) => { calls.push(['in', ...a]); return query },
+      eq: (...a) => { calls.push(['eq', ...a]); return query },
+      not: (...a) => { calls.push(['not', ...a]); return query },
+    }
+    return { query, calls }
+  }
+
+  it('contactIdsForTag pages through a >1000-row tag cohort (eq → query.in gets ALL ids)', async () => {
+    const ids = Array.from({ length: 2500 }, (_, i) => `c-${i}`)
+    const rows = ids.map((id) => ({ contact_id: id }))
+    const pages = []
+    const db = { from: () => pagedTable(rows, pages) }
+    const { query, calls } = captureQuery()
+
+    await resolveTagFilters({
+      db, query, locationId: 'loc-1',
+      filter: { filters: [{ field: 'tag', op: 'eq', value: 'vip' }] },
+    })
+
+    // Three pages (1000 + 1000 + 500) — proves it didn't stop at the cap.
+    expect(pages.length).toBe(3)
+    const inCall = calls.find(c => c[0] === 'in' && c[1] === 'id')
+    expect(inCall).toBeTruthy()
+    expect(inCall[2]).toHaveLength(2500)
+    expect(new Set(inCall[2])).toEqual(new Set(ids))
+  })
+
+  it('contactIdsForEvent pages through a >1000-row registration list', async () => {
+    const regs = Array.from({ length: 1800 }, (_, i) => ({ contact_id: `r-${i}`, team_id: null }))
+    const pages = []
+    const db = {
+      from(table) {
+        if (table === 'race_registrations') return pagedTable(regs, pages)
+        if (table === 'team_members') return pagedTable([], [])
+        throw new Error(`unexpected table ${table}`)
+      },
+    }
+    const { query, calls } = captureQuery()
+
+    await resolveEventFilters({
+      db, query,
+      filter: { filters: [{ field: 'event_registration', op: 'eq', value: 'evt-1' }] },
+    })
+
+    expect(pages.length).toBe(2)   // 1000 + 800
+    const inCall = calls.find(c => c[0] === 'in' && c[1] === 'id')
+    expect(inCall).toBeTruthy()
+    expect(inCall[2]).toHaveLength(1800)
   })
 })

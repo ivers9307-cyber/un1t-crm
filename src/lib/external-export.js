@@ -14,6 +14,7 @@
 import { logInfo, logWarn } from '@/lib/log'
 import { buildTcx } from '@/lib/tcx-builder'
 import { refreshAccessToken, uploadTcx, pollUpload } from '@/lib/strava'
+import { selectAll } from '@/lib/select-all'
 
 const MAX_ATTEMPTS = 5
 const RETRY_DELAYS_MS = [
@@ -112,7 +113,14 @@ async function processOneJob(db, job) {
     .eq('id', job.id)
 
   // Load the integration + service row.
-  const [{ data: integration }, { data: service }, { data: session }, { data: samples }] =
+  // AUDIT P1-2 — the hr_samples stream is paginated. A ~45-minute class
+  // produces ~2,700 one-per-second samples, so the un-paginated select
+  // silently truncated the TCX export at the 1000-row cap — Strava would get
+  // a chopped HR graph that ends a third of the way through the workout.
+  // hr_samples has no surrogate id; the stream is ordered by recorded_at
+  // (effectively unique per session). selectAll throws on a DB error, which
+  // the per-job try/catch in runExportWorker turns into a job failure.
+  const [{ data: integration }, { data: service }, { data: session }, samples] =
     await Promise.all([
       db.from('contact_external_integrations')
         .select('*')
@@ -128,10 +136,11 @@ async function processOneJob(db, job) {
         .select('id, contact_id, started_at, ended_at, avg_hr_bpm, peak_hr_bpm, effort_points, zones_seconds')
         .eq('id', job.session_id)
         .maybeSingle(),
-      db.from('hr_samples')
+      selectAll((from, to) => db.from('hr_samples')
         .select('recorded_at, bpm')
         .eq('session_id', job.session_id)
-        .order('recorded_at', { ascending: true }),
+        .order('recorded_at', { ascending: true })
+        .range(from, to)),
     ])
 
   if (!integration || !integration.auto_export_enabled) {

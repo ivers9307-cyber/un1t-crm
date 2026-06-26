@@ -1,5 +1,13 @@
 // Shared audience filter logic for email campaigns and WhatsApp broadcasts.
 //
+// AUDIT P1-2 — the virtual-field resolvers below (tag + event_registration)
+// fan out over contact_tags / race_registrations / team_members. At
+// Stillorgan's scale (2000+ active contacts, large tag cohorts) a bare
+// `.select('contact_id')` silently truncates at the PostgREST 1000-row cap,
+// so an audience would be computed from only the first 1000 matches — the
+// campaign then sends to the wrong set with NO error. Every such select is
+// paginated through selectAll.
+//
 // Audience filters live in `campaigns.audience_filter` / `whatsapp_broadcasts.audience_filter`
 // as JSON of the form:
 //   { logic: 'and' | 'or', filters: [{ field, op, value }, ...] }
@@ -13,6 +21,8 @@
 // The allowlist mirrors src/components/AudienceBuilder.jsx so legitimate UI
 // flows pass through unchanged. New fields must be added here AND in the
 // builder.
+
+import { selectAll } from '@/lib/select-all'
 
 /**
  * Field → { type, ops }. `type` is informational; `ops` is the set of
@@ -362,12 +372,22 @@ export async function resolveTagFilters({ db, query, filter, locationId }) {
 
   // Helper: list of contact_ids currently tagged with `tag` at the
   // given location (or all locations if locationId is null).
+  // AUDIT P1-2 — paginated: a popular tag can match >1000 contacts, and a
+  // truncated set silently narrows the audience. selectAll throws a plain
+  // Error on a DB failure; re-wrap as InvalidAudienceFilterError so the
+  // caller's existing 400 path is preserved.
   async function contactIdsForTag(tag) {
-    let q = db.from('contact_tags').select('contact_id').eq('tag', tag).is('removed_at', null)
-    if (locationId) q = q.eq('location_id', locationId)
-    const { data, error } = await q
-    if (error) throw new InvalidAudienceFilterError(`tag lookup failed: ${error.message}`)
-    return Array.from(new Set((data || []).map(r => r.contact_id).filter(Boolean)))
+    let data
+    try {
+      data = await selectAll((from, to) => {
+        let q = db.from('contact_tags').select('contact_id').eq('tag', tag).is('removed_at', null)
+        if (locationId) q = q.eq('location_id', locationId)
+        return q.order('contact_id', { ascending: true }).range(from, to)
+      })
+    } catch (err) {
+      throw new InvalidAudienceFilterError(`tag lookup failed: ${err.message}`)
+    }
+    return Array.from(new Set(data.map(r => r.contact_id).filter(Boolean)))
   }
 
   // Positives: intersect across all (AND combine). The first list
@@ -439,24 +459,38 @@ export async function resolveEventFilters({ db, query, filter }) {
   if (positives.length === 0 && negatives.length === 0) return { query }
 
   // contact_ids registered (live) for one event: registrants + teammates.
+  // AUDIT P1-2 — both selects paginated: a large event's registration list
+  // (+ the teammate fan-out across many teams) can exceed the 1000-row cap,
+  // which would silently drop registrants past row 1000 from the audience.
+  // selectAll throws a plain Error; re-wrap as InvalidAudienceFilterError.
   async function contactIdsForEvent(eventId) {
-    const { data: regs, error: rErr } = await db
-      .from('race_registrations')
-      .select('contact_id, team_id')
-      .eq('race_event_id', eventId)
-      .in('status', LIVE_REGISTRATION_STATUSES)
-    if (rErr) throw new InvalidAudienceFilterError(`event lookup failed: ${rErr.message}`)
+    let regs
+    try {
+      regs = await selectAll((from, to) => db
+        .from('race_registrations')
+        .select('contact_id, team_id')
+        .eq('race_event_id', eventId)
+        .in('status', LIVE_REGISTRATION_STATUSES)
+        .order('id', { ascending: true })
+        .range(from, to))
+    } catch (err) {
+      throw new InvalidAudienceFilterError(`event lookup failed: ${err.message}`)
+    }
 
-    const teamIds = Array.from(new Set((regs || []).map(r => r.team_id).filter(Boolean)))
+    const teamIds = Array.from(new Set(regs.map(r => r.team_id).filter(Boolean)))
     let members = []
     if (teamIds.length) {
-      const { data: mem, error: mErr } = await db
-        .from('team_members')
-        .select('contact_id')
-        .in('team_id', teamIds)
-        .not('contact_id', 'is', null)
-      if (mErr) throw new InvalidAudienceFilterError(`event teammate lookup failed: ${mErr.message}`)
-      members = mem || []
+      try {
+        members = await selectAll((from, to) => db
+          .from('team_members')
+          .select('contact_id')
+          .in('team_id', teamIds)
+          .not('contact_id', 'is', null)
+          .order('contact_id', { ascending: true })
+          .range(from, to))
+      } catch (err) {
+        throw new InvalidAudienceFilterError(`event teammate lookup failed: ${err.message}`)
+      }
     }
     return mergeRegistrationContactIds(regs, members)
   }

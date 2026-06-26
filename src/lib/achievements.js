@@ -22,6 +22,7 @@
 // session-finalisation path.
 
 import { logWarn } from '@/lib/log'
+import { selectAll } from '@/lib/select-all'
 
 // ── Period helpers ────────────────────────────────────────────
 
@@ -363,8 +364,13 @@ export async function runDetectionForSession(db, sessionId, { nowMs = Date.now()
     session.event_type_id = session.bookings?.event_type_id || null
 
     // 2) Load history (last 365d) for this contact.
+    // AUDIT P1-2 — paginated (mirrors challenges-io.js loadWindowSessions).
+    // A high-frequency member can log >1000 sessions in 365 days; a truncated
+    // history would silently mis-fire streak / aggregate detectors. id is the
+    // paging tiebreaker so a shared started_at can't skip/double-count a row.
+    // A throw propagates to this function's outer try/catch (best-effort).
     const since = new Date(nowMs - HISTORY_LOOKBACK_DAYS * MS_PER_DAY).toISOString()
-    const { data: rawHistory } = await db
+    const rawHistory = await selectAll((from, to) => db
       .from('heart_rate_sessions')
       .select('id, location_id, started_at, ended_at, effort_points, zones_seconds, bookings:bookings(event_type_id)')
       .eq('contact_id', session.contact_id)
@@ -372,6 +378,8 @@ export async function runDetectionForSession(db, sessionId, { nowMs = Date.now()
       .neq('id', sessionId)
       .gte('started_at', since)
       .order('started_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to))
     const history = (rawHistory || []).map((s) => ({
       ...s, event_type_id: s.bookings?.event_type_id || null,
     }))

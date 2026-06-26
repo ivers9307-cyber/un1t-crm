@@ -384,12 +384,22 @@ describe('runDetectionForSession', () => {
     return {
       from: vi.fn((table) => {
         if (table === 'heart_rate_sessions') {
+          // AUDIT P1-2 — the history load now pages via selectAll, so its chain
+          // ends .order('started_at').order('id').range(from,to). The single()
+          // path (session load) is unchanged. selectAll stops after the first
+          // (short) page, so history resolves in one call.
           return {
             select: vi.fn(() => ({
               eq: vi.fn(() => ({
                 single: vi.fn(() => Promise.resolve({ data: session, error: session ? null : { message: 'not found' } })),
                 not:    vi.fn(() => ({
-                  neq: vi.fn(() => ({ gte: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: history, error: null })) })) })),
+                  neq: vi.fn(() => ({ gte: vi.fn(() => ({
+                    order: vi.fn(() => ({
+                      order: vi.fn(() => ({
+                        range: vi.fn(() => Promise.resolve({ data: history, error: null })),
+                      })),
+                    })),
+                  })) })),
                 })),
               })),
             })),

@@ -9,17 +9,24 @@ import { windowIso } from '@/lib/challenges'
 import { buildChallengeStartPush, buildChallengeResultPush, buildCollectiveTargetPush } from '@/lib/challenge-notifications'
 import { logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { selectAll } from '@/lib/select-all'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 async function tokenHolders(db, locationId) {
-  const { data } = await db
+  // AUDIT P1-2 — paginated. A large location can have >1000 app-linked push
+  // tokens; an un-paginated select would silently miss everyone past row 1000,
+  // so they'd never receive challenge-start/result pushes. A throw propagates
+  // to the per-challenge try/catch in the caller (best-effort).
+  const data = await selectAll((from, to) => db
     .from('champ_push_tokens')
     .select('contact_id, contacts!inner(location_id)')
     .eq('contacts.location_id', locationId)
-  return [...new Set((data || []).map((r) => r.contact_id).filter(Boolean))]
+    .order('contact_id', { ascending: true })
+    .range(from, to))
+  return [...new Set(data.map((r) => r.contact_id).filter(Boolean))]
 }
 
 export async function POST(request) { return GET(request) }
@@ -36,10 +43,16 @@ export async function GET(request) {
 
   // Only challenges that still need an event: start or end not yet announced.
   // (Active-collective target checks need end-null, so they're covered.)
-  const { data: challenges } = await db
+  // AUDIT P1-2 — paginated across all locations; the un-announced set grows
+  // unbounded as locations onboard, and a 1000-row cap would silently stop
+  // announcing once it's exceeded. Keep best-effort so a fetch error doesn't
+  // skip the heartbeat stamp at the end of the tick.
+  const challenges = await selectAll((from, to) => db
     .from('challenges')
     .select('*')
     .or('announced_start_at.is.null,announced_end_at.is.null')
+    .order('id', { ascending: true })
+    .range(from, to)).catch(() => [])
   let started = 0, ended = 0, targets = 0
   for (const ch of challenges || []) {
     try {
