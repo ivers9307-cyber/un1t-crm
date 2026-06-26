@@ -48,6 +48,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifySharedSecret } from '@/lib/webhook-auth'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
+import { resolveUnifiLocation, unifiControllerId } from '@/lib/unifi-webhook'
 import { logInfo, logWarn } from '@/lib/log'
 import {
   matchArrivalToShift,
@@ -135,7 +136,7 @@ export async function POST(request) {
   const candidateLocations = (locs || []).filter(
     (l) => l.settings?.unifi_protect?.host || l.settings?.unifi?.host
   )
-  const location = candidateLocations.length === 1 ? candidateLocations[0] : null
+  const location = resolveUnifiLocation(candidateLocations, unifiControllerId(payload))
   if (!location) {
     logWarn('webhook-unifi-protect', 'cannot resolve location (multi-Protect deploy needs controller mapping)', {
       candidates: candidateLocations.length,
