@@ -18,6 +18,7 @@
 
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
+import { dublinTodayStr } from '@/lib/dublin-time'
 import Link from 'next/link'
 import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors,
@@ -322,7 +323,7 @@ function SortableTaskCard({ task }) {
 }
 
 function TaskCard({ task, dragging }) {
-  const isOverdue = task.due_date && task.status !== 'done' && task.status !== 'cancelled' && task.due_date < new Date().toISOString().slice(0, 10)
+  const isOverdue = task.due_date && task.status !== 'done' && task.status !== 'cancelled' && task.due_date < dublinTodayStr()
   return (
     <div className={`bg-un1t-bg border ${isOverdue ? 'border-red-500/30' : 'border-un1t-border'} rounded-md p-3 cursor-grab ${dragging ? 'shadow-lg' : ''}`}>
       <p className="text-sm text-un1t-text">{task.subject}</p>

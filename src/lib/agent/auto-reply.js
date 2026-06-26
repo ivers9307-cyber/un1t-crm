@@ -20,6 +20,7 @@
 // Never throws.
 
 import { sendTextMessage, sendInteractiveOptions } from '@/lib/whatsapp'
+import { dublinTodayStr } from '@/lib/dublin-time'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { buildCachedSystem } from './prompt'
@@ -294,7 +295,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
       tone: settings?.tone || null,
       extraRules: settings?.extra_rules || null,
       knowledge: knowledge || [],
-      today: new Date().toISOString().slice(0, 10),
+      today: dublinTodayStr(),
       // Tell the model "already verified — don't re-ask" for a phone match OR a
       // still-fresh prior (quiz) verification, so a returning member isn't
       // re-quizzed inside the 30-day window. (Tools already honour the stored

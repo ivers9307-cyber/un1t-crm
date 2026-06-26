@@ -58,7 +58,7 @@ export async function POST(request) {
   // The path date is just for bucket organisation — the real purchase
   // date is captured on the row at finalise. Use the server date so the
   // sign request doesn't need it.
-  const today = new Date().toISOString().slice(0, 10)
+  const today = new Date().toISOString().slice(0, 10) // eslint-disable-line guardrails/no-utc-today -- storage object path segment only (bucket organisation); the real purchase date is captured on the row at finalise
   const storagePath = buildReceiptPath({
     submitterId: user.id,
     purchaseDate: today,

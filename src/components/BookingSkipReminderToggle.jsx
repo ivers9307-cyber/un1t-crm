@@ -13,6 +13,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Bell, BellOff } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
+import { dublinTodayStr } from '@/lib/dublin-time'
 
 export default function BookingSkipReminderToggle({ bookingId, skipReminder, reminderSentAt, bookingDate }) {
   const [skip, setSkip] = useState(!!skipReminder)
@@ -26,7 +27,7 @@ export default function BookingSkipReminderToggle({ bookingId, skipReminder, rem
 
   // Hide for past bookings — the time has gone, reminders aren't
   // relevant. Cleaner than showing a no-op control.
-  const today = new Date().toISOString().slice(0, 10)
+  const today = dublinTodayStr()
   if (bookingDate && bookingDate < today) return null
 
   async function toggle() {

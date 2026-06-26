@@ -28,6 +28,7 @@
 // keeps the existing /invoices UI working unchanged.
 
 import { createServerClient } from '@/lib/supabase'
+import { dublinTodayStr } from '@/lib/dublin-time'
 
 const STORAGE_BUCKETS = Object.freeze({
   supplier_email: 'inbound-invoices',
@@ -57,7 +58,7 @@ const STORAGE_BUCKETS = Object.freeze({
 function syntheticFieldsForReceiptlessItem(item) {
   const amount = Number(item.amount) || 0
   const supplier = (item.vendor && String(item.vendor).trim()) || 'Mileage / cash expense'
-  const invoiceDate = item.expense_date || new Date().toISOString().slice(0, 10)
+  const invoiceDate = item.expense_date || dublinTodayStr()
   // Synthetic invoice number — stable + unique within Xero, with
   // an EXP- prefix so the bookkeeper can tell it's a synthesised
   // reference (not a real invoice number).

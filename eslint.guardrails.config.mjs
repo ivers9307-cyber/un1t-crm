@@ -42,6 +42,8 @@ const config = [
     rules: {
       'guardrails/no-catch-on-supabase-builder': 'error',
       'guardrails/no-uncapped-supabase-limit': 'error',
+      'guardrails/no-zulu-template-date': 'error',
+      'guardrails/no-utc-today': 'error',
     },
   },
 ]

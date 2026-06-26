@@ -50,3 +50,31 @@ ruleTester.run('no-uncapped-supabase-limit', plugin.rules['no-uncapped-supabase-
     { code: 'db.from("x").select("*").limit(1000)', errors: [{ messageId: 'cap' }] },
   ],
 })
+
+ruleTester.run('no-zulu-template-date', plugin.rules['no-zulu-template-date'], {
+  valid: [
+    'new Date("2026-06-25T10:00:00Z")', // literal UTC instant, not interpolated wall-clock
+    'new Date(`${d}T${t}`)', // no trailing Z
+    'new Date(`${dateStr}T00:00:00Z`)', // literal midnight — UTC date math (addDaysISO), legit
+    'new Date(`${d}T12:00:00Z`)', // literal noon — date-label anchor, legit
+    'new Date(ms)',
+    'new Date()',
+  ],
+  invalid: [
+    { code: 'new Date(`${d}T${t}Z`)', errors: [{ messageId: 'z' }] },
+    { code: 'new Date(`${date}T${hh}:${mm}Z`)', errors: [{ messageId: 'z' }] },
+  ],
+})
+
+ruleTester.run('no-utc-today', plugin.rules['no-utc-today'], {
+  valid: [
+    'new Date().toISOString()', // bare UTC timestamp — correct
+    'someDate.toISOString().slice(0, 10)', // a specific date, not "now"
+    'new Date(x).toISOString().slice(0, 10)', // new Date(arg), not "now"
+    'dublinTodayStr()',
+  ],
+  invalid: [
+    { code: 'new Date().toISOString().slice(0, 10)', errors: [{ messageId: 'utcToday' }] },
+    { code: "new Date().toISOString().split('T')[0]", errors: [{ messageId: 'utcToday' }] },
+  ],
+})

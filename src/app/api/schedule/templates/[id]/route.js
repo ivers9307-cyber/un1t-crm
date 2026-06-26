@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { dublinTodayStr } from '@/lib/dublin-time'
 import { validateBody } from '@/lib/validate'
 import { timeOfDay, hexColor , MANAGER_ROLES} from '@/lib/schemas'
 import { WEEKDAY_CODES, generateBlocksForTemplate } from '@/lib/roster'
@@ -68,7 +69,7 @@ export async function PUT(request, props) {
 
   // ---------- Propagate to FUTURE blocks only ----------
 
-  const todayUtc = new Date().toISOString().slice(0, 10)
+  const today = dublinTodayStr()
 
   // 1. If start_time / end_time / max_coaches changed, push the
   //    new values onto every future block under this template.
@@ -93,7 +94,7 @@ export async function PUT(request, props) {
       .from('shift_blocks')
       .update(futureFieldUpdates)
       .eq('template_id', params.id)
-      .gte('block_date', todayUtc)
+      .gte('block_date', today)
       .select('id')
     if (updErr) {
       return NextResponse.json({
@@ -121,7 +122,7 @@ export async function PUT(request, props) {
         .from('shift_blocks')
         .select('id, block_date')
         .eq('template_id', params.id)
-        .gte('block_date', todayUtc)
+        .gte('block_date', today)
       const toDelete = (futureBlocks || []).filter((b) => {
         const code = WEEKDAY_CODES[(new Date(b.block_date + 'T00:00:00Z').getUTCDay() + 6) % 7]
         return removedDays.includes(code)

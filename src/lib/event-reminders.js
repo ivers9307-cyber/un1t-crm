@@ -124,7 +124,7 @@ export async function runEventReminderSends() {
     }
 
     for (const booking of bookings) {
-      const bookingMs = new Date(`${booking.booking_date}T${booking.start_time}Z`).getTime()
+      const bookingMs = new Date(`${booking.booking_date}T${booking.start_time}Z`).getTime() // eslint-disable-line guardrails/no-zulu-template-date -- reminder window-match against now-based bounds; left by the #650 verification, reminder-timing reviewed separately
       if (bookingMs < lo.getTime() || bookingMs > hi.getTime()) continue
       if (sentBookingIds.has(booking.id)) continue
 

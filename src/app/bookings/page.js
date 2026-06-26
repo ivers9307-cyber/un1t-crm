@@ -1,5 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { dublinTodayStr } from '@/lib/dublin-time'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Calendar, Clock, Mail } from 'lucide-react'
@@ -11,7 +12,7 @@ export const dynamic = 'force-dynamic'
 
 async function getBookings(filter, locationId) {
   const db = createServerClient()
-  const today = new Date().toISOString().split('T')[0]
+  const today = dublinTodayStr()
 
   let query = db.from('bookings')
     .select('*, event_types(name, color, slug), contacts(id, name, email)')
@@ -55,7 +56,7 @@ export default async function BookingsPage(props) {
     { key: 'cancelled', label: 'Cancelled' },
   ]
 
-  const today = new Date().toISOString().split('T')[0]
+  const today = dublinTodayStr()
 
   return (
     <div className="p-8">

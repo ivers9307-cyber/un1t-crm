@@ -5,6 +5,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Loader2, Download, RefreshCw } from 'lucide-react'
+import { dublinTodayStr } from '@/lib/dublin-time'
 
 const STATUS_META = {
   on_time:  { label: 'On time', cls: 'bg-emerald-100 text-emerald-800 border-emerald-200' },
@@ -17,7 +18,7 @@ function defaultFromIso() {
   const d = new Date(Date.now() - 14 * 24 * 3600_000)
   return d.toISOString().slice(0, 10)
 }
-function todayIso() { return new Date().toISOString().slice(0, 10) }
+function todayIso() { return dublinTodayStr() }
 
 export default function AttendanceReportClient({ activeLocationName }) {
   const [from, setFrom] = useState(defaultFromIso())

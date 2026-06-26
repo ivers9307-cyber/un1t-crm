@@ -4,6 +4,7 @@ import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Mail, Phone, Calendar, MessageSquare, CheckSquare, Clock, BookOpen, ArrowRight, MessageCircle } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
+import { dublinTodayStr } from '@/lib/dublin-time'
 import { canViewContact } from '@/lib/contact-crossovers'
 import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -268,7 +269,7 @@ export default async function ContactDetailPage(props) {
     )
   }
 
-  const today = new Date().toISOString().split('T')[0]
+  const today = dublinTodayStr()
   const upcomingBookings = bookings.filter(b => b.booking_date >= today && b.status === 'confirmed')
   const pastBookings = bookings.filter(b => b.booking_date < today || b.status !== 'confirmed')
 

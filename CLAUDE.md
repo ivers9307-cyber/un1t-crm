@@ -38,7 +38,7 @@ The "if you miss one, you break prod or burn a session" list. Terse on purpose; 
 - **Web parity:** a new `WEB_PERMISSIONS` key must get a mobile counterpart, a `WEB_ONLY_OK` entry (with reason), or `CROSS_PLATFORM_KEYS` — `check:mobile-parity` gates it.
 
 **Timezones, routing, forms**
-- **`bookings.booking_date`/`start_time` are Dublin wall-clock, not UTC** — never `new Date(\`${d}T${t}Z\`)` (adds the BST offset). More broadly: never mix local-time `Date` parsing with `toISOString()` formatting; test date code under `TZ=Europe/Dublin` *and* a US TZ.
+- **`bookings.booking_date`/`start_time` are Dublin wall-clock, not UTC** — never `new Date(\`${d}T${t}Z\`)` (adds the BST offset). More broadly: never mix local-time `Date` parsing with `toISOString()` formatting; test date code under `TZ=Europe/Dublin` *and* a US TZ. Both that `new Date(\`…Z\`)` form and the UTC-`today` form (`new Date().toISOString().slice/split` — use `dublinTodayStr()` from `@/lib/dublin-time` for a business today) are now lint-enforced via `check:guardrails`.
 - **Public pages must live OUTSIDE auth-gated `src/app/<segment>/`** (layout auth gates run first) AND be added to BOTH the middleware/`proxy.js` allowlist AND the `AppShell` publicPaths list.
 - **Every `<button>` in a `<form>` defaults to `type="submit"`** — set `type="button"` on every non-submit (tab pills, close X, secondary actions).
 

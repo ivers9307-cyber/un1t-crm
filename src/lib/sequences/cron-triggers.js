@@ -83,7 +83,7 @@ export async function runEventReminderTriggers() {
 
     for (const booking of (bookings || [])) {
       if (!booking.contact_id) continue
-      const bookingMs = new Date(`${booking.booking_date}T${booking.start_time}Z`).getTime()
+      const bookingMs = new Date(`${booking.booking_date}T${booking.start_time}Z`).getTime() // eslint-disable-line guardrails/no-zulu-template-date -- reminder window-match against now-based bounds; left by the #650 verification, reminder-timing reviewed separately
       if (bookingMs < lo.getTime() || bookingMs > hi.getTime()) continue
 
       // Optional event_type_id scope — empty means "any event type".

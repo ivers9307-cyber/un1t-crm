@@ -159,7 +159,7 @@ export async function GET(request) {
       status: 200,
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
-        'Content-Disposition': `attachment; filename="audit-log-${new Date().toISOString().slice(0, 10)}.csv"`,
+        'Content-Disposition': `attachment; filename="audit-log-${new Date().toISOString().slice(0, 10)}.csv"`, // eslint-disable-line guardrails/no-utc-today -- CSV export filename suffix; a UTC date key, not a business date
         'Cache-Control': 'no-store',
       },
     })
