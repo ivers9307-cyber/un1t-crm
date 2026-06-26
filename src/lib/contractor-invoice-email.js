@@ -12,6 +12,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { periodLabel } from './contractor-invoices.js'
 import { formatFullDateTimeInTZ } from './dates.js'
+import { getLocationBranding } from './location-branding.js'
 
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'
 
@@ -61,22 +62,26 @@ async function loadInvoiceForEmail(invoiceId) {
     .from('contractor_invoices')
     .select(`
       id, period_start, period_end, invoice_amount, status,
-      decline_reason, approved_at, reviewed_by,
+      decline_reason, approved_at, reviewed_by, location_id,
       contractor:contractor_id ( full_name, email ),
-      location:location_id ( name, logo_url, company_name ),
       reviewer:reviewed_by ( full_name )
     `)
     .eq('id', invoiceId)
     .single()
   if (error || !data) throw new Error(`Invoice not found: ${error?.message || 'unknown'}`)
-  return data
+  // Branding (logo + company name) lives on company_settings keyed by
+  // location_id — the locations table has neither logo_url nor
+  // company_name, so embedding them there returned nothing. Resolve via
+  // the shared helper (never throws; falls back to a neutral 'UN1T').
+  const branding = await getLocationBranding(db, data.location_id)
+  return { ...data, branding }
 }
 
-function brandHeader(location) {
-  if (location?.logo_url) {
-    return `<img src="${escapeAttr(location.logo_url)}" alt="${escapeAttr(location.company_name || location.name || 'Logo')}" style="max-height:48px;margin-bottom:16px" />`
+function brandHeader(branding) {
+  if (branding?.logoUrl) {
+    return `<img src="${escapeAttr(branding.logoUrl)}" alt="${escapeAttr(branding.companyName || 'Logo')}" style="max-height:48px;margin-bottom:16px" />`
   }
-  return `<div style="font-size:24px;font-weight:bold;letter-spacing:2px;margin-bottom:16px">${escapeHtml(location?.company_name || 'UN1T')}</div>`
+  return `<div style="font-size:24px;font-weight:bold;letter-spacing:2px;margin-bottom:16px">${escapeHtml(branding?.companyName || 'UN1T')}</div>`
 }
 
 export async function sendInvoiceApprovedEmail(invoiceId) {
@@ -89,7 +94,7 @@ export async function sendInvoiceApprovedEmail(invoiceId) {
   const subject = `Invoice approved — ${period}`
   const htmlBody = `
     <div style="font-family:-apple-system,Segoe UI,sans-serif;max-width:600px">
-      ${brandHeader(inv.location)}
+      ${brandHeader(inv.branding)}
       <div style="background:#10B981;color:white;padding:16px;border-radius:8px;text-align:center;margin-bottom:24px">
         <div style="font-size:32px;line-height:1">✓</div>
         <div style="font-weight:bold;font-size:18px;margin-top:6px">Invoice approved</div>
@@ -135,7 +140,7 @@ export async function sendInvoiceDeclinedEmail(invoiceId) {
   const subject = `Invoice needs adjustment — ${period}`
   const htmlBody = `
     <div style="font-family:-apple-system,Segoe UI,sans-serif;max-width:600px">
-      ${brandHeader(inv.location)}
+      ${brandHeader(inv.branding)}
       <div style="background:#F59E0B;color:white;padding:16px;border-radius:8px;text-align:center;margin-bottom:24px">
         <div style="font-weight:bold;font-size:18px">Invoice needs adjustment</div>
       </div>
