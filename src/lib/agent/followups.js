@@ -23,6 +23,7 @@
 
 import { buildCachedSystem } from './prompt'
 import { formatHistoryForClaude, parseAgentResponse, phoneMatchesAllowlist } from './core'
+import { getLocationBranding } from '@/lib/location-branding'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const AGENT_MODEL = 'claude-sonnet-4-6'
@@ -263,13 +264,13 @@ async function stampStage(db, conversationId, stage, sent) {
 
 // One short proactive message in Mia's voice, given the thread + an
 // instruction. Returns the text or null (callers log the reason).
-async function composeAgentText(location, settings, historyRows, instruction) {
+async function composeAgentText(location, settings, historyRows, instruction, companyName) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { error: 'no_api_key' }
   // CACHE.2 — cache the stable prefix (no tools on this path, so it caches the
   // stable system block directly); the date suffix stays uncached.
   const system = buildCachedSystem({
-    businessName: 'UN1T',
+    businessName: companyName || 'UN1T',
     locationName: location.name,
     agentName: settings?.agent_name || null,
     membershipUrl: settings?.membership_signup_url || null,
@@ -301,7 +302,8 @@ async function composeAgentText(location, settings, historyRows, instruction) {
 }
 
 async function sendNudge(db, conv, location, settings, facts) {
-  const composed = await composeAgentText(location, settings, facts.rows, NUDGE_INSTRUCTION)
+  const branding = await getLocationBranding(db, location.id)
+  const composed = await composeAgentText(location, settings, facts.rows, NUDGE_INSTRUCTION, branding.companyName)
   if (composed.error) return skipLog(conv.id, `nudge_${composed.error}`)
   const text = composed.text
 
@@ -520,6 +522,8 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
       .is('first_class_checkin_at', null)
       .limit(50)
 
+    const branding = await getLocationBranding(db, location.id)
+
     for (const contact of contacts || []) {
       try {
         const decision = classifyCheckinCandidate({
@@ -565,7 +569,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         if (windowOpen) {
           // Case A — free-form, in Mia's voice, referencing the class.
           const composed = await composeAgentText(
-            location, settings, facts.rows, checkinInstruction(className),
+            location, settings, facts.rows, checkinInstruction(className), branding.companyName,
           )
           if (composed.error) {
             console.warn('[radar-agent] checkin-skip', JSON.stringify({ contactId: contact.id, reason: composed.error }))

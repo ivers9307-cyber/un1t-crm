@@ -239,7 +239,6 @@ export function buildInvoicePayload(car, contactId, brandingThemeId, accountCode
   // validateInvoiceFields, and remains available as a Reference
   // fallback below.)
   const description = [
-    'Tesla',
     car.make || '',
     car.model || '',
     car.vehicle_year ? `(${car.vehicle_year})` : '',
@@ -268,7 +267,7 @@ export function buildInvoicePayload(car, contactId, brandingThemeId, accountCode
       Status: 'AUTHORISED',
       ...(brandingThemeId ? { BrandingThemeID: brandingThemeId } : {}),
       LineItems: [{
-        Description: description || 'Tesla import — vehicle',
+        Description: description || 'Imported vehicle',
         Quantity: 1,
         UnitAmount: exVat,
         TaxType: taxType,

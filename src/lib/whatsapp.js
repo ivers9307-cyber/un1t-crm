@@ -5,6 +5,7 @@ import {
   PER_TICK_MAX, AUTO_PAUSE_CONSECUTIVE_FAILURES,
   rollingHeadroom, selectDripRecipients, dripOutcome,
 } from './whatsapp-drip.js'
+import { getLocationBranding } from './location-branding'
 
 // WA-MULTI.1 — config is now per-location. Resolution helper +
 // env fallback live in whatsapp-config.js; the META_API_URL +
@@ -545,13 +546,14 @@ export async function sendBroadcast(broadcastId) {
 
   const template = broadcast.whatsapp_templates
   const variableMapping = broadcast.variable_mapping || {}
+  const branding = await getLocationBranding(db, broadcast.location_id)
   let sentCount = 0
   let failedCount = 0
 
   for (const contact of contacts) {
     try {
       // Build template components with variable substitution
-      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url)
+      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName })
 
       const result = await sendTemplateMessage(
         contact.wa_phone,
@@ -580,7 +582,7 @@ export async function sendBroadcast(broadcastId) {
         message_type: 'template',
         template_name: template.name,
         template_variables: variableMapping,
-        body: renderTemplateBody(template, contact, variableMapping),
+        body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName }),
         status: 'sent',
         broadcast_id: broadcastId,
         sent_at: new Date().toISOString(),
@@ -699,12 +701,13 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
 
   // Resolve the location's WA config once for the whole tick (as the blast does).
   const config = await getWhatsAppConfig(broadcast.location_id)
+  const branding = await getLocationBranding(db, broadcast.location_id)
   const variableMapping = broadcast.variable_mapping || {}
   let sent = 0, failed = 0, consecutiveFailures = 0, autoPaused = false
 
   for (const contact of toSend) {
     try {
-      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url)
+      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName })
       const result = await sendTemplateMessage(contact.wa_phone, template.name, template.language, components, { config })
 
       await db.from('whatsapp_broadcast_recipients').insert({
@@ -716,7 +719,7 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
         contact_id: contact.id, location_id: broadcast.location_id,
         wa_message_id: result.messageId, direction: 'outbound', message_type: 'template',
         template_name: template.name, template_variables: variableMapping,
-        body: renderTemplateBody(template, contact, variableMapping),
+        body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName }),
         status: 'sent', broadcast_id: broadcastId, sent_at: new Date().toISOString(),
       })
       sent++; consecutiveFailures = 0
@@ -777,7 +780,7 @@ export function headerComponentFor(templateComponents, mediaUrl) {
   return { type: 'header', parameters: [{ type: kind, [kind]: { link: mediaUrl } }] }
 }
 
-export function buildTemplateComponents(template, contact, variableMapping, headerMediaUrl) {
+export function buildTemplateComponents(template, contact, variableMapping, headerMediaUrl, opts = {}) {
   const components = []
   const templateComponents = template.components || []
 
@@ -798,7 +801,7 @@ export function buildTemplateComponents(template, contact, variableMapping, head
   // Check if template has body variables
   const bodyComp = templateComponents.find(c => c.type === 'BODY')
   if (bodyComp && bodyComp.text) {
-    const values = resolveTemplateVariableValues(template, contact, variableMapping)
+    const values = resolveTemplateVariableValues(template, contact, variableMapping, opts)
     if (values.length > 0) {
       components.push({
         type: 'body',
@@ -818,7 +821,7 @@ export function buildTemplateComponents(template, contact, variableMapping, head
  * body text we persist on whatsapp_messages (the inbox thread shows
  * what was actually sent instead of a "[template]" placeholder).
  */
-export function resolveTemplateVariableValues(template, contact, variableMapping) {
+export function resolveTemplateVariableValues(template, contact, variableMapping, opts = {}) {
   const bodyComp = (template.components || []).find(c => c.type === 'BODY')
   const varMatches = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
   return varMatches.map((_, i) => {
@@ -828,7 +831,7 @@ export function resolveTemplateVariableValues(template, contact, variableMapping
     else if (fieldName === 'name') value = contact.name || ''
     else if (fieldName === 'email') value = contact.email || ''
     else if (fieldName === 'phone') value = contact.phone || contact.wa_phone || ''
-    else if (fieldName === 'location_name') value = 'UN1T'
+    else if (fieldName === 'location_name') value = opts.companyName || 'UN1T'
     else if (fieldName) value = contact[fieldName] || fieldName  // Use as literal if not a field
     return value
   })
@@ -849,10 +852,10 @@ export function substituteTemplateBody(bodyText, values) {
  * persisted as whatsapp_messages.body so threads show real content.
  * Returns null when the template has no BODY text.
  */
-export function renderTemplateBody(template, contact, variableMapping) {
+export function renderTemplateBody(template, contact, variableMapping, opts = {}) {
   const bodyComp = (template.components || []).find(c => c.type === 'BODY')
   if (!bodyComp?.text) return null
-  return substituteTemplateBody(bodyComp.text, resolveTemplateVariableValues(template, contact, variableMapping))
+  return substituteTemplateBody(bodyComp.text, resolveTemplateVariableValues(template, contact, variableMapping, opts))
 }
 
 /**

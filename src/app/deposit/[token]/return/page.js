@@ -9,7 +9,7 @@ import CarDepositPage from '@/components/CarDepositPage'
 export const dynamicParams = true
 
 export const metadata = {
-  title: 'Tesla Car Deposit',
+  title: 'Car Deposit',
 }
 
 export default async function DepositReturnPage(props) {
