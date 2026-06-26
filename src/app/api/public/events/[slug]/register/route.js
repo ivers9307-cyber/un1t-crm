@@ -34,6 +34,7 @@ import { writeContactTags } from '@/lib/contact-tags'
 import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
 import { wouldFit, spotsLeft } from '@/lib/event-signups'
+import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 
 export const runtime = 'nodejs'
 
@@ -257,7 +258,8 @@ export async function POST(request, props) {
         .select('status, team:teams ( size )')
         .eq('race_event_id', race.id)
         .eq('wave_id', wave.id)
-        .eq('status', 'confirmed')
+        // Count reserved-but-unpaid spots too, else concurrent paid signups oversell.
+        .in('status', LIVE_REGISTRATION_STATUSES)
         .limit(2000)
       if (!wouldFit(wave.capacity, waveRegs || [], 'people', body.team_size)) {
         const left = spotsLeft(wave.capacity, waveRegs || [], 'people')

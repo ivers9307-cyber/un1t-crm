@@ -23,6 +23,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
+import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
 import { validateTeamRoster, computeTeamPricing } from '@/lib/member-validation'
@@ -141,7 +142,8 @@ export async function POST(request, props) {
       .select('*', { count: 'exact', head: true })
       .eq('race_event_id', race.id)
       .eq('wave_id', wave.id)
-      .eq('status', 'confirmed')
+      // Count reserved-but-unpaid spots too, else concurrent paid signups oversell.
+      .in('status', LIVE_REGISTRATION_STATUSES)
     if ((count || 0) >= wave.capacity) {
       return NextResponse.json({
         success: false,
