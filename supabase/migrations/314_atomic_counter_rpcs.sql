@@ -100,3 +100,15 @@ returns table(current_index int, version int) language sql set search_path = '' 
   where id = p_presentation_id
   returning current_index, version;
 $$;
+
+-- 9 + 10. Per-send email open/click counters (Postmark Open/Click webhooks can
+-- fire concurrently for one send). Sibling to increment_campaign_metric /
+-- increment_contact_opens already used in the same handler.
+create or replace function increment_email_send_opens(p_send_id uuid)
+returns void language sql set search_path = '' as $$
+  update public.email_sends set open_count = coalesce(open_count,0) + 1 where id = p_send_id;
+$$;
+create or replace function increment_email_send_clicks(p_send_id uuid)
+returns void language sql set search_path = '' as $$
+  update public.email_sends set click_count = coalesce(click_count,0) + 1 where id = p_send_id;
+$$;
