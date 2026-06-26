@@ -38,6 +38,7 @@ import {
 import { triggerSequencesForTagsAdded } from '@/lib/sequences/triggers'
 import { applyInvoiceWebhook } from '@/lib/glofox-invoices'
 import { applyMemberSync } from '@/lib/glofox-sync'
+import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -161,169 +162,190 @@ export async function POST(request) {
     return NextResponse.json({ success: true, status: 'dark_launch', event_row_id: eventRow.id })
   }
 
-  // 5. Map event type → tag list. Unknown events get marked but
-  // not failed — Glofox might send domains we haven't mapped yet.
-  const tags = tagsForGlofoxEvent(parsed.eventType)
-  if (tags.length === 0) {
-    await markEvent(db, eventRow.id, 'unknown_event_type', null, null)
-    return NextResponse.json({ success: true, status: 'unknown_event_type', event_type: parsed.eventType })
-  }
-
-  // 6. Find the contact, scoped to the resolved location.
-  // Lookup priority:
-  //   a) email — preferred (MEMBER_UPDATED, INVOICE_UPDATED)
-  //   b) glofox_member_id — fallback for BOOKING_* / MEMBERSHIP_*
-  //      events which Glofox's payloads ship without an email
-  //      (GLOFOX5.1).
-  if (!parsed.contactEmail && !parsed.userId) {
-    await markEvent(db, eventRow.id, 'failed', null, 'No contact_email or user_id in payload')
-    return NextResponse.json({ success: true, status: 'no_email' })
-  }
-
-  let contact = null
-  if (parsed.contactEmail) {
-    const { data: contactRows, error: contactErr } = await db
-      .from('contacts')
-      .select('id')
-      .eq('location_id', creds.locationId)
-      .eq('email', parsed.contactEmail)
-      .limit(1)
-    if (contactErr) {
-      await markEvent(db, eventRow.id, 'failed', null, `Contact lookup by email: ${contactErr.message}`)
-      return NextResponse.json({ success: true, status: 'lookup_error' })
+  // 5–9. Action block — everything AFTER auth + dedup + dark-launch is the
+  // "processing" boundary. If anything here throws unexpectedly (a bug, a
+  // transient lib error, etc.) we capture a dead-letter row and still 200 the
+  // provider. The inner try/catch blocks below (invoice, tag, sequences,
+  // member-sync) are best-effort guards for known failure modes; this outer
+  // catch is the safety net for anything else.
+  try {
+    // 5. Map event type → tag list. Unknown events get marked but
+    // not failed — Glofox might send domains we haven't mapped yet.
+    const tags = tagsForGlofoxEvent(parsed.eventType)
+    if (tags.length === 0) {
+      await markEvent(db, eventRow.id, 'unknown_event_type', null, null)
+      return NextResponse.json({ success: true, status: 'unknown_event_type', event_type: parsed.eventType })
     }
-    contact = contactRows?.[0] || null
-  }
-  if (!contact && parsed.userId) {
-    const { data: contactRows, error: contactErr } = await db
-      .from('contacts')
-      .select('id')
-      .eq('location_id', creds.locationId)
-      .eq('glofox_member_id', parsed.userId)
-      .limit(1)
-    if (contactErr) {
-      await markEvent(db, eventRow.id, 'failed', null, `Contact lookup by glofox_member_id: ${contactErr.message}`)
-      return NextResponse.json({ success: true, status: 'lookup_error' })
+
+    // 6. Find the contact, scoped to the resolved location.
+    // Lookup priority:
+    //   a) email — preferred (MEMBER_UPDATED, INVOICE_UPDATED)
+    //   b) glofox_member_id — fallback for BOOKING_* / MEMBERSHIP_*
+    //      events which Glofox's payloads ship without an email
+    //      (GLOFOX5.1).
+    if (!parsed.contactEmail && !parsed.userId) {
+      await markEvent(db, eventRow.id, 'failed', null, 'No contact_email or user_id in payload')
+      return NextResponse.json({ success: true, status: 'no_email' })
     }
-    contact = contactRows?.[0] || null
-  }
-  if (!contact) {
-    await markEvent(db, eventRow.id, 'contact_not_found', null, null)
+
+    let contact = null
+    if (parsed.contactEmail) {
+      const { data: contactRows, error: contactErr } = await db
+        .from('contacts')
+        .select('id')
+        .eq('location_id', creds.locationId)
+        .eq('email', parsed.contactEmail)
+        .limit(1)
+      if (contactErr) {
+        await markEvent(db, eventRow.id, 'failed', null, `Contact lookup by email: ${contactErr.message}`)
+        return NextResponse.json({ success: true, status: 'lookup_error' })
+      }
+      contact = contactRows?.[0] || null
+    }
+    if (!contact && parsed.userId) {
+      const { data: contactRows, error: contactErr } = await db
+        .from('contacts')
+        .select('id')
+        .eq('location_id', creds.locationId)
+        .eq('glofox_member_id', parsed.userId)
+        .limit(1)
+      if (contactErr) {
+        await markEvent(db, eventRow.id, 'failed', null, `Contact lookup by glofox_member_id: ${contactErr.message}`)
+        return NextResponse.json({ success: true, status: 'lookup_error' })
+      }
+      contact = contactRows?.[0] || null
+    }
+    if (!contact) {
+      await markEvent(db, eventRow.id, 'contact_not_found', null, null)
+      return NextResponse.json({
+        success: true,
+        status: 'contact_not_found',
+        email: parsed.contactEmail,
+        user_id: parsed.userId,
+      })
+    }
+
+    // 7a. GLOFOX2.1.20 — INVOICE_UPDATED side-effect. Mirror the
+    // Glofox invoice into glofox_invoices + recompute the contact's
+    // LTV aggregates. Best-effort: failures here log but don't abort
+    // the rest of the webhook flow (tags + sequences still fire).
+    let ltvResult = null
+    const isInvoiceEvent = String(parsed.eventType || '').toUpperCase() === 'INVOICE_UPDATED'
+    if (isInvoiceEvent) {
+      try {
+        ltvResult = await applyInvoiceWebhook(db, creds.locationId, contact.id, payload)
+      } catch (e) {
+        logWarn('glofox-webhook', 'invoice ltv update threw', {
+          err: e?.message, contact_id: contact.id, event_id: parsed.eventId,
+        })
+        ltvResult = { ok: false, reason: 'threw', error: e?.message }
+      }
+    }
+
+    // 7. Apply each tag using the same re-activate-or-insert pattern
+    // as the apply_tag step in steps.js.
+    const appliedTags = []
+    for (const tag of tags) {
+      try {
+        const { data: existing } = await db
+          .from('contact_tags')
+          .select('id, removed_at')
+          .eq('contact_id', contact.id)
+          .eq('tag', tag)
+          .order('added_at', { ascending: false })
+          .limit(1)
+        const row = existing?.[0]
+        if (row && row.removed_at) {
+          await db.from('contact_tags')
+            .update({ removed_at: null, added_at: new Date().toISOString() })
+            .eq('id', row.id)
+        } else if (!row) {
+          await db.from('contact_tags').insert({
+            contact_id: contact.id,
+            location_id: creds.locationId,
+            tag,
+          })
+        }
+        appliedTags.push(tag)
+      } catch (e) {
+        logWarn('glofox-webhook', `failed to apply tag ${tag}`, { err: e?.message, contact_id: contact.id })
+      }
+    }
+
+    // 8. Fire tag_added sequences. Best-effort.
+    if (appliedTags.length > 0) {
+      try {
+        await triggerSequencesForTagsAdded(contact.id, appliedTags)
+      } catch (e) {
+        logWarn('glofox-webhook', 'tag_added trigger threw', { err: e?.message })
+      }
+    }
+
+    // 9. GLOFOX5.1 — real-time member sync for state-changing events.
+    // applyMemberSync detects trial-lifecycle transitions and writes
+    // glofox_trial_engaged / _credits_low / _ended / _converted tags
+    // (GLOFOX4.2). Without this, those tags only fired from the daily
+    // 3am cron — a 24-hour delay between an actual class booking and
+    // the operator-built sequences reacting to it.
+    //
+    // We re-fetch from /2.0/members/{id} rather than trust the webhook
+    // payload because:
+    //   - BOOKING events don't include the member's lead_status
+    //   - MEMBERSHIP events don't include the booking aggregates
+    //   - applyMemberSync needs the canonical member shape to compute
+    //     credits + booking counts correctly
+    // Best-effort: failures here log but don't fail the webhook.
+    let memberSyncResult = null
+    const MEMBER_SYNC_EVENTS = new Set([
+      'MEMBER_UPDATED', 'MEMBER_CREATED',
+      'BOOKING_CREATED', 'BOOKING_UPDATED', 'BOOKING_DELETED',
+      'MEMBERSHIP_CREATED', 'MEMBERSHIP_UPDATED', 'MEMBERSHIP_DELETED',
+      'COURSE_BOOKING_CREATED', 'COURSE_BOOKING_DELETED',
+    ])
+    if (parsed.userId && MEMBER_SYNC_EVENTS.has(String(parsed.eventType || '').toUpperCase())) {
+      try {
+        const r = await glofoxFetch(creds, `/2.0/members/${encodeURIComponent(parsed.userId)}`)
+        if (r.ok) {
+          const body = await r.json()
+          const fullMember = body?.data || body?.member || body
+          memberSyncResult = await applyMemberSync(db, creds.locationId, fullMember, { creds })
+        } else {
+          memberSyncResult = { ok: false, status: r.status, reason: 'glofox_fetch_failed' }
+        }
+      } catch (e) {
+        logWarn('glofox-webhook', 'real-time member sync threw', {
+          err: e?.message, user_id: parsed.userId, event_type: parsed.eventType,
+        })
+        memberSyncResult = { ok: false, reason: 'threw', error: e?.message }
+      }
+    }
+
+    await markEvent(db, eventRow.id, 'applied', {
+      contact_id: contact.id, tags: appliedTags, ltv: ltvResult, member_sync: memberSyncResult,
+    }, null)
     return NextResponse.json({
       success: true,
-      status: 'contact_not_found',
-      email: parsed.contactEmail,
-      user_id: parsed.userId,
+      status: 'applied',
+      location_id: creds.locationId,
+      contact_id: contact.id,
+      tags: appliedTags,
+      ltv: ltvResult,
+      member_sync: memberSyncResult ? { applied: memberSyncResult.action || memberSyncResult.ok || false } : null,
     })
+  } catch (e) {
+    logWarn('glofox-webhook', 'processing threw unexpectedly', {
+      err: e?.message, event_type: parsed.eventType, event_id: parsed.eventId,
+    })
+    await deadLetterWebhook(db, {
+      provider: 'glofox',
+      eventType: parsed.eventType || null,
+      payload,
+      error: e,
+      locationId: creds.locationId,
+    })
+    // Always 200 Glofox — we have the raw payload in dead_letter for replay.
+    return NextResponse.json({ success: true, status: 'processing_failed_dead_lettered' })
   }
-
-  // 7a. GLOFOX2.1.20 — INVOICE_UPDATED side-effect. Mirror the
-  // Glofox invoice into glofox_invoices + recompute the contact's
-  // LTV aggregates. Best-effort: failures here log but don't abort
-  // the rest of the webhook flow (tags + sequences still fire).
-  let ltvResult = null
-  const isInvoiceEvent = String(parsed.eventType || '').toUpperCase() === 'INVOICE_UPDATED'
-  if (isInvoiceEvent) {
-    try {
-      ltvResult = await applyInvoiceWebhook(db, creds.locationId, contact.id, payload)
-    } catch (e) {
-      logWarn('glofox-webhook', 'invoice ltv update threw', {
-        err: e?.message, contact_id: contact.id, event_id: parsed.eventId,
-      })
-      ltvResult = { ok: false, reason: 'threw', error: e?.message }
-    }
-  }
-
-  // 7. Apply each tag using the same re-activate-or-insert pattern
-  // as the apply_tag step in steps.js.
-  const appliedTags = []
-  for (const tag of tags) {
-    try {
-      const { data: existing } = await db
-        .from('contact_tags')
-        .select('id, removed_at')
-        .eq('contact_id', contact.id)
-        .eq('tag', tag)
-        .order('added_at', { ascending: false })
-        .limit(1)
-      const row = existing?.[0]
-      if (row && row.removed_at) {
-        await db.from('contact_tags')
-          .update({ removed_at: null, added_at: new Date().toISOString() })
-          .eq('id', row.id)
-      } else if (!row) {
-        await db.from('contact_tags').insert({
-          contact_id: contact.id,
-          location_id: creds.locationId,
-          tag,
-        })
-      }
-      appliedTags.push(tag)
-    } catch (e) {
-      logWarn('glofox-webhook', `failed to apply tag ${tag}`, { err: e?.message, contact_id: contact.id })
-    }
-  }
-
-  // 8. Fire tag_added sequences. Best-effort.
-  if (appliedTags.length > 0) {
-    try {
-      await triggerSequencesForTagsAdded(contact.id, appliedTags)
-    } catch (e) {
-      logWarn('glofox-webhook', 'tag_added trigger threw', { err: e?.message })
-    }
-  }
-
-  // 9. GLOFOX5.1 — real-time member sync for state-changing events.
-  // applyMemberSync detects trial-lifecycle transitions and writes
-  // glofox_trial_engaged / _credits_low / _ended / _converted tags
-  // (GLOFOX4.2). Without this, those tags only fired from the daily
-  // 3am cron — a 24-hour delay between an actual class booking and
-  // the operator-built sequences reacting to it.
-  //
-  // We re-fetch from /2.0/members/{id} rather than trust the webhook
-  // payload because:
-  //   - BOOKING events don't include the member's lead_status
-  //   - MEMBERSHIP events don't include the booking aggregates
-  //   - applyMemberSync needs the canonical member shape to compute
-  //     credits + booking counts correctly
-  // Best-effort: failures here log but don't fail the webhook.
-  let memberSyncResult = null
-  const MEMBER_SYNC_EVENTS = new Set([
-    'MEMBER_UPDATED', 'MEMBER_CREATED',
-    'BOOKING_CREATED', 'BOOKING_UPDATED', 'BOOKING_DELETED',
-    'MEMBERSHIP_CREATED', 'MEMBERSHIP_UPDATED', 'MEMBERSHIP_DELETED',
-    'COURSE_BOOKING_CREATED', 'COURSE_BOOKING_DELETED',
-  ])
-  if (parsed.userId && MEMBER_SYNC_EVENTS.has(String(parsed.eventType || '').toUpperCase())) {
-    try {
-      const r = await glofoxFetch(creds, `/2.0/members/${encodeURIComponent(parsed.userId)}`)
-      if (r.ok) {
-        const body = await r.json()
-        const fullMember = body?.data || body?.member || body
-        memberSyncResult = await applyMemberSync(db, creds.locationId, fullMember, { creds })
-      } else {
-        memberSyncResult = { ok: false, status: r.status, reason: 'glofox_fetch_failed' }
-      }
-    } catch (e) {
-      logWarn('glofox-webhook', 'real-time member sync threw', {
-        err: e?.message, user_id: parsed.userId, event_type: parsed.eventType,
-      })
-      memberSyncResult = { ok: false, reason: 'threw', error: e?.message }
-    }
-  }
-
-  await markEvent(db, eventRow.id, 'applied', {
-    contact_id: contact.id, tags: appliedTags, ltv: ltvResult, member_sync: memberSyncResult,
-  }, null)
-  return NextResponse.json({
-    success: true,
-    status: 'applied',
-    location_id: creds.locationId,
-    contact_id: contact.id,
-    tags: appliedTags,
-    ltv: ltvResult,
-    member_sync: memberSyncResult ? { applied: memberSyncResult.action || memberSyncResult.ok || false } : null,
-  })
 }
 
 async function markEvent(db, id, status, result, errorMessage) {

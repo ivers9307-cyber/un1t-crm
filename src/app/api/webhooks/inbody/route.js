@@ -14,6 +14,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifyInbodySecret, parseInbodyNotification } from '@/lib/inbody-webhook'
+import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 
 export const runtime = 'nodejs'
 
@@ -41,23 +42,42 @@ export async function POST(request) {
 
   const db = createServerClient()
   // Idempotent capture — a re-sent notification collides on the dedup index.
-  const { error } = await db
-    .from('inbody_webhook_events')
-    .upsert({
-      account: n.account,
-      tel_hp: n.telHp,
-      user_id: n.userId,
-      test_datetime: n.testDatetime,
-      equip: n.equip,
-      equip_serial: n.equipSerial,
-      is_temp_data: n.isTempData,
-      payload: body,
-      processed: false,
-    }, { onConflict: 'account,user_id,test_datetime', ignoreDuplicates: true })
+  try {
+    const { error } = await db
+      .from('inbody_webhook_events')
+      .upsert({
+        account: n.account,
+        tel_hp: n.telHp,
+        user_id: n.userId,
+        test_datetime: n.testDatetime,
+        equip: n.equip,
+        equip_serial: n.equipSerial,
+        is_temp_data: n.isTempData,
+        payload: body,
+        processed: false,
+      }, { onConflict: 'account,user_id,test_datetime', ignoreDuplicates: true })
 
-  if (error) {
-    console.error('[inbody] capture failed:', error.message)
-    return NextResponse.json({ success: false, error: 'Capture failed' }, { status: 500 })
+    if (error) {
+      console.error('[inbody] capture failed:', error.message)
+      await deadLetterWebhook(db, {
+        provider: 'inbody',
+        eventType: n.account || null,
+        payload: body,
+        error,
+      })
+      // Return 200 so InBody does not disable the webhook on repeated failures.
+      return NextResponse.json({ success: true, status: 'capture_failed' }, { status: 200 })
+    }
+  } catch (e) {
+    console.error('[inbody] capture threw:', e?.message)
+    await deadLetterWebhook(db, {
+      provider: 'inbody',
+      eventType: n.account || null,
+      payload: body,
+      error: e,
+    })
+    // Return 200 so InBody does not disable the webhook on repeated throws.
+    return NextResponse.json({ success: true, status: 'capture_failed' }, { status: 200 })
   }
 
   return NextResponse.json({ success: true }, { status: 200 })

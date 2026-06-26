@@ -29,6 +29,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifySharedSecret } from '@/lib/webhook-auth'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
+import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 
 // Force Node.js runtime so node:crypto is available for the timing-safe compare.
 export const runtime = 'nodejs'
@@ -115,7 +116,15 @@ export async function POST(request) {
   const { error } = await db.from('postmark_webhook_queue').insert({ payload: body })
   if (error) {
     console.error('[postmark webhook] queue insert failed:', error.message)
-    return NextResponse.json({ success: false, error: 'queue_insert_failed' }, { status: 500 })
+    await deadLetterWebhook(db, {
+      provider: 'postmark',
+      eventType: recordType,
+      payload: body,
+      error,
+    })
+    // Return 200 so Postmark does not retry-storm us while the queue table is
+    // unavailable — the dead-letter row keeps the event visible for ops.
+    return NextResponse.json({ success: true, status: 'queue_failed_dead_lettered' })
   }
 
   return NextResponse.json({ success: true, queued: true })
