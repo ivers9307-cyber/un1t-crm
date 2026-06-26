@@ -65,7 +65,6 @@ export async function POST(_request, props) {
       xero_invoice_branding_id: result.brandingThemeId,
       xero_invoice_emailed_at: result.emailedAt,
       xero_invoice_issued_at: result.issuedAt,
-      xero_invoice_issue_count: (car.xero_invoice_issue_count || 0) + 1,
     }).eq('id', car.id)
 
     if (upErr) {
@@ -75,6 +74,9 @@ export async function POST(_request, props) {
         invoice: result,
       }, { status: 500 })
     }
+
+    // Atomic issue-count bump (best-effort) — secondary to the invoice op.
+    try { await db.rpc('increment_car_xero_issue_count', { p_car_id: car.id }) } catch {}
 
     return NextResponse.json({ success: true, invoice: result })
   } catch (e) {
