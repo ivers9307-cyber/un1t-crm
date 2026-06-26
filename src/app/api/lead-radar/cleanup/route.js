@@ -16,12 +16,19 @@
 // Access: lead_radar permission (owner + head_coach by default).
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadCleanup } from '@/lib/lead-radar-data'
 import { radarCache, invalidateRadar } from '@/lib/radar-cache'
 import { logWarn } from '@/lib/log'
+import { validateBody } from '@/lib/validate'
+
+const CleanupBody = z.object({
+  decision: z.enum(['archive', 'keep']),
+  contact_ids: z.array(z.string()).min(1),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -73,16 +80,11 @@ export async function POST(request) {
   if (access.error) return access.error
   const { user, locationId } = access
 
-  let body
-  try { body = await request.json() } catch { body = {} }
-  const decision = body?.decision
-  const contactIds = Array.isArray(body?.contact_ids) ? body.contact_ids.filter(Boolean) : []
-  if (decision !== 'archive' && decision !== 'keep') {
-    return NextResponse.json({ success: false, error: 'decision must be "archive" or "keep"' }, { status: 400 })
-  }
-  if (contactIds.length === 0) {
-    return NextResponse.json({ success: false, error: 'contact_ids is required' }, { status: 400 })
-  }
+  const validation = await validateBody(request, CleanupBody)
+  if (!validation.ok) return validation.response
+  const body = validation.data
+  const decision = body.decision
+  const contactIds = body.contact_ids.filter(Boolean)
   if (contactIds.length > MAX_BULK) {
     return NextResponse.json({ success: false, error: `Max ${MAX_BULK} contacts per request` }, { status: 413 })
   }

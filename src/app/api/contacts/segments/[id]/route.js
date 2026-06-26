@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { audienceFilterSchema } from '@/lib/schemas'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -34,14 +35,9 @@ export async function PUT(request, props) {
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
 
-  const raw = await request.json().catch(() => ({}))
-  const parsed = UpdateBody.safeParse(raw)
-  if (!parsed.success) {
-    return NextResponse.json({
-      success: false,
-      error: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; '),
-    }, { status: 400 })
-  }
+  const validation = await validateBody(request, UpdateBody, { allowEmpty: true })
+  if (!validation.ok) return validation.response
+  const parsed = { data: validation.data }
 
   const updates = { updated_at: new Date().toISOString() }
   if (parsed.data.name !== undefined) updates.name = parsed.data.name.trim()

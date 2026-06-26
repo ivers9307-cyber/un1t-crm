@@ -14,6 +14,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { startImpersonation } from '@/lib/impersonation'
 import { createServerClient } from '@/lib/supabase'
 import { logAuditEvent } from '@/lib/audit'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 
@@ -37,14 +38,9 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Master only' }, { status: 403 })
   }
 
-  const raw = await request.json().catch(() => ({}))
-  const parsed = Body.safeParse(raw)
-  if (!parsed.success) {
-    return NextResponse.json({
-      success: false,
-      error: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; '),
-    }, { status: 400 })
-  }
+  const validation = await validateBody(request, Body)
+  if (!validation.ok) return validation.response
+  const parsed = { data: validation.data }
 
   if (parsed.data.target_user_id === realMasterId) {
     return NextResponse.json({ success: false, error: 'Cannot impersonate yourself.' }, { status: 400 })

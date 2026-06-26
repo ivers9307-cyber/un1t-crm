@@ -6,6 +6,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { applyAudienceFilterAsync, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { audienceFilterSchema } from '@/lib/schemas'
 import { crossoverContactIds, fetchCrossoverContext } from '@/lib/contact-crossovers'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -98,14 +99,9 @@ export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
 
-  const raw = await request.json().catch(() => ({}))
-  const parsed = SearchBody.safeParse(raw)
-  if (!parsed.success) {
-    return NextResponse.json({
-      success: false,
-      error: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; '),
-    }, { status: 400 })
-  }
+  const validation = await validateBody(request, SearchBody, { allowEmpty: true })
+  if (!validation.ok) return validation.response
+  const parsed = { data: validation.data }
 
   const locationId = parsed.data.location_id || user.activeLocation?.id
   if (!locationId) {

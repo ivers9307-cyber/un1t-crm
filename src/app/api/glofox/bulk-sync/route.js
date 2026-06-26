@@ -43,11 +43,28 @@
 //   Comfortable under Vercel's timeout.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/schemas'
 import { glofoxCredentialsForLocation, fetchAllMembersPage, glofoxFetch } from '@/lib/glofox'
 import { previewMemberSync, applyMemberSync } from '@/lib/glofox-sync'
+import { validateBody } from '@/lib/validate'
+
+const BulkSyncBody = z.object({
+  location_id: uuidLike.optional(),
+  filters: z.object({
+    lead_status: z.array(z.string()).optional(),
+    created: z.object({ start: z.number().optional() }).optional(),
+    modified: z.object({ start: z.number().optional() }).optional(),
+  }).optional(),
+  pagination: z.object({
+    skip: z.number().int().min(0).optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+  }).optional(),
+  dry_run: z.boolean().optional(),
+  mode: z.enum(['glofox_pull', 'crm_resync']).optional(),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -60,8 +77,9 @@ export async function POST(request) {
     return NextResponse.json({ ok: false, error: 'Master only' }, { status: 403 })
   }
 
-  let body
-  try { body = await request.json() } catch { body = {} }
+  const validation = await validateBody(request, BulkSyncBody, { allowEmpty: true })
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const url = new URL(request.url)
   const locationId = body.location_id || url.searchParams.get('location_id') || user.activeLocation?.id || null
   if (!locationId || !uuidLike.safeParse(locationId).success) {

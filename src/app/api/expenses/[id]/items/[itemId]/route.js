@@ -5,6 +5,7 @@
 // from Storage. Both submitter-only, draft-only.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import {
@@ -13,6 +14,18 @@ import {
   RECEIPT_MAX_BYTES,
   buildReceiptPath,
 } from '@/lib/fte-expenses'
+import { isoDate } from '@/lib/schemas'
+import { validateBody } from '@/lib/validate'
+
+// All fields optional — PATCH updates only the fields supplied.
+const PatchExpenseItemBody = z.object({
+  expense_date: isoDate.optional(),
+  category: z.string().optional(),
+  amount: z.union([z.number(), z.string()]).optional(),
+  vat_amount: z.union([z.number(), z.string()]).optional(),
+  vendor: z.string().max(200).nullable().optional(),
+  description: z.string().max(500).nullable().optional(),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -61,7 +74,9 @@ export async function PATCH(request, { params }) {
       body[k] = typeof v === 'string' ? v : null
     }
   } else {
-    try { body = await request.json() } catch { body = {} }
+    const validation = await validateBody(request, PatchExpenseItemBody, { allowEmpty: true })
+    if (!validation.ok) return validation.response
+    body = validation.data
   }
 
   // Build the update set defensively — only known fields, with the

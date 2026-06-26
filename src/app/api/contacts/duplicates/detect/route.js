@@ -9,10 +9,17 @@
 // Authorization: session auth + contact_linking permission.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { runDetection } from '@/lib/person-detect'
+import { validateBody } from '@/lib/validate'
+import { uuidLike } from '@/lib/schemas'
+
+const DetectBody = z.object({
+  location_id: uuidLike.optional(),
+})
 
 export const runtime = 'nodejs'
 
@@ -29,12 +36,9 @@ export async function POST(request) {
   }
 
   // Parse body (optional) + query string for commit flag
-  let body = {}
-  try {
-    body = await request.json()
-  } catch {
-    // Empty or non-JSON body is fine — all fields are optional
-  }
+  const validation = await validateBody(request, DetectBody, { allowEmpty: true })
+  if (!validation.ok) return validation.response
+  const body = validation.data
 
   const url = new URL(request.url)
   const commit = url.searchParams.get('commit') === 'true'

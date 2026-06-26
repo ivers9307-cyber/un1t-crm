@@ -19,11 +19,19 @@
 // Master OR owner at the location (same gate as /media).
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
+import { validateBody } from '@/lib/validate'
+
+const SignedUploadBody = z.object({
+  location_id: uuidLike,
+  kind: z.string(),
+  content_type: z.string(),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -39,15 +47,10 @@ const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp
 export async function POST(request) {
   const user = await getCurrentUser()
 
-  const body = await request.json().catch(() => null)
-  if (!body) {
-    return NextResponse.json({ success: false, error: 'Expected a JSON body.' }, { status: 400 })
-  }
-  const { location_id: locationId, kind, content_type: contentType } = body
+  const validation = await validateBody(request, SignedUploadBody)
+  if (!validation.ok) return validation.response
+  const { location_id: locationId, kind, content_type: contentType } = validation.data
 
-  if (!locationId || !uuidLike.safeParse(locationId).success) {
-    return NextResponse.json({ success: false, error: 'location_id is required' }, { status: 400 })
-  }
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
   if (!hasPermissionForLocation(user, locationId, 'landing_page')) {

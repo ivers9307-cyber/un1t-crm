@@ -4,11 +4,17 @@
 // to the submitter on success — best-effort, never blocks.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { withAuth } from '@/lib/with-auth'
 import { resolveIssue, getInboxIssue } from '@/lib/issues'
 import { logAuditEvent } from '@/lib/audit'
 import { sendPush } from '@/lib/push'
 import { logWarn } from '@/lib/log'
+import { validateBody } from '@/lib/validate'
+
+const ResolveBody = z.object({
+  notes: z.string().optional(),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -41,11 +47,9 @@ export const POST = withAuth(
       return NextResponse.json({ success: false, error: 'Not found.' }, { status: 404 })
     }
 
-    let body
-    try { body = await request.json() }
-    catch {
-      return NextResponse.json({ success: false, error: 'Invalid JSON body.' }, { status: 400 })
-    }
+    const validation = await validateBody(request, ResolveBody, { allowEmpty: true })
+    if (!validation.ok) return validation.response
+    const body = validation.data
 
     const out = await resolveIssue(db, {
       issueId: id, profileId: user.id, notes: body?.notes,
