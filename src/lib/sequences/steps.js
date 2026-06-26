@@ -37,6 +37,7 @@ import {
   renderTemplateBody,
 } from '@/lib/whatsapp'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
+import { getLocationBranding } from '@/lib/location-branding'
 
 // ── email ───────────────────────────────────────────────────────
 
@@ -140,11 +141,13 @@ export async function sendWhatsappStep(db, { step, sequence, contact }) {
 
   // Variable mapping resolution mirrors the broadcasts flow exactly.
   const variableMapping = step.whatsapp_variables || {}
+  const branding = await getLocationBranding(db, sequence.location_id)
   const components = buildTemplateComponents(
     template,
     contact,
     variableMapping,
-    step.whatsapp_header_media_url || null
+    step.whatsapp_header_media_url || null,
+    { companyName: branding.companyName },
   )
 
   const result = await sendTemplateMessage(
@@ -167,7 +170,7 @@ export async function sendWhatsappStep(db, { step, sequence, contact }) {
       message_type: 'template',
       template_name: template.name,
       template_variables: variableMapping,
-      body: renderTemplateBody(template, contact, variableMapping),
+      body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName }),
       status: 'sent',
       sent_at: new Date().toISOString(),
     })

@@ -3,7 +3,7 @@
 // ship a matching header parameter, falling back to the URL persisted
 // on the template row when the caller has no per-send override.
 import { describe, it, expect } from 'vitest'
-import { buildTemplateComponents } from './whatsapp.js'
+import { buildTemplateComponents, resolveTemplateVariableValues } from './whatsapp.js'
 
 const VIDEO_TEMPLATE = {
   name: 'consultation_booking',
@@ -104,6 +104,21 @@ describe('parseConsentKeyword', () => {
     for (const t of ['please stop texting me', 'stop it', 'can I unsubscribe?', '', null, undefined]) {
       expect(parseConsentKeyword(t)).toBeNull()
     }
+  })
+})
+
+describe('resolveTemplateVariableValues — location_name branding', () => {
+  const tpl = { components: [{ type: 'BODY', text: 'Hi {{1}}, from {{2}}' }] }
+  const contact = { first_name: 'Sam', name: 'Sam Lee' }
+
+  it('resolves location_name from opts.companyName', () => {
+    const vals = resolveTemplateVariableValues(tpl, contact, { 1: 'first_name', 2: 'location_name' }, { companyName: 'CCF Autos' })
+    expect(vals[1]).toBe('CCF Autos')
+  })
+
+  it('falls back to UN1T when no companyName is passed', () => {
+    const vals = resolveTemplateVariableValues(tpl, contact, { 1: 'first_name', 2: 'location_name' })
+    expect(vals[1]).toBe('UN1T')
   })
 })
 
