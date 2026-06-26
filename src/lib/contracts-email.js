@@ -15,47 +15,47 @@
 import { createServerClient } from './supabase.js'
 import { sendEmail } from './postmark.js'
 import { formatFullDateTimeInTZ } from './dates.js'
+import { getLocationBranding } from './location-branding.js'
 
 function appUrl() {
   return process.env.NEXT_PUBLIC_APP_URL || 'https://crm.un1tdublin.com'
 }
 
 /**
- * Look up a logo URL for the contract's anchor location. Falls
- * back to null silently if no branding row exists — the email
- * template degrades gracefully.
+ * Resolve the contract's anchor location's operator-configured branding
+ * ({ companyName, logoUrl }) from company_settings, via the shared
+ * getLocationBranding helper. Never throws — a branding miss must not
+ * break a contract notification; the email template degrades to the
+ * plain "UN1T" wordmark.
  */
-async function getLocationLogo(locationId) {
-  if (!locationId) return null
+async function getBranding(locationId) {
+  let db = null
   try {
-    const db = createServerClient()
-    const { data } = await db
-      .from('company_branding')
-      .select('logo_url')
-      .eq('location_id', locationId)
-      .maybeSingle()
-    return data?.logo_url || null
+    db = createServerClient()
   } catch {
-    return null
+    // createServerClient should never throw, but if it does the
+    // null db makes getLocationBranding return its neutral default.
   }
+  return getLocationBranding(db, locationId)
 }
 
-function brandedHeader(logoUrl) {
-  if (logoUrl) {
+function brandedHeader(branding) {
+  const companyName = branding?.companyName || 'UN1T'
+  if (branding?.logoUrl) {
     return `<div style="text-align:center;padding:24px 0;">
-      <img src="${logoUrl}" alt="UN1T" style="max-height:60px;max-width:200px;" />
+      <img src="${branding.logoUrl}" alt="${escapeHtml(companyName)}" style="max-height:60px;max-width:200px;" />
     </div>`
   }
-  return `<div style="text-align:center;padding:24px 0;font-size:24px;font-weight:bold;letter-spacing:0.05em;">UN1T</div>`
+  return `<div style="text-align:center;padding:24px 0;font-size:24px;font-weight:bold;letter-spacing:0.05em;">${escapeHtml(companyName)}</div>`
 }
 
-function emailShell(innerHtml, logoUrl) {
+function emailShell(innerHtml, branding) {
   return `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:#f4f4f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111827;">
   <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
-    ${brandedHeader(logoUrl)}
+    ${brandedHeader(branding)}
     <div style="padding:0 32px 32px 32px;line-height:1.6;">
       ${innerHtml}
     </div>
@@ -78,7 +78,7 @@ function emailShell(innerHtml, logoUrl) {
  */
 export async function sendContractIssuedEmail({ contract, recipient, issuer, templateName }) {
   if (!recipient?.email) return { ok: false, error: 'No recipient email' }
-  const logoUrl = await getLocationLogo(contract.location_id)
+  const branding = await getBranding(contract.location_id)
   const reviewUrl = `${appUrl()}/account/contracts/${contract.id}`
   const subject = `Action required: ${templateName || 'Your contract'} from UN1T`
   const innerHtml = `
@@ -102,7 +102,7 @@ export async function sendContractIssuedEmail({ contract, recipient, issuer, tem
     await sendEmail({
       to: recipient.email,
       subject,
-      htmlBody: emailShell(innerHtml, logoUrl),
+      htmlBody: emailShell(innerHtml, branding),
       stream: 'outbound',
       tag: 'contract-issued',
       metadata: { contract_id: contract.id, profile_id: contract.profile_id },
@@ -121,7 +121,7 @@ export async function sendContractIssuedEmail({ contract, recipient, issuer, tem
  * /account/contracts/[id] (recipient).
  */
 export async function sendContractSignedEmails({ contract, recipient, issuer, templateName }) {
-  const logoUrl = await getLocationLogo(contract.location_id)
+  const branding = await getBranding(contract.location_id)
   const recipientUrl = `${appUrl()}/account/contracts/${contract.id}`
   const issuerUrl = `${appUrl()}/admin/contracts/${contract.id}`
   const results = { recipient: null, issuer: null }
@@ -144,7 +144,7 @@ export async function sendContractSignedEmails({ contract, recipient, issuer, te
       await sendEmail({
         to: recipient.email,
         subject,
-        htmlBody: emailShell(innerHtml, logoUrl),
+        htmlBody: emailShell(innerHtml, branding),
         stream: 'outbound',
         tag: 'contract-signed',
         metadata: { contract_id: contract.id, profile_id: contract.profile_id },
@@ -173,7 +173,7 @@ export async function sendContractSignedEmails({ contract, recipient, issuer, te
       await sendEmail({
         to: issuer.email,
         subject,
-        htmlBody: emailShell(innerHtml, logoUrl),
+        htmlBody: emailShell(innerHtml, branding),
         stream: 'outbound',
         tag: 'contract-signed-issuer',
         metadata: { contract_id: contract.id, profile_id: contract.profile_id },
@@ -191,7 +191,7 @@ export async function sendContractSignedEmails({ contract, recipient, issuer, te
  */
 export async function sendContractDeclinedEmail({ contract, recipient, issuer, templateName }) {
   if (!issuer?.email) return { ok: false, error: 'No issuer email' }
-  const logoUrl = await getLocationLogo(contract.location_id)
+  const branding = await getBranding(contract.location_id)
   const issuerUrl = `${appUrl()}/admin/contracts/${contract.id}`
   const subject = `Declined: ${recipient?.full_name || 'recipient'} — ${templateName || 'contract'}`
   const innerHtml = `
@@ -210,7 +210,7 @@ export async function sendContractDeclinedEmail({ contract, recipient, issuer, t
     await sendEmail({
       to: issuer.email,
       subject,
-      htmlBody: emailShell(innerHtml, logoUrl),
+      htmlBody: emailShell(innerHtml, branding),
       stream: 'outbound',
       tag: 'contract-declined',
       metadata: { contract_id: contract.id, profile_id: contract.profile_id },
@@ -226,7 +226,7 @@ export async function sendContractDeclinedEmail({ contract, recipient, issuer, t
  */
 export async function sendContractRevokedEmail({ contract, recipient, templateName }) {
   if (!recipient?.email) return { ok: false, error: 'No recipient email' }
-  const logoUrl = await getLocationLogo(contract.location_id)
+  const branding = await getBranding(contract.location_id)
   const subject = `Contract withdrawn: ${templateName || 'previous contract'}`
   const innerHtml = `
     <h2 style="font-size:20px;margin:0 0 16px 0;">A contract has been withdrawn</h2>
@@ -243,7 +243,7 @@ export async function sendContractRevokedEmail({ contract, recipient, templateNa
     await sendEmail({
       to: recipient.email,
       subject,
-      htmlBody: emailShell(innerHtml, logoUrl),
+      htmlBody: emailShell(innerHtml, branding),
       stream: 'outbound',
       tag: 'contract-revoked',
       metadata: { contract_id: contract.id, profile_id: contract.profile_id },
