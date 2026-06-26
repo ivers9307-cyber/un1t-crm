@@ -105,6 +105,7 @@ export default function RootLayout() {
               <Stack.Screen name="tasks" options={{ headerShown: false }} />
               <Stack.Screen name="bookings" options={{ headerShown: false }} />
               <Stack.Screen name="radar" options={{ headerShown: false }} />
+              <Stack.Screen name="assistant" options={{ headerShown: false }} />
               <Stack.Screen name="staff" options={{ headerShown: false }} />
               <Stack.Screen name="cars" options={{ headerShown: false }} />
               <Stack.Screen name="races" options={{ headerShown: false }} />

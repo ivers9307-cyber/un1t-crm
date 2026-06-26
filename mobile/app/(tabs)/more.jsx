@@ -176,6 +176,10 @@ export default function More() {
   // (contacts isn't a bar-eligible layout feature yet); defaults on for
   // every role, like the web contacts list.
   if (canMobile(profile, 'contacts', activeLocation)) tiles.push({ key: 'contacts', icon: 'people-circle-outline', label: 'Contacts', onPress: () => router.push('/contacts') })
+  // MOBILE-ASSISTANT.1 — in-app AI assistant chat (P2-8). Gated by the
+  // existing `assistant` mobile permission (defaults on for master /
+  // owner / manager; explicit opt-in for head_coach + staff).
+  if (canMobile(profile, 'assistant', activeLocation)) tiles.push({ key: 'assistant', icon: 'sparkles-outline', label: 'Assistant', onPress: () => router.push('/assistant') })
   // ACCOUNTING-HUB.1 — one "Accounting" tile for the money surfaces
   // (Expenses, own Invoices, Invoices approver inbox, SPEND.P3
   // company-card receipts, and the EVENTS-HUB.2 Orders revenue ledger).
