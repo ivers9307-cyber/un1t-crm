@@ -23,6 +23,7 @@ import LocationForm from '@/components/LocationForm'
 import LocationFeatures from '@/components/LocationFeatures'
 import CarDepositSettings from '@/components/CarDepositSettings'
 import BrandingSettings from '@/components/BrandingSettings'
+import OrgBrandingSettings from '@/components/OrgBrandingSettings'
 import LocationIntegrations from '@/components/settings/LocationIntegrations'
 import NotificationConfigCard from '@/components/settings/NotificationConfigCard'
 
@@ -45,6 +46,10 @@ export default async function EditLocationPage(props) {
   ])
 
   if (!location) notFound()
+
+  // The org this location belongs to (mig 079) — powers the org-level branding
+  // defaults shown above the per-location branding (mig 317).
+  const org = (organizations || []).find((o) => o.id === location.organization_id) || null
 
   // Pull the Xero connection row (if any), the Google Business connection
   // row (if any), and a sample car for the BCA template preview.
@@ -155,6 +160,7 @@ export default async function EditLocationPage(props) {
             <ImageIcon size={16} className="text-un1t-subtle" />
             <h3 className="text-lg font-semibold">Branding</h3>
           </div>
+          <OrgBrandingSettings orgId={location.organization_id} orgName={org?.name} />
           <BrandingSettings user={user} locationId={location.id} />
         </section>
       )}

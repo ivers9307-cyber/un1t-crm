@@ -1,0 +1,77 @@
+import { NextResponse } from 'next/server'
+import { z } from 'zod'
+import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
+import { validateBody, uuidLike } from '@/lib/validate'
+
+// Organisation-level branding defaults (mig 317). Locations inherit these via
+// getLocationBranding when they have not set their own. Mirrors
+// /api/settings/branding but keyed on organization_id. Master may target any
+// org; an owner is limited to organisations they own.
+const OrgBrandingSchema = z.object({
+  organization_id: uuidLike.optional(),
+  logo_url: z.string().url().max(2000).nullable().optional(),
+  favicon_url: z.string().url().max(2000).nullable().optional(),
+  company_name: z.string().max(200).nullable().optional(),
+})
+
+// Resolve the org the caller may act on. Master targets any org (defaults to
+// active); an owner is constrained to orgs they own (getOwnerOrganizationIds).
+// Returns null when the caller has no claim to the requested/active org.
+function resolveOrgId(user, requested) {
+  if (user.role === 'master') return requested || user.activeOrganization?.id || null
+  const owned = getOwnerOrganizationIds(user)
+  const target = requested || user.activeOrganization?.id || owned[0] || null
+  return target && owned.includes(target) ? target : null
+}
+
+// GET /api/settings/org-branding?organization_id=xxx — org branding defaults
+export async function GET(request) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  const { searchParams } = new URL(request.url)
+  const orgId = resolveOrgId(user, searchParams.get('organization_id'))
+  if (!orgId) return NextResponse.json({ success: false, error: 'No organisation access' }, { status: 403 })
+
+  const db = createServerClient()
+  const { data } = await db.from('org_settings')
+    .select('*')
+    .eq('organization_id', orgId)
+    .maybeSingle()
+
+  return NextResponse.json({ success: true, data: data || null })
+}
+
+// PUT /api/settings/org-branding — upsert org branding (owner-of-org or master)
+export async function PUT(request) {
+  const user = await getCurrentUser()
+  if (!user || (user.role !== 'owner' && user.role !== 'master')) {
+    return NextResponse.json({ success: false, error: 'Only owners or master can update organisation branding' }, { status: 403 })
+  }
+
+  const validation = await validateBody(request, OrgBrandingSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
+
+  const orgId = resolveOrgId(user, body.organization_id)
+  if (!orgId) return NextResponse.json({ success: false, error: 'No organisation access' }, { status: 403 })
+
+  const db = createServerClient()
+  const record = {
+    organization_id: orgId,
+    logo_url: body.logo_url ?? null,
+    favicon_url: body.favicon_url ?? null,
+    company_name: body.company_name ?? null,
+    updated_at: new Date().toISOString(),
+    updated_by: user.id,
+  }
+
+  const { data, error } = await db.from('org_settings')
+    .upsert(record, { onConflict: 'organization_id' })
+    .select()
+    .single()
+
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  return NextResponse.json({ success: true, data })
+}
