@@ -24,7 +24,20 @@
 // permission + role in one shot).
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { withAuth } from '@/lib/with-auth'
+import { validateBody } from '@/lib/validate'
+
+const AcDeviceCreateSchema = z.object({
+  provider: z.string().optional(),
+  provider_device_id: z.string().optional(),
+  label: z.string().optional(),
+  default_mode: z.string().optional(),
+  default_temp_c: z.union([z.number(), z.string()]).optional(),
+  default_fan: z.string().optional(),
+  session_minutes: z.union([z.number(), z.string()]).optional(),
+  device_group: z.string().nullable().optional(),
+}).passthrough()
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -87,9 +100,9 @@ export const POST = withAuth(
       )
     }
 
-    let body
-    try { body = await request.json() }
-    catch { return NextResponse.json({ success: false, error: 'Invalid JSON body.' }, { status: 400 }) }
+    const validation = await validateBody(request, AcDeviceCreateSchema)
+    if (!validation.ok) return validation.response
+    const body = validation.data
 
     const provider = String(body?.provider || '').toLowerCase()
     const providerDeviceId = String(body?.provider_device_id || '').trim()

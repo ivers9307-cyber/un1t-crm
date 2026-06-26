@@ -12,9 +12,18 @@
 // write side. Mirrors the policies admin pattern.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { withAuth } from '@/lib/with-auth'
 import { listTemplates, createTemplate } from '@/lib/checklists'
 import { logAuditEvent } from '@/lib/audit'
+import { validateBody } from '@/lib/validate'
+
+const ChecklistTemplateCreateSchema = z.object({
+  role:        z.string().optional(),
+  day_of_week: z.union([z.string(), z.number()]).optional(),
+  name:        z.string().optional(),
+  items:       z.array(z.unknown()).optional(),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -58,14 +67,9 @@ export const POST = withAuth(
       )
     }
 
-    let body
-    try { body = await request.json() }
-    catch {
-      return NextResponse.json(
-        { success: false, error: 'Invalid JSON body.' },
-        { status: 400 }
-      )
-    }
+    const v = await validateBody(request, ChecklistTemplateCreateSchema)
+    if (!v.ok) return v.response
+    const body = v.data
 
     const out = await createTemplate(db, {
       locationId,

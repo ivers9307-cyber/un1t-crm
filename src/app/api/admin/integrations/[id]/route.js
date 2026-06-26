@@ -4,9 +4,21 @@
 // after seed.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { logWarn } from '@/lib/log'
+import { validateBody } from '@/lib/validate'
+
+// All fields optional — the route itself validates "at least one present"
+const IntegrationPatchSchema = z.object({
+  client_id:     z.string().optional(),
+  client_secret: z.string().optional(),
+  redirect_uri:  z.string().optional(),
+  scopes:        z.array(z.string()).optional(),
+  is_enabled:    z.boolean().optional(),
+  notes:         z.string().optional(),
+}).passthrough()
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -26,9 +38,9 @@ export async function PATCH(request, props) {
   const id = params?.id
   if (!id) return NextResponse.json({ ok: false, error: 'Missing id' }, { status: 400 })
 
-  let body
-  try { body = await request.json() }
-  catch { return NextResponse.json({ ok: false, error: 'Invalid JSON' }, { status: 400 }) }
+  const v = await validateBody(request, IntegrationPatchSchema)
+  if (!v.ok) return v.response
+  const body = v.data
 
   const patch = {}
   for (const k of ALLOWED_FIELDS) {

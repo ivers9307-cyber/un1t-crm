@@ -1,7 +1,13 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { runFlowAgent } from '@/lib/sequences/agent/run'
+import { validateBody } from '@/lib/validate'
+
+const AgentSchema = z.object({
+  prompt: z.string().optional(),
+}).passthrough()
 
 // FLOW-GRAPH Phase 3 — POST /api/sequences/[id]/graph/agent
 // Turn a plain-English ask into a flow graph and save it as a DRAFT for review.
@@ -23,7 +29,9 @@ export async function POST(request, props) {
   const guard = assertLocationAccessOr404(user, sequence.location_id)
   if (guard) return guard
 
-  const body = await request.json().catch(() => ({}))
+  const validation = await validateBody(request, AgentSchema, { allowEmpty: true })
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : ''
   if (!prompt) return NextResponse.json({ success: false, error: 'Describe the sequence you want.' }, { status: 400 })
   if (prompt.length > 4000) return NextResponse.json({ success: false, error: 'That description is too long.' }, { status: 400 })

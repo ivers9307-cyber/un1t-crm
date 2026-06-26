@@ -1,8 +1,15 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { compileForPublish } from '@/lib/sequences/graph/persist'
 import { parseGraphShape } from '@/lib/sequences/graph/schema'
+import { validateBody } from '@/lib/validate'
+
+// Permissive — graph is a free-form object validated by compileForPublish.
+const PublishSchema = z.object({
+  graph: z.any().optional(),
+}).passthrough()
 
 // FLOW-GRAPH Phase 2 — POST /api/sequences/[id]/graph/publish
 // Promote a graph to the live sequence: validate → compile → replace
@@ -32,7 +39,9 @@ export async function POST(request, props) {
 
   // Publish the graph in the request body, else the saved draft, else the
   // already-published graph (republish).
-  const body = await request.json().catch(() => ({}))
+  const validation = await validateBody(request, PublishSchema, { allowEmpty: true })
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const graph = body?.graph ?? existing.draft_graph ?? existing.graph
   if (!graph) {
     return NextResponse.json({ success: false, error: 'Nothing to publish — no graph or draft on this sequence' }, { status: 400 })

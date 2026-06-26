@@ -14,10 +14,19 @@
 // requires a rotation.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { issueBridgeToken } from '@/lib/bridge-auth'
 import { logInfo, logWarn } from '@/lib/log'
+import { validateBody } from '@/lib/validate'
+import { uuidLike } from '@/lib/schemas'
+
+const BridgeCreateSchema = z.object({
+  name:        z.string().min(1).max(80),
+  location_id: uuidLike,
+  hardware_id: z.string().min(1).max(100),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -31,22 +40,9 @@ export async function POST(request) {
     return NextResponse.json({ ok: false, error: 'Master only' }, { status: 403 })
   }
 
-  let body
-  try {
-    body = await request.json()
-  } catch {
-    return NextResponse.json({ ok: false, error: 'invalid_json' }, { status: 400 })
-  }
-
-  const name = String(body?.name || '').trim().slice(0, 80)
-  const locationId = String(body?.location_id || '').trim()
-  const hardwareId = String(body?.hardware_id || '').trim().slice(0, 100)
-  if (!name || !locationId || !hardwareId) {
-    return NextResponse.json({
-      ok: false,
-      error: 'name, location_id and hardware_id are required',
-    }, { status: 400 })
-  }
+  const v = await validateBody(request, BridgeCreateSchema)
+  if (!v.ok) return v.response
+  const { name, location_id: locationId, hardware_id: hardwareId } = v.data
 
   const { raw, hash } = issueBridgeToken()
 

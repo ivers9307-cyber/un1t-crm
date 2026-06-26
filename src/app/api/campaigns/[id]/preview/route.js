@@ -1,7 +1,16 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { buildAudienceQueryAsync, consentFieldForStream } from '@/lib/postmark'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { validateBody } from '@/lib/validate'
+import { audienceFilterSchema } from '@/lib/schemas'
+
+// All optional — omitted fields fall back to the saved campaign values
+const CampaignPreviewSchema = z.object({
+  filter:     audienceFilterSchema,
+  email_type: z.enum(['marketing', 'utility']).optional(),
+})
 
 export const dynamic = 'force-dynamic'
 
@@ -84,11 +93,10 @@ export async function POST(request, props) {
   if (guard) return guard
 
   // Use the filter the operator is editing, fall back to the saved one.
-  let body = {}
-  try { body = await request.json() } catch { body = {} }
-  const filter = (body && typeof body === 'object' && body.filter !== undefined)
-    ? body.filter
-    : campaign.audience_filter
+  const v = await validateBody(request, CampaignPreviewSchema, { allowEmpty: true })
+  if (!v.ok) return v.response
+  const body = v.data
+  const filter = (body && body.filter !== undefined) ? body.filter : campaign.audience_filter
 
   // Reflect the in-flight Marketing/Utility toggle if the editor sent it,
   // so the count updates before the campaign is saved; fall back to the

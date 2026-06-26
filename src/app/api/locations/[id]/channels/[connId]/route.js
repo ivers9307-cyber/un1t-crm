@@ -1,8 +1,19 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { maskConnectionRow, buildConnectionPatch } from '@/lib/agent/channels'
+import { validateBody } from '@/lib/validate'
+
+const ChannelPatchSchema = z.object({
+  label: z.string().optional(),
+  external_account_id: z.string().nullable().optional(),
+  page_id: z.string().nullable().optional(),
+  app_id: z.string().nullable().optional(),
+  display_name: z.string().nullable().optional(),
+  is_active: z.boolean().optional(),
+}).passthrough()
 
 // PATCH /api/locations/[id]/channels/[connId] — update a connection.
 // Secrets are only overwritten when a fresh value is supplied (a masked
@@ -16,7 +27,9 @@ export async function PATCH(request, props) {
   const allowed = user.role === 'master' || (MANAGER_ROLES.includes(user.role) && (user.locations || []).some(l => l.id === locationId))
   if (!allowed) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
 
-  const body = await request.json()
+  const validation = await validateBody(request, ChannelPatchSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const db = createServerClient()
 
   // Look up the row's platform for the one-active deactivation step.

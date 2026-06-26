@@ -21,9 +21,16 @@
 // these sessions earn points + feed community, same as a strap session.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { resolveCustomerContact } from '@/lib/customer-auth'
 import { mapAppleHealthWorkoutToSession } from '@/lib/apple-health-map'
+import { validateBody } from '@/lib/validate'
+
+const AppleHealthIngestSchema = z.object({
+  workouts: z.array(z.any()).optional(),
+  healthMetrics: z.array(z.any()).optional(),
+}).passthrough()
 import { resolveMaxHr, resolveScoringConfig } from '@/lib/heart-rate'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { lookupBookedMember } from '@/lib/class-bookings'
@@ -44,8 +51,9 @@ export async function POST(request) {
   }
   const locationId = contact.location_id
 
-  let body
-  try { body = await request.json() } catch { body = {} }
+  const validation = await validateBody(request, AppleHealthIngestSchema, { allowEmpty: true })
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const workouts = Array.isArray(body?.workouts) ? body.workouts : []
   const healthMetrics = Array.isArray(body?.healthMetrics) ? body.healthMetrics : []
 

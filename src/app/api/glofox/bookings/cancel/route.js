@@ -13,10 +13,18 @@
 //   }
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/schemas'
 import { glofoxCredentialsForLocation, cancelBooking } from '@/lib/glofox'
+import { validateBody } from '@/lib/validate'
+
+const CancelBookingBody = z.object({
+  location_id: uuidLike.optional(),
+  booking_id: z.string().min(1),
+  user_id: z.string().min(1),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -28,19 +36,14 @@ export async function POST(request) {
     return NextResponse.json({ ok: false, error: 'Master only' }, { status: 403 })
   }
 
-  let body
-  try { body = await request.json() } catch { body = {} }
+  const validation = await validateBody(request, CancelBookingBody)
+  if (!validation.ok) return validation.response
+  const body = validation.data
   const locationId = body.location_id || user.activeLocation?.id || null
-  if (!locationId || !uuidLike.safeParse(locationId).success) {
+  if (!locationId) {
     return NextResponse.json({
       ok: false,
       error: 'Provide location_id in body or set an active location',
-    }, { status: 400 })
-  }
-  if (!body.booking_id || !body.user_id) {
-    return NextResponse.json({
-      ok: false,
-      error: 'booking_id and user_id are required',
     }, { status: 400 })
   }
 

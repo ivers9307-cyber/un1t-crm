@@ -1,7 +1,13 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { resolveRearmPatch } from '@/lib/agent/core'
+import { validateBody } from '@/lib/validate'
+
+const ConversationPatchSchema = z.object({
+  resolved: z.boolean(),
+})
 
 // GET /api/whatsapp/conversations/[id] — get conversation with messages
 export async function GET(request, props) {
@@ -61,10 +67,9 @@ export async function PATCH(request, props) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  const body = await request.json().catch(() => null)
-  if (!body || typeof body.resolved !== 'boolean') {
-    return NextResponse.json({ success: false, error: 'Body must be { resolved: boolean }' }, { status: 400 })
-  }
+  const validation = await validateBody(request, ConversationPatchSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
 
   const db = createServerClient()
   const { data: conversation, error } = await db.from('whatsapp_conversations')

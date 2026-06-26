@@ -22,9 +22,19 @@
 // should move to a background job pattern.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { reclassifyAllContacts } from '@/lib/pipeline-reclassify'
+import { validateBody } from '@/lib/validate'
+import { uuidLike } from '@/lib/schemas'
+
+// All fields optional — an empty POST body is valid (falls back to activeLocation)
+const PipelineReclassifySchema = z.object({
+  location_id: uuidLike.optional(),
+  source:      z.enum(['manual', 'backfill']).optional(),
+  dry_run:     z.boolean().optional(),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -37,8 +47,9 @@ export async function POST(request) {
     return NextResponse.json({ ok: false, error: 'Master only' }, { status: 403 })
   }
 
-  let body = {}
-  try { body = await request.json() } catch { /* body optional */ }
+  const v = await validateBody(request, PipelineReclassifySchema, { allowEmpty: true })
+  if (!v.ok) return v.response
+  const body = v.data
 
   const locationId = body?.location_id || user.activeLocation?.id || null
   if (!locationId) {

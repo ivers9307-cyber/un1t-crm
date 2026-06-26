@@ -6,10 +6,17 @@
 //   Toggle is_active or update label. Same role gate as POST.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { getPersonGroup } from '@/lib/person-links'
 import { logInfo, logWarn } from '@/lib/log'
+import { validateBody } from '@/lib/validate'
+
+const PatchDeviceBody = z.object({
+  is_active: z.boolean().optional(),
+  label: z.string().max(80).nullable().optional(),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -57,8 +64,9 @@ export async function PATCH(request, props) {
     return NextResponse.json({ ok: false, error: 'Admin only' }, { status: 403 })
   }
 
-  let body
-  try { body = await request.json() } catch { body = {} }
+  const validation = await validateBody(request, PatchDeviceBody, { allowEmpty: true })
+  if (!validation.ok) return validation.response
+  const body = validation.data
 
   const updates = {}
   if (typeof body.is_active === 'boolean') updates.is_active = body.is_active

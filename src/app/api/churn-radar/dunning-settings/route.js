@@ -14,9 +14,18 @@
 // Access: churn_radar permission (owner + head_coach by default).
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { validateBody } from '@/lib/validate'
+import { uuidLike } from '@/lib/schemas'
+
+// dunning_sequence_id may be null (clear) or a UUID string (set).
+// Empty string is also valid and treated as null by the route.
+const DunningSettingsSchema = z.object({
+  dunning_sequence_id: z.union([uuidLike, z.literal(''), z.null()]).optional(),
+})
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -75,8 +84,9 @@ export async function PUT(request) {
   const g = await guard()
   if (g.error) return g.error
 
-  let body
-  try { body = await request.json() } catch { body = {} }
+  const v = await validateBody(request, DunningSettingsSchema, { allowEmpty: true })
+  if (!v.ok) return v.response
+  const body = v.data
   const raw = body?.dunning_sequence_id
   const seqId = raw === null || raw === '' || raw === undefined ? null : String(raw)
 

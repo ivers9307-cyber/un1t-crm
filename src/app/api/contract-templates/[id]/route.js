@@ -9,6 +9,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { contractTemplateSchema } from '@/lib/schemas'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 
@@ -42,17 +43,12 @@ export async function PATCH(request, props) {
     return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
   }
 
-  const raw = await request.json().catch(() => ({}))
   // Accept partial updates — re-use the schema with `.partial()` so
   // the wizard can patch a single field (toggle active, rename, etc.)
   // without resending the full body.
-  const parsed = contractTemplateSchema.partial().safeParse(raw)
-  if (!parsed.success) {
-    return NextResponse.json({
-      success: false,
-      error: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; '),
-    }, { status: 400 })
-  }
+  const validation = await validateBody(request, contractTemplateSchema.partial(), { allowEmpty: true })
+  if (!validation.ok) return validation.response
+  const parsed = { data: validation.data }
 
   // Bump version when the body changes — preserves the audit trail
   // that the issued contracts were rendered against an older

@@ -11,6 +11,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getOwnerOrganizationIds } from '@/lib/auth'
 import { contractTemplateSchema } from '@/lib/schemas'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 
@@ -56,14 +57,9 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Master or owner only' }, { status: 403 })
   }
 
-  const raw = await request.json().catch(() => ({}))
-  const parsed = contractTemplateSchema.safeParse(raw)
-  if (!parsed.success) {
-    return NextResponse.json({
-      success: false,
-      error: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; '),
-    }, { status: 400 })
-  }
+  const validation = await validateBody(request, contractTemplateSchema)
+  if (!validation.ok) return validation.response
+  const parsed = { data: validation.data }
 
   // Anchor the template to the issuer's active organisation.
   // Master without an active org context can pick during edit;
