@@ -22,8 +22,14 @@ import { logWarn } from '@/lib/log'
  *
  * @param {string} name — must match a row in public.cron_heartbeats
  *                        (seeded via mig 053 for the three current crons).
+ * @param {object} [outcome] — optional JSON-serialisable summary of this run's
+ *                        work, e.g. { processed: 5, skipped: 0, deadLettered: 1 }.
+ *                        When provided, also writes last_outcome so ops can
+ *                        distinguish "ran and idle" from "ran but broken".
+ *                        When omitted, last_outcome is left unchanged (backward
+ *                        compatible — all existing callers are unaffected).
  */
-export async function stampHeartbeat(name) {
+export async function stampHeartbeat(name, outcome) {
   if (!name || typeof name !== 'string') {
     logWarn('cron-heartbeat', 'invalid name', { name })
     return
@@ -31,9 +37,11 @@ export async function stampHeartbeat(name) {
 
   try {
     const db = createServerClient()
+    const patch = { last_ok_at: new Date().toISOString() }
+    if (outcome !== undefined) patch.last_outcome = outcome
     const { data, error } = await db
       .from('cron_heartbeats')
-      .update({ last_ok_at: new Date().toISOString() })
+      .update(patch)
       .eq('name', name)
       .select('name')
 
