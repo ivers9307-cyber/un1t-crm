@@ -297,23 +297,18 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
     sent_at: timestamp.toISOString(),
   })
 
-  // Get current unread count to increment
-  const { data: currentConv } = await db.from('whatsapp_conversations')
-    .select('unread_count')
-    .eq('id', conversationId)
-    .single()
-
   // Update conversation
   await db.from('whatsapp_conversations').update({
     last_message_at: timestamp.toISOString(),
     last_message_direction: 'inbound',
     last_message_preview: body?.substring(0, 100) || `[${messageType}]`,
-    unread_count: (currentConv?.unread_count || 0) + 1,
     resolved_at: null,
     // AGENT-FOLLOWUP.1 — a reply ends the quiet-cycle: the ladder
     // starts fresh from this message.
     agent_followup_stage: 0,
   }).eq('id', conversationId)
+  // Atomic unread bump (best-effort) — replaces the read-modify-write above.
+  try { await db.rpc('increment_whatsapp_conversation_unread', { p_conversation_id: conversationId }) } catch {}
 
   // Consent keywords — the broadcast footer promises "Reply STOP to
   // Unsubscribe", so honour an exact STOP/START text reply: flip
@@ -446,16 +441,10 @@ async function handleStatusUpdate(db, status) {
         : statusValue === 'read' ? 'total_read'
         : 'total_failed'
 
-      const { data: broadcast } = await db.from('whatsapp_broadcasts')
-        .select(metricField)
-        .eq('id', msg.broadcast_id)
-        .single()
-
-      if (broadcast) {
-        await db.from('whatsapp_broadcasts')
-          .update({ [metricField]: (broadcast[metricField] || 0) + 1 })
-          .eq('id', msg.broadcast_id)
-      }
+      // Atomic; best-effort — a counter must never break the status webhook.
+      try {
+        await db.rpc('increment_whatsapp_broadcast_metric', { p_broadcast_id: msg.broadcast_id, p_metric: metricField })
+      } catch {}
     }
   }
 }
