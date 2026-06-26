@@ -16,6 +16,7 @@ import { createRacePayment } from '@/lib/race-payments'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
 import { getAppUrl } from '@/lib/app-url'
 import { wouldFit } from '@/lib/event-signups'
+import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
 
 /**
  * Register one person for an event when it's FREE for them.
@@ -61,7 +62,8 @@ export async function registerSoloEventEntry(db, { race, waveId, contact }) {
     const { data: waveRegs } = await db.from('race_registrations')
       .select('status, team:teams ( size )')
       .eq('wave_id', wave.id)
-      .eq('status', 'confirmed')
+      // Count reserved-but-unpaid spots too, else concurrent paid signups oversell.
+      .in('status', LIVE_REGISTRATION_STATUSES)
       .limit(2000)
     if (!wouldFit(wave.capacity, waveRegs || [], mode, 1)) return { ok: false, reason: 'wave_full' }
   }
