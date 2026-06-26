@@ -6,6 +6,7 @@ import { fetchScheduledShiftRows } from '@/lib/report-generator'
 import { upsertShiftAssignment } from '@/lib/roster-write'
 import { SYSTEM_PROMPT, TOOLS } from '@/lib/assistant-prompt'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, ADMIN_ROLES } from '@/lib/schemas'
 import {
@@ -364,6 +365,14 @@ export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  }
+
+  // The `assistant` permission gates this route, mirroring the web AppShell
+  // gate (hasPermission(user, 'assistant')). Web hides the bubble and mobile
+  // hides the tile unless the user has it — enforce it server-side too so a
+  // staff user (assistant defaults off) can't call the API directly.
+  if (!hasPermission(user, 'assistant')) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY
