@@ -24,7 +24,7 @@ import Link from 'next/link'
 // BOOKKEEPER-APPROVALS.1 — read `?focus=<id>` so the drill-in from
 // /approvals lands on the right row + correct tab.
 import { useSearchParams } from 'next/navigation'
-import { INVOICE_CATEGORIES } from '@/lib/invoice-extraction'
+import { INVOICE_CATEGORIES } from '@/lib/invoice-categories'
 import XeroAccountPicker from '@/components/invoices/XeroAccountPicker'
 import XeroContactPicker from '@/components/invoices/XeroContactPicker'
 import BulkUploadPanel from '@/components/invoices/BulkUploadPanel'
