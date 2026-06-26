@@ -34,6 +34,49 @@ const Body = z.object({
   reason: z.string().max(500).optional(),
 })
 
+/**
+ * Pure decision logic for whether an order can be refunded and what
+ * amount to refund. Extracted so it can be unit-tested without an HTTP
+ * request or DB round-trip.
+ *
+ * Returns { ok: true, refundAmount } or { ok: false, code, error, status }.
+ */
+export function resolveRefund(order, requestedAmountCents) {
+  if (order.status !== 'completed') {
+    return {
+      ok: false,
+      code: 'invalid_status',
+      error: `Only completed orders can be refunded (current status: ${order.status}).`,
+      status: 409,
+    }
+  }
+  if (order.payment_provider !== 'revolut') {
+    return {
+      ok: false,
+      code: 'unsupported_provider',
+      error: 'Refunds are only supported for Revolut-paid orders. Issue a manual refund via your provider.',
+      status: 400,
+    }
+  }
+  if (!order.payment_provider_ref) {
+    return {
+      ok: false,
+      code: 'no_provider_ref',
+      error: 'Order is missing a Revolut order reference — cannot refund.',
+      status: 422,
+    }
+  }
+  if (requestedAmountCents && requestedAmountCents > order.amount_cents) {
+    return {
+      ok: false,
+      code: 'refund_exceeds_order',
+      error: `Refund amount (${requestedAmountCents}) exceeds order total (${order.amount_cents}).`,
+      status: 400,
+    }
+  }
+  return { ok: true, refundAmount: requestedAmountCents || order.amount_cents }
+}
+
 export async function POST(request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
@@ -69,38 +112,16 @@ export async function POST(request, props) {
   const guard = assertLocationAccessOr404(user, order.location_id)
   if (guard) return guard
 
-  if (order.status !== 'completed') {
+  // Partial vs full — delegates all guards to the pure resolveRefund helper.
+  const resolution = resolveRefund(order, body.amount_cents)
+  if (!resolution.ok) {
     return NextResponse.json({
       success: false,
-      error: `Only completed orders can be refunded (current status: ${order.status}).`,
-      code: 'invalid_status',
-    }, { status: 409 })
+      error: resolution.error,
+      code: resolution.code,
+    }, { status: resolution.status })
   }
-  if (order.payment_provider !== 'revolut') {
-    return NextResponse.json({
-      success: false,
-      error: 'Refunds are only supported for Revolut-paid orders. Issue a manual refund via your provider.',
-      code: 'unsupported_provider',
-    }, { status: 400 })
-  }
-  if (!order.payment_provider_ref) {
-    return NextResponse.json({
-      success: false,
-      error: 'Order is missing a Revolut order reference — cannot refund.',
-      code: 'no_provider_ref',
-    }, { status: 422 })
-  }
-
-  // Partial vs full. amount_cents must be <= the order's amount.
-  const requested = body.amount_cents
-  if (requested && requested > order.amount_cents) {
-    return NextResponse.json({
-      success: false,
-      error: `Refund amount (${requested}) exceeds order total (${order.amount_cents}).`,
-      code: 'refund_exceeds_order',
-    }, { status: 400 })
-  }
-  const refundAmount = requested || order.amount_cents
+  const refundAmount = resolution.refundAmount
 
   // Hit Revolut. RevolutError → surface a clean 502.
   let revolutResult = null
