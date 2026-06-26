@@ -24,6 +24,7 @@ import { dublinTodayStr } from '@/lib/dublin-time'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { buildCachedSystem } from './prompt'
+import { getLocationBranding } from '@/lib/location-branding'
 import {
   shouldAgentReply,
   formatHistoryForClaude,
@@ -162,6 +163,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
     .eq('id', locationId)
     .single()
   const settings = loc?.settings?.customer_agent || null
+  const branding = await getLocationBranding(db, locationId)
 
   // Conversation state: kill switch + linked contact + verification.
   const nameCol = adapter.nameColumn
@@ -288,7 +290,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
     // prefix (base prompt + knowledge). Caches cumulatively after the tool
     // block; the volatile suffix (today + identity override) stays uncached.
     const system = buildCachedSystem({
-      businessName: 'UN1T',
+      businessName: branding.companyName,
       locationName: loc?.name || null,
       agentName: settings?.agent_name || null,
       membershipUrl: settings?.membership_signup_url || null,

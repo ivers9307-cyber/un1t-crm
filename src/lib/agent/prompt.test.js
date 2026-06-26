@@ -197,6 +197,18 @@ describe('buildCustomerSystemPromptParts (cache split)', () => {
   })
 })
 
+describe('buildCustomerSystemPromptParts — businessName', () => {
+  it('uses the provided businessName', () => {
+    const parts = buildCustomerSystemPromptParts({ businessName: 'CCF Autos' })
+    expect(JSON.stringify(parts)).toContain('CCF Autos')
+  })
+
+  it('falls back to UN1T when businessName is absent', () => {
+    const parts = buildCustomerSystemPromptParts({})
+    expect(JSON.stringify(parts)).toContain('UN1T')
+  })
+})
+
 describe('buildCachedSystem (Anthropic system blocks)', () => {
   const opts = {
     businessName: 'UN1T',
