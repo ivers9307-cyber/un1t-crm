@@ -50,6 +50,7 @@ The "if you miss one, you break prod or burn a session" list. Terse on purpose; 
 - **No silent env fallbacks** (`getAppUrl()` throws if unset) and **no `x-api-key`** — Bearer or session only. Standard response shape `{ success, data?, error?, issues? }`.
 - **Consent has two families:** `_administrative` (transactional/reminders) vs `_marketing` (broadcasts). Reminders check `_administrative`; MARKETING WhatsApp templates are refused on transactional paths (Meta policy).
 - **Customer-facing copy/labels must be operator-editable** (settings field + default fallback), not hard-coded.
+- **Branding lives on `company_settings`** (`logo_url`/`favicon_url`/`company_name`, one row per `location_id`) — resolve via `getLocationBranding(db, locationId)`. There is **no `company_branding` table** (just the mig 013 *filename*) and `locations` has no branding columns; either wrong source silently renders no logo (bit both contract + invoice emails).
 - **Background watchers must NEVER `git checkout`/`pull`** (shared worktree — raced foreground once). Read-only `git log`/`gh` only.
 - **Mia stays on the Anthropic Messages API** (not the Agent SDK); **no OpenAI** anywhere (Richard's call — incl. voice transcription).
 
