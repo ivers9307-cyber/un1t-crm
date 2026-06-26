@@ -41,6 +41,7 @@
 // Access: churn_radar permission (owner + head_coach by default).
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
@@ -52,11 +53,21 @@ import { invalidateRadar } from '@/lib/radar-cache'
 import { logWarn, logInfo } from '@/lib/log'
 import { getLocationBranding } from '@/lib/location-branding'
 import { defaultWinbackMessage } from '@/lib/churn-winback'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const RADAR_ACTIONS = ['contacted', 'task_assigned', 'winback_sent', 'outreach_sent', 'payment_reminder', 'snoozed', 'dismissed']
+
+const ChurnRadarActionSchema = z.object({
+  contact_id: z.string().min(1),
+  action: z.string().min(1),
+  note: z.string().max(500).optional(),
+  message: z.string().max(1000).optional(),
+  snooze_days: z.number().optional(),
+  template_name: z.string().optional(),
+})
 
 // Membership columns paymentTroubleKind() needs to re-derive that a
 // member is genuinely behind before any dunning enrol.
@@ -84,11 +95,12 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
   }
 
-  let body
-  try { body = await request.json() } catch { body = {} }
-  const contactId = String(body?.contact_id || '').trim()
-  const action = String(body?.action || '').trim()
-  const note = body?.note ? String(body.note).slice(0, 500) : null
+  const validation = await validateBody(request, ChurnRadarActionSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
+  const contactId = String(body.contact_id).trim()
+  const action = String(body.action).trim()
+  const note = body.note ? String(body.note).slice(0, 500) : null
   if (!contactId || !RADAR_ACTIONS.includes(action)) {
     return NextResponse.json({
       success: false,

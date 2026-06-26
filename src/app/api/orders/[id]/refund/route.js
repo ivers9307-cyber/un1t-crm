@@ -25,6 +25,7 @@ import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { refundOrder, RevolutError } from '@/lib/revolut'
 import { emitEvent, applyTagRules, EVENT_TYPES } from '@/lib/contact-events'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -88,16 +89,9 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
   }
 
-  const raw = await request.json().catch(() => ({}))
-  const parsed = Body.safeParse(raw || {})
-  if (!parsed.success) {
-    return NextResponse.json({
-      success: false,
-      error: 'Invalid request body',
-      details: parsed.error.flatten(),
-    }, { status: 400 })
-  }
-  const body = parsed.data
+  const validation = await validateBody(request, Body, { allowEmpty: true })
+  if (!validation.ok) return validation.response
+  const body = validation.data
 
   const db = createServerClient()
   const { data: order, error: lookupErr } = await db

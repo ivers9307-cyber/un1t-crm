@@ -25,6 +25,7 @@ import { syncOrderFromCarDeposit } from '@/lib/orders'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { logWarn } from '@/lib/log'
 import { buildDepositSmsBody } from '@/lib/deposit-receipts'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -41,14 +42,9 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Not permitted' }, { status: 403 })
   }
 
-  const raw = await request.json().catch(() => ({}))
-  const parsed = Body.safeParse(raw)
-  if (!parsed.success) {
-    return NextResponse.json({
-      success: false,
-      error: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; '),
-    }, { status: 400 })
-  }
+  const validation = await validateBody(request, Body, { allowEmpty: true })
+  if (!validation.ok) return validation.response
+  const parsed = { data: validation.data }
 
   const db = createServerClient()
   const { data: car } = await db

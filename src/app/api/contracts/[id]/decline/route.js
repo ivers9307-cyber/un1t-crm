@@ -16,6 +16,7 @@ import { contractDeclineSchema } from '@/lib/schemas'
 import { canTransition } from '@/lib/contracts'
 import { sendContractDeclinedEmail } from '@/lib/contracts-email'
 import { logAuditEvent } from '@/lib/audit'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 
@@ -24,14 +25,9 @@ export async function POST(request, props) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  const raw = await request.json().catch(() => ({}))
-  const parsed = contractDeclineSchema.safeParse(raw)
-  if (!parsed.success) {
-    return NextResponse.json({
-      success: false,
-      error: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; '),
-    }, { status: 400 })
-  }
+  const validation = await validateBody(request, contractDeclineSchema)
+  if (!validation.ok) return validation.response
+  const parsed = { data: validation.data }
 
   const db = createServerClient()
   const { data: contract, error: rErr } = await db

@@ -17,6 +17,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { enrolContacts } from '@/lib/sequences'
+import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 
@@ -38,14 +39,9 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Email permission required' }, { status: 403 })
   }
 
-  const raw = await request.json().catch(() => ({}))
-  const parsed = Body.safeParse(raw)
-  if (!parsed.success) {
-    return NextResponse.json({
-      success: false,
-      error: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; '),
-    }, { status: 400 })
-  }
+  const validation = await validateBody(request, Body)
+  if (!validation.ok) return validation.response
+  const parsed = { data: validation.data }
 
   const db = createServerClient()
   // Verify sequence exists + the caller can see it (RLS-by-location).
