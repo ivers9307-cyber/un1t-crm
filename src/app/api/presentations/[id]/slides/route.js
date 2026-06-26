@@ -58,6 +58,6 @@ export async function POST(request, { params }) {
     inserted.push(row); pos += 1
   }
 
-  await db.from('presentations').update({ version: deck.version + 1, updated_at: new Date().toISOString() }).eq('id', id)
+  await db.rpc('bump_presentation_version', { p_presentation_id: id })
   return NextResponse.json({ success: true, added: inserted.length })
 }

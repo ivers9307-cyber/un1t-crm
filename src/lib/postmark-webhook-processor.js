@@ -82,14 +82,13 @@ export async function processPostmarkEvent(db, body) {
           .eq('postmark_message_id', messageId)
 
         const { data: openSend } = await db.from('email_sends')
-          .select('id, contact_id, campaign_id, open_count')
+          .select('id, contact_id, campaign_id')
           .eq('postmark_message_id', messageId)
           .single()
 
         if (openSend) {
-          await db.from('email_sends')
-            .update({ open_count: (openSend.open_count || 0) + 1 })
-            .eq('id', openSend.id)
+          // Atomic open counter (best-effort) — replaces the read-modify-write.
+          try { await db.rpc('increment_email_send_opens', { p_send_id: openSend.id }) } catch {}
 
           if (body.FirstOpen) {
             // supabase-js builders are thenables, not Promises — they
@@ -118,18 +117,16 @@ export async function processPostmarkEvent(db, body) {
         const clickedUrl = body.OriginalLink
 
         const { data: clickSend } = await db.from('email_sends')
-          .select('id, contact_id, campaign_id, click_count')
+          .select('id, contact_id, campaign_id')
           .eq('postmark_message_id', messageId)
           .single()
 
         if (clickSend) {
           await db.from('email_sends')
-            .update({
-              status: 'clicked',
-              clicked_at: now,
-              click_count: (clickSend.click_count || 0) + 1,
-            })
+            .update({ status: 'clicked', clicked_at: now })
             .eq('id', clickSend.id)
+          // Atomic click counter (best-effort) — replaces the read-modify-write.
+          try { await db.rpc('increment_email_send_clicks', { p_send_id: clickSend.id }) } catch {}
 
           const { data: recipient } = await db.from('campaign_recipients')
             .select('clicked_links, clicked_at')

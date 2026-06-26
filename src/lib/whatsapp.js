@@ -619,10 +619,8 @@ export async function sendBroadcast(broadcastId) {
     total_failed: failedCount,
   }).eq('id', broadcastId)
 
-  // Update template send count
-  await db.from('whatsapp_templates').update({
-    total_sent: template.total_sent + sentCount,
-  }).eq('id', template.id)
+  // Update template send count (atomic; best-effort).
+  try { await db.rpc('increment_whatsapp_template_sent', { p_template_id: template.id, p_delta: sentCount }) } catch {}
 
   return { sent: sentCount, failed: failedCount, total: contacts.length }
 }

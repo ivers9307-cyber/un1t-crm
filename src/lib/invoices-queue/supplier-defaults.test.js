@@ -35,7 +35,7 @@ function defaultsChain(result, upsertSpy) {
   return chain
 }
 
-function makeDb({ contacts, defaultRow, upsertSpy } = {}) {
+function makeDb({ contacts, defaultRow, upsertSpy, rpcCalls } = {}) {
   return {
     from(table) {
       if (table === 'xero_contacts') {
@@ -45,6 +45,10 @@ function makeDb({ contacts, defaultRow, upsertSpy } = {}) {
         return defaultsChain({ data: defaultRow ?? null, error: null }, upsertSpy)
       }
       throw new Error(`unexpected table ${table}`)
+    },
+    rpc(name, args) {
+      if (rpcCalls) rpcCalls.push({ name, args })
+      return Promise.resolve({ data: null, error: null })
     },
   }
 }
@@ -130,34 +134,48 @@ describe('getSupplierDefault', () => {
 
 describe('recordSupplierDefault', () => {
   it('no-ops without an xero_account_id', async () => {
-    const upsert = vi.fn(() => Promise.resolve({ data: null, error: null }))
-    const db = makeDb({ upsertSpy: upsert })
+    const rpcCalls = []
+    const db = makeDb({ rpcCalls })
     await recordSupplierDefault(db, { locationId: 'loc1', xeroContactId: 'c1' })
-    expect(upsert).not.toHaveBeenCalled()
+    expect(rpcCalls).toHaveLength(0)
   })
 
-  it('upserts and increments use_count from the existing row', async () => {
-    const upsert = vi.fn(() => Promise.resolve({ data: null, error: null }))
-    const db = makeDb({ defaultRow: { use_count: 3 }, upsertSpy: upsert })
+  it('calls upsert_supplier_default rpc with the correct p_* args', async () => {
+    const rpcCalls = []
+    const db = makeDb({ rpcCalls })
     await recordSupplierDefault(db, {
       locationId: 'loc1', xeroContactId: 'c1', supplierName: 'Acme Ltd',
       accountCode: '420', xeroAccountId: 'acc-1', category: 'utilities',
     })
-    expect(upsert).toHaveBeenCalledTimes(1)
-    const [payload, opts] = upsert.mock.calls[0]
-    expect(payload.use_count).toBe(4)
-    expect(payload.default_xero_account_id).toBe('acc-1')
-    expect(payload.default_account_code).toBe('420')
-    expect(payload.default_category).toBe('utilities')
-    expect(opts).toEqual({ onConflict: 'location_id,xero_contact_id' })
+    expect(rpcCalls).toContainEqual({
+      name: 'upsert_supplier_default',
+      args: {
+        p_location_id: 'loc1',
+        p_xero_contact_id: 'c1',
+        p_supplier_name: 'Acme Ltd',
+        p_account_code: '420',
+        p_xero_account_id: 'acc-1',
+        p_category: 'utilities',
+      },
+    })
   })
 
-  it('starts use_count at 1 when there is no existing row', async () => {
-    const upsert = vi.fn(() => Promise.resolve({ data: null, error: null }))
-    const db = makeDb({ defaultRow: null, upsertSpy: upsert })
+  it('passes null for optional fields when omitted', async () => {
+    const rpcCalls = []
+    const db = makeDb({ rpcCalls })
     await recordSupplierDefault(db, {
       locationId: 'loc1', xeroContactId: 'c1', accountCode: '400', xeroAccountId: 'acc-9',
     })
-    expect(upsert.mock.calls[0][0].use_count).toBe(1)
+    expect(rpcCalls).toContainEqual({
+      name: 'upsert_supplier_default',
+      args: {
+        p_location_id: 'loc1',
+        p_xero_contact_id: 'c1',
+        p_supplier_name: null,
+        p_account_code: '400',
+        p_xero_account_id: 'acc-9',
+        p_category: null,
+      },
+    })
   })
 })

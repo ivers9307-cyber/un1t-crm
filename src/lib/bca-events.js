@@ -66,9 +66,8 @@ export async function recordBcaPostmarkEvent(db, submissionId, body) {
     raw_payload: body,
   })
 
-  // Rollup columns. Each branch fetches the existing row so first_*
-  // is COALESCEd (only set on the very first event of its kind) and
-  // counts are incremented atomically.
+  // Rollup columns. Open/Click counters go via record_bca_event RPC
+  // (atomic increment + COALESCE). Other fields are safe direct patch.
   const patch = { last_postmark_event_at: now }
   switch (recordType) {
     case 'Delivery': {
@@ -77,29 +76,9 @@ export async function recordBcaPostmarkEvent(db, submissionId, body) {
       break
     }
     case 'Open': {
-      patch.last_opened_at = body.ReceivedAt || now
-      // first_opened_at + open_count handled via RPC-style read-modify
-      // below (no atomic increment helper for BCA yet — at the
-      // volumes here, RMW is fine; concurrent opens for the same
-      // submission are vanishingly rare).
-      const { data: row } = await db
-        .from('car_bca_submissions')
-        .select('first_opened_at, open_count')
-        .eq('id', submissionId)
-        .single()
-      patch.first_opened_at = row?.first_opened_at || body.ReceivedAt || now
-      patch.open_count = (row?.open_count || 0) + 1
       break
     }
     case 'Click': {
-      patch.last_clicked_at = body.ReceivedAt || now
-      const { data: row } = await db
-        .from('car_bca_submissions')
-        .select('first_clicked_at, click_count')
-        .eq('id', submissionId)
-        .single()
-      patch.first_clicked_at = row?.first_clicked_at || body.ReceivedAt || now
-      patch.click_count = (row?.click_count || 0) + 1
       break
     }
     case 'Bounce': {
@@ -119,6 +98,12 @@ export async function recordBcaPostmarkEvent(db, submissionId, body) {
     .update(patch)
     .eq('id', submissionId)
   if (error) return { ok: false, error: error.message }
+
+  if (recordType === 'Open' || recordType === 'Click') {
+    const p_event = recordType === 'Open' ? 'open' : 'click'
+    await db.rpc('record_bca_event', { p_submission_id: submissionId, p_event, p_at: body.ReceivedAt || now })
+  }
+
   return { ok: true, eventType }
 }
 
@@ -134,23 +119,13 @@ export async function recordBcaPostmarkEvent(db, submissionId, body) {
  * @param {{ip?: string|null, userAgent?: string|null}} ctx
  */
 export async function recordBcaPageView(db, submissionId, ctx = {}) {
-  const now = new Date().toISOString()
   await db.from('car_bca_submission_events').insert({
     submission_id: submissionId,
     event_type: 'page_view',
     ip: ctx.ip || null,
     user_agent: ctx.userAgent || null,
   })
-  const { data: row } = await db
-    .from('car_bca_submissions')
-    .select('first_viewed_at, view_count')
-    .eq('id', submissionId)
-    .single()
-  await db.from('car_bca_submissions').update({
-    first_viewed_at: row?.first_viewed_at || now,
-    last_viewed_at: now,
-    view_count: (row?.view_count || 0) + 1,
-  }).eq('id', submissionId)
+  await db.rpc('record_bca_event', { p_submission_id: submissionId, p_event: 'view' })
 }
 
 /**
@@ -162,7 +137,6 @@ export async function recordBcaPageView(db, submissionId, ctx = {}) {
  * @param {{type: 'merged'|'file', slug?: string|null, ip?: string|null, userAgent?: string|null}} args
  */
 export async function recordBcaDownload(db, submissionId, args = {}) {
-  const now = new Date().toISOString()
   const isMerged = args.type === 'merged'
   await db.from('car_bca_submission_events').insert({
     submission_id: submissionId,
@@ -172,16 +146,7 @@ export async function recordBcaDownload(db, submissionId, args = {}) {
     user_agent: args.userAgent || null,
   })
   if (isMerged) {
-    const { data: row } = await db
-      .from('car_bca_submissions')
-      .select('first_merged_download_at, merged_download_count')
-      .eq('id', submissionId)
-      .single()
-    await db.from('car_bca_submissions').update({
-      first_merged_download_at: row?.first_merged_download_at || now,
-      last_merged_download_at: now,
-      merged_download_count: (row?.merged_download_count || 0) + 1,
-    }).eq('id', submissionId)
+    await db.rpc('record_bca_event', { p_submission_id: submissionId, p_event: 'download_merged' })
   }
   // For individual-file downloads we don't roll up onto the submission
   // row (would add 1 column per slug); per-file counts come from a

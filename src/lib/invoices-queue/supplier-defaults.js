@@ -64,10 +64,9 @@ export async function getSupplierDefault(db, locationId, xeroContactId) {
 
 /**
  * Remember (or refresh) a supplier's coding after an invoice is
- * approved. Upsert keyed (location_id, xero_contact_id); use_count is
- * bumped via a read-then-write — fine at the one-operator-at-a-time
- * cadence of invoice approvals. No-op without an xero_account_id —
- * there's nothing worth remembering.
+ * approved. Delegates to the upsert_supplier_default RPC which
+ * atomically increments use_count and stamps last_used_at.
+ * No-op without an xero_account_id — there's nothing worth remembering.
  */
 export async function recordSupplierDefault(db, {
   locationId, xeroContactId, supplierName,
@@ -75,25 +74,14 @@ export async function recordSupplierDefault(db, {
 }) {
   if (!locationId || !xeroContactId || !xeroAccountId) return
 
-  const { data: existing } = await db
-    .from('xero_supplier_defaults')
-    .select('use_count')
-    .eq('location_id', locationId)
-    .eq('xero_contact_id', xeroContactId)
-    .maybeSingle()
-
-  await db
-    .from('xero_supplier_defaults')
-    .upsert({
-      location_id: locationId,
-      xero_contact_id: xeroContactId,
-      supplier_name: supplierName || null,
-      default_account_code: accountCode || null,
-      default_xero_account_id: xeroAccountId,
-      default_category: category || null,
-      use_count: (existing?.use_count || 0) + 1,
-      last_used_at: new Date().toISOString(),
-    }, { onConflict: 'location_id,xero_contact_id' })
+  await db.rpc('upsert_supplier_default', {
+    p_location_id: locationId,
+    p_xero_contact_id: xeroContactId,
+    p_supplier_name: supplierName || null,
+    p_account_code: accountCode || null,
+    p_xero_account_id: xeroAccountId,
+    p_category: category || null,
+  })
 }
 
 /**

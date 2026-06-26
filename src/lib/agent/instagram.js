@@ -184,15 +184,14 @@ export async function handleInstagramInbound(db, event) {
   })
 
   // Bump conversation summary + unread.
-  const { data: convNow } = await db.from('instagram_conversations')
-    .select('unread_count').eq('id', conversationId).single()
   await db.from('instagram_conversations').update({
     last_message_at: ts,
     last_message_direction: 'inbound',
     resolved_at: null,
     last_message_preview: body.substring(0, 100),
-    unread_count: (convNow?.unread_count || 0) + 1,
   }).eq('id', conversationId)
+  // Atomic unread bump (best-effort) — replaces the read-modify-write above.
+  try { await db.rpc('increment_instagram_conversation_unread', { p_conversation_id: conversationId }) } catch {}
 
   // Push notification fan-out for inbound Instagram (MOBILE-MSG.M2) —
   // mirrors the WhatsApp webhook: assigned user first, otherwise
