@@ -45,6 +45,7 @@ export default function ConsultationForm({
   const [date, setDate] = useState(toDateInput(consultation?.consulted_at))
   const [coachId, setCoachId] = useState(consultation?.coach_id || selectedCoachId || '')
   const [notes, setNotes] = useState(consultation?.notes || '')
+  const [memberFeedback, setMemberFeedback] = useState(consultation?.member_feedback || '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
@@ -60,6 +61,8 @@ export default function ConsultationForm({
       consulted_at: `${date}T12:00:00Z`,
       coach_id: coachId || undefined,
       notes: notes.trim() || undefined,
+      // null (not undefined) so clearing the box clears it server-side on edit.
+      member_feedback: memberFeedback.trim() ? memberFeedback.trim() : null,
     }
 
     const url = isEdit
@@ -132,6 +135,19 @@ export default function ConsultationForm({
             onChange={(e) => setNotes(e.target.value)}
             rows={4}
             placeholder="What was discussed, agreed actions, observations…"
+            className="w-full rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-sm text-un1t-text"
+          />
+        )}
+      </Field>
+
+      <Field id={`consult-feedback-${consultation?.id || 'new'}`} label="Feedback for member (shown in their app)">
+        {(p) => (
+          <textarea
+            {...p}
+            value={memberFeedback}
+            onChange={(e) => setMemberFeedback(e.target.value)}
+            rows={3}
+            placeholder="A short note your member sees in the app — wins, focus for next time…"
             className="w-full rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-sm text-un1t-text"
           />
         )}
