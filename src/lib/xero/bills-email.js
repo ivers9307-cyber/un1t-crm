@@ -134,7 +134,7 @@ export async function sendCarDocumentBillEmail(documentId) {
 
   const subject = `${docLabel} — ${reg}`
   const htmlBody = `
-    <p>Forwarded from UN1T CRM for car <strong>${reg}</strong> (${car.make || 'Tesla'} ${car.model || ''}).</p>
+    <p>Forwarded from UN1T CRM for car <strong>${reg}</strong> (${[car.make, car.model].filter(Boolean).join(' ') || 'vehicle'}).</p>
     <p>Document type: <strong>${docLabel}</strong></p>
     <p>Original filename: ${doc.file_name || 'n/a'}</p>
     <p>Xero will OCR this attachment and create a draft bill in Bills to pay → Draft.</p>

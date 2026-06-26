@@ -194,4 +194,23 @@ describe('buildInvoicePayload — line description', () => {
     expect(desc).toContain('IE reg 221D37742')
     expect(desc).toContain('VIN LRW3F7FS5NC505371')
   })
+
+  it('does not double-print the make (no hard-coded "Tesla" prefix)', () => {
+    const desc = buildInvoicePayload(completeCar(), 'CID', null, '200', 'OUTPUT2').Invoices[0].LineItems[0].Description
+    expect(desc).not.toMatch(/Tesla\s+Tesla/)          // the old bug: literal 'Tesla' + car.make 'Tesla'
+    expect(desc.match(/Tesla/g) || []).toHaveLength(1)  // the make appears exactly once
+    expect(desc.startsWith('Tesla Model 3')).toBe(true)
+  })
+
+  it('uses the actual make for a non-Tesla vehicle', () => {
+    const desc = buildInvoicePayload(completeCar({ make: 'BMW', model: '3 Series' }), 'CID', null, '200', 'OUTPUT2').Invoices[0].LineItems[0].Description
+    expect(desc).toContain('BMW 3 Series')
+    expect(desc).not.toContain('Tesla')
+  })
+
+  it('falls back to a make-neutral description when the vehicle fields are all blank', () => {
+    const blank = completeCar({ make: '', model: '', vehicle_year: null, irish_reg: '', vin: '' })
+    const desc = buildInvoicePayload(blank, 'CID', null, '200', 'OUTPUT2').Invoices[0].LineItems[0].Description
+    expect(desc).toBe('Imported vehicle')
+  })
 })
