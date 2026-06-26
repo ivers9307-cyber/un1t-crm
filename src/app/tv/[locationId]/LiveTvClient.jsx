@@ -15,7 +15,7 @@
 //   - No interactivity — touch input on TV browsers is unreliable
 
 import { useEffect, useMemo, useState } from 'react'
-import { buildTimeline, computeEffectiveElapsedMs, resolveTimerState } from '@/lib/class-timer'
+import { buildTimeline, computeEffectiveElapsedMs, resolveTimerState, SEG_COLOR } from '@/lib/class-timer'
 
 const POLL_MS = 2000
 
@@ -25,15 +25,6 @@ const ZONE_BG = {
   3: '#047857', // green
   4: '#b45309', // amber/yellow
   5: '#b91c1c', // red
-}
-
-// CLASS-TIMER — segment-type colours on the black TV (bright-on-dark).
-const SEG_COLOR = {
-  work: '#EF4444',    // red — push
-  rest: '#10B981',    // green — recover
-  prep: '#9CA3AF',    // grey
-  station: '#3B82F6', // blue
-  custom: '#A78BFA',  // violet
 }
 
 export default function LiveTvClient({ locationId }) {
