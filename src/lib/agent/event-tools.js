@@ -260,6 +260,7 @@ export async function executeEventTool(toolName, input, ctx) {
     const waveIds = events.flatMap((e) => (e.waves || []).map((w) => w.id))
     const takenByWave = {}
     if (waveIds.length) {
+      // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- agent informational spots-left across a race's waves; domain-bounded under 1000
       const { data: regs } = await db.from('race_registrations')
         .select('wave_id, status')
         .in('wave_id', waveIds)

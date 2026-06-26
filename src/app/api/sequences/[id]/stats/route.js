@@ -23,6 +23,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { selectAll } from '@/lib/select-all'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -48,14 +49,18 @@ export async function GET(_request, props) {
   if (guard) return guard
 
   // Per-step email_sends rows. Pull the lot, aggregate client-side
-  // — Supabase JS doesn't expose GROUP BY directly. Capped at 5k
-  // rows; if a sequence ever needs more, add a SQL view.
-  const { data: sends, error: sendsErr } = await db
-    .from('email_sends')
-    .select('sequence_step_id, status, opened_at, clicked_at, bounced_at, complained_at')
-    .eq('sequence_id', params.id)
-    .limit(5000)
-  if (sendsErr) {
+  // — Supabase JS doesn't expose GROUP BY directly. Paginates via
+  // selectAll (the old .limit(1000) PostgREST cap silently truncated a
+  // busy sequence's stats); if this ever gets heavy, add a SQL view.
+  let sends
+  try {
+    sends = await selectAll((from, to) => db
+      .from('email_sends')
+      .select('sequence_step_id, status, opened_at, clicked_at, bounced_at, complained_at')
+      .eq('sequence_id', params.id)
+      .order('id', { ascending: true })
+      .range(from, to))
+  } catch (sendsErr) {
     return NextResponse.json({ success: false, error: sendsErr.message }, { status: 500 })
   }
 
@@ -75,14 +80,24 @@ export async function GET(_request, props) {
     if (s.status === 'failed') agg.failed += 1
   }
 
-  // Enrolment-level totals.
+  // Enrolment-level totals. Paginated via selectAll (the old
+  // .limit(10_000) was silently capped at the 1000-row PostgREST
+  // ceiling). Best-effort: an error here shouldn't fail the whole
+  // stats response, so swallow it and report zeroes (matches the
+  // prior un-checked behaviour).
   const enrolmentStats = { total: 0, active: 0, completed: 0, exited: 0, paused: 0 }
   const exitReasons = {}
-  const { data: enrolments } = await db
-    .from('sequence_enrollments')
-    .select('status, exit_reason')
-    .eq('sequence_id', params.id)
-    .limit(10_000)
+  let enrolments = []
+  try {
+    enrolments = await selectAll((from, to) => db
+      .from('sequence_enrollments')
+      .select('status, exit_reason')
+      .eq('sequence_id', params.id)
+      .order('id', { ascending: true })
+      .range(from, to))
+  } catch {
+    enrolments = []
+  }
   for (const e of (enrolments || [])) {
     enrolmentStats.total += 1
     if (e.status === 'active') enrolmentStats.active += 1

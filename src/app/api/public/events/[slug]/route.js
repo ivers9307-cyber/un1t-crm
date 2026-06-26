@@ -52,6 +52,7 @@ export async function GET(_request, props) {
     let isFull = false
     if (w.capacity != null) {
       if (mode === 'people') {
+        // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- wave-capacity gate; a single race wave never holds >1000 registrations
         const { data: waveRegs } = await db
           .from('race_registrations')
           .select('status, team:teams ( size )')

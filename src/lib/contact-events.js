@@ -214,12 +214,13 @@ export async function applyTagRules({ db, contactId }) {
   if (!contact) return result
 
   // Pull all events for this contact, time-ascending.
+  // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- hard cap; the rules engine doesn't need unbounded contact history
   const { data: events } = await db
     .from('contact_events')
     .select('event_type, occurred_at, source_type, source_id, event_metadata')
     .eq('contact_id', contactId)
     .order('occurred_at', { ascending: true })
-    .limit(1000) // hard cap; rules don't need unbounded history
+    .limit(1000)
 
   const eventList = events || []
 

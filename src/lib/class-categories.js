@@ -39,8 +39,8 @@ export function mergeSeenWithMappings(seenNames = [], mappings = []) {
  */
 export async function loadSeenClassCategories(db, locationId) {
   const [{ data: hrRows }, { data: occRows }, { data: mappings }] = await Promise.all([
-    db.from('heart_rate_sessions').select('class_name').eq('location_id', locationId).not('class_name', 'is', null).limit(1000),
-    db.from('class_occurrences').select('name').eq('location_id', locationId).limit(1000),
+    db.from('heart_rate_sessions').select('class_name').eq('location_id', locationId).not('class_name', 'is', null).limit(1000), // eslint-disable-line guardrails/no-uncapped-supabase-limit -- distinct class names at a location; tiny set, 1000 captures every name (see fn doc)
+    db.from('class_occurrences').select('name').eq('location_id', locationId).limit(1000), // eslint-disable-line guardrails/no-uncapped-supabase-limit -- distinct class names; tiny set, 1000 captures every name
     db.from('class_categories').select('class_name_normalized, category').eq('location_id', locationId),
   ])
   const seen = [

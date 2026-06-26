@@ -22,6 +22,8 @@ on:
       - '.eslintrc.json'
       - 'eslint.config.mjs'
       - 'eslint.mobile-imports.config.mjs'
+      - 'eslint.guardrails.config.mjs'
+      - 'eslint-rules/**'
       - 'vitest.config.js'
       - 'jsconfig.json'
       # scripts/** added because scripts/check-mobile-parity.mjs is
@@ -48,6 +50,8 @@ on:
       - '.eslintrc.json'
       - 'eslint.config.mjs'
       - 'eslint.mobile-imports.config.mjs'
+      - 'eslint.guardrails.config.mjs'
+      - 'eslint-rules/**'
       - 'vitest.config.js'
       - 'jsconfig.json'
       - 'scripts/**'
@@ -95,3 +99,10 @@ jobs:
       # authorize the caller itself. See scripts/check-route-guards.mjs.
       - name: Route guard presence
         run: npm run check:route-guards
+
+      # Catches the audit's recurring silent-data-loss classes — a .catch on a
+      # supabase thenable (throws, query never runs) and a .limit(>=1000) without
+      # .range() (PostgREST silently caps at 1000 rows). ERROR-level custom ESLint
+      # rules in a scoped config. See eslint.guardrails.config.mjs.
+      - name: Supabase guardrails
+        run: npm run check:guardrails
