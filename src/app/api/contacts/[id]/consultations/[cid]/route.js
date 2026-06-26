@@ -21,6 +21,9 @@ const UpdateConsultationSchema = z.object({
   consulted_at: z.string().optional(),
   coach_id: uuidLike.optional(),
   notes: z.string().optional(),
+  // Coach-authored feedback shown to the member in the champ-app (mig 318);
+  // distinct from the staff-only `notes`. Nullable so it can be cleared.
+  member_feedback: z.string().nullable().optional(),
 })
 
 // ============================================================
@@ -64,6 +67,7 @@ export async function PUT(request, props) {
   if (body.consulted_at !== undefined) updates.consulted_at = body.consulted_at
   if (body.coach_id !== undefined) updates.coach_id = body.coach_id
   if (body.notes !== undefined) updates.notes = body.notes
+  if (body.member_feedback !== undefined) updates.member_feedback = body.member_feedback
 
   const { data, error } = await db
     .from('consultations')

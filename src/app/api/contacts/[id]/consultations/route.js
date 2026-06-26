@@ -21,6 +21,9 @@ const CreateConsultationSchema = z.object({
   consulted_at: z.string().optional(),
   coach_id: uuidLike.optional(),
   notes: z.string().optional(),
+  // Coach-authored feedback shown to the member in the champ-app (mig 318);
+  // distinct from the staff-only `notes`. Nullable so it can be cleared.
+  member_feedback: z.string().nullable().optional(),
 })
 
 // ============================================================
@@ -63,6 +66,7 @@ export async function POST(request, props) {
     created_by: user.id,
     coach_id: body.coach_id || user.id,
     notes: body.notes,
+    member_feedback: body.member_feedback ?? null,
   }
 
   // Only set consulted_at if provided — otherwise let the DB default to now().
