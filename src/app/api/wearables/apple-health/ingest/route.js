@@ -26,10 +26,18 @@ import { createServerClient } from '@/lib/supabase'
 import { resolveCustomerContact } from '@/lib/customer-auth'
 import { mapAppleHealthWorkoutToSession } from '@/lib/apple-health-map'
 import { validateBody } from '@/lib/validate'
+import { applyWeightObservation } from '@/lib/body-metrics'
+import { parseBodyBlock } from '@/lib/apple-health-body'
 
 const AppleHealthIngestSchema = z.object({
   workouts: z.array(z.any()).optional(),
   healthMetrics: z.array(z.any()).optional(),
+  body: z.object({
+    weight_kg: z.number().optional(),
+    weight_at: z.string().optional(),
+    dob: z.string().optional(),
+    biological_sex: z.string().optional(),
+  }).optional(),
 }).passthrough()
 import { resolveMaxHr, resolveScoringConfig } from '@/lib/heart-rate'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
@@ -177,5 +185,29 @@ export async function POST(request) {
     }
   }
 
-  return NextResponse.json({ success: true, ingested, deduped, finalised, metricsUpserted })
+  // Body metrics (weight + dob + biological sex) → canonical contacts fields.
+  // Weight freshest-wins; dob/gender only-if-null (never clobber Glofox / an
+  // explicit member choice). Best-effort — never fails the ingest.
+  let bodyApplied = null
+  try {
+    const parsedBody = parseBodyBlock(body?.body)
+    if (parsedBody.weightKg != null) {
+      await applyWeightObservation(db, {
+        contactId: contact.id, weightKg: parsedBody.weightKg, source: 'apple_health',
+        observedAt: parsedBody.weightAt || new Date().toISOString(),
+      })
+    }
+    if (parsedBody.dob || parsedBody.gender) {
+      const { data: cur } = await db.from('contacts').select('dob, gender').eq('id', contact.id).maybeSingle()
+      const patch = {}
+      if (parsedBody.dob && !cur?.dob) patch.dob = parsedBody.dob
+      if (parsedBody.gender && !cur?.gender) patch.gender = parsedBody.gender
+      if (Object.keys(patch).length) await db.from('contacts').update(patch).eq('id', contact.id)
+    }
+    bodyApplied = { weight: parsedBody.weightKg != null, dob: !!parsedBody.dob, gender: !!parsedBody.gender }
+  } catch (e) {
+    console.warn(`[apple-health-ingest] body block failed for contact ${contact.id}: ${e?.message || e}`)
+  }
+
+  return NextResponse.json({ success: true, ingested, deduped, finalised, metricsUpserted, bodyApplied })
 }

@@ -24,10 +24,14 @@ const WORKOUT = {
 }
 function reqWith(body) { return { json: async () => body } }
 
-// In-memory Supabase mock: per-table maybeSingle fixtures, records inserts + upserts.
-function makeDb({ location = { id: 'loc-1', settings: {} }, existingWorkout = null, richer = null } = {}) {
+// In-memory Supabase mock: per-table maybeSingle fixtures, records inserts + upserts + updates.
+function makeDb({ location = { id: 'loc-1', settings: {} }, existingWorkout = null, richer = null, contact = {} } = {}) {
   const inserts = []
   const upserts = []
+  const updates = []
+  // contacts.maybeSingle fixture: the booking lookup needs glofox_member_id; the
+  // body block reads weight_kg/_at + dob/gender. Caller overrides via `contact`.
+  const contactRow = { glofox_member_id: 'gm-1', weight_kg: null, weight_kg_at: null, dob: null, gender: null, ...contact }
   function from(table) {
     const b = {}
     b.select = () => b
@@ -37,9 +41,10 @@ function makeDb({ location = { id: 'loc-1', settings: {} }, existingWorkout = nu
     b.limit = () => b
     b.insert = (payload) => { b._payload = payload; return b }
     b.upsert = (rows) => { upserts.push({ table, rows }); return Promise.resolve({ error: null }) }
+    b.update = (payload) => { b._update = payload; return b }
     b.maybeSingle = () => {
       if (table === 'locations') return Promise.resolve({ data: location })
-      if (table === 'contacts') return Promise.resolve({ data: { glofox_member_id: 'gm-1' } })
+      if (table === 'contacts') return Promise.resolve({ data: contactRow })
       if (table === 'heart_rate_sessions') {
         return Promise.resolve({ data: b._dedupKind === 'richer' ? richer : existingWorkout })
       }
@@ -49,9 +54,14 @@ function makeDb({ location = { id: 'loc-1', settings: {} }, existingWorkout = nu
       inserts.push({ table, payload: b._payload })
       return Promise.resolve({ data: { id: 'sess-new' }, error: null })
     }
+    // .update(...).eq(...) resolves as a thenable-less promise once awaited.
+    b.then = (resolve) => {
+      if (b._update !== undefined) updates.push({ table, payload: b._update })
+      return Promise.resolve({ data: null, error: null }).then(resolve)
+    }
     return b
   }
-  return { from, _inserts: inserts, _upserts: upserts }
+  return { from, _inserts: inserts, _upserts: upserts, _updates: updates }
 }
 
 beforeEach(() => {
@@ -148,6 +158,49 @@ describe('POST /api/wearables/apple-health/ingest', () => {
     expect(db._upserts[0].table).toBe('member_health_metrics')
     expect(db._upserts[0].rows).toHaveLength(2)
     expect(db._upserts[0].rows[0]).toEqual(expect.objectContaining({ contact_id: 'c-1', metric: 'resting_heart_rate', source: 'apple_health' }))
+  })
+
+  it('body block → weight applied (freshest-wins) + dob/gender filled when contact null', async () => {
+    const db = makeDb({ contact: { weight_kg: null, weight_kg_at: null, dob: null, gender: null } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(reqWith({
+      workouts: [],
+      body: { weight_kg: 82.5, weight_at: '2026-06-25T07:00:00Z', biological_sex: 'male', dob: '1990-04-01' },
+    }))
+    const json = await res.json()
+    expect(json.bodyApplied).toEqual({ weight: true, dob: true, gender: true })
+    // weight update (via applyWeightObservation) + the dob/gender patch.
+    const weightUpd = db._updates.find((u) => u.table === 'contacts' && u.payload.weight_kg != null)
+    expect(weightUpd.payload).toEqual(expect.objectContaining({ weight_kg: 82.5, weight_kg_source: 'apple_health', weight_kg_at: '2026-06-25T07:00:00Z' }))
+    const dobUpd = db._updates.find((u) => u.table === 'contacts' && (u.payload.dob || u.payload.gender))
+    expect(dobUpd.payload).toEqual({ dob: '1990-04-01', gender: 'male' })
+  })
+
+  it('body block → existing dob+gender NOT overwritten (only-if-null)', async () => {
+    const db = makeDb({ contact: { dob: '1980-01-01', gender: 'female', weight_kg: null, weight_kg_at: null } })
+    createServerClient.mockReturnValue(db)
+    const res = await POST(reqWith({
+      workouts: [],
+      body: { weight_kg: 70, biological_sex: 'male', dob: '1990-04-01' },
+    }))
+    const json = await res.json()
+    expect(json.bodyApplied).toEqual({ weight: true, dob: true, gender: true })
+    // dob/gender already set → the patch must be empty, so NO dob/gender update fired.
+    const dobUpd = db._updates.find((u) => u.table === 'contacts' && (u.payload.dob || u.payload.gender))
+    expect(dobUpd).toBeUndefined()
+    // weight still applied (freshest-wins; contact had none).
+    const weightUpd = db._updates.find((u) => u.table === 'contacts' && u.payload.weight_kg != null)
+    expect(weightUpd.payload).toEqual(expect.objectContaining({ weight_kg: 70, weight_kg_source: 'apple_health' }))
+  })
+
+  it('no body block → no-op, no contacts update (backward-compatible)', async () => {
+    const db = makeDb()
+    createServerClient.mockReturnValue(db)
+    const res = await POST(reqWith({ workouts: [] }))
+    const json = await res.json()
+    expect(json.success).toBe(true)
+    expect(json.bodyApplied).toEqual({ weight: false, dob: false, gender: false })
+    expect(db._updates.filter((u) => u.table === 'contacts')).toHaveLength(0)
   })
 
   it('skips a workout missing its id/start_time (no dedup key / time anchor)', async () => {
