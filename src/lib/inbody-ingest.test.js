@@ -19,11 +19,13 @@
 // We mock only `createServerClient` (via the module alias @/lib/supabase) so
 // the ingest + phone-normalisation logic runs as written.
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/body-metrics', () => ({ applyWeightObservation: vi.fn().mockResolvedValue(true) }))
 
 import { ingestScan, matchContactId } from './inbody-ingest.js'
+import { applyWeightObservation } from '@/lib/body-metrics'
 
 // ─── DB mock builder ──────────────────────────────────────────────────────────
 
@@ -259,5 +261,42 @@ describe('ingestScan — idempotency + attribution', () => {
       locationId: 'loc-1',
     })
     expect(db._upserted[0].row.source).toBe('lookinbody')
+  })
+})
+
+// ─── ingestScan — canonical weight feed ──────────────────────────────────────
+
+describe('ingestScan — canonical weight feed', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('calls applyWeightObservation with inbody source when a scan with weight matches a contact', async () => {
+    const db = makeDb({
+      contacts: [{ id: 'c-42', phone: '+353851234567', wa_phone: null }],
+    })
+    await ingestScan(db, {
+      telHp: '0851234567',
+      testDatetime: '20260115120000',
+      raw: rawScan,
+      locationId: 'loc-1',
+    })
+    expect(applyWeightObservation).toHaveBeenCalledOnce()
+    const args = applyWeightObservation.mock.calls[0][1]
+    expect(args.contactId).toBe('c-42')
+    expect(args.weightKg).toBeCloseTo(82.4)
+    expect(args.source).toBe('inbody')
+    expect(typeof args.observedAt).toBe('string')
+  })
+
+  it('does NOT call applyWeightObservation when there is no matched contact', async () => {
+    const db = makeDb({ contacts: [] })
+    await ingestScan(db, {
+      telHp: '0851234567',
+      testDatetime: '20260115130000',
+      raw: rawScan,
+      locationId: 'loc-1',
+    })
+    expect(applyWeightObservation).not.toHaveBeenCalled()
   })
 })

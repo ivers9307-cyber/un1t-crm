@@ -8,6 +8,7 @@ import { createServerClient } from '@/lib/supabase'
 import { parseFullInBodyData } from '@/lib/inbody-scan'
 import { inbodyDatetimeToIso } from '@/lib/inbody-webhook'
 import { normalisePhone9 } from '@/lib/person-links'
+import { applyWeightObservation } from '@/lib/body-metrics'
 
 const SOURCE = 'lookinbody'
 
@@ -60,5 +61,13 @@ export async function ingestScan(db, { telHp, testDatetime, raw, locationId }) {
     }, { onConflict: 'source,external_id' })
 
   if (error) return { ok: false, reason: 'upsert_failed', error: error.message }
+
+  // Feed the canonical body weight (freshest-wins) so calories can use it.
+  if (contactId && Number.isFinite(Number(measurements?.weight_kg))) {
+    await applyWeightObservation(client, {
+      contactId, weightKg: measurements.weight_kg, source: 'inbody', observedAt: scannedAt,
+    })
+  }
+
   return { ok: true, linked: !!contactId, contactId }
 }
