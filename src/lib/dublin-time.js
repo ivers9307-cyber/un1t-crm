@@ -60,3 +60,15 @@ export function addDaysISO(dateStr, days) {
   d.setUTCDate(d.getUTCDate() + days)
   return d.toISOString().slice(0, 10)
 }
+
+/**
+ * Format a UTC instant (ISO string) as a Dublin wall-clock HH:MM (24h, DST-safe
+ * via Intl). Returns null for an unparseable input.
+ */
+export function dublinTimeLabel(iso) {
+  const t = iso ? Date.parse(iso) : NaN
+  if (!Number.isFinite(t)) return null
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Dublin', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date(t))
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { dublinTodayStr, dublinNowMinutes, addDaysISO } from './dublin-time.js'
+import { dublinTodayStr, dublinNowMinutes, addDaysISO, dublinTimeLabel } from './dublin-time.js'
 
 describe('dublinTodayStr', () => {
   beforeEach(() => { vi.useFakeTimers() })
@@ -70,5 +70,18 @@ describe('addDaysISO', () => {
   })
   it('zero days = same date', () => {
     expect(addDaysISO('2026-05-11', 0)).toBe('2026-05-11')
+  })
+})
+
+describe('dublinTimeLabel', () => {
+  it('formats a UTC instant as Dublin HH:MM (BST = +1 in summer)', () => {
+    expect(dublinTimeLabel('2026-06-27T17:00:00Z')).toBe('18:00')
+  })
+  it('formats a winter instant (GMT = +0)', () => {
+    expect(dublinTimeLabel('2026-01-15T09:30:00Z')).toBe('09:30')
+  })
+  it('returns null for a bad input', () => {
+    expect(dublinTimeLabel('nope')).toBeNull()
+    expect(dublinTimeLabel(null)).toBeNull()
   })
 })
