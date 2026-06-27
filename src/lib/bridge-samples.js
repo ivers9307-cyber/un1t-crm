@@ -29,12 +29,19 @@
 
 import { logWarn } from '@/lib/log'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
-import { lookupBookedMember, resolveClassLinkSource } from '@/lib/class-bookings'
+import { lookupBookedMember, resolveClassLinkSource, resolveBookedOccurrenceForMember } from '@/lib/class-bookings'
+import { classSessionAction } from '@/lib/hr-session-lifecycle'
 
 // 90 min covers an hour-long class plus 15min before + 15min after.
 const BOOKING_WINDOW_MS = 90 * 60 * 1000
 // How far before the booking start we already accept samples.
 const BOOKING_PRE_GRACE_MS = 30 * 60 * 1000
+
+// Booking-first grace: a registered, BOOKED member's strap routes this wide
+// around their class (warmup/cooldown). Only behind a confirmed booking — the
+// presence fallback below stays at the tight OCC_PRE/POST window.
+const BOOKED_PRE_MS = 45 * 60_000
+const BOOKED_POST_MS = 30 * 60_000
 
 // ── protocol-aware identifiers ──────────────────────────────────
 //
@@ -260,6 +267,14 @@ export async function resolveStrapsForBatch(db, { bridgeId, locationId, deviceKe
     return map
   }
 
+  // Staff HR test mode (mig 321) — registered straps route any time while active.
+  let testModeActive = false
+  if (deviceRows && deviceRows.length > 0) {
+    const { data: bridge } = await db
+      .from('ble_bridges').select('test_mode_until').eq('id', bridgeId).maybeSingle()
+    testModeActive = !!bridge?.test_mode_until && new Date(bridge.test_mode_until).getTime() > nowMs
+  }
+
   // For each device, find or create a session tied to the contact's
   // currently-in-progress booking (if any).
   for (const dev of deviceRows || []) {
@@ -268,6 +283,7 @@ export async function resolveStrapsForBatch(db, { bridgeId, locationId, deviceKe
       locationId,
       deviceKey: dev.identifier,
       nowMs,
+      testModeActive,
     })
     if (sessionId) {
       map.set(canonicaliseDeviceKey(dev.identifier) || dev.identifier, {
@@ -298,16 +314,22 @@ export async function resolveStrapsForBatch(db, { bridgeId, locationId, deviceKe
 
 /**
  * Find an existing open heart_rate_sessions row for this contact at this
- * location, or create one. Creation triggers, in priority:
- *   (b) a Glofox class is running at this location now → tie the session to
- *       that occurrence (presence). This is the path for ordinary class-goers,
- *       who have no native CRM booking.
- *   (c) an in-progress native CRM booking (consultation / PT) → tie to it.
- * Returns null if neither applies.
+ * location, or create one. Resolution, in priority:
+ *   (a) an existing OPEN session → return it (rejoin across drop-outs),
+ *       backfilling the class link booking-first.
+ *   (b) a class for this member → tie the session to it. Booking-first (the
+ *       member's BOOKED occurrence, wide 45/30 window) else the location-wide
+ *       live class (presence, tight OCC_PRE/POST). Class-keyed dedup: reopen a
+ *       closed (member, class) session while the class is still live; skip once
+ *       it has ended.
+ *   (c) test mode active (mig 321) → a presence-less session any time.
+ *   (d) an in-progress native CRM booking (consultation / PT) → tie to it.
+ * Returns null if none apply.
  */
-async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, nowMs }) {
-  // (a) any existing open session? Return it, backfilling the class link if
-  // it doesn't have one yet (e.g. session opened just before class start).
+async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, nowMs, testModeActive = false }) {
+  // (a) Any existing OPEN session for this contact? Return it (rejoin across a
+  // mid-class drop-out works because the stale-close cron defers closing
+  // class-linked sessions until class end). Backfill the class link booking-first.
   const { data: existing } = await db
     .from('heart_rate_sessions')
     .select('id, glofox_event_id')
@@ -317,53 +339,66 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
     .order('started_at', { ascending: false })
     .limit(1)
     .maybeSingle()
-  if (existing?.id) {
-    if (!existing.glofox_event_id) {
-      const occ = await resolveCurrentOccurrence(db, { locationId, nowMs })
-      if (occ) {
-        const { data: c } = await db.from('contacts').select('glofox_member_id').eq('id', contactId).single()
-        const booked = await lookupBookedMember(db, { locationId, glofoxEventId: occ.glofox_event_id, glofoxMemberId: c?.glofox_member_id })
-        await db.from('heart_rate_sessions')
-          .update({ glofox_event_id: occ.glofox_event_id, class_name: occ.class_name, class_link_source: resolveClassLinkSource({ liveClass: occ, booked }) })
-          .eq('id', existing.id)
-      }
-    }
-    return existing.id
-  }
 
-  // Snapshot the contact's max HR once (used by whichever create path runs).
+  // Contact's max HR + glofox id (used by backfill + create paths).
   const { data: contact } = await db
     .from('contacts')
     .select('max_hr_override, dob, glofox_member_id')
     .eq('id', contactId)
     .single()
+
+  // Resolve the class for this member NOW: booking-first (wide), then presence (tight).
+  const bookedOcc = await resolveBookedOccurrenceForMember(db, {
+    locationId, glofoxMemberId: contact?.glofox_member_id, nowMs, preMs: BOOKED_PRE_MS, postMs: BOOKED_POST_MS,
+  })
+  const occ = bookedOcc || await resolveCurrentOccurrence(db, { locationId, nowMs })
+  const linkSource = occ
+    ? (bookedOcc ? 'booked' : resolveClassLinkSource({
+        liveClass: occ,
+        booked: await lookupBookedMember(db, { locationId, glofoxEventId: occ.glofox_event_id, glofoxMemberId: contact?.glofox_member_id }),
+      }))
+    : null
+
+  if (existing?.id) {
+    if (!existing.glofox_event_id && occ) {
+      await db.from('heart_rate_sessions')
+        .update({ glofox_event_id: occ.glofox_event_id, class_name: occ.class_name, class_link_source: linkSource })
+        .eq('id', existing.id)
+    }
+    return existing.id
+  }
+
   const maxHr = resolveMaxHrForBridgeInsert(contact)
   const nowIso = new Date(nowMs).toISOString()
 
-  // (b) PRIMARY: a Glofox class is running now → tie the session to it
-  // (presence). This is what makes ordinary class-goers (no native CRM
-  // booking) get a session at all.
-  const occ = await resolveCurrentOccurrence(db, { locationId, nowMs })
+  // (b) Class-linked create (booking-first or presence). One session per
+  // (member, class): reopen a closed one while the class is still live; skip
+  // (no new session, no duplicate email) once the class has ended.
   if (occ) {
-    const booked = await lookupBookedMember(db, {
-      locationId, glofoxEventId: occ.glofox_event_id, glofoxMemberId: contact?.glofox_member_id,
-    })
+    const { data: priorForClass } = await db
+      .from('heart_rate_sessions')
+      .select('id, ended_at')
+      .eq('contact_id', contactId)
+      .eq('glofox_event_id', occ.glofox_event_id)
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    const action = classSessionAction({ existing: priorForClass || null, occ, nowMs })
+    if (action === 'return') return priorForClass.id
+    if (action === 'skip') return null
+    if (action === 'reopen') {
+      await db.from('heart_rate_sessions').update({ ended_at: null }).eq('id', priorForClass.id)
+      return priorForClass.id
+    }
     const { data: created, error: createErr } = await db
       .from('heart_rate_sessions')
       .insert({
-        contact_id: contactId,
-        location_id: locationId,
-        booking_id: null,
-        source: 'ble_bridge',
-        device_identifier: deviceKey,
-        started_at: nowIso,
-        max_hr_used: maxHr,
-        glofox_event_id: occ.glofox_event_id,
-        class_name: occ.class_name,
-        class_link_source: resolveClassLinkSource({ liveClass: occ, booked }),
+        contact_id: contactId, location_id: locationId, booking_id: null, source: 'ble_bridge',
+        device_identifier: deviceKey, started_at: nowIso, max_hr_used: maxHr,
+        glofox_event_id: occ.glofox_event_id, class_name: occ.class_name, class_link_source: linkSource,
       })
-      .select('id')
-      .single()
+      .select('id').single()
     if (createErr) {
       logWarn('bridge-samples', 'auto-create (class) session failed', { err: createErr, contactId, glofox_event_id: occ.glofox_event_id })
       return null
@@ -371,10 +406,26 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
     return created?.id || null
   }
 
-  // (c) FALLBACK: an in-progress native CRM booking (consultation / PT).
+  // (c) Test mode — presence-less session any time (no class, no booking).
+  if (testModeActive) {
+    const { data: created, error: tErr } = await db
+      .from('heart_rate_sessions')
+      .insert({
+        contact_id: contactId, location_id: locationId, booking_id: null, source: 'ble_bridge',
+        device_identifier: deviceKey, started_at: nowIso, max_hr_used: maxHr,
+        glofox_event_id: null, class_name: null, class_link_source: null,
+      })
+      .select('id').single()
+    if (tErr) {
+      logWarn('bridge-samples', 'auto-create (test mode) session failed', { err: tErr, contactId })
+      return null
+    }
+    return created?.id || null
+  }
+
+  // (d) FALLBACK: an in-progress native CRM booking (consultation / PT).
   const yesterdayIso = new Date(nowMs - 24 * 3600_000).toISOString().slice(0, 10)
   const tomorrowIso = new Date(nowMs + 24 * 3600_000).toISOString().slice(0, 10)
-
   const { data: bookings } = await db
     .from('bookings')
     .select('id, booking_date, start_time, event_type_id, status')
@@ -387,8 +438,6 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
   let activeBooking = null
   for (const b of bookings || []) {
     if (!b.booking_date || !b.start_time) continue
-    // booking_date + start_time are Dublin wall-clock (NOT UTC) — convert
-    // correctly (the old `T${start_time}Z` was off by the BST offset).
     const bookingMs = dublinWallClockToMs(b.booking_date, b.start_time)
     if (!Number.isFinite(bookingMs)) continue
     const lo = nowMs - BOOKING_WINDOW_MS
@@ -399,23 +448,15 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
       }
     }
   }
-
   if (!activeBooking) return null
 
   const { data: created, error: createErr } = await db
     .from('heart_rate_sessions')
     .insert({
-      contact_id: contactId,
-      location_id: locationId,
-      booking_id: activeBooking.id,
-      source: 'ble_bridge',
-      device_identifier: deviceKey,
-      started_at: nowIso,
-      max_hr_used: maxHr,
+      contact_id: contactId, location_id: locationId, booking_id: activeBooking.id, source: 'ble_bridge',
+      device_identifier: deviceKey, started_at: nowIso, max_hr_used: maxHr,
     })
-    .select('id')
-    .single()
-
+    .select('id').single()
   if (createErr) {
     logWarn('bridge-samples', 'auto-create session failed', { err: createErr, contactId, bookingId: activeBooking.id })
     return null

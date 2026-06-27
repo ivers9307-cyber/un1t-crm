@@ -415,3 +415,81 @@ describe('resolveStrapsForBatch: anonymous straps', () => {
     expect(inserted).toBeNull()
   })
 })
+
+describe('resolveStrapsForBatch: registered booking-first + test mode', () => {
+  const NOW = Date.parse('2026-06-27T07:45:00Z')
+  const occ8 = { glofox_event_id: 'e8', name: 'TEMPO', starts_at: '2026-06-27T08:00:00Z', ends_at: '2026-06-27T09:00:00Z' }
+
+  function makeDb({ bookings = [], occs = [], existingOpen = null, existingClass = null, testModeUntil = null, captureInsert, captureUpdate } = {}) {
+    return {
+      from: vi.fn((table) => {
+        if (table === 'ble_bridges') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: { test_mode_until: testModeUntil } })) })) })) }
+        }
+        if (table === 'strap_assignments') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => ({ not: vi.fn(() => Promise.resolve({ data: [] })) })) })) })) }
+        }
+        if (table === 'contact_devices') {
+          return { select: vi.fn(() => ({ in: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: [{ identifier: 'ant:12511', contact_id: 'c1', contacts: { id: 'c1', location_id: 'loc1' } }], error: null })) })) })) })) }
+        }
+        if (table === 'class_bookings') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => Promise.resolve({ data: bookings })) })) })) })) })) }
+        }
+        if (table === 'bookings') {
+          // Native CRM booking fallback (path d) — no native bookings in these cases.
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ in: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => Promise.resolve({ data: [] })) })) })) })) })) })) }
+        }
+        if (table === 'class_occurrences') {
+          return {
+            select: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                in: vi.fn(() => Promise.resolve({ data: occs })),
+                gte: vi.fn(() => ({ lte: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: [] })) })) })),
+              })),
+            })),
+          }
+        }
+        if (table === 'contacts') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { glofox_member_id: 'g1', max_hr_override: null, dob: null } })) })) })) }
+        }
+        if (table === 'heart_rate_sessions') {
+          return {
+            select: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                eq: vi.fn(() => ({
+                  is: vi.fn(() => ({ order: vi.fn(() => ({ limit: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: existingOpen })) })) })) })),
+                  order: vi.fn(() => ({ limit: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: existingClass })) })) })),
+                })),
+              })),
+            })),
+            insert: vi.fn((row) => { if (captureInsert) captureInsert(row); return { select: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { id: 'new-1' }, error: null })) })) } }),
+            update: vi.fn((patch) => { if (captureUpdate) captureUpdate(patch); return { eq: vi.fn(() => Promise.resolve({ error: null })) } }),
+          }
+        }
+        throw new Error(`unexpected ${table}`)
+      }),
+    }
+  }
+
+  it('maps a booked member to their booked class (booking-first, label=booked)', async () => {
+    let inserted = null
+    const db = makeDb({ bookings: [{ glofox_event_id: 'e8', status: 'BOOKED', starts_at: occ8.starts_at }], occs: [occ8], captureInsert: (r) => { inserted = r } })
+    const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:12511'], nowMs: NOW })
+    expect(map.get('ant:12511')).toMatchObject({ sessionId: 'new-1', contactId: 'c1', via: 'auto' })
+    expect(inserted).toMatchObject({ glofox_event_id: 'e8', class_link_source: 'booked', device_identifier: 'ant:12511' })
+  })
+
+  it('creates nothing for an unbooked member with no live class and test mode off', async () => {
+    const db = makeDb({ bookings: [], occs: [] })
+    const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:12511'], nowMs: NOW })
+    expect(map.has('ant:12511')).toBe(false)
+  })
+
+  it('creates a presence-less session when the bridge is in test mode', async () => {
+    let inserted = null
+    const db = makeDb({ bookings: [], occs: [], testModeUntil: new Date(NOW + 3600_000).toISOString(), captureInsert: (r) => { inserted = r } })
+    const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:12511'], nowMs: NOW })
+    expect(map.get('ant:12511')).toMatchObject({ sessionId: 'new-1', via: 'auto' })
+    expect(inserted).toMatchObject({ device_identifier: 'ant:12511', glofox_event_id: null, class_link_source: null })
+  })
+})
