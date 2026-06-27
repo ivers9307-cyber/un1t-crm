@@ -60,6 +60,7 @@ export default function LiveTvClient({ locationId }) {
   }, [])
 
   const sessions = data?.sessions || []
+  const availableStraps = data?.available_straps || []
   const cols = gridColsFor(sessions.length)
 
   // Green dot to the right of "Live" = the studio's HR bridge (Pi) is
@@ -115,6 +116,22 @@ export default function LiveTvClient({ locationId }) {
           {sessions.map((s, idx) => (
             <Tile key={s.id} session={s} rank={idx + 1} />
           ))}
+        </div>
+      )}
+
+      {availableStraps.length > 0 && (
+        <div className="mt-6 px-4 pb-4">
+          <p className="mb-2 text-xs uppercase tracking-wide text-white/40">Unpaired straps</p>
+          <div className="flex flex-wrap gap-3">
+            {availableStraps.map((s) => (
+              <div key={s.key} className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3 opacity-70">
+                <span className="font-mono text-sm text-white/70">{s.label}</span>
+                <span className="text-lg font-semibold tabular-nums text-white">
+                  {s.currentBpm ?? '—'}<span className="ml-1 text-xs font-normal text-white/40">bpm</span>
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </main>

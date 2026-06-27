@@ -16,7 +16,8 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { summariseSession, zoneForBpm } from '@/lib/heart-rate'
-import { isBridgeOnline, latestBridgeSeenMs } from '@/lib/bridge-samples'
+import { isBridgeOnline, latestBridgeSeenMs, maskStrapLabel } from '@/lib/bridge-samples'
+import { getAvailableStraps } from '@/lib/live-class'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -54,6 +55,15 @@ export async function GET(_request, props) {
     last_seen_at: bridgeSeenMs > 0 ? new Date(bridgeSeenMs).toISOString() : null,
   }
 
+  // Unpaired straps — broadcasting but not attached to any open session.
+  const rawStraps = await getAvailableStraps(db, locationId)
+  const availableStraps = (rawStraps || []).map((s) => ({
+    key: s.device_key,
+    label: maskStrapLabel(s.device_key),
+    protocol: s.protocol,
+    currentBpm: s.lastBpm ?? null,
+  }))
+
   // Open sessions at this location.
   const { data: sessions } = await db
     .from('heart_rate_sessions')
@@ -80,6 +90,7 @@ export async function GET(_request, props) {
       location: { id: location.id, name: location.name },
       bridge,
       sessions: [],
+      available_straps: availableStraps,
       timer: timerRun || null,
     })
   }
@@ -171,6 +182,7 @@ export async function GET(_request, props) {
     location: { id: location.id, name: location.name },
     bridge,
     sessions: tiles,
+    available_straps: availableStraps,
     timer: timerRun || null,
   })
 }
