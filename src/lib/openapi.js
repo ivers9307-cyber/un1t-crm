@@ -1027,6 +1027,48 @@ registry.registerPath({
 })
 
 // ============================================================================
+// Customer (champ-app member) self-service
+// ============================================================================
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/me/body-metrics',
+  tags: ['Me'],
+  security: [{ BearerAuth: [] }],
+  summary: 'Save own body metrics (champ-app member)',
+  description: 'Member self-service: update gender, dob, and/or weight. Stamps profile_setup_completed_at when all three are present for the first time.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            gender: z.enum(['female', 'male', 'other']).optional(),
+            weight_kg: z.number().min(20).max(300).optional(),
+            dob: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+          }).openapi('BodyMetricsBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Metrics saved — returns current values and completion stamp',
+      content: {
+        'application/json': {
+          schema: SuccessResponse(z.object({
+            dob: z.string().nullable(),
+            gender: z.string().nullable(),
+            weight_kg: z.number().nullable(),
+            profile_setup_completed_at: z.string().nullable(),
+          })).openapi('BodyMetricsResponse'),
+        },
+      },
+    },
+    401: { description: 'Invalid or missing member JWT', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
 //
