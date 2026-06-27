@@ -17,6 +17,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { buildTimeline, computeEffectiveElapsedMs, resolveTimerState, SEG_COLOR } from '@/lib/class-timer'
 import { shouldPlayIntro, INTRO_DURATION_MS } from '@/lib/tv-class-intro'
+import { isKioskParam, showReconnecting } from '@/lib/tv-kiosk'
 
 const POLL_MS = 2000
 
@@ -32,6 +33,8 @@ export default function LiveTvClient({ locationId }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [now, setNow] = useState(new Date())
+  const [kiosk] = useState(() => typeof window !== 'undefined' && isKioskParam(window.location.search))
+  const [failures, setFailures] = useState(0)
 
   // Poll the public endpoint.
   useEffect(() => {
@@ -44,8 +47,12 @@ export default function LiveTvClient({ locationId }) {
         if (!res.ok || !json.ok) throw new Error(json.error || 'Live fetch failed')
         setData(json)
         setError(null)
+        setFailures(0)
       } catch (e) {
-        if (!cancelled) setError(e.message)
+        if (!cancelled) {
+          setError(e.message)
+          setFailures((f) => f + 1)
+        }
       }
     }
     tick()
@@ -53,12 +60,32 @@ export default function LiveTvClient({ locationId }) {
     return () => { cancelled = true; clearInterval(t) }
   }, [locationId])
 
+  // Screen Wake Lock (kiosk only) — prevents display sleep on the Pi.
+  useEffect(() => {
+    if (!kiosk || typeof navigator === 'undefined' || !navigator.wakeLock) return
+    let lock = null
+    let released = false
+    const acquire = async () => { try { lock = await navigator.wakeLock.request('screen') } catch {} }
+    const onVis = () => { if (document.visibilityState === 'visible' && !released) acquire() }
+    acquire()
+    document.addEventListener('visibilitychange', onVis)
+    return () => { released = true; document.removeEventListener('visibilitychange', onVis); try { lock && lock.release() } catch {} }
+  }, [kiosk])
+
+  // Landscape lock (kiosk only, best-effort).
+  useEffect(() => {
+    if (!kiosk) return
+    try { screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape').catch(() => {}) } catch {}
+  }, [kiosk])
+
   // Live wall clock — refreshes every second so the header time
   // ticks visibly, helping the coach confirm the screen isn't frozen.
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(t)
   }, [])
+
+  const reconnecting = showReconnecting({ consecutiveFailures: failures })
 
   const sessions = data?.sessions || []
   const availableStraps = data?.available_straps || []
@@ -73,7 +100,10 @@ export default function LiveTvClient({ locationId }) {
     : 'Heart-rate bridge offline'
 
   return (
-    <main className="relative min-h-screen bg-black text-white">
+    <main className="relative min-h-screen bg-black text-white" style={kiosk ? { cursor: 'none' } : undefined}>
+      {kiosk && reconnecting && (
+        <div className="absolute top-4 right-4 z-40 rounded-full bg-white/10 px-3 py-1 text-xs text-white/60">● reconnecting…</div>
+      )}
       <header className="flex items-center justify-between px-6 py-4 border-b border-neutral-800">
         <div>
           <p className="flex items-center gap-2 text-xs uppercase tracking-[0.3em] text-red-500 font-bold">
@@ -101,7 +131,7 @@ export default function LiveTvClient({ locationId }) {
 
       <TimerBanner timer={data?.timer} serverTime={data?.server_time} />
 
-      {error && (
+      {!kiosk && error && (
         <p className="m-4 rounded-lg border border-red-700 bg-red-950 p-3 text-sm">
           Connection issue: {error}. Retrying…
         </p>
