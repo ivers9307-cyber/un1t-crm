@@ -17,6 +17,8 @@ import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { BOOKED_PRE_MS, BOOKED_POST_MS } from '@/lib/bridge-samples'
 import { lookupBookedMember, resolveClassLinkSource, resolveBookedOccurrenceForMember } from '@/lib/class-bookings'
 import { resolveMaxHr, summariseSession, resolveScoringConfig } from '@/lib/heart-rate'
+import { resolveBodyMetrics } from '@/lib/body-metrics'
+import { estimateCaloriesKcal } from '@/lib/calories'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { sendCustomerPush } from '@/lib/customer-push'
 import { runDetectionForSession } from '@/lib/achievements'
@@ -271,7 +273,7 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
 export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
   const { data: session, error: sErr } = await db
     .from('heart_rate_sessions')
-    .select('id, contact_id, location_id, max_hr_used, ended_at, class_name')
+    .select('id, contact_id, location_id, started_at, max_hr_used, ended_at, class_name')
     .eq('id', sessionId)
     .single()
   if (sErr || !session) return { ok: false, error: 'Session not found' }
@@ -306,6 +308,20 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
   const summary = summariseSession(samples, session.max_hr_used, { zonePoints })
   const endedAt = new Date(nowMs).toISOString()
 
+  // Calories — in-studio (bridge) sessions carry no provider value, so estimate
+  // from HR + duration + the member's body metrics. Best-effort: null leaves it blank.
+  let caloriesKcal = null
+  if (session.contact_id) {
+    try {
+      const startMs = new Date(session.started_at).getTime()
+      const durationMin = Number.isFinite(startMs) ? (nowMs - startMs) / 60000 : null
+      const bm = await resolveBodyMetrics(db, session.contact_id, nowMs)
+      caloriesKcal = estimateCaloriesKcal({
+        avgHr: summary.avgHrBpm, durationMin, age: bm.age, weightKg: bm.weightKg, gender: bm.gender,
+      })
+    } catch { /* best-effort */ }
+  }
+
   const { error: updErr } = await db
     .from('heart_rate_sessions')
     .update({
@@ -314,6 +330,7 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
       effort_points: summary.effortPoints,
       avg_hr_bpm: summary.avgHrBpm,
       peak_hr_bpm: summary.peakHrBpm,
+      calories_kcal: caloriesKcal,
     })
     .eq('id', sessionId)
   if (updErr) return { ok: false, error: updErr.message }

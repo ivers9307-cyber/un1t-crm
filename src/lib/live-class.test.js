@@ -453,6 +453,82 @@ describe('endSession', () => {
     expect(updatedSessionRow.zones_seconds).toBeTruthy()
     expect(updatedSaRows.ended_at).toBeTruthy()
   })
+
+  // Calorie estimate is best-effort: a numeric kcal when the contact has
+  // dob+gender+weight and avg HR is present, else null (no contact / no weight).
+  function dbForCalories({ contactRow }) {
+    let updatedSessionRow = null
+    const startMs = Date.parse('2026-05-08T16:10:00Z') // 60 min before nowMs below
+    const samples = [
+      { recorded_at: '2026-05-08T16:10:00Z', bpm: 150 },
+      { recorded_at: '2026-05-08T16:11:00Z', bpm: 152 },
+    ]
+    const db = {
+      from: vi.fn((table) => {
+        if (table === 'heart_rate_sessions') {
+          return {
+            select: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                single: vi.fn(() => Promise.resolve({
+                  data: {
+                    id: 'sess-cal', contact_id: 'contact-1', location_id: 'loc-1',
+                    started_at: '2026-05-08T16:10:00Z', max_hr_used: 190, ended_at: null,
+                  },
+                  error: null,
+                })),
+              })),
+            })),
+            update: vi.fn((row) => {
+              if (row.calories_kcal !== undefined) updatedSessionRow = row
+              return { eq: vi.fn(() => Promise.resolve({ error: null })) }
+            }),
+          }
+        }
+        if (table === 'contacts') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: contactRow, error: null })) })) })) }
+        }
+        if (table === 'locations') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'loc-1', settings: {} }, error: null })) })) })) }
+        }
+        if (table === 'hr_samples') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ order: vi.fn(() => ({ range: vi.fn(() => Promise.resolve({ data: samples, error: null })) })) })) })) }
+        }
+        if (table === 'strap_assignments') {
+          return { update: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ error: null })) })) })) }
+        }
+        // finalizeSessionRewards reloads the session, then touches contact_goals,
+        // member_monthly_targets, etc. — return benign empties for anything else.
+        return {
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              single: vi.fn(() => Promise.resolve({ data: { id: 'sess-cal', contact_id: 'contact-1', location_id: 'loc-1', effort_points: 0, ended_at: null, source: 'ble_bridge', glofox_event_id: null, class_name: null }, error: null })),
+              maybeSingle: vi.fn(() => Promise.resolve({ data: null, error: null })),
+              eq: vi.fn(() => ({ is: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })),
+              not: vi.fn(() => ({ gte: vi.fn(() => Promise.resolve({ data: [], error: null })) })),
+            })),
+          })),
+          insert: vi.fn(() => ({ select: vi.fn(() => Promise.resolve({ data: [], error: null })) })),
+          update: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ error: null })) })) })),
+        }
+      }),
+    }
+    return { db, get: () => updatedSessionRow, startMs }
+  }
+
+  it('writes a numeric calories_kcal when the contact has dob+gender+weight', async () => {
+    const { db, get } = dbForCalories({ contactRow: { dob: '1990-01-01', gender: 'male', weight_kg: 80 } })
+    const out = await endSession(db, 'sess-cal', { nowMs: Date.parse('2026-05-08T17:10:00Z') })
+    expect(out.ok).toBe(true)
+    expect(typeof get().calories_kcal).toBe('number')
+    expect(get().calories_kcal).toBeGreaterThan(0)
+  })
+
+  it('writes calories_kcal: null when the contact lacks weight', async () => {
+    const { db, get } = dbForCalories({ contactRow: { dob: '1990-01-01', gender: 'male', weight_kg: null } })
+    const out = await endSession(db, 'sess-cal', { nowMs: Date.parse('2026-05-08T17:10:00Z') })
+    expect(out.ok).toBe(true)
+    expect(get().calories_kcal).toBeNull()
+  })
 })
 
 // ── endAllAtLocation ───────────────────────────────────────────
