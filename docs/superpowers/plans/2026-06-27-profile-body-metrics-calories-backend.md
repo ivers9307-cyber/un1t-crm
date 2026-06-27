@@ -45,21 +45,15 @@
 
 - [ ] **Step 1: Write the migration**
 
+> DISCOVERY (applied): `contacts.dob` (mig 134) AND `contacts.gender` already exist from the Glofox sync. `gender` holds `female`/`male`/`null` plus a legacy `P` code (~1.5k rows, ≈ "prefer not to say"). So we add NO gender column and NO CHECK constraint (a CHECK would reject the `P` rows). New writes are validated to `female|male|other` at the app layer (Task 6 zod); the calorie calc (Task 2) treats anything that isn't `male`/`female` (incl. `P`, `other`, `null`) as sex-neutral. Only the four new columns are added:
+
 ```sql
 -- 322_contacts_body_metrics.sql
--- Body metrics needed to compute calories for in-studio HR sessions, captured at
--- profile setup and kept fresh from the freshest source. dob already exists (mig 134).
 ALTER TABLE public.contacts
-  ADD COLUMN IF NOT EXISTS gender text,
   ADD COLUMN IF NOT EXISTS weight_kg numeric,
   ADD COLUMN IF NOT EXISTS weight_kg_source text,
   ADD COLUMN IF NOT EXISTS weight_kg_at timestamptz,
   ADD COLUMN IF NOT EXISTS profile_setup_completed_at timestamptz;
-
-ALTER TABLE public.contacts
-  DROP CONSTRAINT IF EXISTS contacts_gender_check;
-ALTER TABLE public.contacts
-  ADD CONSTRAINT contacts_gender_check CHECK (gender IS NULL OR gender IN ('female','male','other'));
 
 COMMENT ON COLUMN public.contacts.weight_kg IS 'Current body weight (kg) — freshest of manual/inbody/apple_health (mig 322).';
 COMMENT ON COLUMN public.contacts.weight_kg_source IS 'manual | inbody | apple_health (mig 322).';
