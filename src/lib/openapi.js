@@ -919,6 +919,113 @@ registry.registerPath({
   },
 })
 
+// Live HR
+registry.registerPath({
+  method: 'get',
+  path: '/api/live/{locationId}',
+  tags: ['Live HR'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Current live HR sessions + available straps for a location (staff)',
+  request: { params: z.object({ locationId: uuidLike }) },
+  responses: {
+    200: {
+      description: 'Live state including sessions, available straps, roster, and test_mode_until',
+      content: {
+        'application/json': {
+          schema: z.object({
+            ok: z.literal(true),
+            server_time: z.string(),
+            sessions: z.array(z.record(z.string(), z.unknown())),
+            available_straps: z.array(z.record(z.string(), z.unknown())),
+            roster: z.array(z.record(z.string(), z.unknown())),
+            occurrence: z.record(z.string(), z.unknown()).nullable(),
+            test_mode_until: z.string().nullable(),
+          }).openapi('LiveState'),
+        },
+      },
+    },
+    403: { description: 'Location not in scope', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/live/{locationId}/pair',
+  tags: ['Live HR'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Override strap pairing for a walk-in or lent strap (coach+)',
+  request: {
+    params: z.object({ locationId: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            device_key: z.string().optional(),
+            contact_id: uuidLike.optional(),
+            bridge_id: uuidLike.optional(),
+            booking_id: uuidLike.nullable().optional(),
+          }).openapi('PairOverrideBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Paired — returns session_id' },
+    400: { description: 'Missing required fields or pair failed', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Coach role or location scope required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/live/{locationId}/test-mode',
+  tags: ['Live HR'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Enable staff HR test mode (manager+)',
+  description: 'Sets test_mode_until on all ble_bridges for the location, allowing straps to route to sessions outside a live class. Time-boxed; default 120 min, max 240 min.',
+  request: {
+    params: z.object({ locationId: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ minutes: z.number().int().positive().optional() }).openapi('TestModeBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Test mode enabled — returns test_mode_until',
+      content: {
+        'application/json': {
+          schema: z.object({ ok: z.literal(true), test_mode_until: z.string() }).openapi('TestModeEnabled'),
+        },
+      },
+    },
+    403: { description: 'Manager role or location scope required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/live/{locationId}/test-mode',
+  tags: ['Live HR'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Disable staff HR test mode (manager+)',
+  request: { params: z.object({ locationId: uuidLike }) },
+  responses: {
+    200: {
+      description: 'Test mode cleared — test_mode_until is null',
+      content: {
+        'application/json': {
+          schema: z.object({ ok: z.literal(true), test_mode_until: z.null() }).openapi('TestModeDisabled'),
+        },
+      },
+    },
+    403: { description: 'Manager role or location scope required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
