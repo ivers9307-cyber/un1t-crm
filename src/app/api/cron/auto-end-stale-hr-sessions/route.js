@@ -20,6 +20,7 @@ import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { sendCustomerPush } from '@/lib/customer-push'
 import { logInfo, logWarn } from '@/lib/log'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { shouldCloseStaleSession, STALE_AFTER_MS, MAX_SESSION_LENGTH_MS } from '@/lib/hr-session-lifecycle'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -28,8 +29,9 @@ export const dynamic = 'force-dynamic'
 // bridge is 3s; if we haven't heard for 5 min the strap is genuinely
 // off. We also auto-close sessions whose started_at is >4 hours old
 // regardless of last_sample_at (defensive — class never lasts 4hr).
-const STALE_AFTER_MS = 5 * 60 * 1000
-const MAX_SESSION_LENGTH_MS = 4 * 3600 * 1000
+// STALE_AFTER_MS / MAX_SESSION_LENGTH_MS now come from the shared
+// hr-session-lifecycle helper (keeps the query bounds + the close
+// decision in lockstep).
 
 export async function POST(request) {
   return GET(request)
@@ -53,19 +55,35 @@ export async function GET(request) {
   // mix with the partial index, so we just union in JS.
   const [{ data: silentRows }, { data: longRows }] = await Promise.all([
     db.from('heart_rate_sessions')
-      .select('id, last_sample_at, started_at')
+      .select('id, last_sample_at, started_at, glofox_event_id')
       .is('ended_at', null)
       .not('last_sample_at', 'is', null)
       .lt('last_sample_at', staleCutoff),
     db.from('heart_rate_sessions')
-      .select('id, last_sample_at, started_at')
+      .select('id, last_sample_at, started_at, glofox_event_id')
       .is('ended_at', null)
       .lt('started_at', longCutoff),
   ])
 
+  const candidates = new Map()
+  for (const r of silentRows || []) candidates.set(r.id, r)
+  for (const r of longRows || [])   candidates.set(r.id, candidates.get(r.id) || r)
+
+  // Fetch ends_at for the class-linked candidates so we can defer closing a
+  // session whose class is still running (mid-class drop-out is rejoinable).
+  const eventIds = [...new Set([...candidates.values()].map((r) => r.glofox_event_id).filter(Boolean))]
+  let occByEvent = new Map()
+  if (eventIds.length) {
+    const { data: occs } = await db
+      .from('class_occurrences').select('glofox_event_id, ends_at').in('glofox_event_id', eventIds)
+    occByEvent = new Map((occs || []).map((o) => [o.glofox_event_id, o]))
+  }
+
   const toEnd = new Map()
-  for (const r of silentRows || []) toEnd.set(r.id, { reason: 'strap_silent', ...r })
-  for (const r of longRows || [])   toEnd.set(r.id, toEnd.get(r.id) || { reason: 'too_long', ...r })
+  for (const [id, r] of candidates) {
+    const occ = r.glofox_event_id ? occByEvent.get(r.glofox_event_id) || null : null
+    if (shouldCloseStaleSession({ session: r, occ, nowMs })) toEnd.set(id, r)
+  }
 
   let endedCount = 0
   let endFailed = 0

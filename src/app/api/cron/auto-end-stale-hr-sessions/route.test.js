@@ -17,20 +17,28 @@ let builders = []
 // Rows the Phase-2 email sweep resolves. The sweep is the only query that
 // filters on email_sent_at, so we key off that to feed it (default empty).
 let sweepRows = []
+// Phase-1 silent-candidate rows (the query that filters on last_sample_at).
+let silentRows = []
+// class_occurrences rows the ends_at lookup resolves (matched on glofox_event_id).
+let occRows = []
 
-function makeBuilder() {
+function makeBuilder(table) {
   // A thenable query-builder: every method records its name+args and returns
-  // `this`; awaiting resolves the Phase-2 sweep rows (when this is the sweep
-  // query) or an empty result so the route's other loops no-op.
+  // `this`; awaiting resolves the right rows for whichever query this is
+  // (Phase-2 email sweep, Phase-1 silent candidates, the class_occurrences
+  // ends_at lookup) or an empty result so the route's other loops no-op.
   const calls = []
   const builder = {
     calls,
     then(resolve) {
-      const isSweep = calls.some((c) => c.method === 'is' && c.args[0] === 'email_sent_at')
-      return Promise.resolve({ data: isSweep ? sweepRows : [], error: null }).then(resolve)
+      let data = []
+      if (table === 'class_occurrences') data = occRows
+      else if (calls.some((c) => c.method === 'is' && c.args[0] === 'email_sent_at')) data = sweepRows
+      else if (calls.some((c) => c.method === 'lt' && c.args[0] === 'last_sample_at')) data = silentRows
+      return Promise.resolve({ data, error: null }).then(resolve)
     },
   }
-  for (const method of ['select', 'eq', 'is', 'not', 'lt', 'order', 'limit', 'neq', 'gte']) {
+  for (const method of ['select', 'eq', 'is', 'not', 'lt', 'order', 'limit', 'neq', 'gte', 'in']) {
     builder[method] = vi.fn((...args) => { calls.push({ method, args }); return builder })
   }
   return builder
@@ -38,7 +46,7 @@ function makeBuilder() {
 
 const fakeDb = {
   from: vi.fn((table) => {
-    const b = makeBuilder()
+    const b = makeBuilder(table)
     b.table = table
     builders.push(b)
     return b
@@ -55,6 +63,7 @@ vi.mock('@/lib/log', () => ({ logInfo: vi.fn(), logWarn: vi.fn() }))
 import { GET } from './route.js'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { sendCustomerPush } from '@/lib/customer-push'
+import { endSession } from '@/lib/live-class'
 
 function req() {
   return { headers: { get: (k) => (k.toLowerCase() === 'authorization' ? 'Bearer test-secret' : null) } }
@@ -63,6 +72,8 @@ function req() {
 beforeEach(() => {
   builders = []
   sweepRows = []
+  silentRows = []
+  occRows = []
   vi.clearAllMocks()
   process.env.CRON_SECRET = 'test-secret'
 })
@@ -91,6 +102,29 @@ describe('auto-end-stale-hr-sessions — Phase 2 email-sweep query', () => {
   it('401s without the CRON_SECRET bearer', async () => {
     const res = await GET({ headers: { get: () => 'Bearer wrong' } })
     expect(res.status).toBe(401)
+  })
+
+  it('DEFERS closing a silent class-linked session whose class is still running', async () => {
+    const now = Date.now()
+    // A silent, class-linked candidate: last sample ~10 min ago (past the 5-min
+    // stale cutoff), class started 25 min ago, mapped to event 'e8'.
+    silentRows = [
+      {
+        id: 's-class',
+        last_sample_at: new Date(now - 10 * 60 * 1000).toISOString(),
+        started_at: new Date(now - 25 * 60 * 1000).toISOString(),
+        glofox_event_id: 'e8',
+      },
+    ]
+    // Its class has NOT yet ended (ends in 30 min) → session is rejoinable, so
+    // the cron must defer the close.
+    occRows = [{ glofox_event_id: 'e8', ends_at: new Date(now + 30 * 60 * 1000).toISOString() }]
+
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+
+    const endedIds = endSession.mock.calls.map((c) => c[1]) // endSession(db, sessionId, …)
+    expect(endedIds).not.toContain('s-class') // class still running → not closed
   })
 
   it('pushes for a real session but NOT for a too-little-data junk skip', async () => {
