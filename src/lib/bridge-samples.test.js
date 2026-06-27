@@ -492,4 +492,28 @@ describe('resolveStrapsForBatch: registered booking-first + test mode', () => {
     expect(map.get('ant:12511')).toMatchObject({ sessionId: 'new-1', via: 'auto' })
     expect(inserted).toMatchObject({ device_identifier: 'ant:12511', glofox_event_id: null, class_link_source: null })
   })
+
+  it('reopens a closed session for the same class while the class is still live', async () => {
+    let updated = null
+    const db = makeDb({
+      bookings: [{ glofox_event_id: 'e8', status: 'BOOKED', starts_at: occ8.starts_at }],
+      occs: [occ8],
+      existingClass: { id: 'cls-1', ended_at: '2026-06-27T07:40:00Z' },
+      captureUpdate: (p) => { updated = p },
+    })
+    const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:12511'], nowMs: NOW })
+    expect(map.get('ant:12511')).toMatchObject({ sessionId: 'cls-1', via: 'auto' })
+    expect(updated).toMatchObject({ ended_at: null })
+  })
+
+  it('skips (no new session) when the class has ended past grace', async () => {
+    const AFTER = Date.parse('2026-06-27T09:30:00Z') // class ended 09:00; past +10m grace, within booking +30m
+    const db = makeDb({
+      bookings: [{ glofox_event_id: 'e8', status: 'BOOKED', starts_at: occ8.starts_at }],
+      occs: [occ8],
+      existingClass: { id: 'cls-1', ended_at: '2026-06-27T08:55:00Z' },
+    })
+    const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:12511'], nowMs: AFTER })
+    expect(map.has('ant:12511')).toBe(false)
+  })
 })

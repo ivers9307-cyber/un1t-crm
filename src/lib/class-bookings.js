@@ -188,7 +188,7 @@ export function pickNearestBookedOccurrence(bookingRows, occByEventId, nowMs, { 
     const dist = Math.abs(startMs - nowMs)
     if (dist < bestDist) {
       bestDist = dist
-      best = { glofox_event_id: occ.glofox_event_id, class_name: occ.name || null }
+      best = { glofox_event_id: occ.glofox_event_id, class_name: occ.name || null, ends_at: occ.ends_at ?? null }
     }
   }
   return best

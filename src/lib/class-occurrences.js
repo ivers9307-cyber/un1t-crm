@@ -161,7 +161,7 @@ export async function resolveCurrentOccurrence(db, { locationId, nowMs = Date.no
     .order('starts_at', { ascending: false })
   for (const occ of data || []) {
     if (occurrenceIsLive(occ, nowMs)) {
-      return { glofox_event_id: occ.glofox_event_id, class_name: occ.name || null }
+      return { glofox_event_id: occ.glofox_event_id, class_name: occ.name || null, ends_at: occ.ends_at ?? null }
     }
   }
   return null

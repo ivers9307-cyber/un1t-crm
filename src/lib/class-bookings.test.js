@@ -144,7 +144,7 @@ describe('pickNearestBookedOccurrence', () => {
       { glofox_event_id: 'e7', status: 'BOOKED', starts_at: occ7.starts_at },
     ]
     const out = pickNearestBookedOccurrence(bookings, occByEvent([occ7, occ8]), NOW, W)
-    expect(out).toEqual({ glofox_event_id: 'e8', class_name: 'TEMPO' })
+    expect(out).toEqual({ glofox_event_id: 'e8', class_name: 'TEMPO', ends_at: '2026-06-27T09:00:00Z' })
   })
 
   it('ignores cancelled bookings', () => {
