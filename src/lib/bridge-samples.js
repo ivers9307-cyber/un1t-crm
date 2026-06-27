@@ -40,8 +40,8 @@ const BOOKING_PRE_GRACE_MS = 30 * 60 * 1000
 // Booking-first grace: a registered, BOOKED member's strap routes this wide
 // around their class (warmup/cooldown). Only behind a confirmed booking — the
 // presence fallback below stays at the tight OCC_PRE/POST window.
-const BOOKED_PRE_MS = 45 * 60_000
-const BOOKED_POST_MS = 30 * 60_000
+export const BOOKED_PRE_MS = 45 * 60_000
+export const BOOKED_POST_MS = 30 * 60_000
 
 // ── protocol-aware identifiers ──────────────────────────────────
 //

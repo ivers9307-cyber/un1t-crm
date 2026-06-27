@@ -14,6 +14,7 @@
 import { logWarn } from '@/lib/log'
 import { selectAll } from '@/lib/select-all'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
+import { BOOKED_PRE_MS, BOOKED_POST_MS } from '@/lib/bridge-samples'
 import { lookupBookedMember, resolveClassLinkSource, resolveBookedOccurrenceForMember } from '@/lib/class-bookings'
 import { resolveMaxHr, summariseSession, resolveScoringConfig } from '@/lib/heart-rate'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
@@ -183,11 +184,10 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
   const maxHr = resolveMaxHr(contact, nowMs)
 
   // Which class is running for THIS member now? Booking-first (wide), then the
-  // location-wide live class (presence). Mirrors the bridge auto path.
+  // location-wide live class (presence). Mirrors the bridge auto path (shares
+  // the BOOKED_PRE_MS/BOOKED_POST_MS window constants).
   // Best-effort — a strap paired outside any class still creates a session,
   // just without a class link.
-  const BOOKED_PRE_MS = 45 * 60_000
-  const BOOKED_POST_MS = 30 * 60_000
   const bookedOcc = await resolveBookedOccurrenceForMember(db, {
     locationId, glofoxMemberId: contact?.glofox_member_id, nowMs, preMs: BOOKED_PRE_MS, postMs: BOOKED_POST_MS,
   })

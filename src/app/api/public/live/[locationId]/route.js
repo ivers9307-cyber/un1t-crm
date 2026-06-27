@@ -143,9 +143,12 @@ export async function GET(_request, props) {
     const parts = fullName.trim().split(/\s+/)
     const firstName = parts[0] || 'Member'
     const lastInitial = parts.length > 1 ? parts[parts.length - 1][0] + '.' : ''
+    // Anonymous walk-in sessions are labelled by their strap — but mask it
+    // (never a full BLE MAC on the public TV), same privacy floor as the
+    // unpaired-strap tiles above.
     const displayName = sess.contacts
       ? (lastInitial ? `${firstName} ${lastInitial}` : firstName)
-      : (sess.device_identifier || 'Guest')
+      : (sess.device_identifier ? maskStrapLabel(sess.device_identifier) : 'Guest')
 
     const stale = sess.last_sample_at
       ? (nowMs - new Date(sess.last_sample_at).getTime()) > STALE_AFTER_MS
