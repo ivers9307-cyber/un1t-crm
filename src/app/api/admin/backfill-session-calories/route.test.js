@@ -21,9 +21,11 @@ function makeReq(params = {}) {
   return new Request(`http://localhost/api/admin/backfill-session-calories${qs ? `?${qs}` : ''}`)
 }
 
-// Minimal chainable Supabase query builder whose terminal `then` resolves
-// with `{ data, error }`.  Chain methods that differ per call-site can be
-// distinguished by the `from` table name.
+// Minimal chainable Supabase query builder. The select fan-out is paginated
+// via selectAll, which calls the builder with (from, to) and AWAITS .range():
+// the chain therefore terminates on .range() resolving { data, error }. We
+// return the whole `sessions` array on the first page (< 1000 rows) so selectAll
+// stops after one page. The update path terminates on .eq() resolving { error }.
 function makeDb({ sessions = [], updateError = null } = {}) {
   const updateBuilder = {
     eq: function () { return this },
@@ -34,16 +36,14 @@ function makeDb({ sessions = [], updateError = null } = {}) {
     _calls: [],
     from(table) {
       this._calls.push(table)
-      // select chain (for the query)
+      // select chain (for the paginated query) — resolves on .range()
       const selectBuilder = {
         select: function () { return this },
         eq: function () { return this },
         not: function () { return this },
         gte: function () { return this },
         order: function () { return this },
-        limit: function () { return this },
-        then: (resolve) =>
-          Promise.resolve({ data: sessions, error: null }).then(resolve),
+        range: (from) => Promise.resolve({ data: from === 0 ? sessions : [], error: null }),
       }
       if (table === 'heart_rate_sessions' && this._calls.filter((t) => t === table).length === 1) {
         return selectBuilder
@@ -109,38 +109,34 @@ describe('POST /api/admin/backfill-session-calories', () => {
       },
     ]
 
-    // Track update calls to verify sess-1 was written, sess-2 was not.
+    // Track update calls to verify sess-1 was written, sess-2 was not. The
+    // select path is paginated (selectAll → .range), so it terminates on
+    // .range(); the update path terminates on .eq('id', ...).
     const updatedIds = []
     const db = {
       from(table) {
         if (table === 'heart_rate_sessions') {
           let isUpdate = false
-          let updateId = null
           const builder = {
             select: function () { return this },
-            eq: function (col, val) {
-              if (isUpdate && col === 'id') updateId = val
-              return this
-            },
             not: function () { return this },
             gte: function () { return this },
             order: function () { return this },
-            limit: function () { return this },
-            update: function () {
-              isUpdate = true
-              return this
-            },
-            then: (resolve) => {
-              if (isUpdate) {
-                updatedIds.push(updateId)
-                return Promise.resolve({ error: null }).then(resolve)
+            // select terminator: first page returns the rows, later pages empty.
+            range: (from) => Promise.resolve({ data: from === 0 ? sessions : [], error: null }),
+            update: function () { isUpdate = true; return this },
+            // update terminator: .eq('id', val) is the last call in the update chain.
+            eq: function (col, val) {
+              if (isUpdate && col === 'id') {
+                updatedIds.push(val)
+                return Promise.resolve({ error: null })
               }
-              return Promise.resolve({ data: sessions, error: null }).then(resolve)
+              return this
             },
           }
           return builder
         }
-        return { select: function () { return this }, then: (resolve) => Promise.resolve({ data: [], error: null }).then(resolve) }
+        return { select: function () { return this }, range: () => Promise.resolve({ data: [], error: null }) }
       },
     }
 
@@ -155,6 +151,9 @@ describe('POST /api/admin/backfill-session-calories', () => {
     expect(json.data.scanned).toBe(2)
     expect(json.data.filled).toBe(1)
     expect(json.data.skipped).toBe(1)
+
+    // Only the fillable session was written back.
+    expect(updatedIds).toEqual(['sess-1'])
 
     // Verify resolveBodyMetrics was only called for the fillable session
     expect(resolveBodyMetrics).toHaveBeenCalledTimes(1)
