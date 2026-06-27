@@ -16,6 +16,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { buildTimeline, computeEffectiveElapsedMs, resolveTimerState, SEG_COLOR } from '@/lib/class-timer'
+import { shouldPlayIntro, INTRO_DURATION_MS } from '@/lib/tv-class-intro'
 
 const POLL_MS = 2000
 
@@ -72,7 +73,7 @@ export default function LiveTvClient({ locationId }) {
     : 'Heart-rate bridge offline'
 
   return (
-    <main className="min-h-screen bg-black text-white">
+    <main className="relative min-h-screen bg-black text-white">
       <header className="flex items-center justify-between px-6 py-4 border-b border-neutral-800">
         <div>
           <p className="flex items-center gap-2 text-xs uppercase tracking-[0.3em] text-red-500 font-bold">
@@ -134,7 +135,48 @@ export default function LiveTvClient({ locationId }) {
           </div>
         </div>
       )}
+
+      <ClassStartIntro current={data?.current_class} serverTime={data?.server_time} />
     </main>
+  )
+}
+
+function ClassStartIntro({ current, serverTime }) {
+  const [visible, setVisible] = useState(false)
+  const [shown, setShown] = useState(false) // drives the fade/scale-in transition
+  const cls = current
+
+  useEffect(() => {
+    if (!cls?.glofox_event_id || !serverTime) return
+    const nowMs = Date.parse(serverTime)
+    let lastPlayedKey = null
+    try { lastPlayedKey = sessionStorage.getItem('tvIntroLastKey') } catch {}
+    if (!shouldPlayIntro({ currentClass: cls, lastPlayedKey, nowMs })) return
+    try { sessionStorage.setItem('tvIntroLastKey', cls.glofox_event_id) } catch {}
+    setVisible(true)
+    const inT = setTimeout(() => setShown(true), 30)
+    const outT = setTimeout(() => setShown(false), INTRO_DURATION_MS - 600)
+    const hideT = setTimeout(() => setVisible(false), INTRO_DURATION_MS)
+    return () => { clearTimeout(inT); clearTimeout(outT); clearTimeout(hideT) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cls?.glofox_event_id, serverTime])
+
+  if (!visible || !cls) return null
+  const meta = [cls.starts_at_label, cls.program].filter(Boolean).join('  ·  ')
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 50, background: '#08080A',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      opacity: shown ? 1 : 0, transition: 'opacity .6s ease' }}>
+      <span style={{ position: 'absolute', top: 24, left: 28, fontWeight: 700, letterSpacing: 6, color: '#fff' }}>UN1T</span>
+      <span style={{ position: 'absolute', top: 24, right: 28, fontSize: 14, fontWeight: 700, letterSpacing: 3, color: '#EF4444' }}>● LIVE</span>
+      <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: 8, color: '#7a7a82',
+        opacity: shown ? 1 : 0, transform: shown ? 'translateY(0)' : 'translateY(8px)', transition: 'all .6s ease .1s' }}>NOW STARTING</span>
+      <span style={{ fontSize: '11vw', lineHeight: 1, fontWeight: 800, color: '#fff', letterSpacing: 2, marginTop: 8,
+        opacity: shown ? 1 : 0, transform: shown ? 'scale(1)' : 'scale(.92)', transition: 'all .7s cubic-bezier(.2,.7,.2,1) .25s' }}>{cls.class_name || 'CLASS'}</span>
+      <span style={{ height: 4, width: shown ? 160 : 0, background: '#EF4444', borderRadius: 2, margin: '22px 0 14px', transition: 'width .7s cubic-bezier(.4,0,.1,1) .5s' }} />
+      {meta ? <span style={{ fontSize: 22, fontWeight: 500, letterSpacing: 2, color: '#b8b8be',
+        opacity: shown ? 1 : 0, transform: shown ? 'translateY(0)' : 'translateY(8px)', transition: 'all .6s ease .7s' }}>{meta}</span> : null}
+    </div>
   )
 }
 
