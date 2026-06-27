@@ -58,7 +58,6 @@ export async function GET(_request, props) {
   // Unpaired straps — broadcasting but not attached to any open session.
   const rawStraps = await getAvailableStraps(db, locationId)
   const availableStraps = (rawStraps || []).map((s) => ({
-    key: s.device_key,
     label: maskStrapLabel(s.device_key),
     protocol: s.protocol,
     currentBpm: s.lastBpm ?? null,

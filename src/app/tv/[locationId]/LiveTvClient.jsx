@@ -123,8 +123,8 @@ export default function LiveTvClient({ locationId }) {
         <div className="mt-6 px-4 pb-4">
           <p className="mb-2 text-xs uppercase tracking-wide text-white/40">Unpaired straps</p>
           <div className="flex flex-wrap gap-3">
-            {availableStraps.map((s) => (
-              <div key={s.key} className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3 opacity-70">
+            {availableStraps.map((s, i) => (
+              <div key={`strap-${i}`} className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3 opacity-70">
                 <span className="font-mono text-sm text-white/70">{s.label}</span>
                 <span className="text-lg font-semibold tabular-nums text-white">
                   {s.currentBpm ?? '—'}<span className="ml-1 text-xs font-normal text-white/40">bpm</span>
