@@ -193,7 +193,7 @@ export function zoneBreakdown(zonesSeconds) {
 
 // ── internals ────────────────────────────────────────────────────
 
-function computeAge(dob, refMs) {
+export function computeAge(dob, refMs) {
   if (!dob) return null
   const dobMs = new Date(dob).getTime()
   if (!Number.isFinite(dobMs)) return null
