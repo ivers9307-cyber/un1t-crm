@@ -18,17 +18,24 @@
 import { useEffect, useState } from 'react'
 import {
   Wifi, WifiOff, Smartphone, Monitor, Plus, Trash2,
-  Copy, Check, AlertTriangle,
+  Copy, Check, AlertTriangle, Activity, ArrowRight,
 } from 'lucide-react'
+import { describePinOutcome, bareHost } from '@/lib/studio-pin-outcomes'
 
 export default function StudioDevicesManager({ locations }) {
   const [trustedIps, setTrustedIps] = useState([])
   const [devices, setDevices] = useState([])
+  const [activity, setActivity] = useState([])
   const [loadingIps, setLoadingIps] = useState(true)
   const [loadingDevices, setLoadingDevices] = useState(true)
+  const [loadingActivity, setLoadingActivity] = useState(true)
   const [error, setError] = useState(null)
   const [pairingToken, setPairingToken] = useState(null) // shown once
   const [tokenCopied, setTokenCopied] = useState(false)
+  // Set by the activity panel's "Add to trusted IPs" action to prefill +
+  // open the Trusted-IPs form. The nonce re-triggers the prefill effect
+  // even when the same IP is clicked twice.
+  const [ipPrefill, setIpPrefill] = useState(null)
 
   // --------- fetchers ---------
   const refreshIps = async () => {
@@ -59,10 +66,35 @@ export default function StudioDevicesManager({ locations }) {
     }
   }
 
+  const refreshActivity = async () => {
+    setLoadingActivity(true)
+    try {
+      const res = await fetch('/api/admin/studio-devices/activity')
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error || 'Failed to load')
+      setActivity(json.attempts || [])
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoadingActivity(false)
+    }
+  }
+
   useEffect(() => {
     refreshIps()
     refreshDevices()
+    refreshActivity()
   }, [])
+
+  // Prefill the Trusted-IPs form from an "untrusted network" activity
+  // row and scroll it into view. `nonce` makes repeat clicks re-fire.
+  const prefillTrustedIp = (ip, locationId) => {
+    const host = bareHost(ip)
+    if (!host) return
+    setError(null)
+    setIpPrefill({ ip_cidr: host, location_id: locationId || '', nonce: Date.now() })
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
 
   // --------- mutations ---------
   const addIp = async (form) => {
@@ -162,6 +194,7 @@ export default function StudioDevicesManager({ locations }) {
         loading={loadingIps}
         onAdd={addIp}
         onRemove={removeIp}
+        prefill={ipPrefill}
       />
 
       <DevicesPanel
@@ -171,6 +204,14 @@ export default function StudioDevicesManager({ locations }) {
         onPair={pairDevice}
         onRevoke={revokeDevice}
       />
+
+      <RecentActivityPanel
+        activity={activity}
+        locations={locations}
+        loading={loadingActivity}
+        onRefresh={refreshActivity}
+        onAddTrusted={prefillTrustedIp}
+      />
     </div>
   )
 }
@@ -179,12 +220,24 @@ export default function StudioDevicesManager({ locations }) {
 // Trusted IPs panel
 // ============================================================
 
-function TrustedIpsPanel({ ips, locations, loading, onAdd, onRemove }) {
+function TrustedIpsPanel({ ips, locations, loading, onAdd, onRemove, prefill }) {
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ location_id: '', ip_cidr: '', label: '' })
   const [submitting, setSubmitting] = useState(false)
 
   const locName = (id) => locations.find((l) => l.id === id)?.name || id
+
+  // Apply a prefill pushed from the activity panel: open the form and
+  // drop in the offending IP + its device's location.
+  useEffect(() => {
+    if (!prefill) return
+    setForm({
+      location_id: prefill.location_id || '',
+      ip_cidr: prefill.ip_cidr || '',
+      label: 'Studio wifi',
+    })
+    setShowForm(true)
+  }, [prefill])
 
   const submit = async (e) => {
     e.preventDefault()
@@ -498,6 +551,114 @@ function DevicesTable({ title, rows, locName, loading, onRevoke }) {
         </table>
       )}
     </div>
+  )
+}
+
+// ============================================================
+// Recent PIN activity panel
+// ============================================================
+
+const TONE_CLASSES = {
+  success: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30',
+  warn: 'text-amber-300 bg-amber-500/10 border-amber-500/30',
+  error: 'text-red-300 bg-red-500/10 border-red-500/30',
+  muted: 'text-un1t-subtle bg-un1t-border/30 border-un1t-border',
+}
+
+function ActivityBadge({ outcome }) {
+  const { label, tone } = describePinOutcome(outcome)
+  return (
+    <span className={`inline-block text-xs px-2 py-0.5 rounded-full border ${TONE_CLASSES[tone] || TONE_CLASSES.muted}`}>
+      {label}
+    </span>
+  )
+}
+
+function RecentActivityPanel({ activity, locations, loading, onRefresh, onAddTrusted }) {
+  const locName = (id) => locations.find((l) => l.id === id)?.name || id
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <Activity size={16} className="text-emerald-400" /> Recent PIN activity
+          </h3>
+          <p className="text-xs text-un1t-subtle mt-0.5 max-w-3xl">
+            The real reason each sign-in attempt passed or failed. The device itself only ever
+            shows a generic &quot;Incorrect PIN&quot; — so when staff can&apos;t get in, check here:
+            an <span className="text-red-300">untrusted network</span> means the device&apos;s IP
+            isn&apos;t in the trusted list above (add it with one click).
+          </p>
+        </div>
+        <button
+          onClick={onRefresh}
+          className="inline-flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border border-un1t-border text-un1t-subtle hover:text-un1t-text"
+        >
+          Refresh
+        </button>
+      </div>
+
+      <div className="rounded-lg border border-un1t-border overflow-hidden">
+        {loading ? (
+          <div className="p-4 text-xs text-un1t-subtle">Loading...</div>
+        ) : activity.length === 0 ? (
+          <div className="p-4 text-xs text-un1t-subtle">No PIN attempts logged yet.</div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="text-xs text-un1t-subtle bg-un1t-border/20">
+              <tr>
+                <th className="text-left px-3 py-2">When</th>
+                <th className="text-left px-3 py-2">Result</th>
+                <th className="text-left px-3 py-2">Device</th>
+                <th className="text-left px-3 py-2">Location</th>
+                <th className="text-left px-3 py-2">Source IP</th>
+                <th className="px-3 py-2"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-un1t-border">
+              {activity.map((a) => {
+                const { actionable } = describePinOutcome(a.outcome)
+                const ip = bareHost(a.source_ip)
+                const canAdd = actionable === 'trusted_ip' && ip && a.device?.location_id
+                return (
+                  <tr key={a.id} className="hover:bg-un1t-border/20">
+                    <td className="px-3 py-2 text-xs text-un1t-subtle whitespace-nowrap">
+                      {new Date(a.attempted_at).toLocaleString('en-IE', { dateStyle: 'short', timeStyle: 'short' })}
+                    </td>
+                    <td className="px-3 py-2">
+                      <ActivityBadge outcome={a.outcome} />
+                      {a.matched_name && (
+                        <span className="text-xs text-un1t-subtle ml-2">{a.matched_name}</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-un1t-subtle">
+                      {a.device?.label || <span className="text-un1t-muted italic">unknown</span>}
+                    </td>
+                    <td className="px-3 py-2 text-un1t-subtle">
+                      {a.device?.location_id ? locName(a.device.location_id) : <span className="text-un1t-muted italic">—</span>}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-un1t-subtle">
+                      {ip || <span className="text-un1t-muted italic">—</span>}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {canAdd && (
+                        <button
+                          onClick={() => onAddTrusted(ip, a.device.location_id)}
+                          className="text-xs text-blue-300 hover:text-blue-200 inline-flex items-center gap-1 whitespace-nowrap"
+                        >
+                          Add to trusted IPs <ArrowRight size={12} />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </section>
   )
 }
 
