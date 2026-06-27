@@ -20,6 +20,7 @@ export default function LiveClassClient({ locationId, locationName }) {
   const [endingAll, setEndingAll] = useState(false)
   const [pairing, setPairing] = useState(null) // strap object being paired
   const [tab, setTab] = useState('live')   // 'live' | 'detected'
+  const [testModeUntil, setTestModeUntil] = useState(null)
   const lastTickRef = useRef(0)
 
   async function poll() {
@@ -33,6 +34,7 @@ export default function LiveClassClient({ locationId, locationName }) {
         roster: json.roster || [],
         occurrence: json.occurrence || null,
       })
+      setTestModeUntil(json.test_mode_until || null)
       setError(null)
     } catch (e) {
       setError(e.message)
@@ -158,6 +160,8 @@ export default function LiveClassClient({ locationId, locationName }) {
         <p className="mt-10 text-center text-sm text-un1t-subtle">Loading live class…</p>
       ) : (
         <>
+          <TestModeControl locationId={locationId} testModeUntil={testModeUntil} onChange={setTestModeUntil} />
+
           <SessionGrid
             sessions={data.sessions}
             onEndOne={endOne}
@@ -185,6 +189,47 @@ export default function LiveClassClient({ locationId, locationName }) {
 }
 
 // ── components ───────────────────────────────────────────────────
+
+function TestModeControl({ locationId, testModeUntil, onChange }) {
+  const [busy, setBusy] = useState(false)
+  const activeMs = testModeUntil ? new Date(testModeUntil).getTime() : 0
+  const active = activeMs > Date.now()
+  const minsLeft = active ? Math.max(1, Math.round((activeMs - Date.now()) / 60000)) : 0
+
+  async function enable() {
+    setBusy(true)
+    try {
+      const res = await fetch(`/api/live/${locationId}/test-mode`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ minutes: 120 }),
+      })
+      const json = await res.json()
+      if (json.ok) onChange?.(json.test_mode_until)
+    } finally { setBusy(false) }
+  }
+  async function disable() {
+    setBusy(true)
+    try {
+      const res = await fetch(`/api/live/${locationId}/test-mode`, { method: 'DELETE' })
+      const json = await res.json()
+      if (json.ok) onChange?.(null)
+    } finally { setBusy(false) }
+  }
+
+  if (active) {
+    return (
+      <div className="mb-4 flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm">
+        <span className="font-semibold text-amber-800">HR test mode on</span>
+        <span className="text-amber-700">registered straps route for ~{minsLeft} min</span>
+        <button type="button" onClick={disable} disabled={busy} className="ml-auto rounded-md bg-amber-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-amber-500 disabled:opacity-50">Turn off</button>
+      </div>
+    )
+  }
+  return (
+    <button type="button" onClick={enable} disabled={busy} className="mb-4 rounded-md border border-un1t-border px-3 py-1.5 text-sm font-medium hover:bg-un1t-surface disabled:opacity-50">
+      Enable HR test mode (2h)
+    </button>
+  )
+}
 
 function SessionGrid({ sessions, onEndOne }) {
   if (sessions.length === 0) {
