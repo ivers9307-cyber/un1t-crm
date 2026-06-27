@@ -303,17 +303,19 @@ describe('pairOverride', () => {
             data: { id: 'c-1', max_hr_override: null, dob: '1990-05-08', glofox_member_id: 'm1', location_id: 'loc-1' }, error: null,
           })) })) })) })) }
         }
-        if (table === 'class_occurrences') {
-          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => ({
-            order: vi.fn(() => Promise.resolve({ data: [
-              { glofox_event_id: 'ev1', name: 'DR1VE', starts_at: '2026-06-18T05:00:00Z', ends_at: '2026-06-18T06:00:00Z' },
-            ] })),
-          })) })) })) })) }
-        }
         if (table === 'class_bookings') {
-          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({
-            not: vi.fn(() => ({ limit: vi.fn(() => Promise.resolve({ data: [{ id: 'bk1' }] })) })),
-          })) })) })) })) }
+          // resolveBookedOccurrenceForMember: .eq(location_id).eq(glofox_member_id).gte().lte()
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({
+            gte: vi.fn(() => ({ lte: vi.fn(() => Promise.resolve({ data: [
+              { glofox_event_id: 'ev1', status: 'CONFIRMED', starts_at: '2026-06-18T05:00:00Z' },
+            ] })) })),
+          })) })) })) }
+        }
+        if (table === 'class_occurrences') {
+          // resolveBookedOccurrenceForMember: .eq(location_id).in(glofox_event_id, [...])
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ in: vi.fn(() => Promise.resolve({ data: [
+            { glofox_event_id: 'ev1', name: 'DR1VE', starts_at: '2026-06-18T05:00:00Z', ends_at: '2026-06-18T06:00:00Z' },
+          ] })) })) })) }
         }
         if (table === 'heart_rate_sessions') {
           return {

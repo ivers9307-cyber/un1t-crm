@@ -14,7 +14,7 @@
 import { logWarn } from '@/lib/log'
 import { selectAll } from '@/lib/select-all'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
-import { lookupBookedMember, resolveClassLinkSource } from '@/lib/class-bookings'
+import { lookupBookedMember, resolveClassLinkSource, resolveBookedOccurrenceForMember } from '@/lib/class-bookings'
 import { resolveMaxHr, summariseSession, resolveScoringConfig } from '@/lib/heart-rate'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { sendCustomerPush } from '@/lib/customer-push'
@@ -182,15 +182,19 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
   if (!contact) return { ok: false, error: 'Contact not at this location' }
   const maxHr = resolveMaxHr(contact, nowMs)
 
-  // Which Glofox class is running right now? Stamp it on the session so
-  // coach-paired members get the same class link as the auto-ingest path
-  // (HR-CLASS-ALLOC.1/.2): 'booked' if the member was booked into this class,
-  // else 'presence'. Best-effort — a strap paired outside any class still
-  // creates a session, just without a class link.
-  const liveClass = await resolveCurrentOccurrence(db, { locationId, nowMs })
-  const booked = liveClass ? await lookupBookedMember(db, {
-    locationId, glofoxEventId: liveClass.glofox_event_id, glofoxMemberId: contact?.glofox_member_id,
-  }) : false
+  // Which class is running for THIS member now? Booking-first (wide), then the
+  // location-wide live class (presence). Mirrors the bridge auto path.
+  // Best-effort — a strap paired outside any class still creates a session,
+  // just without a class link.
+  const BOOKED_PRE_MS = 45 * 60_000
+  const BOOKED_POST_MS = 30 * 60_000
+  const bookedOcc = await resolveBookedOccurrenceForMember(db, {
+    locationId, glofoxMemberId: contact?.glofox_member_id, nowMs, preMs: BOOKED_PRE_MS, postMs: BOOKED_POST_MS,
+  })
+  const liveClass = bookedOcc || await resolveCurrentOccurrence(db, { locationId, nowMs })
+  const booked = liveClass
+    ? (bookedOcc ? true : await lookupBookedMember(db, { locationId, glofoxEventId: liveClass.glofox_event_id, glofoxMemberId: contact?.glofox_member_id }))
+    : false
   const linkSource = resolveClassLinkSource({ liveClass, booked }) // 'booked' | 'presence' | null
 
   // Find or create a session.
