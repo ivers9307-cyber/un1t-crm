@@ -16,6 +16,7 @@ The "if you miss one, you break prod or burn a session" list. Terse on purpose; 
 - **Migrations are forward-only**; apply via Supabase MCP (`apply_migration`) against the **un1t-crm** project (ref `iyvtbjjxdggiadzwwvdj`; confirm via `list_projects` — NOT the sentinel project `tpttqakxmyxrwnqjepfm`). Run `get_advisors` (type=security) after any DDL. Apply the migration *before* the code that depends on it deploys.
 - **Supabase views default to SECURITY DEFINER** (bypass RLS). Always `WITH (security_invoker = on)`. The advisor flags it ERROR-level.
 - **RLS policies: wrap `auth.uid()` in `(SELECT auth.uid())`** (advisor `auth_rls_initplan` — per-row vs per-query eval).
+- **One permissive policy per (table, command).** Don't pair a `FOR ALL` "manage" policy with a separate read policy — the `FOR ALL` overlaps the read on SELECT and trips `multiple_permissive_policies` (counted ×5 grant roles). Instead write the manage side as **explicit `INSERT`/`UPDATE`/`DELETE`** policies and keep a **single `SELECT`** policy whose `USING` is the OR of every population that may read. RLS ORs permissive policies, so `FOR ALL` ≡ the four per-command policies and merging reads is behaviour-preserving. Scope policies `TO authenticated` unless anon genuinely needs them. Reference cleanup: mig 320 (and 167).
 
 **supabase-js / PostgREST traps** (these fail *silently*)
 - **Builders are thenables, not Promises** — they have `.then` but no `.catch`. `await db.rpc(...).catch(()=>{})` throws and the rpc never runs. Use `try { await … } catch {}`.
