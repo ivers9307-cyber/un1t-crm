@@ -107,6 +107,22 @@ export function parseDeviceKey(key) {
 }
 
 /**
+ * A privacy-safe display label for an unpaired strap on the PUBLIC TV.
+ * ANT+ → the device number (not PII). BLE → last 4 hex of the MAC, masked
+ * (never the full MAC on a public screen). Bad key → a generic 'Strap'.
+ *
+ * @param {string} deviceKey
+ * @returns {string}
+ */
+export function maskStrapLabel(deviceKey) {
+  const parsed = parseDeviceKey(deviceKey)
+  if (!parsed) return 'Strap'
+  if (parsed.protocol === 'ant') return `Strap ${parsed.deviceId}`
+  const hex = String(parsed.deviceId).replace(/[^0-9A-Fa-f]/g, '')
+  return hex.length >= 4 ? `Strap ••${hex.slice(-4).toUpperCase()}` : 'Strap'
+}
+
+/**
  * Round-trip a device_key into canonical form, or null if it doesn't
  * parse.
  */

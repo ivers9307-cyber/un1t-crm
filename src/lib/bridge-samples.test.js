@@ -17,6 +17,7 @@ import {
   BRIDGE_ONLINE_WINDOW_MS,
   dublinWallClockToMs,
   resolveStrapsForBatch,
+  maskStrapLabel,
 } from './bridge-samples.js'
 
 // ── canonicaliseMac ──────────────────────────────────────────────
@@ -346,6 +347,21 @@ describe('dublinWallClockToMs', () => {
     expect(dublinWallClockToMs('2026-06-18', '6pm')).toBeNaN()
     expect(dublinWallClockToMs(null, null)).toBeNaN()
     expect(dublinWallClockToMs('2026-06-18', '')).toBeNaN()
+  })
+})
+
+// ── maskStrapLabel ───────────────────────────────────────────────
+
+describe('maskStrapLabel', () => {
+  it('shows the ANT+ device number', () => {
+    expect(maskStrapLabel('ant:12511')).toBe('Strap 12511')
+  })
+  it('masks a BLE MAC to the last 4 hex', () => {
+    expect(maskStrapLabel('ble:AA:BB:CC:DD:EE:FF')).toBe('Strap ••EEFF')
+  })
+  it('falls back to a generic label on a bad key', () => {
+    expect(maskStrapLabel('garbage')).toBe('Strap')
+    expect(maskStrapLabel(null)).toBe('Strap')
   })
 })
 
