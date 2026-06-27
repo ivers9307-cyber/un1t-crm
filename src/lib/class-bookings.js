@@ -7,7 +7,7 @@
 // sync + every BOOKING_* webhook). It drives both the booked-vs-presence tag on
 // heart_rate_sessions and the coach-view live-class roster panel.
 
-import { toMillis, resolveCurrentOccurrence } from '@/lib/class-occurrences'
+import { toMillis, occurrenceIsLive, resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { logWarn } from '@/lib/log'
 
 /**
@@ -162,4 +162,66 @@ export async function getClassRoster(db, { locationId, nowMs = Date.now() } = {}
     .eq('location_id', locationId)
     .eq('glofox_event_id', occ.glofox_event_id)
   return { occurrence: occ, roster: data || [] }
+}
+
+// ── booking-first class selection (HR-ROUTE.3) ────────────────────
+
+/**
+ * Pure: from a member's booking rows + a map of their occurrences, pick the
+ * occurrence nearest to now whose window (preMs/postMs around start/end) is live
+ * and whose booking is not cancelled. Returns { glofox_event_id, class_name } | null.
+ *
+ * @param {Array<{glofox_event_id:string, status:string|null, starts_at:string|null}>} bookingRows
+ * @param {Map<string, {glofox_event_id:string, name:string|null, starts_at:string, ends_at:string|null}>} occByEventId
+ * @param {number} nowMs
+ * @param {{preMs:number, postMs:number}} window
+ */
+export function pickNearestBookedOccurrence(bookingRows, occByEventId, nowMs, { preMs, postMs }) {
+  let best = null
+  let bestDist = Infinity
+  for (const b of bookingRows || []) {
+    if (String(b?.status || '').toUpperCase() === 'CANCELLED') continue
+    const occ = occByEventId.get(b.glofox_event_id)
+    if (!occ) continue
+    if (!occurrenceIsLive(occ, nowMs, { preMs, postMs })) continue
+    const startMs = new Date(occ.starts_at).getTime()
+    const dist = Math.abs(startMs - nowMs)
+    if (dist < bestDist) {
+      bestDist = dist
+      best = { glofox_event_id: occ.glofox_event_id, class_name: occ.name || null }
+    }
+  }
+  return best
+}
+
+/**
+ * IO: the occurrence the member is booked into around now (booking-first class
+ * selection for a registered strap). Loads the member's non-cancelled bookings
+ * near now, joins their occurrences for ends_at, and picks the nearest live one.
+ * Returns { glofox_event_id, class_name } | null. Fast-null when no glofoxMemberId.
+ *
+ * @param {object} db service-role client
+ * @param {{ locationId:string, glofoxMemberId:string|null, nowMs?:number, preMs:number, postMs:number }} opts
+ */
+export async function resolveBookedOccurrenceForMember(db, { locationId, glofoxMemberId, nowMs = Date.now(), preMs, postMs }) {
+  if (!db || !locationId || !glofoxMemberId) return null
+  const sinceIso = new Date(nowMs - 3 * 60 * 60_000).toISOString()
+  const untilIso = new Date(nowMs + preMs).toISOString()
+  const { data: bookings } = await db
+    .from('class_bookings')
+    .select('glofox_event_id, status, starts_at')
+    .eq('location_id', locationId)
+    .eq('glofox_member_id', glofoxMemberId)
+    .gte('starts_at', sinceIso)
+    .lte('starts_at', untilIso)
+  if (!bookings || bookings.length === 0) return null
+
+  const eventIds = [...new Set(bookings.map((b) => b.glofox_event_id).filter(Boolean))]
+  const { data: occs } = await db
+    .from('class_occurrences')
+    .select('glofox_event_id, name, starts_at, ends_at')
+    .eq('location_id', locationId)
+    .in('glofox_event_id', eventIds)
+  const occByEventId = new Map((occs || []).map((o) => [o.glofox_event_id, o]))
+  return pickNearestBookedOccurrence(bookings, occByEventId, nowMs, { preMs, postMs })
 }

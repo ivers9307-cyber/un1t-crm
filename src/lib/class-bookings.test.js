@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mapBookingToRosterRow, upsertClassBookings, resolveClassLinkSource, lookupBookedMember, mergeRosterWithSessions } from './class-bookings'
+import { mapBookingToRosterRow, upsertClassBookings, resolveClassLinkSource, lookupBookedMember, mergeRosterWithSessions, pickNearestBookedOccurrence } from './class-bookings'
 
 describe('class-bookings: mapBookingToRosterRow', () => {
   const base = {
@@ -128,5 +128,37 @@ describe('class-bookings: mergeRosterWithSessions', () => {
   })
   it('handles empty inputs', () => {
     expect(mergeRosterWithSessions([], [])).toEqual([])
+  })
+})
+
+describe('pickNearestBookedOccurrence', () => {
+  const NOW = Date.parse('2026-06-27T07:45:00Z')
+  const occ8 = { glofox_event_id: 'e8', name: 'TEMPO', starts_at: '2026-06-27T08:00:00Z', ends_at: '2026-06-27T09:00:00Z' }
+  const occ7 = { glofox_event_id: 'e7', name: 'RIDE',  starts_at: '2026-06-27T07:00:00Z', ends_at: '2026-06-27T08:00:00Z' }
+  const occByEvent = (occs) => new Map(occs.map((o) => [o.glofox_event_id, o]))
+  const W = { preMs: 45 * 60000, postMs: 30 * 60000 }
+
+  it('maps an early arrival to the upcoming booked class even when a previous class still overlaps', () => {
+    const bookings = [
+      { glofox_event_id: 'e8', status: 'BOOKED', starts_at: occ8.starts_at },
+      { glofox_event_id: 'e7', status: 'BOOKED', starts_at: occ7.starts_at },
+    ]
+    const out = pickNearestBookedOccurrence(bookings, occByEvent([occ7, occ8]), NOW, W)
+    expect(out).toEqual({ glofox_event_id: 'e8', class_name: 'TEMPO' })
+  })
+
+  it('ignores cancelled bookings', () => {
+    const bookings = [{ glofox_event_id: 'e8', status: 'CANCELLED', starts_at: occ8.starts_at }]
+    expect(pickNearestBookedOccurrence(bookings, occByEvent([occ8]), NOW, W)).toBeNull()
+  })
+
+  it('returns null when the booked occurrence is outside the window', () => {
+    const far = { glofox_event_id: 'eX', name: 'LATE', starts_at: '2026-06-27T12:00:00Z', ends_at: '2026-06-27T13:00:00Z' }
+    const bookings = [{ glofox_event_id: 'eX', status: 'BOOKED', starts_at: far.starts_at }]
+    expect(pickNearestBookedOccurrence(bookings, occByEvent([far]), NOW, W)).toBeNull()
+  })
+
+  it('returns null with no bookings', () => {
+    expect(pickNearestBookedOccurrence([], new Map(), NOW, W)).toBeNull()
   })
 })
