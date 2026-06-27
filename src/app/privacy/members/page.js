@@ -19,7 +19,7 @@ export const runtime = 'nodejs'
 export const metadata = {
   title: 'Privacy policy · UN1T Dublin',
   description:
-    'How Champ Fitness Ltd (trading as UN1T Dublin) collects, uses, and protects the personal data of members, leads, and website visitors under GDPR and Irish data protection law.',
+    'How Champ Fitness Ltd (trading as UN1T Dublin) collects, uses, and protects the personal data of members, member app users, leads, and website visitors under GDPR and Irish data protection law.',
 }
 
 export default function MemberPrivacyPolicy() {
@@ -67,6 +67,7 @@ export default function MemberPrivacyPolicy() {
             <li><strong>Membership:</strong> membership type, class bookings, attendance history, and account preferences.</li>
             <li><strong>Payment:</strong> billing details and transaction records. Card details are handled by our payment provider and are not stored by us.</li>
             <li><strong>Health &amp; fitness:</strong> information you choose to share, such as PAR-Q answers, injuries, or goals (special category data).</li>
+            <li><strong>Member app &amp; connected fitness data:</strong> if you use our member app and connect Apple Health or a heart-rate monitor, the workout and heart-rate data you authorise (including per-session effort, heart-rate zones and points), and any InBody body-composition scan results.</li>
             <li><strong>Marketing &amp; leads:</strong> enquiry details and messages you send via web forms, WhatsApp, or social media, plus your marketing preferences.</li>
             <li><strong>Technical:</strong> IP address, device and browser type, cookies, and pages visited.</li>
             <li><strong>CCTV:</strong> images captured by cameras in public areas of our premises.</li>
@@ -75,6 +76,20 @@ export default function MemberPrivacyPolicy() {
             We only collect health information where you provide it and where it
             is needed to keep you safe during training. You may decline to share
             it, though this can limit our ability to tailor sessions safely.
+          </p>
+          <p>
+            <strong>Apple Health and the member app.</strong> If you connect Apple
+            Health (or a heart-rate monitor) in our member app, we read only the
+            workout and heart-rate data you authorise, and only to provide the app
+            to you &mdash; to score your own sessions and show your own progress,
+            streaks, points and gym challenges. This health and fitness data is
+            <strong> never used for advertising, never used to track you</strong>{' '}
+            across other apps or websites, and is <strong>never sold or shared</strong>{' '}
+            with third parties for their own purposes. It is stored in our secure
+            systems (hosted in the EU) and is visible only to you and, where you
+            are a coaching member, the coach you work with. You can disconnect
+            Apple Health at any time in the app&rsquo;s settings, and you can ask
+            us to delete your data using the contact details below.
           </p>
 
           <h2 className="text-xl font-semibold mt-8 mb-3">3. How we use your data</h2>
