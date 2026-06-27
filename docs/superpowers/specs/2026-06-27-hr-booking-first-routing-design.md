@@ -1,4 +1,4 @@
-# HR routing: booking-first class mapping + staff test mode + unmapped-detection display
+# HR routing: booking-first class mapping + staff test mode + unmapped-detection display + class-aware session lifecycle
 
 **Date:** 2026-06-27
 **Status:** Design approved, pending spec review
@@ -32,6 +32,15 @@ linked. Two root issues, confirmed against the live DB:
    only renders `heart_rate_sessions`. A broadcasting strap with no session shows
    nowhere on the big screen; an operator must manually pair it first.
 
+4. **A mid-class drop-out splits the session and emails early.** The strap goes
+   silent (member steps out / a bridge blip), and within 5 min
+   [`auto-end-stale-hr-sessions`](../../../src/app/api/cron/auto-end-stale-hr-sessions/route.js)
+   (`STALE_AFTER_MS = 5 min`) closes the session and fires the post-class email —
+   even though the class is still running. If the member returns mid-class they
+   get a *new* session, and the post-class email per-session dedup
+   (`email_sent_at`) is per-row, so a second session = a **second email** for the
+   same class.
+
 ## Goals
 
 - A registered strap maps to **the class the member is actually booked into**,
@@ -41,6 +50,10 @@ linked. Two root issues, confirmed against the live DB:
 - **Every broadcasting strap is visible on the screen immediately**, labelled by
   its number, with no pairing step. Pairing/booking *upgrades* the tile from a
   number to a name with points.
+- **One session per member per scheduled class.** A mid-class drop-out keeps the
+  session open; HR returning during the class rejoins the same session; the
+  post-class email is sent **once, at class end** — never mid-class, never
+  duplicated.
 
 ## Non-goals
 
@@ -133,6 +146,54 @@ The same booking-first-then-time helper replaces the bare
   both. When a booking/test-mode/pair creates a session, the tile flips from
   number to name on the next 2s poll.
 
+### Layer 4 — Class-aware session lifecycle (rejoin + deferred email)
+
+A single class session per member, kept open across mid-class drop-outs, closed
+and emailed once at class end. The post-class email dedup (`email_sent_at`) is
+**per session row**, so the only reliable way to avoid duplicate emails is to
+guarantee one session per `(member, class)` — not to dedupe emails.
+
+**A. Defer the stale auto-close while the class is still running.** In
+[`auto-end-stale-hr-sessions`](../../../src/app/api/cron/auto-end-stale-hr-sessions/route.js),
+a **class-linked** session (`glofox_event_id` set) is only closed when:
+
+- it is silent > `STALE_AFTER_MS` (5 min) **AND** `now > occ.ends_at + CLASS_END_GRACE`, or
+- the existing 4 h hard cap (`MAX_SESSION_LENGTH_MS`) fires (unchanged backstop).
+
+So a class-linked session that is **silent but whose class is still scheduled**
+is *deferred* (left open, rejoinable) rather than closed. A session that is
+**still streaming** is never stale (its `last_sample_at` stays fresh — touched on
+every sample batch), so a class running past its scheduled end is unaffected.
+**Non-class** sessions (native PT/consultation bookings, test-mode presence-less,
+off-site imports) keep the current 5-min stale-close — there is no class end to
+wait for. The cron needs the occurrence `ends_at`; fetch it per class-linked
+candidate (by `glofox_event_id`) — small N (open sessions at one location).
+
+**B. Rejoin is then automatic.** Because the session stays open through the gap,
+returning HR mid-class hits `findOrCreateAutoSession` step (a) (existing open
+session) and appends to the **same** session. No new code on the rejoin path
+beyond A keeping the row open.
+
+**C. One session per member per class on the create path.** Before creating a
+class-linked session, look for an existing session for
+`(contact_id, glofox_event_id)`:
+
+- **open** → return it (rejoin; already covered by step a),
+- **closed + class still live** (`now ≤ occ.ends_at + CLASS_END_GRACE`) → reopen
+  (`ended_at = null`) and return it (defensive — should not trigger once A defers;
+  `email_sent_at` is still null because the email was deferred, so reopening
+  cannot re-send),
+- **closed + class ended** → return `null`: the class is over, so a returning
+  strap is a live unpaired tile (Layer 3), **not** a new scoring session and not a
+  second email.
+
+This closes the duplicate-email hole: a post-class re-entry inside the
+booking-first grace window cannot spawn a second session.
+
+**Email timing, net:** the post-class email fires **exactly once**, when the
+single class session closes — either the coach hits "end class" (`endAllAtLocation`)
+at the bell, or the cron closes it at `ends_at + CLASS_END_GRACE`. Never mid-class.
+
 ## Data flow (registered strap, sample arrives)
 
 ```
@@ -148,6 +209,17 @@ bridge POST /api/bridge/samples
               else null
       → (3) anon: still-unmatched + class live (20/10) → anon session
   TV/coach poll → named/anon session tiles + unpaired number tiles (Layer 3)
+
+  Note (Layer 4): step (a) reattaches a mid-class drop-out to its still-open
+  session because the stale-close cron defers closing class-linked sessions
+  until class end + grace; step (b)/(c) creation is class-keyed so a re-entry
+  cannot spawn a second session for a class the member already has one for.
+
+every 5 min — cron auto-end-stale-hr-sessions:
+  class-linked session  → close only if silent>5min AND now > ends_at + 10min
+  non-class session     → close if silent>5min (unchanged)
+  any session           → close if started_at > 4h ago (unchanged backstop)
+  → close = finalise + ONE post-class email (email_sent_at)
 ```
 
 ## Defaults / parameters
@@ -160,13 +232,17 @@ bridge POST /api/bridge/samples
 | Test mode toggle gate | manager roles (`MANAGER_ROLES`) |
 | Test mode scope | registered straps only |
 | Unpaired tile label | ANT+ number; BLE last-4 masked |
+| `CLASS_END_GRACE` (defer close until after class end) | 10 min |
+| Non-class stale-close (`STALE_AFTER_MS`) | 5 min (unchanged) |
+| Max session length backstop (`MAX_SESSION_LENGTH_MS`) | 4 h (unchanged) |
 
 ## Components / files touched
 
 | File | Change |
 |---|---|
 | `src/lib/class-bookings.js` | + `resolveBookedOccurrenceForMember` (pure-ish IO + a pure nearest-pick helper for unit tests) |
-| `src/lib/bridge-samples.js` | reorder `findOrCreateAutoSession` (booking-first → presence → test-mode); thread `testModeActive`; backfill uses booking-first |
+| `src/lib/bridge-samples.js` | reorder `findOrCreateAutoSession` (booking-first → presence → test-mode); thread `testModeActive`; backfill uses booking-first; class-keyed find-or-create (open→return, closed+live→reopen, closed+ended→null) [Layer 4C] |
+| `src/app/api/cron/auto-end-stale-hr-sessions/route.js` | defer closing class-linked sessions until `ends_at + CLASS_END_GRACE`; non-class + 4h backstop unchanged [Layer 4A] |
 | `src/lib/live-class.js` | `pairOverride` class stamp via booking-first helper |
 | `supabase/migrations/NNN_hr_bridge_test_mode.sql` | + `ble_bridges.test_mode_until` |
 | `src/app/api/live/[locationId]/test-mode/route.js` | new POST/DELETE (manager+) |
@@ -188,6 +264,11 @@ bridge POST /api/bridge/samples
   once `test_mode_until` passes; anon path still gated on a live class.
 - **Route guard**: `check:route-guards` covers the new `/api/live/.../test-mode`
   route (manager gate + `assertLocationAccess`).
+- **Lifecycle (Layer 4)**: a class-linked session silent mid-class is NOT closed;
+  the same session silent after `ends_at + grace` IS closed (+ one email); a
+  still-streaming session past scheduled end stays open; a non-class session
+  closes at 5-min silence as before; a re-entry after class end does not create a
+  second session (closed+ended → null). Cover the email fires exactly once.
 - Display layers verified against the live bridge once a strap is broadcasting
   (the whole HR feature is still pending device verification).
 
@@ -203,3 +284,12 @@ bridge POST /api/bridge/samples
   view (`/api/live`, authenticated) may still show the full `device_key`.
 - Migration is forward-only, applied via Supabase MCP against `iyvtbjjxdggiadzwwvdj`;
   run `get_advisors` (security) after the DDL.
+- **Layer 4 changes email *timing*, intentionally:** a member who leaves mid-class
+  and never returns now gets their post-class email at **class end + grace**
+  (≤ ~10 min after the bell) instead of ~5 min after they walked out. This is the
+  requested behaviour and the cost of single-session-per-class. A coach who hits
+  "end class" still emails immediately at the bell.
+- **Class `ends_at` correctness depends on the occurrence spine.** A class
+  missing/mis-timed in `class_occurrences` (e.g. a sync gap) falls back to the 4 h
+  backstop for closing — the session won't hang forever, but the email could be
+  late. The daily 04:00 sync keeps the spine current.
