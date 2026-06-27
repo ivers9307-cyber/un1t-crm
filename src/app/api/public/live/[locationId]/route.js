@@ -18,6 +18,8 @@ import { createServerClient } from '@/lib/supabase'
 import { summariseSession, zoneForBpm } from '@/lib/heart-rate'
 import { isBridgeOnline, latestBridgeSeenMs, maskStrapLabel } from '@/lib/bridge-samples'
 import { getAvailableStraps } from '@/lib/live-class'
+import { resolveCurrentClassForTv } from '@/lib/class-occurrences'
+import { dublinTimeLabel } from '@/lib/dublin-time'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -82,6 +84,11 @@ export async function GET(_request, props) {
     .limit(1)
     .maybeSingle()
 
+  const liveClass = await resolveCurrentClassForTv(db, { locationId, nowMs })
+  const currentClass = liveClass
+    ? { class_name: liveClass.class_name, program: liveClass.program, starts_at: liveClass.starts_at, starts_at_label: dublinTimeLabel(liveClass.starts_at), glofox_event_id: liveClass.glofox_event_id }
+    : null
+
   if (!sessions || sessions.length === 0) {
     return NextResponse.json({
       ok: true,
@@ -91,6 +98,7 @@ export async function GET(_request, props) {
       sessions: [],
       available_straps: availableStraps,
       timer: timerRun || null,
+      current_class: currentClass,
     })
   }
 
@@ -186,5 +194,6 @@ export async function GET(_request, props) {
     sessions: tiles,
     available_straps: availableStraps,
     timer: timerRun || null,
+    current_class: currentClass,
   })
 }

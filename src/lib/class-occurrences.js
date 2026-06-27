@@ -166,3 +166,28 @@ export async function resolveCurrentOccurrence(db, { locationId, nowMs = Date.no
   }
   return null
 }
+
+/**
+ * IO: the class running at a location right now, with the fields the TV
+ * class-start intro card needs. Same "most-recently-started live occurrence"
+ * resolution as resolveCurrentOccurrence. Returns null when nothing is live.
+ * @returns {Promise<null | { glofox_event_id:string, class_name:string|null, program:string|null, starts_at:string }>}
+ */
+export async function resolveCurrentClassForTv(db, { locationId, nowMs = Date.now() } = {}) {
+  if (!db || !locationId) return null
+  const sinceIso = new Date(nowMs - 3 * 60 * 60_000).toISOString()
+  const untilIso = new Date(nowMs + OCC_PRE_MS).toISOString()
+  const { data } = await db
+    .from('class_occurrences')
+    .select('glofox_event_id, name, program, starts_at, ends_at')
+    .eq('location_id', locationId)
+    .gte('starts_at', sinceIso)
+    .lte('starts_at', untilIso)
+    .order('starts_at', { ascending: false })
+  for (const occ of data || []) {
+    if (occurrenceIsLive(occ, nowMs)) {
+      return { glofox_event_id: occ.glofox_event_id, class_name: occ.name || null, program: occ.program || null, starts_at: occ.starts_at }
+    }
+  }
+  return null
+}
