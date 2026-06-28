@@ -37,6 +37,7 @@ export const DASHBOARD_LINK_PERM_KEYS = [
   'dashboard_business',
   'churn_radar',
   'lead_radar',
+  'engagement_analytics',
 ]
 
 // Every top-level item carries a `section` (UI-FOUND.4) so the sidebar

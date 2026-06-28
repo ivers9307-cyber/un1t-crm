@@ -1,6 +1,21 @@
 import { describe, it, expect } from 'vitest'
 import { buildSessionPush, buildGoalPush, buildStreakAtRiskPush, buildTargetHitPush, buildTierUpPush, buildFriendRequestPush, buildFriendAcceptedPush, buildReactionPush, periodKey, streakAtRisk } from './customer-notifications.js'
-import { attendanceDrop, buildWinbackPush } from './customer-notifications.js'
+import { attendanceDrop, buildWinbackPush, buildClassReminderPush } from './customer-notifications.js'
+
+describe('buildClassReminderPush', () => {
+  it('builds a pre-class reminder with the class name + time label', () => {
+    const p = buildClassReminderPush({ className: 'UN1T HIIT', timeLabel: '7:30pm', classBookingId: 'cb-1' })
+    expect(p.title).toBe('UN1T HIIT starting soon')
+    expect(p.body).toContain('7:30pm')
+    expect(p.data).toEqual({ type: 'class_reminder', class_booking_id: 'cb-1' })
+  })
+  it('degrades gracefully with no name / time', () => {
+    const p = buildClassReminderPush({})
+    expect(p.title).toBe('Your class starting soon')
+    expect(p.data.type).toBe('class_reminder')
+    expect(p.data.class_booking_id).toBeNull()
+  })
+})
 
 describe('buildSessionPush', () => {
   const base = { effortPoints: 280, className: 'Conditioning', sessionId: 'sess-1' }

@@ -54,6 +54,9 @@ export function resolveDashboardTarget(user) {
   // instead of the "no dashboards" empty state.
   if (hasPermission(user, 'churn_radar')) return '/dashboard/churn-radar'
   if (hasPermission(user, 'lead_radar'))  return '/dashboard/lead-radar'
+  // P2-7 — engagement analytics is a dashboard tab too; a user holding only
+  // this permission still gets a landing target instead of the empty state.
+  if (hasPermission(user, 'engagement_analytics')) return '/dashboard/engagement'
 
   return null
 }
