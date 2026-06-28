@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mapBiologicalSexToGender, parseBodyBlock } from './apple-health-body.js'
+import { mapBiologicalSexToGender, parseBodyBlock, normalizeHealthMetricKey } from './apple-health-body.js'
 
 describe('mapBiologicalSexToGender', () => {
   it('maps HealthKit values to our enum', () => {
@@ -40,5 +40,17 @@ describe('parseBodyBlock', () => {
   })
   it('handles an empty/absent block', () => {
     expect(parseBodyBlock(undefined)).toEqual({ weightKg: null, weightAt: null, dob: null, gender: null })
+  })
+})
+
+describe('normalizeHealthMetricKey', () => {
+  it('aliases hrv and vo2max to canonical keys', () => {
+    expect(normalizeHealthMetricKey('hrv')).toBe('heart_rate_variability_sdnn')
+    expect(normalizeHealthMetricKey('vo2max')).toBe('vo2_max')
+  })
+  it('passes canonical / unknown keys through', () => {
+    expect(normalizeHealthMetricKey('resting_heart_rate')).toBe('resting_heart_rate')
+    expect(normalizeHealthMetricKey('active_energy')).toBe('active_energy')
+    expect(normalizeHealthMetricKey('whatever')).toBe('whatever')
   })
 })

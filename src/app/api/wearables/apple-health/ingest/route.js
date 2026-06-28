@@ -27,7 +27,7 @@ import { resolveCustomerContact } from '@/lib/customer-auth'
 import { mapAppleHealthWorkoutToSession } from '@/lib/apple-health-map'
 import { validateBody } from '@/lib/validate'
 import { applyWeightObservation } from '@/lib/body-metrics'
-import { parseBodyBlock } from '@/lib/apple-health-body'
+import { parseBodyBlock, normalizeHealthMetricKey } from '@/lib/apple-health-body'
 
 const AppleHealthIngestSchema = z.object({
   workouts: z.array(z.any()).optional(),
@@ -168,7 +168,7 @@ export async function POST(request) {
     .map((m) => ({
       contact_id: contact.id,
       location_id: locationId,
-      metric: String(m.metric),
+      metric: normalizeHealthMetricKey(m.metric),
       recorded_at: m.recorded_at,
       value: Number(m.value),
       unit: m.unit ?? null,
