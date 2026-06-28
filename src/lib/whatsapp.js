@@ -1053,21 +1053,60 @@ export function parseConsentKeyword(text) {
  * right conversation row.
  */
 export async function getOrCreateConversation(db, contact, locationId) {
+  // The unique key on whatsapp_conversations is (location_id, wa_phone) —
+  // NOT (location_id, contact_id) (mig 008). The inbound webhook also keys
+  // on wa_phone. Looking up by contact_id could MISS a row the webhook
+  // already created for this number (e.g. as an unknown sender, contact_id
+  // still null), and the INSERT would then violate the wa_phone unique
+  // constraint → null id → an orphaned outbound message not linked to the
+  // thread. Key on wa_phone to match the constraint.
+  const waPhone = contact.wa_phone
+  if (waPhone) {
+    const { data: existing } = await db.from('whatsapp_conversations')
+      .select('id, contact_id')
+      .eq('location_id', locationId)
+      .eq('wa_phone', waPhone)
+      .maybeSingle()
+    if (existing) {
+      // Backfill contact_id if the row was created for an unknown sender.
+      if (!existing.contact_id && contact.id) {
+        await db.from('whatsapp_conversations').update({ contact_id: contact.id }).eq('id', existing.id)
+      }
+      return existing.id
+    }
+
+    const { data: created, error } = await db.from('whatsapp_conversations').insert({
+      location_id: locationId,
+      contact_id: contact.id,
+      wa_phone: waPhone,
+      status: 'active',
+    }).select('id').single()
+    if (!error && created) return created.id
+
+    // Lost a race with the inbound webhook (or another send) on the same
+    // wa_phone — the unique constraint rejected us; re-read the winner.
+    const { data: raced } = await db.from('whatsapp_conversations')
+      .select('id')
+      .eq('location_id', locationId)
+      .eq('wa_phone', waPhone)
+      .maybeSingle()
+    return raced?.id
+  }
+
+  // No wa_phone (shouldn't happen for a WA send, but be safe) — fall back to
+  // a contact_id lookup so we don't insert a duplicate NULL-wa_phone row.
   const { data: existing } = await db.from('whatsapp_conversations')
     .select('id')
     .eq('location_id', locationId)
     .eq('contact_id', contact.id)
-    .single()
-
+    .maybeSingle()
   if (existing) return existing.id
-
   const { data: created } = await db.from('whatsapp_conversations').insert({
     location_id: locationId,
     contact_id: contact.id,
-    wa_phone: contact.wa_phone,
+    wa_phone: null,
     status: 'active',
   }).select('id').single()
-
   return created?.id
 }
 
