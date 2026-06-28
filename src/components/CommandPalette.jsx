@@ -75,6 +75,9 @@ export default function CommandPalette({ user }) {
           .from('contacts')
           .select('id, name, email, phone')
           .eq('location_id', locId)
+          // CONTACT-DEDUP — jump straight to the one unified profile per
+          // person; the non-primary linked accounts route to it anyway.
+          .eq('is_primary_contact', true)
           .or(`name.ilike.%${term}%,email.ilike.%${term}%,phone.ilike.%${term}%`)
           .limit(6)
         if (!cancelled) setContacts(Array.isArray(data) ? data : [])

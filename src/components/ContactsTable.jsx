@@ -62,6 +62,22 @@ function CrossoverMarker({ ctx }) {
   )
 }
 
+// CONTACT-DEDUP — the lookup list shows ONE row per linked person (the group
+// primary). This chip flags that the row folds in other accounts so the
+// operator knows the duplicates aren't lost — they're on the profile.
+function LinkedMarker({ contact }) {
+  if (!contact?.person_group_id) return null
+  const n = contact.linked_count
+  return (
+    <span
+      className="inline-flex items-center align-middle ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-700"
+      title="This profile folds in linked accounts — open it to see all the emails, numbers and Glofox records"
+    >
+      {n > 0 ? `Linked +${n}` : 'Linked'}
+    </span>
+  )
+}
+
 export default function ContactsTable({ contacts, locationId, crossoverContext = {}, canMerge = false, canDelete = false }) {
   // Set<contactId>. Set so toggle is O(1) and resilient to the contact
   // list changing under us (filter / search updates).
@@ -203,6 +219,7 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
                   <td className="p-3">
                     <Link href={`/contacts/${c.id}`} className="font-medium hover:underline">{c.name}</Link>
                     <CrossoverMarker ctx={crossoverContext[c.id]} />
+                    <LinkedMarker contact={c} />
                   </td>
                   <td className="p-3 text-un1t-subtle">{c.email}</td>
                   <td className="p-3 text-un1t-subtle">{c.phone}</td>
@@ -277,6 +294,7 @@ export default function ContactsTable({ contacts, locationId, crossoverContext =
                           {formatStage(c.pipeline_stage_slug)}
                         </span>
                         <CrossoverMarker ctx={crossoverContext[c.id]} />
+                        <LinkedMarker contact={c} />
                       </div>
                       {(c.email || c.phone) && (
                         <div className="text-xs text-un1t-subtle truncate mt-0.5">

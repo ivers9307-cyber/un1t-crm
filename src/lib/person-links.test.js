@@ -50,6 +50,7 @@ import {
   getPersonGroup,
   linkContactPair,
   personGroupResolver,
+  attachLinkedCounts,
 } from './person-links'
 
 // Chainable Supabase mock — mirrors the pattern from churn-radar-data.test.js.
@@ -545,5 +546,53 @@ describe('personGroupResolver', () => {
     })
     const { groupOf } = await personGroupResolver(db, ['a', 'a', null, undefined])
     expect(groupOf('a')).toBe('G')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// attachLinkedCounts (CONTACT-DEDUP — the "Linked +N" chip)
+// ---------------------------------------------------------------------------
+describe('attachLinkedCounts', () => {
+  function membersDb(memberRows) {
+    return {
+      from: () => ({
+        select: () => ({
+          in: (_col, ids) => Promise.resolve({
+            data: memberRows.filter((m) => ids.includes(m.group_id)),
+            error: null,
+          }),
+        }),
+      }),
+    }
+  }
+
+  it('leaves rows untouched when none are grouped (no query)', async () => {
+    const rows = [{ id: 'a', person_group_id: null }, { id: 'b' }]
+    const out = await attachLinkedCounts(membersDb([]), rows)
+    expect(out).toEqual(rows)
+  })
+
+  it('annotates grouped rows with linked_count = members − 1; leaves ungrouped alone', async () => {
+    const rows = [
+      { id: 'p1', person_group_id: 'g1' },
+      { id: 'p2', person_group_id: 'g2' },
+      { id: 'u', person_group_id: null },
+    ]
+    const members = [
+      { group_id: 'g1' }, { group_id: 'g1' }, { group_id: 'g1' }, // 3 → +2
+      { group_id: 'g2' },                                          // 1 → +0
+    ]
+    const out = await attachLinkedCounts(membersDb(members), rows)
+    expect(out.find((r) => r.id === 'p1').linked_count).toBe(2)
+    expect(out.find((r) => r.id === 'p2').linked_count).toBe(0)
+    expect(out.find((r) => r.id === 'u').linked_count).toBeUndefined()
+  })
+
+  it('returns rows unchanged on a query error (best-effort, never throws)', async () => {
+    const errDb = {
+      from: () => ({ select: () => ({ in: () => Promise.resolve({ data: null, error: { message: 'boom' } }) }) }),
+    }
+    const out = await attachLinkedCounts(errDb, [{ id: 'p1', person_group_id: 'g1' }])
+    expect(out[0].linked_count).toBeUndefined()
   })
 })
