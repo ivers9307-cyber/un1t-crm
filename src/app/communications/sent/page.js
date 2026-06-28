@@ -44,9 +44,22 @@ export default async function SendsHistoryPage() {
     for (const b of data || []) rows.push({ ...b, channel: 'sms', detail: `/communications/sms/broadcasts/${b.id}` })
   }
   if (canWa && locationId) {
-    const { data } = await db.from('whatsapp_broadcasts').select(`${SELECT}, delivery_summary`)
+    const { data } = await db.from('whatsapp_broadcasts').select(`${SELECT}, delivery_summary, delivery_mode`)
       .eq('location_id', locationId).order('created_at', { ascending: false }).limit(100)
-    for (const b of data || []) rows.push({ ...b, channel: 'whatsapp', detail: `/whatsapp/broadcasts/${b.id}` })
+    for (const b of data || []) {
+      const row = { ...b, channel: 'whatsapp', detail: `/whatsapp/broadcasts/${b.id}` }
+      // An in-flight drip's total_sent is a per-tick snapshot that lags the live
+      // "dispatched" (sent+delivered+read) count the detail page shows. Recompute
+      // it here so the list and the detail agree. Bounded — only in-flight drips.
+      if (b.status === 'sending' && b.delivery_mode === 'drip') {
+        const { count } = await db.from('whatsapp_broadcast_recipients')
+          .select('id', { count: 'exact', head: true })
+          .eq('broadcast_id', b.id)
+          .in('status', ['sent', 'delivered', 'read'])
+        row.total_sent = count ?? b.total_sent
+      }
+      rows.push(row)
+    }
   }
   if (canEmail && locationId) {
     // campaigns has its own count columns (total_bounced, not total_failed).
