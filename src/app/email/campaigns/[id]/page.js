@@ -1,5 +1,5 @@
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import CampaignDetail from '@/components/CampaignDetail'
 import CampaignEditor from '@/components/CampaignEditor'
@@ -18,7 +18,10 @@ export default async function CampaignDetailPage(props) {
     .eq('id', params.id)
     .single()
 
-  if (!campaign) notFound()
+  // IDOR guard — campaign (and its recipients) must belong to a location the user
+  // can access. 404 (not 403) so foreign ids aren't enumerable. Must run BEFORE the
+  // draft/edit branch below, or a foreign draft would open in the editor.
+  if (!campaign || assertLocationAccess(user, campaign.location_id)) notFound()
 
   // CAMPAIGN.4 — drafts (and any URL with ?edit=1) open in the editor.
   // Previously this rendered <CampaignDetail> for drafts, which then
