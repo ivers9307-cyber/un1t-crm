@@ -8,7 +8,8 @@ import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { Mail, MessageCircle, MessageSquare, Megaphone, Repeat, FileText, Inbox, Send } from 'lucide-react'
+import { tierLabel, qualityAccent } from '@/lib/whatsapp-number-health'
+import { Mail, MessageCircle, MessageSquare, Megaphone, Repeat, FileText, Inbox, Send, ShieldCheck, Gauge } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -63,8 +64,17 @@ export default async function CommunicationsHub() {
   }
 
   // WhatsApp stats
-  let unreadConvos = 0, draftBroadcasts = 0
+  let unreadConvos = 0, draftBroadcasts = 0, waHealth = null
   if (canWhatsapp && locationId) {
+    // Number health (Meta quality rating + messaging tier) — stored by the
+    // refresh-whatsapp-health cron (mig 329). Default number for the location.
+    const { data: num } = await db.from('whatsapp_numbers')
+      .select('quality_rating, messaging_limit_tier, name_status, quality_checked_at')
+      .eq('location_id', locationId).eq('is_active', true)
+      .order('is_default', { ascending: false })
+      .limit(1).maybeSingle()
+    if (num) waHealth = num
+
     // Unread = conversations with unread inbound messages.
     const { count: unread } = await db
       .from('whatsapp_conversations')
@@ -141,6 +151,19 @@ export default async function CommunicationsHub() {
         {canWhatsapp && (
           <>
             <StatCard label="Unread WhatsApp" value={unreadConvos} icon={Inbox} accent={unreadConvos > 0 ? 'text-amber-400' : undefined} />
+            {waHealth && (
+              <>
+                <StatCard
+                  label="WhatsApp quality"
+                  value={waHealth.quality_rating
+                    ? waHealth.quality_rating.charAt(0) + waHealth.quality_rating.slice(1).toLowerCase()
+                    : (waHealth.quality_checked_at ? 'Unavailable' : 'Checking…')}
+                  icon={ShieldCheck}
+                  accent={qualityAccent(waHealth.quality_rating)}
+                />
+                <StatCard label="Daily conversation limit" value={tierLabel(waHealth.messaging_limit_tier)} icon={Gauge} />
+              </>
+            )}
             {!canEmail && <StatCard label="Draft broadcasts" value={draftBroadcasts} icon={Megaphone} />}
           </>
         )}
