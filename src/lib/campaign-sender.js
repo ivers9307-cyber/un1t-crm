@@ -116,14 +116,14 @@ export async function tickCampaignSend(db, campaign) {
   // Phase 2 — process one CHUNK_SIZE batch of queued recipients.
   // Join contacts inline so we have email + name + preferences for
   // the merge tags + unsubscribe URL without a second round-trip.
-  const { data: queuedRows, error: queuedErr } = await db
+  const { data: candidateRows, error: queuedErr } = await db
     .from('campaign_recipients')
     .select(`
       id,
       contact_id,
       contact:contacts!inner(
         id, email, first_name, last_name, name, phone, pipeline_stage_slug,
-        email_status, email_marketing, glofox_passcode,
+        email_status, email_marketing, email_administrative, glofox_passcode,
         contact_preferences(unsubscribe_token)
       )
     `)
@@ -134,7 +134,7 @@ export async function tickCampaignSend(db, campaign) {
 
   if (queuedErr) return { phase: 'send', error: `queued fetch failed: ${queuedErr.message}` }
 
-  if (!queuedRows || queuedRows.length === 0) {
+  if (!candidateRows || candidateRows.length === 0) {
     // Done — no more queued. Finalize.
     await db.from('campaigns').update({
       status: 'sent',
@@ -145,6 +145,49 @@ export async function tickCampaignSend(db, campaign) {
       .then(({ error }) => { if (error) console.error('[campaign-sender] recalc failed:', error.message) })
 
     return { phase: 'finalise', sent: 0 }
+  }
+
+  // Double-send guard (HIGH) — Vercel cron does NOT skip an overlapping
+  // invocation, so two ticks can SELECT the same queued chunk and both
+  // call sendBatch. Atomically claim the chunk: flip queued→sending and
+  // keep only the rows THIS tick won. A concurrent tick re-evaluates
+  // status='queued' after our row lock releases, matches 0 of these ids,
+  // and claims a different chunk — so no recipient is ever sent twice.
+  const candidateIds = candidateRows.map(r => r.id)
+  const { data: claimedRows } = await db
+    .from('campaign_recipients')
+    .update({ status: 'sending' })
+    .in('id', candidateIds)
+    .eq('status', 'queued')
+    .select('id')
+  const claimedIds = new Set((claimedRows || []).map(r => r.id))
+  const claimed = candidateRows.filter(r => claimedIds.has(r.id))
+  if (claimed.length === 0) {
+    // Another concurrent tick claimed this whole chunk — nothing to do.
+    return { phase: 'send', sent: 0, bounced: 0 }
+  }
+
+  // Consent re-check (HIGH) — the audience was filtered at POPULATE time,
+  // possibly many ticks (minutes) ago. A contact who has since unsubscribed
+  // or hard-bounced must NOT be emailed. Re-apply the exact populate-time
+  // gate (postmark.js buildAudienceQuery): consent for this stream still
+  // granted AND email_status not bounced/complained.
+  const consentOk = (c) => {
+    const granted = stream === 'outbound' ? c.email_administrative === true : c.email_marketing === true
+    return granted && !['bounced', 'complained'].includes(c.email_status)
+  }
+  const suppressed = claimed.filter(r => !consentOk(r.contact))
+  const queuedRows = claimed.filter(r => consentOk(r.contact))
+  if (suppressed.length > 0) {
+    // Park them out of the queue without sending. Engagement counters are
+    // sourced from email_sends (recalculate_campaign_stats), so a 'cancelled'
+    // recipient row simply never counts as sent — no stat corruption.
+    await db.from('campaign_recipients')
+      .update({ status: 'cancelled' })
+      .in('id', suppressed.map(r => r.id))
+  }
+  if (queuedRows.length === 0) {
+    return { phase: 'send', sent: 0, bounced: 0, suppressed: suppressed.length }
   }
 
   // Build email batch for this chunk.
@@ -239,5 +282,5 @@ export async function tickCampaignSend(db, campaign) {
   await db.rpc('recalculate_campaign_stats', { p_campaign_id: campaignId })
     .then(({ error }) => { if (error) console.error('[campaign-sender] mid-send recalc failed:', error.message) })
 
-  return { phase: 'send', sent: sentCount, bounced: bouncedCount }
+  return { phase: 'send', sent: sentCount, bounced: bouncedCount, suppressed: suppressed.length }
 }

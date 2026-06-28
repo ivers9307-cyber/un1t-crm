@@ -17,7 +17,12 @@ const CampaignUpdateSchema = z.object({
   audience_filter: audienceFilterSchema,
   scheduled_at: z.string().datetime().nullable().optional(),
   template_id: uuidLike.nullable().optional(),
-  status: z.enum(['draft', 'scheduled', 'sending', 'sent', 'cancelled']).optional(),
+  // Only the editable states may be set through this generic update —
+  // 'sending'/'sent'/'cancelled' are owned by the send cron and the
+  // dedicated send/cancel endpoints. Letting a client force them here could
+  // mark a campaign 'sent' without sending, or reset a 'sending' one to
+  // 'draft' (→ re-populate → double-send).
+  status: z.enum(['draft', 'scheduled']).optional(),
   // API speaks email_type (marketing/utility); mapped to postmark_stream below.
   email_type: z.enum(['marketing', 'utility']).optional(),
 })
@@ -60,6 +65,17 @@ export async function PUT(request, props) {
   const db = createServerClient()
   const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'campaigns', id: params.id })
   if (scopeErr) return scopeErr
+
+  // Only a draft or a (not-yet-due) scheduled campaign may be edited. Once
+  // it's queued / sending / sent / cancelled the send state machine owns it —
+  // an edit here would race the cron or rewrite an already-sent record.
+  const { data: current } = await db.from('campaigns').select('status').eq('id', params.id).single()
+  if (current && !['draft', 'scheduled'].includes(current.status)) {
+    return NextResponse.json({
+      success: false,
+      error: `Campaign is '${current.status}' — only draft or scheduled campaigns can be edited.`,
+    }, { status: 409 })
+  }
 
   const { data, error } = await db.from('campaigns')
     .update(updates)

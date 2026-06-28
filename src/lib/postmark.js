@@ -155,14 +155,33 @@ export async function sendBatch(emails) {
       } : {}),
     }))
 
-    const response = await fetch(`${POSTMARK_API_URL}/email/batch`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    })
-
-    const result = await response.json()
-    results.push(...(Array.isArray(result) ? result : [result]))
+    // Postmark's batch endpoint returns an ARRAY of per-message results on
+    // success. On a non-2xx (auth, rate-limit, malformed batch) — or a
+    // network/JSON failure — it returns a single { ErrorCode, Message }
+    // object (or nothing). The old code pushed that as ONE result for the
+    // whole chunk, so the caller mis-mapped it to email[0] and silently
+    // dropped the other 499 (or treated the chunk as sent). Always emit one
+    // result PER email, in order, so every recipient is accounted for and a
+    // failed batch is recorded as failed (and retried) rather than lost.
+    let result
+    try {
+      const response = await fetch(`${POSTMARK_API_URL}/email/batch`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      })
+      result = await response.json()
+      if (!response.ok || !Array.isArray(result)) {
+        const code = result?.ErrorCode || -1
+        const message = result?.Message || `Postmark batch failed (HTTP ${response.status})`
+        results.push(...chunk.map(() => ({ ErrorCode: code, Message: message })))
+        continue
+      }
+    } catch (err) {
+      results.push(...chunk.map(() => ({ ErrorCode: -1, Message: err?.message || 'Postmark batch request failed' })))
+      continue
+    }
+    results.push(...result)
   }
 
   return results

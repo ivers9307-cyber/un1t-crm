@@ -13,7 +13,7 @@
 // fetch mock + a Supabase mock to test meaningfully and live in a
 // follow-up commit.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   applyMergeTags,
   buildUnsubscribeUrl,
@@ -21,6 +21,7 @@ import {
   toListUnsubscribeUrl,
   buildAudienceQuery,
   consentFieldForStream,
+  sendBatch,
 } from './postmark.js'
 
 // Fluent fake recording method calls (mirrors sms.test.js).
@@ -336,5 +337,54 @@ describe('buildAudienceQuery — consent gate', () => {
     const db = { from: () => builder }
     expect(() => buildAudienceQuery(db, { logic: 'and', filters: [] }, 'loc-uuid', { consentField: 'profiles.role' }))
       .toThrow(/consentField/)
+  })
+})
+
+describe('sendBatch — failure handling (COMMS-AUDIT batch 3)', () => {
+  const two = [
+    { to: 'a@x.ie', subject: 'S', htmlBody: '<p>a</p>' },
+    { to: 'b@x.ie', subject: 'S', htmlBody: '<p>b</p>' },
+  ]
+
+  beforeEach(() => {
+    process.env.POSTMARK_API_KEY = 'test-token'
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('returns one result PER email on success (passes the array through)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [
+        { ErrorCode: 0, MessageID: 'm1' },
+        { ErrorCode: 0, MessageID: 'm2' },
+      ],
+    })
+    const results = await sendBatch(two)
+    expect(results).toHaveLength(2)
+    expect(results[0].MessageID).toBe('m1')
+  })
+
+  it('emits one error result PER email when the batch HTTP call is non-2xx (not one for the whole chunk)', async () => {
+    // Postmark returns a single { ErrorCode, Message } object on auth/rate
+    // errors — the old code pushed it once, silently dropping email #2.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({ ErrorCode: 300, Message: 'Invalid batch' }),
+    })
+    const results = await sendBatch(two)
+    expect(results).toHaveLength(2)
+    expect(results.every(r => r.ErrorCode === 300)).toBe(true)
+  })
+
+  it('emits one error result PER email when the request throws (network/JSON failure)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNRESET'))
+    const results = await sendBatch(two)
+    expect(results).toHaveLength(2)
+    expect(results.every(r => r.ErrorCode === -1)).toBe(true)
+    expect(results[0].Message).toMatch(/ECONNRESET/)
   })
 })
