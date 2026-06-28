@@ -432,6 +432,33 @@ export function applyWhatsAppReachability(query) {
 }
 
 /**
+ * Reachability breakdown for an audience_filter at a location, as single-table
+ * head:true counts on contacts (safe post mig 325). Shared by the pre-send
+ * count endpoint and the persisted delivery_summary so the number the operator
+ * sees before sending matches what actually goes out.
+ *
+ * Reason counts (no_number / no_consent / opted_out) are independent and may
+ * overlap; the true excluded total is matched - reachable.
+ *
+ * @returns {Promise<{matched:number, reachable:number, excluded:{no_number:number,no_consent:number,opted_out:number}}>}
+ */
+export async function computeWhatsAppReachabilitySummary(db, filter, locationId) {
+  const countOf = async (extra) => {
+    const base = db.from('contacts').select('id', { count: 'exact', head: true }).eq('location_id', locationId)
+    const { query } = await applyAudienceFilterAsync({ db, query: base, filter, locationId })
+    const { count } = await (extra ? extra(query) : query)
+    return count || 0
+  }
+  // Order matters — keep aligned with the test's call sequence.
+  const matched = await countOf(null)
+  const reachable = await countOf((q) => applyWhatsAppReachability(q))
+  const no_number = await countOf((q) => q.is('wa_phone', null))
+  const no_consent = await countOf((q) => q.eq('whatsapp_marketing', false))
+  const opted_out = await countOf((q) => q.in('wa_status', ['blocked', 'opted_out']))
+  return { matched, reachable, excluded: { no_number, no_consent, opted_out } }
+}
+
+/**
  * Build audience query for WhatsApp broadcasts. Single-table on contacts now
  * that whatsapp_marketing is denormalized (mig 325) — no contact_preferences
  * embed, so head:true counts over this gate are safe.
