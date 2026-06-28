@@ -188,6 +188,10 @@ const DAYS_SINCE_OPS = new Set(['days_since_gt', 'days_since_lt'])
 // date field these carry an ISO date string (Number('2026-07-01') is
 // NaN), so coercing by op alone wrongly rejects date before/after.
 const NUMERIC_COMPARE_OPS = new Set(['gt', 'lt', 'gte', 'lte'])
+// Upper bound on a tag/event exclusion (NOT IN) id-set. The list rides in
+// the GET URL, so an unbounded exclusion blows the URL-length limit and 500s.
+// Above this we throw a clear error instead of emitting a broken query.
+const MAX_EXCLUSION_IDS = 2000
 
 export class InvalidAudienceFilterError extends Error {
   constructor(message) {
@@ -196,8 +200,70 @@ export class InvalidAudienceFilterError extends Error {
   }
 }
 
+// ── OR support (PostgREST .or()) ─────────────────────────────────
+// When filter.logic === 'or', the scalar predicates must be combined with
+// OR, not chained (chaining ANDs). PostgREST expresses OR as a single
+// .or('cond1,cond2,…') call. These helpers translate one validated filter
+// into its PostgREST condition string. Values containing the or-string's
+// reserved chars (comma / parens / quotes) are double-quoted + escaped.
+
+function orValue(v) {
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v)
+  const s = String(v ?? '')
+  if (/[,()"\\]/.test(s)) return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+  return s
+}
+
+function orIlikePattern(v) {
+  const pat = `%${String(v ?? '')}%`
+  // % is not a reserved char; only quote if the value itself carries one.
+  if (/[,()"\\]/.test(pat)) return `"${pat.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+  return pat
+}
+
+// Build the PostgREST condition string for one validated (field, op, v).
+// Mirrors the AND switch in applyAudienceFilter exactly.
+function toOrCondition(field, op, v) {
+  switch (op) {
+    case 'eq': return `${field}.eq.${orValue(v)}`
+    case 'neq': return `${field}.neq.${orValue(v)}`
+    case 'gt': return `${field}.gt.${orValue(v)}`
+    case 'lt': return `${field}.lt.${orValue(v)}`
+    case 'gte': return `${field}.gte.${orValue(v)}`
+    case 'lte': return `${field}.lte.${orValue(v)}`
+    case 'in':
+      if (!Array.isArray(v)) throw new InvalidAudienceFilterError(`Filter "${field} in" requires an array value`)
+      // Empty selection → an always-false disjunct (contributes nothing).
+      return v.length === 0
+        ? `${field}.eq.00000000-0000-0000-0000-000000000000`
+        : `${field}.in.(${v.map(orValue).join(',')})`
+    case 'contains': return `${field}.ilike.${orIlikePattern(v)}`
+    case 'not_contains': return `${field}.not.ilike.${orIlikePattern(v)}`
+    case 'is_null': return `${field}.is.null`
+    case 'is_not_null':
+    case 'not_null': return `${field}.not.is.null`
+    case 'days_since_gt': {
+      const cutoff = new Date()
+      cutoff.setDate(cutoff.getDate() - v)
+      return `${field}.lt.${cutoff.toISOString()}`
+    }
+    case 'days_since_lt': {
+      const cutoff = new Date()
+      cutoff.setDate(cutoff.getDate() - v)
+      return `${field}.gte.${cutoff.toISOString()}`
+    }
+    default:
+      throw new InvalidAudienceFilterError(`Unsupported operator: ${op}`)
+  }
+}
+
 /**
  * Apply a whitelisted audience filter to a Supabase query.
+ *
+ * Honours filter.logic: 'and' (default) chains predicates; 'or' combines them
+ * with a single PostgREST .or(). OR is not supported together with tag/event
+ * virtual filters (those resolve to AND-combined id-sets) — that combination
+ * throws rather than silently producing the wrong audience.
  *
  * Throws InvalidAudienceFilterError on any unknown field, unsupported op,
  * or unparseable numeric value. Callers should catch this and return 400.
@@ -213,6 +279,9 @@ export function applyAudienceFilter(query, filter) {
     throw new InvalidAudienceFilterError('audience_filter.filters must be an array')
   }
 
+  const useOr = filter.logic === 'or'
+  const orParts = []
+
   for (const f of filter.filters) {
     if (!f || typeof f !== 'object') {
       throw new InvalidAudienceFilterError('Each filter must be an object')
@@ -227,18 +296,21 @@ export function applyAudienceFilter(query, filter) {
       throw new InvalidAudienceFilterError(`Operator "${op}" is not allowed on field "${field}"`)
     }
 
-    // 'tag' is a virtual field — it doesn't exist as a column on
-    // contacts. resolveTagFilters() must be called first, which
-    // pre-fetches the matching contact_ids and the caller injects
-    // them as a contacts.id constraint. Skip the tag entries here
-    // so the scalar-filter loop doesn't try to apply them as
-    // `query.eq('tag', ...)`.
-    if (fieldConfig.type === 'tag') continue
-
-    // 'event' is a virtual field (event_registration) resolved by
-    // resolveEventFilters into a contacts.id IN (…) constraint — skip
-    // it in the scalar-filter loop, exactly like 'tag'.
-    if (fieldConfig.type === 'event') continue
+    // 'tag' / 'event' are virtual fields resolved separately (resolveTag/
+    // EventFilters) into AND-combined contacts.id constraints. They cannot
+    // participate in an OR disjunction with the scalar predicates, so under
+    // OR logic we fail loudly rather than silently dropping them (which
+    // would widen the audience to everyone matching the scalar OR).
+    if (fieldConfig.type === 'tag' || fieldConfig.type === 'event') {
+      if (useOr) {
+        throw new InvalidAudienceFilterError(
+          'OR logic is not supported together with tag or event filters. Use AND, or send these as separate audiences.'
+        )
+      }
+      // AND: skip here — the scalar-filter loop must not apply a virtual
+      // field as `query.eq('tag', …)`; the resolver injected its id-set.
+      continue
+    }
 
     // Parse + validate value where required.
     let v = value
@@ -258,6 +330,13 @@ export function applyAudienceFilter(query, filter) {
       if (v === true || v === 'true') v = true
       else if (v === false || v === 'false') v = false
       else throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a boolean value`)
+    }
+
+    // OR logic — accumulate a PostgREST condition string instead of
+    // chaining (which would AND). Applied once after the loop.
+    if (useOr) {
+      orParts.push(toOrCondition(field, op, v))
+      continue
     }
 
     switch (op) {
@@ -320,6 +399,12 @@ export function applyAudienceFilter(query, filter) {
         // but defend in depth.
         throw new InvalidAudienceFilterError(`Unsupported operator: ${op}`)
     }
+  }
+
+  // OR: combine every accumulated scalar predicate into one .or() so they
+  // match ANY (not ALL). A single condition still works via .or().
+  if (useOr && orParts.length) {
+    query = query.or(orParts.join(','))
   }
 
   return query
@@ -405,15 +490,23 @@ export async function resolveTagFilters({ db, query, filter, locationId }) {
     query = query.in('id', [...allowed])
   }
 
-  // Negatives: subtract. Use NOT IN (…) — but Supabase JS doesn't
-  // support `.not('id', 'in', […])` cleanly across all client
-  // versions. Use the OR-string `id.not.in.(…)` form via .or().
+  // Negatives: subtract via a single deduped NOT IN. The exclusion list
+  // rides in the GET URL (`id=not.in.(…)`), so combining all negative tags
+  // into one set keeps the URL minimal, and the size bound stops an
+  // unbounded exclusion (a popular tag with thousands of members) from
+  // blowing the URL-length limit — above the bound we fail loudly rather
+  // than emit a broken/truncated query that silently widens the audience.
+  const negIds = new Set()
   for (const tag of negatives) {
-    const ids = await contactIdsForTag(tag)
-    if (ids.length === 0) continue // nothing to exclude
-    // `id=not.in.(uuid1,uuid2,…)` is the PostgREST URL form. The JS
-    // client supports it via the negation chain on .not().
-    query = query.not('id', 'in', `(${ids.join(',')})`)
+    for (const id of await contactIdsForTag(tag)) negIds.add(id)
+  }
+  if (negIds.size > MAX_EXCLUSION_IDS) {
+    throw new InvalidAudienceFilterError(
+      `Tag exclusion matches too many contacts (${negIds.size}) to apply in one query — add a positive filter to narrow the audience first.`
+    )
+  }
+  if (negIds.size > 0) {
+    query = query.not('id', 'in', `(${[...negIds].join(',')})`)
   }
 
   return { query }
@@ -508,11 +601,19 @@ export async function resolveEventFilters({ db, query, filter }) {
     query = query.in('id', [...allowed])
   }
 
-  // Negatives: subtract via NOT IN.
+  // Negatives: subtract via a single deduped, size-bounded NOT IN — see
+  // resolveTagFilters for why (the exclusion list rides in the GET URL).
+  const negIds = new Set()
   for (const eventId of negatives) {
-    const ids = await contactIdsForEvent(eventId)
-    if (ids.length === 0) continue
-    query = query.not('id', 'in', `(${ids.join(',')})`)
+    for (const id of await contactIdsForEvent(eventId)) negIds.add(id)
+  }
+  if (negIds.size > MAX_EXCLUSION_IDS) {
+    throw new InvalidAudienceFilterError(
+      `Event exclusion matches too many contacts (${negIds.size}) to apply in one query — add a positive filter to narrow the audience first.`
+    )
+  }
+  if (negIds.size > 0) {
+    query = query.not('id', 'in', `(${[...negIds].join(',')})`)
   }
 
   return { query }

@@ -21,6 +21,11 @@ const BroadcastCreateSchema = z.object({
   audience_filter: audienceFilterSchema.optional(),
   scheduled_at: z.string().datetime({ offset: true }).nullable().optional(),
   location_id: uuidLike.optional(),
+  // Create directly as 'scheduled' (with scheduled_at) so the composer
+  // doesn't need a second PATCH to flip the status — that 2-step left a
+  // stranded draft if the PATCH failed. Only draft/scheduled are settable
+  // here; sending/sent are owned by the send loop + /send endpoint.
+  status: z.enum(['draft', 'scheduled']).optional(),
 })
 
 // GET /api/sms/broadcasts?location_id=xxx — list broadcasts at a
@@ -71,13 +76,17 @@ export async function POST(request) {
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
 
+  // 'scheduled' requires a scheduled_at; otherwise it'd sit invisible to
+  // the cron (which picks up status='scheduled' AND scheduled_at <= now).
+  const status = body.status === 'scheduled' && body.scheduled_at ? 'scheduled' : 'draft'
+
   const db = createServerClient()
   const { data, error } = await db.from('sms_broadcasts').insert({
     location_id: locationId,
     name: body.name,
     body: body.body,
     audience_filter: body.audience_filter || { filters: [], logic: 'and' },
-    status: 'draft',
+    status,
     scheduled_at: body.scheduled_at || null,
     created_by: user.id,
   }).select().single()

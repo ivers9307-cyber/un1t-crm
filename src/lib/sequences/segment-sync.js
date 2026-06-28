@@ -202,7 +202,7 @@ export async function syncSegmentMemberships() {
   // Fetch the segment rows in one go.
   const { data: segments, error: segErr } = await db
     .from('contact_segments')
-    .select('id, location_id, filter')
+    .select('id, location_id, filter, memberships_initialized_at')
     .in('id', [...segmentIds])
   if (segErr) {
     throw new Error(`sync-segment-memberships: segment lookup failed: ${segErr.message}`)
@@ -218,14 +218,27 @@ export async function syncSegmentMemberships() {
 
       await persistDiff(db, segment.id, additions, removals)
 
+      // First-sync guard — the very first time we snapshot a segment there
+      // is no stored set, so EVERY current member is an "addition". Firing
+      // segment_added for a whole pre-existing membership would mass-enrol
+      // contacts who didn't just join. So on the first sync we only
+      // establish the baseline (persisted above) + stamp the marker, and
+      // SUPPRESS both triggers. Every later sync fires on real transitions.
+      const isFirstSync = !segment.memberships_initialized_at
+      if (isFirstSync) {
+        await db.from('contact_segments')
+          .update({ memberships_initialized_at: new Date().toISOString() })
+          .eq('id', segment.id)
+      }
+
       // Fire triggers AFTER persist — if the trigger throws, the
       // snapshot still reflects the diff, so we don't re-fire on
       // the next tick. (Sequence enrol has its own dedup via
       // enrolContacts → enrolment uniqueness.)
-      if (additions.length) {
+      if (!isFirstSync && additions.length) {
         await triggerSequencesForSegmentAdded(segment.id, additions)
       }
-      if (removals.length) {
+      if (!isFirstSync && removals.length) {
         await triggerSequencesForSegmentRemoved(segment.id, removals)
       }
 

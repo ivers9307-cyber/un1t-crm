@@ -213,6 +213,92 @@ describe('applyAudienceFilter', () => {
   })
 })
 
+describe('applyAudienceFilter — OR logic (COMMS-AUDIT batch 6)', () => {
+  let q
+  beforeEach(() => { q = makeMockQuery() })
+
+  it('AND remains the default — chains predicates, no .or()', () => {
+    applyAudienceFilter(q.query, {
+      logic: 'and',
+      filters: [
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' },
+        { field: 'email_status', op: 'eq', value: 'active' },
+      ],
+    })
+    expect(q.calls).toEqual([
+      ['eq', 'pipeline_stage_slug', 'active_member'],
+      ['eq', 'email_status', 'active'],
+    ])
+  })
+
+  it('OR combines scalar predicates into a single .or() string', () => {
+    applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' },
+        { field: 'email_status', op: 'eq', value: 'active' },
+      ],
+    })
+    expect(q.calls).toEqual([
+      ['or', 'pipeline_stage_slug.eq.active_member,email_status.eq.active'],
+    ])
+  })
+
+  it('OR renders contains as ilike with % wildcards', () => {
+    applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [
+        { field: 'name', op: 'contains', value: 'jo' },
+        { field: 'email', op: 'contains', value: 'gmail' },
+      ],
+    })
+    expect(q.calls).toEqual([
+      ['or', 'name.ilike.%jo%,email.ilike.%gmail%'],
+    ])
+  })
+
+  it('OR quotes a value containing reserved chars (comma)', () => {
+    applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [{ field: 'name', op: 'eq', value: 'Smith, Jr' }],
+    })
+    expect(q.calls).toEqual([['or', 'name.eq."Smith, Jr"']])
+  })
+
+  it('OR with a number range builds gt/lt conditions', () => {
+    applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [
+        { field: 'total_bookings_30d', op: 'gte', value: 5 },
+        { field: 'total_noshow_30d', op: 'gt', value: 2 },
+      ],
+    })
+    expect(q.calls).toEqual([
+      ['or', 'total_bookings_30d.gte.5,total_noshow_30d.gt.2'],
+    ])
+  })
+
+  it('throws on OR combined with a tag virtual filter (rather than silently dropping it)', () => {
+    expect(() => applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' },
+        { field: 'tag', op: 'eq', value: 'vip' },
+      ],
+    })).toThrow(InvalidAudienceFilterError)
+  })
+
+  it('throws on OR combined with an event virtual filter', () => {
+    expect(() => applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [
+        { field: 'email_status', op: 'eq', value: 'active' },
+        { field: 'event_registration', op: 'eq', value: 'evt-1' },
+      ],
+    })).toThrow(InvalidAudienceFilterError)
+  })
+})
+
 describe('AUDIENCE_FIELDS allowlist', () => {
   it('is frozen so it cannot be mutated at runtime', () => {
     expect(Object.isFrozen(AUDIENCE_FIELDS)).toBe(true)
