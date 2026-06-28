@@ -170,7 +170,7 @@ contact can have neither number nor consent); they are presented as honest hints
 
 ### 5. After-send truth
 
-- `sendBroadcast` and the drip tick (`sendBroadcastTick`) in `src/lib/whatsapp.js`:
+- `sendBroadcast` and the drip tick (`sendDripChunk`) in `src/lib/whatsapp.js`:
   compute the raw-match count once (single `head:true` count on the filter), derive
   `excluded` reason counts, and persist `delivery_summary` on the
   `whatsapp_broadcasts` row alongside the existing metrics. `total_recipients` stays =
