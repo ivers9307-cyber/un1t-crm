@@ -7,6 +7,7 @@ import { hasPermission } from '@/lib/permissions'
 import ContactsView from '@/components/ContactsView'
 import ContactsHeaderActions from '@/components/ContactsHeaderActions'
 import { crossoverContactIds, fetchCrossoverContext } from '@/lib/contact-crossovers'
+import { attachLinkedCounts } from '@/lib/person-links'
 import ContactDuplicatesView from '@/components/ContactDuplicatesView'
 
 export const dynamic = 'force-dynamic'
@@ -66,9 +67,13 @@ export default async function ContactsPage(props) {
   // client. If a downstream component needs more columns, add them
   // here AND in the /api/contacts/search route so both paths return
   // the same shape.
-  const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at, location_id, glofox_membership_status'
+  // person_group_id drives the "Linked" chip; is_primary_contact (mig 334)
+  // folds a linked person down to ONE row (the group primary) in this lookup
+  // list. The non-primary accounts stay reachable from the profile + via the
+  // "Show linked duplicates" toggle (which re-queries the API without it).
+  const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at, location_id, glofox_membership_status, person_group_id'
   const crossIds = await crossoverContactIds(db, locationId)
-  let query = db.from('contacts').select(CONTACT_LIST_FIELDS)
+  let query = db.from('contacts').select(CONTACT_LIST_FIELDS).eq('is_primary_contact', true)
   query = crossIds.length > 0
     ? query.or(`location_id.eq.${locationId},id.in.(${crossIds.join(',')})`)
     : query.eq('location_id', locationId)
@@ -96,8 +101,9 @@ export default async function ContactsPage(props) {
     query = query.or(orClauses.join(','))
   }
 
-  const { data: contacts } = await query
-  const crossoverContext = await fetchCrossoverContext(db, contacts || [], locationId)
+  const { data: rawContacts } = await query
+  const contacts = await attachLinkedCounts(db, rawContacts || [])
+  const crossoverContext = await fetchCrossoverContext(db, contacts, locationId)
 
   const canCreate = MANAGER_ROLES.includes(user.role)
   // Delete + bulk-delete: head_coach / manager / owner / master

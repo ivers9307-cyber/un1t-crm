@@ -386,3 +386,40 @@ export async function personGroupResolver(db, contactIds) {
     primaryOf: (groupId) => primaryByGroup.get(groupId) || null,
   }
 }
+
+/**
+ * Annotate deduped lookup rows with how many OTHER accounts each one folds in,
+ * for the "Linked +N" chip. Only rows carrying a person_group_id are counted;
+ * linked_count = (members in that group) − 1 (this primary itself). The group
+ * id set is chunked ≤150 to stay clear of the PostgREST URL-length limit (the
+ * BUG-FIX #538 lesson). Best-effort: returns rows unchanged on a query error.
+ *
+ * @param {SupabaseClient} db
+ * @param {Array<{person_group_id?: string|null}>} rows
+ * @returns {Promise<Array>}  rows with `linked_count` added on grouped rows
+ */
+export async function attachLinkedCounts(db, rows) {
+  const list = rows || []
+  const groupIds = [...new Set(list.map((r) => r?.person_group_id).filter(Boolean))]
+  if (groupIds.length === 0) return list
+
+  const counts = new Map()
+  const CHUNK = 150
+  try {
+    for (let i = 0; i < groupIds.length; i += CHUNK) {
+      const slice = groupIds.slice(i, i + CHUNK)
+      const { data, error } = await db
+        .from('person_group_members')
+        .select('group_id')
+        .in('group_id', slice)
+      if (error) return list
+      for (const m of data || []) counts.set(m.group_id, (counts.get(m.group_id) || 0) + 1)
+    }
+  } catch {
+    return list
+  }
+
+  return list.map((r) => r?.person_group_id
+    ? { ...r, linked_count: Math.max(0, (counts.get(r.person_group_id) || 1) - 1) }
+    : r)
+}

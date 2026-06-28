@@ -19,7 +19,10 @@ const CONTACT_SELECT =
  */
 export async function searchContacts({ locationId, query = '', limit = 40 }) {
   if (!locationId) return { success: false, error: 'locationId required' }
+  // CONTACT-DEDUP (mig 334) — the directory shows one profile per linked
+  // person (the group primary); the folded accounts are reachable from it.
   let q = supabase.from('contacts').select(CONTACT_SELECT).eq('location_id', locationId)
+    .eq('is_primary_contact', true)
   const term = (query || '').trim()
   if (term) {
     // Commas + % are PostgREST .or()/ilike control chars — strip them so

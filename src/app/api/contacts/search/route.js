@@ -6,6 +6,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { applyAudienceFilterAsync, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { audienceFilterSchema } from '@/lib/schemas'
 import { crossoverContactIds, fetchCrossoverContext } from '@/lib/contact-crossovers'
+import { attachLinkedCounts } from '@/lib/person-links'
 import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
@@ -92,6 +93,10 @@ const SearchBody = z.object({
   // on this (the send path re-scopes by location_id) — this just keeps
   // crossovers from appearing in the picker's type-ahead.
   include_crossovers: z.boolean().optional(),
+  // CONTACT-DEDUP (mig 334): lookup callers (the /contacts list) set this to
+  // fold each linked person down to ONE row (the group primary). Reach callers
+  // (the send people-picker) omit it so every account/channel stays visible.
+  primary_only: z.boolean().optional(),
 })
 
 export async function POST(request) {
@@ -133,7 +138,7 @@ export async function POST(request) {
   // ContactsView gets a stable shape whichever code path it took.
   // Keep this list in lock-step with `CONTACT_LIST_FIELDS` in
   // src/app/contacts/page.js.
-  const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at, location_id, glofox_membership_status'
+  const CONTACT_LIST_FIELDS = 'id, name, email, phone, lead_source, pipeline_stage_slug, trial_credits_remaining, created_at, location_id, glofox_membership_status, person_group_id'
   // Crossovers are opt-in (see schema) — default OFF so shared callers
   // such as the send people-picker stay owned-only.
   const wantCrossovers = parsed.data.include_crossovers === true
@@ -143,6 +148,14 @@ export async function POST(request) {
     : q.eq('location_id', locationId)
   let listQuery = applyLoc(db.from('contacts').select(CONTACT_LIST_FIELDS))
   let countQuery = applyLoc(db.from('contacts').select('id', { count: 'exact', head: true }))
+
+  // CONTACT-DEDUP — lookup callers fold each linked person to one row (the
+  // group primary). Applied before order/range so the filter methods remain
+  // available. Reach callers leave primary_only unset → every account shown.
+  if (parsed.data.primary_only === true) {
+    listQuery = listQuery.eq('is_primary_contact', true)
+    countQuery = countQuery.eq('is_primary_contact', true)
+  }
 
   // Free-text search applies on top of the audience filter — separate
   // substring match, not part of the filter schema. Both queries get it.
@@ -210,12 +223,19 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: countRes.error.message }, { status: 500 })
   }
 
+  // Annotate the deduped lookup rows with their folded-account counts (for
+  // the "Linked +N" chip). Only when primary_only — reach callers don't need
+  // it and shouldn't pay the extra query.
+  const contacts = parsed.data.primary_only === true
+    ? await attachLinkedCounts(db, listRes.data || [])
+    : (listRes.data || [])
+
   const crossoverContext = wantCrossovers
-    ? await fetchCrossoverContext(db, listRes.data || [], locationId)
+    ? await fetchCrossoverContext(db, contacts, locationId)
     : {}
   return NextResponse.json({
     success: true,
-    contacts: listRes.data || [],
+    contacts,
     crossoverContext,
     count: countRes.count ?? 0,
     limit,

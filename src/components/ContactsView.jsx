@@ -40,6 +40,10 @@ export default function ContactsView({
   // or null when not in advanced mode.
   const [filter, setFilter] = useState(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  // CONTACT-DEDUP — the list shows ONE row per linked person (the group
+  // primary). Toggling this on re-queries the API WITHOUT the primary_only
+  // filter so the operator can see/reach the folded duplicate accounts.
+  const [showDuplicates, setShowDuplicates] = useState(false)
 
   // Client-fetched list (populated when advanced filter is active).
   // null means "use initialContacts from the server"; an array means
@@ -136,7 +140,10 @@ export default function ContactsView({
   // over the first 200 server-rendered contacts, so a contact outside
   // that 200-row window was unfindable. The API path searches the
   // whole table.
-  const apiActive = filterRowCount > 0 || !!(search?.trim())
+  // showDuplicates also forces the API path: the server-rendered
+  // initialContacts are already deduped (is_primary_contact=true), so the
+  // only way to surface the folded accounts is to re-query without it.
+  const apiActive = filterRowCount > 0 || !!(search?.trim()) || showDuplicates
 
   // Build the body for /api/contacts/search. Memoised so the effect
   // doesn't re-run on every render — it should only re-fire when the
@@ -157,7 +164,9 @@ export default function ContactsView({
     // this-studio); other callers of this route (e.g. the send people-
     // picker) omit this and stay owned-only.
     include_crossovers: true,
-  }), [filterRowCount, filter, search, locationId])
+    // Fold linked people to one row unless the operator opted to see dupes.
+    primary_only: !showDuplicates,
+  }), [filterRowCount, filter, search, locationId, showDuplicates])
 
   const fetchContacts = useCallback(async () => {
     setLoading(true)
@@ -316,6 +325,18 @@ export default function ContactsView({
           className="w-full max-w-md bg-un1t-surface border border-un1t-border rounded-md px-4 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
         />
       </form>
+
+      {/* CONTACT-DEDUP — the list shows one profile per person; this reveals
+          the folded linked accounts when an operator needs them. */}
+      <label className="mb-5 -mt-3 flex items-center gap-2 text-xs text-un1t-subtle cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={showDuplicates}
+          onChange={(e) => setShowDuplicates(e.target.checked)}
+          className="accent-un1t-text"
+        />
+        Show linked duplicates — the list folds each person down to one profile
+      </label>
 
       {/* Saved segments chip strip — visible whenever any segments
           exist OR the advanced panel is open (so a fresh user can
