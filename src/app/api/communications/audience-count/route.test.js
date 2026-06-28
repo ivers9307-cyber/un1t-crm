@@ -10,7 +10,7 @@ vi.mock('@/lib/validate', () => ({
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/whatsapp', () => ({
   computeWhatsAppReachabilitySummary: vi.fn(async () => ({
-    matched: 10, reachable: 6, excluded: { no_number: 3, no_consent: 2, opted_out: 1 },
+    matched: 10, reachable: 6, excluded: { no_number: 3, no_consent: 2, opted_out: 1, undeliverable: 0 },
   })),
 }))
 // Channel-agnostic path resolves the filter then awaits a { count } builder.
@@ -46,7 +46,7 @@ describe('audience-count POST', () => {
     const json = await res.json()
     expect(json).toEqual({
       success: true, count: 10, reachable: 6,
-      excluded: { no_number: 3, no_consent: 2, opted_out: 1 },
+      excluded: { no_number: 3, no_consent: 2, opted_out: 1, undeliverable: 0 },
     })
   })
 })

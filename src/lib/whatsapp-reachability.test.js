@@ -26,20 +26,20 @@ function dbReturningCounts(counts) {
 }
 
 describe('computeWhatsAppReachabilitySummary', () => {
-  it('returns matched, reachable, and the three exclusion reason counts', async () => {
-    // Call order in the helper: matched, reachable, no_number, no_consent, opted_out
-    const db = dbReturningCounts([10, 6, 3, 2, 1])
+  it('returns matched, reachable, and the four exclusion reason counts', async () => {
+    // Call order in the helper: matched, reachable, no_number, no_consent, opted_out, undeliverable
+    const db = dbReturningCounts([10, 6, 3, 2, 1, 4])
     const out = await computeWhatsAppReachabilitySummary(db, { logic: 'and', filters: [] }, 'loc')
     expect(out).toEqual({
       matched: 10,
       reachable: 6,
-      excluded: { no_number: 3, no_consent: 2, opted_out: 1 },
+      excluded: { no_number: 3, no_consent: 2, opted_out: 1, undeliverable: 4 },
     })
   })
 
   it('coerces null counts to 0', async () => {
-    const db = dbReturningCounts([null, null, null, null, null])
+    const db = dbReturningCounts([null, null, null, null, null, null])
     const out = await computeWhatsAppReachabilitySummary(db, { logic: 'and', filters: [] }, 'loc')
-    expect(out).toEqual({ matched: 0, reachable: 0, excluded: { no_number: 0, no_consent: 0, opted_out: 0 } })
+    expect(out).toEqual({ matched: 0, reachable: 0, excluded: { no_number: 0, no_consent: 0, opted_out: 0, undeliverable: 0 } })
   })
 })

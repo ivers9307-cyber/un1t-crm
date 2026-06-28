@@ -429,6 +429,7 @@ export function applyWhatsAppReachability(query) {
     .not('wa_phone', 'is', null)
     .neq('wa_status', 'blocked')
     .neq('wa_status', 'opted_out')
+    .neq('wa_status', 'undeliverable')
 }
 
 /**
@@ -437,10 +438,10 @@ export function applyWhatsAppReachability(query) {
  * count endpoint and the persisted delivery_summary so the number the operator
  * sees before sending matches what actually goes out.
  *
- * Reason counts (no_number / no_consent / opted_out) are independent and may
- * overlap; the true excluded total is matched - reachable.
+ * Reason counts (no_number / no_consent / opted_out / undeliverable) are
+ * independent and may overlap; the true excluded total is matched - reachable.
  *
- * @returns {Promise<{matched:number, reachable:number, excluded:{no_number:number,no_consent:number,opted_out:number}}>}
+ * @returns {Promise<{matched:number, reachable:number, excluded:{no_number:number,no_consent:number,opted_out:number,undeliverable:number}}>}
  */
 export async function computeWhatsAppReachabilitySummary(db, filter, locationId) {
   const countOf = async (extra) => {
@@ -455,7 +456,60 @@ export async function computeWhatsAppReachabilitySummary(db, filter, locationId)
   const no_number = await countOf((q) => q.is('wa_phone', null))
   const no_consent = await countOf((q) => q.eq('whatsapp_marketing', false))
   const opted_out = await countOf((q) => q.in('wa_status', ['blocked', 'opted_out']))
-  return { matched, reachable, excluded: { no_number, no_consent, opted_out } }
+  const undeliverable = await countOf((q) => q.eq('wa_status', 'undeliverable'))
+  return { matched, reachable, excluded: { no_number, no_consent, opted_out, undeliverable } }
+}
+
+// Recipient statuses that mean the message successfully left our system and was
+// accepted by Meta. A message moves sent -> delivered -> read via status
+// webhooks, so the cumulative "sent" tally must count all three — counting only
+// 'sent' makes the number SHRINK as delivery receipts arrive.
+export const DISPATCHED_STATUSES = ['sent', 'delivered', 'read']
+
+// True when a send failure means the recipient is not a reachable WhatsApp
+// account (permanent) — vs a transient/policy failure (rate limit, 24h
+// re-engagement, frequency cap) which must NOT permanently exclude the contact.
+// Meta surfaces "Message undeliverable" / error code 131026 for a number that
+// isn't a WhatsApp user. We match that narrowly; everything else is retryable.
+// The resulting wa_status='undeliverable' is reversible — an inbound message
+// from the contact reactivates them (see the webhook inbound handler).
+export function isUndeliverableError({ code, message } = {}) {
+  if (code != null && String(code) === '131026') return true
+  return /undeliverable/i.test(String(message || ''))
+}
+
+// A contact is flagged undeliverable only after this many undeliverable failures.
+// Meta's 131026 ("Message undeliverable") is an OVERLOADED code — besides "not a
+// WhatsApp user" it also fires for transient frequency-capping / quality
+// throttling, so a single failure is NOT proof a number is dead. Requiring
+// repeated failures (standard hard-bounce suppression) protects an engaged
+// contact who was merely throttled: a genuinely-dead number fails every send; a
+// throttled one recovers and never reaches the threshold.
+export const UNDELIVERABLE_FAILURE_THRESHOLD = 2
+
+// Flag a contact's number as undeliverable (not on WhatsApp) after REPEATED
+// permanent-looking send failures, so future audiences skip it
+// (applyWhatsAppReachability excludes wa_status='undeliverable'). Only flips an
+// 'active' contact — never overrides an explicit opted_out/blocked, idempotent.
+// Reversible: an inbound message reactivates the contact. Best-effort — must
+// never throw into a send/webhook. The just-recorded failure row is included in
+// the count (callers insert it before calling this).
+export async function markUndeliverableIfPermanent(db, contactId, { code, message } = {}) {
+  if (!contactId || !isUndeliverableError({ code, message })) return
+  try {
+    const { count } = await db.from('whatsapp_broadcast_recipients')
+      .select('id', { count: 'exact', head: true })
+      .eq('contact_id', contactId)
+      .eq('status', 'failed')
+      .ilike('error_message', '%undeliverable%')
+    if ((count || 0) < UNDELIVERABLE_FAILURE_THRESHOLD) return
+    await db.from('contacts')
+      .update({ wa_status: 'undeliverable' })
+      .eq('id', contactId)
+      .eq('wa_status', 'active')
+  } catch (e) {
+    console.error(`[wa] mark-undeliverable failed for contact ${contactId}:`, e?.message || e)
+  }
 }
 
 /**
@@ -648,6 +702,10 @@ export async function sendBroadcast(broadcastId) {
         failed_at: new Date().toISOString(),
       })
 
+      // Permanently-undeliverable number (not on WhatsApp) → flag so future
+      // audiences skip it. Reversible (inbound message reactivates). Best-effort.
+      await markUndeliverableIfPermanent(db, contact.id, { message: err.message })
+
       failedCount++
     }
 
@@ -788,6 +846,8 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
         broadcast_id: broadcastId, contact_id: contact.id,
         status: 'failed', error_message: err.message, failed_at: new Date().toISOString(),
       })
+      // Permanently-undeliverable number → flag so future audiences skip it.
+      await markUndeliverableIfPermanent(db, contact.id, { message: err.message })
       failed++; consecutiveFailures++
       if (consecutiveFailures >= AUTO_PAUSE_CONSECUTIVE_FAILURES) { autoPaused = true; break }
     }
@@ -795,9 +855,11 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
     if (sent % 50 === 0 && sent > 0) await new Promise(r => setTimeout(r, 1000))
   }
 
-  // Cumulative totals from the recipients table.
+  // Cumulative totals from the recipients table. "Sent" = successfully dispatched,
+  // which includes rows the status webhook has since moved to delivered/read —
+  // counting only status='sent' makes the tally SHRINK as receipts arrive.
   const { count: totalSent } = await db.from('whatsapp_broadcast_recipients')
-    .select('id', { count: 'exact', head: true }).eq('broadcast_id', broadcastId).eq('status', 'sent')
+    .select('id', { count: 'exact', head: true }).eq('broadcast_id', broadcastId).in('status', DISPATCHED_STATUSES)
   const { count: totalFailed } = await db.from('whatsapp_broadcast_recipients')
     .select('id', { count: 'exact', head: true }).eq('broadcast_id', broadcastId).eq('status', 'failed')
 

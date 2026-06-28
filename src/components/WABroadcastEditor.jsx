@@ -7,7 +7,7 @@ import { ArrowLeft, Save, Send, Users, CheckCircle2, XCircle } from 'lucide-reac
 import AudienceBuilder from './AudienceBuilder'
 import { estimateDripDays } from '@/lib/whatsapp-drip'
 
-export default function WABroadcastEditor({ broadcast, templates, locationId, userId }) {
+export default function WABroadcastEditor({ broadcast, templates, locationId, userId, failedRecipients = [], failedCount = 0 }) {
   const router = useRouter()
   const isSent = broadcast?.status === 'sent'
   const isDripInFlight = broadcast?.delivery_mode === 'drip' && broadcast?.status === 'sending'
@@ -237,9 +237,11 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                   {broadcast.delivery_summary.excluded?.no_number ? <li>• {broadcast.delivery_summary.excluded.no_number} have no WhatsApp number</li> : null}
                   {broadcast.delivery_summary.excluded?.no_consent ? <li>• {broadcast.delivery_summary.excluded.no_consent} haven&apos;t opted into WhatsApp marketing</li> : null}
                   {broadcast.delivery_summary.excluded?.opted_out ? <li>• {broadcast.delivery_summary.excluded.opted_out} opted out</li> : null}
+                  {broadcast.delivery_summary.excluded?.undeliverable ? <li>• {broadcast.delivery_summary.excluded.undeliverable} not on WhatsApp (undeliverable)</li> : null}
                 </ul>
               </div>
             )}
+            <FailedSendsBox failedRecipients={failedRecipients} failedCount={failedCount} />
           </div>
         )}
 
@@ -318,7 +320,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                 const total = broadcast.total_recipients || 0
                 const done = (broadcast.total_sent || 0) + (broadcast.total_failed || 0)
                 const remaining = Math.max(0, total - done)
-                const pct = total > 0 ? Math.round((done / total) * 100) : 0
+                const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
                 const days = estimateDripDays(remaining, broadcast.daily_cap || 500)
                 return (
                   <>
@@ -338,6 +340,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                 )
               })()}
             </div>
+            <FailedSendsBox failedRecipients={failedRecipients} failedCount={failedCount} />
           </div>
         )}
 
@@ -446,6 +449,45 @@ function DripStat({ label, value }) {
     <div className="bg-un1t-bg border border-un1t-border rounded-lg p-3">
       <p className="text-xs text-un1t-subtle uppercase">{label}</p>
       <p className="text-xl font-bold mt-1">{value}</p>
+    </div>
+  )
+}
+
+// Failed-sends summary — name · number · reason. Fed by a dedicated failed-only
+// query in the page (the recipients embed is capped at 1000 rows for big drips).
+function FailedSendsBox({ failedRecipients = [], failedCount = 0 }) {
+  if (!failedCount) return null
+  return (
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden">
+      <div className="px-4 py-3 border-b border-un1t-border flex items-center gap-2">
+        <XCircle size={14} className="text-red-400" />
+        <p className="text-sm font-medium text-un1t-text">Failed sends ({failedCount.toLocaleString()})</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm min-w-[520px]">
+          <thead>
+            <tr className="border-b border-un1t-border text-left text-xs text-un1t-subtle uppercase tracking-wider">
+              <th className="px-4 py-2">Contact</th>
+              <th className="px-4 py-2">Number</th>
+              <th className="px-4 py-2">Reason</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-un1t-border">
+            {failedRecipients.map(r => (
+              <tr key={r.id} className="hover:bg-un1t-border/20">
+                <td className="px-4 py-2">{r.contacts?.name || 'Unknown'}</td>
+                <td className="px-4 py-2 text-un1t-subtle tabular-nums">{r.contacts?.wa_phone || r.contacts?.phone || '—'}</td>
+                <td className="px-4 py-2 text-red-700">{r.error_message || 'Delivery failed'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {failedCount > failedRecipients.length && (
+        <p className="px-4 py-2 text-[11px] text-un1t-subtle border-t border-un1t-border">
+          Showing the {failedRecipients.length.toLocaleString()} most recent of {failedCount.toLocaleString()} failures.
+        </p>
+      )}
     </div>
   )
 }
