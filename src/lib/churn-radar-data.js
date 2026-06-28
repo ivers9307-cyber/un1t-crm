@@ -469,6 +469,61 @@ export async function loadUnpaidCharges(db, locationId, nowMs = Date.now()) {
   return { charges: unpaidCharges, summary: { total: unpaidCharges.length, totalValueCents } }
 }
 
+/**
+ * Page every `glofox_invoices` row for a SINGLE contact with a given status.
+ * Like fetchInvoicesByStatus but keyed by contact_id (the profile is one
+ * contact, not a whole location). Paginated for the same 1k-row reason.
+ */
+async function fetchContactInvoicesByStatus(db, contactId, status, columns) {
+  const rows = []
+  const PAGE = 1000
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await db
+      .from('glofox_invoices')
+      .select(columns)
+      .eq('contact_id', contactId)
+      .eq('status', status)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    if (error) throw new Error(error.message)
+    rows.push(...(data || []))
+    if (!data || data.length < PAGE) break
+  }
+  return rows
+}
+
+/**
+ * PROFILE-ARREARS.1 — the open past-due total for ONE contact, for the
+ * contact profile page. fetchPastDue aggregates the whole location to drive
+ * the Overdue chase-list; the profile needs the single-contact figure so an
+ * ungrouped member (the ~99% case) shows the SAME arrears the chase-list
+ * flags instead of a blank "—". Uses the identical glofox_invoices columns
+ * and the shared `nettedOutByRetry` settled-retry netting, so the profile,
+ * the radar (fetchPastDue) and the grouped person view (person-aggregate)
+ * all agree.
+ *
+ * Best-effort: any DB error (or a pre-migration glofox_invoices) returns
+ * zeros rather than crashing the profile render.
+ *
+ * @returns {Promise<{ arrearsCents: number, count: number }>}
+ *   arrearsCents — summed amount of the surviving (non-settled-retry) PAST_DUE rows
+ *   count — number of those surviving rows (drives the "Payment overdue" pill)
+ */
+export async function loadContactArrears(db, contactId) {
+  if (!contactId) return { arrearsCents: 0, count: 0 }
+  try {
+    const [pastDueRows, paidRows] = await Promise.all([
+      fetchContactInvoicesByStatus(db, contactId, 'PAST_DUE', 'id, contact_id, glofox_user_id, amount_cents, invoice_date'),
+      fetchContactInvoicesByStatus(db, contactId, 'PAID', 'glofox_user_id, amount_cents, invoice_date'),
+    ])
+    const { kept } = nettedOutByRetry(pastDueRows, paidRows)
+    const arrearsCents = kept.reduce((sum, r) => sum + (Number(r.amount_cents) || 0), 0)
+    return { arrearsCents, count: kept.length }
+  } catch {
+    return { arrearsCents: 0, count: 0 }
+  }
+}
+
 // WINBACK.1 — statuses a former member can carry. ex_member is in
 // here even though it's outside MEMBER_STATUSES; a lapsed member
 // whose Glofox status flipped to ex_member is a clear win-back case.

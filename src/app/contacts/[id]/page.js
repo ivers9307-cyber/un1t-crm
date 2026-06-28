@@ -9,6 +9,7 @@ import { canViewContact } from '@/lib/contact-crossovers'
 import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
+import { loadContactArrears } from '@/lib/churn-radar-data'
 import ContactActions from '@/components/ContactActions'
 import ContactComposer from '@/components/ContactComposer'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
@@ -95,12 +96,17 @@ export default async function ContactDetailPage(props) {
     if (pg?.group?.id) person = await aggregatePerson(db, pg.group.id)
   } catch { person = null }
 
-  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes] = await Promise.all([
+  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, contactArrears] = await Promise.all([
     db.from('deals').select('*, pipeline_stages(name, color)').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('bookings').select('*, event_types(name, color)').eq('contact_id', id).order('booking_date', { ascending: true }),
     db.from('whatsapp_conversations').select('id, wa_phone, last_message_at, last_message_preview, last_message_direction, unread_count, status, window_expires_at').eq('contact_id', id).order('last_message_at', { ascending: false }),
+    // PROFILE-ARREARS.1 — this contact's open past-due total (netted), so the
+    // profile shows the SAME arrears the Overdue chase-list flags. Previously
+    // arrears were only computed for grouped contacts, so an ungrouped member
+    // in arrears showed "—" and the overdue pill never lit (no pastDueIds ctx).
+    loadContactArrears(db, id),
   ])
 
   // GLOFOX-CATALOG — resolve the member's plan description (pricing +
@@ -138,7 +144,12 @@ export default async function ContactDetailPage(props) {
   const activityContact = person
     ? { ...contact, last_attended_at: person.lastAttendedAt, total_attended_30d: person.attended }
     : contact
-  const churnClass = classifyContact(activityContact)
+  // PROFILE-ARREARS.1 — supply the past-due context classifyContact needs to
+  // light the "Payment overdue" pill. Without it the overdue branch (guarded on
+  // ctx.pastDueIds) can never fire here, so a member the Overdue chase-list
+  // flags showed no overdue signal on their own profile.
+  const arrearsCtx = contactArrears.count > 0 ? { pastDueIds: new Set([activityContact.id]) } : {}
+  const churnClass = classifyContact(activityContact, arrearsCtx)
   const churnScored = churnClass === 'active' ? scoreMember(activityContact, Date.now()) : null
   let risk = null
   if (churnClass === 'overdue') {
@@ -293,15 +304,15 @@ export default async function ContactDetailPage(props) {
   // PERSON-LINK.1 — at-a-glance lifetime metrics. Prefer the unified
   // person aggregate when the contact is grouped, else fall back to the
   // single-contact figures the page already loaded.
-  //  - arrears: the aggregate computes it from glofox_invoices for the
-  //    whole group; there's no single-contact arrears figure on this page
-  //    and we deliberately don't add a new per-contact query, so it shows
-  //    only when grouped (null → "—" otherwise).
+  //  - arrears (PROFILE-ARREARS.1): grouped contacts use the cross-account
+  //    aggregate; ungrouped contacts use the per-contact figure (netted, same
+  //    source as the Overdue chase-list) so a member in arrears shows their
+  //    real total here instead of "—".
   //  - lifetime value: not aggregated cross-account (the codebase has no
   //    cross-member LTV roll-up), so we keep the primary contact's figure
   //    in both the grouped and single case.
   const ltvCents = contact.lifetime_value_cents
-  const metricArrearsCents = person ? person.arrearsCents : null
+  const metricArrearsCents = person ? person.arrearsCents : contactArrears.arrearsCents
   const metricAttended = person ? person.attended : (Number(contact.total_attended_30d) || 0)
   const metricDeals = person ? person.dealsCount : deals.length
 

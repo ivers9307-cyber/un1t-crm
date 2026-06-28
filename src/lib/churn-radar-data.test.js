@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { loadOverdue, loadRadar } from './churn-radar-data'
+import { loadOverdue, loadRadar, loadContactArrears } from './churn-radar-data'
 
 // ARREARS-NETTING.1 (Fix B) — the live Overdue feature must net cross-
 // invoice-id payment retries out of the chase-list + total, the same way the
@@ -145,6 +145,69 @@ describe('loadOverdue — retry netting (Fix B)', () => {
     // Only the un-netted invoice's amount remains.
     expect(summary.totalValueCents).toBe(9900)
     expect(overdue[0].invoiceCount).toBe(1)
+  })
+})
+
+// ── PROFILE-ARREARS.1: per-contact arrears for the contact profile ───────────
+//
+// The radar's fetchPastDue aggregates the WHOLE location; the profile page needs
+// ONE contact's open past-due total so an ungrouped member (the ~99% case) shows
+// the SAME arrears the Overdue chase-list flags — instead of a blank "—".
+// loadContactArrears must use the identical glofox_invoices columns + the shared
+// nettedOutByRetry settled-retry netting, scoped to a single contact_id.
+
+describe('loadContactArrears — per-contact profile arrears (PROFILE-ARREARS.1)', () => {
+  const C = 'c-john'
+  const U = 'u-john'
+  const pd = (id, cents, date) => gInvoice({ id, glofox_user_id: U, contact_id: C, amount_cents: cents, status: 'PAST_DUE', invoice_date: date })
+  const paid = (id, cents, date) => gInvoice({ id, glofox_user_id: U, contact_id: C, amount_cents: cents, status: 'PAID', invoice_date: date })
+
+  it('sums the open past-due fees a single ungrouped contact owes (John Heenan case)', async () => {
+    // 6 distinct late-cancel / no-show fees = €55. The only same-amount PAID
+    // (the €5 on 22 Jan) is ~4 months from the €5 PAST_DUE → far outside the
+    // ±1-day retry window → nothing nets out → the profile must show €55.
+    const db = makeDb({
+      glofox_invoices: (state) => {
+        if (state.status === 'PAST_DUE') return [
+          pd('f1', 1000, '2026-05-14T06:00:00Z'),
+          pd('f2', 500, '2026-05-31T08:00:00Z'),
+          pd('f3', 1000, '2026-06-07T09:00:00Z'),
+          pd('f4', 1000, '2026-06-13T06:00:00Z'),
+          pd('f5', 1000, '2026-06-17T07:00:00Z'),
+          pd('f6', 1000, '2026-06-26T06:00:00Z'),
+        ]
+        if (state.status === 'PAID') return [paid('p1', 500, '2026-01-22T10:00:00Z')]
+        return []
+      },
+    })
+    const res = await loadContactArrears(db, C)
+    expect(res.arrearsCents).toBe(5500)
+    expect(res.count).toBe(6)
+  })
+
+  it('nets a settled card-retry (same member, same amount, within ±1 day) out of the figure', async () => {
+    const db = makeDb({
+      glofox_invoices: (state) => {
+        if (state.status === 'PAST_DUE') return [pd('pd1', 9900, '2026-05-27T10:36:00Z')]
+        if (state.status === 'PAID') return [paid('p1', 9900, '2026-05-27T10:40:00Z')]
+        return []
+      },
+    })
+    const res = await loadContactArrears(db, C)
+    expect(res.arrearsCents).toBe(0)
+    expect(res.count).toBe(0)
+  })
+
+  it('returns zeros for a contact with no invoices', async () => {
+    const db = makeDb({ glofox_invoices: () => [] })
+    const res = await loadContactArrears(db, C)
+    expect(res).toEqual({ arrearsCents: 0, count: 0 })
+  })
+
+  it('returns zeros (never throws) when the invoice query errors', async () => {
+    const db = makeDb({ glofox_invoices: () => { throw new Error('boom') } })
+    const res = await loadContactArrears(db, C)
+    expect(res).toEqual({ arrearsCents: 0, count: 0 })
   })
 })
 

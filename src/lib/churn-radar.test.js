@@ -13,6 +13,7 @@ import {
   radarSummary,
   buildOverdue,
   paymentTroubleKind,
+  classifyRefreshedMember,
   monthlyValueCents,
   scoreWinbackContact,
   buildWinback,
@@ -329,6 +330,64 @@ describe('paymentTroubleKind — dunning guard', () => {
   })
   it('returns null for a non-member', () => {
     expect(paymentTroubleKind({ glofox_membership_status: 'lead' }, NOW)).toBe(null)
+  })
+})
+
+// RADAR-PAY.2 — the post-refresh verdict the refresh-member route returns.
+// The re-read `fresh` row is selected with STATE_COLUMNS — it has NO `id` —
+// and both classifyContact AND paymentTroubleKind need ctx.pastDueIds to see
+// open arrears, so this helper must inject the id and feed the same ctx to
+// both. Bug it fixes: the route called classifyContact(fresh || {}) with no
+// ctx + no id, so a member who genuinely owes could never read 'overdue' and
+// (when their subscription wasn't separately "slipping") fell through to
+// still_flagged=false and wrongly dropped off the list.
+describe('classifyRefreshedMember — RADAR-PAY.2 post-refresh verdict', () => {
+  // Simulate the route's STATE_COLUMNS re-read: same shape, but no id/name.
+  const freshRow = (over = {}) => {
+    const r = healthy(over)
+    delete r.id
+    delete r.name
+    return r
+  }
+
+  it('classifies a member with open past-due invoices as overdue (injects the id + ctx the route lacks)', () => {
+    // freshRow has NO id; only the helper injecting id='c-john' makes the
+    // ctx.pastDueIds match — so 'overdue' proves the injection works.
+    const res = classifyRefreshedMember(freshRow(), 'c-john', 2, NOW)
+    expect(res.classification).toBe('overdue')
+    expect(res.trouble).toBe('overdue')
+    expect(res.stillFlagged).toBe(true)
+  })
+
+  it('keeps a member flagged when they owe a fee even though their subscription is current (the previously-masked case)', () => {
+    // Recent payment → detectPaymentSlipping does NOT fire, so the old
+    // `trouble` fallback was null; only the overdue ctx keeps them flagged.
+    const res = classifyRefreshedMember(
+      freshRow({ glofox_billing_interval: '1 month', last_payment_at: daysAgo(5) }),
+      'c-john', 6, NOW,
+    )
+    expect(res.classification).toBe('overdue')
+    expect(res.stillFlagged).toBe(true)
+  })
+
+  it('does not flag a paid-up member with no past-due as overdue', () => {
+    const res = classifyRefreshedMember(
+      freshRow({ glofox_billing_interval: '1 month', last_payment_at: daysAgo(5) }),
+      'c-john', 0, NOW,
+    )
+    expect(res.classification).toBe('active')
+    expect(res.trouble).toBe(null)
+    expect(res.stillFlagged).toBe(false)
+  })
+
+  it('still reports slipping (stillFlagged) for an active sub past due with no open invoice rows', () => {
+    const res = classifyRefreshedMember(
+      freshRow({ glofox_billing_interval: '1 month', last_payment_at: daysAgo(40) }),
+      'c-john', 0, NOW,
+    )
+    expect(res.classification).toBe('active')
+    expect(res.trouble).toBe('slipping')
+    expect(res.stillFlagged).toBe(true)
   })
 })
 
