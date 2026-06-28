@@ -418,18 +418,28 @@ export async function editTemplate(metaTemplateId, { category, components }, opt
 // ============================================================
 
 /**
- * Build audience query for WhatsApp broadcasts
- * Same pattern as email but checks whatsapp_marketing consent and wa_phone
+ * The WhatsApp broadcast reachability gate, as single-table predicates on
+ * contacts (post mig 325: whatsapp_marketing is denormalized). Shared by the
+ * send audience and the pre-send count so they agree by construction:
+ * opted into WA marketing, has a normalized WA number, not blocked/opted-out.
  */
-function whatsAppAudienceBase(db, locationId) {
-  return db
-    .from('contacts')
-    .select('*, contact_preferences!inner(*)')
-    .eq('location_id', locationId)
-    .eq('contact_preferences.whatsapp_marketing', true)
+export function applyWhatsAppReachability(query) {
+  return query
+    .eq('whatsapp_marketing', true)
     .not('wa_phone', 'is', null)
     .neq('wa_status', 'blocked')
     .neq('wa_status', 'opted_out')
+}
+
+/**
+ * Build audience query for WhatsApp broadcasts. Single-table on contacts now
+ * that whatsapp_marketing is denormalized (mig 325) — no contact_preferences
+ * embed, so head:true counts over this gate are safe.
+ */
+function whatsAppAudienceBase(db, locationId) {
+  return applyWhatsAppReachability(
+    db.from('contacts').select('*').eq('location_id', locationId)
+  )
 }
 
 export function buildWhatsAppAudience(db, filter, locationId) {

@@ -74,11 +74,16 @@ describe('buildWhatsAppAudienceAsync', () => {
     expect(result.query).toBeDefined()
   })
 
-  it('applies the WhatsApp eligibility gates', async () => {
+  it('applies the WhatsApp eligibility gates (single-table, post mig 325)', async () => {
     const { builder, calls } = makeFakeQuery()
     const db = { from: (t) => { calls.push({ method: 'from', args: [t] }); return builder } }
     await buildWhatsAppAudienceAsync(db, { logic: 'and', filters: [] }, 'loc-uuid')
-    expect(calls).toContainEqual({ method: 'eq', args: ['contact_preferences.whatsapp_marketing', true] })
+    // Gate now reads the denormalized contacts.whatsapp_marketing — no contact_preferences embed.
+    expect(calls).toContainEqual({ method: 'eq', args: ['whatsapp_marketing', true] })
     expect(calls).toContainEqual({ method: 'not', args: ['wa_phone', 'is', null] })
+    expect(calls).toContainEqual({ method: 'neq', args: ['wa_status', 'blocked'] })
+    expect(calls).toContainEqual({ method: 'neq', args: ['wa_status', 'opted_out'] })
+    // The old embedded-join gate is gone.
+    expect(calls).not.toContainEqual({ method: 'eq', args: ['contact_preferences.whatsapp_marketing', true] })
   })
 })
