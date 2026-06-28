@@ -87,7 +87,11 @@ export async function POST(request, props) {
         phone,
         body.template_name,
         body.template_language || 'en',
-        components
+        components,
+        // Route from THIS location's WhatsApp number (whatsapp_numbers),
+        // not the env-default — otherwise a manual reply goes out from the
+        // wrong/agent number (or fails silently on a dead env token).
+        { locationId: conversation.location_id }
       )
       templateName = body.template_name
       // Render the actual text the contact received so the thread shows
@@ -111,7 +115,7 @@ export async function POST(request, props) {
           window_expired: true,
         }, { status: 400 })
       }
-      result = await sendMediaMessage(phone, messageType, body.media_url, body.caption)
+      result = await sendMediaMessage(phone, messageType, body.media_url, body.caption, { locationId: conversation.location_id })
       messageBody = body.caption || `[${messageType}]`
     } else {
       // Text message — 24h window only
@@ -122,7 +126,7 @@ export async function POST(request, props) {
           window_expired: true,
         }, { status: 400 })
       }
-      result = await sendTextMessage(phone, messageBody)
+      result = await sendTextMessage(phone, messageBody, { locationId: conversation.location_id })
     }
 
     // Save message to DB

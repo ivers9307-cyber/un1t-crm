@@ -194,9 +194,20 @@ export async function POST(request) {
     await db.rpc('increment_sms_broadcast_delivered', { p_broadcast_id: recipient.broadcast_id })
   } else if (messageStatus === 'undelivered') {
     await db.rpc('increment_sms_broadcast_undelivered', { p_broadcast_id: recipient.broadcast_id })
+  } else if (messageStatus === 'failed') {
+    // 'failed' = Twilio never sent it. A recipient the send loop already
+    // counted as 'sent' that now fails must move OUT of total_sent and INTO
+    // total_failed, or the broadcast's "sent" figure permanently over-counts
+    // async failures. The early `recipient.status === messageStatus` guard
+    // (above) makes this fire at most once per recipient. (mig 332 RPC.)
+    await db.rpc('increment_sms_broadcast_metric', { p_broadcast_id: recipient.broadcast_id, p_metric: 'total_failed', p_delta: 1 })
+    if (recipient.status === 'sent') {
+      await db.rpc('increment_sms_broadcast_metric', { p_broadcast_id: recipient.broadcast_id, p_metric: 'total_sent', p_delta: -1 })
+    }
   }
-  // Note: total_sent / total_failed are written by the send loop
-  // (sms.js#sendBroadcast). We don't double-count them here.
+  // Note: total_sent / total_failed are otherwise written by the send loop
+  // (sms.js#sendBroadcast) at send time; here we only correct an async
+  // sent→failed transition Twilio reports after the loop has finished.
 
   return NextResponse.json({ success: true, status: messageStatus })
 }

@@ -429,6 +429,15 @@ async function handleStatusUpdate(db, status) {
     .single()
 
   if (msg?.broadcast_id) {
+    // Prior recipient status — so counter adjustments fire once per real
+    // transition (Meta may redeliver a status webhook).
+    const { data: prevRecip } = await db.from('whatsapp_broadcast_recipients')
+      .select('status')
+      .eq('broadcast_id', msg.broadcast_id)
+      .eq('contact_id', msg.contact_id)
+      .maybeSingle()
+    const prevStatus = prevRecip?.status
+
     const recipUpdates = { status: statusValue }
     if (statusValue === 'delivered') recipUpdates.delivered_at = timestamp.toISOString()
     if (statusValue === 'read') recipUpdates.read_at = timestamp.toISOString()
@@ -451,8 +460,9 @@ async function handleStatusUpdate(db, status) {
       })
     }
 
-    // Update broadcast metrics
-    if (['delivered', 'read', 'failed'].includes(statusValue)) {
+    // Update broadcast metrics — only on a genuine transition (guards
+    // against Meta redelivering the same status and double-counting).
+    if (prevStatus !== statusValue && ['delivered', 'read', 'failed'].includes(statusValue)) {
       const metricField = statusValue === 'delivered' ? 'total_delivered'
         : statusValue === 'read' ? 'total_read'
         : 'total_failed'
@@ -461,6 +471,15 @@ async function handleStatusUpdate(db, status) {
       try {
         await db.rpc('increment_whatsapp_broadcast_metric', { p_broadcast_id: msg.broadcast_id, p_metric: metricField })
       } catch {}
+
+      // A message counted as a successful send (total_sent = dispatched:
+      // sent/delivered/read) that now FAILED must come back OUT of total_sent
+      // or the "sent" figure permanently over-counts async failures.
+      if (statusValue === 'failed' && ['sent', 'delivered', 'read'].includes(prevStatus)) {
+        try {
+          await db.rpc('increment_whatsapp_broadcast_metric', { p_broadcast_id: msg.broadcast_id, p_metric: 'total_sent', p_delta: -1 })
+        } catch {}
+      }
     }
   }
 }
