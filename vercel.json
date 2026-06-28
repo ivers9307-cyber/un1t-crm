@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/glofox-arrears-reconcile",
+      "schedule": "0 4 * * *"
+    },
+    {
       "path": "/api/cron/run-scheduled-reports",
       "schedule": "0 7 * * *"
     },
