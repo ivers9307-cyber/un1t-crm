@@ -157,6 +157,10 @@
       "schedule": "0 10 * * *"
     },
     {
+      "path": "/api/cron/send-class-booking-reminders",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/strava-import",
       "schedule": "*/5 * * * *"
     },

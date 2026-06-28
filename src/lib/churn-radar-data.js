@@ -102,8 +102,11 @@ async function fetchInvoicesByStatus(db, locationId, status, columns) {
  * retries out: a PAST_DUE row whose member (glofox_user_id) has a PAID
  * `glofox_invoices` row of the same amount_cents within ±7 days is excluded
  * from the Overdue list + total (shared pure helper `nettedOutByRetry`).
+ *
+ * Exported for reuse by the engagement→churn analytics (P2-7) — the at-risk
+ * classification needs the same authoritative arrears context.
  */
-async function fetchPastDue(db, locationId) {
+export async function fetchPastDue(db, locationId) {
   const [pastDueRows, pendingRows, paidRows] = await Promise.all([
     fetchInvoicesByStatus(db, locationId, 'PAST_DUE', 'id, contact_id, glofox_user_id, amount_cents, invoice_date, status'),
     fetchInvoicesByStatus(db, locationId, 'PENDING', 'id, contact_id, glofox_user_id, amount_cents, invoice_date, status, line_item_subtypes'),
@@ -163,9 +166,11 @@ async function fetchContactsByIds(db, ids) {
 
 /**
  * Fetch every paying member at a location. Paginated — the member
- * base can exceed Supabase's ~1000-row response cap.
+ * base can exceed Supabase's ~1000-row response cap. Exported for reuse
+ * by the engagement→churn analytics (P2-7), which needs the same active
+ * base + columns the radar scores on.
  */
-async function fetchMembers(db, locationId) {
+export async function fetchMembers(db, locationId) {
   const rows = []
   const PAGE = 1000
   for (let from = 0; ; from += PAGE) {

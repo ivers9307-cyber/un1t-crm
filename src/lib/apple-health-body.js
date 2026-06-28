@@ -2,6 +2,15 @@
 // No DB. The ingest route applies the parsed values (weight freshest-wins;
 // dob/gender only-if-null).
 
+// Apple Health metric keys the champ-app uploads use some short aliases; the
+// member_health_metrics consumer (champ-app wearable-trends-view) reads canonical
+// keys. Normalize at ingest so HRV/VO2max actually surface.
+const METRIC_KEY_ALIASES = { hrv: 'heart_rate_variability_sdnn', vo2max: 'vo2_max' }
+export function normalizeHealthMetricKey(metric) {
+  const k = String(metric ?? '').trim()
+  return METRIC_KEY_ALIASES[k] || k
+}
+
 const GENDERS = ['female', 'male', 'other']
 
 export function mapBiologicalSexToGender(raw) {

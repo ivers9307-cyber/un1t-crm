@@ -19,6 +19,8 @@ const SEGMENTS = [
   // their own permission gates, this strip is display-only.
   { id: 'churn',    label: 'Churn',    href: '/dashboard/churn-radar', perm: 'churn_radar' },
   { id: 'leads',    label: 'Leads',    href: '/dashboard/lead-radar',  perm: 'lead_radar'  },
+  // P2-7 — engagement→churn analytics (friend-count vs retention + app adoption).
+  { id: 'engagement', label: 'Engagement', href: '/dashboard/engagement', perm: 'engagement_analytics' },
 ]
 
 export default async function DashboardLayout({ children }) {
