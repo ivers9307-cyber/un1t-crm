@@ -291,14 +291,14 @@ Ensure `applyAudienceFilterAsync` is imported (the file already imports `applyAu
  * @returns {Promise<{matched:number, reachable:number, excluded:{no_number:number,no_consent:number,opted_out:number}}>}
  */
 export async function computeWhatsAppReachabilitySummary(db, filter, locationId) {
-  const filtered = async () => {
+  // NOTE: do NOT factor the query-build into a separate `async filtered()` that
+  // `return`s the builder — supabase-js builders are thenables, so returning one
+  // across an async boundary makes `await` unwrap it to { count } (crashes in
+  // prod too, not just under the mock). Build + await within one async fn.
+  const countOf = async (extra) => {
     const base = db.from('contacts').select('id', { count: 'exact', head: true }).eq('location_id', locationId)
     const { query } = await applyAudienceFilterAsync({ db, query: base, filter, locationId })
-    return query
-  }
-  const countOf = async (extra) => {
-    const q = await filtered()
-    const { count } = await (extra ? extra(q) : q)
+    const { count } = await (extra ? extra(query) : query)
     return count || 0
   }
   // Order matters — keep aligned with the test's call sequence.
