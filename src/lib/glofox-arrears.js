@@ -352,3 +352,81 @@ export function computeArrears(details, opts = {}) {
     warnings,
   }
 }
+
+// ── GLOFOX-RECONCILE.1 — stale-PAST_DUE reconciliation ─────────────────
+// The churn radar reads glofox_invoices.status='PAST_DUE', a table fed by
+// INVOICE_UPDATED webhooks that CREATE late-cancel / no-show fee rows as
+// PAST_DUE. When a fee is later forgiven / cancelled / written off in Glofox,
+// no webhook flips the local copy, so the row goes stale and the radar shows a
+// member owing money they don't (verified 2026-06-28: forgiven fees carry
+// is_forgiven; waived/cancelled fees are simply ABSENT from the report). The
+// Glofox TransactionsList report is the source of truth; these helpers
+// reconcile local open PAST_DUE rows against it.
+
+const RECONCILE_DAY_MS = 86_400_000
+
+/**
+ * Index a Glofox report's transactions by invoice_id, recording whether the
+ * invoice has any settled / forgiven transaction. Invoices with no transaction
+ * in the report are simply absent from the map.
+ *
+ * @param {Array} details  TransactionsList.details from the Glofox report
+ * @returns {Map<string, { settled: boolean, forgiven: boolean }>}
+ */
+export function indexReportByInvoice(details) {
+  const map = new Map()
+  for (const row of Array.isArray(details) ? details : []) {
+    const { t } = unwrap(row)
+    const invId = t?.invoice_id
+    if (!invId) continue
+    const cur = map.get(invId) || { settled: false, forgiven: false }
+    if (isSettledTxn(t)) cur.settled = true
+    if (isForgivenTxn(t)) cur.forgiven = true
+    map.set(invId, cur)
+  }
+  return map
+}
+
+/**
+ * Decide, for each local open PAST_DUE invoice, whether it is still genuinely
+ * owed (keep) or should be cleared because Glofox no longer shows it as a debt.
+ * `glofox_invoices.id` IS the Glofox invoice_id, so we match directly.
+ *
+ *   - report settled  → clear as PAID      (the charge went through)
+ *   - report forgiven → clear as FORGIVEN  (staff waived it)
+ *   - report present, unpaid → keep        (a real, still-open debt)
+ *   - absent from report:
+ *       · older than `absentAgeDays` → clear as CANCELLED (waived/cancelled
+ *         in Glofox; the resolution event never reached our webhook)
+ *       · within the buffer → keep (a brand-new fee may not have hit the
+ *         transaction ledger yet — don't clear it prematurely)
+ *       · unparseable invoice_date → keep (can't judge age, so never clear)
+ *
+ * Pure: no I/O. The caller fetches the report + the open PAST_DUE rows and
+ * applies the returned 'clear' decisions.
+ *
+ * @param {Array<{id:string, invoice_date?:string|null}>} pastDueRows
+ * @param {Map<string,{settled:boolean,forgiven:boolean}>} reportIndex
+ * @param {number} [nowMs]
+ * @param {{ absentAgeDays?: number }} [opts]
+ * @returns {Array<{ id:string, action:'keep'|'clear', newStatus?:string, reason:string }>}
+ */
+export function reconcileOpenPastDue(pastDueRows, reportIndex, nowMs = Date.now(), opts = {}) {
+  const absentAgeDays =
+    Number.isFinite(opts.absentAgeDays) && opts.absentAgeDays >= 0 ? opts.absentAgeDays : 2
+  const idx = reportIndex instanceof Map ? reportIndex : new Map()
+  const out = []
+  for (const r of Array.isArray(pastDueRows) ? pastDueRows : []) {
+    const v = idx.get(r.id)
+    if (v?.settled) { out.push({ id: r.id, action: 'clear', newStatus: 'PAID', reason: 'settled' }); continue }
+    if (v?.forgiven) { out.push({ id: r.id, action: 'clear', newStatus: 'FORGIVEN', reason: 'forgiven' }); continue }
+    if (v) { out.push({ id: r.id, action: 'keep', reason: 'report_unpaid' }); continue }
+    // Absent from the report.
+    const dueMs = Date.parse(r.invoice_date)
+    if (!Number.isFinite(dueMs)) { out.push({ id: r.id, action: 'keep', reason: 'absent_unknown_age' }); continue }
+    const ageDays = (nowMs - dueMs) / RECONCILE_DAY_MS
+    if (ageDays > absentAgeDays) out.push({ id: r.id, action: 'clear', newStatus: 'CANCELLED', reason: 'absent_aged' })
+    else out.push({ id: r.id, action: 'keep', reason: 'absent_recent' })
+  }
+  return out
+}
