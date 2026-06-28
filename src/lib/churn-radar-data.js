@@ -17,7 +17,7 @@ import {
   classifyContact,
   MEMBER_STATUSES,
 } from '@/lib/churn-radar'
-import { nettedOutByRetry } from '@/lib/glofox-arrears'
+import { nettedOutByRetry, isCustomChargeFee } from '@/lib/glofox-arrears'
 import { combineGroupActivity, rollupByPerson } from '@/lib/person-rollup'
 import { selectAll } from '@/lib/select-all'
 
@@ -105,12 +105,17 @@ async function fetchInvoicesByStatus(db, locationId, status, columns) {
  * from the Overdue list + total (shared pure helper `nettedOutByRetry`).
  */
 async function fetchPastDue(db, locationId) {
-  const [pastDueRows, paidRows] = await Promise.all([
+  const [pastDueRows, pendingRows, paidRows] = await Promise.all([
     fetchInvoicesByStatus(db, locationId, 'PAST_DUE', 'id, contact_id, glofox_user_id, amount_cents, invoice_date'),
+    fetchInvoicesByStatus(db, locationId, 'PENDING', 'id, contact_id, glofox_user_id, amount_cents, invoice_date, line_item_subtypes'),
     fetchInvoicesByStatus(db, locationId, 'PAID', 'glofox_user_id, amount_cents, invoice_date'),
   ])
+  // OWED-PENDING.1 — PENDING custom-charge fees (no-show / late-cancel, applied
+  // but not yet collected) count as owed too; a PENDING subscription renewal is
+  // a scheduled future payment, not arrears, so it's filtered out.
+  const openRows = [...pastDueRows, ...pendingRows.filter(isCustomChargeFee)]
   // Net cross-invoice-id payment retries out before aggregating.
-  const { kept } = nettedOutByRetry(pastDueRows, paidRows)
+  const { kept } = nettedOutByRetry(openRows, paidRows)
 
   const byId = new Map()
   for (const r of kept) {
@@ -512,11 +517,14 @@ async function fetchContactInvoicesByStatus(db, contactId, status, columns) {
 export async function loadContactArrears(db, contactId) {
   if (!contactId) return { arrearsCents: 0, count: 0 }
   try {
-    const [pastDueRows, paidRows] = await Promise.all([
+    const [pastDueRows, pendingRows, paidRows] = await Promise.all([
       fetchContactInvoicesByStatus(db, contactId, 'PAST_DUE', 'id, contact_id, glofox_user_id, amount_cents, invoice_date'),
+      fetchContactInvoicesByStatus(db, contactId, 'PENDING', 'id, contact_id, glofox_user_id, amount_cents, invoice_date, line_item_subtypes'),
       fetchContactInvoicesByStatus(db, contactId, 'PAID', 'glofox_user_id, amount_cents, invoice_date'),
     ])
-    const { kept } = nettedOutByRetry(pastDueRows, paidRows)
+    // OWED-PENDING.1 — count PENDING custom-charge fees as owed (not pending subs).
+    const openRows = [...pastDueRows, ...pendingRows.filter(isCustomChargeFee)]
+    const { kept } = nettedOutByRetry(openRows, paidRows)
     const arrearsCents = kept.reduce((sum, r) => sum + (Number(r.amount_cents) || 0), 0)
     return { arrearsCents, count: kept.length }
   } catch {

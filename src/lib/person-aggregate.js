@@ -21,7 +21,7 @@
 //    CLAUDE.md pattern from pipeline-reclassify.js.
 //  - thenables: never .catch() a supabase builder — try { await } catch {} only.
 
-import { nettedOutByRetry } from './glofox-arrears'
+import { nettedOutByRetry, isCustomChargeFee } from './glofox-arrears'
 import { normalisePhone9 } from './person-links'
 
 const PAGE_SIZE = 1000
@@ -91,13 +91,20 @@ export async function aggregatePerson(db, groupId) {
   const contacts = contactRows || []
 
   // ── Step 3: Build parallel fetches ───────────────────────────────────────
-  const [pastDueRows, paidRows, dealCountRes, timelineRes] = await Promise.all([
+  const [pastDueRows, pendingRows, paidRows, dealCountRes, timelineRes] = await Promise.all([
     // Arrears: PAST_DUE invoices for these members
     fetchGroupInvoicesByStatus(
       db,
       memberIds,
       'PAST_DUE',
       'id, contact_id, glofox_user_id, amount_cents, invoice_date',
+    ),
+    // Arrears: PENDING custom-charge fees count too (OWED-PENDING.1)
+    fetchGroupInvoicesByStatus(
+      db,
+      memberIds,
+      'PENDING',
+      'id, contact_id, glofox_user_id, amount_cents, invoice_date, line_item_subtypes',
     ),
     // Arrears: PAID invoices for netting (retry detection)
     fetchGroupInvoicesByStatus(
@@ -172,7 +179,9 @@ export async function aggregatePerson(db, groupId) {
   }
 
   // ── Step 7: Arrears — nettedOutByRetry (same as fetchPastDue) ────────────
-  const { kept: survivingPastDue } = nettedOutByRetry(pastDueRows, paidRows)
+  // OWED-PENDING.1 — include PENDING custom-charge fees alongside PAST_DUE.
+  const openRows = [...pastDueRows, ...pendingRows.filter(isCustomChargeFee)]
+  const { kept: survivingPastDue } = nettedOutByRetry(openRows, paidRows)
   const arrearsCents = survivingPastDue.reduce(
     (sum, r) => sum + (Number(r.amount_cents) || 0),
     0,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { indexReportByInvoice, reconcileOpenPastDue } from './glofox-arrears'
+import { indexReportByInvoice, reconcileOpenPastDue, isCountedOwedRow } from './glofox-arrears'
 import { runArrearsReconcile } from './glofox-reconcile'
 
 // GLOFOX-RECONCILE.1 — the churn radar reads glofox_invoices.status='PAST_DUE',
@@ -73,6 +73,46 @@ describe('reconcileOpenPastDue (GLOFOX-RECONCILE.1)', () => {
     const out = reconcileOpenPastDue([{ id: 'x', invoice_date: '2026-06-27T12:00:00Z' }], new Map(), NOW)
     expect(out[0].action).toBe('keep')
   })
+
+  // OWED-PENDING.1 — a PENDING fee isn't charged yet, so it's expected to be
+  // absent from the transactions ledger; absence must NOT clear it.
+  it('keeps a PENDING fee that is absent from the report regardless of age', () => {
+    const out = reconcileOpenPastDue(
+      [{ id: 'p1', status: 'PENDING', invoice_date: '2026-05-01' }], // 58d old + absent
+      new Map(), NOW, { absentAgeDays: 2 },
+    )
+    expect(out[0]).toMatchObject({ action: 'keep', reason: 'pending_open' })
+  })
+
+  it('still clears a PENDING fee the report shows settled / forgiven', () => {
+    const idx = indexReportByInvoice([
+      txn({ invoice_id: 'pp', paid: true }),
+      txn({ invoice_id: 'pf', metadata: { is_forgiven: true } }),
+    ])
+    const out = reconcileOpenPastDue([
+      { id: 'pp', status: 'PENDING', invoice_date: '2026-06-01' },
+      { id: 'pf', status: 'PENDING', invoice_date: '2026-06-01' },
+    ], idx, NOW)
+    const byId = Object.fromEntries(out.map((d) => [d.id, d]))
+    expect(byId.pp).toMatchObject({ action: 'clear', newStatus: 'PAID', reason: 'settled' })
+    expect(byId.pf).toMatchObject({ action: 'clear', newStatus: 'FORGIVEN', reason: 'forgiven' })
+  })
+})
+
+describe('isCountedOwedRow (OWED-PENDING.1)', () => {
+  it('counts every PAST_DUE row', () => {
+    expect(isCountedOwedRow({ status: 'PAST_DUE' })).toBe(true)
+    expect(isCountedOwedRow({ status: 'PAST_DUE', line_item_subtypes: null })).toBe(true)
+  })
+  it('counts PENDING only when it is a custom-charge fee', () => {
+    expect(isCountedOwedRow({ status: 'PENDING', line_item_subtypes: 'CUSTOM_CHARGE' })).toBe(true)
+    expect(isCountedOwedRow({ status: 'PENDING', line_item_subtypes: 'SUBSCRIPTION_PAYMENT,UPFRONT_PAYMENT' })).toBe(false)
+    expect(isCountedOwedRow({ status: 'PENDING', line_item_subtypes: null })).toBe(false)
+  })
+  it('never counts PAID / CANCELLED / other statuses', () => {
+    expect(isCountedOwedRow({ status: 'PAID', line_item_subtypes: 'CUSTOM_CHARGE' })).toBe(false)
+    expect(isCountedOwedRow({ status: 'CANCELLED' })).toBe(false)
+  })
 })
 
 // ── runArrearsReconcile — orchestration (GLOFOX-RECONCILE.1) ──────────────
@@ -112,11 +152,11 @@ describe('runArrearsReconcile — orchestration (GLOFOX-RECONCILE.1)', () => {
   const rtxn = (over) => ({ StripeCharge: { invoice_id: 'inv', metadata: {}, ...over } })
 
   const pastDue = [
-    { id: 'paid1', invoice_date: '2026-06-01', amount_cents: 1000 },
-    { id: 'forg1', invoice_date: '2026-06-01', amount_cents: 3500 },
-    { id: 'open1', invoice_date: '2026-06-01', amount_cents: 5000 },
-    { id: 'absentOld', invoice_date: '2026-05-14', amount_cents: 500 },
-    { id: 'absentNew', invoice_date: '2026-06-27', amount_cents: 500 },
+    { id: 'paid1', status: 'PAST_DUE', invoice_date: '2026-06-01', amount_cents: 1000 },
+    { id: 'forg1', status: 'PAST_DUE', invoice_date: '2026-06-01', amount_cents: 3500 },
+    { id: 'open1', status: 'PAST_DUE', invoice_date: '2026-06-01', amount_cents: 5000 },
+    { id: 'absentOld', status: 'PAST_DUE', invoice_date: '2026-05-14', amount_cents: 500 },
+    { id: 'absentNew', status: 'PAST_DUE', invoice_date: '2026-06-27', amount_cents: 500 },
   ]
   const report = {
     ok: true, status: 200,
@@ -169,5 +209,22 @@ describe('runArrearsReconcile — orchestration (GLOFOX-RECONCILE.1)', () => {
     await expect(
       runArrearsReconcile(db, creds, 'loc-1', { nowMs: NOW, reportFetcher: async () => ({ ok: false, status: 502 }) }),
     ).rejects.toThrow(/report/i)
+  })
+
+  it('OWED-PENDING.1 — scans PENDING custom-charge fees (kept when absent), drops pending subscriptions', async () => {
+    const rows = [
+      { id: 'pd', status: 'PAST_DUE', invoice_date: '2026-05-14', amount_cents: 1000 }, // absent+old → clear
+      { id: 'pendFee', status: 'PENDING', line_item_subtypes: 'CUSTOM_CHARGE', invoice_date: '2026-05-01', amount_cents: 1000 }, // absent → kept
+      { id: 'pendSub', status: 'PENDING', line_item_subtypes: 'SUBSCRIPTION_PAYMENT', invoice_date: '2026-05-01', amount_cents: 20900 }, // not owed → not scanned
+    ]
+    const { db, updates } = makeReconcileDb(rows)
+    const res = await runArrearsReconcile(db, creds, 'loc-1', { nowMs: NOW, commit: true, reportFetcher: async () => ({ ok: true, status: 200, body: { TransactionsList: { details: [] } } }) })
+    expect(res.scanned).toBe(2) // pd + pendFee; pendSub filtered out
+    expect(res.cleared).toBe(1) // only the aged-absent PAST_DUE
+    const written = new Map()
+    for (const u of updates) for (const id of u.ids) written.set(id, u.payload)
+    expect(written.get('pd')).toMatchObject({ status: 'CANCELLED', reconciled_reason: 'absent_aged' })
+    expect(written.has('pendFee')).toBe(false) // pending fee kept, not cleared
+    expect(written.has('pendSub')).toBe(false)
   })
 })

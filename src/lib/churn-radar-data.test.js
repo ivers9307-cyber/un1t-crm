@@ -46,8 +46,8 @@ const LOC = 'loc-1'
 // Use a fixed "now" so daysOverdue etc. are deterministic.
 const NOW = Date.parse('2026-06-01T00:00:00Z')
 
-function gInvoice({ id, glofox_user_id, contact_id, amount_cents, status, invoice_date }) {
-  return { id, glofox_user_id, contact_id, amount_cents, status, invoice_date, location_id: LOC }
+function gInvoice({ id, glofox_user_id, contact_id, amount_cents, status, invoice_date, line_item_subtypes = null }) {
+  return { id, glofox_user_id, contact_id, amount_cents, status, invoice_date, line_item_subtypes, location_id: LOC }
 }
 function contact({ id, name = 'Member' }) {
   return {
@@ -208,6 +208,45 @@ describe('loadContactArrears — per-contact profile arrears (PROFILE-ARREARS.1)
     const db = makeDb({ glofox_invoices: () => { throw new Error('boom') } })
     const res = await loadContactArrears(db, C)
     expect(res).toEqual({ arrearsCents: 0, count: 0 })
+  })
+})
+
+// ── OWED-PENDING.1: PENDING custom-charge fees count as owed ──────────────────
+// A no-show / late-cancel fee that's been applied but not yet collected sits
+// PENDING in Glofox; it counts toward what a member owes. A PENDING subscription
+// renewal (a scheduled future payment) does NOT.
+describe('PENDING custom-charge fees count as owed (OWED-PENDING.1)', () => {
+  it('loadContactArrears counts a PENDING custom-charge fee but not a pending subscription', async () => {
+    const db = makeDb({
+      glofox_invoices: (state) => {
+        if (state.status === 'PAST_DUE') return [gInvoice({ id: 'pd', glofox_user_id: 'cf', contact_id: 'c-claire', amount_cents: 1000, status: 'PAST_DUE', invoice_date: '2026-05-03T00:00:00Z' })]
+        if (state.status === 'PENDING') return [
+          gInvoice({ id: 'fee', glofox_user_id: 'cf', contact_id: 'c-claire', amount_cents: 1000, status: 'PENDING', invoice_date: '2026-05-26T00:00:00Z', line_item_subtypes: 'CUSTOM_CHARGE' }),
+          gInvoice({ id: 'sub', glofox_user_id: 'cf', contact_id: 'c-claire', amount_cents: 20900, status: 'PENDING', invoice_date: '2026-05-26T00:00:00Z', line_item_subtypes: 'SUBSCRIPTION_PAYMENT' }),
+        ]
+        return []
+      },
+    })
+    const res = await loadContactArrears(db, 'c-claire')
+    expect(res.arrearsCents).toBe(2000) // €10 PAST_DUE + €10 PENDING fee; €209 pending sub excluded
+    expect(res.count).toBe(2)
+  })
+
+  it('loadOverdue includes the PENDING custom-charge fee in the chase-list + total', async () => {
+    const db = makeDb({
+      glofox_invoices: (state) => {
+        if (state.status === 'PAST_DUE') return [gInvoice({ id: 'pd', glofox_user_id: 'cf', contact_id: 'c-claire', amount_cents: 4000, status: 'PAST_DUE', invoice_date: '2026-05-03T00:00:00Z' })]
+        if (state.status === 'PENDING') return [gInvoice({ id: 'fee', glofox_user_id: 'cf', contact_id: 'c-claire', amount_cents: 2000, status: 'PENDING', invoice_date: '2026-05-26T00:00:00Z', line_item_subtypes: 'CUSTOM_CHARGE' })]
+        return []
+      },
+      churn_radar_actions: [],
+      contacts: [contact({ id: 'c-claire', name: 'Claire' })],
+    })
+    const { overdue, summary } = await loadOverdue(db, LOC, NOW)
+    expect(overdue).toHaveLength(1)
+    expect(overdue[0].contactId).toBe('c-claire')
+    expect(overdue[0].invoiceCount).toBe(2) // €40 PAST_DUE + €20 PENDING fee
+    expect(summary.totalValueCents).toBe(6000)
   })
 })
 
