@@ -25,6 +25,11 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
   const [pausing, setPausing] = useState(false)
   const [error, setError] = useState(null)
   const [tab, setTab] = useState(isSent ? 'results' : 'setup')
+  // Adjust drip pacing on a running drip (mig 328 / WA-DRIP-SIZE).
+  const [editingDrip, setEditingDrip] = useState(false)
+  const [savingDrip, setSavingDrip] = useState(false)
+  const [capInput, setCapInput] = useState(broadcast?.daily_cap || 500)
+  const [tickInput, setTickInput] = useState(broadcast?.per_tick_max || '')
 
   const selectedTemplate = templates.find(t => t.id === templateId)
   const bodyComp = selectedTemplate?.components?.find(c => c.type === 'BODY')
@@ -127,6 +132,30 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
       setError(err.message)
     } finally {
       setPausing(false)
+    }
+  }
+
+  async function handleSaveDripSettings() {
+    setSavingDrip(true)
+    setError(null)
+    try {
+      const cap = Number(capInput)
+      const tick = Number(tickInput)
+      const payload = {}
+      if (cap > 0) payload.daily_cap = cap
+      if (tick > 0) payload.per_tick_max = tick
+      const res = await fetch(`/api/whatsapp/broadcasts/${broadcastId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).then(r => r.json())
+      if (!res.success) throw new Error(res.error)
+      setEditingDrip(false)
+      router.refresh()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSavingDrip(false)
     }
   }
 
@@ -353,6 +382,36 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                       {dp ? `${dp.sentToday.toLocaleString()} of ${cap.toLocaleString()} sent today · ` : `Up to ${cap.toLocaleString()}/day · `}
                       {String(broadcast.send_window_start).slice(0, 5)}–{String(broadcast.send_window_end).slice(0, 5)} {broadcast.send_window_tz}
                     </p>
+                    <div className="pt-1">
+                      {!editingDrip ? (
+                        <button type="button"
+                          onClick={() => { setCapInput(broadcast.daily_cap || 500); setTickInput(broadcast.per_tick_max || ''); setEditingDrip(true) }}
+                          className="text-[11px] text-un1t-subtle hover:text-un1t-text underline">Adjust pacing</button>
+                      ) : (
+                        <div className="rounded-lg border border-un1t-border bg-un1t-bg/40 p-3 space-y-2 text-left">
+                          <div className="flex gap-3">
+                            <label className="block flex-1">
+                              <span className="block text-[11px] font-medium text-un1t-subtle mb-1">Daily limit (/24h)</span>
+                              <input type="number" min={1} max={100000} value={capInput} onChange={e => setCapInput(e.target.value)}
+                                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm" />
+                            </label>
+                            <label className="block flex-1">
+                              <span className="block text-[11px] font-medium text-un1t-subtle mb-1">Batch / run <span className="text-un1t-subtle/60">(blank = 100)</span></span>
+                              <input type="number" min={1} max={5000} value={tickInput} onChange={e => setTickInput(e.target.value)} placeholder="100"
+                                className="w-full bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-sm" />
+                            </label>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button type="button" onClick={handleSaveDripSettings} disabled={savingDrip}
+                              className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent disabled:opacity-50">
+                              {savingDrip ? 'Saving…' : 'Save'}</button>
+                            <button type="button" onClick={() => setEditingDrip(false)} disabled={savingDrip}
+                              className="text-xs text-un1t-subtle hover:text-un1t-text px-2 py-1.5">Cancel</button>
+                            <span className="text-[11px] text-un1t-subtle">Applies on the next 15-min run.</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </>
                 )
               })()}

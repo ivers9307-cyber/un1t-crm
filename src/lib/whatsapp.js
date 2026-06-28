@@ -798,7 +798,8 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
     return { status: 'sent', sent: 0, failed: 0, recipients: 0 }
   }
   const doneIds = await fetchDripDoneContactIds(db, broadcastId)
-  const { toSend, exhausted } = selectDripRecipients({ audience, doneIds, headroom, perTickMax })
+  // Per-drip burstiness override (mig 328) — falls back to the code default.
+  const { toSend, exhausted } = selectDripRecipients({ audience, doneIds, headroom, perTickMax: broadcast.per_tick_max || perTickMax })
 
   if (toSend.length === 0) {
     if (exhausted) {

@@ -12,6 +12,9 @@ const BroadcastUpdateSchema = z.object({
   header_media_url: url.nullable().optional(),
   audience_filter: audienceFilterSchema,
   status: z.enum(['draft', 'scheduled', 'sending', 'sent', 'cancelled']).optional(),
+  // Drip pacing — editable while a drip is in flight (next tick uses the new values).
+  daily_cap: z.number().int().positive().max(100000).optional(),
+  per_tick_max: z.number().int().positive().max(5000).optional(),
 })
 
 async function loadBroadcastLocation(db, id) {
