@@ -60,18 +60,33 @@ export async function GET(request) {
   const summary = { processed: 0, failed: 0, batch_size: rows?.length || 0 }
 
   for (const row of rows || []) {
+    // Claim the row BEFORE processing. Vercel cron does not skip an
+    // overlapping invocation, so two ticks can fetch the same pending rows
+    // (processed_at still NULL) and both run processPostmarkEvent — double-
+    // counting opens/clicks and re-applying bounces/unsubscribes. This CAS
+    // flips processed_at from NULL→now: only one tick wins; a concurrent
+    // tick matches 0 rows and skips. On failure we roll processed_at back
+    // to NULL (+ attempts++) so it retries within the MAX_ATTEMPTS budget.
+    const { data: claimed } = await db
+      .from('postmark_webhook_queue')
+      .update({ processed_at: new Date().toISOString() })
+      .eq('id', row.id)
+      .is('processed_at', null)
+      .select('id')
+    if (!claimed || claimed.length === 0) {
+      summary.skipped = (summary.skipped || 0) + 1
+      continue
+    }
+
     const result = await processPostmarkEvent(db, row.payload)
     if (result.ok) {
       summary.processed += 1
-      await db
-        .from('postmark_webhook_queue')
-        .update({ processed_at: new Date().toISOString() })
-        .eq('id', row.id)
     } else {
       summary.failed += 1
       await db
         .from('postmark_webhook_queue')
         .update({
+          processed_at: null,
           attempts: (row.attempts || 0) + 1,
           error: result.error || 'unknown',
         })
