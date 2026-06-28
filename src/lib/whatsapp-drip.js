@@ -43,6 +43,15 @@ export function isWithinSendWindow(now, { start, end, tz }) {
   return mins >= s || mins < e           // wraps midnight
 }
 
+// Drip status for the progress UI: actively sending, operator-paused, or waiting
+// outside the daily send window. `resumesAt` (the window-open time) is shown when
+// closed so the operator knows when it picks back up.
+export function dripWindowStatus(now, { start, end, tz, paused }) {
+  if (paused) return { state: 'paused' }
+  if (isWithinSendWindow(now, { start, end, tz })) return { state: 'sending' }
+  return { state: 'closed', resumesAt: String(start || '').slice(0, 5) }
+}
+
 // How many more we may send in the current rolling-24h window.
 export function rollingHeadroom(dailyCap, sentLast24h) {
   return Math.max(0, dailyCap - sentLast24h)

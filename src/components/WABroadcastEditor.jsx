@@ -7,7 +7,7 @@ import { ArrowLeft, Save, Send, Users, CheckCircle2, XCircle } from 'lucide-reac
 import AudienceBuilder from './AudienceBuilder'
 import { estimateDripDays } from '@/lib/whatsapp-drip'
 
-export default function WABroadcastEditor({ broadcast, templates, locationId, userId, failedRecipients = [], failedCount = 0 }) {
+export default function WABroadcastEditor({ broadcast, templates, locationId, userId, failedRecipients = [], failedCount = 0, dripProgress = null }) {
   const router = useRouter()
   const isSent = broadcast?.status === 'sent'
   const isDripInFlight = broadcast?.delivery_mode === 'drip' && broadcast?.status === 'sending'
@@ -300,41 +300,58 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
 
         {isDripInFlight && (
           <div className="max-w-2xl space-y-4">
-            {broadcast.paused_at && (
-              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-700 text-sm px-4 py-2">
-                Paused — resume to continue sending.
-              </div>
-            )}
             <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Drip in progress</h3>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider shrink-0">Drip in progress</h3>
+                  {dripProgress?.window && (() => {
+                    const w = dripProgress.window
+                    const cls = w.state === 'sending' ? 'bg-green-500/15 text-green-700'
+                      : w.state === 'paused' ? 'bg-amber-500/15 text-amber-700'
+                      : 'bg-un1t-border/50 text-un1t-subtle'
+                    const label = w.state === 'sending' ? 'Sending'
+                      : w.state === 'paused' ? 'Paused'
+                      : `Window closed — resumes ${w.resumesAt}`
+                    return <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full truncate ${cls}`}>{label}</span>
+                  })()}
+                </div>
                 <button
+                  type="button"
                   onClick={handlePauseToggle}
                   disabled={pausing}
-                  className="text-sm border border-un1t-border px-3 py-1.5 rounded-md hover:border-un1t-text/30 transition-colors disabled:opacity-50"
+                  className="text-sm border border-un1t-border px-3 py-1.5 rounded-md hover:border-un1t-text/30 transition-colors disabled:opacity-50 shrink-0"
                 >
                   {pausing ? '…' : broadcast.paused_at ? 'Resume' : 'Pause'}
                 </button>
               </div>
               {(() => {
+                const dp = dripProgress
+                const sent = dp ? dp.dispatched : (broadcast.total_sent || 0)
+                const reached = dp ? dp.reached : (broadcast.total_delivered || 0)
+                const read = dp ? dp.read : (broadcast.total_read || 0)
+                const failed = dp ? dp.failed : (broadcast.total_failed || 0)
                 const total = broadcast.total_recipients || 0
-                const done = (broadcast.total_sent || 0) + (broadcast.total_failed || 0)
+                const done = sent + failed
                 const remaining = Math.max(0, total - done)
                 const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
-                const days = estimateDripDays(remaining, broadcast.daily_cap || 500)
+                const cap = broadcast.daily_cap || 500
+                const days = estimateDripDays(remaining, cap)
                 return (
                   <>
                     <div className="h-2 bg-un1t-border/40 rounded-full overflow-hidden">
                       <div className="h-full bg-green-500 transition-all" style={{ width: `${pct}%` }} />
                     </div>
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 text-center">
-                      <DripStat label="Sent" value={broadcast.total_sent || 0} />
-                      <DripStat label="Failed" value={broadcast.total_failed || 0} />
-                      <DripStat label="Remaining" value={remaining} />
+                    <div className="grid grid-cols-3 gap-4 text-center">
+                      <DripStat label="Sent" value={sent.toLocaleString()} />
+                      <DripStat label="Delivered" value={reached.toLocaleString()} />
+                      <DripStat label="Read" value={read.toLocaleString()} />
+                      <DripStat label="Failed" value={failed.toLocaleString()} />
+                      <DripStat label="Remaining" value={remaining.toLocaleString()} />
                       <DripStat label="Est. days left" value={remaining === 0 ? '0' : `~${days}`} />
                     </div>
                     <p className="text-xs text-un1t-muted">
-                      Up to {broadcast.daily_cap || 500}/day · {String(broadcast.send_window_start).slice(0, 5)}–{String(broadcast.send_window_end).slice(0, 5)} {broadcast.send_window_tz}
+                      {dp ? `${dp.sentToday.toLocaleString()} of ${cap.toLocaleString()} sent today · ` : `Up to ${cap.toLocaleString()}/day · `}
+                      {String(broadcast.send_window_start).slice(0, 5)}–{String(broadcast.send_window_end).slice(0, 5)} {broadcast.send_window_tz}
                     </p>
                   </>
                 )

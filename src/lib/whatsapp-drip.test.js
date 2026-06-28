@@ -1,7 +1,7 @@
 // src/lib/whatsapp-drip.test.js
 import { describe, it, expect } from 'vitest'
 import {
-  isWithinSendWindow, rollingHeadroom, estimateDripDays, selectDripRecipients, dripOutcome,
+  isWithinSendWindow, dripWindowStatus, rollingHeadroom, estimateDripDays, selectDripRecipients, dripOutcome,
   PER_TICK_MAX, AUTO_PAUSE_CONSECUTIVE_FAILURES,
 } from './whatsapp-drip.js'
 
@@ -32,6 +32,20 @@ describe('isWithinSendWindow', () => {
   })
   it('a zero-length window never sends', () => {
     expect(isWithinSendWindow(new Date('2026-06-10T12:00:00Z'), { start: '09:00', end: '09:00', tz: DUBLIN })).toBe(false)
+  })
+})
+
+describe('dripWindowStatus', () => {
+  it('is sending inside the window when not paused', () => {
+    // 12:00Z = 13:00 IST — inside 09:00–20:00
+    expect(dripWindowStatus(new Date('2026-06-10T12:00:00Z'), win)).toEqual({ state: 'sending' })
+  })
+  it('is paused when paused, even inside the window', () => {
+    expect(dripWindowStatus(new Date('2026-06-10T12:00:00Z'), { ...win, paused: true })).toEqual({ state: 'paused' })
+  })
+  it('is closed with the resume time outside the window', () => {
+    // 21:00Z = 22:00 IST — past 20:00
+    expect(dripWindowStatus(new Date('2026-06-10T21:00:00Z'), win)).toEqual({ state: 'closed', resumesAt: '09:00' })
   })
 })
 
