@@ -572,11 +572,15 @@ export async function sendBroadcast(broadcastId) {
   // the per-contact shape (wa_phone, id) is unchanged. Throws on query error.
   const contacts = await fetchAllWhatsAppAudience(db, broadcast.audience_filter, broadcast.location_id)
 
-  // Reachability snapshot for the record/list (same single-table counts the
-  // composer shows pre-send). reachable is overridden to what we actually
-  // attempt, to reflect reality over any count-vs-fetch race.
-  const summary = await computeWhatsAppReachabilitySummary(db, broadcast.audience_filter, broadcast.location_id)
-  const deliverySummary = { ...summary, reachable: contacts?.length || 0 }
+  // Reachability snapshot for the record/list — best-effort. A count failure must
+  // never abort the send (CLAUDE.md: side effects don't fail the primary response).
+  let deliverySummary = null
+  try {
+    const summary = await computeWhatsAppReachabilitySummary(db, broadcast.audience_filter, broadcast.location_id)
+    deliverySummary = { ...summary, reachable: contacts?.length || 0 }
+  } catch (e) {
+    console.error(`[broadcast ${broadcastId}] reachability summary failed:`, e?.message || e)
+  }
 
   if (!contacts?.length) {
     await db.from('whatsapp_broadcasts').update({
@@ -724,10 +728,14 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   // Eligible audience (paginated) minus already-processed, capped to this tick.
   const audience = await fetchAllWhatsAppAudience(db, broadcast.audience_filter, broadcast.location_id)
   if (audience.length === 0) {
-    const summary = await computeWhatsAppReachabilitySummary(db, broadcast.audience_filter, broadcast.location_id)
+    let deliverySummary = null
+    try {
+      const summary = await computeWhatsAppReachabilitySummary(db, broadcast.audience_filter, broadcast.location_id)
+      deliverySummary = { ...summary, reachable: 0 }
+    } catch (e) { console.error(`[drip ${broadcastId}] reachability summary failed:`, e?.message || e) }
     await db.from('whatsapp_broadcasts').update({
       status: 'sent', sent_at: new Date().toISOString(), total_recipients: 0,
-      delivery_summary: { ...summary, reachable: 0 },
+      delivery_summary: deliverySummary,
     }).eq('id', broadcastId)
     return { status: 'sent', sent: 0, failed: 0, recipients: 0 }
   }
@@ -736,10 +744,14 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
 
   if (toSend.length === 0) {
     if (exhausted) {
-      const summary = await computeWhatsAppReachabilitySummary(db, broadcast.audience_filter, broadcast.location_id)
+      let deliverySummary = null
+      try {
+        const summary = await computeWhatsAppReachabilitySummary(db, broadcast.audience_filter, broadcast.location_id)
+        deliverySummary = { ...summary, reachable: audience.length }
+      } catch (e) { console.error(`[drip ${broadcastId}] reachability summary failed:`, e?.message || e) }
       await db.from('whatsapp_broadcasts').update({
         status: 'sent', sent_at: new Date().toISOString(), total_recipients: audience.length,
-        delivery_summary: { ...summary, reachable: audience.length },
+        delivery_summary: deliverySummary,
       }).eq('id', broadcastId)
       return { status: 'sent', sent: 0, failed: 0, recipients: audience.length }
     }
