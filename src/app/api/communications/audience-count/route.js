@@ -12,12 +12,14 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { applyAudienceFilterAsync } from '@/lib/audience-filter'
+import { computeWhatsAppReachabilitySummary } from '@/lib/whatsapp'
 
 export const runtime = 'nodejs'
 
 const Schema = z.object({
   location_id: uuidLike,
   audience_filter: z.unknown().optional(),
+  channel: z.enum(['sms', 'whatsapp', 'email']).optional(),
 })
 
 export async function POST(request) {
@@ -26,13 +28,20 @@ export async function POST(request) {
 
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
-  const { location_id, audience_filter } = validation.data
+  const { location_id, audience_filter, channel } = validation.data
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard
 
   const db = createServerClient()
   try {
+    if (channel === 'whatsapp') {
+      // Single-table reachability counts (safe post mig 325) — keep the pre-send
+      // number honest about WhatsApp consent + a usable wa_phone.
+      const { matched, reachable, excluded } =
+        await computeWhatsAppReachabilitySummary(db, audience_filter || { logic: 'and', filters: [] }, location_id)
+      return NextResponse.json({ success: true, count: matched, reachable, excluded })
+    }
     // Count on the FIRST .select() (postgrest-js only reads head/count there).
     const baseQuery = db.from('contacts').select('id', { count: 'exact', head: true }).eq('location_id', location_id)
     // Async path resolves virtual fields (event_registration + tag) into the
