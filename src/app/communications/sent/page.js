@@ -44,7 +44,7 @@ export default async function SendsHistoryPage() {
     for (const b of data || []) rows.push({ ...b, channel: 'sms', detail: `/communications/sms/broadcasts/${b.id}` })
   }
   if (canWa && locationId) {
-    const { data } = await db.from('whatsapp_broadcasts').select(SELECT)
+    const { data } = await db.from('whatsapp_broadcasts').select(`${SELECT}, delivery_summary`)
       .eq('location_id', locationId).order('created_at', { ascending: false }).limit(100)
     for (const b of data || []) rows.push({ ...b, channel: 'whatsapp', detail: `/whatsapp/broadcasts/${b.id}` })
   }
@@ -102,7 +102,15 @@ export default async function SendsHistoryPage() {
                     </td>
                     <td className="px-4 py-3 text-right text-un1t-subtle tabular-nums">
                       {(r.status === 'sent' || r.status === 'sending')
-                        ? <>{(r.total_sent || 0).toLocaleString()}{r.total_failed ? <span className="text-rose-700"> · {r.total_failed} failed</span> : null}</>
+                        ? <>
+                            {(r.total_sent || 0).toLocaleString()}
+                            {r.total_failed ? <span className="text-rose-700"> · {r.total_failed} failed</span> : null}
+                            {(() => {
+                              const ds = r.delivery_summary
+                              const k = ds && ds.matched != null && ds.reachable != null ? ds.matched - ds.reachable : 0
+                              return k > 0 ? <span className="text-amber-700"> · {k} excluded</span> : null
+                            })()}
+                          </>
                         : '—'}
                     </td>
                     <td className="px-4 py-3 text-right text-un1t-subtle hidden sm:table-cell tabular-nums">
