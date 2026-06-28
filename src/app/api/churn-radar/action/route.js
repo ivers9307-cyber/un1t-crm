@@ -228,7 +228,7 @@ export async function POST(request) {
     // this location — a paused or deleted one can't actually send.
     const { data: seq } = await db
       .from('email_sequences')
-      .select('id, name, active, location_id, trigger_type')
+      .select('id, name, status, location_id, trigger_type')
       .eq('id', seqId)
       .maybeSingle()
     if (!seq || seq.location_id !== locationId) {
@@ -237,7 +237,7 @@ export async function POST(request) {
         error: 'The configured dunning sequence is no longer available — re-pick it in settings.',
       }, { status: 400 })
     }
-    if (!seq.active) {
+    if (seq.status !== 'active') {
       return NextResponse.json({
         success: false,
         error: `Your dunning sequence "${seq.name}" is paused — activate it before sending reminders.`,

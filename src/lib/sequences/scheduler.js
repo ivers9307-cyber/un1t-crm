@@ -244,9 +244,10 @@ export async function runSequences({ now = new Date() } = {}) {
         stats.skipped++
         continue
       }
-      if (!sequence.active) {
-        // Sequence was paused since enrolment — push the row's
-        // next-step time forward so we don't busy-loop on it.
+      if (sequence.status !== 'active') {
+        // Sequence is not active (paused/draft/completed) — `status` is the live
+        // column (`active` is a dead legacy boolean that stays false on new
+        // sequences). Push the row's next-step time forward so we don't busy-loop.
         await db.from('sequence_enrollments').update({
           last_processed_at: now.toISOString(),
           next_step_at: new Date(now.getTime() + 60 * 60_000).toISOString(),

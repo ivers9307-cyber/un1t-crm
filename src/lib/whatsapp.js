@@ -778,7 +778,10 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   const { count: sentLast24h } = await db.from('whatsapp_broadcast_recipients')
     .select('id', { count: 'exact', head: true })
     .eq('broadcast_id', broadcastId)
-    .eq('status', 'sent')
+    // Count everything DISPATCHED in the window, not just rows still in 'sent' —
+    // a status webhook promoting sent→delivered→read must NOT free up headroom,
+    // or the rolling-24h consumption under-counts and the drip exceeds daily_cap.
+    .in('status', DISPATCHED_STATUSES)
     .gt('sent_at', since)
   const headroom = rollingHeadroom(broadcast.daily_cap, sentLast24h || 0)
   if (headroom <= 0) return { status: 'sending', skipped: 'no_headroom', headroom: 0, sent: 0, failed: 0 }

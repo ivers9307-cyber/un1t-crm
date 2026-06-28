@@ -485,11 +485,11 @@ function DunningSettings() {
             <option value="">— None (dunning button hidden) —</option>
             {sequences.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.name}{s.active ? '' : ' (paused)'}
+                {s.name}{s.status === 'active' ? '' : ' (paused)'}
               </option>
             ))}
           </select>
-          {chosen && !chosen.active && (
+          {chosen && chosen.status !== 'active' && (
             <p className="mt-2 text-xs text-amber-600">
               This sequence is paused — activate it under Sequences or reminders won&apos;t send.
             </p>

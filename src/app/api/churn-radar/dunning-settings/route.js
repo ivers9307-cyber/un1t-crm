@@ -63,7 +63,7 @@ export async function GET() {
   // valid dunning targets — trigger-driven sequences enrol themselves.
   const { data: sequences, error: seqErr } = await db
     .from('email_sequences')
-    .select('id, name, active')
+    .select('id, name, status')
     .eq('location_id', g.locationId)
     .eq('trigger_type', 'manual')
     .order('name', { ascending: true })
