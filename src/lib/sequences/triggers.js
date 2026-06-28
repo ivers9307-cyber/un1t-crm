@@ -177,7 +177,7 @@ export async function triggerSequencesForBooking(bookingId) {
       .select('id, trigger_config')
       .eq('location_id', booking.location_id)
       .eq('trigger_type', 'booking_created')
-      .eq('active', true)
+      .eq('status', 'active')
     if (!sequences || sequences.length === 0) return
 
     for (const seq of sequences) {
