@@ -24,7 +24,8 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { glofoxFetch, glofoxCredentialsForLocation } from '@/lib/glofox'
 import { applyMemberSync } from '@/lib/glofox-sync'
-import { classifyContact, paymentTroubleKind } from '@/lib/churn-radar'
+import { classifyRefreshedMember } from '@/lib/churn-radar'
+import { loadContactArrears } from '@/lib/churn-radar-data'
 import { invalidateRadar } from '@/lib/radar-cache'
 import { logWarn, logInfo } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
@@ -123,8 +124,15 @@ export async function POST(request) {
     .select(STATE_COLUMNS)
     .eq('id', contactId)
     .maybeSingle()
-  const classification = classifyContact(fresh || {})
-  const trouble = paymentTroubleKind(fresh || {})
+  // RADAR-PAY.2 — the overdue verdict needs the contact's open past-due
+  // invoices: classifyContact + paymentTroubleKind both gate 'overdue' on
+  // ctx.pastDueIds, and the STATE_COLUMNS re-read above has no id. Pull the
+  // netted per-contact arrears (same source as the Overdue chase-list) and
+  // let classifyRefreshedMember inject the id + ctx into both. Without this a
+  // member who genuinely owes a fee but whose subscription is current would
+  // read classification!='overdue' + trouble=null → wrongly drop off the list.
+  const { count: pastDueCount } = await loadContactArrears(db, contactId)
+  const { classification, trouble, stillFlagged } = classifyRefreshedMember(fresh, contactId, pastDueCount)
 
   logInfo('churn-radar', 'member refreshed from glofox', { contactId, classification, trouble })
   return NextResponse.json({
@@ -134,7 +142,7 @@ export async function POST(request) {
       state: fresh?.glofox_membership_state || null,
       classification,                       // 'overdue' | 'paused' | 'active' | 'quarantine' | 'out'
       payment_trouble: trouble,             // 'overdue' | 'slipping' | null
-      still_flagged: classification === 'overdue' || trouble !== null,
+      still_flagged: stillFlagged,
     },
   })
 }

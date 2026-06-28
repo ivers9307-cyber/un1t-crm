@@ -407,6 +407,34 @@ export function paymentTroubleKind(contact, nowMs = Date.now(), ctx = {}) {
 }
 
 /**
+ * RADAR-PAY.2 — the post-refresh radar verdict for one member, for the
+ * refresh-member route. Pure wrapper around classifyContact +
+ * paymentTroubleKind that supplies the two things the route can't: the
+ * past-due context (both functions gate their 'overdue' branch on
+ * ctx.pastDueIds — see classifyContact) and the contact `id` (the route's
+ * STATE_COLUMNS re-read omits it, so ctx.pastDueIds.has(contact.id) would
+ * check `undefined` and never match). Without this a member who genuinely
+ * owes could never read 'overdue', and — when their subscription wasn't
+ * separately "slipping" — wrongly reported still_flagged=false.
+ *
+ * @param {object|null} fresh - the re-read contact state row (no id)
+ * @param {string} contactId - the contact's id (carries the open invoices)
+ * @param {number} pastDueCount - surviving (netted) open PAST_DUE rows for this contact
+ * @returns {{ classification: string, trouble: 'overdue'|'slipping'|null, stillFlagged: boolean }}
+ */
+export function classifyRefreshedMember(fresh, contactId, pastDueCount = 0, nowMs = Date.now()) {
+  const contact = { ...(fresh || {}), id: contactId }
+  const ctx = pastDueCount > 0 ? { pastDueIds: new Set([contactId]) } : {}
+  const classification = classifyContact(contact, ctx)
+  const trouble = paymentTroubleKind(contact, nowMs, ctx)
+  return {
+    classification,
+    trouble,
+    stillFlagged: classification === 'overdue' || trouble !== null,
+  }
+}
+
+/**
  * Score a batch of contacts. Returns the at-risk list (members
  * tripping ≥1 signal), highest score first, then longest-quiet
  * first. Members with no signals — the healthy active base — are
