@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { loadOverdue, loadRadar, loadContactArrears } from './churn-radar-data'
+import { loadOverdue, loadUnpaidCharges, loadRadar, loadContactArrears } from './churn-radar-data'
 
 // ARREARS-NETTING.1 (Fix B) — the live Overdue feature must net cross-
 // invoice-id payment retries out of the chase-list + total, the same way the
@@ -232,21 +232,42 @@ describe('PENDING custom-charge fees count as owed (OWED-PENDING.1)', () => {
     expect(res.count).toBe(2)
   })
 
-  it('loadOverdue includes the PENDING custom-charge fee in the chase-list + total', async () => {
+  it('routes a small PAST_DUE + PENDING fee to Unpaid charges, never Overdue', async () => {
     const db = makeDb({
       glofox_invoices: (state) => {
-        if (state.status === 'PAST_DUE') return [gInvoice({ id: 'pd', glofox_user_id: 'cf', contact_id: 'c-claire', amount_cents: 4000, status: 'PAST_DUE', invoice_date: '2026-05-03T00:00:00Z' })]
-        if (state.status === 'PENDING') return [gInvoice({ id: 'fee', glofox_user_id: 'cf', contact_id: 'c-claire', amount_cents: 2000, status: 'PENDING', invoice_date: '2026-05-26T00:00:00Z', line_item_subtypes: 'CUSTOM_CHARGE' })]
+        if (state.status === 'PAST_DUE') return [gInvoice({ id: 'pd', glofox_user_id: 'cf', contact_id: 'c-claire', amount_cents: 1000, status: 'PAST_DUE', invoice_date: '2026-05-03T00:00:00Z' })]
+        if (state.status === 'PENDING') return [gInvoice({ id: 'fee', glofox_user_id: 'cf', contact_id: 'c-claire', amount_cents: 1000, status: 'PENDING', invoice_date: '2026-05-26T00:00:00Z', line_item_subtypes: 'CUSTOM_CHARGE' })]
         return []
       },
       churn_radar_actions: [],
       contacts: [contact({ id: 'c-claire', name: 'Claire' })],
     })
-    const { overdue, summary } = await loadOverdue(db, LOC, NOW)
+    const { overdue } = await loadOverdue(db, LOC, NOW)
+    expect(overdue).toHaveLength(0) // €10 past-due < €50 → not on the chase-list
+    const { charges, summary } = await loadUnpaidCharges(db, LOC, NOW)
+    expect(charges).toHaveLength(1)
+    expect(charges[0].contactId).toBe('c-claire')
+    expect(charges[0].invoiceCount).toBe(2) // €10 PAST_DUE + €10 PENDING fee
+    expect(summary.totalValueCents).toBe(2000)
+  })
+
+  it('keeps a ≥€50 PAST_DUE debt on Overdue but its PENDING fee in Unpaid charges (both tabs)', async () => {
+    const db = makeDb({
+      glofox_invoices: (state) => {
+        if (state.status === 'PAST_DUE') return [gInvoice({ id: 'pd', glofox_user_id: 'cf', contact_id: 'c-big', amount_cents: 20900, status: 'PAST_DUE', invoice_date: '2026-05-03T00:00:00Z' })]
+        if (state.status === 'PENDING') return [gInvoice({ id: 'fee', glofox_user_id: 'cf', contact_id: 'c-big', amount_cents: 1000, status: 'PENDING', invoice_date: '2026-05-26T00:00:00Z', line_item_subtypes: 'CUSTOM_CHARGE' })]
+        return []
+      },
+      churn_radar_actions: [],
+      contacts: [contact({ id: 'c-big', name: 'Big Debt' })],
+    })
+    const { overdue } = await loadOverdue(db, LOC, NOW)
     expect(overdue).toHaveLength(1)
-    expect(overdue[0].contactId).toBe('c-claire')
-    expect(overdue[0].invoiceCount).toBe(2) // €40 PAST_DUE + €20 PENDING fee
-    expect(summary.totalValueCents).toBe(6000)
+    expect(overdue[0].amountOwedCents).toBe(20900) // PAST_DUE only — pending excluded from Overdue
+    const { charges } = await loadUnpaidCharges(db, LOC, NOW)
+    expect(charges).toHaveLength(1)
+    expect(charges[0].contactId).toBe('c-big')
+    expect(charges[0].amountOwedCents).toBe(1000) // just the pending fee
   })
 })
 

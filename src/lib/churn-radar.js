@@ -546,6 +546,40 @@ export function splitArrears(rows, minCents = OVERDUE_MIN_CENTS) {
 }
 
 /**
+ * OWED-PENDING.1 — bucket per-contact arrears into the two radar tabs.
+ * PAST_DUE drives the split: ≥ minCents → Overdue (the chase-list), < minCents
+ * → Unpaid charges (small custom charges). PENDING fees ("awaiting
+ * authorization") ALWAYS land in Unpaid charges, never on the Overdue
+ * chase-list — a pending charge isn't a confirmed debt to dun. A contact can
+ * appear in BOTH buckets: a real ≥€50 past-due debt in Overdue plus a separate
+ * pending fee in Unpaid charges.
+ *
+ * @param {Map<string,{amountCents:number,count:number,oldestDueAt:string|null}>} pastDueById
+ * @param {Map<string,{amountCents:number,count:number,oldestDueAt:string|null}>} pendingById
+ * @returns {{ overdueById: Map, unpaidById: Map }} per-contact aggregates per tab
+ */
+export function bucketArrears(pastDueById, pendingById, minCents = OVERDUE_MIN_CENTS) {
+  const overdueById = new Map()
+  const unpaidById = new Map()
+  const pd = pastDueById instanceof Map ? pastDueById : new Map()
+  const pe = pendingById instanceof Map ? pendingById : new Map()
+  const addUnpaid = (id, part) => {
+    if (!part || !(part.amountCents > 0)) return
+    const cur = unpaidById.get(id) || { amountCents: 0, count: 0, oldestDueAt: null }
+    cur.amountCents += part.amountCents || 0
+    cur.count += part.count || 0
+    if (part.oldestDueAt && (!cur.oldestDueAt || part.oldestDueAt < cur.oldestDueAt)) cur.oldestDueAt = part.oldestDueAt
+    unpaidById.set(id, cur)
+  }
+  for (const [id, agg] of pd) {
+    if ((agg?.amountCents || 0) >= minCents) overdueById.set(id, agg)
+    else addUnpaid(id, agg)
+  }
+  for (const [id, agg] of pe) addUnpaid(id, agg)
+  return { overdueById, unpaidById }
+}
+
+/**
  * Build the overdue chase-list from the past-due invoice aggregate in
  * `ctx.pastDueById` (Map<contactId, { amountCents, count, oldestDueAt }>).
  * Includes any supplied contact carrying an open past-due invoice —

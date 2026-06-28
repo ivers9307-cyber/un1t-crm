@@ -9,8 +9,7 @@ import {
   buildRadar,
   buildWinback,
   buildOverdue,
-  splitArrears,
-  OVERDUE_MIN_CENTS,
+  bucketArrears,
   radarSummary,
   computeRecoveryStats,
   computeTrend,
@@ -106,8 +105,8 @@ async function fetchInvoicesByStatus(db, locationId, status, columns) {
  */
 async function fetchPastDue(db, locationId) {
   const [pastDueRows, pendingRows, paidRows] = await Promise.all([
-    fetchInvoicesByStatus(db, locationId, 'PAST_DUE', 'id, contact_id, glofox_user_id, amount_cents, invoice_date'),
-    fetchInvoicesByStatus(db, locationId, 'PENDING', 'id, contact_id, glofox_user_id, amount_cents, invoice_date, line_item_subtypes'),
+    fetchInvoicesByStatus(db, locationId, 'PAST_DUE', 'id, contact_id, glofox_user_id, amount_cents, invoice_date, status'),
+    fetchInvoicesByStatus(db, locationId, 'PENDING', 'id, contact_id, glofox_user_id, amount_cents, invoice_date, status, line_item_subtypes'),
     fetchInvoicesByStatus(db, locationId, 'PAID', 'glofox_user_id, amount_cents, invoice_date'),
   ])
   // OWED-PENDING.1 — PENDING custom-charge fees (no-show / late-cancel, applied
@@ -117,19 +116,27 @@ async function fetchPastDue(db, locationId) {
   // Net cross-invoice-id payment retries out before aggregating.
   const { kept } = nettedOutByRetry(openRows, paidRows)
 
-  const byId = new Map()
+  // OWED-PENDING.1 — bucket the netted rows by status. PAST_DUE drives the
+  // Overdue chase-list + 'overdue' classification; PENDING ('awaiting
+  // authorization') fees are kept SEPARATE so they only ever surface in the
+  // Unpaid-charges tab, never on the Overdue list.
+  const byId = new Map()        // PAST_DUE
+  const pendingById = new Map() // PENDING custom-charge fees
   for (const r of kept) {
     // A row with no contact_id can't be surfaced on a contact-keyed list.
     if (r.contact_id == null) continue
-    const cur = byId.get(r.contact_id) || { amountCents: 0, count: 0, oldestDueAt: null }
+    const target = r.status === 'PENDING' ? pendingById : byId
+    const cur = target.get(r.contact_id) || { amountCents: 0, count: 0, oldestDueAt: null }
     cur.amountCents += Number(r.amount_cents) || 0
     cur.count += 1
     if (r.invoice_date && (!cur.oldestDueAt || r.invoice_date < cur.oldestDueAt)) {
       cur.oldestDueAt = r.invoice_date
     }
-    byId.set(r.contact_id, cur)
+    target.set(r.contact_id, cur)
   }
-  return { ids: new Set(byId.keys()), byId }
+  // ids = PAST_DUE contacts only — a pending fee never classifies a member as
+  // 'overdue' (no pill, off the chase-list); it shows in Unpaid charges instead.
+  return { ids: new Set(byId.keys()), byId, pendingById }
 }
 
 /**
@@ -349,13 +356,19 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   // RADAR-OVERDUE.1 — split the full past-due chase-list at OVERDUE_MIN_CENTS
   // so the headline badges match their tabs: Overdue (≥€50, real debts) vs
   // Unpaid charges (<€50, small custom charges). Incl. ex-members who owe.
-  const overdueIds = [...pastDue.ids].filter((id) => !dismissed.has(id))
+  // OWED-PENDING.1 — Overdue badge = ≥€50 PAST_DUE; Unpaid charges = small
+  // PAST_DUE + PENDING 'awaiting authorization' fees. Pending never counts as
+  // Overdue. (A contact can land in both if they owe ≥€50 AND have a pending fee.)
+  const { overdueById, unpaidById } = bucketArrears(pastDue.byId, pastDue.pendingById)
   let overdueCount = 0, overdueValueCents = 0
   let unpaidChargesCount = 0, unpaidChargesValueCents = 0
-  for (const id of overdueIds) {
-    const amt = pastDue.byId.get(id)?.amountCents || 0
-    if (amt >= OVERDUE_MIN_CENTS) { overdueCount++; overdueValueCents += amt }
-    else if (amt > 0) { unpaidChargesCount++; unpaidChargesValueCents += amt }
+  for (const [id, agg] of overdueById) {
+    if (dismissed.has(id)) continue
+    overdueCount++; overdueValueCents += agg.amountCents || 0
+  }
+  for (const [id, agg] of unpaidById) {
+    if (dismissed.has(id)) continue
+    unpaidChargesCount++; unpaidChargesValueCents += agg.amountCents || 0
   }
 
   const finalSummary = {
@@ -436,7 +449,11 @@ async function loadArrearsRows(db, locationId, nowMs) {
     fetchActions(db, locationId),
     fetchDismissed(db, locationId),
   ])
-  const ids = [...pastDue.ids].filter((id) => !dismissed.has(id))
+  // OWED-PENDING.1 — PAST_DUE drives Overdue (≥€50) vs small-charges; PENDING
+  // 'awaiting authorization' fees go to the Unpaid-charges tab only. A contact
+  // may appear in both tabs (a real ≥€50 debt + a separate pending fee).
+  const { overdueById, unpaidById } = bucketArrears(pastDue.byId, pastDue.pendingById)
+  const ids = [...new Set([...overdueById.keys(), ...unpaidById.keys()])].filter((id) => !dismissed.has(id))
   const contacts = await fetchContactsByIds(db, ids)
 
   // Actions are newest-first — first hit per contact is the latest.
@@ -446,12 +463,11 @@ async function loadArrearsRows(db, locationId, nowMs) {
       lastContacted.set(a.contact_id, { action: a.action, at: a.created_at })
     }
   }
+  const withAction = (r) => ({ ...r, lastContacted: lastContacted.get(r.contactId) || null })
 
-  const rows = buildOverdue(contacts, nowMs, { pastDueById: pastDue.byId }).map((r) => ({
-    ...r,
-    lastContacted: lastContacted.get(r.contactId) || null,
-  }))
-  return splitArrears(rows)
+  const overdue = buildOverdue(contacts, nowMs, { pastDueById: overdueById }).map(withAction)
+  const unpaidCharges = buildOverdue(contacts, nowMs, { pastDueById: unpaidById }).map(withAction)
+  return { overdue, unpaidCharges }
 }
 
 export async function loadOverdue(db, locationId, nowMs = Date.now()) {
