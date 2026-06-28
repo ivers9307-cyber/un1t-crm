@@ -72,6 +72,17 @@ export function buildStreakAtRiskPush({ streak }) {
   }
 }
 
+/** Pre-class reminder push (P2-7) — a member with a booked class coming up. */
+export function buildClassReminderPush({ className, timeLabel, classBookingId } = {}) {
+  const name = className ? String(className) : 'Your class'
+  const when = timeLabel ? ` at ${timeLabel}` : ''
+  return {
+    title: `${name} starting soon`,
+    body: `You're booked in${when} — see you there 💪`,
+    data: { type: 'class_reminder', class_booking_id: classBookingId || null },
+  }
+}
+
 /** Idempotency key for a goal/period: YYYY-MM (month) or YYYY-Www (ISO week). */
 export function periodKey(period, nowMs = Date.now()) {
   const d = new Date(nowMs)

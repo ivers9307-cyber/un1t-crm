@@ -167,6 +167,10 @@ const WEB_ONLY_OK = {
   consultations: 'coach/web surface; member-facing equivalent is the champ app (SP3), not the staff mobile app',
   automations: 'operational-automation admin hub; web/operator surface, no mobile counterpart',
   challenges: 'operator challenge admin; web/operator surface, no mobile counterpart',
+  // P2-7 — engagement→churn analytics dashboard tab. A desktop analytics /
+  // triage surface (cross-tab table + headline), like the full radar
+  // dashboards; the mobile radar glance covers the at-risk list, not this report.
+  engagement_analytics: 'engagement→churn analytics dashboard (/dashboard/engagement) — desktop operator analytics surface, like the full radar dashboards. No mobile counterpart by design.',
 }
 
 const webDrift = []
