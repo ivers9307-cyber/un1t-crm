@@ -40,6 +40,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // WhatsApp pacing (WA-DRIP)
   const [waMode, setWaMode] = useState('blast') // 'blast' | 'drip'
   const [dailyCap, setDailyCap] = useState(500)
+  const [perTickCap, setPerTickCap] = useState('') // blank = code default (100/tick)
   const [windowStart, setWindowStart] = useState('09:00')
   const [windowEnd, setWindowEnd] = useState('20:00')
   // Schedule (SMS only)
@@ -166,6 +167,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           delivery_mode: waMode,
           ...(drip ? {
             daily_cap: Number(dailyCap) || 500,
+            ...(Number(perTickCap) > 0 ? { per_tick_max: Number(perTickCap) } : {}),
             send_window_start: windowStart, send_window_end: windowEnd,
             send_window_tz: 'Europe/Dublin',
           } : {}),
@@ -219,7 +221,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   function reset() {
     setResult(null); setError(null); setBody(''); setTemplateId(''); setVariables({})
     setLabel(''); setFilter(EMPTY_FILTER); setScheduleMode('now'); setScheduledAtLocal('')
-    setWaMode('blast'); setDailyCap(500); setWindowStart('09:00'); setWindowEnd('20:00')
+    setWaMode('blast'); setDailyCap(500); setPerTickCap(''); setWindowStart('09:00'); setWindowEnd('20:00')
     setReachable(null); setExcluded(null)
   }
 
@@ -463,6 +465,12 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
                 <span className="block text-xs font-medium text-un1t-subtle mb-1">Daily limit (messages per 24h)</span>
                 <input type="number" min={1} max={100000} className={fieldCls}
                   value={dailyCap} onChange={e => setDailyCap(e.target.value)} />
+              </label>
+              <label className="block">
+                <span className="block text-xs font-medium text-un1t-subtle mb-1">Batch size per run <span className="text-un1t-subtle/60">(optional)</span></span>
+                <input type="number" min={1} max={5000} className={fieldCls}
+                  value={perTickCap} onChange={e => setPerTickCap(e.target.value)} placeholder="100 (default)" />
+                <span className="block text-[11px] text-un1t-subtle mt-1">How many go out each 15-min run. Lower = smoother; blank uses the default (100). The daily limit still caps the 24h total.</span>
               </label>
               <div className="flex gap-3">
                 <label className="block flex-1">

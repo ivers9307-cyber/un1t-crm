@@ -15,6 +15,7 @@ const BroadcastCreateSchema = z.object({
   // WA-DRIP — paced delivery. Defaults keep the blast path identical.
   delivery_mode: z.enum(['blast', 'drip']).optional().default('blast'),
   daily_cap: z.number().int().positive().max(100000).optional(),
+  per_tick_max: z.number().int().positive().max(5000).optional(),
   send_window_start: timeOfDay.optional(),
   send_window_end: timeOfDay.optional(),
   send_window_tz: z.string().max(64).optional(),
@@ -75,6 +76,7 @@ export async function POST(request) {
     delivery_mode: body.delivery_mode || 'blast',
     ...(isDrip ? {
       daily_cap: body.daily_cap ?? 500,
+      per_tick_max: body.per_tick_max ?? null,
       send_window_start: body.send_window_start || '09:00',
       send_window_end: body.send_window_end || '20:00',
       send_window_tz: body.send_window_tz || 'Europe/Dublin',
