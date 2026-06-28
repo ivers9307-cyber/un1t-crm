@@ -609,8 +609,29 @@ export async function sendBroadcast(broadcastId) {
   if (!broadcast.whatsapp_templates) throw new Error('No template selected')
   if (broadcast.whatsapp_templates.status !== 'APPROVED') throw new Error('Template not approved by Meta')
 
-  // Update status to sending
-  await db.from('whatsapp_broadcasts').update({ status: 'sending' }).eq('id', broadcastId)
+  // Guard the entry state: only a draft (operator clicked Send) or a
+  // 'sending' broadcast left mid-flight by an earlier crash may run.
+  // Without this a second POST /send re-ran the WHOLE audience and
+  // re-blasted everyone (the recipient insert was post-send and the table
+  // had no unique key, so it couldn't even de-dupe the record).
+  if (broadcast.status !== 'draft' && broadcast.status !== 'sending') {
+    throw new Error(`Broadcast is in '${broadcast.status}' state — only draft / sending can be sent`)
+  }
+
+  // Compare-and-swap the draft→sending flip so two concurrent clicks can't
+  // both start a pass — only the request that actually flips it proceeds.
+  // A broadcast already 'sending' is a legitimate resume (the per-recipient
+  // claim below de-dupes that path), so fall through.
+  if (broadcast.status !== 'sending') {
+    const { data: claimed } = await db.from('whatsapp_broadcasts')
+      .update({ status: 'sending' })
+      .eq('id', broadcastId)
+      .eq('status', broadcast.status)
+      .select('id')
+    if (!claimed?.length) {
+      return { sent: 0, failed: 0, total: 0, skipped: 'already-sending' }
+    }
+  }
 
   // WA-MULTI.1 — resolve the location's WA config ONCE upfront and
   // reuse for every recipient. Cheaper than re-resolving per-send;
@@ -646,13 +667,31 @@ export async function sendBroadcast(broadcastId) {
     return { sent: 0, delivery_summary: deliverySummary }
   }
 
+  // Resume support: skip contacts already recorded by a previous pass (a
+  // crash mid-blast, or a retry). Paginated so a >1000-recipient broadcast
+  // doesn't cap the done-set at 1000 and re-send the tail.
+  const doneIds = new Set(await fetchDripDoneContactIds(db, broadcastId))
+  const pending = contacts.filter(c => !doneIds.has(c.id))
+
   const template = broadcast.whatsapp_templates
   const variableMapping = broadcast.variable_mapping || {}
   const branding = await getLocationBranding(db, broadcast.location_id)
   let sentCount = 0
   let failedCount = 0
 
-  for (const contact of contacts) {
+  for (const contact of pending) {
+    // Claim-first: insert the recipient row (status 'pending') BEFORE the
+    // Meta send. The unique (broadcast_id, contact_id) constraint (mig 331)
+    // makes this the per-recipient mutex — a concurrent pass that already
+    // claimed this contact fails the insert and we skip, so the template
+    // goes out exactly once even though doneIds was read before the race.
+    const { error: claimErr } = await db.from('whatsapp_broadcast_recipients').insert({
+      broadcast_id: broadcastId,
+      contact_id: contact.id,
+      status: 'pending',
+    })
+    if (claimErr) continue
+
     try {
       // Build template components with variable substitution
       const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName })
@@ -665,14 +704,12 @@ export async function sendBroadcast(broadcastId) {
         { config: broadcastConfig }
       )
 
-      // Create recipient record
-      await db.from('whatsapp_broadcast_recipients').insert({
-        broadcast_id: broadcastId,
-        contact_id: contact.id,
+      // Promote the claimed row to 'sent'. A DB hiccup here can't re-send.
+      await db.from('whatsapp_broadcast_recipients').update({
         wa_message_id: result.messageId,
         status: 'sent',
         sent_at: new Date().toISOString(),
-      })
+      }).eq('broadcast_id', broadcastId).eq('contact_id', contact.id)
 
       // Log to messages table
       await db.from('whatsapp_messages').insert({
@@ -694,13 +731,13 @@ export async function sendBroadcast(broadcastId) {
     } catch (err) {
       console.error(`Failed to send to ${contact.wa_phone}:`, err.message)
 
-      await db.from('whatsapp_broadcast_recipients').insert({
-        broadcast_id: broadcastId,
-        contact_id: contact.id,
+      // Promote the claimed row to 'failed' (it already exists from the
+      // claim-first insert above).
+      await db.from('whatsapp_broadcast_recipients').update({
         status: 'failed',
         error_message: err.message,
         failed_at: new Date().toISOString(),
-      })
+      }).eq('broadcast_id', broadcastId).eq('contact_id', contact.id)
 
       // Permanently-undeliverable number (not on WhatsApp) → flag so future
       // audiences skip it. Reversible (inbound message reactivates). Best-effort.
@@ -716,20 +753,33 @@ export async function sendBroadcast(broadcastId) {
     }
   }
 
+  // Recompute cumulative metrics from the recipients table — a resumed
+  // pass only sent the remainder, so sentCount/failedCount under-count.
+  // Count everything dispatched (sent/delivered/read) as sent.
+  const { count: cumulativeSent } = await db.from('whatsapp_broadcast_recipients')
+    .select('id', { count: 'exact', head: true })
+    .eq('broadcast_id', broadcastId)
+    .in('status', DISPATCHED_STATUSES)
+  const { count: cumulativeFailed } = await db.from('whatsapp_broadcast_recipients')
+    .select('id', { count: 'exact', head: true })
+    .eq('broadcast_id', broadcastId)
+    .eq('status', 'failed')
+
   // Update broadcast metrics
   await db.from('whatsapp_broadcasts').update({
     status: 'sent',
     sent_at: new Date().toISOString(),
     total_recipients: contacts.length,
-    total_sent: sentCount,
-    total_failed: failedCount,
+    total_sent: cumulativeSent || 0,
+    total_failed: cumulativeFailed || 0,
     delivery_summary: deliverySummary,
   }).eq('id', broadcastId)
 
-  // Update template send count (atomic; best-effort).
+  // Update template send count (atomic; best-effort). Only THIS pass's
+  // sends — a resume must not double-count rows a prior pass already added.
   try { await db.rpc('increment_whatsapp_template_sent', { p_template_id: template.id, p_delta: sentCount }) } catch {}
 
-  return { sent: sentCount, failed: failedCount, total: contacts.length, delivery_summary: deliverySummary }
+  return { sent: cumulativeSent || 0, failed: cumulativeFailed || 0, total: contacts.length, delivery_summary: deliverySummary }
 }
 
 /**

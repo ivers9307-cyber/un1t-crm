@@ -164,11 +164,23 @@ export async function sendBroadcast(broadcastId, { maxRecipients = Infinity } = 
   }
   if (!broadcast.locations) throw new Error('Broadcast location is missing')
 
-  // Move to 'sending' before iterating so a duplicate POST /send
-  // can't kick off two parallel sends. If the broadcast was already
-  // 'sending' (resumed from a previous chunk), this is a no-op.
+  // Move to 'sending' before iterating so a duplicate "Send now" (or a
+  // racing cron tick) can't kick off two parallel first-passes. Use a
+  // compare-and-swap — guard the update on the exact status we just read —
+  // so only the request that actually flips draft/scheduled→sending
+  // proceeds; the loser bails out as a no-op. A broadcast already in
+  // 'sending' is a legitimate resume, so fall through (the per-recipient
+  // claim below is the real exactly-once guarantee for that path).
   if (broadcast.status !== 'sending') {
-    await db.from('sms_broadcasts').update({ status: 'sending' }).eq('id', broadcastId)
+    const { data: claimed } = await db
+      .from('sms_broadcasts')
+      .update({ status: 'sending' })
+      .eq('id', broadcastId)
+      .eq('status', broadcast.status)
+      .select('id')
+    if (!claimed?.length) {
+      return { sent: 0, failed: 0, recipients: 0, remaining: 0, status: 'sending' }
+    }
   }
 
   // Resolve audience — paged so broadcasts to >1000 eligible contacts aren't
@@ -220,6 +232,27 @@ export async function sendBroadcast(broadcastId, { maxRecipients = Infinity } = 
   for (let i = 0; i < chunk.length; i++) {
     const contact = chunk[i]
 
+    // Claim-first: insert the recipient row (status 'pending') BEFORE the
+    // Twilio call. The unique (broadcast_id, contact_id) constraint makes
+    // this row the per-recipient mutex — if a concurrent pass (a duplicate
+    // /send, an overlapping cron tick, or a retry after a mid-loop crash)
+    // already claimed this contact, the insert fails and we skip, so the
+    // SMS goes out exactly once even though doneSet was read before the
+    // race. The old code inserted AFTER the send, so the constraint only
+    // de-duped the *record*, not the *send* — and a duplicate-key threw
+    // mid-loop, recording a delivered SMS as failed and crashing the chunk.
+    const { error: claimErr } = await db.from('sms_broadcast_recipients').insert({
+      broadcast_id: broadcastId,
+      contact_id: contact.id,
+      status: 'pending',
+    })
+    if (claimErr) {
+      // unique_violation = already claimed by another pass → skip (not a
+      // failure). Any other insert error is a real DB fault; skip too,
+      // rather than send a message we have no row to de-dupe on.
+      continue
+    }
+
     // Apply merge tags per recipient — same tag set as ad-hoc and
     // email (first_name, name, location_name, etc.).
     const renderedBody = applyMergeTags(broadcast.body, contact, {
@@ -237,18 +270,13 @@ export async function sendBroadcast(broadcastId, { maxRecipients = Infinity } = 
         statusCallback: buildStatusCallback(broadcastId, contact.id),
       })
 
-      // Per-recipient row. Unique constraint on (broadcast_id,
-      // contact_id) means a manual retry of the same broadcast
-      // can't double-record. If a send hits a TwilioError mid-loop
-      // and we resume, we'd see "duplicate key" — caller decides
-      // whether that's a failure or a no-op.
-      await db.from('sms_broadcast_recipients').insert({
-        broadcast_id: broadcastId,
-        contact_id: contact.id,
+      // Promote the claimed row to 'sent'. A DB hiccup here can't double-
+      // send (the SMS already left Twilio) and can't miscount it as failed.
+      await db.from('sms_broadcast_recipients').update({
         twilio_message_sid: result?.sid || null,
         status: 'sent',
         sent_at: new Date().toISOString(),
-      })
+      }).eq('broadcast_id', broadcastId).eq('contact_id', contact.id)
 
       // Activity timeline entry on the contact, same shape as the
       // ad-hoc /api/contacts/[id]/sms route. The contact page's
@@ -268,13 +296,11 @@ export async function sendBroadcast(broadcastId, { maxRecipients = Infinity } = 
         ? `Twilio ${err.code || err.status || ''}: ${err.message}`.trim()
         : (err?.message || 'Unknown send error')
 
-      await db.from('sms_broadcast_recipients').insert({
-        broadcast_id: broadcastId,
-        contact_id: contact.id,
+      await db.from('sms_broadcast_recipients').update({
         status: 'failed',
         error_message: errMsg,
         failed_at: new Date().toISOString(),
-      })
+      }).eq('broadcast_id', broadcastId).eq('contact_id', contact.id)
 
       failedCount++
     }
