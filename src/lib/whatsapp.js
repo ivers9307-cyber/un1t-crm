@@ -418,18 +418,55 @@ export async function editTemplate(metaTemplateId, { category, components }, opt
 // ============================================================
 
 /**
- * Build audience query for WhatsApp broadcasts
- * Same pattern as email but checks whatsapp_marketing consent and wa_phone
+ * The WhatsApp broadcast reachability gate, as single-table predicates on
+ * contacts (post mig 325: whatsapp_marketing is denormalized). Shared by the
+ * send audience and the pre-send count so they agree by construction:
+ * opted into WA marketing, has a normalized WA number, not blocked/opted-out.
  */
-function whatsAppAudienceBase(db, locationId) {
-  return db
-    .from('contacts')
-    .select('*, contact_preferences!inner(*)')
-    .eq('location_id', locationId)
-    .eq('contact_preferences.whatsapp_marketing', true)
+export function applyWhatsAppReachability(query) {
+  return query
+    .eq('whatsapp_marketing', true)
     .not('wa_phone', 'is', null)
     .neq('wa_status', 'blocked')
     .neq('wa_status', 'opted_out')
+}
+
+/**
+ * Reachability breakdown for an audience_filter at a location, as single-table
+ * head:true counts on contacts (safe post mig 325). Shared by the pre-send
+ * count endpoint and the persisted delivery_summary so the number the operator
+ * sees before sending matches what actually goes out.
+ *
+ * Reason counts (no_number / no_consent / opted_out) are independent and may
+ * overlap; the true excluded total is matched - reachable.
+ *
+ * @returns {Promise<{matched:number, reachable:number, excluded:{no_number:number,no_consent:number,opted_out:number}}>}
+ */
+export async function computeWhatsAppReachabilitySummary(db, filter, locationId) {
+  const countOf = async (extra) => {
+    const base = db.from('contacts').select('id', { count: 'exact', head: true }).eq('location_id', locationId)
+    const { query } = await applyAudienceFilterAsync({ db, query: base, filter, locationId })
+    const { count } = await (extra ? extra(query) : query)
+    return count || 0
+  }
+  // Order matters — keep aligned with the test's call sequence.
+  const matched = await countOf(null)
+  const reachable = await countOf((q) => applyWhatsAppReachability(q))
+  const no_number = await countOf((q) => q.is('wa_phone', null))
+  const no_consent = await countOf((q) => q.eq('whatsapp_marketing', false))
+  const opted_out = await countOf((q) => q.in('wa_status', ['blocked', 'opted_out']))
+  return { matched, reachable, excluded: { no_number, no_consent, opted_out } }
+}
+
+/**
+ * Build audience query for WhatsApp broadcasts. Single-table on contacts now
+ * that whatsapp_marketing is denormalized (mig 325) — no contact_preferences
+ * embed, so head:true counts over this gate are safe.
+ */
+function whatsAppAudienceBase(db, locationId) {
+  return applyWhatsAppReachability(
+    db.from('contacts').select('*').eq('location_id', locationId)
+  )
 }
 
 export function buildWhatsAppAudience(db, filter, locationId) {
@@ -535,13 +572,24 @@ export async function sendBroadcast(broadcastId) {
   // the per-contact shape (wa_phone, id) is unchanged. Throws on query error.
   const contacts = await fetchAllWhatsAppAudience(db, broadcast.audience_filter, broadcast.location_id)
 
+  // Reachability snapshot for the record/list — best-effort. A count failure must
+  // never abort the send (CLAUDE.md: side effects don't fail the primary response).
+  let deliverySummary = null
+  try {
+    const summary = await computeWhatsAppReachabilitySummary(db, broadcast.audience_filter, broadcast.location_id)
+    deliverySummary = { ...summary, reachable: contacts?.length || 0 }
+  } catch (e) {
+    console.error(`[broadcast ${broadcastId}] reachability summary failed:`, e?.message || e)
+  }
+
   if (!contacts?.length) {
     await db.from('whatsapp_broadcasts').update({
       status: 'sent',
       sent_at: new Date().toISOString(),
       total_recipients: 0,
+      delivery_summary: deliverySummary,
     }).eq('id', broadcastId)
-    return { sent: 0 }
+    return { sent: 0, delivery_summary: deliverySummary }
   }
 
   const template = broadcast.whatsapp_templates
@@ -617,12 +665,13 @@ export async function sendBroadcast(broadcastId) {
     total_recipients: contacts.length,
     total_sent: sentCount,
     total_failed: failedCount,
+    delivery_summary: deliverySummary,
   }).eq('id', broadcastId)
 
   // Update template send count (atomic; best-effort).
   try { await db.rpc('increment_whatsapp_template_sent', { p_template_id: template.id, p_delta: sentCount }) } catch {}
 
-  return { sent: sentCount, failed: failedCount, total: contacts.length }
+  return { sent: sentCount, failed: failedCount, total: contacts.length, delivery_summary: deliverySummary }
 }
 
 /**
@@ -679,8 +728,14 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   // Eligible audience (paginated) minus already-processed, capped to this tick.
   const audience = await fetchAllWhatsAppAudience(db, broadcast.audience_filter, broadcast.location_id)
   if (audience.length === 0) {
+    let deliverySummary = null
+    try {
+      const summary = await computeWhatsAppReachabilitySummary(db, broadcast.audience_filter, broadcast.location_id)
+      deliverySummary = { ...summary, reachable: 0 }
+    } catch (e) { console.error(`[drip ${broadcastId}] reachability summary failed:`, e?.message || e) }
     await db.from('whatsapp_broadcasts').update({
       status: 'sent', sent_at: new Date().toISOString(), total_recipients: 0,
+      delivery_summary: deliverySummary,
     }).eq('id', broadcastId)
     return { status: 'sent', sent: 0, failed: 0, recipients: 0 }
   }
@@ -689,8 +744,14 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
 
   if (toSend.length === 0) {
     if (exhausted) {
+      let deliverySummary = null
+      try {
+        const summary = await computeWhatsAppReachabilitySummary(db, broadcast.audience_filter, broadcast.location_id)
+        deliverySummary = { ...summary, reachable: audience.length }
+      } catch (e) { console.error(`[drip ${broadcastId}] reachability summary failed:`, e?.message || e) }
       await db.from('whatsapp_broadcasts').update({
         status: 'sent', sent_at: new Date().toISOString(), total_recipients: audience.length,
+        delivery_summary: deliverySummary,
       }).eq('id', broadcastId)
       return { status: 'sent', sent: 0, failed: 0, recipients: audience.length }
     }

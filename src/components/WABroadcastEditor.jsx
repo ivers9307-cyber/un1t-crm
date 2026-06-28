@@ -227,6 +227,19 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                 <p className="text-2xl font-bold mt-1 text-red-400">{broadcast.total_failed || 0}</p>
               </div>
             </div>
+            {broadcast.delivery_summary && (broadcast.delivery_summary.matched - broadcast.delivery_summary.reachable) > 0 && (
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+                <p className="text-xs text-un1t-subtle uppercase">Excluded from this send</p>
+                <p className="text-sm mt-1">
+                  {(broadcast.delivery_summary.matched - broadcast.delivery_summary.reachable).toLocaleString()} of {broadcast.delivery_summary.matched.toLocaleString()} matched contacts weren&apos;t reachable on WhatsApp.
+                </p>
+                <ul className="mt-2 text-sm text-un1t-subtle space-y-0.5">
+                  {broadcast.delivery_summary.excluded?.no_number ? <li>• {broadcast.delivery_summary.excluded.no_number} have no WhatsApp number</li> : null}
+                  {broadcast.delivery_summary.excluded?.no_consent ? <li>• {broadcast.delivery_summary.excluded.no_consent} haven&apos;t opted into WhatsApp marketing</li> : null}
+                  {broadcast.delivery_summary.excluded?.opted_out ? <li>• {broadcast.delivery_summary.excluded.opted_out} opted out</li> : null}
+                </ul>
+              </div>
+            )}
           </div>
         )}
 

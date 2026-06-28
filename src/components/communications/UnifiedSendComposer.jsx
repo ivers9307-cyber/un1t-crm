@@ -48,6 +48,8 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // Audience count (debounced)
   const [count, setCount] = useState(null)
   const [counting, setCounting] = useState(false)
+  const [reachable, setReachable] = useState(null)   // WhatsApp only
+  const [excluded, setExcluded] = useState(null)     // { no_number, no_consent, opted_out }
   // Submit
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
@@ -70,9 +72,8 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // /email/campaigns/[id] for advanced options: from-name, preview text, test send).
   const { ref: unlayerRef, loaded: unlayerLoaded, exportHtml: exportEmailHtml } = useUnlayerEditor({ mountId: 'unlayer-editor-composer', active: channel === 'email' })
 
-  // Live "how many contacts match" — debounced, channel-agnostic (the real
-  // per-channel consent/reachability gate applies at send; the result reports
-  // the true recipient count).
+  // Live audience size — debounced. For WhatsApp we ask channel-aware so the
+  // number reflects consent + a usable wa_phone (the same gate the send applies).
   useEffect(() => {
     let alive = true
     setCounting(true)
@@ -81,18 +82,21 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         const res = await fetch('/api/communications/audience-count', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ location_id: locationId, audience_filter: effectiveFilter }),
+          body: JSON.stringify({ location_id: locationId, audience_filter: effectiveFilter, channel }),
         })
         const data = await res.json()
-        if (alive) setCount(data?.success ? data.count : null)
+        if (!alive) return
+        setCount(data?.success ? data.count : null)
+        setReachable(data?.success && channel === 'whatsapp' ? (data.reachable ?? null) : null)
+        setExcluded(data?.success && channel === 'whatsapp' ? (data.excluded ?? null) : null)
       } catch {
-        if (alive) setCount(null)
+        if (alive) { setCount(null); setReachable(null); setExcluded(null) }
       } finally {
         if (alive) setCounting(false)
       }
     }, 400)
     return () => { alive = false; clearTimeout(t) }
-  }, [locationId, effectiveFilter])
+  }, [locationId, effectiveFilter, channel])
 
   const insertTag = (tag) => {
     const el = bodyRef.current
@@ -119,7 +123,10 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   const audienceValid = !useExplicit || people.length > 0
   const isSchedule = scheduleMode === 'later' && (channel === 'sms' || channel === 'email')
   const isDrip = channel === 'whatsapp' && waMode === 'drip'
-  const canSend = !busy && composeValid && scheduleValid && audienceValid && (count == null || count > 0)
+  // For WhatsApp the meaningful gate is the reachable count, not raw matches —
+  // an audience of 1 with 0 reachable has nobody to send to.
+  const sendableCount = channel === 'whatsapp' ? reachable : count
+  const canSend = !busy && composeValid && scheduleValid && audienceValid && (sendableCount == null || sendableCount > 0)
 
   // ── submit ──────────────────────────────────────────────────────
   async function postJson(url, payload) {
@@ -213,6 +220,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
     setResult(null); setError(null); setBody(''); setTemplateId(''); setVariables({})
     setLabel(''); setFilter(EMPTY_FILTER); setScheduleMode('now'); setScheduledAtLocal('')
     setWaMode('blast'); setDailyCap(500); setWindowStart('09:00'); setWindowEnd('20:00')
+    setReachable(null); setExcluded(null)
   }
 
   // ── result screen ───────────────────────────────────────────────
@@ -241,19 +249,36 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         ) : (
           <>
             <h2 className="text-lg font-semibold text-un1t-text">
-              {result.queued ? 'Queued' : (result.remaining > 0 ? 'Sending…' : 'Sent')}
+              {result.queued
+                ? 'Queued'
+                : result.channel === 'whatsapp' && (result.sent ?? 0) === 0 && result.remaining ? 'Sending…'
+                : result.channel === 'whatsapp' && (result.sent ?? 0) === 0 ? 'Nobody was reachable'
+                : (result.remaining > 0 ? 'Sending…' : 'Sent')}
             </h2>
             <p className="text-sm text-un1t-subtle mt-1">
               {result.queued
                 ? 'Your email is queued — it goes out within the next minute.'
-                : (
-                  <>
-                    {`${result.sent ?? result.total ?? 0} sent`}
-                    {result.failed ? `, ${result.failed} failed` : ''}
-                    {result.recipients != null ? ` of ${result.recipients}` : ''}
-                    {result.remaining > 0 ? ' — the rest go out automatically over the next few minutes.' : '.'}
-                  </>
-                )}
+                : (() => {
+                    const ds = result.delivery_summary
+                    const k = ds ? (ds.matched - ds.reachable) : null
+                    const reasons = ds && ds.excluded ? [
+                      ds.excluded.no_number ? `${ds.excluded.no_number} no WhatsApp number` : null,
+                      ds.excluded.no_consent ? `${ds.excluded.no_consent} no marketing opt-in` : null,
+                      ds.excluded.opted_out ? `${ds.excluded.opted_out} opted out` : null,
+                    ].filter(Boolean).join(', ') : ''
+                    if (result.channel === 'whatsapp' && (result.sent ?? 0) === 0 && !result.remaining) {
+                      return reasons
+                        ? `None of the ${ds.matched} matched contacts could be messaged — ${reasons}.`
+                        : 'None of the matched contacts could be messaged on WhatsApp.'
+                    }
+                    return <>
+                      {`${result.sent ?? result.total ?? 0} sent`}
+                      {result.failed ? `, ${result.failed} failed` : ''}
+                      {result.recipients != null ? ` of ${result.recipients}` : ''}
+                      {k > 0 ? ` · ${k} excluded${reasons ? ` (${reasons})` : ''}` : ''}
+                      {result.remaining > 0 ? ' — the rest go out automatically over the next few minutes.' : '.'}
+                    </>
+                  })()}
             </p>
           </>
         )}
@@ -296,13 +321,30 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         {useExplicit
           ? <ContactMultiSelect locationId={locationId} value={people} onChange={setPeople} />
           : <AudienceBuilder filter={filter} onChange={setFilter} />}
-        <div className="mt-2 flex items-center gap-1.5 text-xs text-un1t-subtle">
-          <Users size={13} />
-          {counting
-            ? <span className="flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> counting…</span>
-            : count == null
-              ? <span>Add a condition to see how many contacts match.</span>
-              : <span><b className="text-un1t-text">{count.toLocaleString()}</b> contact{count === 1 ? '' : 's'} match this filter</span>}
+        <div className="mt-2 flex flex-col gap-0.5 text-xs text-un1t-subtle">
+          <div className="flex items-center gap-1.5">
+            <Users size={13} />
+            {counting
+              ? <span className="flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> counting…</span>
+              : count == null
+                ? <span>Add a condition to see how many contacts match.</span>
+                : channel === 'whatsapp'
+                  ? <span><b className="text-un1t-text">{count.toLocaleString()}</b> match · <b className="text-un1t-text">{(reachable ?? 0).toLocaleString()}</b> reachable on WhatsApp</span>
+                  : <span><b className="text-un1t-text">{count.toLocaleString()}</b> contact{count === 1 ? '' : 's'} match this filter</span>}
+          </div>
+          {channel === 'whatsapp' && !counting && count != null && reachable != null && (count - reachable) > 0 && (
+            <div className="flex items-start gap-1.5 text-amber-700">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+              <span>
+                {(count - reachable).toLocaleString()} excluded
+                {excluded ? ` — ${[
+                  excluded.no_number ? `${excluded.no_number} no WhatsApp number` : null,
+                  excluded.no_consent ? `${excluded.no_consent} no marketing opt-in` : null,
+                  excluded.opted_out ? `${excluded.opted_out} opted out` : null,
+                ].filter(Boolean).join(', ')}` : ''}
+              </span>
+            </div>
+          )}
         </div>
       </Section>
 
