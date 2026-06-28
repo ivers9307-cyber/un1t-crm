@@ -7,6 +7,7 @@ import {
   hasLiveMembership,
   isRealMembershipPlan,
   splitArrears,
+  bucketArrears,
   OVERDUE_MIN_CENTS,
   scoreMember,
   buildRadar,
@@ -869,5 +870,50 @@ describe('RADAR-TREND.1 — computeTrend', () => {
     const t = computeTrend(summary, { captured_at: '2026-05-15T06:00:00.000Z' })
     expect(t.deltas.activeBase).toBe(268)   // 268 − 0
     expect(t.deltas.overdue).toBe(11)
+  })
+})
+
+describe('bucketArrears (OWED-PENDING.1)', () => {
+  const M = (entries) => new Map(entries)
+
+  it('routes PAST_DUE ≥ €50 → Overdue, < €50 → Unpaid charges', () => {
+    const { overdueById, unpaidById } = bucketArrears(
+      M([
+        ['big', { amountCents: 6000, count: 1, oldestDueAt: '2026-05-01' }],
+        ['small', { amountCents: 1000, count: 1, oldestDueAt: '2026-05-01' }],
+      ]),
+      M(),
+    )
+    expect(overdueById.has('big')).toBe(true)
+    expect(overdueById.has('small')).toBe(false)
+    expect(unpaidById.get('small')?.amountCents).toBe(1000)
+    expect(unpaidById.has('big')).toBe(false)
+  })
+
+  it('always routes PENDING fees to Unpaid charges, never Overdue — even ≥ €50', () => {
+    const { overdueById, unpaidById } = bucketArrears(
+      M(),
+      M([['p', { amountCents: 9000, count: 1, oldestDueAt: '2026-05-01' }]]),
+    )
+    expect(overdueById.size).toBe(0)
+    expect(unpaidById.get('p')?.amountCents).toBe(9000)
+  })
+
+  it('puts a ≥€50 PAST_DUE debt in Overdue AND its PENDING fee in Unpaid charges (both tabs)', () => {
+    const { overdueById, unpaidById } = bucketArrears(
+      M([['c', { amountCents: 20900, count: 1, oldestDueAt: '2026-05-01' }]]),
+      M([['c', { amountCents: 1000, count: 1, oldestDueAt: '2026-05-26' }]]),
+    )
+    expect(overdueById.get('c')?.amountCents).toBe(20900)
+    expect(unpaidById.get('c')?.amountCents).toBe(1000)
+  })
+
+  it('merges a small PAST_DUE + a PENDING fee into ONE Unpaid-charges row', () => {
+    const { overdueById, unpaidById } = bucketArrears(
+      M([['c', { amountCents: 1000, count: 1, oldestDueAt: '2026-05-03' }]]),
+      M([['c', { amountCents: 1000, count: 1, oldestDueAt: '2026-05-26' }]]),
+    )
+    expect(overdueById.size).toBe(0)
+    expect(unpaidById.get('c')).toMatchObject({ amountCents: 2000, count: 2, oldestDueAt: '2026-05-03' })
   })
 })

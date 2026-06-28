@@ -13,29 +13,33 @@
 // owed, recording reconciled_at / reconciled_reason so the change is auditable.
 
 import { fetchPaymentsReport } from './glofox'
-import { indexReportByInvoice, reconcileOpenPastDue } from './glofox-arrears'
+import { indexReportByInvoice, reconcileOpenPastDue, OWED_STATUSES, isCountedOwedRow } from './glofox-arrears'
 
 const JAN_1_2026 = 1767225600 // unix seconds — never ask Glofox for the whole of time
 const PAGE = 1000
 const HARD_LIMIT = 50_000
 const DAY_SEC = 86_400
 
-/** Page every open PAST_DUE invoice for a location (PostgREST caps at 1000). */
+/**
+ * Page every open OWED invoice for a location — PAST_DUE plus PENDING
+ * custom-charge fees (OWED-PENDING.1); pending subscription renewals are
+ * dropped. PostgREST caps at 1000 rows, so paginate.
+ */
 async function fetchOpenPastDue(db, locationId) {
   const rows = []
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await db
       .from('glofox_invoices')
-      .select('id, invoice_date, amount_cents, glofox_user_id, contact_id')
+      .select('id, invoice_date, amount_cents, glofox_user_id, contact_id, status, line_item_subtypes')
       .eq('location_id', locationId)
-      .eq('status', 'PAST_DUE')
+      .in('status', OWED_STATUSES)
       .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
     if (error) throw new Error(`glofox_invoices read failed: ${error.message}`)
     rows.push(...(data || []))
     if (!data || data.length < PAGE || rows.length >= HARD_LIMIT) break
   }
-  return rows
+  return rows.filter(isCountedOwedRow)
 }
 
 /**

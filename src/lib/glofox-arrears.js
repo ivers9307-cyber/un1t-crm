@@ -365,6 +365,25 @@ export function computeArrears(details, opts = {}) {
 
 const RECONCILE_DAY_MS = 86_400_000
 
+// ── OWED-PENDING.1 — what counts as "owed" ─────────────────────────────
+// PAST_DUE is always owed (a failed or lapsed charge). PENDING is owed ONLY
+// when it's a CUSTOM_CHARGE fee (a no-show / late-cancel fee that's been
+// applied but not yet collected) — NEVER a pending SUBSCRIPTION renewal, which
+// is a scheduled future payment, not arrears. (Stillorgan has no separate
+// PENDING_INTENT status; 'PENDING' is the only pending value in the data.)
+export const OWED_STATUSES = Object.freeze(['PAST_DUE', 'PENDING'])
+
+export function isCustomChargeFee(row) {
+  return String(row?.line_item_subtypes || '').toUpperCase().includes('CUSTOM_CHARGE')
+}
+
+/** Does this glofox_invoices row count toward what a member owes? */
+export function isCountedOwedRow(row) {
+  if (row?.status === 'PAST_DUE') return true
+  if (row?.status === 'PENDING') return isCustomChargeFee(row)
+  return false
+}
+
 /**
  * Index a Glofox report's transactions by invoice_id, recording whether the
  * invoice has any settled / forgiven transaction. Invoices with no transaction
@@ -396,16 +415,18 @@ export function indexReportByInvoice(details) {
  *   - report forgiven → clear as FORGIVEN  (staff waived it)
  *   - report present, unpaid → keep        (a real, still-open debt)
  *   - absent from report:
- *       · older than `absentAgeDays` → clear as CANCELLED (waived/cancelled
- *         in Glofox; the resolution event never reached our webhook)
- *       · within the buffer → keep (a brand-new fee may not have hit the
- *         transaction ledger yet — don't clear it prematurely)
+ *       · status PENDING → keep (OWED-PENDING.1 — a pending fee isn't charged
+ *         yet, so it's EXPECTED to be absent; absence is not a cancel signal)
+ *       · PAST_DUE older than `absentAgeDays` → clear as CANCELLED (waived/
+ *         cancelled in Glofox; the resolution event never reached our webhook)
+ *       · PAST_DUE within the buffer → keep (a brand-new fee may not have hit
+ *         the transaction ledger yet — don't clear it prematurely)
  *       · unparseable invoice_date → keep (can't judge age, so never clear)
  *
- * Pure: no I/O. The caller fetches the report + the open PAST_DUE rows and
+ * Pure: no I/O. The caller fetches the report + the open owed rows and
  * applies the returned 'clear' decisions.
  *
- * @param {Array<{id:string, invoice_date?:string|null}>} pastDueRows
+ * @param {Array<{id:string, status?:string, invoice_date?:string|null}>} pastDueRows
  * @param {Map<string,{settled:boolean,forgiven:boolean}>} reportIndex
  * @param {number} [nowMs]
  * @param {{ absentAgeDays?: number }} [opts]
@@ -422,6 +443,15 @@ export function reconcileOpenPastDue(pastDueRows, reportIndex, nowMs = Date.now(
     if (v?.forgiven) { out.push({ id: r.id, action: 'clear', newStatus: 'FORGIVEN', reason: 'forgiven' }); continue }
     if (v) { out.push({ id: r.id, action: 'keep', reason: 'report_unpaid' }); continue }
     // Absent from the report.
+    if (r.status === 'PENDING') {
+      // OWED-PENDING.1 — a PENDING fee hasn't been charged yet, so it's
+      // EXPECTED to be missing from the transactions ledger; absence is NOT a
+      // cancellation signal (unlike a PAST_DUE row). Keep it — it clears via a
+      // settled/forgiven txn (handled above) or an INVOICE_UPDATED webhook
+      // flipping its status. Never absent_aged-clear a pending fee.
+      out.push({ id: r.id, action: 'keep', reason: 'pending_open' })
+      continue
+    }
     const dueMs = Date.parse(r.invoice_date)
     if (!Number.isFinite(dueMs)) { out.push({ id: r.id, action: 'keep', reason: 'absent_unknown_age' }); continue }
     const ageDays = (nowMs - dueMs) / RECONCILE_DAY_MS
