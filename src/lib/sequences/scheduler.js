@@ -31,6 +31,12 @@ import {
 
 export const MAX_ERRORS = 5
 export const PROCESS_BATCH_SIZE = 100
+// How far forward a claimed enrolment's next_step_at is leased while the
+// runner processes it. The runner has no SELECT … FOR UPDATE SKIP LOCKED,
+// so each row is claimed with a CAS bump (see runSequences); the lease is
+// long enough to cover a tick's processing and short enough that a crashed
+// tick's enrolment is retried promptly.
+export const CLAIM_LEASE_MS = 10 * 60_000
 
 // ── Public: pause / resume / exit ────────────────────────────────
 
@@ -230,6 +236,26 @@ export async function runSequences({ now = new Date() } = {}) {
 
   for (const enrollment of due) {
     try {
+      // Atomic claim — the runner has no SELECT … FOR UPDATE SKIP LOCKED, so
+      // two overlapping cron ticks can both pick this due row. The step SENDS
+      // below BEFORE the cursor advances, so re-processing the same row =
+      // a DOUBLE send. CAS-bump next_step_at to a short lease: the predicate
+      // `status='active' AND next_step_at <= now` still matches for exactly
+      // one tick; the other re-evaluates it against the leased (future) value,
+      // matches 0 rows, and skips. The real next_step_at is written when
+      // processing finishes (or by the catch); a crashed tick re-leases after
+      // CLAIM_LEASE_MS.
+      const { data: claimed } = await db.from('sequence_enrollments')
+        .update({ next_step_at: new Date(now.getTime() + CLAIM_LEASE_MS).toISOString() })
+        .eq('id', enrollment.id)
+        .eq('status', 'active')
+        .lte('next_step_at', now.toISOString())
+        .select('id')
+      if (!claimed || claimed.length === 0) {
+        stats.skipped++
+        continue
+      }
+
       // Reload the parent sequence + the contact in one go.
       const [{ data: sequence }, { data: contact }] = await Promise.all([
         db.from('email_sequences').select('*').eq('id', enrollment.sequence_id).single(),

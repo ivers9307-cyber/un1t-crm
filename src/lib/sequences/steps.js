@@ -86,6 +86,11 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
   })
   const mergedHtml = appendUnsubscribeFooter(merged, unsubscribeUrl)
 
+  // Attribution (source_type='sequence', sequence_id, sequence_step_id) is
+  // passed in so the email_sends row is inserted WITH it — atomically. The
+  // previous follow-up UPDATE keyed on postmark_message_id raced the open/
+  // click webhook: a fast webhook could process the row before the UPDATE
+  // landed, so the open was never attributed to the step.
   const result = await sendTransactionalEmail({
     to: contact.email,
     subject: mergedSubject,
@@ -93,20 +98,10 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
     contactId: contact.id,
     locationId: sequence.location_id,
     tag: `seq-${sequence.id}`,
+    sourceType: 'sequence',
+    sequenceId: sequence.id,
+    sequenceStepId: step.id,
   })
-
-  // Annotate the email_sends row with sequence + step references so
-  // open/click webhooks can attribute opens back to the step.
-  if (result?.messageId) {
-    await db
-      .from('email_sends')
-      .update({
-        source_type: 'sequence',
-        sequence_id: sequence.id,
-        sequence_step_id: step.id,
-      })
-      .eq('postmark_message_id', result.messageId)
-  }
 
   // Bump per-step metric.
   // supabase-js builders don't have .catch — try/catch around await.

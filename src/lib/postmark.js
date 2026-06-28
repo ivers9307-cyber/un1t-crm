@@ -380,7 +380,14 @@ export async function buildAudienceQueryAsync(db, filter, locationId, { columns 
 /**
  * Send a transactional email (uses Postmark's transactional stream)
  */
-export async function sendTransactionalEmail({ to, subject, htmlBody, contactId, locationId, tag }) {
+export async function sendTransactionalEmail({
+  to, subject, htmlBody, contactId, locationId, tag,
+  // Optional attribution written ATOMICALLY with the email_sends row.
+  // Callers that send on behalf of a sequence pass these so an open/click
+  // webhook can never beat the attribution (the sequence runner used to
+  // write them in a follow-up UPDATE that raced the webhook).
+  sourceType = 'transactional', sequenceId = null, sequenceStepId = null,
+}) {
   const result = await sendEmail({
     to,
     subject,
@@ -395,7 +402,9 @@ export async function sendTransactionalEmail({ to, subject, htmlBody, contactId,
     await db.from('email_sends').insert({
       contact_id: contactId,
       location_id: locationId,
-      source_type: 'transactional',
+      source_type: sourceType,
+      sequence_id: sequenceId,
+      sequence_step_id: sequenceStepId,
       subject,
       from_email: process.env.POSTMARK_FROM_EMAIL,
       to_email: to,
