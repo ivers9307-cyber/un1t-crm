@@ -10,6 +10,8 @@ import { estimateDripDays } from '@/lib/whatsapp-drip'
 export default function WABroadcastEditor({ broadcast, templates, locationId, userId, failedRecipients = [], failedCount = 0, dripProgress = null }) {
   const router = useRouter()
   const isSent = broadcast?.status === 'sent'
+  const isCancelled = broadcast?.status === 'cancelled'
+  const isTerminal = isSent || isCancelled   // finished (sent or cancelled) → read-only results, not the editor
   const isDripInFlight = broadcast?.delivery_mode === 'drip' && broadcast?.status === 'sending'
 
   const [name, setName] = useState(broadcast?.name || '')
@@ -23,8 +25,9 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
   const [saving, setSaving] = useState(false)
   const [sending, setSending] = useState(false)
   const [pausing, setPausing] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const [error, setError] = useState(null)
-  const [tab, setTab] = useState(isSent ? 'results' : 'setup')
+  const [tab, setTab] = useState(isTerminal ? 'results' : 'setup')
   // Adjust drip pacing on a running drip (mig 328 / WA-DRIP-SIZE).
   const [editingDrip, setEditingDrip] = useState(false)
   const [savingDrip, setSavingDrip] = useState(false)
@@ -135,6 +138,25 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
     }
   }
 
+  async function handleCancel() {
+    if (!confirm('Cancel this campaign? Messages already sent stay sent, but no more will go out — this cannot be undone.')) return
+    setCancelling(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/whatsapp/broadcasts/${broadcastId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'cancelled' }),
+      }).then(r => r.json())
+      if (!res.success) throw new Error(res.error)
+      router.refresh()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   async function handleSaveDripSettings() {
     setSavingDrip(true)
     setError(null)
@@ -174,19 +196,21 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="Broadcast name..."
-            disabled={isSent}
+            disabled={isTerminal}
             className="bg-transparent text-lg font-semibold text-un1t-text placeholder:text-un1t-muted focus:outline-none w-64 disabled:opacity-70"
           />
           {broadcast?.status && (
             <span className={`text-xs px-2 py-0.5 rounded-full ${
-              broadcast.status === 'sent' ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'
+              broadcast.status === 'sent' ? 'bg-green-500/20 text-green-400'
+                : broadcast.status === 'cancelled' ? 'bg-rose-500/20 text-rose-400'
+                : 'bg-gray-500/20 text-gray-400'
             }`}>
               {broadcast.status}
             </span>
           )}
         </div>
 
-        {!isSent && !isDripInFlight && (
+        {!isTerminal && !isDripInFlight && (
           <div className="flex items-center gap-2">
             <button
               onClick={handleSave}
@@ -215,7 +239,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
       )}
 
       {/* Tabs for sent broadcasts */}
-      {isSent && (
+      {isTerminal && (
         <div className="flex border-b border-un1t-border bg-un1t-surface shrink-0">
           {[
             { key: 'results', label: 'Results' },
@@ -236,12 +260,12 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
 
       {/* Content */}
       <div className="flex-1 overflow-auto p-6">
-        {isSent && tab === 'results' && (
+        {isTerminal && tab === 'results' && (
           <div className="max-w-3xl space-y-4">
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
                 <p className="text-xs text-un1t-subtle uppercase">Sent</p>
-                <p className="text-2xl font-bold mt-1">{broadcast.total_sent || 0}</p>
+                <p className="text-2xl font-bold mt-1">{(dripProgress?.dispatched ?? broadcast.total_sent ?? 0).toLocaleString()}</p>
               </div>
               <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
                 <p className="text-xs text-un1t-subtle uppercase">Delivered</p>
@@ -274,7 +298,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
           </div>
         )}
 
-        {isSent && tab === 'recipients' && (
+        {isTerminal && tab === 'recipients' && (
           <div className="bg-un1t-surface border border-un1t-border rounded-lg overflow-x-auto">
             <table className="w-full text-sm min-w-[600px]">
               <thead>
@@ -344,14 +368,24 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                     return <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full truncate ${cls}`}>{label}</span>
                   })()}
                 </div>
-                <button
-                  type="button"
-                  onClick={handlePauseToggle}
-                  disabled={pausing}
-                  className="text-sm border border-un1t-border px-3 py-1.5 rounded-md hover:border-un1t-text/30 transition-colors disabled:opacity-50 shrink-0"
-                >
-                  {pausing ? '…' : broadcast.paused_at ? 'Resume' : 'Pause'}
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handlePauseToggle}
+                    disabled={pausing || cancelling}
+                    className="text-sm border border-un1t-border px-3 py-1.5 rounded-md hover:border-un1t-text/30 transition-colors disabled:opacity-50"
+                  >
+                    {pausing ? '…' : broadcast.paused_at ? 'Resume' : 'Pause'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCancel}
+                    disabled={pausing || cancelling}
+                    className="text-sm border border-rose-500/30 text-rose-700 px-3 py-1.5 rounded-md hover:bg-rose-500/10 transition-colors disabled:opacity-50"
+                  >
+                    {cancelling ? '…' : 'Cancel'}
+                  </button>
+                </div>
               </div>
               {(() => {
                 const dp = dripProgress
@@ -420,7 +454,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
           </div>
         )}
 
-        {!isSent && !isDripInFlight && (
+        {!isTerminal && !isDripInFlight && (
           <div className="max-w-3xl space-y-6">
             {/* Template selection */}
             <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
