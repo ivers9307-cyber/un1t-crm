@@ -1,6 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
-import { refreshWindow, parseConsentKeyword } from '@/lib/whatsapp'
+import { refreshWindow, parseConsentKeyword, markUndeliverableIfPermanent } from '@/lib/whatsapp'
 import { applyWhatsappConsentKeyword } from '@/lib/whatsapp-consent'
 import { resolveWhatsAppNumberByPhoneNumberId } from '@/lib/whatsapp-config'
 import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
@@ -187,6 +187,13 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
       .update({ wa_phone: phoneWithout })
       .eq('id', contact.id)
       .is('wa_phone', null)
+
+    // Reactivate a number previously flagged undeliverable — an inbound message
+    // proves they're on WhatsApp. Only flips 'undeliverable' (never opted_out/blocked).
+    await db.from('contacts')
+      .update({ wa_status: 'active' })
+      .eq('id', contact.id)
+      .eq('wa_status', 'undeliverable')
   }
 
   // Determine location: contact's location wins if known (their
@@ -434,6 +441,15 @@ async function handleStatusUpdate(db, status) {
       .update(recipUpdates)
       .eq('broadcast_id', msg.broadcast_id)
       .eq('contact_id', msg.contact_id)
+
+    // An async failure that means "not a WhatsApp number" → flag the contact so
+    // future audiences skip it (reversible on inbound). Best-effort, never throws.
+    if (statusValue === 'failed' && msg.contact_id) {
+      await markUndeliverableIfPermanent(db, msg.contact_id, {
+        code: status.errors?.[0]?.code,
+        message: status.errors?.[0]?.title,
+      })
+    }
 
     // Update broadcast metrics
     if (['delivered', 'read', 'failed'].includes(statusValue)) {

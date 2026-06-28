@@ -83,6 +83,7 @@ describe('buildWhatsAppAudienceAsync', () => {
     expect(calls).toContainEqual({ method: 'not', args: ['wa_phone', 'is', null] })
     expect(calls).toContainEqual({ method: 'neq', args: ['wa_status', 'blocked'] })
     expect(calls).toContainEqual({ method: 'neq', args: ['wa_status', 'opted_out'] })
+    expect(calls).toContainEqual({ method: 'neq', args: ['wa_status', 'undeliverable'] })
     // The old embedded-join gate is gone.
     expect(calls).not.toContainEqual({ method: 'eq', args: ['contact_preferences.whatsapp_marketing', true] })
   })

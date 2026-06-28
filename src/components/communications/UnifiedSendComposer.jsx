@@ -265,6 +265,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
                       ds.excluded.no_number ? `${ds.excluded.no_number} no WhatsApp number` : null,
                       ds.excluded.no_consent ? `${ds.excluded.no_consent} no marketing opt-in` : null,
                       ds.excluded.opted_out ? `${ds.excluded.opted_out} opted out` : null,
+                      ds.excluded.undeliverable ? `${ds.excluded.undeliverable} not on WhatsApp` : null,
                     ].filter(Boolean).join(', ') : ''
                     if (result.channel === 'whatsapp' && (result.sent ?? 0) === 0 && !result.remaining) {
                       return reasons
@@ -341,6 +342,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
                   excluded.no_number ? `${excluded.no_number} no WhatsApp number` : null,
                   excluded.no_consent ? `${excluded.no_consent} no marketing opt-in` : null,
                   excluded.opted_out ? `${excluded.opted_out} opted out` : null,
+                  excluded.undeliverable ? `${excluded.undeliverable} not on WhatsApp` : null,
                 ].filter(Boolean).join(', ')}` : ''}
               </span>
             </div>
