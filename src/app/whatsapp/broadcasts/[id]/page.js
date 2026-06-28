@@ -1,5 +1,5 @@
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import WABroadcastEditor from '@/components/WABroadcastEditor'
 import { dripWindowStatus } from '@/lib/whatsapp-drip'
@@ -17,7 +17,9 @@ export default async function EditBroadcastPage(props) {
     .eq('id', params.id)
     .single()
 
-  if (!broadcast) notFound()
+  // IDOR guard — a broadcast (and its recipients' names/numbers) must belong to a
+  // location the user can access. 404 (not 403) so foreign ids aren't enumerable.
+  if (!broadcast || assertLocationAccess(user, broadcast.location_id)) notFound()
 
   const { data: templates } = await db.from('whatsapp_templates')
     .select('*')
