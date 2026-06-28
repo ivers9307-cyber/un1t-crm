@@ -143,17 +143,14 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
     setBusy(true); setError(null); setResult(null)
     try {
       if (channel === 'sms') {
+        // Create in the final state in ONE call. Scheduling used to be a
+        // create-then-PATCH 2-step that stranded a draft if the PATCH failed;
+        // the create now sets status='scheduled' atomically.
         const { broadcast } = await postJson('/api/sms/broadcasts', {
           name: defaultLabel(), body, audience_filter: effectiveFilter, location_id: locationId,
-          ...(scheduleMode === 'later' ? { scheduled_at: scheduledIso } : {}),
+          ...(scheduleMode === 'later' ? { scheduled_at: scheduledIso, status: 'scheduled' } : {}),
         })
         if (scheduleMode === 'later') {
-          const res = await fetch(`/api/sms/broadcasts/${broadcast.id}`, {
-            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: 'scheduled', scheduled_at: scheduledIso }),
-          })
-          const data = await res.json()
-          if (!res.ok || data?.success === false) throw new Error(data?.error || 'Could not schedule')
           setResult({ channel, mode: 'scheduled', when: scheduledIso, id: broadcast.id, detail: `/communications/sms/broadcasts/${broadcast.id}` })
         } else {
           const data = await postJson(`/api/sms/broadcasts/${broadcast.id}/send`, {})

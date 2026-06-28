@@ -57,6 +57,8 @@ function buildDb({ triggerRows = [], segmentRows = [], currentMembers = [], stor
   const upsertSpy = vi.fn().mockResolvedValue({ data: null, error: null })
   // inSpy tracks deletes — the delete chain ends in .in(contact_id, [...]).
   const inSpy = vi.fn().mockResolvedValue({ data: null, error: null })
+  // updateSegmentSpy tracks the first-sync memberships_initialized_at stamp.
+  const updateSegmentSpy = vi.fn().mockResolvedValue({ data: null, error: null })
 
   const db = {
     from: vi.fn((table) => {
@@ -74,6 +76,8 @@ function buildDb({ triggerRows = [], segmentRows = [], currentMembers = [], stor
           return {
             select: vi.fn().mockReturnThis(),
             in: vi.fn().mockReturnThis(),
+            // First-sync stamps memberships_initialized_at via update().eq().
+            update: () => ({ eq: updateSegmentSpy }),
             then: (onF) => Promise.resolve({ data: segmentRows, error: null }).then(onF),
           }
         }
@@ -120,7 +124,7 @@ function buildDb({ triggerRows = [], segmentRows = [], currentMembers = [], stor
       }
     }),
   }
-  return { db, upsertSpy, inSpy }
+  return { db, upsertSpy, inSpy, updateSegmentSpy }
 }
 
 describe('syncSegmentMemberships', () => {
@@ -141,7 +145,7 @@ describe('syncSegmentMemberships', () => {
   it('fires neither trigger for a stable segment (current == stored)', async () => {
     const { db, upsertSpy, inSpy } = buildDb({
       triggerRows: [{ trigger_config: { segment_id: 'seg-1' } }],
-      segmentRows: [{ id: 'seg-1', location_id: 'loc-1', filter: null }],
+      segmentRows: [{ id: 'seg-1', location_id: 'loc-1', filter: null, memberships_initialized_at: '2026-01-01T00:00:00Z' }],
       currentMembers:   ['c1', 'c2', 'c3'],
       storedMemberships: ['c1', 'c2', 'c3'],
     })
@@ -159,7 +163,7 @@ describe('syncSegmentMemberships', () => {
   it('fires segment_added when contacts enter the segment', async () => {
     const { db, upsertSpy, inSpy } = buildDb({
       triggerRows: [{ trigger_config: { segment_id: 'seg-1' } }],
-      segmentRows: [{ id: 'seg-1', location_id: 'loc-1', filter: null }],
+      segmentRows: [{ id: 'seg-1', location_id: 'loc-1', filter: null, memberships_initialized_at: '2026-01-01T00:00:00Z' }],
       currentMembers:    ['c1', 'c2', 'c3'],
       storedMemberships: ['c1'],
     })
@@ -177,10 +181,35 @@ describe('syncSegmentMemberships', () => {
     expect(inSpy).not.toHaveBeenCalled()       // no deletes
   })
 
+  it('first sync (memberships_initialized_at null) establishes the baseline WITHOUT firing triggers', async () => {
+    // The bug: wiring a segment_added sequence to an already-populated
+    // segment fired for the WHOLE membership on the first tick. Now the
+    // first sync persists the baseline + stamps the marker and suppresses
+    // both triggers; only LATER joiners fire.
+    const { db, upsertSpy, updateSegmentSpy } = buildDb({
+      triggerRows: [{ trigger_config: { segment_id: 'seg-1' } }],
+      segmentRows: [{ id: 'seg-1', location_id: 'loc-1', filter: null, memberships_initialized_at: null }],
+      currentMembers:    ['c1', 'c2', 'c3'],
+      storedMemberships: [], // never synced
+    })
+    createServerClient.mockReturnValue(db)
+
+    const stats = await syncSegmentMemberships()
+
+    // Baseline IS persisted (so next tick has a snapshot to diff against)…
+    expect(upsertSpy).toHaveBeenCalledTimes(1)
+    // …and the marker is stamped…
+    expect(updateSegmentSpy).toHaveBeenCalledTimes(1)
+    // …but NO triggers fire for the pre-existing membership.
+    expect(triggerSequencesForSegmentAdded).not.toHaveBeenCalled()
+    expect(triggerSequencesForSegmentRemoved).not.toHaveBeenCalled()
+    expect(stats.segments_processed).toBe(1)
+  })
+
   it('fires segment_removed when contacts exit the segment', async () => {
     const { db, upsertSpy, inSpy } = buildDb({
       triggerRows: [{ trigger_config: { segment_id: 'seg-1' } }],
-      segmentRows: [{ id: 'seg-1', location_id: 'loc-1', filter: null }],
+      segmentRows: [{ id: 'seg-1', location_id: 'loc-1', filter: null, memberships_initialized_at: '2026-01-01T00:00:00Z' }],
       currentMembers:    ['c1'],
       storedMemberships: ['c1', 'c2', 'c3'],
     })
@@ -201,7 +230,7 @@ describe('syncSegmentMemberships', () => {
   it('fires both triggers when membership churns in both directions', async () => {
     const { db, upsertSpy, inSpy } = buildDb({
       triggerRows: [{ trigger_config: { segment_id: 'seg-1' } }],
-      segmentRows: [{ id: 'seg-1', location_id: 'loc-1', filter: null }],
+      segmentRows: [{ id: 'seg-1', location_id: 'loc-1', filter: null, memberships_initialized_at: '2026-01-01T00:00:00Z' }],
       currentMembers:    ['c2', 'c3', 'c4'],
       storedMemberships: ['c1', 'c2', 'c3'],
     })
@@ -227,7 +256,7 @@ describe('syncSegmentMemberships', () => {
         { trigger_config: { segment_id: 'seg-1' } },
         { trigger_config: { segment_id: 'seg-1' } },
       ],
-      segmentRows: [{ id: 'seg-1', location_id: 'loc-1', filter: null }],
+      segmentRows: [{ id: 'seg-1', location_id: 'loc-1', filter: null, memberships_initialized_at: '2026-01-01T00:00:00Z' }],
       currentMembers:    ['c1'],
       storedMemberships: ['c1'],
     })
