@@ -93,6 +93,13 @@ describe('getOpenApiSpec', () => {
     expect(glofox.security).not.toContainEqual({ CookieAuth: [] })
   })
 
+  it('documents the bridge device API', () => {
+    expect(spec.paths).toHaveProperty('/api/bridge/scan')
+    const op = spec.paths['/api/bridge/scan'].post
+    expect(op.tags).toContain('Bridge')
+    expect(op.security).toContainEqual({ BridgeAuth: [] })
+  })
+
   it('declares webhook + bridge auth schemes', () => {
     const s = spec.components.securitySchemes
     expect(s).toHaveProperty('GlofoxHmac')

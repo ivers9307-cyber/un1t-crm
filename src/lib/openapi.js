@@ -811,6 +811,115 @@ registry.registerPath({
   },
 })
 
+// ============================================================================
+// Bridge — Pi device API, BridgeAuth on all routes
+// ============================================================================
+
+const StrapScan = z.object({
+  straps: z.array(z.object({
+    device_key: z.string().openapi({ example: 'ble:AA:BB:CC:DD:EE:FF' }),
+    name: z.string().nullable().optional(),
+    rssi: z.number().nullable().optional(),
+    last_bpm: z.number().nullable().optional(),
+  })).max(100),
+}).openapi('StrapScan')
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/bridge/scan',
+  tags: ['Bridge'],
+  security: [{ BridgeAuth: [] }],
+  summary: 'Report currently-visible straps',
+  description: 'Pi bridge → CRM. Overwrites ble_bridges.last_seen_straps. Polled ~every 5s during coach pairing. Max 100 straps.',
+  request: { body: { content: { 'application/json': { schema: StrapScan } } } },
+  responses: {
+    200: { description: 'Stored' },
+    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/bridge/samples',
+  tags: ['Bridge'],
+  security: [{ BridgeAuth: [] }],
+  summary: 'Batch of HR samples for live sessions',
+  description: 'Pi bridge → CRM. Posts a batch of heart-rate samples for active live sessions.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeSamplesBatch') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/bridge/heartbeat',
+  tags: ['Bridge'],
+  security: [{ BridgeAuth: [] }],
+  summary: 'Bridge liveness ping',
+  description: 'Pi bridge → CRM. Periodic heartbeat to indicate the bridge is online.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeHeartbeat') } } } },
+  responses: {
+    200: { description: 'Acknowledged' },
+    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/bridge/inbody/ingest',
+  tags: ['Bridge'],
+  security: [{ BridgeAuth: [] }],
+  summary: 'Push a fresh InBody scan',
+  description: 'Pi bridge → CRM. Ingests a new InBody body-composition scan result.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeInBodyIngest') } } } },
+  responses: {
+    200: { description: 'Ingested' },
+    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/bridge/inbody/backfill-ingest',
+  tags: ['Bridge'],
+  security: [{ BridgeAuth: [] }],
+  summary: 'Push a historical InBody scan',
+  description: 'Pi bridge → CRM. Ingests a historical InBody scan during backfill.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeInBodyBackfillIngest') } } } },
+  responses: {
+    200: { description: 'Ingested' },
+    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/bridge/inbody/backfill-pending',
+  tags: ['Bridge'],
+  security: [{ BridgeAuth: [] }],
+  summary: 'List scans pending backfill',
+  description: 'Pi bridge → CRM. Returns list of InBody scans that are pending backfill ingestion.',
+  responses: {
+    200: { description: 'Pending backfill scans', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeBackfillPendingResponse') } } },
+    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/bridge/inbody/pending',
+  tags: ['Bridge'],
+  security: [{ BridgeAuth: [] }],
+  summary: 'List scans pending ingest',
+  description: 'Pi bridge → CRM. Returns list of InBody scans that are pending ingest.',
+  responses: {
+    200: { description: 'Pending scans', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeIngestPendingResponse') } } },
+    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Contacts (Bearer auth — used by n8n)
 registry.registerPath({
   method: 'get',
