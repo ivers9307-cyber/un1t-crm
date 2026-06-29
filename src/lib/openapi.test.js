@@ -107,6 +107,12 @@ describe('getOpenApiSpec', () => {
     expect(op.security).toContainEqual({ CookieAuth: [] })
   })
 
+  it('includes an outbound webhooks stub', () => {
+    expect(spec).toHaveProperty('webhooks')
+    expect(spec.webhooks).toHaveProperty('lead.created')
+    expect(spec.webhooks['lead.created'].post.description).toMatch(/planned/i)
+  })
+
   it('declares webhook + bridge auth schemes', () => {
     const s = spec.components.securitySchemes
     expect(s).toHaveProperty('GlofoxHmac')

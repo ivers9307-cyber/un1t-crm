@@ -1950,7 +1950,7 @@ let cachedSpec = null
 
 function buildSpec() {
   const generator = new OpenApiGeneratorV31(registry.definitions)
-  return generator.generateDocument({
+  const doc = generator.generateDocument({
     openapi: '3.1.0',
     info: {
       title: 'UN1T CRM API',
@@ -1966,6 +1966,31 @@ function buildSpec() {
       { url: 'http://localhost:3000', description: 'Local dev' },
     ],
   })
+  // Outbound events we PLAN to push to subscribers. 3.1 `webhooks` keyword:
+  // the API is the source; the reader implements the receiver. Not yet built.
+  doc.webhooks = {
+    'lead.created': {
+      post: {
+        tags: ['Webhooks (Outbound)'],
+        summary: 'Lead created (planned)',
+        description: 'PLANNED — not yet implemented. Fired when a new lead is captured. ' +
+          'Your endpoint receives this payload; respond 2xx to acknowledge.',
+        requestBody: {
+          content: { 'application/json': { schema: {
+            type: 'object',
+            properties: {
+              event: { type: 'string', example: 'lead.created' },
+              contact_id: { type: 'string', format: 'uuid' },
+              location_id: { type: 'string', format: 'uuid' },
+              created_at: { type: 'string', format: 'date-time' },
+            },
+          } } },
+        },
+        responses: { '2xx': { description: 'Acknowledged by your endpoint' } },
+      },
+    },
+  }
+  return doc
 }
 
 // unstable_cache only works inside Next.js's request runtime — calling
