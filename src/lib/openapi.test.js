@@ -100,6 +100,13 @@ describe('getOpenApiSpec', () => {
     expect(op.security).toContainEqual({ BridgeAuth: [] })
   })
 
+  it('documents the staff mobile API', () => {
+    expect(spec.paths).toHaveProperty('/api/mobile/today-feed')
+    const op = spec.paths['/api/mobile/today-feed'].get
+    expect(op.tags).toContain('Mobile')
+    expect(op.security).toContainEqual({ CookieAuth: [] })
+  })
+
   it('declares webhook + bridge auth schemes', () => {
     const s = spec.components.securitySchemes
     expect(s).toHaveProperty('GlofoxHmac')

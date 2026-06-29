@@ -920,6 +920,163 @@ registry.registerPath({
   },
 })
 
+// ============================================================================
+// Mobile — Staff App, CookieAuth on all routes
+// ============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/mobile/today-feed',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Coach "today" feed',
+  responses: {
+    200: { description: 'Today feed', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/mobile/layout',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save the mobile home layout',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('MobileLayoutBody') } } } },
+  responses: {
+    200: { description: 'Layout saved' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/mobile/me',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Current staff profile + permissions',
+  responses: {
+    200: { description: 'Profile', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/mobile/radar',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Lead/churn radar summary',
+  responses: {
+    200: { description: 'Radar summary', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/mobile/device-tokens',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Register a push token',
+  request: { body: { content: { 'application/json': { schema: z.object({ token: z.string(), platform: z.string().optional() }).openapi('DeviceTokenRegisterBody') } } } },
+  responses: {
+    200: { description: 'Token registered' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/mobile/device-tokens',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Remove a push token',
+  request: { body: { content: { 'application/json': { schema: z.object({ token: z.string() }).openapi('DeviceTokenRemoveBody') } } } },
+  responses: {
+    200: { description: 'Token removed' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/mobile/impersonate',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Start impersonation',
+  request: { body: { content: { 'application/json': { schema: z.object({ userId: uuidLike }).openapi('ImpersonateStartBody') } } } },
+  responses: {
+    200: { description: 'Impersonation started' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/mobile/impersonate/stop',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Stop impersonation',
+  responses: {
+    200: { description: 'Impersonation stopped' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/mobile/impersonate/users',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List impersonatable users',
+  responses: {
+    200: { description: 'Users', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/mobile/checklists/today',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: "Today's checklists",
+  responses: {
+    200: { description: 'Checklists', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/mobile/checklists/{id}/items/{itemId}',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Tick a checklist item',
+  request: { params: z.object({ id: uuidLike, itemId: uuidLike }) },
+  responses: {
+    200: { description: 'Item ticked' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/mobile/checklists/{id}/items/{itemId}',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Untick a checklist item',
+  request: { params: z.object({ id: uuidLike, itemId: uuidLike }) },
+  responses: {
+    200: { description: 'Item unticked' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Contacts (Bearer auth — used by n8n)
 registry.registerPath({
   method: 'get',
