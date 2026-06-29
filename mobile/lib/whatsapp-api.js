@@ -42,7 +42,7 @@ export async function listMessages(conversationId, limit = 50) {
   // freezes the thread once a conversation outgrows the cap (web had the
   // identical bug; see the conversation [id] route).
   const { data, error } = await supabase.from('whatsapp_messages')
-    .select('id, direction, message_type, body, media_url, media_mime_type, status, sent_at, delivered_at, read_at, sent_by, source, template_name, created_at')
+    .select('id, direction, message_type, body, media_url, media_external_id, media_storage_path, media_mime_type, status, sent_at, delivered_at, read_at, sent_by, source, template_name, created_at')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: false })
     .limit(limit)

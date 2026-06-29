@@ -9,6 +9,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { maybeAutoReply } from '@/lib/agent/auto-reply'
 import { applyTemplateEvent } from '@/lib/whatsapp-template-events'
+import { ensureMediaRehosted } from '@/lib/whatsapp-media-server'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
 export const runtime = 'nodejs'
@@ -247,7 +248,10 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
   // Extract message content
   let body = ''
   let messageType = message.type || 'text'
-  let mediaUrl = null
+  // WA-MEDIA.1 — inbound media arrives as a Meta media ID (not a URL).
+  // Store it in media_external_id; the bytes are re-hosted into the
+  // whatsapp-media bucket (eagerly below, lazily by /api/whatsapp/media).
+  let mediaExternalId = null
   let mediaMime = null
 
   switch (messageType) {
@@ -256,21 +260,21 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
       break
     case 'image':
       body = message.image?.caption || ''
-      mediaUrl = message.image?.id
+      mediaExternalId = message.image?.id
       mediaMime = message.image?.mime_type
       break
     case 'video':
       body = message.video?.caption || ''
-      mediaUrl = message.video?.id
+      mediaExternalId = message.video?.id
       mediaMime = message.video?.mime_type
       break
     case 'document':
       body = message.document?.caption || message.document?.filename || ''
-      mediaUrl = message.document?.id
+      mediaExternalId = message.document?.id
       mediaMime = message.document?.mime_type
       break
     case 'audio':
-      mediaUrl = message.audio?.id
+      mediaExternalId = message.audio?.id
       mediaMime = message.audio?.mime_type
       break
     case 'location':
@@ -290,7 +294,7 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
   }
 
   // Save message (contact_id is null for unknown senders)
-  await db.from('whatsapp_messages').insert({
+  const { data: insertedMessage } = await db.from('whatsapp_messages').insert({
     conversation_id: conversationId,
     contact_id: contact?.id || null,
     location_id: locationId,
@@ -298,11 +302,11 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
     direction: 'inbound',
     message_type: messageType,
     body,
-    media_url: mediaUrl,
+    media_external_id: mediaExternalId,
     media_mime_type: mediaMime,
     status: 'delivered',
     sent_at: timestamp.toISOString(),
-  })
+  }).select('id').single()
 
   // Update conversation
   await db.from('whatsapp_conversations').update({
@@ -316,6 +320,25 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
   }).eq('id', conversationId)
   // Atomic unread bump (best-effort) — replaces the read-modify-write above.
   try { await db.rpc('increment_whatsapp_conversation_unread', { p_conversation_id: conversationId }) } catch {}
+
+  // WA-MEDIA.1 — re-host inbound media into the whatsapp-media bucket now,
+  // so the inbox shows it without a first-view round-trip and it survives
+  // Meta's ~30-day media expiry. Best-effort and bounded: never block or
+  // fail the webhook — /api/whatsapp/media re-hosts lazily if this misses.
+  if (mediaExternalId && insertedMessage?.id) {
+    try {
+      await ensureMediaRehosted(db, {
+        id: insertedMessage.id,
+        location_id: locationId,
+        message_type: messageType,
+        media_mime_type: mediaMime,
+        media_external_id: mediaExternalId,
+        media_storage_path: null,
+      })
+    } catch (e) {
+      console.error('[wa-webhook] inbound media rehost failed (will lazy-load):', e?.message)
+    }
+  }
 
   // Consent keywords — the broadcast footer promises "Reply STOP to
   // Unsubscribe", so honour an exact STOP/START text reply: flip

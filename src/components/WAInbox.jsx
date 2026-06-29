@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { createBrowserClient } from '@/lib/supabase'
+import { isServableMedia } from '@shared/whatsapp-media'
+import WAMediaContent from '@/components/WAMediaContent'
 import {
   ArrowLeft, Send, MessageCircle, Clock, CheckCheck,
   Check, Image as ImageIcon, FileText, Mic, AlertCircle, RefreshCw,
@@ -646,8 +648,12 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                     {msg.message_type === 'template' && (
                       <p className="text-[10px] text-green-300 mb-1">Template: {msg.template_name}</p>
                     )}
-                    <MessageTypeIcon type={msg.message_type} />
-                    <p className="text-sm whitespace-pre-wrap">{msg.body || `[${msg.message_type}]`}</p>
+                    {isServableMedia(msg)
+                      ? <WAMediaContent message={msg} />
+                      : <MessageTypeIcon type={msg.message_type} />}
+                    {(msg.body || !isServableMedia(msg)) && (
+                      <p className="text-sm whitespace-pre-wrap">{msg.body || `[${msg.message_type}]`}</p>
+                    )}
                     <div className="flex items-center justify-end gap-1 mt-0.5">
                       {/* AGENT-QA.1 — rate Mia's replies; feeds the analytics quality list */}
                       {msg.source === 'agent' && (
