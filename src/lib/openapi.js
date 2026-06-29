@@ -1959,12 +1959,13 @@ function buildSpec() {
     openapi: '3.1.0',
     info: {
       title: 'UN1T CRM API',
-      version: '1.0.0',
+      version: '1.1.0',
       description:
         'HTTP API for the UN1T gym CRM. Most endpoints accept either a Supabase ' +
         'session cookie (browser) or a Bearer token (CRM_API_KEY for n8n / external ' +
         'integrations). Mutating endpoints validate request bodies via Zod schemas; ' +
-        'invalid input returns 400 with structured `issues` array.',
+        'invalid input returns 400 with structured `issues` array.' +
+        ' Covers the public, inbound-webhook, bridge and mobile integration surface; planned outbound events appear under webhooks.',
     },
     servers: [
       { url: 'https://crm.un1tdublin.com', description: 'Production' },
