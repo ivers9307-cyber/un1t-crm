@@ -27,8 +27,8 @@ describe('isUndeliverableError', () => {
 })
 
 describe('UNDELIVERABLE_FAILURE_THRESHOLD', () => {
-  it('requires repeated failures (>= 2) before excluding — 131026 is overloaded, a single failure can be transient', () => {
-    expect(UNDELIVERABLE_FAILURE_THRESHOLD).toBeGreaterThanOrEqual(2)
+  it('excludes on the FIRST undeliverable failure (operator policy 2026-06-29; reversible on inbound)', () => {
+    expect(UNDELIVERABLE_FAILURE_THRESHOLD).toBe(1)
   })
 })
 

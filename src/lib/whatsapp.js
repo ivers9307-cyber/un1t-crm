@@ -478,22 +478,27 @@ export function isUndeliverableError({ code, message } = {}) {
   return /undeliverable/i.test(String(message || ''))
 }
 
-// A contact is flagged undeliverable only after this many undeliverable failures.
-// Meta's 131026 ("Message undeliverable") is an OVERLOADED code — besides "not a
-// WhatsApp user" it also fires for transient frequency-capping / quality
-// throttling, so a single failure is NOT proof a number is dead. Requiring
-// repeated failures (standard hard-bounce suppression) protects an engaged
-// contact who was merely throttled: a genuinely-dead number fails every send; a
-// throttled one recovers and never reaches the threshold.
-export const UNDELIVERABLE_FAILURE_THRESHOLD = 2
+// A contact is flagged undeliverable after this many undeliverable failures.
+// Operator policy (Richard, 2026-06-29): suppress on the FIRST undeliverable
+// failure — stop marketing re-hitting a number that looks dead rather than
+// waiting for a second strike. Meta's 131026 ("Message undeliverable") is an
+// OVERLOADED code (besides "not a WhatsApp user" it can fire for transient
+// frequency-capping / quality throttling), so one failure isn't *proof* a number
+// is dead — accepted trade-off because the resulting wa_status='undeliverable'
+// is REVERSIBLE: any inbound message from the contact reactivates them (see the
+// webhook inbound handler). Only genuine 131026 / "undeliverable" failures count
+// toward this — transient rate-limit / 24h-window errors are already excluded by
+// isUndeliverableError(), so they never trip it.
+export const UNDELIVERABLE_FAILURE_THRESHOLD = 1
 
-// Flag a contact's number as undeliverable (not on WhatsApp) after REPEATED
-// permanent-looking send failures, so future audiences skip it
-// (applyWhatsAppReachability excludes wa_status='undeliverable'). Only flips an
-// 'active' contact — never overrides an explicit opted_out/blocked, idempotent.
-// Reversible: an inbound message reactivates the contact. Best-effort — must
-// never throw into a send/webhook. The just-recorded failure row is included in
-// the count (callers insert it before calling this).
+// Flag a contact's number as undeliverable (not on WhatsApp) once it has hit
+// UNDELIVERABLE_FAILURE_THRESHOLD permanent-looking send failures (now 1 — the
+// first one), so future audiences skip it (applyWhatsAppReachability excludes
+// wa_status='undeliverable'). Only flips an 'active' contact — never overrides
+// an explicit opted_out/blocked, idempotent. Reversible: an inbound message
+// reactivates the contact. Best-effort — must never throw into a send/webhook.
+// The just-recorded failure row is included in the count (callers insert it
+// before calling this), so at threshold 1 the triggering failure suffices.
 export async function markUndeliverableIfPermanent(db, contactId, { code, message } = {}) {
   if (!contactId || !isUndeliverableError({ code, message })) return
   try {
