@@ -165,6 +165,26 @@ export async function POST(request) {
     logWarn('booking', `confirmation send error`, { err: e })
   }
 
+  // Campaign WhatsApp confirmation (the /start funnel sends source='meta_book').
+  // Best-effort; never blocks the booking response. UTILITY template; Dublin
+  // day/time formatted the same way as the email/SMS confirmation.
+  try {
+    if (body.source === 'meta_book' && data?.contact_id) {
+      const { fmtBookingTime } = await import('@/lib/booking-confirmations')
+      const { maybeSendBookingWhatsappConfirm } = await import('@/lib/automations/booking-whatsapp-confirm')
+      const { data: c } = await db.from('contacts')
+        .select('id, first_name, name, phone, wa_phone').eq('id', data.contact_id).maybeSingle()
+      if (c) {
+        const firstName = c.first_name || (c.name ? c.name.split(' ')[0] : '') || 'there'
+        const whenLabel = fmtBookingTime(data.booking_date, data.start_time)
+        await maybeSendBookingWhatsappConfirm({
+          db, locationId: data.location_id, contact: c,
+          templateName: 'booking_consult_confirmed', bodyParams: [firstName, whenLabel],
+        })
+      }
+    }
+  } catch (e) { logWarn('book', 'whatsapp confirm failed', { err: e }) }
+
   // GLOFOX3.2 (mig 144). When the event_type is opted in, push the
   // booking customer to Glofox in create-and-trial mode. The
   // handle_new_booking trigger has already created (or matched) the
