@@ -50,6 +50,7 @@ describe('resolveCampaign', () => {
   it('returns the config for a known campaign', () => {
     expect(resolveCampaign('stillorgan-free-class')).toEqual({
       locationPublicPath: 'stillorgan', tag: 'stillorgan-free-trial', leadSource: 'meta_free_trial',
+      whatsappTemplate: 'meta_ad_whatsapp_lead',
     })
   })
   it('returns null for an unknown or non-string key', () => {

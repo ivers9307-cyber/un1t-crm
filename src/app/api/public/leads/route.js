@@ -110,5 +110,23 @@ export async function POST(request) {
     }
   } catch (e) { logWarn('leads', 'glofox provisioning hook failed', { err: e }) }
 
+  // Campaign first-touch WhatsApp (e.g. Meta free-class lead → welcome
+  // template w/ quick-reply buttons → Mia handoff). Only fires for
+  // campaigns that configure a template; best-effort, never blocks.
+  try {
+    const camp = resolveCampaign(campaign)
+    if (camp?.whatsappTemplate) {
+      const { data: c } = await db
+        .from('contacts')
+        .select('id, name, first_name, phone, wa_phone')
+        .eq('id', contactId)
+        .maybeSingle()
+      if (c) {
+        const { maybeSendCampaignWhatsappWelcome } = await import('@/lib/automations/meta-ad-whatsapp-welcome')
+        await maybeSendCampaignWhatsappWelcome({ db, locationId, contact: c, templateName: camp.whatsappTemplate })
+      }
+    }
+  } catch (e) { logWarn('leads', 'campaign WA welcome failed', { err: e }) }
+
   return NextResponse.json({ success: true, data: { already_on_list: alreadyOnList } })
 }

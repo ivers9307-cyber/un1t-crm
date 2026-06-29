@@ -68,6 +68,11 @@ export const LEAD_CAMPAIGNS = {
     locationPublicPath: 'stillorgan',
     tag: 'stillorgan-free-trial',
     leadSource: 'meta_free_trial',
+    // First-touch WhatsApp: the instant the lead signs up, send this
+    // APPROVED template (asks consultation vs first class via quick-reply
+    // buttons); the reply hands off to the Mia agent who books it. Name
+    // must match a whatsapp_templates row at the campaign's location.
+    whatsappTemplate: 'meta_ad_whatsapp_lead',
   },
 }
 
