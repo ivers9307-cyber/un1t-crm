@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   LeadSchema, normaliseLead, leadConfigFromBlocks,
   DEFAULT_LEAD_TAG, DEFAULT_LEAD_SOURCE,
+  LEAD_CAMPAIGNS, resolveCampaign,
 } from './leads'
 
 const valid = {
@@ -29,13 +30,42 @@ describe('LeadSchema', () => {
   it('ignores unknown/legacy fields (e.g. a cached pre-honeypot-removal build still sending company)', () => {
     expect(LeadSchema.safeParse({ ...valid, company: 'whatever' }).success).toBe(true)
   })
+  it('accepts an optional campaign key', () => {
+    expect(LeadSchema.safeParse({ ...valid, campaign: 'stillorgan-free-class' }).success).toBe(true)
+  })
 })
 
 describe('normaliseLead', () => {
-  it('trims name/phone and lowercases email', () => {
+  it('trims name/phone and lowercases email, campaign null when absent', () => {
     expect(normaliseLead(valid)).toEqual({
-      firstName: 'Sarah', email: 'sarah@example.com', phone: '087 123 4567', publicPath: 'hatch-street',
+      firstName: 'Sarah', email: 'sarah@example.com', phone: '087 123 4567', publicPath: 'hatch-street', campaign: null,
     })
+  })
+  it('trims and passes through a campaign key', () => {
+    expect(normaliseLead({ ...valid, campaign: '  stillorgan-free-class ' }).campaign).toBe('stillorgan-free-class')
+  })
+})
+
+describe('resolveCampaign', () => {
+  it('returns the config for a known campaign', () => {
+    expect(resolveCampaign('stillorgan-free-class')).toEqual({
+      locationPublicPath: 'stillorgan', tag: 'stillorgan-free-trial', leadSource: 'meta_free_trial',
+    })
+  })
+  it('returns null for an unknown or non-string key', () => {
+    expect(resolveCampaign('made-up')).toBeNull()
+    expect(resolveCampaign(null)).toBeNull()
+    expect(resolveCampaign(undefined)).toBeNull()
+    // not fooled by inherited Object.prototype props
+    expect(resolveCampaign('toString')).toBeNull()
+    expect(resolveCampaign('constructor')).toBeNull()
+  })
+  it('every registered campaign carries the three required fields', () => {
+    for (const cfg of Object.values(LEAD_CAMPAIGNS)) {
+      expect(typeof cfg.locationPublicPath).toBe('string')
+      expect(typeof cfg.tag).toBe('string')
+      expect(typeof cfg.leadSource).toBe('string')
+    }
   })
 })
 

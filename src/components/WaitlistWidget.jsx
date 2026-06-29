@@ -13,7 +13,7 @@
 
 import { useState } from 'react'
 
-export default function WaitlistWidget({ publicPath, buttonLabel, successMessage, consentLabel }) {
+export default function WaitlistWidget({ publicPath, campaign, buttonLabel, successMessage, consentLabel }) {
   const [form, setForm] = useState({ first_name: '', email: '', phone: '', consent: false })
   const [status, setStatus] = useState('idle') // idle | submitting | done | error
   const [error, setError] = useState(null)
@@ -28,7 +28,7 @@ export default function WaitlistWidget({ publicPath, buttonLabel, successMessage
       const r = await fetch('/api/public/leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, public_path: publicPath }),
+        body: JSON.stringify({ ...form, public_path: publicPath, ...(campaign ? { campaign } : {}) }),
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) {
