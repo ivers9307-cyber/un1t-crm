@@ -73,6 +73,7 @@ export const BRANDS = [
       '/stillorgan',    // pretty path → next.config rewrites to /welcome/stillorgan
       '/hatch-street',  // pretty path → next.config rewrites to /welcome/hatch-street
       '/free-class',    // Stillorgan paid-traffic campaign landing page (src/app/free-class)
+      '/start',         // Meta-ad booking wizard (src/app/start)
       '/privacy',       // GDPR privacy policy (waitlist consent link + App Store URL)
       '/book/',         // public Calendly-style booking pages
       '/event/',        // public race / workshop / etc. signup pages

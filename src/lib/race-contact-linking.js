@@ -39,9 +39,14 @@ import { splitName } from './name-utils'
  * @param {string|null} [args.email]        normalised case is fine; we'll lower-case
  * @param {string|null} [args.name]
  * @param {string|null} [args.phone]
+ * @param {boolean} [args.restrictToLocation=false]  when true, skip the
+ *        cross-location email fallback. Public, unauthenticated lead/booking
+ *        forms set this so a known email can't resolve an existing person at
+ *        another location (and then have attribution/consent/a deal written
+ *        against them) — an IDOR on a public write path.
  * @returns {Promise<string|null>}
  */
-export async function findOrCreateRaceContact({ db, locationId, email, name = null, phone = null }) {
+export async function findOrCreateRaceContact({ db, locationId, email, name = null, phone = null, restrictToLocation = false }) {
   if (!email || typeof email !== 'string') return null
   const normalised = email.toLowerCase().trim()
   if (!normalised || !normalised.includes('@')) return null
@@ -57,16 +62,20 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
       .maybeSingle()
     if (existing?.id) return existing.id
 
-    // No match here. Try a global match (in case the contact lives
-    // at a sibling location in the same org). Don't change
-    // location_id — the contact stays where it is, the
-    // team_members row just points across.
-    const { data: anywhere } = await db
-      .from('contacts')
-      .select('id')
-      .ilike('email', normalised)
-      .maybeSingle()
-    if (anywhere?.id) return anywhere.id
+    // No match here. Unless the caller restricts to this location, try a
+    // global match (the contact may live at a sibling location in the same
+    // org). Don't change location_id — the contact stays where it is, the
+    // team_members row just points across. Public lead/booking forms set
+    // restrictToLocation so they never resolve a cross-location contact from a
+    // bare email (IDOR).
+    if (!restrictToLocation) {
+      const { data: anywhere } = await db
+        .from('contacts')
+        .select('id')
+        .ilike('email', normalised)
+        .maybeSingle()
+      if (anywhere?.id) return anywhere.id
+    }
 
     // Create. CLASSIFY.2: no lead_status / pipeline_stage_slug set
     // here. The deal trigger (mig 155) will populate
