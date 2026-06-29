@@ -237,7 +237,7 @@ export default function Conversation() {
             onContentSizeChange={() => scrollRef.current?.scrollToEnd?.({ animated: false })}
           >
             {messages.map(m => (
-              <MessageBubble key={m.id} msg={m} myRating={feedback[m.id] || null} onRate={rate} />
+              <MessageBubble key={m.id} msg={m} myRating={feedback[m.id] || null} onRate={rate} channel="whatsapp" />
             ))}
           </ScrollView>
 

@@ -7,11 +7,16 @@
 import { View, Text, Pressable } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { mediaLabel } from '../lib/inbox'
+import { isServableMedia } from '../../shared/whatsapp-media'
+import WAMediaThumb from './WAMediaThumb'
 
-export default function MessageBubble({ msg, myRating, onRate }) {
+export default function MessageBubble({ msg, myRating, onRate, channel }) {
   const out = msg.direction === 'outbound'
   const isAgent = msg.source === 'agent'
-  const media = mediaLabel(msg.message_type)
+  // WhatsApp inbound media re-hosts through /api/whatsapp/media and renders
+  // inline; Instagram (separate table/route) stays a chip for now.
+  const showMedia = channel === 'whatsapp' && isServableMedia(msg)
+  const media = !showMedia && mediaLabel(msg.message_type)
   const time = msg.created_at
     ? new Date(msg.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
     : ''
@@ -36,6 +41,11 @@ export default function MessageBubble({ msg, myRating, onRate }) {
               Template · {msg.template_name}
             </Text>
           )}
+          {showMedia && (
+            <View className={msg.body ? 'mb-1' : ''}>
+              <WAMediaThumb msg={msg} />
+            </View>
+          )}
           {media && (
             <View className={`flex-row items-center ${msg.body ? 'mb-0.5' : ''}`}>
               <Ionicons name={media.icon} size={14} color={out ? 'rgba(255,255,255,0.85)' : '#64748B'} />
@@ -48,7 +58,7 @@ export default function MessageBubble({ msg, myRating, onRate }) {
             <Text className={`text-base ${out ? 'text-white' : 'text-un1t-text'}`}>
               {msg.body}
             </Text>
-          ) : !media ? (
+          ) : (!media && !showMedia) ? (
             <Text className={`text-base ${out ? 'text-white' : 'text-un1t-text'}`}>—</Text>
           ) : null}
           <View className="flex-row items-center justify-end mt-1">
