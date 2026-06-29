@@ -1,16 +1,15 @@
 'use client'
 
-// /start booking funnel. Brief's step order: choose path → details → pick a
-// slot → confirmed. Reuses the existing public booking APIs (no new booking
-// endpoint). Class option is "coming soon" until Phase 2. On success the
-// booking endpoint also fires a WhatsApp confirmation (source='meta_book').
+// /start booking funnel. Choose path → details → pick a slot/class → done.
+// Consultation reuses the public booking APIs (POST /api/public/book, which
+// fires a WhatsApp confirm on source='meta_book'). Class enqueues to the async
+// pipeline (POST /api/public/class-booking) → the cron books + WhatsApp-confirms.
 
 import { useState, useEffect } from 'react'
 
 const CONSULT_SLUG = 'free-un1t-consultation'
 
 function dayList(maxAdvanceDays = 30) {
-  // Next ~14 selectable days as YYYY-MM-DD (Dublin wall-clock, no UTC math).
   const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Dublin', year: 'numeric', month: '2-digit', day: '2-digit' })
   const label = new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'short' })
   const out = []
@@ -25,20 +24,23 @@ function dayList(maxAdvanceDays = 30) {
 const inputCls = 'w-full bg-white/[0.06] border border-white/15 rounded-xl px-4 py-3.5 text-base text-white placeholder-white/40 focus:outline-none focus:border-white/50'
 
 export default function StartFunnel() {
-  const [step, setStep] = useState('choose') // choose | details | calendar | done
-  const [path, setPath] = useState(null)     // 'consultation'
+  const [step, setStep] = useState('choose') // choose | details | calendar | classpick | done | classdone
+  const [path, setPath] = useState(null)     // 'consultation' | 'class'
   const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', consent: false })
   const [event, setEvent] = useState(null)
   const [days] = useState(() => dayList())
   const [selectedDate, setSelectedDate] = useState(null)
   const [slots, setSlots] = useState([])
   const [slotsLoading, setSlotsLoading] = useState(false)
+  const [classes, setClasses] = useState([])
+  const [classesLoading, setClassesLoading] = useState(false)
+  const [selectedClassDay, setSelectedClassDay] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }))
 
-  // Load the consultation event once the user has chosen the consult path.
+  // Consultation: load the event once chosen.
   useEffect(() => {
     if (path !== 'consultation') return
     fetch(`/api/public/bookings/${CONSULT_SLUG}`)
@@ -46,6 +48,21 @@ export default function StartFunnel() {
       .then((j) => { if (j.success && j.data) setEvent(j.data); else setError("Couldn't load booking times — please try again shortly.") })
       .catch(() => setError("Couldn't load booking times — please try again shortly."))
   }, [path])
+
+  // Class: load classes when entering the class picker.
+  useEffect(() => {
+    if (step !== 'classpick') return
+    setClassesLoading(true)
+    fetch('/api/public/classes')
+      .then((r) => r.json())
+      .then((j) => {
+        const list = (j.success && j.data?.classes) ? j.data.classes : []
+        setClasses(list)
+        if (list.length) setSelectedClassDay(list[0].day)
+      })
+      .catch(() => setClasses([]))
+      .finally(() => setClassesLoading(false))
+  }, [step])
 
   async function loadSlots(date) {
     setSelectedDate(date); setSlots([]); setSlotsLoading(true)
@@ -56,7 +73,8 @@ export default function StartFunnel() {
     } catch { setSlots([]) } finally { setSlotsLoading(false) }
   }
 
-  function chooseConsult() { setPath('consultation'); setStep('details') }
+  function chooseConsult() { setPath('consultation'); setError(null); setStep('details') }
+  function chooseClass() { setPath('class'); setError(null); setStep('details') }
 
   function detailsNext(e) {
     e.preventDefault()
@@ -64,7 +82,7 @@ export default function StartFunnel() {
     if (!form.first_name.trim() || !form.last_name.trim() || !form.email.trim() || form.phone.replace(/\D/g, '').length < 7 || !form.consent) {
       setError('Please complete every field and tick consent.'); return
     }
-    setStep('calendar')
+    setStep(path === 'class' ? 'classpick' : 'calendar')
   }
 
   async function book(slot) {
@@ -87,6 +105,24 @@ export default function StartFunnel() {
     } catch { setError('Something went wrong. Please try again.') } finally { setSubmitting(false) }
   }
 
+  async function bookClass(c) {
+    if (submitting) return
+    setSubmitting(true); setError(null)
+    try {
+      const r = await fetch('/api/public/class-booking', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_id: c.event_id, class_name: c.name, starts_at: c.starts_at,
+          first_name: form.first_name.trim(), last_name: form.last_name.trim(),
+          email: form.email.trim(), phone: form.phone.trim(), consent: form.consent,
+        }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || j.success === false) { setError(j.error || 'Something went wrong — please try again.'); return }
+      setStep('classdone')
+    } catch { setError('Something went wrong. Please try again.') } finally { setSubmitting(false) }
+  }
+
   if (step === 'done') {
     return (
       <div className="max-w-md mx-auto px-6 py-16 text-center">
@@ -95,6 +131,17 @@ export default function StartFunnel() {
       </div>
     )
   }
+  if (step === 'classdone') {
+    return (
+      <div className="max-w-md mx-auto px-6 py-16 text-center">
+        <p className="font-display font-extrabold uppercase text-3xl text-white mb-3">You&apos;re being booked in 🎉</p>
+        <p className="text-white/70">Watch for a WhatsApp confirming your class. See you at UN1T Stillorgan!</p>
+      </div>
+    )
+  }
+
+  const classDays = Array.from(new Set(classes.map((c) => c.day)))
+  const dayClasses = classes.filter((c) => c.day === selectedClassDay)
 
   return (
     <div className="max-w-xl mx-auto px-6 py-12 text-white">
@@ -105,10 +152,10 @@ export default function StartFunnel() {
             <div className="font-bold text-lg">Book a free consultation</div>
             <div className="text-white/60 text-sm mt-1">Meet a coach, talk goals, get a plan.</div>
           </button>
-          <div className="w-full text-left rounded-2xl border-2 border-white/10 p-6 opacity-50 cursor-not-allowed">
-            <div className="font-bold text-lg">Book a free class <span className="text-xs uppercase tracking-wider ml-2 text-white/50">Coming soon</span></div>
-            <div className="text-white/50 text-sm mt-1">Jump straight into a session.</div>
-          </div>
+          <button onClick={chooseClass} className="w-full text-left rounded-2xl border-2 border-white/20 hover:border-white p-6 transition-colors">
+            <div className="font-bold text-lg">Book a free class</div>
+            <div className="text-white/60 text-sm mt-1">Jump straight into a session.</div>
+          </button>
         </div>
       )}
 
@@ -150,6 +197,39 @@ export default function StartFunnel() {
               </button>
             ))}
           </div>
+          {error && <p className="text-sm text-red-300 mt-3">{error}</p>}
+        </div>
+      )}
+
+      {step === 'classpick' && (
+        <div>
+          <h1 className="font-display font-extrabold uppercase text-2xl mb-4">Pick a class</h1>
+          {classesLoading && <p className="text-white/50 text-sm">Loading classes…</p>}
+          {!classesLoading && classes.length === 0 && <p className="text-white/50 text-sm">No classes available right now — try a consultation instead.</p>}
+          {!classesLoading && classes.length > 0 && (
+            <>
+              <div className="flex gap-2 overflow-x-auto pb-3 mb-4">
+                {classDays.map((d) => {
+                  const lbl = classes.find((c) => c.day === d)?.day_label || d
+                  return (
+                    <button key={d} onClick={() => setSelectedClassDay(d)}
+                      className={`shrink-0 px-4 py-3 rounded-xl border-2 text-sm ${selectedClassDay === d ? 'border-white bg-white text-black' : 'border-white/20 text-white'}`}>
+                      {lbl}
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="space-y-2">
+                {dayClasses.map((c) => (
+                  <button key={c.event_id} disabled={submitting} onClick={() => bookClass(c)}
+                    className="w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 border-white/20 hover:border-white text-left disabled:opacity-50">
+                    <span><span className="font-bold">{c.time}</span> · {c.name}</span>
+                    <span className="text-xs text-white/50">{c.spots_left} left</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
           {error && <p className="text-sm text-red-300 mt-3">{error}</p>}
         </div>
       )}
