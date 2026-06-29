@@ -165,6 +165,18 @@ export async function POST(request) {
     logWarn('booking', `confirmation send error`, { err: e })
   }
 
+  // Attribute /start (source='meta_book') leads so the funnel is measurable,
+  // mirroring /free-class: stamp lead_source + apply a campaign tag. Values are
+  // hard-coded server-side (gated on source), so the client can't inject them.
+  // Best-effort; never blocks the booking.
+  try {
+    if (body.source === 'meta_book' && data?.contact_id) {
+      await db.from('contacts').update({ lead_source: 'meta_book' }).eq('id', data.contact_id).is('lead_source', null)
+      const { writeContactTag } = await import('@/lib/contact-tags')
+      await writeContactTag(db, { contactId: data.contact_id, locationId: data.location_id, tag: 'stillorgan-start' })
+    }
+  } catch (e) { logWarn('book', 'meta_book attribution failed', { err: e }) }
+
   // Campaign WhatsApp confirmation (the /start funnel sends source='meta_book').
   // Best-effort; never blocks the booking response. UTILITY template; Dublin
   // day/time formatted the same way as the email/SMS confirmation.

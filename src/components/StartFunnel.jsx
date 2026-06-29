@@ -41,7 +41,10 @@ export default function StartFunnel() {
   // Load the consultation event once the user has chosen the consult path.
   useEffect(() => {
     if (path !== 'consultation') return
-    fetch(`/api/public/bookings/${CONSULT_SLUG}`).then((r) => r.json()).then((j) => { if (j.success) setEvent(j.data) }).catch(() => {})
+    fetch(`/api/public/bookings/${CONSULT_SLUG}`)
+      .then((r) => r.json())
+      .then((j) => { if (j.success && j.data) setEvent(j.data); else setError("Couldn't load booking times — please try again shortly.") })
+      .catch(() => setError("Couldn't load booking times — please try again shortly."))
   }, [path])
 
   async function loadSlots(date) {
@@ -65,7 +68,8 @@ export default function StartFunnel() {
   }
 
   async function book(slot) {
-    if (submitting || !event) return
+    if (submitting) return
+    if (!event) { setError("Couldn't load booking times — please refresh and try again."); return }
     setSubmitting(true); setError(null)
     try {
       const r = await fetch('/api/public/book', {
