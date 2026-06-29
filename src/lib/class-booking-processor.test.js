@@ -12,6 +12,8 @@ vi.mock('@/lib/automations/booking-whatsapp-confirm', () => ({ maybeSendBookingW
 
 import { processClassBookingRequest } from './class-booking-processor'
 import { createBooking } from '@/lib/glofox'
+import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
+import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
 
 function makeDb(contact) {
@@ -43,5 +45,17 @@ describe('processClassBookingRequest', () => {
     createBooking.mockResolvedValueOnce({ ok: false, status: 400, body: { message_code: 'EVENT_FULL' } })
     const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
     expect(r.outcome).toBe('needs_review')
+  })
+  it('ambiguous Glofox account (multiple matches) → review, never books', async () => {
+    findOrCreateGlofoxMember.mockResolvedValueOnce({ status: 'needs_review', glofox_member_id: 'gm-guess' })
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', last_name: 'Lee', phone: '0871234567', glofox_member_id: null, last_attended_at: null }), req)
+    expect(r.outcome).toBe('needs_review')
+    expect(createBooking).not.toHaveBeenCalled()
+  })
+  it('existing account with no live credits → review (no fragile auto-purchase)', async () => {
+    computeCreditsRemaining.mockReturnValueOnce(0)
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
+    expect(r.outcome).toBe('needs_review')
+    expect(createBooking).not.toHaveBeenCalled()
   })
 })

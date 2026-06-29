@@ -37,6 +37,15 @@ create index if not exists idx_cbr_status_queued on public.class_booking_request
 create index if not exists idx_cbr_location on public.class_booking_requests (location_id);
 create index if not exists idx_cbr_contact on public.class_booking_requests (contact_id);
 
+-- One active/booked request per (contact, class) — dedupes double-submits +
+-- guarantees it under a concurrent race (the enqueue route treats the 23505
+-- violation as a successful dedupe). Partial, so re-attempts are allowed after
+-- a prior request goes to review/failed. (Applied to prod via the Supabase MCP
+-- migration 'class_booking_requests_dedupe_index'.)
+create unique index if not exists uq_cbr_active_contact_event
+  on public.class_booking_requests (contact_id, glofox_event_id)
+  where status in ('queued','processing','booked');
+
 create or replace trigger trg_cbr_updated_at before update on public.class_booking_requests
   for each row execute function update_updated_at();
 

@@ -184,6 +184,29 @@ export async function PATCH(request, { params }) {
         }
       }
     }
+
+    // /start-funnel class bookings: keep the class_booking_requests queue row in
+    // sync (otherwise it's stuck in 'needs_review' forever) and — because these
+    // public leads have no agent conversation thread — send them the public
+    // booking_class_confirmed WhatsApp directly. Best-effort.
+    if (details?.source === 'start_funnel') {
+      try {
+        const cbrStatus = finalStatus === 'actioned' ? 'booked' : 'failed'
+        await db.from('class_booking_requests')
+          .update({ status: cbrStatus, last_error: finalStatus === 'actioned' ? null : (executed?.message_code || 'approval_book_failed') })
+          .eq('approval_request_id', id)
+      } catch (e) { console.warn(`[agent-requests] cbr sync error: ${e?.message || e}`) }
+      if (finalStatus === 'actioned' && !row.conversation_id) {
+        try {
+          const { data: c } = await db.from('contacts').select('id, first_name, name, phone, wa_phone').eq('id', row.contact_id).maybeSingle()
+          if (c) {
+            const { maybeSendBookingWhatsappConfirm } = await import('@/lib/automations/booking-whatsapp-confirm')
+            const firstName = c.first_name || (c.name ? c.name.split(' ')[0] : '') || 'there'
+            await maybeSendBookingWhatsappConfirm({ db, locationId: row.location_id, contact: c, templateName: 'booking_class_confirmed', bodyParams: [firstName, details.class_name || 'your class', details.class_time || ''] })
+          }
+        } catch (e) { console.warn(`[agent-requests] cbr confirm error: ${e?.message || e}`) }
+      }
+    }
   }
 
   const { data, error } = await db.from('agent_membership_requests').update({
