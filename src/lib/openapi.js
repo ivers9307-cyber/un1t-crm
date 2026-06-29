@@ -205,8 +205,8 @@ registry.registerComponent('securitySchemes', 'MetaSignature', {
   description: 'Meta webhook signature. GET handshake echoes hub.challenge; POST carries X-Hub-Signature-256 over the raw body.',
 })
 registry.registerComponent('securitySchemes', 'WebhookToken', {
-  type: 'apiKey', in: 'header', name: 'Authorization',
-  description: 'Provider-specific shared secret or signature header (Postmark/Twilio/Revolut/Xero/Strava/InBody/UniFi), or a path token for tokenised receivers.',
+  type: 'apiKey', in: 'header', name: 'X-Webhook-Token',
+  description: 'Shared-secret / signature header. Postmark, UniFi and InBody use `X-Webhook-Token`; Twilio uses `X-Twilio-Signature`; Revolut uses `Revolut-Signature`; Xero uses `X-Xero-Signature`. Tokenised receivers (`invoices-inbound`, `sequence`) instead authenticate via the path token.',
 })
 registry.registerComponent('securitySchemes', 'BridgeAuth', {
   type: 'http', scheme: 'bearer',
@@ -243,7 +243,11 @@ registry.registerPath({
   tags: ['Public'],
   summary: 'Public waitlist / lead capture',
   description: 'Anonymous. Rate-limited to 8 requests per IP per 15 min. Studio resolved server-side from publicPath — caller cannot target an arbitrary location.',
-  request: { body: { content: { 'application/json': { schema: LeadSchema } } } },
+  // Re-derive via .extend({}) so the .openapi() decorator is present: LeadSchema
+  // is constructed in leads.js BEFORE extendZodWithOpenApi(z) runs here, so the
+  // raw export lacks .openapi (zod v4 adds it per-instance at construction time).
+  // .extend({}) yields an identical schema built under the extended z. leads.js untouched.
+  request: { body: { content: { 'application/json': { schema: LeadSchema.extend({}).openapi('LeadCapture') } } } },
   responses: {
     200: { description: 'Lead captured' },
     400: { description: 'Validation failed or studio not accepting sign-ups', content: { 'application/json': { schema: ErrorResponse } } },
@@ -581,9 +585,9 @@ registry.registerPath({
   method: 'get',
   path: '/api/webhooks/instagram',
   tags: ['Webhooks (Inbound)'],
-  security: [{ MetaSignature: [] }],
+  security: [],
   summary: 'Instagram webhook verification handshake',
-  description: 'Meta hub.challenge verification — echoes hub.challenge when hub.verify_token matches.',
+  description: 'Meta verification handshake: echoes `hub.challenge` when `hub.verify_token` matches. POST carries the signed payload.',
   responses: {
     200: { description: 'Challenge echoed' },
     403: { description: 'Verify token mismatch' },
@@ -608,9 +612,9 @@ registry.registerPath({
   method: 'get',
   path: '/api/webhooks/whatsapp',
   tags: ['Webhooks (Inbound)'],
-  security: [{ MetaSignature: [] }],
+  security: [],
   summary: 'WhatsApp webhook verification handshake',
-  description: 'Meta hub.challenge verification — echoes hub.challenge when hub.verify_token matches.',
+  description: 'Meta verification handshake: echoes `hub.challenge` when `hub.verify_token` matches. POST carries the signed payload.',
   responses: {
     200: { description: 'Challenge echoed' },
     403: { description: 'Verify token mismatch' },
@@ -635,9 +639,9 @@ registry.registerPath({
   method: 'get',
   path: '/api/webhooks/strava',
   tags: ['Webhooks (Inbound)'],
-  security: [{ WebhookToken: [] }],
+  security: [],
   summary: 'Strava subscription validation',
-  description: 'Strava → CRM. GET echoes hub.challenge to validate the webhook subscription.',
+  description: 'Strava subscription validation (echoes `hub.challenge`).',
   responses: {
     200: { description: 'Challenge echoed' },
     403: { description: 'Verify token mismatch' },
@@ -654,6 +658,7 @@ registry.registerPath({
   request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('StravaWebhookEvent') } } } },
   responses: {
     200: { description: 'Accepted' },
+    401: { description: 'Verify-token mismatch', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -661,9 +666,9 @@ registry.registerPath({
   method: 'get',
   path: '/api/webhooks/xero',
   tags: ['Webhooks (Inbound)'],
-  security: [{ WebhookToken: [] }],
+  security: [],
   summary: 'Xero intent-to-receive verification',
-  description: 'Xero → CRM. GET is used by Xero to verify the webhook endpoint.',
+  description: 'Xero intent-to-receive validation (200).',
   responses: {
     200: { description: 'OK' },
   },
@@ -687,9 +692,9 @@ registry.registerPath({
   method: 'get',
   path: '/api/webhooks/revolut',
   tags: ['Webhooks (Inbound)'],
-  security: [{ WebhookToken: [] }],
+  security: [],
   summary: 'Revolut webhook verification',
-  description: 'Revolut → CRM. GET verification request.',
+  description: 'Configuration ping (200).',
   responses: {
     200: { description: 'OK' },
   },
@@ -713,9 +718,9 @@ registry.registerPath({
   method: 'get',
   path: '/api/webhooks/revolut/race-payments',
   tags: ['Webhooks (Inbound)'],
-  security: [{ WebhookToken: [] }],
+  security: [],
   summary: 'Revolut race-payments webhook verification',
-  description: 'Revolut → CRM. GET verification request for the race-payments webhook endpoint.',
+  description: 'Configuration ping (200).',
   responses: {
     200: { description: 'OK' },
   },
@@ -781,9 +786,9 @@ registry.registerPath({
   method: 'post',
   path: '/api/webhooks/invoices-inbound/{token}',
   tags: ['Webhooks (Inbound)'],
-  security: [{ WebhookToken: [] }],
+  security: [],
   summary: 'Tokenised inbound invoice email/forward',
-  description: 'Inbound invoice receiver. Token in path authenticates the request (no static secret). Accepts email-forwarded invoices.',
+  description: 'Inbound invoice receiver. Accepts email-forwarded invoices. Authenticated by the unguessable `{token}` path segment, not a header.',
   request: {
     params: z.object({ token: z.string() }),
     body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('InboundInvoiceEvent') } } },
@@ -798,9 +803,9 @@ registry.registerPath({
   method: 'post',
   path: '/api/webhooks/sequence/{token}',
   tags: ['Webhooks (Inbound)'],
-  security: [{ WebhookToken: [] }],
+  security: [],
   summary: 'Tokenised sequence callback',
-  description: 'Sequence event callback. Token in path authenticates the delivery; carries step completion or external event data.',
+  description: 'Sequence event callback; carries step completion or external event data. Authenticated by the unguessable `{token}` path segment, not a header.',
   request: {
     params: z.object({ token: z.string() }),
     body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('SequenceCallbackEvent') } } },
@@ -931,7 +936,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'Coach "today" feed',
   responses: {
-    200: { description: 'Today feed', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    200: { description: 'Today feed', content: { 'application/json': { schema: z.object({}).passthrough().openapi('TodayFeedResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -956,7 +961,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'Current staff profile + permissions',
   responses: {
-    200: { description: 'Profile', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    200: { description: 'Profile', content: { 'application/json': { schema: z.object({}).passthrough().openapi('MobileMeResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -968,7 +973,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'Lead/churn radar summary',
   responses: {
-    200: { description: 'Radar summary', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    200: { description: 'Radar summary', content: { 'application/json': { schema: z.object({}).passthrough().openapi('MobileRadarResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -1032,7 +1037,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'List impersonatable users',
   responses: {
-    200: { description: 'Users', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    200: { description: 'Users', content: { 'application/json': { schema: z.object({}).passthrough().openapi('ImpersonateUsersResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -1044,7 +1049,7 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: "Today's checklists",
   responses: {
-    200: { description: 'Checklists', content: { 'application/json': { schema: z.object({}).passthrough() } } },
+    200: { description: 'Checklists', content: { 'application/json': { schema: z.object({}).passthrough().openapi('ChecklistsTodayResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })

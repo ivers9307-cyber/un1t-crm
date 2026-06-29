@@ -16,7 +16,7 @@ describe('getOpenApiSpec', () => {
     expect(spec.info.version).toMatch(/^\d+\.\d+\.\d+$/)
   })
 
-  it('declares both auth schemes', () => {
+  it('declares the pre-existing browser/integration auth schemes', () => {
     expect(spec.components.securitySchemes).toHaveProperty('BearerAuth')
     expect(spec.components.securitySchemes).toHaveProperty('CookieAuth')
   })
@@ -55,6 +55,7 @@ describe('getOpenApiSpec', () => {
       'CampaignCreate',
       'ScheduledReport',
       'ErrorResponse',
+      'LeadCapture',
     ]) {
       expect(schemas, `missing schema: ${name}`).toHaveProperty(name)
     }
