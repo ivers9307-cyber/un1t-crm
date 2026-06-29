@@ -63,7 +63,7 @@ function Eyebrow({ children, dark = true }) {
   )
 }
 
-export default function BlockRenderer({ block, onEdit, locationId, publicPath, reviewsData, ctaHref, ctaLabel }) {
+export default function BlockRenderer({ block, onEdit, locationId, publicPath, campaign, reviewsData, ctaHref, ctaLabel }) {
   // onEdit is bound to this block: caller hands us a generic
   // (blockId, path, value) function and we curry the blockId so
   // each child renderer thinks in local field paths.
@@ -80,7 +80,7 @@ export default function BlockRenderer({ block, onEdit, locationId, publicPath, r
     case 'pillars':     return <PillarsBlock     block={block} {...editProps} />
     case 'gallery':     return <GalleryBlock     block={block} {...editProps} />
     case 'event':       return <EventBlock       block={block} />
-    case 'lead_form':   return <LeadFormBlock    block={block} onEdit={localOnEdit} publicPath={publicPath} />
+    case 'lead_form':   return <LeadFormBlock    block={block} onEdit={localOnEdit} publicPath={publicPath} campaign={campaign} />
     case 'embed':       return <EmbedBlock       block={block} onEdit={localOnEdit} />
     case 'stats':       return <StatsBlock       block={block} onEdit={localOnEdit} />
     case 'testimonial': return <TestimonialBlock block={block} onEdit={localOnEdit} />
@@ -315,7 +315,7 @@ export function EventBlock({ block }) {
   )
 }
 
-export function LeadFormBlock({ block, onEdit, publicPath }) {
+export function LeadFormBlock({ block, onEdit, publicPath, campaign }) {
   return (
     <section id="waitlist" className="scroll-mt-20 relative bg-black text-white py-24 md:py-32 border-t border-white/10 overflow-hidden">
       {/* Faint outlined watermark drifting behind the form — depth
@@ -341,6 +341,7 @@ export function LeadFormBlock({ block, onEdit, publicPath }) {
           <div className="lp-card-glow rounded-2xl p-6 md:p-8">
             <WaitlistWidget
               publicPath={publicPath}
+              campaign={campaign}
               buttonLabel={block.button_label}
               successMessage={block.success_message}
               consentLabel={block.consent_label}

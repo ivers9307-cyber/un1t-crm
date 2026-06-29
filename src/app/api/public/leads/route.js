@@ -11,7 +11,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
-import { LeadSchema, normaliseLead, leadConfigFromBlocks } from '@/lib/leads'
+import { LeadSchema, normaliseLead, leadConfigFromBlocks, resolveCampaign } from '@/lib/leads'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { writeContactTag } from '@/lib/contact-tags'
 import { logWarn } from '@/lib/log'
@@ -31,7 +31,7 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
-  const { firstName, email, phone, publicPath } = normaliseLead(body)
+  const { firstName, email, phone, publicPath, campaign } = normaliseLead(body)
 
   // Resolve the studio + its lead-form config from public_path. The
   // client never sends a location_id or the tag/source, so a caller
@@ -45,7 +45,17 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'This studio is not accepting sign-ups right now.' }, { status: 400 })
   }
   const locationId = page.location_id
-  const { tag, leadSource } = leadConfigFromBlocks(page.blocks)
+  let { tag, leadSource } = leadConfigFromBlocks(page.blocks)
+
+  // Paid-traffic campaign override. Only applies when the slug is in
+  // the server-side allowlist AND its studio matches the resolved
+  // public_path — so a campaign can't be replayed against another
+  // studio or used to inject an arbitrary tag/source.
+  const camp = resolveCampaign(campaign)
+  if (camp && camp.locationPublicPath === publicPath) {
+    tag = camp.tag
+    leadSource = camp.leadSource
+  }
 
   // Find-or-create the contact at this studio (shared public-form helper).
   const contactId = await findOrCreateRaceContact({ db, locationId, email, name: firstName, phone })
