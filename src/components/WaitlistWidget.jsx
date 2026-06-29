@@ -36,6 +36,14 @@ export default function WaitlistWidget({ publicPath, buttonLabel, successMessage
         setStatus('error')
         return
       }
+      // Meta Pixel standard Lead event. fbq only exists once the visitor
+      // has accepted marketing cookies (CookieConsent loads it then), so
+      // guard for it. This is the conversion signal Meta optimises ad
+      // delivery toward; Ads Manager attributes it to the campaign/ad via
+      // the landing URL's UTM params.
+      if (typeof window !== 'undefined' && typeof window.fbq === 'function') {
+        window.fbq('track', 'Lead')
+      }
       setStatus('done')
     } catch {
       setError('Something went wrong. Please try again.')

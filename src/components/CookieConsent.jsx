@@ -28,7 +28,7 @@ const EXPIRY_DAYS = 180
 
 // ---- Replace these with your real tag IDs ----
 const GA_MEASUREMENT_ID = 'G-XXXXXXXXXX'
-const META_PIXEL_ID = 'XXXXXXXXXXXXXXX'
+const META_PIXEL_ID = '1866914428028977' // UN1T Web dataset (Meta Pixel)
 const TIKTOK_PIXEL_ID = 'XXXXXXXXXXXXXXXXXXXX'
 const GOOGLE_ADS_ID = 'AW-XXXXXXXXX'
 
@@ -153,9 +153,16 @@ export default function CookieConsent() {
   const [marketing, setMarketing] = useState(false)
 
   useEffect(() => {
-    // Host-scope: never render on the ccfautos brand.
+    // Host-scope: the cookie banner + advertising pixels are a PUBLIC
+    // MARKETING SITE concern only. Activate solely on the apex marketing
+    // host (un1tdublin.com / www) — never on the authenticated CRM
+    // (crm.un1tdublin.com, the default host), the ccfautos dealership
+    // brand (pay.ccfautos.com), or Vercel preview hosts. This keeps the
+    // Meta/Google/TikTok pixels off the staff CRM, matching the /privacy
+    // statement that the CRM uses no advertising identifiers.
     const host = window.location.hostname || ''
-    if (host.includes('ccfautos')) return
+    const isMarketingSite = host === 'un1tdublin.com' || host === 'www.un1tdublin.com'
+    if (!isMarketingSite) return
 
     const existing = readConsent()
     if (existing && Date.now() - (existing.ts || 0) < EXPIRY_DAYS * 24 * 60 * 60 * 1000) {
