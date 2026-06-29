@@ -23,6 +23,7 @@ import {
   permissionsSchema, audienceFilterSchema,
   passwordSchema,
 } from './schemas.js'
+import { LeadSchema } from './leads.js'
 
 // Wire .openapi() onto Zod so we can decorate inline-defined schemas.
 extendZodWithOpenApi(z)
@@ -229,6 +230,300 @@ registry.registerPath({
     400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Slot no longer available', content: { 'application/json': { schema: ErrorResponse } } },
     429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// Public surface — anonymous, no security
+// ============================================================================
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/leads',
+  tags: ['Public'],
+  summary: 'Public waitlist / lead capture',
+  description: 'Anonymous. Rate-limited to 8 requests per IP per 15 min. Studio resolved server-side from publicPath — caller cannot target an arbitrary location.',
+  request: { body: { content: { 'application/json': { schema: LeadSchema } } } },
+  responses: {
+    200: { description: 'Lead captured' },
+    400: { description: 'Validation failed or studio not accepting sign-ups', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/branding',
+  tags: ['Public'],
+  summary: 'Branding config for a location by publicPath',
+  description: 'Anonymous. Returns company_settings branding for the location resolved from the publicPath query param.',
+  request: { query: z.object({ publicPath: z.string().optional() }) },
+  responses: {
+    200: { description: 'Branding config', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BrandingResponse') } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/bookings/{slug}',
+  tags: ['Public'],
+  summary: 'Booking page config for a slug',
+  request: { params: z.object({ slug: z.string() }) },
+  responses: {
+    200: { description: 'Booking page config', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BookingPageConfig') } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/bookings/{slug}/slots',
+  tags: ['Public'],
+  summary: 'Available slots for a booking page',
+  request: {
+    params: z.object({ slug: z.string() }),
+    query: z.object({ date: isoDate.optional() }),
+  },
+  responses: {
+    200: { description: 'Available slots', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BookingSlotsResponse') } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/challenges/{locationId}',
+  tags: ['Public'],
+  summary: 'Public challenge board for a location',
+  request: { params: z.object({ locationId: uuidLike }) },
+  responses: {
+    200: { description: 'Challenge board', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicChallengesResponse') } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/events/{slug}',
+  tags: ['Public'],
+  summary: 'Event detail for a public event slug',
+  request: { params: z.object({ slug: z.string() }) },
+  responses: {
+    200: { description: 'Event detail', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEventDetail') } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/events/{slug}/register',
+  tags: ['Public'],
+  summary: 'Event signup — name, email, phone (+ team fields)',
+  request: {
+    params: z.object({ slug: z.string() }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            name: z.string().min(1).max(200),
+            email: email,
+            phone: z.string().max(50).optional(),
+            team_name: z.string().max(200).optional(),
+          }).openapi('EventRegisterBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Registration confirmed' },
+    400: { description: 'Validation failed or registration closed', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/events/{slug}/check-member',
+  tags: ['Public'],
+  summary: 'Membership check before registering for an event',
+  request: {
+    params: z.object({ slug: z.string() }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ email: email }).openapi('EventCheckMemberBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Membership status', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventCheckMemberResponse') } } },
+    404: { description: 'Event not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/events/{slug}/display',
+  tags: ['Public'],
+  summary: 'Public display feed for an event (TV / kiosk)',
+  request: { params: z.object({ slug: z.string() }) },
+  responses: {
+    200: { description: 'Display feed', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventDisplayFeed') } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/events/checkin-qr',
+  tags: ['Public'],
+  summary: 'QR payload/image for event check-in; query = signed token',
+  request: { query: z.object({ token: z.string() }) },
+  responses: {
+    200: { description: 'QR payload or image' },
+    400: { description: 'Invalid or expired token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/event-payments/{id}',
+  tags: ['Public'],
+  summary: 'Payment status for an event payment',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Payment status', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventPaymentStatus') } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/event-registrations/{id}',
+  tags: ['Public'],
+  summary: 'Registration status for an event registration',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Registration status', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventRegistrationStatus') } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/races/{slug}/register',
+  tags: ['Public'],
+  summary: 'Race signup',
+  request: {
+    params: z.object({ slug: z.string() }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({}).passthrough().openapi('RaceRegisterBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Registration confirmed' },
+    400: { description: 'Validation failed or registration closed', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Race not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/deposit/{token}',
+  tags: ['Public'],
+  summary: 'Deposit request detail by token',
+  request: { params: z.object({ token: z.string() }) },
+  responses: {
+    200: { description: 'Deposit request detail', content: { 'application/json': { schema: z.object({}).passthrough().openapi('DepositRequestDetail') } } },
+    404: { description: 'Not found or expired', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/deposit/{token}/accept-and-pay',
+  tags: ['Public'],
+  summary: 'Accept and pay a deposit request',
+  request: {
+    params: z.object({ token: z.string() }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({}).passthrough().openapi('DepositAcceptBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Payment initiated or confirmed' },
+    400: { description: 'Validation failed or deposit already paid', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found or expired', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/live/{locationId}',
+  tags: ['Public'],
+  summary: 'Public live / TV state feed for a location',
+  request: { params: z.object({ locationId: uuidLike }) },
+  responses: {
+    200: { description: 'Live state', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicLiveState') } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/tv/{token}/content',
+  tags: ['Public'],
+  summary: 'TV content for a paired display',
+  request: { params: z.object({ token: z.string() }) },
+  responses: {
+    200: { description: 'TV content', content: { 'application/json': { schema: z.object({}).passthrough().openapi('TvContent') } } },
+    404: { description: 'Token not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/presentations/{token}/state',
+  tags: ['Public'],
+  summary: 'Slideshow state for a presenter token',
+  request: { params: z.object({ token: z.string() }) },
+  responses: {
+    200: { description: 'Presentation state', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PresentationState') } } },
+    404: { description: 'Token not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/bca/{token}/merged',
+  tags: ['Public'],
+  summary: 'Merged BCA document by token',
+  request: { params: z.object({ token: z.string() }) },
+  responses: {
+    200: { description: 'Merged BCA doc' },
+    404: { description: 'Token not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/bca/{token}/file/{slug}',
+  tags: ['Public'],
+  summary: 'BCA file by token and slug',
+  request: { params: z.object({ token: z.string(), slug: z.string() }) },
+  responses: {
+    200: { description: 'BCA file' },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

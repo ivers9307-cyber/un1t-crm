@@ -68,6 +68,20 @@ describe('getOpenApiSpec', () => {
     expect(() => JSON.stringify(spec)).not.toThrow()
   })
 
+  it('documents the public surface anonymously', () => {
+    for (const p of [
+      '/api/public/leads',
+      '/api/public/branding',
+      '/api/public/events/{slug}/register',
+      '/api/public/bookings/{slug}/slots',
+    ]) {
+      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
+    }
+    const op = spec.paths['/api/public/leads'].post
+    expect(op.security ?? []).toHaveLength(0)
+    expect(op.tags).toContain('Public')
+  })
+
   it('declares webhook + bridge auth schemes', () => {
     const s = spec.components.securitySchemes
     expect(s).toHaveProperty('GlofoxHmac')
