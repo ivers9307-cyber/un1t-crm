@@ -527,6 +527,290 @@ registry.registerPath({
   },
 })
 
+// ============================================================================
+// Webhooks (Inbound) — provider-auth, externally-owned payloads
+// ============================================================================
+
+const GlofoxEvent = z.object({}).passthrough().openapi('GlofoxWebhookEvent', {
+  description: 'Glofox booking/membership/member/access event. branchId resolves the location; event_id dedupes retried deliveries.',
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/glofox',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ GlofoxHmac: [] }],
+  summary: 'Inbound Glofox events',
+  description: 'Glofox → CRM. HMAC-SHA256 verified against the per-location webhook secret (resolved by branchId). Idempotent via glofox_webhook_events.event_id.',
+  request: { body: { content: { 'application/json': { schema: GlofoxEvent } } } },
+  responses: {
+    200: { description: 'Accepted (and processed unless dark-launched)' },
+    401: { description: 'Bad / missing signature', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/postmark',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Postmark delivery/bounce/open events',
+  description: 'Postmark → CRM. Payload is a Postmark delivery/bounce/open/spam event.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('PostmarkWebhookEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/inbody',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'InBody body-scan results',
+  description: 'InBody → CRM. Carries a body composition scan result. Auth verified via shared token.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('InBodyWebhookEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/webhooks/instagram',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ MetaSignature: [] }],
+  summary: 'Instagram webhook verification handshake',
+  description: 'Meta hub.challenge verification — echoes hub.challenge when hub.verify_token matches.',
+  responses: {
+    200: { description: 'Challenge echoed' },
+    403: { description: 'Verify token mismatch' },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/instagram',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ MetaSignature: [] }],
+  summary: 'Instagram DM/comment events',
+  description: 'Meta → CRM. X-Hub-Signature-256 verified. Carries Instagram DM or comment events.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('InstagramWebhookEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/webhooks/whatsapp',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ MetaSignature: [] }],
+  summary: 'WhatsApp webhook verification handshake',
+  description: 'Meta hub.challenge verification — echoes hub.challenge when hub.verify_token matches.',
+  responses: {
+    200: { description: 'Challenge echoed' },
+    403: { description: 'Verify token mismatch' },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/whatsapp',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ MetaSignature: [] }],
+  summary: 'WhatsApp message/status events',
+  description: 'Meta → CRM. X-Hub-Signature-256 verified. Carries incoming WA messages and delivery status updates.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('WhatsAppWebhookEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/webhooks/strava',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Strava subscription validation',
+  description: 'Strava → CRM. GET echoes hub.challenge to validate the webhook subscription.',
+  responses: {
+    200: { description: 'Challenge echoed' },
+    403: { description: 'Verify token mismatch' },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/strava',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Strava activity events',
+  description: 'Strava → CRM. Carries activity create/update/delete events.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('StravaWebhookEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/webhooks/xero',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Xero intent-to-receive verification',
+  description: 'Xero → CRM. GET is used by Xero to verify the webhook endpoint.',
+  responses: {
+    200: { description: 'OK' },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/xero',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Xero accounting events',
+  description: 'Xero → CRM. Carries accounting events (invoices, contacts, payments).',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('XeroWebhookEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/webhooks/revolut',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Revolut webhook verification',
+  description: 'Revolut → CRM. GET verification request.',
+  responses: {
+    200: { description: 'OK' },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/revolut',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Revolut payment events',
+  description: 'Revolut Merchant → CRM. Carries payment success/failure events.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('RevolutWebhookEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/webhooks/revolut/race-payments',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Revolut race-payments webhook verification',
+  description: 'Revolut → CRM. GET verification request for the race-payments webhook endpoint.',
+  responses: {
+    200: { description: 'OK' },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/revolut/race-payments',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Revolut race deposit payment events',
+  description: 'Revolut Merchant → CRM. Separate webhook endpoint for race deposit payment events.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('RevolutRacePaymentEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/twilio/status',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Twilio SMS delivery status',
+  description: 'Twilio → CRM. Carries SMS delivery status callbacks (delivered/failed/undelivered).',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('TwilioStatusEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/unifi-access',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'UniFi Access door events',
+  description: 'UniFi Access → CRM. Carries door open/close and access events.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('UnifiAccessEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/unifi-protect',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'UniFi Protect events',
+  description: 'UniFi Protect → CRM. Carries camera/NVR events.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('UnifiProtectEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/invoices-inbound/{token}',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Tokenised inbound invoice email/forward',
+  description: 'Inbound invoice receiver. Token in path authenticates the request (no static secret). Accepts email-forwarded invoices.',
+  request: {
+    params: z.object({ token: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('InboundInvoiceEvent') } } },
+  },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Invalid token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/sequence/{token}',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Tokenised sequence callback',
+  description: 'Sequence event callback. Token in path authenticates the delivery; carries step completion or external event data.',
+  request: {
+    params: z.object({ token: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('SequenceCallbackEvent') } } },
+  },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Invalid token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Contacts (Bearer auth — used by n8n)
 registry.registerPath({
   method: 'get',

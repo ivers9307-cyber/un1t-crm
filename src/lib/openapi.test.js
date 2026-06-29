@@ -82,6 +82,17 @@ describe('getOpenApiSpec', () => {
     expect(op.tags).toContain('Public')
   })
 
+  it('documents inbound webhooks with provider auth', () => {
+    for (const p of ['/api/webhooks/glofox', '/api/webhooks/whatsapp', '/api/webhooks/postmark', '/api/webhooks/twilio/status']) {
+      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
+    }
+    const glofox = spec.paths['/api/webhooks/glofox'].post
+    expect(glofox.tags).toContain('Webhooks (Inbound)')
+    expect(glofox.security).toContainEqual({ GlofoxHmac: [] })
+    // Not gated by the browser/integration schemes:
+    expect(glofox.security).not.toContainEqual({ CookieAuth: [] })
+  })
+
   it('declares webhook + bridge auth schemes', () => {
     const s = spec.components.securitySchemes
     expect(s).toHaveProperty('GlofoxHmac')
