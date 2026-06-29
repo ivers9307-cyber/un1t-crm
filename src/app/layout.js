@@ -1,6 +1,7 @@
 import './globals.css'
 import AppShellServer from '@/components/AppShellServer'
 import StudioLockOverlay from '@/components/StudioLockOverlay'
+import CookieConsent from '@/components/CookieConsent'
 
 // PERF.3 — Vercel SpeedInsights + Analytics are now mounted inside
 // AppShell's authenticated branch (not at the root layout). Pre-auth
@@ -71,6 +72,10 @@ export default function RootLayout({ children }) {
             studio_device_token in localStorage). Safe to mount at
             the root; regular browser users see nothing. */}
         <StudioLockOverlay />
+        {/* GDPR cookie consent + advertising pixels. Self-scopes to the
+            public marketing host (un1tdublin.com); renders nothing on the
+            CRM, ccfautos, or preview hosts. Safe to mount at the root. */}
+        <CookieConsent />
       </body>
     </html>
   )
