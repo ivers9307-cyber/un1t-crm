@@ -8,18 +8,18 @@ vi.mock('@/lib/glofox', () => ({
 }))
 vi.mock('@/lib/glofox-sync', () => ({ computeCreditsRemaining: vi.fn(() => 3) }))
 vi.mock('@/lib/glofox-push', () => ({ findOrCreateGlofoxMember: vi.fn(async () => ({ status: 'created', glofox_member_id: 'gm1' })) }))
-vi.mock('@/lib/automations/booking-whatsapp-confirm', () => ({ maybeSendBookingWhatsappConfirm: vi.fn(async () => ({ sent: true })) }))
+vi.mock('@/lib/automations/booking-whatsapp-confirm', () => ({ maybeSendBookingWhatsappConfirm: vi.fn(async () => ({ sent: true })), CLASS_CONFIRM_TEMPLATE: 'booking_class_confirmed_' }))
 
 import { processClassBookingRequest } from './class-booking-processor'
 import { createBooking } from '@/lib/glofox'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
-import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
+import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
 
 function makeDb(contact) {
   const api = {
     from() { return this },
-    select() { return this }, eq() { return this }, is() { return this },
+    select() { return this }, eq() { return this }, is() { return this }, contains() { return this }, limit() { return this },
     maybeSingle: async () => ({ data: contact }),
     update() { return { eq: () => ({ is: async () => ({}) }) } },
     insert() { return { select: () => ({ maybeSingle: async () => ({ data: { id: 'amr1' } }), single: async () => ({ data: { id: 'amr1' } }) }) } },
@@ -39,7 +39,9 @@ describe('processClassBookingRequest', () => {
     const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: null, last_attended_at: null }), req)
     expect(r.outcome).toBe('booked')
     expect(createBooking).toHaveBeenCalled()
-    expect(maybeSendBookingWhatsappConfirm).toHaveBeenCalled()
+    // Must use the shared template constant (matching the live APPROVED name),
+    // not a hardcoded literal — guards the trailing-underscore typo from regressing.
+    expect(maybeSendBookingWhatsappConfirm).toHaveBeenCalledWith(expect.objectContaining({ templateName: CLASS_CONFIRM_TEMPLATE }))
   })
   it('booking failure → review', async () => {
     createBooking.mockResolvedValueOnce({ ok: false, status: 400, body: { message_code: 'EVENT_FULL' } })

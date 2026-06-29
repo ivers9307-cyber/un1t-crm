@@ -127,7 +127,7 @@ export default function StartFunnel() {
     return (
       <div className="max-w-md mx-auto px-6 py-16 text-center">
         <p className="font-display font-extrabold uppercase text-3xl text-white mb-3">You&apos;re booked 🎉</p>
-        <p className="text-white/70">We&apos;ve sent a WhatsApp confirming your consultation. See you at UN1T Stillorgan!</p>
+        <p className="text-white/70">You&apos;ll get a WhatsApp confirming your consultation if we have your number. See you at UN1T Stillorgan!</p>
       </div>
     )
   }

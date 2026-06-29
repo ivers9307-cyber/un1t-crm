@@ -5,7 +5,7 @@
 import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, fetchUserCredits, GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
-import { maybeSendBookingWhatsappConfirm } from '@/lib/automations/booking-whatsapp-confirm'
+import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
 import { logWarn } from '@/lib/log'
 
 const labelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
@@ -14,18 +14,40 @@ function classLabel(startsAt) {
   const d = new Date(startsAt)
   return isNaN(d.getTime()) ? 'your class' : labelFmt.format(d)
 }
+const MAX_ATTEMPTS = 3 // keep in sync with the process-class-bookings cron
+
 async function setStatus(db, id, fields) {
   try { await db.from('class_booking_requests').update(fields).eq('id', id) } catch (e) { logWarn('cbp', 'status update failed', { err: e }) }
 }
 async function routeToReview(db, request, reason) {
   let approvalId = null
+  // Reuse an existing pending review item for this (contact, class) so a
+  // re-submit/retry can't create a duplicate that staff approve twice.
   try {
-    const { data: amr } = await db.from('agent_membership_requests').insert({
-      location_id: request.location_id, contact_id: request.contact_id, kind: 'class_booking', status: 'pending',
-      details: { event_id: request.glofox_event_id, class_name: request.class_name, class_time: classLabel(request.starts_at), mode: 'draft', source: 'start_funnel', reason },
-    }).select('id').maybeSingle()
-    approvalId = amr?.id || null
-  } catch (e) { logWarn('cbp', 'review insert failed', { err: e }) }
+    const { data: existing } = await db.from('agent_membership_requests')
+      .select('id').eq('contact_id', request.contact_id).eq('kind', 'class_booking').eq('status', 'pending')
+      .contains('details', { event_id: request.glofox_event_id }).limit(1).maybeSingle()
+    approvalId = existing?.id || null
+  } catch (e) { logWarn('cbp', 'review lookup failed', { err: e }) }
+
+  if (!approvalId) {
+    try {
+      const { data: amr } = await db.from('agent_membership_requests').insert({
+        location_id: request.location_id, contact_id: request.contact_id, kind: 'class_booking', status: 'pending',
+        details: { event_id: request.glofox_event_id, class_name: request.class_name, class_time: classLabel(request.starts_at), mode: 'draft', source: 'start_funnel', reason },
+      }).select('id').maybeSingle()
+      approvalId = amr?.id || null
+    } catch (e) { logWarn('cbp', 'review insert failed', { err: e }) }
+  }
+
+  if (!approvalId) {
+    // Couldn't create OR find a review item — don't strand the row in
+    // needs_review with no approval to act on (a silent dead-end). Retry under
+    // the attempt cap, else mark failed so an operator query surfaces it.
+    const next = (request.attempts || 0) + 1 >= MAX_ATTEMPTS ? 'failed' : 'queued'
+    await setStatus(db, request.id, { status: next, last_error: `review_unavailable:${reason}` })
+    return { outcome: next === 'failed' ? 'failed' : 'needs_review', detail: `review_unavailable:${reason}` }
+  }
   await setStatus(db, request.id, { status: 'needs_review', last_error: reason, approval_request_id: approvalId })
   return { outcome: 'needs_review', detail: reason }
 }
@@ -84,7 +106,7 @@ export async function processClassBookingRequest(db, request) {
   const glofoxBookingId = result?.body?.id || result?.body?._id || result?.body?.booking_id || result?.body?.data?.id || null
   await setStatus(db, request.id, { status: 'booked', last_error: null, glofox_booking_id: glofoxBookingId })
   try {
-    await maybeSendBookingWhatsappConfirm({ db, locationId: request.location_id, contact, templateName: 'booking_class_confirmed', bodyParams: [firstName, request.class_name || 'your class', classLabel(request.starts_at)] })
+    await maybeSendBookingWhatsappConfirm({ db, locationId: request.location_id, contact, templateName: CLASS_CONFIRM_TEMPLATE, bodyParams: [firstName, request.class_name || 'your class', classLabel(request.starts_at)] })
   } catch (e) { logWarn('cbp', 'class confirm failed', { err: e }) }
   return { outcome: 'booked' }
 }

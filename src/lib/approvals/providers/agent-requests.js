@@ -8,15 +8,19 @@
 // Auto-mode bookings and consultations are written as already
 // actioned/failed (audit trail) and never appear here.
 //
-// Scope mirrors the issues provider: owner + master at the active
-// location act on customer-agent requests.
+// Visibility matches the role set the PATCH /api/agent/membership-requests/[id]
+// route accepts to ACT on these requests (MANAGER_ROLES) — otherwise managers /
+// head_coaches who are authorised to approve get no badge/count/Today-feed for
+// time-sensitive class-booking reviews and have to know to visit the buried
+// /settings/customer-agent/requests page.
 
 import {
   canApproveAtActiveLocation,
   viewerActiveLocationId,
 } from '../registry'
+import { MANAGER_ROLES } from '@/lib/schemas'
 
-const HANDLER_ROLES = ['owner']
+const HANDLER_ROLES = MANAGER_ROLES
 
 const KIND_LABELS = {
   pause: 'Pause membership',
