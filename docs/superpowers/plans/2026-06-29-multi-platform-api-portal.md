@@ -691,7 +691,7 @@ function buildSpec() {
     },
     servers: [
       { url: 'https://app.champfitness.ie', description: 'Production' },
-      { url: 'http://localhost:8081', description: 'Local dev' },
+      { url: 'http://localhost:3001', description: 'Local dev' },
     ],
   })
 }
@@ -701,7 +701,7 @@ export async function getOpenApiSpec() {
 }
 ```
 
-(Verify the dev `server` URL/port against champ-app's web dev script; adjust if not 8081.)
+(champ-app's web dev script is `next dev -p 3001`, so local dev is `http://localhost:3001`.)
 
 - [ ] **Step 4: Run test, verify pass**
 
@@ -812,10 +812,10 @@ const PUBLIC_PATHS = ['/login', '/auth/callback', '/share', '/api/oauth', '/api/
 - [ ] **Step 3: Verify the spec is reachable unauthenticated** — start the champ-app web dev server and curl it:
 
 ```bash
-npm run dev &   # or the repo's web dev script
-sleep 5
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8081/api/openapi.json   # expect 200, not 401
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8081/api/social/feed     # expect 401 (still gated)
+npm run dev &   # champ-app web dev = `next dev -p 3001`
+sleep 6
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3001/api/openapi.json   # expect 200, not 401
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3001/api/social/feed     # expect 401 (still gated)
 ```
 
 Expected: `/api/openapi.json` → 200; a normal member route → 401. Stop the dev server afterward.
