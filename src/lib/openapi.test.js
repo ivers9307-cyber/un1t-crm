@@ -67,4 +67,12 @@ describe('getOpenApiSpec', () => {
   it('serialises to valid JSON without circular refs', () => {
     expect(() => JSON.stringify(spec)).not.toThrow()
   })
+
+  it('declares webhook + bridge auth schemes', () => {
+    const s = spec.components.securitySchemes
+    expect(s).toHaveProperty('GlofoxHmac')
+    expect(s).toHaveProperty('MetaSignature')
+    expect(s).toHaveProperty('WebhookToken')
+    expect(s).toHaveProperty('BridgeAuth')
+  })
 })

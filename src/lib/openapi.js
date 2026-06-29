@@ -195,6 +195,22 @@ registry.registerComponent('securitySchemes', 'CookieAuth', {
   name: 'sb-access-token',
   description: 'Supabase session cookie set after browser login.',
 })
+registry.registerComponent('securitySchemes', 'GlofoxHmac', {
+  type: 'apiKey', in: 'header', name: 'X-Glofox-Signature',
+  description: 'HMAC-SHA256 of the raw body, keyed by the per-location webhook secret. Verified in src/lib/glofox.js verifyGlofoxSignature.',
+})
+registry.registerComponent('securitySchemes', 'MetaSignature', {
+  type: 'apiKey', in: 'header', name: 'X-Hub-Signature-256',
+  description: 'Meta webhook signature. GET handshake echoes hub.challenge; POST carries X-Hub-Signature-256 over the raw body.',
+})
+registry.registerComponent('securitySchemes', 'WebhookToken', {
+  type: 'apiKey', in: 'header', name: 'Authorization',
+  description: 'Provider-specific shared secret or signature header (Postmark/Twilio/Revolut/Xero/Strava/InBody/UniFi), or a path token for tokenised receivers.',
+})
+registry.registerComponent('securitySchemes', 'BridgeAuth', {
+  type: 'http', scheme: 'bearer',
+  description: 'Per-bridge device token. Verified in src/lib/bridge-auth.js verifyBridgeToken.',
+})
 
 // ============================================================================
 // Path registrations — high-traffic / external-facing routes
