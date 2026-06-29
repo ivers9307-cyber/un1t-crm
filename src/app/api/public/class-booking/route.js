@@ -58,7 +58,9 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'That class is no longer available — please pick another.' }, { status: 400 })
   }
 
-  const contactId = await findOrCreateRaceContact({ db, locationId, email: b.email.toLowerCase(), name, phone: b.phone })
+  // restrictToLocation: a public form must not resolve (and then enqueue a Glofox
+  // booking / write consent against) an existing contact at another location.
+  const contactId = await findOrCreateRaceContact({ db, locationId, email: b.email.toLowerCase(), name, phone: b.phone, restrictToLocation: true })
   if (!contactId) return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
 
   try { await db.from('contacts').update({ lead_source: 'meta_book' }).eq('id', contactId).is('lead_source', null) } catch (e) { logWarn('classbook', 'lead_source failed', { err: e }) }

@@ -58,7 +58,9 @@ export async function POST(request) {
   }
 
   // Find-or-create the contact at this studio (shared public-form helper).
-  const contactId = await findOrCreateRaceContact({ db, locationId, email, name: firstName, phone })
+  // restrictToLocation: a public form must not resolve (and then write consent/
+  // a deal against) an existing contact at another location from a bare email.
+  const contactId = await findOrCreateRaceContact({ db, locationId, email, name: firstName, phone, restrictToLocation: true })
   if (!contactId) {
     return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
   }
