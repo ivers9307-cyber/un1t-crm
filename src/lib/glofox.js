@@ -843,6 +843,11 @@ export async function purchaseGlofoxMembership(creds, userId, membershipId, plan
   try {
     const r = await glofoxFetch(creds, path, {
       method: 'POST',
+      // Declare the JSON body's content-type (as createBooking/register do).
+      // The trial purchase is the next call after register in the booking flow;
+      // the body is empty today, but set it so Glofox can't ignore a body we
+      // later add — the exact class of bug that broke registration.
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(opts.body || {}),
     })
     let parsed
