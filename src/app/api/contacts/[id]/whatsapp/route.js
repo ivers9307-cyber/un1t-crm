@@ -32,6 +32,7 @@ import {
   isSendableUtilityTemplate,
   buildBodyComponents,
 } from '@/lib/radar-outreach'
+import { manualTakeoverPatch } from '@/lib/agent/core'
 
 export const runtime = 'nodejs'
 
@@ -92,7 +93,7 @@ export async function POST(request, props) {
   let conversation = null
   const { data: existing } = await db
     .from('whatsapp_conversations')
-    .select('id, window_expires_at, location_id')
+    .select('id, window_expires_at, location_id, agent_handed_off_at')
     .eq('contact_id', contactId)
     .order('last_message_at', { ascending: false, nullsFirst: false })
     .limit(1)
@@ -107,7 +108,7 @@ export async function POST(request, props) {
         wa_phone: waPhone,
         status: 'active',
       })
-      .select('id, window_expires_at, location_id')
+      .select('id, window_expires_at, location_id, agent_handed_off_at')
       .single()
     if (created) {
       conversation = created
@@ -115,7 +116,7 @@ export async function POST(request, props) {
       // Unique-constraint race on wa_phone — adopt the existing row.
       const { data: byPhone } = await db
         .from('whatsapp_conversations')
-        .select('id, window_expires_at, location_id')
+        .select('id, window_expires_at, location_id, agent_handed_off_at')
         .eq('wa_phone', waPhone)
         .eq('location_id', contact.location_id)
         .limit(1)
@@ -197,10 +198,13 @@ export async function POST(request, props) {
     sent_by: user.full_name || null,
     sent_at: nowIso,
   })
+  // Manual operator send = intentional human take-over → pause Mia in this
+  // thread (auto re-arms after the cooldown / on resolve). Same as the inbox.
   await db.from('whatsapp_conversations').update({
     last_message_at: nowIso,
     last_message_direction: 'outbound',
     last_message_preview: messageBody?.substring(0, 100),
+    ...manualTakeoverPatch(conversation.agent_handed_off_at),
   }).eq('id', conversation.id)
   // Timeline activity — mirrors the ad-hoc SMS surface so the
   // contact's timeline shows the send. Best-effort: the message is
