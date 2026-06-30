@@ -15,6 +15,7 @@ import {
   resolveActingContactId,
   isHandoffExpired,
   resolveRearmPatch,
+  manualTakeoverPatch,
   resolveAgentEffort,
 } from './core'
 import { HANDOFF_PREFIX, OPTIONS_PREFIX } from './prompt'
@@ -283,6 +284,28 @@ describe('resolveRearmPatch', () => {
   })
   it('does nothing when un-resolving', () => {
     expect(resolveRearmPatch({ resolved: false, agent_handed_off_at: '2026-06-12T17:24:11Z' })).toEqual({})
+  })
+})
+
+describe('manualTakeoverPatch', () => {
+  it('pauses the agent and stamps now when the thread was never handed off', () => {
+    const now = new Date('2026-06-30T10:00:00Z')
+    expect(manualTakeoverPatch(null, now)).toEqual({
+      agent_active: false,
+      agent_handed_off_at: '2026-06-30T10:00:00.000Z',
+    })
+  })
+  it('preserves an existing handoff timestamp (so re-arm is not pushed out per message)', () => {
+    const now = new Date('2026-06-30T10:00:00Z')
+    expect(manualTakeoverPatch('2026-06-30T08:00:00Z', now)).toEqual({
+      agent_active: false,
+      agent_handed_off_at: '2026-06-30T08:00:00Z',
+    })
+  })
+  it('always pauses (agent_active=false) and never stamps null — so it auto-re-arms, not permanent-off', () => {
+    const patch = manualTakeoverPatch(undefined, new Date('2026-06-30T10:00:00Z'))
+    expect(patch.agent_active).toBe(false)
+    expect(patch.agent_handed_off_at).toBeTruthy()
   })
 })
 

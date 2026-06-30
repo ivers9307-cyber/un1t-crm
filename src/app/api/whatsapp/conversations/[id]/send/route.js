@@ -5,6 +5,7 @@ import { sendTextMessage, sendTemplateMessage, sendMediaMessage, isWindowOpen, s
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { url } from '@/lib/schemas'
+import { manualTakeoverPatch } from '@/lib/agent/core'
 
 const SendMessageSchema = z.object({
   type: z.enum(['text', 'template', 'image', 'video', 'document', 'audio']).optional(),
@@ -146,11 +147,16 @@ export async function POST(request, props) {
       sent_at: new Date().toISOString(),
     })
 
-    // Update conversation
+    // Update conversation. Sending as a human is an intentional TAKE-OVER —
+    // stop Mia auto-replying in this thread (mirrors the Instagram send route;
+    // core.js's agent_active gate). Staff stay in control; the agent re-arms
+    // after handoff_cooldown_hours of quiet, or instantly when the thread is
+    // resolved.
     await db.from('whatsapp_conversations').update({
       last_message_at: new Date().toISOString(),
       last_message_direction: 'outbound',
       last_message_preview: messageBody?.substring(0, 100),
+      ...manualTakeoverPatch(conversation.agent_handed_off_at),
     }).eq('id', params.id)
 
     return NextResponse.json({ success: true, messageId: result.messageId })

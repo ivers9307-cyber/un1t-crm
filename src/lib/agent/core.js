@@ -118,6 +118,23 @@ export function resolveRearmPatch({ resolved, agent_handed_off_at } = {}) {
   return {}
 }
 
+/**
+ * Conversation-patch when an operator sends a MANUAL message: that's an
+ * intentional human take-over, so the auto-responder must stop replying in
+ * this thread (shouldAgentReply skips when agent_active === false). Stamps a
+ * handoff timestamp so it AUTO-RE-ARMS after handoff_cooldown_hours of quiet
+ * (and resolving the thread re-arms instantly) — preserving an existing stamp
+ * so a back-and-forth manual exchange doesn't keep pushing the re-arm out.
+ * Pure — used by the WhatsApp + Instagram operator send routes. (A null stamp
+ * would mean a PERMANENT off, which we deliberately avoid here.)
+ */
+export function manualTakeoverPatch(existingHandoffAt, now = new Date()) {
+  return {
+    agent_active: false,
+    agent_handed_off_at: existingHandoffAt || now.toISOString(),
+  }
+}
+
 export function shouldAgentReply({ settings, conversation, message, senderPhone, now = new Date() }) {
   const s = settings || {}
   const enabled = !!s.enabled
