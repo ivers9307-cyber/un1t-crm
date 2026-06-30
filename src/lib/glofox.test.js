@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHmac } from 'node:crypto'
-import { verifyGlofoxSignature, parseGlofoxEvent, tagsForGlofoxEvent, generateGlofoxPasscode } from './glofox.js'
+import { verifyGlofoxSignature, parseGlofoxEvent, tagsForGlofoxEvent, generateGlofoxPasscode, purchaseGlofoxMembership } from './glofox.js'
 
 function sign(secret, body) {
   return createHmac('sha256', secret).update(body).digest('hex')
@@ -348,6 +348,15 @@ describe('registerGlofoxMember content-type', () => {
     expect(url).toContain('/2.0/register')
     expect(init.headers['Content-Type']).toBe('application/json')
     expect(JSON.parse(init.body)).toMatchObject({ first_name: 'Sam', last_name: 'Lee', email: 'sam@x.com' })
+  })
+
+  it('POSTs the membership purchase as application/json', async () => {
+    global.fetch.mockResolvedValueOnce(res(200, { ok: true }))
+    const out = await purchaseGlofoxMembership(creds, 'u1', 'm1', 'p1')
+    expect(out.ok).toBe(true)
+    const [url, init] = global.fetch.mock.calls[0]
+    expect(url).toContain('/purchase')
+    expect(init.headers['Content-Type']).toBe('application/json')
   })
 })
 
