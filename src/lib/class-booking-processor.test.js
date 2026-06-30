@@ -76,4 +76,9 @@ describe('processClassBookingRequest', () => {
     expect(r.outcome).toBe('needs_review')
     expect(createBooking).not.toHaveBeenCalled()
   })
+  it('Glofox "already booked" (reaper re-run) → booked, not review', async () => {
+    createBooking.mockResolvedValueOnce({ ok: false, status: 400, body: { message_code: 'YOU_HAVE_BOOKED_FOR_THIS_EVENT' } })
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
+    expect(r.outcome).toBe('booked')
+  })
 })

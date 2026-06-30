@@ -7,7 +7,7 @@ import { useState, useEffect } from 'react'
 // Approve, Decline, or (for cancellations) Save (retention kept them).
 // The actual Glofox change is made by staff after approving.
 
-const KIND_LABEL = { pause: 'Pause', cancellation: 'Cancellation' }
+const KIND_LABEL = { pause: 'Pause', cancellation: 'Cancellation', class_booking: 'Class booking', consultation: 'Consultation' }
 const STATUS_STYLE = {
   pending: 'bg-amber-100 text-amber-800',
   approved: 'bg-green-100 text-green-700',
@@ -27,6 +27,7 @@ export default function AgentRequestsPage() {
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState(null)
   const [error, setError] = useState(null)
+  const [focusId, setFocusId] = useState(null)
 
   async function load() {
     try {
@@ -37,6 +38,18 @@ export default function AgentRequestsPage() {
     finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
+
+  // Deep-link focus: /approvals links here with ?focus=<requestId>. Read it
+  // client-side (avoids a Suspense boundary) and scroll the row into view +
+  // highlight it once loaded, so a one-click jump lands on the right request.
+  useEffect(() => {
+    try { setFocusId(new URLSearchParams(window.location.search).get('focus')) } catch { /* no-op */ }
+  }, [])
+  useEffect(() => {
+    if (!focusId || loading) return
+    const el = document.getElementById(`agent-req-${focusId}`)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [focusId, loading, requests])
 
   async function decide(id, status) {
     setBusyId(id)
@@ -62,8 +75,9 @@ export default function AgentRequestsPage() {
     <div className="max-w-3xl">
       <h1 className="text-xl font-bold text-un1t-text mb-1">Agent Requests</h1>
       <p className="text-sm text-un1t-muted mb-6">
-        Pause &amp; cancellation requests captured by the customer agent. Review and decide —
-        the agent never changes a membership itself. After approving, make the change in Glofox.
+        Requests from the customer agent and booking flows. Review and decide — approving a
+        class booking completes it automatically; for pause/cancellation, make the change in
+        Glofox after approving.
       </p>
 
       {error && <div className="text-sm text-red-600 mb-4">{error}</div>}
@@ -76,7 +90,7 @@ export default function AgentRequestsPage() {
 
       <div className="space-y-3">
         {pending.map(r => (
-          <RequestCard key={r.id} r={r} busy={busyId === r.id} onDecide={decide} />
+          <RequestCard key={r.id} r={r} busy={busyId === r.id} onDecide={decide} focused={r.id === focusId} />
         ))}
       </div>
 
@@ -85,7 +99,7 @@ export default function AgentRequestsPage() {
           <h2 className="text-sm font-semibold text-un1t-subtle uppercase tracking-wider mt-8 mb-3">Decided</h2>
           <div className="space-y-2">
             {decided.map(r => (
-              <div key={r.id} className="flex items-center justify-between border border-un1t-border rounded-md px-4 py-2 text-sm">
+              <div key={r.id} id={`agent-req-${r.id}`} className={`flex items-center justify-between border rounded-md px-4 py-2 text-sm ${r.id === focusId ? 'border-un1t-text ring-2 ring-un1t-text/30' : 'border-un1t-border'}`}>
                 <span className="text-un1t-text">
                   {KIND_LABEL[r.kind] || r.kind} · {r.contacts?.name || r.contacts?.first_name || 'Unknown'}
                 </span>
@@ -99,12 +113,12 @@ export default function AgentRequestsPage() {
   )
 }
 
-function RequestCard({ r, busy, onDecide }) {
+function RequestCard({ r, busy, onDecide, focused = false }) {
   const name = r.contacts?.name || r.contacts?.first_name || 'Unknown member'
   const d = r.details || {}
   const isCancel = r.kind === 'cancellation'
   return (
-    <div className="border border-un1t-border rounded-lg p-4">
+    <div id={`agent-req-${r.id}`} className={`border rounded-lg p-4 ${focused ? 'border-un1t-text ring-2 ring-un1t-text/30' : 'border-un1t-border'}`}>
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <span className={`text-xs px-2 py-0.5 rounded-full ${isCancel ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'}`}>
@@ -122,8 +136,11 @@ function RequestCard({ r, busy, onDecide }) {
           <p>{d.start_date ? `From ${fmtDate(d.start_date)}` : ''}{d.end_date ? ` to ${fmtDate(d.end_date)}` : ''}</p>
         )}
         {isCancel && d.desired_date && <p>Requested date: {fmtDate(d.desired_date)}</p>}
+        {(r.kind === 'class_booking' || r.kind === 'consultation') && (d.class_name || d.class_time) && (
+          <p>{d.class_name || (r.kind === 'consultation' ? 'Consultation' : 'Class')}{d.class_time ? ` · ${d.class_time}` : ''}</p>
+        )}
         {d.reason && <p className="text-un1t-muted">Reason: “{d.reason}”</p>}
-        {!d.reason && !d.start_date && !d.end_date && !d.desired_date && (
+        {!d.reason && !d.start_date && !d.end_date && !d.desired_date && !d.class_name && !d.class_time && (
           <p className="text-un1t-muted">No further detail captured.</p>
         )}
       </div>

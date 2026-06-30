@@ -116,9 +116,13 @@ export async function processClassBookingRequest(db, request) {
   }
 
   const result = await createBooking(creds, { user_id: memberId, model: GLOFOX_BOOKING_MODEL, model_id: request.glofox_event_id })
-  if (!result?.ok) {
-    const code = result?.body?.message_code || result?.body?.message || `status_${result?.status}`
-    return routeToReview(db, request, `booking_failed:${code}`)
+  const code = result?.body?.message_code || result?.body?.message || null
+  // Glofox dedupes member+event server-side. A re-run (e.g. the reaper requeued
+  // a row whose first attempt booked but died before persisting) returns
+  // "already booked" — that's a SUCCESS, not a failure to push to staff review.
+  const alreadyBooked = code === 'YOU_HAVE_BOOKED_FOR_THIS_EVENT'
+  if (!result?.ok && !alreadyBooked) {
+    return routeToReview(db, request, `booking_failed:${code || `status_${result?.status}`}`)
   }
   // Persist the Glofox booking id (best-effort across response shapes) so re-runs
   // and the /approvals view can see the real booking.
