@@ -4,6 +4,7 @@ vi.mock('@/lib/glofox', () => ({
   missingGlofoxCredentialsForLocation: vi.fn(() => []),
   createBooking: vi.fn(async () => ({ ok: true, status: 200, body: {} })),
   fetchUserCredits: vi.fn(async () => [{ active: true, available: 3 }]),
+  fetchUserBookingsResult: vi.fn(async () => ({ ok: true, bookings: [] })),
   GLOFOX_BOOKING_MODEL: 'event',
 }))
 vi.mock('@/lib/glofox-sync', () => ({ computeCreditsRemaining: vi.fn(() => 3) }))
@@ -11,7 +12,7 @@ vi.mock('@/lib/glofox-push', () => ({ findOrCreateGlofoxMember: vi.fn(async () =
 vi.mock('@/lib/automations/booking-whatsapp-confirm', () => ({ maybeSendBookingWhatsappConfirm: vi.fn(async () => ({ sent: true })), CLASS_CONFIRM_TEMPLATE: 'booking_class_confirmed_' }))
 
 import { processClassBookingRequest } from './class-booking-processor'
-import { createBooking } from '@/lib/glofox'
+import { createBooking, fetchUserBookingsResult } from '@/lib/glofox'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
@@ -36,7 +37,9 @@ describe('processClassBookingRequest', () => {
     expect(createBooking).not.toHaveBeenCalled()
   })
   it('brand-new lead: creates account, books, confirms', async () => {
-    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: null, last_attended_at: null }), req)
+    // Search (createIfMissing:false) finds nobody → not in Glofox → clean create path.
+    findOrCreateGlofoxMember.mockResolvedValueOnce({ status: 'skipped', glofox_member_id: null })
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', last_name: 'Lee', phone: '0871234567', glofox_member_id: null, last_attended_at: null }), req)
     expect(r.outcome).toBe('booked')
     expect(createBooking).toHaveBeenCalled()
     // Must use the shared template constant (matching the live APPROVED name),
@@ -56,6 +59,19 @@ describe('processClassBookingRequest', () => {
   })
   it('existing account with no live credits → review (no fragile auto-purchase)', async () => {
     computeCreditsRemaining.mockReturnValueOnce(0)
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
+    expect(r.outcome).toBe('needs_review')
+    expect(createBooking).not.toHaveBeenCalled()
+  })
+  it('wide attendance check catches a repeat trainer with stale last_attended_at → review', async () => {
+    // last_attended_at is NULL (stale), but the live booking history shows a prior attended class.
+    fetchUserBookingsResult.mockResolvedValueOnce({ ok: true, bookings: [{ attended: true, time_start: 1700000000 }] })
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
+    expect(r.outcome).toBe('needs_review')
+    expect(createBooking).not.toHaveBeenCalled()
+  })
+  it('uncertain attendance read (Glofox error) → review, never books', async () => {
+    fetchUserBookingsResult.mockResolvedValueOnce({ ok: false, bookings: [] })
     const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
     expect(r.outcome).toBe('needs_review')
     expect(createBooking).not.toHaveBeenCalled()
