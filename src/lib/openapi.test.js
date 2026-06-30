@@ -16,7 +16,7 @@ describe('getOpenApiSpec', () => {
     expect(spec.info.version).toMatch(/^\d+\.\d+\.\d+$/)
   })
 
-  it('declares both auth schemes', () => {
+  it('declares the pre-existing browser/integration auth schemes', () => {
     expect(spec.components.securitySchemes).toHaveProperty('BearerAuth')
     expect(spec.components.securitySchemes).toHaveProperty('CookieAuth')
   })
@@ -55,6 +55,7 @@ describe('getOpenApiSpec', () => {
       'CampaignCreate',
       'ScheduledReport',
       'ErrorResponse',
+      'LeadCapture',
     ]) {
       expect(schemas, `missing schema: ${name}`).toHaveProperty(name)
     }
@@ -66,5 +67,58 @@ describe('getOpenApiSpec', () => {
 
   it('serialises to valid JSON without circular refs', () => {
     expect(() => JSON.stringify(spec)).not.toThrow()
+  })
+
+  it('documents the public surface anonymously', () => {
+    for (const p of [
+      '/api/public/leads',
+      '/api/public/branding',
+      '/api/public/events/{slug}/register',
+      '/api/public/bookings/{slug}/slots',
+    ]) {
+      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
+    }
+    const op = spec.paths['/api/public/leads'].post
+    expect(op.security ?? []).toHaveLength(0)
+    expect(op.tags).toContain('Public')
+  })
+
+  it('documents inbound webhooks with provider auth', () => {
+    for (const p of ['/api/webhooks/glofox', '/api/webhooks/whatsapp', '/api/webhooks/postmark', '/api/webhooks/twilio/status']) {
+      expect(spec.paths, `missing ${p}`).toHaveProperty(p)
+    }
+    const glofox = spec.paths['/api/webhooks/glofox'].post
+    expect(glofox.tags).toContain('Webhooks (Inbound)')
+    expect(glofox.security).toContainEqual({ GlofoxHmac: [] })
+    // Not gated by the browser/integration schemes:
+    expect(glofox.security).not.toContainEqual({ CookieAuth: [] })
+  })
+
+  it('documents the bridge device API', () => {
+    expect(spec.paths).toHaveProperty('/api/bridge/scan')
+    const op = spec.paths['/api/bridge/scan'].post
+    expect(op.tags).toContain('Bridge')
+    expect(op.security).toContainEqual({ BridgeAuth: [] })
+  })
+
+  it('documents the staff mobile API', () => {
+    expect(spec.paths).toHaveProperty('/api/mobile/today-feed')
+    const op = spec.paths['/api/mobile/today-feed'].get
+    expect(op.tags).toContain('Mobile')
+    expect(op.security).toContainEqual({ CookieAuth: [] })
+  })
+
+  it('includes an outbound webhooks stub', () => {
+    expect(spec).toHaveProperty('webhooks')
+    expect(spec.webhooks).toHaveProperty('lead.created')
+    expect(spec.webhooks['lead.created'].post.description).toMatch(/planned/i)
+  })
+
+  it('declares webhook + bridge auth schemes', () => {
+    const s = spec.components.securitySchemes
+    expect(s).toHaveProperty('GlofoxHmac')
+    expect(s).toHaveProperty('MetaSignature')
+    expect(s).toHaveProperty('WebhookToken')
+    expect(s).toHaveProperty('BridgeAuth')
   })
 })

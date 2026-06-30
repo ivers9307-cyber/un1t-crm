@@ -12,7 +12,7 @@ const HTML = `<!DOCTYPE html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>UN1T CRM — API Reference</title>
+    <title>UN1T — API Portal</title>
     <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
     <style>
       html, body { margin: 0; padding: 0; }
@@ -25,7 +25,11 @@ const HTML = `<!DOCTYPE html>
     <script>
       window.addEventListener('load', function () {
         window.ui = SwaggerUIBundle({
-          url: '/api/openapi.json',
+          urls: [
+            { url: '/api/openapi.json', name: 'UN1T CRM' },
+            { url: 'https://app.champfitness.ie/api/openapi.json', name: 'Champ App' },
+          ],
+          'urls.primaryName': 'UN1T CRM',
           dom_id: '#swagger-ui',
           deepLinking: true,
           presets: [SwaggerUIBundle.presets.apis],

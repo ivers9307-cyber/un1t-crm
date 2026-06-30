@@ -23,6 +23,7 @@ import {
   permissionsSchema, audienceFilterSchema,
   passwordSchema,
 } from './schemas.js'
+import { LeadSchema } from './leads.js'
 
 // Wire .openapi() onto Zod so we can decorate inline-defined schemas.
 extendZodWithOpenApi(z)
@@ -195,6 +196,22 @@ registry.registerComponent('securitySchemes', 'CookieAuth', {
   name: 'sb-access-token',
   description: 'Supabase session cookie set after browser login.',
 })
+registry.registerComponent('securitySchemes', 'GlofoxHmac', {
+  type: 'apiKey', in: 'header', name: 'X-Glofox-Signature',
+  description: 'HMAC-SHA256 of the raw body, keyed by the per-location webhook secret. Verified in src/lib/glofox.js verifyGlofoxSignature.',
+})
+registry.registerComponent('securitySchemes', 'MetaSignature', {
+  type: 'apiKey', in: 'header', name: 'X-Hub-Signature-256',
+  description: 'Meta webhook signature. GET handshake echoes hub.challenge; POST carries X-Hub-Signature-256 over the raw body.',
+})
+registry.registerComponent('securitySchemes', 'WebhookToken', {
+  type: 'apiKey', in: 'header', name: 'X-Webhook-Token',
+  description: 'Shared-secret / signature header. Postmark, UniFi and InBody use `X-Webhook-Token`; Twilio uses `X-Twilio-Signature`; Revolut uses `Revolut-Signature`; Xero uses `X-Xero-Signature`. Tokenised receivers (`invoices-inbound`, `sequence`) instead authenticate via the path token.',
+})
+registry.registerComponent('securitySchemes', 'BridgeAuth', {
+  type: 'http', scheme: 'bearer',
+  description: 'Per-bridge device token. Verified in src/lib/bridge-auth.js verifyBridgeToken.',
+})
 
 // ============================================================================
 // Path registrations — high-traffic / external-facing routes
@@ -213,6 +230,855 @@ registry.registerPath({
     400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Slot no longer available', content: { 'application/json': { schema: ErrorResponse } } },
     429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// Public surface — anonymous, no security
+// ============================================================================
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/leads',
+  tags: ['Public'],
+  summary: 'Public waitlist / lead capture',
+  description: 'Anonymous. Rate-limited to 8 requests per IP per 15 min. Studio resolved server-side from publicPath — caller cannot target an arbitrary location.',
+  // Re-derive via .extend({}) so the .openapi() decorator is present: LeadSchema
+  // is constructed in leads.js BEFORE extendZodWithOpenApi(z) runs here, so the
+  // raw export lacks .openapi (zod v4 adds it per-instance at construction time).
+  // .extend({}) yields an identical schema built under the extended z. leads.js untouched.
+  request: { body: { content: { 'application/json': { schema: LeadSchema.extend({}).openapi('LeadCapture') } } } },
+  responses: {
+    200: { description: 'Lead captured' },
+    400: { description: 'Validation failed or studio not accepting sign-ups', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/branding',
+  tags: ['Public'],
+  summary: 'Branding config for a location by publicPath',
+  description: 'Anonymous. Returns company_settings branding for the location resolved from the publicPath query param.',
+  request: { query: z.object({ publicPath: z.string().optional() }) },
+  responses: {
+    200: { description: 'Branding config', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BrandingResponse') } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/bookings/{slug}',
+  tags: ['Public'],
+  summary: 'Booking page config for a slug',
+  request: { params: z.object({ slug: z.string() }) },
+  responses: {
+    200: { description: 'Booking page config', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BookingPageConfig') } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/bookings/{slug}/slots',
+  tags: ['Public'],
+  summary: 'Available slots for a booking page',
+  request: {
+    params: z.object({ slug: z.string() }),
+    query: z.object({ date: isoDate.optional() }),
+  },
+  responses: {
+    200: { description: 'Available slots', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BookingSlotsResponse') } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/challenges/{locationId}',
+  tags: ['Public'],
+  summary: 'Public challenge board for a location',
+  request: { params: z.object({ locationId: uuidLike }) },
+  responses: {
+    200: { description: 'Challenge board', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicChallengesResponse') } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/events/{slug}',
+  tags: ['Public'],
+  summary: 'Event detail for a public event slug',
+  request: { params: z.object({ slug: z.string() }) },
+  responses: {
+    200: { description: 'Event detail', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicEventDetail') } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/events/{slug}/register',
+  tags: ['Public'],
+  summary: 'Event signup — name, email, phone (+ team fields)',
+  request: {
+    params: z.object({ slug: z.string() }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            name: z.string().min(1).max(200),
+            email: email,
+            phone: z.string().max(50).optional(),
+            team_name: z.string().max(200).optional(),
+          }).openapi('EventRegisterBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Registration confirmed' },
+    400: { description: 'Validation failed or registration closed', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Event not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/events/{slug}/check-member',
+  tags: ['Public'],
+  summary: 'Membership check before registering for an event',
+  request: {
+    params: z.object({ slug: z.string() }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ email: email }).openapi('EventCheckMemberBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Membership status', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventCheckMemberResponse') } } },
+    404: { description: 'Event not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/events/{slug}/display',
+  tags: ['Public'],
+  summary: 'Public display feed for an event (TV / kiosk)',
+  request: { params: z.object({ slug: z.string() }) },
+  responses: {
+    200: { description: 'Display feed', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventDisplayFeed') } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/events/checkin-qr',
+  tags: ['Public'],
+  summary: 'QR payload/image for event check-in; query = signed token',
+  request: { query: z.object({ token: z.string() }) },
+  responses: {
+    200: { description: 'QR payload or image' },
+    400: { description: 'Invalid or expired token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/event-payments/{id}',
+  tags: ['Public'],
+  summary: 'Payment status for an event payment',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Payment status', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventPaymentStatus') } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/event-registrations/{id}',
+  tags: ['Public'],
+  summary: 'Registration status for an event registration',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Registration status', content: { 'application/json': { schema: z.object({}).passthrough().openapi('EventRegistrationStatus') } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/races/{slug}/register',
+  tags: ['Public'],
+  summary: 'Race signup',
+  request: {
+    params: z.object({ slug: z.string() }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({}).passthrough().openapi('RaceRegisterBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Registration confirmed' },
+    400: { description: 'Validation failed or registration closed', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Race not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/deposit/{token}',
+  tags: ['Public'],
+  summary: 'Deposit request detail by token',
+  request: { params: z.object({ token: z.string() }) },
+  responses: {
+    200: { description: 'Deposit request detail', content: { 'application/json': { schema: z.object({}).passthrough().openapi('DepositRequestDetail') } } },
+    404: { description: 'Not found or expired', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/deposit/{token}/accept-and-pay',
+  tags: ['Public'],
+  summary: 'Accept and pay a deposit request',
+  request: {
+    params: z.object({ token: z.string() }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({}).passthrough().openapi('DepositAcceptBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Payment initiated or confirmed' },
+    400: { description: 'Validation failed or deposit already paid', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found or expired', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/live/{locationId}',
+  tags: ['Public'],
+  summary: 'Public live / TV state feed for a location',
+  request: { params: z.object({ locationId: uuidLike }) },
+  responses: {
+    200: { description: 'Live state', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PublicLiveState') } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/tv/{token}/content',
+  tags: ['Public'],
+  summary: 'TV content for a paired display',
+  request: { params: z.object({ token: z.string() }) },
+  responses: {
+    200: { description: 'TV content', content: { 'application/json': { schema: z.object({}).passthrough().openapi('TvContent') } } },
+    404: { description: 'Token not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/presentations/{token}/state',
+  tags: ['Public'],
+  summary: 'Slideshow state for a presenter token',
+  request: { params: z.object({ token: z.string() }) },
+  responses: {
+    200: { description: 'Presentation state', content: { 'application/json': { schema: z.object({}).passthrough().openapi('PresentationState') } } },
+    404: { description: 'Token not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/bca/{token}/merged',
+  tags: ['Public'],
+  summary: 'Merged BCA document by token',
+  request: { params: z.object({ token: z.string() }) },
+  responses: {
+    200: { description: 'Merged BCA doc' },
+    404: { description: 'Token not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/bca/{token}/file/{slug}',
+  tags: ['Public'],
+  summary: 'BCA file by token and slug',
+  request: { params: z.object({ token: z.string(), slug: z.string() }) },
+  responses: {
+    200: { description: 'BCA file' },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// Webhooks (Inbound) — provider-auth, externally-owned payloads
+// ============================================================================
+
+const GlofoxEvent = z.object({}).passthrough().openapi('GlofoxWebhookEvent', {
+  description: 'Glofox booking/membership/member/access event. branchId resolves the location; event_id dedupes retried deliveries.',
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/glofox',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ GlofoxHmac: [] }],
+  summary: 'Inbound Glofox events',
+  description: 'Glofox → CRM. HMAC-SHA256 verified against the per-location webhook secret (resolved by branchId). Idempotent via glofox_webhook_events.event_id.',
+  request: { body: { content: { 'application/json': { schema: GlofoxEvent } } } },
+  responses: {
+    200: { description: 'Accepted (and processed unless dark-launched)' },
+    401: { description: 'Bad / missing signature', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/postmark',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Postmark delivery/bounce/open events',
+  description: 'Postmark → CRM. Payload is a Postmark delivery/bounce/open/spam event.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('PostmarkWebhookEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/inbody',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'InBody body-scan results',
+  description: 'InBody → CRM. Carries a body composition scan result. Auth verified via shared token.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('InBodyWebhookEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/webhooks/instagram',
+  tags: ['Webhooks (Inbound)'],
+  security: [],
+  summary: 'Instagram webhook verification handshake',
+  description: 'Meta verification handshake: echoes `hub.challenge` when `hub.verify_token` matches. POST carries the signed payload.',
+  responses: {
+    200: { description: 'Challenge echoed' },
+    403: { description: 'Verify token mismatch' },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/instagram',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ MetaSignature: [] }],
+  summary: 'Instagram DM/comment events',
+  description: 'Meta → CRM. X-Hub-Signature-256 verified. Carries Instagram DM or comment events.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('InstagramWebhookEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/webhooks/whatsapp',
+  tags: ['Webhooks (Inbound)'],
+  security: [],
+  summary: 'WhatsApp webhook verification handshake',
+  description: 'Meta verification handshake: echoes `hub.challenge` when `hub.verify_token` matches. POST carries the signed payload.',
+  responses: {
+    200: { description: 'Challenge echoed' },
+    403: { description: 'Verify token mismatch' },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/whatsapp',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ MetaSignature: [] }],
+  summary: 'WhatsApp message/status events',
+  description: 'Meta → CRM. X-Hub-Signature-256 verified. Carries incoming WA messages and delivery status updates.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('WhatsAppWebhookEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/webhooks/strava',
+  tags: ['Webhooks (Inbound)'],
+  security: [],
+  summary: 'Strava subscription validation',
+  description: 'Strava subscription validation (echoes `hub.challenge`).',
+  responses: {
+    200: { description: 'Challenge echoed' },
+    403: { description: 'Verify token mismatch' },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/strava',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Strava activity events',
+  description: 'Strava → CRM. Carries activity create/update/delete events.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('StravaWebhookEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Verify-token mismatch', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/webhooks/xero',
+  tags: ['Webhooks (Inbound)'],
+  security: [],
+  summary: 'Xero intent-to-receive verification',
+  description: 'Xero intent-to-receive validation (200).',
+  responses: {
+    200: { description: 'OK' },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/xero',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Xero accounting events',
+  description: 'Xero → CRM. Carries accounting events (invoices, contacts, payments).',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('XeroWebhookEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/webhooks/revolut',
+  tags: ['Webhooks (Inbound)'],
+  security: [],
+  summary: 'Revolut webhook verification',
+  description: 'Configuration ping (200).',
+  responses: {
+    200: { description: 'OK' },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/revolut',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Revolut payment events',
+  description: 'Revolut Merchant → CRM. Carries payment success/failure events.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('RevolutWebhookEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/webhooks/revolut/race-payments',
+  tags: ['Webhooks (Inbound)'],
+  security: [],
+  summary: 'Revolut race-payments webhook verification',
+  description: 'Configuration ping (200).',
+  responses: {
+    200: { description: 'OK' },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/revolut/race-payments',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Revolut race deposit payment events',
+  description: 'Revolut Merchant → CRM. Separate webhook endpoint for race deposit payment events.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('RevolutRacePaymentEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Bad signature', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/twilio/status',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'Twilio SMS delivery status',
+  description: 'Twilio → CRM. Carries SMS delivery status callbacks (delivered/failed/undelivered).',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('TwilioStatusEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/unifi-access',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'UniFi Access door events',
+  description: 'UniFi Access → CRM. Carries door open/close and access events.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('UnifiAccessEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/unifi-protect',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'UniFi Protect events',
+  description: 'UniFi Protect → CRM. Carries camera/NVR events.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('UnifiProtectEvent') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/invoices-inbound/{token}',
+  tags: ['Webhooks (Inbound)'],
+  security: [],
+  summary: 'Tokenised inbound invoice email/forward',
+  description: 'Inbound invoice receiver. Accepts email-forwarded invoices. Authenticated by the unguessable `{token}` path segment, not a header.',
+  request: {
+    params: z.object({ token: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('InboundInvoiceEvent') } } },
+  },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Invalid token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/sequence/{token}',
+  tags: ['Webhooks (Inbound)'],
+  security: [],
+  summary: 'Tokenised sequence callback',
+  description: 'Sequence event callback; carries step completion or external event data. Authenticated by the unguessable `{token}` path segment, not a header.',
+  request: {
+    params: z.object({ token: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('SequenceCallbackEvent') } } },
+  },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Invalid token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// Bridge — Pi device API, BridgeAuth on all routes
+// ============================================================================
+
+const StrapScan = z.object({
+  straps: z.array(z.object({
+    device_key: z.string().openapi({ example: 'ble:AA:BB:CC:DD:EE:FF' }),
+    name: z.string().nullable().optional(),
+    rssi: z.number().nullable().optional(),
+    last_bpm: z.number().nullable().optional(),
+  })).max(100),
+}).openapi('StrapScan')
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/bridge/scan',
+  tags: ['Bridge'],
+  security: [{ BridgeAuth: [] }],
+  summary: 'Report currently-visible straps',
+  description: 'Pi bridge → CRM. Overwrites ble_bridges.last_seen_straps. Polled ~every 5s during coach pairing. Max 100 straps.',
+  request: { body: { content: { 'application/json': { schema: StrapScan } } } },
+  responses: {
+    200: { description: 'Stored' },
+    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/bridge/samples',
+  tags: ['Bridge'],
+  security: [{ BridgeAuth: [] }],
+  summary: 'Batch of HR samples for live sessions',
+  description: 'Pi bridge → CRM. Posts a batch of heart-rate samples for active live sessions.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeSamplesBatch') } } } },
+  responses: {
+    200: { description: 'Accepted' },
+    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/bridge/heartbeat',
+  tags: ['Bridge'],
+  security: [{ BridgeAuth: [] }],
+  summary: 'Bridge liveness ping',
+  description: 'Pi bridge → CRM. Periodic heartbeat to indicate the bridge is online.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeHeartbeat') } } } },
+  responses: {
+    200: { description: 'Acknowledged' },
+    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/bridge/inbody/ingest',
+  tags: ['Bridge'],
+  security: [{ BridgeAuth: [] }],
+  summary: 'Push a fresh InBody scan',
+  description: 'Pi bridge → CRM. Ingests a new InBody body-composition scan result.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeInBodyIngest') } } } },
+  responses: {
+    200: { description: 'Ingested' },
+    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/bridge/inbody/backfill-ingest',
+  tags: ['Bridge'],
+  security: [{ BridgeAuth: [] }],
+  summary: 'Push a historical InBody scan',
+  description: 'Pi bridge → CRM. Ingests a historical InBody scan during backfill.',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeInBodyBackfillIngest') } } } },
+  responses: {
+    200: { description: 'Ingested' },
+    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/bridge/inbody/backfill-pending',
+  tags: ['Bridge'],
+  security: [{ BridgeAuth: [] }],
+  summary: 'List scans pending backfill',
+  description: 'Pi bridge → CRM. Returns list of InBody scans that are pending backfill ingestion.',
+  responses: {
+    200: { description: 'Pending backfill scans', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeBackfillPendingResponse') } } },
+    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/bridge/inbody/pending',
+  tags: ['Bridge'],
+  security: [{ BridgeAuth: [] }],
+  summary: 'List scans pending ingest',
+  description: 'Pi bridge → CRM. Returns list of InBody scans that are pending ingest.',
+  responses: {
+    200: { description: 'Pending scans', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeIngestPendingResponse') } } },
+    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// Mobile — Staff App, CookieAuth on all routes
+// ============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/mobile/today-feed',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Coach "today" feed',
+  responses: {
+    200: { description: 'Today feed', content: { 'application/json': { schema: z.object({}).passthrough().openapi('TodayFeedResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/mobile/layout',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save the mobile home layout',
+  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('MobileLayoutBody') } } } },
+  responses: {
+    200: { description: 'Layout saved' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/mobile/me',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Current staff profile + permissions',
+  responses: {
+    200: { description: 'Profile', content: { 'application/json': { schema: z.object({}).passthrough().openapi('MobileMeResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/mobile/radar',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Lead/churn radar summary',
+  responses: {
+    200: { description: 'Radar summary', content: { 'application/json': { schema: z.object({}).passthrough().openapi('MobileRadarResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/mobile/device-tokens',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Register a push token',
+  request: { body: { content: { 'application/json': { schema: z.object({ token: z.string(), platform: z.string().optional() }).openapi('DeviceTokenRegisterBody') } } } },
+  responses: {
+    200: { description: 'Token registered' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/mobile/device-tokens',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Remove a push token',
+  request: { body: { content: { 'application/json': { schema: z.object({ token: z.string() }).openapi('DeviceTokenRemoveBody') } } } },
+  responses: {
+    200: { description: 'Token removed' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/mobile/impersonate',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Start impersonation',
+  request: { body: { content: { 'application/json': { schema: z.object({ userId: uuidLike }).openapi('ImpersonateStartBody') } } } },
+  responses: {
+    200: { description: 'Impersonation started' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/mobile/impersonate/stop',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Stop impersonation',
+  responses: {
+    200: { description: 'Impersonation stopped' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/mobile/impersonate/users',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List impersonatable users',
+  responses: {
+    200: { description: 'Users', content: { 'application/json': { schema: z.object({}).passthrough().openapi('ImpersonateUsersResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/mobile/checklists/today',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: "Today's checklists",
+  responses: {
+    200: { description: 'Checklists', content: { 'application/json': { schema: z.object({}).passthrough().openapi('ChecklistsTodayResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/mobile/checklists/{id}/items/{itemId}',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Tick a checklist item',
+  request: { params: z.object({ id: uuidLike, itemId: uuidLike }) },
+  responses: {
+    200: { description: 'Item ticked' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/mobile/checklists/{id}/items/{itemId}',
+  tags: ['Mobile'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Untick a checklist item',
+  request: { params: z.object({ id: uuidLike, itemId: uuidLike }) },
+  responses: {
+    200: { description: 'Item unticked' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -1089,22 +1955,48 @@ let cachedSpec = null
 
 function buildSpec() {
   const generator = new OpenApiGeneratorV31(registry.definitions)
-  return generator.generateDocument({
+  const doc = generator.generateDocument({
     openapi: '3.1.0',
     info: {
       title: 'UN1T CRM API',
-      version: '1.0.0',
+      version: '1.1.0',
       description:
         'HTTP API for the UN1T gym CRM. Most endpoints accept either a Supabase ' +
         'session cookie (browser) or a Bearer token (CRM_API_KEY for n8n / external ' +
         'integrations). Mutating endpoints validate request bodies via Zod schemas; ' +
-        'invalid input returns 400 with structured `issues` array.',
+        'invalid input returns 400 with structured `issues` array.' +
+        ' Covers the public, inbound-webhook, bridge and mobile integration surface; planned outbound events appear under webhooks.',
     },
     servers: [
       { url: 'https://crm.un1tdublin.com', description: 'Production' },
       { url: 'http://localhost:3000', description: 'Local dev' },
     ],
   })
+  // Outbound events we PLAN to push to subscribers. 3.1 `webhooks` keyword:
+  // the API is the source; the reader implements the receiver. Not yet built.
+  doc.webhooks = {
+    'lead.created': {
+      post: {
+        tags: ['Webhooks (Outbound)'],
+        summary: 'Lead created (planned)',
+        description: 'PLANNED — not yet implemented. Fired when a new lead is captured. ' +
+          'Your endpoint receives this payload; respond 2xx to acknowledge.',
+        requestBody: {
+          content: { 'application/json': { schema: {
+            type: 'object',
+            properties: {
+              event: { type: 'string', example: 'lead.created' },
+              contact_id: { type: 'string', format: 'uuid' },
+              location_id: { type: 'string', format: 'uuid' },
+              created_at: { type: 'string', format: 'date-time' },
+            },
+          } } },
+        },
+        responses: { '2xx': { description: 'Acknowledged by your endpoint' } },
+      },
+    },
+  }
+  return doc
 }
 
 // unstable_cache only works inside Next.js's request runtime — calling
