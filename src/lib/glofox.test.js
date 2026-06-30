@@ -329,3 +329,24 @@ describe('glofoxFetch 429/5xx backoff (via fetchMemberResult)', () => {
     expect(global.fetch).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('registerGlofoxMember content-type', () => {
+  beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+  const res = (status, body) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => null }, json: async () => body })
+  const creds = { branchId: 'b', apiKey: 'k', apiToken: 't' }
+
+  // Regression: without Content-Type: application/json the body went as
+  // text/plain, Glofox never parsed it, and every field came back "required" —
+  // so no member was created and the booking dead-ended in staff review.
+  it('POSTs /register as application/json with the fields in the body', async () => {
+    const { registerGlofoxMember } = await import('./glofox.js')
+    global.fetch.mockResolvedValueOnce(res(200, { user: { _id: 'gm1' } }))
+    const out = await registerGlofoxMember(creds, { first_name: 'Sam', last_name: 'Lee', email: 'Sam@X.com', password: 'Abcd-1234' })
+    expect(out.ok).toBe(true)
+    const [url, init] = global.fetch.mock.calls[0]
+    expect(url).toContain('/2.0/register')
+    expect(init.headers['Content-Type']).toBe('application/json')
+    expect(JSON.parse(init.body)).toMatchObject({ first_name: 'Sam', last_name: 'Lee', email: 'sam@x.com' })
+  })
+})

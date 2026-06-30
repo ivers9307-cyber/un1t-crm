@@ -768,6 +768,11 @@ export async function registerGlofoxMember(creds, payload) {
   try {
     const r = await glofoxFetch(creds, '/2.0/register', {
       method: 'POST',
+      // MUST set this: without it fetch sends the body as text/plain and Glofox
+      // never parses the JSON, rejecting every field as "required" (and the new
+      // member is never created → the booking dead-ends in staff review). Mirrors
+      // createBooking, the working POST.
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
     let parsed
