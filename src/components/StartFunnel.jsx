@@ -26,7 +26,10 @@ const inputCls = 'w-full bg-white/[0.06] border border-white/15 rounded-xl px-4 
 export default function StartFunnel() {
   const [step, setStep] = useState('choose') // choose | details | calendar | classpick | done | classdone
   const [path, setPath] = useState(null)     // 'consultation' | 'class'
-  const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', consent: false })
+  // Marketing-consent defaults to ticked (operator's call — pre-ticked + required;
+  // accepted GDPR/Planet49 risk to maximise opt-in). Still un-tickable, and the
+  // booking confirmation is a UTILITY/transactional send that doesn't rely on it.
+  const [form, setForm] = useState({ first_name: '', last_name: '', email: '', phone: '', consent: true })
   const [event, setEvent] = useState(null)
   const [days] = useState(() => dayList())
   const [selectedDate, setSelectedDate] = useState(null)
