@@ -107,3 +107,34 @@ export async function computeAvailableSlots(db, event, date) {
   const nowMinutes = date === todayStr ? dublinNowMinutes() : -1
   return filterAvailableSlots(slots, { booked, blocked, nowMinutes })
 }
+
+const dayLabelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'short' })
+
+/**
+ * Which of the next `days` calendar days actually have ≥1 available slot.
+ * Reuses computeAvailableSlots per day (in parallel) so the day list can NEVER
+ * diverge from the per-day slot list — same incident-hardened Dublin-time
+ * semantics, no reimplementation. Clamped to the event's max_advance_days.
+ * Returns [{ date: 'YYYY-MM-DD', label: 'Tue, 30 Jun' }] for bookable days only.
+ */
+export async function computeAvailableDays(db, event, { days = 14 } = {}) {
+  if (!event) return []
+  const todayStr = dublinTodayStr()
+  const horizon = Math.min(Math.max(1, Number(days) || 14), 31)
+  const maxAdv = Number.isFinite(Number(event.max_advance_days)) && Number(event.max_advance_days) >= 0
+    ? Number(event.max_advance_days) : 30
+  const maxDateStr = addDaysISO(todayStr, maxAdv)
+  const dates = []
+  for (let i = 0; i < horizon; i++) {
+    const d = addDaysISO(todayStr, i)
+    if (d > maxDateStr) break
+    dates.push(d)
+  }
+  const checked = await Promise.all(dates.map(async (date) => {
+    const slots = await computeAvailableSlots(db, event, date)
+    return slots.length > 0 ? date : null
+  }))
+  return checked
+    .filter(Boolean)
+    .map((date) => ({ date, label: dayLabelFmt.format(new Date(`${date}T12:00:00Z`)) }))
+}

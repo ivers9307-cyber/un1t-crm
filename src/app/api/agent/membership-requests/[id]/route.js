@@ -157,6 +157,19 @@ export async function PATCH(request, { params }) {
       finalStatus = 'failed'
       details = { ...details, result: { ok: false, message_code: 'NOT_EXECUTABLE' } }
     } else {
+      // If the processor sent this for a credit grant (existing account with no
+      // live credits), grant the trial class credit BEFORE booking — otherwise
+      // Glofox rejects on no-credits and staff could never complete it.
+      if (details?.reason === 'needs_credit_grant') {
+        try {
+          const { purchaseGlofoxMembership } = await import('@/lib/glofox')
+          const { data: loc } = await db.from('locations').select('settings').eq('id', row.location_id).maybeSingle()
+          const g = loc?.settings?.glofox || {}
+          if (g.trial_membership_id && g.trial_plan_code) {
+            await purchaseGlofoxMembership(creds, contact.glofox_member_id, g.trial_membership_id, g.trial_plan_code)
+          }
+        } catch (e) { console.warn(`[agent-requests] trial grant error: ${e?.message || e}`) }
+      }
       const result = await createBooking(creds, {
         user_id: contact.glofox_member_id,
         model: GLOFOX_BOOKING_MODEL,
@@ -200,9 +213,9 @@ export async function PATCH(request, { params }) {
         try {
           const { data: c } = await db.from('contacts').select('id, first_name, name, phone, wa_phone').eq('id', row.contact_id).maybeSingle()
           if (c) {
-            const { maybeSendBookingWhatsappConfirm } = await import('@/lib/automations/booking-whatsapp-confirm')
+            const { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } = await import('@/lib/automations/booking-whatsapp-confirm')
             const firstName = c.first_name || (c.name ? c.name.split(' ')[0] : '') || 'there'
-            await maybeSendBookingWhatsappConfirm({ db, locationId: row.location_id, contact: c, templateName: 'booking_class_confirmed', bodyParams: [firstName, details.class_name || 'your class', details.class_time || ''] })
+            await maybeSendBookingWhatsappConfirm({ db, locationId: row.location_id, contact: c, templateName: CLASS_CONFIRM_TEMPLATE, bodyParams: [firstName, details.class_name || 'your class', details.class_time || ''] })
           }
         } catch (e) { console.warn(`[agent-requests] cbr confirm error: ${e?.message || e}`) }
       }

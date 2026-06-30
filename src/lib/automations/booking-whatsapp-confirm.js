@@ -8,6 +8,14 @@ import { toE164Ireland } from '@/lib/twilio'
 import { sendTemplateMessage, getOrCreateConversation } from '@/lib/whatsapp'
 import { logWarn } from '@/lib/log'
 
+// Live APPROVED template names (single source of truth — keep in sync with the
+// templates in WhatsApp Manager). NOTE: the class template was created with a
+// TRAILING UNDERSCORE ('booking_class_confirmed_'); the lookup below is exact,
+// so the code must match the live name. If the operator recreates a clean
+// 'booking_class_confirmed', update this one constant.
+export const CONSULT_CONFIRM_TEMPLATE = 'booking_consult_confirmed'
+export const CLASS_CONFIRM_TEMPLATE = 'booking_class_confirmed_'
+
 export async function maybeSendBookingWhatsappConfirm({ db, locationId, contact, templateName, bodyParams = [] }) {
   try {
     if (!templateName) return { sent: false, reason: 'no_template_configured' }

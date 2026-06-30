@@ -28,10 +28,30 @@ export function shapePublicClass(e) {
   }
 }
 
+// Operator deny-list. Hide classes whose name contains any configured keyword
+// (case-insensitive), stored at locations.settings.glofox.hidden_class_keywords
+// — keeps free-trial leads out of e.g. ELITES / members-only sessions. Applied
+// inside listPublicClasses so it governs BOTH the public picker AND the booking
+// enqueue (both go through here): a hidden class can be neither seen nor booked.
+export function parseHiddenKeywords(raw) {
+  const arr = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[\n,]/) : []
+  return arr.map((s) => String(s || '').trim().toLowerCase()).filter(Boolean)
+}
+export function isClassHidden(name, keywords) {
+  if (!keywords || !keywords.length) return false
+  const n = String(name || '').toLowerCase()
+  return keywords.some((k) => n.includes(k))
+}
+
 // Resolve a location's live, bookable classes for the next `days` days.
 export async function listPublicClasses(db, locationId, days = 7) {
   const creds = await glofoxCredentialsForLocation(db, locationId)
   if (missingGlofoxCredentialsForLocation(creds).length) return []
+  let hidden = []
+  try {
+    const { data: loc } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
+    hidden = parseHiddenKeywords(loc?.settings?.glofox?.hidden_class_keywords)
+  } catch { /* no-op: a read failure just means no deny-list applied */ }
   const start = Math.floor(Date.now() / 1000)
   const end = start + Math.min(14, Math.max(1, days)) * 86400
   const { ok, events } = await fetchUpcomingEvents(creds, { start, end, limit: 100 })
@@ -41,5 +61,6 @@ export async function listPublicClasses(db, locationId, days = 7) {
     .filter((e) => e && e.active !== false && e.private !== true && (Number(e.time_start) || 0) * 1000 > now)
     .map(shapePublicClass)
     .filter((c) => !c.full)
+    .filter((c) => !isClassHidden(c.name, hidden))
     .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
 }
