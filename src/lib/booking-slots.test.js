@@ -3,8 +3,25 @@
 // agent's consultation tools reuse the EXACT same availability logic
 // (incident-hardened Dublin-time semantics included).
 
-import { describe, it, expect } from 'vitest'
-import { generateDaySlots, filterAvailableSlots } from './booking-slots'
+import { describe, it, expect, vi } from 'vitest'
+// Pin "today" so computeAvailableDays' range/weekday math is deterministic.
+// 2026-06-29 is a Monday (2026-06-30 = Tue, per the live calendar).
+vi.mock('@/lib/dublin-time', () => ({
+  dublinTodayStr: () => '2026-06-29',
+  dublinNowMinutes: () => 0,
+  addDaysISO: (d, n) => {
+    const dt = new Date(`${d}T00:00:00Z`)
+    dt.setUTCDate(dt.getUTCDate() + Number(n))
+    return dt.toISOString().slice(0, 10)
+  },
+}))
+import { generateDaySlots, filterAvailableSlots, computeAvailableDays } from './booking-slots'
+
+// Chainable db stub: every bookings/blocked_times query resolves to { data: [] }.
+function makeEmptyDb() {
+  const chain = { from() { return chain }, select() { return chain }, eq() { return chain }, in() { return chain }, then(r) { r({ data: [] }) } }
+  return chain
+}
 
 describe('generateDaySlots', () => {
   it('steps through the window by duration+buffer', () => {
@@ -45,5 +62,25 @@ describe('filterAvailableSlots', () => {
   it('drops past slots when filtering today (Dublin minutes)', () => {
     const out = filterAvailableSlots(slots, { booked: [], blocked: [], nowMinutes: 9 * 60 + 30 })
     expect(out.map((s) => s.start)).toEqual(['10:00'])
+  })
+})
+
+describe('computeAvailableDays', () => {
+  // Windows only on Mon + Wed → within a 5-day horizon from Mon 29 Jun only
+  // those two weekdays produce a slot; Tue/Thu/Fri are dropped from the list.
+  const event = {
+    id: 'ev1', duration_minutes: 60, buffer_minutes: 0, max_advance_days: 30,
+    availability: { mon: { start: '09:00', end: '10:00' }, wed: { start: '09:00', end: '10:00' } },
+  }
+
+  it('returns only days that have an open slot, with Dublin day labels', async () => {
+    const days = await computeAvailableDays(makeEmptyDb(), event, { days: 5 })
+    expect(days.map((d) => d.date)).toEqual(['2026-06-29', '2026-07-01'])
+    expect(days[0].label).toContain('29 Jun')
+    expect(days[1].label).toContain('1 Jul')
+  })
+
+  it('returns [] when the event is missing', async () => {
+    expect(await computeAvailableDays(makeEmptyDb(), null, { days: 5 })).toEqual([])
   })
 })

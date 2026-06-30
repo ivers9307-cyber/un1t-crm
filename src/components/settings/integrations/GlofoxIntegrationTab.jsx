@@ -29,6 +29,11 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
       ? `${initial.trial_membership_id}:${initial.trial_plan_code}`
       : ''
   )
+  const [hiddenClasses, setHiddenClasses] = useState(
+    Array.isArray(initial.hidden_class_keywords)
+      ? initial.hidden_class_keywords.join(', ')
+      : (initial.hidden_class_keywords || '')
+  )
 
   const [memberships, setMemberships] = useState([])
   const [membershipsLoading, setMembershipsLoading] = useState(false)
@@ -63,6 +68,7 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
   async function save() {
     setSaving(true); setError(null); setSavedAt(null)
     const [trialMembershipId, trialPlanCode] = trialKey ? trialKey.split(':') : ['', '']
+    const hiddenList = hiddenClasses.split(/[\n,]/).map((s) => s.trim()).filter(Boolean)
     const db = createBrowserClient()
     // Re-read current settings so we merge rather than clobber any
     // other tab's slice. Tiny race window if two tabs save at the
@@ -72,7 +78,7 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
     if (readErr) { setError(readErr.message); setSaving(false); return }
     const nextSettings = {
       ...(row?.settings || {}),
-      glofox: (branchId || apiKey || apiToken || webhookSecret || namespace || trialMembershipId)
+      glofox: (branchId || apiKey || apiToken || webhookSecret || namespace || trialMembershipId || hiddenList.length)
         ? {
             branch_id: branchId || null,
             api_key: apiKey || null,
@@ -81,6 +87,7 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
             namespace: namespace || null,
             trial_membership_id: trialMembershipId || null,
             trial_plan_code: trialPlanCode || null,
+            hidden_class_keywords: hiddenList.length ? hiddenList : null,
           }
         : null,
     }
@@ -159,6 +166,19 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
           ))}
         </select>
         {membershipsLoading && <p className="text-[11px] text-un1t-muted mt-1">Loading membership list…</p>}
+      </Field>
+
+      <Field
+        label="Hide classes from public booking"
+        hint="Comma- or line-separated name keywords. Any class whose name contains one is hidden from the public /start picker AND can't be booked there (e.g. EL1TES, OPEN GYM). Case-insensitive; leave blank to show every class."
+      >
+        <textarea
+          value={hiddenClasses}
+          onChange={e => setHiddenClasses(e.target.value)}
+          rows={2}
+          placeholder="EL1TES, OPEN GYM"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+        />
       </Field>
 
       <div className="flex justify-end pt-2 border-t border-un1t-border/40">
