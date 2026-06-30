@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHmac } from 'node:crypto'
-import { verifyGlofoxSignature, parseGlofoxEvent, tagsForGlofoxEvent } from './glofox.js'
+import { verifyGlofoxSignature, parseGlofoxEvent, tagsForGlofoxEvent, generateGlofoxPasscode } from './glofox.js'
 
 function sign(secret, body) {
   return createHmac('sha256', secret).update(body).digest('hex')
@@ -348,5 +348,30 @@ describe('registerGlofoxMember content-type', () => {
     expect(url).toContain('/2.0/register')
     expect(init.headers['Content-Type']).toBe('application/json')
     expect(JSON.parse(init.body)).toMatchObject({ first_name: 'Sam', last_name: 'Lee', email: 'sam@x.com' })
+  })
+})
+
+describe('generateGlofoxPasscode (Glofox password policy)', () => {
+  // Regression for the live PASSWORD_RULE_LOWER_CASE failure: the old
+  // uppercase+digits-only alphabet could never produce a lowercase letter, so
+  // Glofox rejected every new-member registration. Every output must now carry
+  // one of each class Glofox checks.
+  it('guarantees lowercase + uppercase + digit + hyphen on every output (500 runs)', () => {
+    for (let i = 0; i < 500; i++) {
+      const p = generateGlofoxPasscode()
+      expect(p, `lowercase missing in "${p}"`).toMatch(/[a-z]/)
+      expect(p, `uppercase missing in "${p}"`).toMatch(/[A-Z]/)
+      expect(p, `digit missing in "${p}"`).toMatch(/[0-9]/)
+      expect(p, `hyphen missing in "${p}"`).toContain('-')
+      expect(p).toMatch(/^[A-Za-z2-9]{4}-[A-Za-z2-9]{4}$/)
+      // readability: no visually-ambiguous chars
+      expect(p, `ambiguous char in "${p}"`).not.toMatch(/[0O1Il]/)
+    }
+  })
+
+  it('is high-entropy (mostly distinct across 500 runs)', () => {
+    const seen = new Set()
+    for (let i = 0; i < 500; i++) seen.add(generateGlofoxPasscode())
+    expect(seen.size).toBeGreaterThan(490)
   })
 })

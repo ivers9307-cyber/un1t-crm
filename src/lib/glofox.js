@@ -894,27 +894,52 @@ export async function listGlofoxMemberships(creds) {
 
 /**
  * Generate a one-time passcode for a new Glofox account. Used as
- * the initial password on /2.0/register; emailed to the member as
- * "log in once with this, change to your own password."
+ * the initial password on /2.0/register; emailed (and SMS'd) to the
+ * member as "log in once with this, change to your own password."
  *
- * 8 chars, alphanumeric uppercase + digits, hyphenated for
- * readability (e.g., 'ABC1-2345'). Crypto-random.
+ * Glofox enforces a multi-class password policy (live failure 2026-06-30:
+ * PASSWORD_RULE_LOWER_CASE — the old uppercase+digits-only alphabet could
+ * never produce a lowercase letter, so every brand-new lead's account
+ * creation failed). Every output is now GUARANTEED to contain >=1 lowercase,
+ * >=1 uppercase, >=1 digit, and a hyphen (the special char Glofox already
+ * accepted). 8 alphanumeric chars, hyphenated XXXX-XXXX for readability
+ * (e.g. 'Abc4-K7np'). Crypto-random. Visually-ambiguous chars (0/O/o, 1/I/l)
+ * are excluded from every class so the member can retype it.
  */
 export function generateGlofoxPasscode() {
-  // Avoid 0/O/1/I/L confusion — exclude visually-similar chars.
-  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
-  const out = []
-  // 8 chars total — Web Crypto for crypto-strong randomness.
-  const bytes = new Uint8Array(8)
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    crypto.getRandomValues(bytes)
-  } else {
-    for (let i = 0; i < 8; i++) bytes[i] = Math.floor(Math.random() * 256)
+  const UPPER = 'ABCDEFGHJKMNPQRSTUVWXYZ' // A-Z minus I, L, O
+  const LOWER = 'abcdefghijkmnpqrstuvwxyz' // a-z minus l, o
+  const DIGIT = '23456789' // 2-9 minus 0, 1
+  const ALL = UPPER + LOWER + DIGIT
+  const pick = (str) => str[randIndex(str.length)]
+
+  // One guaranteed char from each class (deterministic, so no output can ever
+  // miss a class), then fill the rest from the union and shuffle.
+  const chars = [pick(UPPER), pick(LOWER), pick(DIGIT)]
+  while (chars.length < 8) chars.push(pick(ALL))
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = randIndex(i + 1)
+    ;[chars[i], chars[j]] = [chars[j], chars[i]]
   }
-  for (let i = 0; i < 8; i++) {
-    out.push(alphabet[bytes[i] % alphabet.length])
+  // XXXX-XXXX — the hyphen doubles as the special char Glofox already accepts.
+  return chars.slice(0, 4).join('') + '-' + chars.slice(4).join('')
+}
+
+/**
+ * Crypto-strong, unbiased integer in [0, n). Rejection-samples a byte so there
+ * is no modulo bias (the old `byte % 31` slightly favoured low indices). Uses
+ * the global Web Crypto API (Edge/Node 18+/browser) with a Math.random
+ * fallback. n must be <= 256.
+ */
+function randIndex(n) {
+  const limit = Math.floor(256 / n) * n // largest multiple of n <= 256
+  const buf = new Uint8Array(1)
+  const hasCrypto = typeof crypto !== 'undefined' && crypto.getRandomValues
+  for (;;) {
+    if (hasCrypto) crypto.getRandomValues(buf)
+    else buf[0] = Math.floor(Math.random() * 256)
+    if (buf[0] < limit) return buf[0] % n
   }
-  return out.slice(0, 4).join('') + '-' + out.slice(4).join('')
 }
 
 /**
