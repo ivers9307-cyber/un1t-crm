@@ -6,6 +6,7 @@
 // pipeline (POST /api/public/class-booking) → the cron books + WhatsApp-confirms.
 
 import { useState, useEffect } from 'react'
+import { isValidMobileNumber } from '@/lib/phone-validate'
 
 const CONSULT_SLUG = 'free-un1t-consultation'
 
@@ -87,8 +88,11 @@ export default function StartFunnel() {
   function detailsNext(e) {
     e.preventDefault()
     setError(null)
-    if (!form.first_name.trim() || !form.last_name.trim() || !form.email.trim() || form.phone.replace(/\D/g, '').length < 7 || !form.consent) {
+    if (!form.first_name.trim() || !form.last_name.trim() || !form.email.trim() || !form.phone.trim() || !form.consent) {
       setError('Please complete every field and tick consent.'); return
+    }
+    if (!isValidMobileNumber(form.phone)) {
+      setError('Please enter a valid mobile number (e.g. 087 123 4567).'); return
     }
     setStep(path === 'class' ? 'classpick' : 'calendar')
   }
@@ -131,28 +135,26 @@ export default function StartFunnel() {
     } catch { setError('Something went wrong. Please try again.') } finally { setSubmitting(false) }
   }
 
-  if (step === 'done') {
-    return (
-      <div className="max-w-md mx-auto px-6 py-16 text-center">
-        <p className="font-display font-extrabold uppercase text-3xl text-white mb-3">You&apos;re booked 🎉</p>
-        <p className="text-white/70">You&apos;ll get a WhatsApp confirming your consultation if we have your number. See you at UN1T Stillorgan!</p>
-      </div>
-    )
-  }
-  if (step === 'classdone') {
-    return (
-      <div className="max-w-md mx-auto px-6 py-16 text-center">
-        <p className="font-display font-extrabold uppercase text-3xl text-white mb-3">You&apos;re being booked in 🎉</p>
-        <p className="text-white/70">Watch for a WhatsApp confirming your class. See you at UN1T Stillorgan!</p>
-      </div>
-    )
-  }
-
   const classDays = Array.from(new Set(classes.map((c) => c.day)))
   const dayClasses = classes.filter((c) => c.day === selectedClassDay)
 
+  // The funnel sits as a single frosted card over the hero image (see
+  // start/page.js) — every step renders inside this one wrapper so the card
+  // never jumps between an early-return layout and the main one.
   return (
-    <div className="max-w-xl mx-auto px-6 py-12 text-white">
+    <div className="w-full max-w-lg rounded-3xl border border-white/12 bg-black/45 backdrop-blur-xl shadow-2xl shadow-black/50 px-6 py-8 sm:px-9 sm:py-10 text-white">
+      {step === 'done' && (
+        <div className="text-center py-6">
+          <p className="font-display font-extrabold uppercase text-3xl text-white mb-3">You&apos;re booked 🎉</p>
+          <p className="text-white/70">You&apos;ll get a WhatsApp confirming your consultation if we have your number. See you at UN1T Stillorgan!</p>
+        </div>
+      )}
+      {step === 'classdone' && (
+        <div className="text-center py-6">
+          <p className="font-display font-extrabold uppercase text-3xl text-white mb-3">You&apos;re being booked in 🎉</p>
+          <p className="text-white/70">Watch for a WhatsApp confirming your class. See you at UN1T Stillorgan!</p>
+        </div>
+      )}
       {step === 'choose' && (
         <div className="space-y-4">
           <h1 className="font-display font-extrabold uppercase text-3xl mb-6">How do you want to start?</h1>
