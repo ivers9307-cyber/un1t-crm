@@ -10,6 +10,7 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { validateBody } from '@/lib/validate'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { writeContactTag } from '@/lib/contact-tags'
+import { isValidMobileNumber } from '@/lib/phone-validate'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -21,7 +22,7 @@ const Schema = z.object({
   first_name: z.string().trim().min(1).max(120),
   last_name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(320),
-  phone: z.string().trim().min(1).max(50).refine((v) => v.replace(/\D/g, '').length >= 7, 'Enter a valid phone number'),
+  phone: z.string().trim().min(1).max(50).refine(isValidMobileNumber, 'Enter a valid mobile number'),
   consent: z.boolean().refine((v) => v === true, { message: 'Please tick consent to continue' }),
 })
 
