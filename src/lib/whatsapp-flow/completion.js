@@ -18,13 +18,16 @@ export async function handleFlowCompletion(db, { interactive, contact, locationI
     catch (e) { console.warn('[wa-flow] consent record failed:', e.message) }
   }
 
+  // Prefer the name/email the member just typed in the Flow over the stored contact.
+  const person = { ...contact, name: contactFields.name || contact.name, email: contactFields.email || contact.email }
+
   if (path === 'class') {
     const [glofoxEventId, startsAt, ...nameParts] = String(selection.slot || '').split('|')
     const className = nameParts.join('|')
     const { error } = await db.from('class_booking_requests').insert({
       location_id: locationId, contact_id: contact.id,
       glofox_event_id: glofoxEventId, class_name: className, starts_at: startsAt,
-      customer_name: contact.name, customer_email: contact.email, customer_phone: contact.phone,
+      customer_name: person.name, customer_email: person.email, customer_phone: person.phone,
       status: 'queued',
     })
     // 23505 = a concurrent request already queued this (contact, class) — a successful dedupe.
@@ -34,7 +37,7 @@ export async function handleFlowCompletion(db, { interactive, contact, locationI
 
   const [eventId, date, startTime, endTime] = String(selection.slot || '').split('|')
   const res = await createEventBooking(db, {
-    event: { id: eventId, location_id: locationId }, date, startTime, endTime, contact, source: 'whatsapp_flow',
+    event: { id: eventId, location_id: locationId }, date, startTime, endTime, contact: person, source: 'whatsapp_flow',
   })
   if (res.error) { console.error('[wa-flow] consult booking failed:', res.error.message); return { handled: false } }
   return { handled: true, kind: 'consult' }

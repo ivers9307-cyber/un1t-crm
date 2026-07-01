@@ -12,9 +12,10 @@ function fakeDb(inserts) {
 }
 
 describe('handleFlowCompletion', () => {
-  const contact = { id: 'ct1', name: 'Ann', email: 'ann@x.ie', phone: '+353871234567' }
+  // Stored contact name/email deliberately differ from what the member types in the Flow.
+  const contact = { id: 'ct1', name: 'Old Name', email: 'old@x.ie', phone: '+353871234567' }
 
-  it('class path → queues a class_booking_requests row + records consent', async () => {
+  it('class path → queues a class_booking_requests row (Flow name wins) + records consent', async () => {
     const inserts = {}
     const interactive = { type: 'nfm_reply', nfm_reply: { response_json: JSON.stringify({
       path: 'class', slot: 'c1|2026-07-03T18:00:00Z|HIIT', name: 'Ann', email: 'ann@x.ie', marketing_opt_in: true }) } }
@@ -25,6 +26,7 @@ describe('handleFlowCompletion', () => {
     expect(inserts.class_booking_requests[0]).toMatchObject({
       contact_id: 'ct1', location_id: 'loc1', glofox_event_id: 'c1', class_name: 'HIIT',
       starts_at: '2026-07-03T18:00:00Z', status: 'queued',
+      customer_name: 'Ann', customer_email: 'ann@x.ie', customer_phone: '+353871234567',
     })
     expect(applyFormMarketingConsent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactId: 'ct1', consent: true, source: 'whatsapp_flow' }))
   })
