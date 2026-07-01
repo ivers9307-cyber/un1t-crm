@@ -22,11 +22,17 @@ export function confirmScreen(summary, selection) {
   return { screen: SCREEN.CONFIRM, data: { summary, selection } }
 }
 
-// The published Flow definition (Flow JSON v3.1). Data-exchange screens declare
-// dynamic props via ${data.*}; navigation posts back to the endpoint. Footer
-// payloads forward carry state (path/slot) alongside the current form fields.
+// The published Flow definition (Flow JSON v7.3 — the version WhatsApp Flow
+// Builder currently accepts). Data-exchange screens declare dynamic props via
+// ${data.*}; navigation posts back to the endpoint. Footer payloads forward
+// carry state (path/slot) alongside the current form fields. NB: array screen
+// data needs an `items` schema, prefills use Form `init-values` (not per-input
+// `init-value`), and `${data.selection.*}` needs `selection` sub-properties —
+// all v7.3 requirements Builder rejects otherwise. The published asset also
+// carries a base64 header Image on the PATH screen; that's added at publish
+// time by scripts/build-flow-json.mjs (kept out of source to stay lean).
 export const FLOW_JSON = {
-  version: '3.1',
+  version: '7.3',
   data_api_version: '3.0',
   routing_model: { PATH: ['DAY'], DAY: ['SLOT'], SLOT: ['DETAILS'], DETAILS: ['CONFIRM'], CONFIRM: [] },
   screens: [
@@ -41,7 +47,7 @@ export const FLOW_JSON = {
     },
     {
       id: SCREEN.DAY, title: 'Pick a day',
-      data: { days: { type: 'array', __example__: [] }, path: { type: 'string', __example__: 'class' } },
+      data: { days: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' } } }, __example__: [{ id: '2026-07-03', title: 'Thu 3 Jul' }] }, path: { type: 'string', __example__: 'class' } },
       layout: { type: 'SingleColumnLayout', children: [{
         type: 'Form', name: 'form', children: [
           { type: 'RadioButtonsGroup', name: 'day', label: 'Which day?', required: true, 'data-source': '${data.days}' },
@@ -50,7 +56,7 @@ export const FLOW_JSON = {
     },
     {
       id: SCREEN.SLOT, title: 'Pick a time',
-      data: { day: { type: 'string', __example__: '' }, slots: { type: 'array', __example__: [] }, path: { type: 'string', __example__: 'class' } },
+      data: { day: { type: 'string', __example__: '' }, slots: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' } } }, __example__: [{ id: 'c1|2026-07-03T18:00:00Z|HIIT', title: '18:00 HIIT' }] }, path: { type: 'string', __example__: 'class' } },
       layout: { type: 'SingleColumnLayout', children: [{
         type: 'Form', name: 'form', children: [
           { type: 'RadioButtonsGroup', name: 'slot', label: 'Available times', required: true, 'data-source': '${data.slots}' },
@@ -61,16 +67,16 @@ export const FLOW_JSON = {
       id: SCREEN.DETAILS, title: 'Your details',
       data: { name: { type: 'string', __example__: '' }, email: { type: 'string', __example__: '' }, marketing_opt_in: { type: 'boolean', __example__: true }, path: { type: 'string', __example__: 'class' }, slot: { type: 'string', __example__: '' } },
       layout: { type: 'SingleColumnLayout', children: [{
-        type: 'Form', name: 'form', children: [
-          { type: 'TextInput', name: 'name', label: 'Name', required: true, 'init-value': '${data.name}' },
-          { type: 'TextInput', name: 'email', label: 'Email', 'input-type': 'email', required: true, 'init-value': '${data.email}' },
-          { type: 'OptIn', name: 'marketing_opt_in', label: 'Keep me posted with offers and updates', 'init-value': '${data.marketing_opt_in}' },
+        type: 'Form', name: 'form', 'init-values': { name: '${data.name}', email: '${data.email}', marketing_opt_in: '${data.marketing_opt_in}' }, children: [
+          { type: 'TextInput', name: 'name', label: 'Name', required: true },
+          { type: 'TextInput', name: 'email', label: 'Email', 'input-type': 'email', required: true },
+          { type: 'OptIn', name: 'marketing_opt_in', label: 'Keep me posted with offers and updates' },
           { type: 'Footer', label: 'Review', 'on-click-action': { name: 'data_exchange', payload: { path: '${data.path}', slot: '${data.slot}', name: '${form.name}', email: '${form.email}', marketing_opt_in: '${form.marketing_opt_in}' } } },
         ] }] },
     },
     {
       id: SCREEN.CONFIRM, title: 'Confirm', terminal: true,
-      data: { summary: { type: 'string', __example__: '' }, selection: { type: 'object', __example__: {} } },
+      data: { summary: { type: 'string', __example__: '' }, selection: { type: 'object', properties: { path: { type: 'string' }, slot: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, marketing_opt_in: { type: 'boolean' } }, __example__: { path: 'class', slot: '', name: '', email: '', marketing_opt_in: true } } },
       layout: { type: 'SingleColumnLayout', children: [{
         type: 'Form', name: 'form', children: [
           { type: 'TextBody', text: '${data.summary}' },
