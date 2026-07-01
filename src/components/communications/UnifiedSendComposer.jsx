@@ -43,6 +43,10 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   const [perTickCap, setPerTickCap] = useState('') // blank = code default (100/tick)
   const [windowStart, setWindowStart] = useState('09:00')
   const [windowEnd, setWindowEnd] = useState('20:00')
+  // AGENT-TAKEOVER — operator handles the replies to this WhatsApp send, so
+  // Mia stays off the recipients' threads. (A single-recipient send does this
+  // automatically; the toggle is for bulk sends.)
+  const [handleReplies, setHandleReplies] = useState(false)
   // Schedule (SMS only)
   const [scheduleMode, setScheduleMode] = useState('now') // 'now' | 'later'
   const [scheduledAtLocal, setScheduledAtLocal] = useState('')
@@ -162,6 +166,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           name: defaultLabel(), template_id: templateId, variable_mapping: variables,
           audience_filter: effectiveFilter, location_id: locationId,
           delivery_mode: waMode,
+          handle_replies_manually: handleReplies,
           ...(drip ? {
             daily_cap: Number(dailyCap) || 500,
             ...(Number(perTickCap) > 0 ? { per_tick_max: Number(perTickCap) } : {}),
@@ -482,6 +487,19 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
               <p className="text-[11px] text-un1t-subtle">Europe/Dublin time. The drip pauses overnight and resumes each morning.</p>
             </div>
           )}
+        </Section>
+      )}
+
+      {channel === 'whatsapp' && (
+        <Section title="Replies" sub="Who handles it when a recipient replies to this message?">
+          <label className="flex items-start gap-2 cursor-pointer select-none">
+            <input type="checkbox" className="mt-0.5 accent-un1t-text"
+              checked={handleReplies} onChange={e => setHandleReplies(e.target.checked)} />
+            <span className="text-sm text-un1t-text">
+              I&apos;ll handle the replies myself
+              <span className="block text-[11px] text-un1t-subtle mt-0.5">Pauses the assistant (Mia) on these threads so she doesn&apos;t reply over you. A message sent to a single person does this automatically.</span>
+            </span>
+          </label>
         </Section>
       )}
 

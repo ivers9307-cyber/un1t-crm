@@ -598,6 +598,31 @@ export async function fetchDripDoneContactIds(db, broadcastId) {
   return ids
 }
 
+// AGENT-TAKEOVER — should Mia be paused on each recipient's thread for this
+// send? True when the operator is personally managing the replies: an
+// INDIVIDUAL targeted send (audience of 1 — a 1:1 message that just happens to
+// use the broadcast machinery) always pauses; a BULK send pauses only when the
+// operator opted in via handle_replies_manually. Pure — exported for tests.
+export function shouldPauseAgentForBroadcast(broadcast, recipientCount) {
+  return broadcast?.handle_replies_manually === true || recipientCount === 1
+}
+
+// Take Mia off a recipient's thread after an operator-managed send. Mirrors the
+// manual-send take-over (agent/core.js manualTakeoverPatch): agent_active=false
+// + a handoff stamp so it AUTO-re-arms after the cooldown (never permanent-off).
+// Best-effort — a pause failure must never break the send.
+async function pauseAgentOnThread(db, conversationId) {
+  if (!conversationId) return
+  try {
+    await db.from('whatsapp_conversations')
+      .update({ agent_active: false, agent_handed_off_at: new Date().toISOString() })
+      .eq('id', conversationId)
+      .eq('agent_active', true)
+  } catch (e) {
+    console.error('[wa] pause-agent-on-thread failed:', e?.message || e)
+  }
+}
+
 /**
  * Send a broadcast — template message to filtered audience
  */
@@ -684,6 +709,11 @@ export async function sendBroadcast(broadcastId) {
   let sentCount = 0
   let failedCount = 0
 
+  // AGENT-TAKEOVER — an individual targeted send (audience of 1), or a bulk
+  // send the operator opted to handle, pauses Mia on each recipient thread so
+  // she doesn't reply over the operator when the recipient responds.
+  const pauseAgent = shouldPauseAgentForBroadcast(broadcast, contacts.length)
+
   for (const contact of pending) {
     // Claim-first: insert the recipient row (status 'pending') BEFORE the
     // Meta send. The unique (broadcast_id, contact_id) constraint (mig 331)
@@ -717,8 +747,9 @@ export async function sendBroadcast(broadcastId) {
       }).eq('broadcast_id', broadcastId).eq('contact_id', contact.id)
 
       // Log to messages table
+      const conversationId = await getOrCreateConversation(db, contact, broadcast.location_id)
       await db.from('whatsapp_messages').insert({
-        conversation_id: await getOrCreateConversation(db, contact, broadcast.location_id),
+        conversation_id: conversationId,
         contact_id: contact.id,
         location_id: broadcast.location_id,
         wa_message_id: result.messageId,
@@ -731,6 +762,8 @@ export async function sendBroadcast(broadcastId) {
         broadcast_id: broadcastId,
         sent_at: new Date().toISOString(),
       })
+      // Operator-managed send → keep Mia off this thread.
+      if (pauseAgent) await pauseAgentOnThread(db, conversationId)
 
       sentCount++
     } catch (err) {
@@ -879,6 +912,9 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   const config = await getWhatsAppConfig(broadcast.location_id)
   const branding = await getLocationBranding(db, broadcast.location_id)
   const variableMapping = broadcast.variable_mapping || {}
+  // AGENT-TAKEOVER — pause Mia on each recipient thread for an individual send
+  // (audience of 1) or an opt-in bulk drip the operator is handling.
+  const pauseAgent = shouldPauseAgentForBroadcast(broadcast, audience.length)
   let sent = 0, failed = 0, consecutiveFailures = 0, autoPaused = false
 
   for (const contact of toSend) {
@@ -890,14 +926,16 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
         broadcast_id: broadcastId, contact_id: contact.id,
         wa_message_id: result.messageId, status: 'sent', sent_at: new Date().toISOString(),
       })
+      const conversationId = await getOrCreateConversation(db, contact, broadcast.location_id)
       await db.from('whatsapp_messages').insert({
-        conversation_id: await getOrCreateConversation(db, contact, broadcast.location_id),
+        conversation_id: conversationId,
         contact_id: contact.id, location_id: broadcast.location_id,
         wa_message_id: result.messageId, direction: 'outbound', message_type: 'template',
         template_name: template.name, template_variables: variableMapping,
         body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName }),
         status: 'sent', broadcast_id: broadcastId, sent_at: new Date().toISOString(),
       })
+      if (pauseAgent) await pauseAgentOnThread(db, conversationId)
       sent++; consecutiveFailures = 0
     } catch (err) {
       console.error(`[drip ${broadcastId}] send to ${contact.wa_phone} failed:`, err.message)
