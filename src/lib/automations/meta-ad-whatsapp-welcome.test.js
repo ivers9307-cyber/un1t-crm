@@ -75,3 +75,41 @@ describe('maybeSendCampaignWhatsappWelcome — happy path', () => {
     )
   })
 })
+
+describe('maybeSendCampaignWhatsappWelcome — Flow toggle', () => {
+  function makeFlowDb(template, settings) {
+    return {
+      from(tbl) {
+        if (tbl === 'locations') return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { settings } }) }) }) }
+        if (tbl === 'whatsapp_templates') return { select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: template }) }) }) }) }
+        if (tbl === 'contacts') return { update: () => ({ eq: () => ({ is: async () => ({}) }) }) }
+        if (tbl === 'whatsapp_messages') return { insert: async () => ({}) }
+        return {}
+      },
+    }
+  }
+  const FLOW_TPL = { name: 'book_first_visit', status: 'APPROVED', language: 'en', header_media_url: null, components: [{ type: 'BODY', text: 'Hi {{1}}!' }] }
+
+  it('when whatsapp_flow.enabled → sends the FLOW template with a flow_token button', async () => {
+    const r = await maybeSendCampaignWhatsappWelcome({
+      db: makeFlowDb(FLOW_TPL, { whatsapp_flow: { enabled: true, template_name: 'book_first_visit' } }),
+      locationId: 'loc1', contact: { id: 'c1', first_name: 'Sarah', phone: '0871234567', wa_phone: null }, templateName: 'meta_ad_whatsapp_lead',
+    })
+    expect(r).toEqual({ sent: true, messageId: 'wamid.TEST' })
+    const [, tplName, , components] = sendTemplateMessage.mock.calls[0]
+    expect(tplName).toBe('book_first_visit')
+    const flowBtn = components.find((c) => c.sub_type === 'flow')
+    expect(flowBtn.parameters[0].action.flow_token).toBe('c1.loc1')
+  })
+
+  it('when disabled → keeps the passed template, no flow button', async () => {
+    const r = await maybeSendCampaignWhatsappWelcome({
+      db: makeFlowDb(APPROVED, { whatsapp_flow: { enabled: false } }),
+      locationId: 'loc1', contact: { id: 'c1', first_name: 'Sarah', phone: '0871234567', wa_phone: null }, templateName: 'meta_ad_whatsapp_lead',
+    })
+    expect(r.sent).toBe(true)
+    const [, tplName, , components] = sendTemplateMessage.mock.calls[0]
+    expect(tplName).toBe('meta_ad_whatsapp_lead')
+    expect(components.find((c) => c.sub_type === 'flow')).toBeUndefined()
+  })
+})

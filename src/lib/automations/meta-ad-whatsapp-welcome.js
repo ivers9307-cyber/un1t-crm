@@ -37,6 +37,19 @@ const VARIABLE_MAPPING = { '1': 'first_name' }
  */
 export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact, templateName }) {
   try {
+    // If this location has the booking Flow enabled, prefer its FLOW-button
+    // template over the classic quick-reply welcome, and mint a per-lead
+    // flow_token so the endpoint can resolve contact + location on tap.
+    let flowToken = null
+    try {
+      const { data: loc } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
+      const flowCfg = loc?.settings?.whatsapp_flow
+      if (flowCfg?.enabled && flowCfg.template_name) {
+        templateName = flowCfg.template_name
+        flowToken = `${contact?.id}.${locationId}`
+      }
+    } catch (e) { logWarn('meta-ad-wa-welcome', 'flow config read failed', { err: e }) }
+
     if (!templateName) return { sent: false, reason: 'no_template_configured' }
     if (!contact?.phone) return { sent: false, reason: 'no_phone' }
 
@@ -63,6 +76,11 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
       VARIABLE_MAPPING,
       template.header_media_url || null,
     )
+    // FLOW-button template: attach the per-lead flow_token to the button so the
+    // tapped Flow round-trips it back to /api/whatsapp/flow.
+    if (flowToken) {
+      components.push({ type: 'button', sub_type: 'flow', index: 0, parameters: [{ type: 'action', action: { flow_token: flowToken } }] })
+    }
 
     const result = await sendTemplateMessage(
       waPhone,
