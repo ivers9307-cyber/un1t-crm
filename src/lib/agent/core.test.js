@@ -124,16 +124,28 @@ describe('shouldAgentReply', () => {
 })
 
 describe('formatHistoryForClaude', () => {
-  it('maps direction to roles and drops leading assistant turns', () => {
+  it('maps direction to roles and folds a leading outbound OPENER into the first user turn as context (does not drop it)', () => {
     const rows = [
-      { direction: 'outbound', body: 'Welcome!' },          // dropped (leading assistant)
-      { direction: 'inbound', body: 'how much is membership?' },
-      { direction: 'outbound', body: 'It is €X' },
+      { direction: 'outbound', body: 'Hope you enjoyed your trial — how did you find it?' }, // the opener (e.g. a broadcast)
+      { direction: 'inbound', body: 'Loved it! Thinking about the class passes.' },
+      { direction: 'outbound', body: 'Amazing 😊' },
     ]
-    expect(formatHistoryForClaude(rows)).toEqual([
-      { role: 'user', content: 'how much is membership?' },
-      { role: 'assistant', content: 'It is €X' },
-    ])
+    const out = formatHistoryForClaude(rows)
+    expect(out).toHaveLength(2)
+    expect(out[0].role).toBe('user')
+    // The opener's question is preserved as context so the agent doesn't re-ask it…
+    expect(out[0].content).toContain('how did you find it?')
+    // …alongside the customer's actual reply.
+    expect(out[0].content).toContain('Loved it!')
+    expect(out[1]).toEqual({ role: 'assistant', content: 'Amazing 😊' })
+  })
+
+  it('returns [] when the thread has ONLY outbound messages (no customer turn to reply to)', () => {
+    const rows = [
+      { direction: 'outbound', body: 'Hi Sam 👋' },
+      { direction: 'outbound', body: 'You there?' },
+    ]
+    expect(formatHistoryForClaude(rows)).toEqual([])
   })
   it('placeholders empty / media-only rows', () => {
     const rows = [{ direction: 'inbound', body: '', message_type: 'image' }]
