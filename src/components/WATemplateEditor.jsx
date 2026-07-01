@@ -289,6 +289,18 @@ export default function WATemplateEditor({ template, locationId, userId, events 
   }
 
   async function handleResubmit() {
+    // Resubmit edits can add/change {{n}} variables too — enforce the same
+    // sample-value requirement as a fresh submit before rebuilding components.
+    const sampleError = missingSampleError({
+      bodyText,
+      headerText: headerFormat === 'TEXT' ? headerText : '',
+      bodySamples,
+      headerSamples,
+    })
+    if (sampleError) {
+      setError(sampleError)
+      return
+    }
     setResubmitting(true)
     setError(null)
     try {
