@@ -216,8 +216,25 @@ export function formatHistoryForClaude(rows, opts = {}) {
       mapped.push({ role, content: text })
     }
   }
-  // Anthropic requires the first message to be a user turn.
-  while (mapped.length && mapped[0].role !== 'user') mapped.shift()
+  // Anthropic requires the first turn to be a user turn. But a thread that
+  // OPENS with outbound messages — a broadcast / template / proactive message
+  // that often ASKED something ("how did you find your trial?") — must not lose
+  // that opener, or the agent replies to the customer's answer as a cold open
+  // and re-asks the same question. So instead of DROPPING leading assistant
+  // turns, fold their text into the first user turn as a labelled context
+  // preamble so the conversation flows. (Also covers the case where the
+  // maxMessages window happens to start on an assistant turn mid-thread.)
+  const leading = []
+  while (mapped.length && mapped[0].role !== 'user') {
+    leading.push(mapped.shift().content)
+  }
+  if (leading.length && mapped.length) {
+    const prior = leading.join('\n')
+    mapped[0] = {
+      role: 'user',
+      content: `(Context — the conversation so far. Your earlier message${leading.length > 1 ? 's' : ''} to this customer, which they are now replying to:\n"${prior}"\nContinue that conversation naturally — don't reintroduce yourself or re-ask what you already asked.)\n\n${mapped[0].content}`,
+    }
+  }
   return mapped
 }
 
