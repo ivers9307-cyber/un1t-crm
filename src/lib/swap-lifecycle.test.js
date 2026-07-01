@@ -280,3 +280,35 @@ describe('resolveSwapTransition — terminal-state + bad-input guards', () => {
     expect(TERMINAL_SWAP_STATES).toEqual(expect.arrayContaining(['approved', 'rejected', 'cancelled']))
   })
 })
+
+// GUARD: every status the resolver writes onto shift_assignments must be a
+// value the DB CHECK constraint permits (mig 067 + mig 337). A pure test can't
+// touch the constraint, so this asserts against a hard-coded copy of the
+// allowed set — keep the two in lockstep. This is the drift that caused
+// "shift_assignments_status_check" 500s on approval (status='swapped' was
+// emitted before mig 337 allowed it).
+describe('resolveSwapTransition — assignment status stays DB-valid', () => {
+  // Must match the CHECK on public.shift_assignments.status.
+  const VALID_ASSIGNMENT_STATUSES = ['scheduled', 'confirmed', 'completed', 'cancelled', 'swapped']
+
+  const approveCases = [
+    ['reciprocal swap', makeSwap({
+      status: 'awaiting_approval', target_id: 'coach-2',
+      target_shift_id: 'asg-tgt', target_shift: { id: 'asg-tgt', profile_id: 'coach-2' },
+    })],
+    ['reassign (open claim)', makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' })],
+    ['drop (no taker)', makeSwap({ status: 'awaiting_approval' })],
+  ]
+
+  it.each(approveCases)('%s → only DB-valid assignment statuses', (_label, swap) => {
+    const r = resolveSwapTransition({
+      swap, requestedStatus: 'approved', user: manager, userLocationIds: ['loc-1'],
+    })
+    expect(r.ok).toBe(true)
+    for (const op of r.assignmentOps) {
+      if (op.set.status !== undefined) {
+        expect(VALID_ASSIGNMENT_STATUSES).toContain(op.set.status)
+      }
+    }
+  })
+})
