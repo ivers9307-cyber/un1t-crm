@@ -1,5 +1,8 @@
 // Orchestrates the Flow data-exchange: prefill on INIT, resolve live days/slots
-// on each step, and parse the completion payload. All I/O lives here.
+// on each step, thread state (path/slot) forward, and parse the completion.
+// The chosen slot id encodes everything the booking needs (decoded at completion):
+//   class:   `${event_id}|${starts_at}|${class_name}`
+//   consult: `${event_id}|${date}|${start}|${end}`
 import { computeAvailableDays, computeAvailableSlots } from '@/lib/booking-slots.js'
 import { listPublicClasses } from '@/lib/public-classes.js'
 import { SCREEN, pathScreen, dayScreen, slotScreen, detailsScreen, confirmScreen } from './screens.js'
@@ -13,14 +16,6 @@ async function resolveConsultEvent(db, locationId, config) {
   return event
 }
 
-function classDaysFrom(classes) {
-  const seen = new Map()
-  for (const c of classes) {
-    const day = c.starts_at.slice(0, 10)
-    if (!seen.has(day)) seen.set(day, { id: day, title: dayLabel(day) })
-  }
-  return [...seen.values()]
-}
 function dayLabel(iso) {
   return new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'short' })
     .format(new Date(`${iso}T12:00:00Z`))
@@ -35,32 +30,40 @@ export async function handleDataExchange(db, { decryptedBody, contact, locationI
   if (action === 'INIT') return pathScreen()
 
   if (screen === SCREEN.PATH) {
-    if (data.path === 'consult') {
+    const path = data.path
+    if (path === 'consult') {
       const event = await resolveConsultEvent(db, locationId, config)
-      const days = await computeAvailableDays(db, event, { days: 14 })
-      return dayScreen(days)
+      const rawDays = await computeAvailableDays(db, event, { days: 14 })
+      return dayScreen(rawDays.map((d) => ({ id: d.date, title: d.label })), path)
     }
     const classes = await listPublicClasses(db, locationId)
-    return dayScreen(classDaysFrom(classes))
+    const seen = new Map()
+    for (const c of classes) {
+      const day = c.starts_at.slice(0, 10)
+      if (!seen.has(day)) seen.set(day, { id: day, title: dayLabel(day) })
+    }
+    return dayScreen([...seen.values()], path)
   }
 
   if (screen === SCREEN.DAY) {
-    if (data.path === 'consult') {
+    const path = data.path
+    if (path === 'consult') {
       const event = await resolveConsultEvent(db, locationId, config)
       const slots = await computeAvailableSlots(db, event, data.day)
-      return slotScreen({ day: data.day, slots: slots.map((s) => ({ id: `${event.id}|${data.day}|${s.start}|${s.end}`, title: `${s.start}` })) })
+      return slotScreen({ day: data.day, path, slots: slots.map((s) => ({ id: `${event.id}|${data.day}|${s.start}|${s.end}`, title: s.start })) })
     }
     const classes = (await listPublicClasses(db, locationId)).filter((c) => c.starts_at.slice(0, 10) === data.day)
-    return slotScreen({ day: data.day, slots: classes.map((c) => ({ id: c.event_id, title: `${timeLabel(c.starts_at)} ${c.name}${c.spots_left != null ? ` (${c.spots_left} left)` : ''}` })) })
+    return slotScreen({ day: data.day, path, slots: classes.map((c) => ({ id: `${c.event_id}|${c.starts_at}|${c.name}`, title: `${timeLabel(c.starts_at)} ${c.name}${c.spots_left != null ? ` (${c.spots_left} left)` : ''}` })) })
   }
 
   if (screen === SCREEN.SLOT) {
-    return detailsScreen({ name: contact?.name, email: contact?.email })
+    return detailsScreen({ name: contact?.name, email: contact?.email }, { path: data.path, slot: data.slot })
   }
 
   if (screen === SCREEN.DETAILS) {
     const summary = data.path === 'consult' ? 'Confirm your consultation' : 'Confirm your class'
-    return confirmScreen({ summary, path: data.path, ...data })
+    const selection = { path: data.path, slot: data.slot, name: data.name, email: data.email, marketing_opt_in: data.marketing_opt_in }
+    return confirmScreen(summary, selection)
   }
 
   return pathScreen()
