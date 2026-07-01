@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { ArrowLeft, Save, Send, Trash2, Upload, FileText, Video, X } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import { validateTemplateMedia } from '@/lib/template-media'
+import { extractVariableIndexes, buildBodyExample, buildHeaderTextExample, missingSampleError, samplesFromExample } from '@/lib/whatsapp-template-samples'
 
 // Parse a route response defensively. Infra layers answer in plain text
 // (Vercel's ~4.5 MB body cap returns a literal "Request Entity Too
@@ -78,6 +79,13 @@ export default function WATemplateEditor({ template, locationId, userId, events 
   const [bodyText, setBodyText] = useState(existingBody?.text || '')
   const [footerText, setFooterText] = useState(existingFooter?.text || '')
   const [buttons, setButtons] = useState(existingButtons?.buttons || [])
+
+  // Meta requires an example (sample) value per {{n}} variable at CREATE time,
+  // or the template is rejected. Seed from the existing template when editing.
+  const [bodySamples, setBodySamples] = useState(() => samplesFromExample(existingBody?.example?.body_text?.[0]))
+  const [headerSamples, setHeaderSamples] = useState(() => samplesFromExample(existingHeader?.example?.header_text))
+  const bodyVars = extractVariableIndexes(bodyText)
+  const headerVars = headerFormat === 'TEXT' ? extractVariableIndexes(headerText) : []
 
   // Header media — handle is what Meta needs at template-approval time;
   // url is what we feed Meta at SEND time. Both come back from
@@ -187,6 +195,8 @@ export default function WATemplateEditor({ template, locationId, userId, events 
       const header = { type: 'HEADER', format: headerFormat }
       if (headerFormat === 'TEXT') {
         header.text = headerText
+        const headerExample = buildHeaderTextExample(headerText, headerSamples)
+        if (headerExample) header.example = headerExample
       } else if (mediaHandle) {
         // Real handle from Meta's Resumable Upload API. Required for
         // IMAGE / VIDEO / DOCUMENT headers — Meta needs an actual
@@ -199,13 +209,10 @@ export default function WATemplateEditor({ template, locationId, userId, events 
 
     if (bodyText) {
       const bodyComp = { type: 'BODY', text: bodyText }
-      // Extract example values for variables
-      const vars = bodyText.match(/\{\{\d+\}\}/g) || []
-      if (vars.length > 0) {
-        bodyComp.example = {
-          body_text: [vars.map((_, i) => `Example ${i + 1}`)]
-        }
-      }
+      // Operator-entered sample values → Meta's example.body_text (required for
+      // approval when the body has {{n}} variables).
+      const bodyExample = buildBodyExample(bodyText, bodySamples)
+      if (bodyExample) bodyComp.example = bodyExample
       components.push(bodyComp)
     }
 
@@ -227,6 +234,16 @@ export default function WATemplateEditor({ template, locationId, userId, events 
     }
     if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat) && !mediaHandle) {
       setError(`A ${headerFormat.toLowerCase()} file must be uploaded before submitting — Meta requires a real example asset for media headers.`)
+      return
+    }
+    const sampleError = missingSampleError({
+      bodyText,
+      headerText: headerFormat === 'TEXT' ? headerText : '',
+      bodySamples,
+      headerSamples,
+    })
+    if (sampleError) {
+      setError(sampleError)
       return
     }
 
@@ -272,6 +289,18 @@ export default function WATemplateEditor({ template, locationId, userId, events 
   }
 
   async function handleResubmit() {
+    // Resubmit edits can add/change {{n}} variables too — enforce the same
+    // sample-value requirement as a fresh submit before rebuilding components.
+    const sampleError = missingSampleError({
+      bodyText,
+      headerText: headerFormat === 'TEXT' ? headerText : '',
+      bodySamples,
+      headerSamples,
+    })
+    if (sampleError) {
+      setError(sampleError)
+      return
+    }
     setResubmitting(true)
     setError(null)
     try {
@@ -469,6 +498,25 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                 />
               )}
 
+              {headerVars.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs text-un1t-subtle">Header sample value — shown to Meta for review.</p>
+                  {headerVars.map((i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <span className="text-xs text-un1t-muted w-10 shrink-0">{`{{${i}}}`}</span>
+                      <input
+                        type="text"
+                        value={headerSamples[i] || ''}
+                        onChange={e => setHeaderSamples(s => ({ ...s, [i]: e.target.value }))}
+                        placeholder={`Example for {{${i}}}`}
+                        disabled={(isSubmitted && !canResubmit)}
+                        className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted disabled:opacity-50"
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat) && (
                 <div className="space-y-2">
                   <p className="text-xs text-un1t-muted">
@@ -552,6 +600,25 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                 Use {'{{1}}'}, {'{{2}}'}, etc. for variables. Max 1024 characters.
                 Variables will be mapped to contact fields when sending.
               </p>
+
+              {bodyVars.length > 0 && (
+                <div className="space-y-2 pt-1 border-t border-un1t-border">
+                  <p className="text-xs text-un1t-subtle">Sample values — Meta reviews the template against these, so use realistic examples.</p>
+                  {bodyVars.map((i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <span className="text-xs text-un1t-muted w-10 shrink-0">{`{{${i}}}`}</span>
+                      <input
+                        type="text"
+                        value={bodySamples[i] || ''}
+                        onChange={e => setBodySamples(s => ({ ...s, [i]: e.target.value }))}
+                        placeholder={`Example for {{${i}}}`}
+                        disabled={(isSubmitted && !canResubmit)}
+                        className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted disabled:opacity-50"
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Footer */}
