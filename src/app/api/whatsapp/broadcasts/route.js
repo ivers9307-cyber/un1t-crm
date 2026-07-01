@@ -19,6 +19,9 @@ const BroadcastCreateSchema = z.object({
   send_window_start: timeOfDay.optional(),
   send_window_end: timeOfDay.optional(),
   send_window_tz: z.string().max(64).optional(),
+  // AGENT-TAKEOVER — operator will handle replies on a bulk send, so pause Mia
+  // on each recipient thread. (A single-recipient send pauses automatically.)
+  handle_replies_manually: z.boolean().optional(),
 })
 
 // GET /api/whatsapp/broadcasts
@@ -74,6 +77,7 @@ export async function POST(request) {
     // the send window. A blast stays 'draft' until the operator fires /send.
     status: isDrip ? 'sending' : 'draft',
     delivery_mode: body.delivery_mode || 'blast',
+    handle_replies_manually: body.handle_replies_manually === true,
     ...(isDrip ? {
       daily_cap: body.daily_cap ?? 500,
       per_tick_max: body.per_tick_max ?? null,
