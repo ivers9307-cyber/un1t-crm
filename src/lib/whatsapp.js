@@ -133,6 +133,42 @@ export async function sendInteractiveOptions(to, text, options, opts = {}) {
 }
 
 /**
+ * Interactive Flow message (24h window). Launches a published Flow at `screen`.
+ * flow_token round-trips to our data-exchange endpoint so it can resolve the
+ * contact + location (minted as `<contactId>.<locationId>`).
+ */
+export function buildFlowPayload(to, { flowId, flowToken, flowCta, screen, data = {} }) {
+  return {
+    messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive',
+    interactive: {
+      type: 'flow',
+      body: { text: 'Tap below to book your first visit.' },
+      action: {
+        name: 'flow',
+        parameters: {
+          mode: 'published', flow_message_version: '3', flow_token: flowToken, flow_id: flowId,
+          flow_cta: flowCta || 'Book now', flow_action: 'navigate',
+          flow_action_payload: { screen, data },
+        },
+      },
+    },
+  }
+}
+
+export async function sendFlowMessage(to, opts = {}) {
+  const config = await resolveConfig(opts)
+  const response = await fetch(`${META_API_URL}/${config.phoneNumberId}/messages`, {
+    method: 'POST', headers: headersFor(config), body: JSON.stringify(buildFlowPayload(to, opts)),
+  })
+  const result = await response.json()
+  if (result.error) {
+    console.error('WhatsApp flow send error:', result.error)
+    throw new Error(result.error.message || 'Failed to send WhatsApp flow message')
+  }
+  return { messageId: result.messages?.[0]?.id, status: result.messages?.[0]?.message_status || 'sent' }
+}
+
+/**
  * Send a template message (works anytime — no 24h window needed)
  */
 export async function sendTemplateMessage(to, templateName, language = 'en', components = [], opts = {}) {

@@ -2,6 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { refreshWindow, parseConsentKeyword, markUndeliverableIfPermanent } from '@/lib/whatsapp'
 import { applyWhatsappConsentKeyword } from '@/lib/whatsapp-consent'
+import { handleFlowCompletion } from '@/lib/whatsapp-flow/completion.js'
 import { resolveWhatsAppNumberByPhoneNumberId } from '@/lib/whatsapp-config'
 import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
@@ -284,7 +285,14 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
       body = `Shared contact: ${message.contacts?.[0]?.name?.formatted_name || 'Unknown'}`
       break
     case 'interactive':
-      body = message.interactive?.button_reply?.title || message.interactive?.list_reply?.title || ''
+      if (message.interactive?.type === 'nfm_reply') {
+        // A completed WhatsApp Flow ("Book your first visit"). Book it, then log a marker.
+        try { await handleFlowCompletion(db, { interactive: message.interactive, contact, locationId }) }
+        catch (e) { console.error('[wa-webhook] flow completion failed:', e.message) }
+        body = '[Booking submitted via WhatsApp Flow]'
+      } else {
+        body = message.interactive?.button_reply?.title || message.interactive?.list_reply?.title || ''
+      }
       break
     case 'reaction':
       body = `Reacted: ${message.reaction?.emoji || ''}`
