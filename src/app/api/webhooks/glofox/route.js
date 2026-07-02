@@ -196,7 +196,7 @@ export async function POST(request) {
     if (parsed.contactEmail) {
       const { data: contactRows, error: contactErr } = await db
         .from('contacts')
-        .select('id')
+        .select('id, last_booked_at')
         .eq('location_id', creds.locationId)
         .eq('email', parsed.contactEmail)
         .limit(1)
@@ -209,7 +209,7 @@ export async function POST(request) {
     if (!contact && parsed.userId) {
       const { data: contactRows, error: contactErr } = await db
         .from('contacts')
-        .select('id')
+        .select('id, last_booked_at')
         .eq('location_id', creds.locationId)
         .eq('glofox_member_id', parsed.userId)
         .limit(1)
@@ -282,6 +282,33 @@ export async function POST(request) {
           err: e?.message, contact_id: contact.id, event_id: parsed.eventId,
         })
         ltvResult = { ok: false, reason: 'threw', error: e?.message }
+      }
+    }
+
+    // 6c. SEQ-GLOFOX.2 — stamp glofox_first_booking once-ever on the first
+    // booking we see for a contact. The flow builder's "has booked their
+    // first class?" branch keys on this tag. Two guards keep it honest:
+    //   - once-ever: if a contact_tags row has EVER existed (even removed
+    //     by an operator), a first booking can't happen twice — we skip;
+    //   - last_booked_at must be empty: long-standing members predate this
+    //     tag (no backfill BY DESIGN — a backfill would mass-fire
+    //     tag_added sequences), so without this guard a veteran's next
+    //     booking would wrongly stamp "first". At this point in the
+    //     request last_booked_at still holds the value from BEFORE this
+    //     booking (step 9's member sync updates it afterwards).
+    // Adding to `tags` here rides the step-7 apply loop + step-8
+    // tag_added triggers, so "first booking" automations work too.
+    if ((evUpper === 'BOOKING_CREATED' || evUpper === 'COURSE_BOOKING_CREATED') && !contact.last_booked_at) {
+      try {
+        const { data: fbRows } = await db
+          .from('contact_tags')
+          .select('id')
+          .eq('contact_id', contact.id)
+          .eq('tag', 'glofox_first_booking')
+          .limit(1)
+        if (!fbRows?.length) tags.push('glofox_first_booking')
+      } catch (e) {
+        logWarn('glofox-webhook', 'first-booking tag check threw', { err: e?.message, contact_id: contact.id })
       }
     }
 
