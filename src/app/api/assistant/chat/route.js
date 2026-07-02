@@ -56,7 +56,9 @@ const TOOL_PERMISSIONS = {
   list_shift_templates: 'manager',
   create_shift:         'manager',
   create_contact:       'admin',
-  move_deal:            'admin',
+  // FUNNEL.1 — move_deal was removed: pipeline stages are classifier-
+  // derived (webhook + nightly cron); a manual deals.stage_id write is
+  // silently reverted by the next sync.
   create_activity:      'manager',
   generate_report:      'manager',
 }
@@ -183,27 +185,6 @@ export async function executeTool(toolName, input, context) {
           status: s.status,
         }))
       }
-    }
-
-    case 'move_deal': {
-      if (!locationId) return { error: 'No active location for this action.' }
-      // Confirm the deal belongs to the caller's location BEFORE any
-      // write — otherwise the assistant could move another tenant's deal.
-      const { data: deal } = await db.from('deals')
-        .select('id')
-        .eq('id', input.deal_id)
-        .eq('location_id', locationId)
-        .maybeSingle()
-      if (!deal) return { error: 'Deal not found in your active location.' }
-      const { data: stage } = await db.from('pipeline_stages').select('id').eq('slug', input.stage_slug).single()
-      if (!stage) return { error: `Stage "${input.stage_slug}" not found` }
-      const { data, error } = await db.from('deals')
-        .update({ stage_id: stage.id })
-        .eq('id', input.deal_id)
-        .select('id, title')
-        .single()
-      if (error) return { error: error.message }
-      return { success: true, deal: data, moved_to: input.stage_slug }
     }
 
     case 'create_activity': {

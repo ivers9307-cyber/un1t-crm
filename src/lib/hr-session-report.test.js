@@ -84,15 +84,17 @@ describe('buildSessionReport', () => {
 })
 
 describe('buildNextAction', () => {
-  const base = { stage: 'active_member', membershipSignupUrl: 'https://j', membershipLabel: 'Join' }
+  // Merge of FUNNEL.1 slugs × the Pulse-scope rule (members get NO
+  // next-action — booking stays in the Glofox member app).
+  const base = { stage: 'member', membershipSignupUrl: 'https://j', membershipLabel: 'Join' }
   it('members → no next-action (Pulse stays out of booking)', () => {
     expect(buildNextAction(base)).toBeNull()
   })
-  it('at_risk_member also counts as a member → null', () => {
-    expect(buildNextAction({ ...base, stage: 'at_risk_member' })).toBeNull()
+  it('recently converted (FUNNEL.1 converted stage) counts as a member → null', () => {
+    expect(buildNextAction({ ...base, stage: 'converted' })).toBeNull()
   })
   it('prospect → join with custom label', () => {
-    expect(buildNextAction({ ...base, stage: 'active_trial' })).toEqual({ type: 'join', label: 'Join', url: 'https://j' })
+    expect(buildNextAction({ ...base, stage: 'first_class' })).toEqual({ type: 'join', label: 'Join', url: 'https://j' })
   })
   it('null/unknown stage → join', () => {
     expect(buildNextAction({ ...base, stage: null }).type).toBe('join')

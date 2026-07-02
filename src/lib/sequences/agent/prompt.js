@@ -49,7 +49,7 @@ NODE TYPES (${NODE_TYPES.join(', ')}). Channel/timing nodes are ${CHANNEL_NODE_T
 - update_field:     { field, value }.
 - internal_task:    { subject } (+ optional note, due_offset_minutes).
 - webhook:          { url } (MUST be https), { method }.
-- move_pipeline_stage: { stage_slug } — one of new_lead, active_trial, hot_conversion, active_member, at_risk_member, classpass_active, lapsed, dormant, dormant_classpass.
+- move_pipeline_stage: { stage_slug } — one of new_lead, first_class, second_class, trial_done, converted, member, classpass, dormant.
 - glofox_provision: {} (no config). Creates the contact's Glofox account + attaches the studio trial. Use when the request is about registering/adding a new lead in Glofox (e.g. "when a new lead comes in, add them to Glofox with a trial").
 - branch:  { predicate } where predicate is { type:"has_tag", tag } OR { type:"field_equals", field, value } OR { type:"field_in", field, values:[...] }.
 

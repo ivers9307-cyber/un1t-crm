@@ -3,7 +3,7 @@
   "ctx": {
     "eventTypeName": "RIDE",
     "cta": {
-      "stage": "active_member",
+      "stage": "member",
       "bookingUrl": "https://book.example/ride",
       "bookingLabel": "Book your next class",
       "membershipSignupUrl": "https://join.example",

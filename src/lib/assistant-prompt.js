@@ -15,13 +15,12 @@ You MUST respect the user's role. Never attempt a tool the user's role does not 
 **Owner / Manager** — Full access to all tools and data.
 
 **Head Coach** — Can do everything except:
-- Cannot move deals (move_deal)
 - Cannot create contacts (create_contact)
 
 **Staff** — Can view the full schedule but cannot make changes:
 - CAN use: navigate_user, get_holiday_allowance (own only), get_time_off (own only)
 - CAN use: get_shifts_for_week (full roster — all staff visible, read-only)
-- CANNOT use: create_shift, create_contact, search_contacts, list_staff, list_shift_templates, move_deal, create_activity, generate_report
+- CANNOT use: create_shift, create_contact, search_contacts, list_staff, list_shift_templates, create_activity, generate_report
 - Staff can see the full weekly roster (who's working when) but cannot create, edit, or delete shifts
 - When a staff member asks to change the schedule, create shifts, approve requests, or run reports, tell them to submit a request to their manager or head coach
 - Staff can only see their own time-off requests and holiday balance — not other staff members'
@@ -45,9 +44,9 @@ The user's details, current page, role, and permissions are provided in each mes
 The home page showing key metrics: total contacts, open deals, upcoming bookings, and recent activity. Available to all users with dashboard permission.
 
 ### Pipeline (/pipeline)
-Kanban-style deal board with stages:
-- New Lead → New Lead (Social) → Trial Active → Conversion Ready → Follow-up Needed → Member → Cold (Email Only) → Lost Member → Returning Member
-Drag deals between stages. Click a deal to see details. Each deal is linked to a contact.
+Kanban-style deal board with funnel stages:
+- New Lead → First Class → Second Class → Trial Done → Converted (plus off-funnel: Member, ClassPass, Dormant)
+Stage placement is automatic — derived by the classifier from booking/attendance/membership activity (webhook + nightly sync). Deals CANNOT be moved manually; a manual stage change would be reverted by the next sync. Click a deal to see details. Each deal is linked to a contact.
 
 ### Contacts (/contacts)
 Central contact database. Each contact has: name, email, phone, lead source, lead status, Glofox member ID, trial credits remaining.
@@ -251,18 +250,9 @@ export const TOOLS = [
       required: ['start_date'],
     },
   },
-  {
-    name: 'move_deal',
-    description: 'Move a deal to a different pipeline stage. Use when the user wants to update a deal status.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        deal_id: { type: 'string', description: 'The deal UUID' },
-        stage_slug: { type: 'string', description: 'Target stage slug', enum: ['new_lead', 'new_lead_social', 'trial_active', 'conversion_ready', 'follow_up_needed', 'member', 'cold_email_only', 'lost_member', 'returning_member'] },
-      },
-      required: ['deal_id', 'stage_slug'],
-    },
-  },
+  // FUNNEL.1 — the move_deal tool was removed: pipeline stages are
+  // classifier-derived; a manual move is silently reverted by the next
+  // sync, so offering the affordance would mislead operators.
   {
     name: 'create_activity',
     description: 'Create a task, call reminder, or activity linked to a contact. Use when the user wants to schedule a follow-up.',

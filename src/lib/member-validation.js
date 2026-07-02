@@ -2,7 +2,7 @@
 // signup form (mig 084).
 //
 // We match strictly by (location_id, lower(email)) against contacts
-// where pipeline_stage_slug = 'active_member'. The match is
+// whose pipeline_stage_slug marks a current member. The match is
 // intentionally narrow for v1:
 //
 //   - Email-only: lowest friction. The signup form shows a notice
@@ -10,10 +10,11 @@
 //   - Location-scoped: a contact only counts as a member of THIS
 //     race's location. Cross-location membership is a future call
 //     (and would belong to organisations, not contacts).
-//   - pipeline_stage_slug='active_member' is the membership signal.
-//     The deal trigger (mig 155) auto-syncs this from the contact's
-//     open deal stage, so Glofox sync + manual moves both flow
-//     through here without app code touching the column.
+//   - pipeline_stage_slug ∈ {converted, member} is the membership
+//     signal (FUNNEL.1: 'converted' = became a member ≤60d ago,
+//     'member' = established member). The stage is classifier-derived
+//     from Glofox status, so membership changes flow through here
+//     without app code touching the column.
 //
 // We never leak whether an email exists in contacts when the lookup
 // fails — the route returns { is_member: false } whether the email
@@ -52,7 +53,9 @@ export async function validateMemberByEmail({ db, email, locationId }) {
     .maybeSingle()
 
   if (error || !data) return fail
-  if (data.pipeline_stage_slug !== 'active_member') return fail
+  // FUNNEL.1 — current members sit in 'converted' (≤60d since joining)
+  // or 'member' (established).
+  if (!['converted', 'member'].includes(data.pipeline_stage_slug)) return fail
 
   return {
     is_member: true,

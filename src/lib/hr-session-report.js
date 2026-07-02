@@ -16,7 +16,10 @@ import { buildSessionAnalytics } from './hr-analytics.js'
 export const SESSION_REPORT_VERSION = 1
 
 export const DEFAULT_JOIN_CTA = 'Become a member'
-const MEMBER_STAGES = ['active_member', 'at_risk_member']
+// FUNNEL.1 — current members sit in 'converted' (became a member ≤60d
+// ago) or 'member' (established / off-funnel). Replaces the retired
+// active_member / at_risk_member slugs.
+const MEMBER_STAGES = ['converted', 'member']
 
 /**
  * Context-aware post-class CTA. Pulse stays OUT of booking (the Glofox member

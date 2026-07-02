@@ -12,8 +12,8 @@ import { Labeled, Text, Area, Num, Select } from './nodeEditing'
 import AudienceBuilder from '@/components/AudienceBuilder'
 
 const PIPELINE_SLUGS = [
-  'new_lead', 'active_trial', 'hot_conversion', 'active_member',
-  'at_risk_member', 'classpass_active', 'lapsed', 'dormant', 'dormant_classpass',
+  'new_lead', 'first_class', 'second_class', 'trial_done',
+  'converted', 'member', 'classpass', 'dormant',
 ]
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 

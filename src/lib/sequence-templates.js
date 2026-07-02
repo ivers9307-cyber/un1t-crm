@@ -397,10 +397,10 @@ export const SEQUENCE_TEMPLATES = [
     id: 'consultation_lead_nurture',
     category: 'Lead conversion',
     name: 'Lead nurture from consultation',
-    description: 'Three-touch drip starting the day the prospect books a free consultation. Day 0 thanks + what-to-expect, Day 3 social proof, Day 7 trial-class offer. Goal: contact becomes an active_trial.',
+    description: 'Three-touch drip starting the day the prospect books a free consultation. Day 0 thanks + what-to-expect, Day 3 social proof, Day 7 trial-class offer. Goal: contact attends their first class.',
     trigger_type: 'booking_created',
     trigger_config: {},
-    goal_config: { type: 'pipeline_stage', value: 'active_trial' },
+    goal_config: { type: 'pipeline_stage', value: 'first_class' },
     send_window: { start_hour: 9, end_hour: 19, skip_days: [] },
     steps: [
       {
@@ -468,7 +468,7 @@ export const SEQUENCE_TEMPLATES = [
     trigger_type: 'race_finished',
     trigger_config: {},
     audience_filter: { logic: 'and', filters: [{ field: 'lead_source', op: 'eq', value: 'website' }] },
-    goal_config: { type: 'pipeline_stage', value: 'active_trial' },
+    goal_config: { type: 'pipeline_stage', value: 'first_class' },
     steps: [
       {
         step_type: 'email',
@@ -495,7 +495,7 @@ export const SEQUENCE_TEMPLATES = [
     description: 'Fires only on the contact\'s very first booking. 3 emails: prep guide, day-after follow-up, week-on check-in.',
     trigger_type: 'first_booking',
     trigger_config: {},
-    goal_config: { type: 'pipeline_stage', value: 'active_member' },
+    goal_config: { type: 'pipeline_stage', value: 'converted' },
     send_window: { start_hour: 9, end_hour: 18, skip_days: [] },
     steps: [
       {
@@ -525,9 +525,9 @@ export const SEQUENCE_TEMPLATES = [
     id: 'lead_status_member_welcome',
     category: 'Welcome',
     name: 'New member welcome',
-    description: 'Fires when a contact\'s pipeline stage flips to active_member. One email + a tag for downstream targeting.',
+    description: 'Fires when a contact\'s pipeline stage flips to converted. One email + a tag for downstream targeting.',
     trigger_type: 'pipeline_stage_change',
-    trigger_config: { to_status: 'active_member' },
+    trigger_config: { to_status: 'converted' },
     goal_config: null,
     steps: [
       {

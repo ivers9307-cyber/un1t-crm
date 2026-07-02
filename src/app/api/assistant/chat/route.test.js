@@ -12,7 +12,9 @@
 //     (e.g. both UN1T and CCF Autos)
 //   - create_contact inserted a NULL-location orphan/global row
 //   - list_staff listed staff across every tenant
-//   - move_deal moved a deal by id with no ownership check
+//   - move_deal moved a deal by id with no ownership check (the tool
+//     itself was later removed in FUNNEL.1 — stages are classifier-
+//     derived, so its tests went with it)
 //   - create_activity attached to a client-supplied contact_id with no
 //     ownership check and stamped no location_id
 // These tests pin the scoped behaviour: every tenant-data tool is
@@ -108,7 +110,7 @@ function makeDb(fixtures = {}) {
 }
 
 // Manager at loc-a. Manager ∈ ADMIN_ROLES and MANAGER_ROLES, so it clears
-// the gate for all five tools under test.
+// the gate for all tools under test.
 const MANAGER = { locationId: 'loc-a', role: 'manager', userId: 'u-1' }
 
 function useDb(fixtures) {
@@ -198,31 +200,6 @@ describe('executeTool list_staff — location scoping via profile_locations', ()
     useDb({ profile_locations, profiles })
     const res = await executeTool('list_staff', {}, { ...MANAGER, locationId: null })
     expect(res).toEqual({ staff: [] })
-  })
-})
-
-// ── move_deal ────────────────────────────────────────────────────────
-describe('executeTool move_deal — cross-tenant ownership check', () => {
-  const pipeline_stages = [{ id: 'stage-member', slug: 'member' }]
-  const deals = [
-    { id: 'd-a', title: 'Alice deal', location_id: 'loc-a', stage_id: 'stage-old' },
-    { id: 'd-b', title: 'Bob deal', location_id: 'loc-b', stage_id: 'stage-old' }, // other tenant
-  ]
-
-  it('moves a deal that belongs to the caller’s location', async () => {
-    const db = useDb({ pipeline_stages, deals })
-    const res = await executeTool('move_deal', { deal_id: 'd-a', stage_slug: 'member' }, MANAGER)
-    expect(res.success).toBe(true)
-    expect(res.deal.id).toBe('d-a')
-    expect(res.moved_to).toBe('member')
-    expect(db._writes.some(w => w.table === 'deals' && w.op === 'update')).toBe(true)
-  })
-
-  it('refuses to move another tenant’s deal and issues no update', async () => {
-    const db = useDb({ pipeline_stages, deals })
-    const res = await executeTool('move_deal', { deal_id: 'd-b', stage_slug: 'member' }, MANAGER)
-    expect(res.error).toMatch(/not found/i)
-    expect(db._writes.some(w => w.table === 'deals' && w.op === 'update')).toBe(false)
   })
 })
 

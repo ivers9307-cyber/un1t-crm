@@ -148,7 +148,7 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
         </>
       )
     case 'move_pipeline_stage':
-      return <Labeled label="Move to stage" hint="Pipeline stage slug, e.g. active_member"><Text value={c.stage_slug} onChange={v => onPatch({ stage_slug: v })} placeholder="stage slug" /></Labeled>
+      return <Labeled label="Move to stage" hint="Pipeline stage slug, e.g. converted"><Text value={c.stage_slug} onChange={v => onPatch({ stage_slug: v })} placeholder="stage slug" /></Labeled>
     case 'branch': {
       const p = c.predicate || {}
       const setPred = (patch) => onPatch({ predicate: { ...p, ...patch } })
