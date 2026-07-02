@@ -482,7 +482,7 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
 
 async function handleStatusUpdate(db, status) {
   const messageId = status.id
-  const statusValue = status.status  // sent, delivered, read, failed
+  const statusValue = status.status  // sent, delivered, read, played, failed
   const timestamp = status.timestamp ? new Date(parseInt(status.timestamp) * 1000) : new Date()
 
   const updates = { status: statusValue }
@@ -495,6 +495,11 @@ async function handleStatusUpdate(db, status) {
       updates.delivered_at = timestamp.toISOString()
       break
     case 'read':
+      updates.read_at = timestamp.toISOString()
+      break
+    case 'played':
+      // Voice-note listened-to receipt — the strongest read signal there is.
+      // Stored as read_at; status keeps the distinct 'played' value.
       updates.read_at = timestamp.toISOString()
       break
     case 'failed':

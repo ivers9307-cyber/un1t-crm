@@ -1537,6 +1537,25 @@ registry.registerPath({
   },
 })
 
+// WhatsApp inbox reaction action (cookie auth)
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/conversations/{id}/react',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'React to a WhatsApp message with an emoji',
+  description: 'Sends an emoji reaction to a customer message via Meta (empty string removes the reaction) and logs a thread row. Reactions only receive a sent status webhook — no delivered/read.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ message_id: z.string().min(1), emoji: z.string().max(8) }).openapi('WaReaction') } } },
+  },
+  responses: {
+    200: { description: 'Reaction sent' },
+    404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Meta reaction call failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // WhatsApp spend telemetry (cookie auth)
 registry.registerPath({
   method: 'get',
