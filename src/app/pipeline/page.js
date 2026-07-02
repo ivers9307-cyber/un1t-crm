@@ -114,11 +114,22 @@ export default async function PipelinePage(props) {
 
   // FUNNEL.1 — derive the badge server-side and strip recent_bookings
   // so the client payload stays card-sized (PERF.2 discipline).
+  //
+  // Only funnel columns 1–4 carry the badge (DealCard has a matching
+  // BADGE_SLUGS set). Converted/off-funnel contacts get null so the
+  // KanbanBoard's badge-first sort never re-orders those columns by a
+  // criterion the card doesn't render.
+  const BADGE_SLUGS = new Set(['new_lead', 'first_class', 'second_class', 'trial_done'])
   const boardDeals = deals.map((d) => {
     const { recent_bookings, ...contact } = d.contacts || {}
     return {
       ...d,
-      contacts: { ...contact, next_class_at: nextBookedClass(recent_bookings) },
+      contacts: {
+        ...contact,
+        next_class_at: BADGE_SLUGS.has(contact.pipeline_stage_slug)
+          ? nextBookedClass(recent_bookings)
+          : null,
+      },
     }
   })
 

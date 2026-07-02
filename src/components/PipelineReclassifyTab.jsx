@@ -32,6 +32,16 @@ const STAGE_LABELS = {
   classpass:    'ClassPass',
   dormant:      'Dormant',
   '':           '(no deal yet)',
+  // Legacy labels kept for the one-time FUNNEL.1 migration matrix
+  // (migration-day runs render old-slug → new-stage rows in the
+  // From column); safe to prune after mig 344.
+  active_trial:      'Active Trial',
+  hot_conversion:    'Hot Conversion',
+  active_member:     'Active Member',
+  at_risk_member:    'At Risk Member',
+  classpass_active:  'ClassPass Active',
+  lapsed:            'Lapsed',
+  dormant_classpass: 'Dormant — ClassPass',
 }
 
 function fmtSlug(slug) {

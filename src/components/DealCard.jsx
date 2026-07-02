@@ -76,7 +76,7 @@ export default function DealCard({ deal, locationId }) {
         {BADGE_SLUGS.has(contact.pipeline_stage_slug) && (
           contact.next_class_at ? (
             <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 bg-emerald-500/10 rounded text-emerald-700">
-              Next: {new Date(contact.next_class_at).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })}
+              Next: {new Date(contact.next_class_at).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/Dublin' })}
             </span>
           ) : (
             <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/10 rounded text-red-700">
