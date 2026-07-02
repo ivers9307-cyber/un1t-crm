@@ -59,6 +59,28 @@ describe('selectDueClassReminders', () => {
     const noStart = { id: 'b', contact_id: 'c' }
     expect(selectDueClassReminders([noContact, noStart], now, [30], 5)).toHaveLength(0)
   })
+
+  describe('asymmetric late window (missed-cron-tick catch-up)', () => {
+    // 30-min lead: class starting 20 min away means we're firing 10 min
+    // LATE — inside a 15-min late window, outside the symmetric ±5.
+    it('fires late inside lateWindowMin', () => {
+      const b = { id: 'b1', contact_id: 'c1', starts_at: iso(now + 20 * 60000) }
+      expect(selectDueClassReminders([b], now, [30], 5)).toHaveLength(0) // symmetric default
+      expect(selectDueClassReminders([b], now, [30], 5, 15)).toHaveLength(1)
+    })
+
+    it('stops matching past the late boundary', () => {
+      // 30-min lead, class 14 min away = 16 min late → outside 15.
+      const b = { id: 'b1', contact_id: 'c1', starts_at: iso(now + 14 * 60000) }
+      expect(selectDueClassReminders([b], now, [30], 5, 15)).toHaveLength(0)
+    })
+
+    it('keeps the early side capped at windowMin', () => {
+      // 30-min lead, class 36 min away = 6 min early → out even with late window.
+      const b = { id: 'b1', contact_id: 'c1', starts_at: iso(now + 36 * 60000) }
+      expect(selectDueClassReminders([b], now, [30], 5, 15)).toHaveLength(0)
+    })
+  })
 })
 
 describe('classTimeLabel', () => {

@@ -30,14 +30,79 @@
  *     data: { type: 'time_off_decision', request_id: '...' },
  *   })
  *
- * Returns: { sent, skipped, invalidated } — counts only, no throw on
- * partial failure (push is best-effort; never blocks the caller).
+ * Returns: { sent, skipped, invalidated, failed } — counts only, no throw
+ * on partial failure (push is best-effort; never blocks the caller).
+ * `failed` counts messages that never got an ok ticket from Expo after
+ * retries — callers that keep a "was this reminder sent?" ledger use it
+ * to distinguish "nothing to send" from "the send pipeline fell over"
+ * (see send-push-reminders cron).
  */
 
 import { createServerClient } from './supabase'
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 const BATCH_SIZE = 100 // Expo accepts up to 100 messages per request
+
+// Retry schedule for a failed Expo batch POST: 2 retries (3 attempts
+// total) with modest backoff. Expo blips / 429s / 5xxs are usually
+// transient; anything that survives 2.5s of backoff is counted as
+// failed and left to the caller's own retry story (crons re-tick).
+const RETRY_DELAYS_MS = [500, 2000]
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * POST one batch of messages to Expo with retry + backoff.
+ *
+ * Retries on: fetch exceptions (network blip), 429, 5xx, and 2xx
+ * responses whose body isn't parseable JSON (proxy garbage). Gives up
+ * immediately on any other 4xx — a malformed request won't get better
+ * by retrying.
+ *
+ * @returns {Promise<object[]|null>} the Expo ticket array, or null when
+ *   the batch ultimately failed (caller counts the whole chunk failed).
+ */
+async function postExpoBatch(chunk) {
+  const attempts = RETRY_DELAYS_MS.length + 1
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (attempt > 1) await sleep(RETRY_DELAYS_MS[attempt - 2])
+
+    let response
+    try {
+      response = await fetch(EXPO_PUSH_URL, {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'accept-encoding': 'gzip, deflate',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(chunk),
+      })
+    } catch (err) {
+      console.error(`[push] expo fetch failed (attempt ${attempt}/${attempts})`, err)
+      continue
+    }
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '')
+      console.error(`[push] expo non-2xx ${response.status} (attempt ${attempt}/${attempts})`, body)
+      // 4xx other than 429 = our request is bad; retrying won't help.
+      if (response.status >= 400 && response.status < 500 && response.status !== 429) return null
+      continue
+    }
+
+    const json = await response.json().catch(() => null)
+    if (!json || !Array.isArray(json.data)) {
+      // A 2xx with an unparseable/shapeless body used to be a SILENT
+      // no-op (sent nothing, counted nothing). Log it and treat it as
+      // a retryable failure.
+      console.error(`[push] expo response unparseable (attempt ${attempt}/${attempts})`)
+      continue
+    }
+    return json.data
+  }
+  return null
+}
 
 /**
  * Resolve which of `ids` may receive a push for `category`, reading the LIVE
@@ -97,11 +162,11 @@ export async function resolvePushAllowedIds(db, ids, category) {
  * @param {string} [payload.sound]  'default' (iOS chime) | null. Default 'default'.
  * @param {number} [payload.badge]  Override the iOS app icon badge count.
  *
- * @returns {Promise<{sent:number, skipped:number, invalidated:number}>}
+ * @returns {Promise<{sent:number, skipped:number, invalidated:number, failed:number}>}
  */
 export async function sendPush(userIds, payload) {
   const ids = Array.isArray(userIds) ? userIds : [userIds]
-  if (!ids.length) return { sent: 0, skipped: 0, invalidated: 0 }
+  if (!ids.length) return { sent: 0, skipped: 0, invalidated: 0, failed: 0 }
 
   const db = createServerClient()
 
@@ -115,7 +180,7 @@ export async function sendPush(userIds, payload) {
   const allowedIds = ids.filter(id => allowedSet.has(id))
   let skipped = ids.length - allowedIds.length
 
-  if (!allowedIds.length) return { sent: 0, skipped, invalidated: 0 }
+  if (!allowedIds.length) return { sent: 0, skipped, invalidated: 0, failed: 0 }
 
   // Fetch all push tokens for the allowed users.
   const { data: tokens } = await db
@@ -123,7 +188,7 @@ export async function sendPush(userIds, payload) {
     .select('id, expo_push_token')
     .in('user_id', allowedIds)
 
-  if (!tokens?.length) return { sent: 0, skipped, invalidated: 0 }
+  if (!tokens?.length) return { sent: 0, skipped, invalidated: 0, failed: 0 }
 
   // Build Expo messages — one per token. Expo will silently drop
   // malformed tokens; we additionally prune any reported as
@@ -139,37 +204,21 @@ export async function sendPush(userIds, payload) {
 
   let sent = 0
   let invalidated = 0
+  let failed = 0
   const invalidTokenIds = []
 
-  // Batch — Expo accepts up to 100 per request.
+  // Batch — Expo accepts up to 100 per request. Each batch retries
+  // independently (postExpoBatch); a batch that still fails after
+  // backoff counts every message in it as failed.
   for (let i = 0; i < messages.length; i += BATCH_SIZE) {
     const chunk = messages.slice(i, i + BATCH_SIZE)
     const chunkTokens = tokens.slice(i, i + BATCH_SIZE)
 
-    let response
-    try {
-      response = await fetch(EXPO_PUSH_URL, {
-        method: 'POST',
-        headers: {
-          accept: 'application/json',
-          'accept-encoding': 'gzip, deflate',
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify(chunk),
-      })
-    } catch (err) {
-      // Network blip — log and continue (best-effort).
-      console.error('[push] expo fetch failed', err)
+    const tickets = await postExpoBatch(chunk)
+    if (!tickets) {
+      failed += chunk.length
       continue
     }
-
-    if (!response.ok) {
-      console.error('[push] expo non-2xx', response.status, await response.text().catch(() => ''))
-      continue
-    }
-
-    const json = await response.json().catch(() => null)
-    const tickets = json?.data || []
 
     tickets.forEach((ticket, idx) => {
       if (ticket.status === 'ok') {
@@ -182,18 +231,23 @@ export async function sendPush(userIds, payload) {
         invalidTokenIds.push(chunkTokens[idx].id)
         invalidated++
       } else {
-        // Unknown error (e.g. MessageTooBig, MessageRateExceeded) —
-        // log but don't prune.
+        // Other per-ticket error (e.g. MessageTooBig,
+        // MessageRateExceeded) — log, count failed, don't prune.
         console.error('[push] ticket error', ticket)
+        failed++
       }
     })
   }
 
   if (invalidTokenIds.length) {
-    await db.from('device_tokens').delete().in('id', invalidTokenIds)
+    // supabase-js builders are thenables — destructure and check error
+    // explicitly; a swallowed delete failure leaves dead tokens burning
+    // Expo quota every send.
+    const { error: pruneErr } = await db.from('device_tokens').delete().in('id', invalidTokenIds)
+    if (pruneErr) console.error('[push] dead-token prune failed', pruneErr)
   }
 
-  return { sent, skipped, invalidated }
+  return { sent, skipped, invalidated, failed }
 }
 
 /**
@@ -216,6 +270,6 @@ export async function sendPushToRolesAtLocation(locationId, roles, payload) {
     .filter(l => l.profiles?.active && roles.includes(l.profiles.role))
     .map(l => l.profile_id)
 
-  if (!ids.length) return { sent: 0, skipped: 0, invalidated: 0 }
+  if (!ids.length) return { sent: 0, skipped: 0, invalidated: 0, failed: 0 }
   return sendPush(ids, payload)
 }
