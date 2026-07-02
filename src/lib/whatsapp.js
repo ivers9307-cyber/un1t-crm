@@ -213,6 +213,52 @@ export function splitTrailingUrl(text) {
   return { body, url }
 }
 
+// C4 — in-session media carousel (2-10 swipeable image cards, no template
+// approval; 24h window only). Meta requires consistent button config across
+// cards: all-or-none links, validated here and in the settings UI.
+//
+// Per-card mapping isolated in ONE pure function: Meta's docs are young for
+// this message type, and the per-card cta_url nesting below is the researched
+// shape but may turn out to be `{ buttons: [...] }` style — if a live smoke
+// test says so, this function is the only thing to change.
+function buildCarouselCard(c, i) {
+  return {
+    card_index: i,
+    ...(c.title || c.body ? { body: { text: [c.title, c.body].filter(Boolean).join('\n') } } : {}),
+    header: { type: 'image', image: { link: c.image_url } },
+    ...(c.link_url ? { action: { name: 'cta_url', parameters: { display_text: (c.link_text || 'Open').slice(0, 20), url: c.link_url } } } : {}),
+  }
+}
+
+export function buildMediaCarouselPayload(to, { bodyText, cards }) {
+  const withLinks = cards.filter((c) => c.link_url)
+  if (withLinks.length !== 0 && withLinks.length !== cards.length) {
+    throw new Error('Carousel cards must all have a link, or none')
+  }
+  if (cards.length < 2 || cards.length > 10) throw new Error('Carousel needs 2-10 cards')
+  return {
+    messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive',
+    interactive: {
+      type: 'carousel',
+      body: { text: bodyText },
+      action: { cards: cards.map(buildCarouselCard) },
+    },
+  }
+}
+
+export async function sendMediaCarousel(to, { bodyText, cards }, opts = {}) {
+  const config = await resolveConfig(opts)
+  const response = await fetch(`${META_API_URL}/${config.phoneNumberId}/messages`, {
+    method: 'POST', headers: headersFor(config), body: JSON.stringify(buildMediaCarouselPayload(to, { bodyText, cards })),
+  })
+  const result = await response.json()
+  if (result.error) {
+    console.error('WhatsApp carousel send error:', result.error)
+    throw new Error(result.error.message || 'Failed to send WhatsApp carousel message')
+  }
+  return { messageId: result.messages?.[0]?.id, status: result.messages?.[0]?.message_status || 'sent' }
+}
+
 /**
  * Send a template message (works anytime — no 24h window needed)
  */
