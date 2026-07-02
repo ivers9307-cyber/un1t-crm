@@ -29,6 +29,9 @@ const CardSchema = z.object({
 const CardSetSchema = z.object({
   id: uuidLike,
   name: z.string().min(1).max(60),
+  // Operator-authored "when should Mia send this" context — surfaced to the
+  // customer agent's system prompt (buildCardSetsBlock), never to customers.
+  description: z.string().max(200).optional(),
   body_text: z.string().max(1024).optional(),
   cards: z.array(CardSchema).min(2).max(10),
 }).refine(

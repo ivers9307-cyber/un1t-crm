@@ -23,6 +23,31 @@ const SAT_CLASSES = {
   ],
 }
 
+// MIA-CARDS.1 — the card sets available in the card-set scenarios (same
+// shape as locations.settings.wa_card_sets; the prompt renders name +
+// card count + the operator's "send when" description).
+const CARD_SETS = [
+  {
+    id: 'cs-membership',
+    name: 'Membership',
+    description: 'When someone asks about membership options or pricing',
+    cards: [
+      { image_url: 'https://cdn.test/m1.jpg', title: 'Unlimited — €149/mo' },
+      { image_url: 'https://cdn.test/m2.jpg', title: '8 classes — €99/mo' },
+      { image_url: 'https://cdn.test/m3.jpg', title: 'Off-peak — €79/mo' },
+    ],
+  },
+  {
+    id: 'cs-studio',
+    name: 'Studio tour',
+    description: 'When someone asks what the studio or equipment looks like',
+    cards: [
+      { image_url: 'https://cdn.test/s1.jpg', title: 'The floor' },
+      { image_url: 'https://cdn.test/s2.jpg', title: 'The rig' },
+    ],
+  },
+]
+
 const VERIFY_REFUSALS = {
   get_my_membership: { error: 'not_verified', message: 'Identity not verified yet. Call verify_identity first.' },
   get_my_next_class: { error: 'not_verified', message: 'Identity not verified yet. Call verify_identity first.' },
@@ -250,6 +275,47 @@ export const SCENARIOS = [
     expect: {
       mustNotCall: ['request_cancellation', 'request_pause'],
       notMatch: ["membership\\s+(is|has been)\\s+cancelled", "(I(’|')?ve|consider it)\\s+cancelled"],
+    },
+  },
+  {
+    id: 'card-set-membership',
+    why: 'Card sets: a membership question matches the "Membership" set — send it via send_card_set AND still reply in text.',
+    prompt: {
+      cardSets: CARD_SETS,
+      knowledge: [{ category: 'sales', title: 'Memberships', content: 'Unlimited €149/mo, 8 classes €99/mo, Off-peak €79/mo. All month-to-month.', enabled: true }],
+    },
+    history: [{ direction: 'inbound', body: 'what memberships do you have?' }],
+    tools: {
+      send_card_set: { sent: true, set: 'Membership' },
+    },
+    expect: {
+      handoff: false,
+      mustCall: ['send_card_set'],
+      argMatch: [{ tool: 'send_card_set', field: 'set_name', pattern: '^\\s*membership\\s*$' }],
+      // The cards never replace a text reply of her own — but the cards carry
+      // the membership details, so a short companion line ("sent over some
+      // cards…") is IDEAL; demanding the text restate prices failed good
+      // behaviour in live runs. Keep this loose.
+      match: ['(card|plan|membership|option|detail)'],
+    },
+  },
+  {
+    id: 'card-set-none-relevant',
+    why: 'Card sets are for directly matching questions only — an unrelated question must not trigger one.',
+    prompt: {
+      cardSets: CARD_SETS,
+      identityPreverified: true,
+      knowledge: [{ category: 'faq', title: 'Guests', content: 'Members can bring a friend to class once per month — just book them in as a guest at the front desk or ask the team.', enabled: true }],
+    },
+    history: [{ direction: 'inbound', body: 'can I bring a friend to class tomorrow?' }],
+    tools: {
+      // Innocent timetable lookups are fine — only the card set is off-limits.
+      list_upcoming_classes: SAT_CLASSES,
+    },
+    expect: {
+      handoff: false,
+      mustNotCall: ['send_card_set'],
+      match: ['(friend|guest)'],
     },
   },
   {

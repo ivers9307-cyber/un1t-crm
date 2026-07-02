@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildKnowledgeBlock,
+  buildCardSetsBlock,
   buildCustomerSystemPrompt,
   buildCustomerSystemPromptParts,
   buildCachedSystem,
@@ -30,6 +31,56 @@ describe('buildKnowledgeBlock', () => {
       { category: 'sales', title: 'S', content: 'sale' },
     ])
     expect(out.indexOf('SALES')).toBeLessThan(out.indexOf('GENERAL'))
+  })
+})
+
+// MIA-CARDS.1 — operator-curated WhatsApp card sets rendered as agent
+// knowledge (name + card count + the "send when" description).
+describe('buildCardSetsBlock', () => {
+  const twoCards = [{ title: 'a' }, { title: 'b' }]
+
+  it('returns null when there are no sets (no empty section in the prompt)', () => {
+    expect(buildCardSetsBlock()).toBeNull()
+    expect(buildCardSetsBlock([])).toBeNull()
+  })
+
+  it('renders each described set with its name, card count, and send-when description', () => {
+    const out = buildCardSetsBlock([
+      { name: 'Membership', description: 'When someone asks about membership options or pricing', cards: [{}, {}, {}] },
+      { name: 'Studio tour', description: 'When someone asks what the studio looks like', cards: twoCards },
+    ])
+    expect(out).toContain('VISUAL CARD SETS')
+    expect(out).toContain('send_card_set')
+    expect(out).toContain('- "Membership" (3 cards) — send when: When someone asks about membership options or pricing')
+    expect(out).toContain('- "Studio tour" (2 cards) — send when: When someone asks what the studio looks like')
+    expect(out).toMatch(/at most ONE set per conversation/i)
+  })
+
+  it('the send-when description is the opt-in: undescribed sets stay staff-only', () => {
+    const out = buildCardSetsBlock([
+      { name: 'Handed to Mia', description: 'When someone asks about plans', cards: twoCards },
+      { name: 'Test cards', cards: twoCards },              // no description → invisible
+      { name: 'Blank context', description: '   ', cards: twoCards }, // whitespace → invisible
+    ])
+    expect(out).toContain('Handed to Mia')
+    expect(out).not.toContain('Test cards')
+    expect(out).not.toContain('Blank context')
+    expect(buildCardSetsBlock([{ name: 'Test cards', cards: twoCards }])).toBeNull()
+  })
+
+  it('excludes unsendable sets: <2 cards, no name, or no cards array', () => {
+    const desc = { description: 'When relevant' }
+    expect(buildCardSetsBlock([
+      { name: 'One card', ...desc, cards: [{}] },
+      { name: '', ...desc, cards: twoCards },
+      { name: 'No cards', ...desc },
+    ])).toBeNull()
+    const out = buildCardSetsBlock([
+      { name: 'One card', ...desc, cards: [{}] },
+      { name: 'Good set', ...desc, cards: twoCards },
+    ])
+    expect(out).toContain('Good set')
+    expect(out).not.toContain('One card')
   })
 })
 
@@ -194,6 +245,37 @@ describe('buildCustomerSystemPromptParts (cache split)', () => {
       expect(joined).toContain(needle)
       expect(`${stable}\n\n${volatile}`).toContain(needle)
     }
+  })
+})
+
+// MIA-CARDS.1 — card sets are location-stable operator config, so they live
+// in the CACHED prefix (an operator edit changes the bytes and invalidates
+// the cache naturally), and the section disappears entirely when a channel
+// has no sendable sets (Instagram passes none).
+describe('buildCustomerSystemPromptParts — card sets', () => {
+  const cardSets = [
+    { name: 'Membership', description: 'When someone asks about pricing', cards: [{}, {}] },
+  ]
+
+  it('renders the card-set block in the STABLE part', () => {
+    const { stable, volatile } = buildCustomerSystemPromptParts({ cardSets, today: '2026-07-01' })
+    expect(stable).toContain('VISUAL CARD SETS')
+    expect(stable).toContain('"Membership" (2 cards)')
+    expect(volatile).not.toContain('VISUAL CARD SETS')
+  })
+
+  it('omits the section entirely when there are no sendable sets', () => {
+    for (const sets of [undefined, [], [{ name: 'Solo', cards: [{}] }]]) {
+      const p = buildCustomerSystemPrompt({ cardSets: sets })
+      expect(p).not.toContain('VISUAL CARD SETS')
+      expect(p).not.toContain('send_card_set')
+    }
+  })
+
+  it('stable part stays byte-identical across per-request inputs with card sets present', () => {
+    const a = buildCustomerSystemPromptParts({ cardSets, today: '2026-07-01', identityPreverified: true }).stable
+    const b = buildCustomerSystemPromptParts({ cardSets, today: '2027-01-01', identityPreverified: false }).stable
+    expect(a).toBe(b)
   })
 })
 
