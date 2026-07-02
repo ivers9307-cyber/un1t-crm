@@ -12,6 +12,7 @@ import { maybeAutoReply } from '@/lib/agent/auto-reply'
 import { applyTemplateEvent } from '@/lib/whatsapp-template-events'
 import { NUMBER_EVENT_FIELDS, applyNumberEvent } from '@/lib/whatsapp-number-events'
 import { FLOW_EVENT_FIELDS, applyFlowEvent } from '@/lib/whatsapp-flow-events'
+import { recordCtwaTouch } from '@/lib/meta-capi'
 import { ensureMediaRehosted } from '@/lib/whatsapp-media-server'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
@@ -215,7 +216,7 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
 
   // Get or create conversation (keyed by phone number, NOT by contact)
   const { data: existingConv } = await db.from('whatsapp_conversations')
-    .select('id, contact_id')
+    .select('id, contact_id, ctwa_clid')
     .eq('wa_phone', senderPhone)
     .eq('location_id', locationId)
     .limit(1)
@@ -229,6 +230,11 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
       await db.from('whatsapp_conversations')
         .update({ contact_id: contact.id })
         .eq('id', conversationId)
+      // CTWA backfill: the click id landed while the sender was unknown —
+      // move it onto the newly linked contact (fires the Lead event once).
+      if (existingConv.ctwa_clid) {
+        await recordCtwaTouch(db, { ctwaClid: existingConv.ctwa_clid, conversationId: null, contact, locationId })
+      }
     }
   } else {
     const { data: newConv } = await db.from('whatsapp_conversations').insert({
@@ -237,6 +243,8 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
       wa_phone: senderPhone,
       wa_profile_name: senderName,
       status: 'active',
+      // CTWA: a click-to-WhatsApp ad's first message carries referral.ctwa_clid
+      ctwa_clid: message.referral?.ctwa_clid || null,
     }).select('id').single()
     conversationId = newConv?.id
   }
@@ -245,6 +253,10 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
     console.error('Could not create conversation for:', senderPhone)
     return
   }
+
+  // CTWA attribution — stamp the click id (conversation + contact) and fire
+  // the Lead conversion once. Swallows its own errors; never blocks the webhook.
+  await recordCtwaTouch(db, { ctwaClid: message.referral?.ctwa_clid, conversationId, contact, locationId })
 
   // Update profile name if we have one (it can change)
   if (senderName) {

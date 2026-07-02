@@ -6,6 +6,7 @@ import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, crea
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
+import { sendCtwaConversion } from '@/lib/meta-capi'
 import { logWarn } from '@/lib/log'
 
 const labelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
@@ -131,5 +132,11 @@ export async function processClassBookingRequest(db, request) {
   try {
     await maybeSendBookingWhatsappConfirm({ db, locationId: request.location_id, contact, templateName: CLASS_CONFIRM_TEMPLATE, bodyParams: [firstName, request.class_name || 'your class', classLabel(request.starts_at)] })
   } catch (e) { logWarn('cbp', 'class confirm failed', { err: e }) }
+  // CTWA attribution: a confirmed booking is the conversion the ad campaign
+  // optimises on. No-ops unless the contact carries a ctwa_clid and the
+  // location has settings.meta_ads.dataset_id.
+  try {
+    await sendCtwaConversion(db, { locationId: request.location_id, contactId: request.contact_id, eventName: 'Schedule', contentName: request.class_name || 'Class' })
+  } catch (e) { logWarn('cbp', 'ctwa conversion failed', { err: e }) }
   return { outcome: 'booked' }
 }

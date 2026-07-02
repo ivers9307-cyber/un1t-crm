@@ -7,6 +7,7 @@
 import { parseFlowCompletion } from './handler.js'
 import { applyFormMarketingConsent } from '@/lib/marketing-consent.js'
 import { createEventBooking } from '@/lib/bookings-write.js'
+import { sendCtwaConversion } from '@/lib/meta-capi'
 
 export async function handleFlowCompletion(db, { interactive, contact, locationId }) {
   const parsed = parseFlowCompletion(interactive)
@@ -40,5 +41,10 @@ export async function handleFlowCompletion(db, { interactive, contact, locationI
     event: { id: eventId, location_id: locationId }, date, startTime, endTime, contact: person, source: 'whatsapp_flow',
   })
   if (res.error) { console.error('[wa-flow] consult booking failed:', res.error.message); return { handled: false } }
+  // CTWA attribution: consult booked in-chat is a conversion too (no-ops
+  // without a stored ctwa_clid + configured dataset).
+  try {
+    await sendCtwaConversion(db, { locationId, contactId: contact.id, eventName: 'Schedule', contentName: 'Consultation' })
+  } catch (e) { console.warn('[wa-flow] ctwa conversion failed:', e?.message) }
   return { handled: true, kind: 'consult' }
 }
