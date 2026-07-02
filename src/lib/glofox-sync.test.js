@@ -16,6 +16,7 @@ import {
   mapGlofoxInteraction,
   computeCreditsRemaining,
   detectTrialTransitionTags,
+  shouldStampConversion,
   extractMembershipPlan,
   extractMembershipState,
   extractMemberProfile,
@@ -1444,11 +1445,11 @@ function fakeDb({ rowsByGlofoxId = [], rowsByEmail = [], openDeal = null } = {})
 }
 
 describe('previewMemberSync', () => {
-  // PIPELINE5.4 — deal_action stage_slugs reflect the new classifier
-  // taxonomy (active_trial, hot_conversion, active_member, lapsed,
-  // dormant, etc.) not the old GLOFOX_STATUS_TO_STAGE_SLUG map.
-  // A bare member with no joined_at / created_at / engagement now
-  // correctly resolves to 'dormant' rather than 'new_lead' — the
+  // FUNNEL.1 — deal_action stage_slugs reflect the funnel classifier
+  // taxonomy (new_lead, first_class, second_class, trial_done,
+  // converted, member, classpass, dormant) not the old
+  // GLOFOX_STATUS_TO_STAGE_SLUG map. A bare member with no joined_at /
+  // created_at / engagement still resolves to 'dormant' — the
   // classifier defends against the 8k-import-ghost problem.
   const member = { _id: 'g1', email: 'me@x.com', first_name: 'Me', last_name: 'You', phone: '+353871234567' }
   const isoNow = new Date().toISOString()
@@ -1471,12 +1472,13 @@ describe('previewMemberSync', () => {
     expect(out.deal_action).toEqual({ action: 'create', stage_slug: 'new_lead' })
   })
 
-  it('proposes active_trial stage when Glofox status is trial + just joined', async () => {
-    // 14-day grace window for fresh trial members — no attendance
-    // needed for active_trial classification.
+  it('proposes new_lead when Glofox status is trial + just joined (no classes yet)', async () => {
+    // FUNNEL.1 — a fresh trial member with zero attended classes sits
+    // in the funnel's first column (new_lead); they only advance to
+    // first_class/second_class/trial_done as attendance accrues.
     const m = { ...member, lead_status: 'TRIAL', joined_at: isoDaysAgo(3) }
     const out = await previewMemberSync(fakeDb(), 'loc', m)
-    expect(out.deal_action).toEqual({ action: 'create', stage_slug: 'active_trial' })
+    expect(out.deal_action).toEqual({ action: 'create', stage_slug: 'new_lead' })
   })
 
   it('proposes dormant for a bare member record (no signals at all)', async () => {
@@ -1578,10 +1580,17 @@ describe('previewMemberSync', () => {
   })
 
   it('proposes move when the classifier produces a different stage from the current deal', async () => {
-    // Fresh-joined trial member, existing deal sits at the old
-    // 'trial_active' slug. Classifier says 'active_trial' (new
-    // taxonomy) — so move.
-    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', glofox_membership_status: 'trial' }
+    // Trial member with one recent attended class on the PERSISTED
+    // row; existing deal sits at the old 'trial_active' slug.
+    // FUNNEL.1 classifier says 'first_class' — so move. Also pins the
+    // persisted recent_bookings fallback: this sync carries no live
+    // booking fetch, so the attended count MUST come from the
+    // existing row or the preview diverges from apply.
+    const existing = {
+      id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', glofox_membership_status: 'trial',
+      last_attended_at: isoDaysAgo(4),
+      recent_bookings: [{ status: 'ATTENDED', attended: true }],
+    }
     const out = await previewMemberSync(
       fakeDb({
         rowsByGlofoxId: [existing], rowsByEmail: [existing],
@@ -1592,7 +1601,7 @@ describe('previewMemberSync', () => {
     )
     expect(out.deal_action.action).toBe('move')
     expect(out.deal_action.from_slug).toBe('trial_active')
-    expect(out.deal_action.to_slug).toBe('active_trial')
+    expect(out.deal_action.to_slug).toBe('first_class')
   })
 
   it('proposes move when an ex_member with no recent signal lands in dormant', async () => {
@@ -1646,16 +1655,17 @@ describe('previewMemberSync', () => {
     const out = await previewMemberSync(
       fakeDb({
         rowsByGlofoxId: [existing], rowsByEmail: [existing],
-        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'active_member' },
+        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'member' },
       }),
       'loc',
       { ...member, email: 'fran@x.com', lead_status: 'MEMBER' },
       { skipBookings: true },
     )
     // Must converge with what pipeline-reclassify produces from the same
-    // persisted columns: active_member, NOT dormant. (Deal already there →
-    // leave, i.e. no flap.)
-    expect(out.deal_action.to_slug ?? out.deal_action.stage_slug).toBe('active_member')
+    // persisted columns: under FUNNEL.1 a member with no converted_at is
+    // 'member' (off-funnel), NOT dormant. (Deal already there → leave,
+    // i.e. no flap.)
+    expect(out.deal_action.to_slug ?? out.deal_action.stage_slug).toBe('member')
     expect(out.deal_action.action).toBe('leave')
     // The preview snapshot must also expose the existing row so the apply
     // path (applyMemberSync → ensureDealForContact) can read the persisted
@@ -1687,14 +1697,40 @@ describe('previewMemberSync', () => {
     const out = await previewMemberSync(
       fakeDb({
         rowsByGlofoxId: [existing], rowsByEmail: [existing],
-        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'active_member' },
+        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'member' },
       }),
       'loc',
       { ...member, email: 'fran@x.com', lead_status: 'MEMBER' },
       { skipBookings: true },
     )
-    expect(out.deal_action.to_slug ?? out.deal_action.stage_slug).toBe('active_member')
+    // FUNNEL.1 taxonomy: an unconverted-at member is 'member', not the
+    // old 'active_member' — and still never dormant.
+    expect(out.deal_action.to_slug ?? out.deal_action.stage_slug).toBe('member')
     expect(out.deal_action.action).toBe('leave')
+  })
+
+  it('FUNNEL.1 — persisted converted_at puts a recent convert in the Converted column on preview', async () => {
+    // Pins the converted_at fallback in the preview snapshot: the
+    // dry-run reads the PERSISTED stamp (apply is what writes it), so
+    // a member converted 10 days ago previews as 'converted' — the
+    // same slug the apply-path snapshot and nightly cron produce.
+    const existing = {
+      id: 'c1', email: 'me@x.com', glofox_member_id: 'g1',
+      glofox_membership_status: 'member',
+      converted_at: isoDaysAgo(10),
+      created_at: isoDaysAgo(400),
+    }
+    const out = await previewMemberSync(
+      fakeDb({
+        rowsByGlofoxId: [existing], rowsByEmail: [existing],
+        openDeal: { id: 'd1', stage_id: 's1', stage_slug: 'member' },
+      }),
+      'loc',
+      { ...member, lead_status: 'MEMBER' },
+      { skipBookings: true },
+    )
+    expect(out.deal_action.action).toBe('move')
+    expect(out.deal_action.to_slug).toBe('converted')
   })
 
   it('returns update when only email matches (link to existing CRM contact)', async () => {
@@ -1915,5 +1951,59 @@ describe('mergeBookingAggregates', () => {
       { ...counts, last_attended_at: null, last_booked_at: '2026-04-01T00:00:00.000Z' },
     )
     expect(patch).not.toHaveProperty('last_booked_at')
+  })
+})
+
+describe('shouldStampConversion (FUNNEL.1)', () => {
+  const NOW = new Date('2026-07-02T12:00:00Z').getTime()
+  const daysAgo = (n) => new Date(NOW - n * 24 * 60 * 60 * 1000).toISOString()
+
+  it('stamps on lead→member transition', () => {
+    expect(shouldStampConversion({
+      action: 'update', previousStatus: 'lead', newStatus: 'member',
+      existingConvertedAt: null, joinedAt: daysAgo(30), now: NOW,
+    })).toBe(true)
+  })
+  it('stamps on trial→credit_member transition', () => {
+    expect(shouldStampConversion({
+      action: 'update', previousStatus: 'trial', newStatus: 'credit_member',
+      existingConvertedAt: null, joinedAt: daysAgo(10), now: NOW,
+    })).toBe(true)
+  })
+  it('write-once: never restamps when converted_at already set', () => {
+    expect(shouldStampConversion({
+      action: 'update', previousStatus: 'trial', newStatus: 'member',
+      existingConvertedAt: daysAgo(5), joinedAt: daysAgo(10), now: NOW,
+    })).toBe(false)
+  })
+  it('no stamp on member→member re-sync (no transition)', () => {
+    expect(shouldStampConversion({
+      action: 'update', previousStatus: 'member', newStatus: 'member',
+      existingConvertedAt: null, joinedAt: daysAgo(300), now: NOW,
+    })).toBe(false)
+  })
+  it('no stamp on member→credit_member (already a member)', () => {
+    expect(shouldStampConversion({
+      action: 'update', previousStatus: 'member', newStatus: 'credit_member',
+      existingConvertedAt: null, joinedAt: daysAgo(300), now: NOW,
+    })).toBe(false)
+  })
+  it('create path: stamps a direct join (created as member, joined ≤60d)', () => {
+    expect(shouldStampConversion({
+      action: 'create', previousStatus: null, newStatus: 'member',
+      existingConvertedAt: null, joinedAt: daysAgo(2), now: NOW,
+    })).toBe(true)
+  })
+  it('create path: does NOT stamp a long-standing member appearing for the first time', () => {
+    expect(shouldStampConversion({
+      action: 'create', previousStatus: null, newStatus: 'member',
+      existingConvertedAt: null, joinedAt: daysAgo(200), now: NOW,
+    })).toBe(false)
+  })
+  it('no stamp when newStatus is not a member status', () => {
+    expect(shouldStampConversion({
+      action: 'update', previousStatus: 'lead', newStatus: 'trial',
+      existingConvertedAt: null, joinedAt: daysAgo(5), now: NOW,
+    })).toBe(false)
   })
 })

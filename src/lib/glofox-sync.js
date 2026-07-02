@@ -461,7 +461,7 @@ export async function findStageIdBySlug(db, locationId, stageSlug) {
  * @param {object}  contactSnapshot   shape consumed by classifyContact:
  *   { glofox_membership_status, last_attended_at, total_attended_7d,
  *     total_attended_30d, last_payment_at, joined_at, created_at,
- *     trial_credits_remaining }
+ *     trial_credits_remaining, recent_bookings, converted_at }
  * @param {string?} contactName       fallback for deals.title on create
  */
 export async function ensureDealForContact(db, locationId, contactId, contactSnapshot, contactName = null) {
@@ -921,6 +921,35 @@ export function detectTrialTransitionTags({
   return tags
 }
 
+const MEMBER_STATUSES = new Set(['member', 'credit_member'])
+const CONVERSION_CREATE_WINDOW_DAYS = 60
+
+/**
+ * FUNNEL.1 — should this sync stamp contacts.converted_at?
+ *
+ * Write-once: never when already set. Update path: only on a real
+ * transition INTO member/credit_member from a non-member status
+ * (incl. classpass_payg and ex_member — any status flip into paying
+ * counts; the classifier decides what the board shows). Create path:
+ * a contact appearing for the first time already AS a member is a
+ * direct join only if they joined recently — the nightly full sync
+ * also creates unseen contacts, and stamping a 2022 member as a fresh
+ * conversion would pollute the Converted column.
+ *
+ * Pure function — caller writes the timestamp.
+ */
+export function shouldStampConversion({ action, previousStatus, newStatus, existingConvertedAt, joinedAt, now = Date.now() }) {
+  if (existingConvertedAt) return false
+  if (!MEMBER_STATUSES.has(newStatus)) return false
+  if (action === 'update') return !MEMBER_STATUSES.has(previousStatus)
+  if (action === 'create') {
+    if (!joinedAt) return false
+    const ms = now - new Date(joinedAt).getTime()
+    return Number.isFinite(ms) && ms >= 0 && ms <= CONVERSION_CREATE_WINDOW_DAYS * 24 * 60 * 60 * 1000
+  }
+  return false
+}
+
 export function computeCreditsRemaining(credits) {
   if (!Array.isArray(credits) || credits.length === 0) return null
   const active = credits.filter(c => c?.active === true)
@@ -1069,7 +1098,11 @@ export async function findExistingContact(db, locationId, mapped) {
   // blank live value collapsed recency to null and demoted recently-active,
   // paid-up members to dormant — flapping against the nightly classifier
   // (pipeline-reclassify), which reads the same persisted columns.
-  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, created_at, glofox_member_id, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, lead_source, last_booked_at, last_attended_at, last_payment_at, total_bookings_30d, total_attended_30d, total_attended_7d, total_noshow_30d, trial_credits_remaining'
+  // FUNNEL.1 — recent_bookings + converted_at join the persisted-fallback
+  // set: the funnel classifier counts attended classes from recent_bookings
+  // and gates the Converted column on converted_at, and a LIST/skipBookings
+  // sync doesn't recompute either.
+  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, created_at, glofox_member_id, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, lead_source, last_booked_at, last_attended_at, last_payment_at, total_bookings_30d, total_attended_30d, total_attended_7d, total_noshow_30d, trial_credits_remaining, recent_bookings, converted_at'
   const queries = []
   queries.push(
     db.from('contacts')
@@ -1509,6 +1542,12 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     joined_at: mapped.joined_at ?? existingRow?.joined_at ?? null,
     created_at: existingRow?.created_at ?? null,
     trial_credits_remaining: mapped.trial_credits_remaining ?? existingRow?.trial_credits_remaining ?? null,
+    // FUNNEL.1 — the funnel classifier counts attended classes from
+    // recent_bookings and gates the Converted column on converted_at.
+    recent_bookings: mapped.recent_bookings ?? existingRow?.recent_bookings ?? null,
+    // Preview can't know about a not-yet-written stamp (apply stamps it);
+    // the persisted value is the best dry-run signal.
+    converted_at: existingRow?.converted_at ?? null,
   })
 
   // Ambiguous: same email already linked to a DIFFERENT glofox member.
@@ -1803,6 +1842,30 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     contactId = preview.existing_id
   }
 
+  // FUNNEL.1 — stamp the conversion moment. Runs on the webhook path
+  // (MEMBER_UPDATED → applyMemberSync), so the Converted column moves
+  // near-instantly; the nightly sync is the catch-all. Write-once —
+  // .is('converted_at', null) makes a concurrent double-fire harmless.
+  // Best-effort: a stamp failure must not roll back the contact write.
+  let convertedAt = preview.existing?.converted_at ?? null
+  if (shouldStampConversion({
+    action: preview.action,
+    previousStatus,
+    newStatus,
+    existingConvertedAt: convertedAt,
+    joinedAt: preview.mapped?.joined_at ?? preview.existing?.joined_at ?? null,
+  })) {
+    try {
+      const { error: stampErr } = await db.from('contacts')
+        .update({ converted_at: now })
+        .eq('id', contactId)
+        .is('converted_at', null)
+      if (!stampErr) convertedAt = now
+    } catch (e) {
+      logWarn('glofox-sync', 'converted_at stamp threw', { err: e?.message })
+    }
+  }
+
   // HR-CLASS-ALLOC.2 — refresh this member's slice of the class_bookings roster
   // from the same bookings list previewMemberSync fetched. Best-effort: a roster
   // write must never roll back the member sync.
@@ -1869,6 +1932,10 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
         joined_at:           m.joined_at ?? ex.joined_at ?? null,
         created_at:          ex.created_at ?? null,
         trial_credits_remaining: m.trial_credits_remaining ?? ex.trial_credits_remaining ?? null,
+        // FUNNEL.1 — the funnel classifier counts attended classes from
+        // recent_bookings and gates the Converted column on converted_at.
+        recent_bookings: m.recent_bookings ?? ex.recent_bookings ?? null,
+        converted_at:    convertedAt,
       }
       dealResult = await ensureDealForContact(
         db, locationId, contactId, contactSnapshot,
