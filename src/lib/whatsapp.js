@@ -266,6 +266,27 @@ export async function markAsRead(messageId, opts = {}) {
   })
 }
 
+/**
+ * WA-BLOCK — block or unblock a WhatsApp user on this phone number (Meta Block
+ * API). Blocked users can't message the number and it can't message them —
+ * the inbox's spam/abuse action, which also protects the number's quality
+ * rating. Meta only allows blocking users who messaged within the last 24h.
+ */
+export async function setWhatsAppUserBlockState(waPhone, blocked, opts = {}) {
+  const config = await resolveConfig(opts)
+  const response = await fetch(`${META_API_URL}/${config.phoneNumberId}/block_users`, {
+    method: blocked ? 'POST' : 'DELETE',
+    headers: headersFor(config),
+    body: JSON.stringify({ messaging_product: 'whatsapp', block_users: [{ user: waPhone }] }),
+  })
+  const result = await response.json()
+  if (result.error) {
+    console.error('WhatsApp block API error:', result.error)
+    throw new Error(result.error.message || 'Failed to update WhatsApp block state')
+  }
+  return result
+}
+
 // ============================================================
 // TEMPLATE MANAGEMENT
 // ============================================================
