@@ -88,10 +88,10 @@ export async function loadContextForSession(db, sessionId) {
 
   const { data: loc } = await db.from('locations').select('settings').eq('id', session.location_id).single()
   const ca = loc?.settings?.customer_agent || {}
+  // Pulse stays out of booking (Glofox owns it), so no booking CTA is passed —
+  // only the membership/join conversion action for non-members. See buildNextAction.
   const cta = {
     stage: session.contact?.pipeline_stage_slug ?? null,
-    bookingUrl: ca.booking_url ?? null,
-    bookingLabel: ca.booking_cta_label ?? null,
     membershipSignupUrl: ca.membership_signup_url ?? null,
     membershipLabel: ca.membership_cta_label ?? null,
   }

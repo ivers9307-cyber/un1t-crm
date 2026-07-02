@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import fixture from './__fixtures__/session-report.fixture.json'
-import { buildSessionReport, SESSION_REPORT_VERSION, buildNextAction, DEFAULT_BOOK_CTA, DEFAULT_JOIN_CTA } from './hr-session-report.js'
+import { buildSessionReport, SESSION_REPORT_VERSION, buildNextAction, DEFAULT_JOIN_CTA } from './hr-session-report.js'
 
 describe('buildSessionReport', () => {
   const report = buildSessionReport(fixture.ctx, { nowMs: fixture.nowMs })
@@ -54,8 +54,10 @@ describe('buildSessionReport', () => {
     ])
   })
 
-  it('fills next_action for an active member (book branch)', () => {
-    expect(report.next_action).toEqual({ type: 'book_class', label: 'Book your next class', url: 'https://book.example/ride' })
+  it('gives an active member NO next_action (Pulse stays out of booking)', () => {
+    // Fixture cta.stage is active_member — the report must not surface a
+    // book-class (or any) CTA to members. Glofox owns booking.
+    expect(report.next_action).toBeNull()
   })
 
   it('is JSON-serialisable (surface-agnostic)', () => {
@@ -82,25 +84,23 @@ describe('buildSessionReport', () => {
 })
 
 describe('buildNextAction', () => {
-  const base = { stage: 'active_member', bookingUrl: 'https://b', bookingLabel: 'Book', membershipSignupUrl: 'https://j', membershipLabel: 'Join' }
-  it('members → book_class with custom label', () => {
-    expect(buildNextAction(base)).toEqual({ type: 'book_class', label: 'Book', url: 'https://b' })
+  const base = { stage: 'active_member', membershipSignupUrl: 'https://j', membershipLabel: 'Join' }
+  it('members → no next-action (Pulse stays out of booking)', () => {
+    expect(buildNextAction(base)).toBeNull()
   })
-  it('at_risk_member counts as a member', () => {
-    expect(buildNextAction({ ...base, stage: 'at_risk_member' }).type).toBe('book_class')
+  it('at_risk_member also counts as a member → null', () => {
+    expect(buildNextAction({ ...base, stage: 'at_risk_member' })).toBeNull()
   })
-  it('prospect → join', () => {
+  it('prospect → join with custom label', () => {
     expect(buildNextAction({ ...base, stage: 'active_trial' })).toEqual({ type: 'join', label: 'Join', url: 'https://j' })
   })
   it('null/unknown stage → join', () => {
     expect(buildNextAction({ ...base, stage: null }).type).toBe('join')
   })
-  it('blank label → default copy', () => {
-    expect(buildNextAction({ ...base, bookingLabel: '' }).label).toBe(DEFAULT_BOOK_CTA)
+  it('blank membership label → default copy', () => {
     expect(buildNextAction({ ...base, stage: 'lapsed', membershipLabel: null }).label).toBe(DEFAULT_JOIN_CTA)
   })
-  it('chosen branch URL unset → null', () => {
-    expect(buildNextAction({ ...base, bookingUrl: null })).toBeNull()
+  it('join URL unset → null', () => {
     expect(buildNextAction({ ...base, stage: 'lapsed', membershipSignupUrl: null })).toBeNull()
   })
   it('null cta → null', () => {

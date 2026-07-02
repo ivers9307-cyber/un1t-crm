@@ -21,7 +21,7 @@ describe('PUT /api/settings/customer-agent — CTA fields', () => {
     expect((await PUT(putReq({ enabled: true }))).status).toBe(403)
   })
 
-  it('persists booking_url + the two CTA labels into settings.customer_agent', async () => {
+  it('persists the join CTA (membership url + label) into settings.customer_agent', async () => {
     getCurrentUser.mockResolvedValue({ id: 'u', role: 'manager', activeLocation: { id: 'loc1' } })
     let written = null
     createServerClient.mockReturnValue({
@@ -33,20 +33,19 @@ describe('PUT /api/settings/customer-agent — CTA fields', () => {
     const res = await PUT(putReq({
       enabled: true,
       membership_signup_url: 'https://join.example',
-      booking_url: 'https://book.example/ride',
-      booking_cta_label: 'Book a class',
       membership_cta_label: 'Join us',
     }))
     expect(res.status).toBe(200)
     expect(written.settings.customer_agent).toMatchObject({
       membership_signup_url: 'https://join.example',
-      booking_url: 'https://book.example/ride',
-      booking_cta_label: 'Book a class',
       membership_cta_label: 'Join us',
     })
+    // Pulse stays out of booking — no booking CTA plumbing is persisted.
+    expect(written.settings.customer_agent).not.toHaveProperty('booking_url')
+    expect(written.settings.customer_agent).not.toHaveProperty('booking_cta_label')
   })
 
-  it('coerces blank/invalid to null', async () => {
+  it('coerces blank/invalid membership CTA to null', async () => {
     getCurrentUser.mockResolvedValue({ id: 'u', role: 'manager', activeLocation: { id: 'loc1' } })
     let written = null
     createServerClient.mockReturnValue({
@@ -55,9 +54,9 @@ describe('PUT /api/settings/customer-agent — CTA fields', () => {
         update: (patch) => { written = patch; return { eq: () => ({ select: () => ({ single: () => Promise.resolve({ data: { id: 'loc1' }, error: null }) }) }) } },
       }),
     })
-    const res = await PUT(putReq({ enabled: true, booking_url: '', booking_cta_label: '   ' }))
+    const res = await PUT(putReq({ enabled: true, membership_signup_url: '', membership_cta_label: '   ' }))
     expect(res.status).toBe(200)
-    expect(written.settings.customer_agent.booking_url).toBeNull()
-    expect(written.settings.customer_agent.booking_cta_label).toBeNull()
+    expect(written.settings.customer_agent.membership_signup_url).toBeNull()
+    expect(written.settings.customer_agent.membership_cta_label).toBeNull()
   })
 })
