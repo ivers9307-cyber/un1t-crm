@@ -37,11 +37,16 @@ export async function GET(_request, props) {
     .eq('sequence_id', params.id)
 
   // sequence_enrollments has a single FK to contacts → bare embed is safe.
+  // NB the enrolment timestamp column is enrolled_at — this originally
+  // selected/ordered created_at (which doesn't exist on this table), so the
+  // whole query errored and the UI said "no runs yet" while the /stats
+  // counters showed enrolments. Same lesson as the dormant-column invariant:
+  // mocked tests + next build can't catch a bad column name.
   const { data: rows, error } = await db
     .from('sequence_enrollments')
-    .select('id, status, current_step_order, exit_reason, last_error, source_type, created_at, last_processed_at, contacts(first_name, last_name, email)')
+    .select('id, contact_id, status, current_step_order, exit_reason, last_error, source_type, enrolled_at, next_step_at, last_processed_at, contacts(first_name, last_name, email)')
     .eq('sequence_id', params.id)
-    .order('created_at', { ascending: false })
+    .order('enrolled_at', { ascending: false })
     .limit(50)
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
@@ -52,10 +57,12 @@ export async function GET(_request, props) {
     const name = [c.first_name, c.last_name].filter(Boolean).join(' ').trim() || c.email || 'Unknown contact'
     return {
       id: r.id,
+      contact_id: r.contact_id,
       contact_name: name,
       contact_email: c.email || null,
       source_type: r.source_type || null,
-      created_at: r.created_at,
+      enrolled_at: r.enrolled_at,
+      next_step_at: r.next_step_at,
       last_processed_at: r.last_processed_at,
       ...summariseEnrolmentRun(r, stepCount || 0),
     }

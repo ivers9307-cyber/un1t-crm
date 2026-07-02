@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { summariseEnrolmentRun } from './run-history.js'
+import { summariseEnrolmentRun, describeNextStep } from './run-history.js'
 
 describe('summariseEnrolmentRun', () => {
   it('active → in-progress with 1-based step of N', () => {
@@ -27,5 +27,24 @@ describe('summariseEnrolmentRun', () => {
   })
   it('unknown status falls back', () => {
     expect(summariseEnrolmentRun({ status: 'weird' }, 4).outcome).toBe('weird')
+  })
+})
+
+describe('describeNextStep', () => {
+  const now = Date.parse('2026-07-02T19:52:00Z')
+
+  it('overdue when next_step_at is in the past (runs on the next tick)', () => {
+    expect(describeNextStep('2026-07-02T19:50:54Z', now)).toEqual({ overdue: true, minutes: 0 })
+  })
+
+  it('reports minutes until a future step, rounding up', () => {
+    expect(describeNextStep('2026-07-02T19:52:30Z', now)).toEqual({ overdue: false, minutes: 1 })
+    expect(describeNextStep('2026-07-02T20:52:00Z', now)).toEqual({ overdue: false, minutes: 60 })
+  })
+
+  it('null for missing or garbage timestamps', () => {
+    expect(describeNextStep(null, now)).toBeNull()
+    expect(describeNextStep(undefined, now)).toBeNull()
+    expect(describeNextStep('not-a-date', now)).toBeNull()
   })
 })
