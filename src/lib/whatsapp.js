@@ -217,13 +217,17 @@ export function splitTrailingUrl(text) {
 // approval; 24h window only). Meta requires consistent button config across
 // cards: all-or-none links, validated here and in the settings UI.
 //
-// Per-card mapping isolated in ONE pure function: Meta's docs are young for
-// this message type, and the per-card cta_url nesting below is the researched
-// shape but may turn out to be `{ buttons: [...] }` style — if a live smoke
-// test says so, this function is the only thing to change.
+// Per-card mapping isolated in ONE pure function. Live-verified 2026-07-02:
+// Meta requires a card-level `type` naming the card's button kind — omitting
+// it fails with "violated JSON schema constraint 'required' ... missing:
+// 'type'". Linked cards are `type: 'cta_url'` + the action block. Unlinked
+// cards (no button) remain UNVERIFIED against live Meta — its docs describe
+// one CTA button per card, so buttonless sets may be rejected outright; if an
+// operator hits that, this function is still the only thing to change.
 function buildCarouselCard(c, i) {
   return {
     card_index: i,
+    ...(c.link_url ? { type: 'cta_url' } : {}),
     ...(c.title || c.body ? { body: { text: [c.title, c.body].filter(Boolean).join('\n') } } : {}),
     header: { type: 'image', image: { link: c.image_url } },
     ...(c.link_url ? { action: { name: 'cta_url', parameters: { display_text: (c.link_text || 'Open').slice(0, 20), url: c.link_url } } } : {}),
