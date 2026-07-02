@@ -33,6 +33,9 @@ export async function GET(request) {
     console.error('[radar-agent] checkins tick failed:', e?.message || e)
   }
 
-  await stampHeartbeat('agent-followups')
+  // Persist the tick summary on the heartbeat (last_outcome jsonb) — the
+  // customer-agent settings card reads it to show WHY check-ins were
+  // skipped, so a silent tick is diagnosable without server logs.
+  await stampHeartbeat('agent-followups', { followups: results, checkins })
   return NextResponse.json({ success: true, results, checkins })
 }
