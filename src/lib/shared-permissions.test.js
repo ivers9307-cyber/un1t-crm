@@ -132,6 +132,41 @@ describe('per-location feature gate (isFeatureEnabledAtLocation)', () => {
   })
 })
 
+describe('notification registry ↔ per-user toggles', () => {
+  it('every sendPush category in the registry has a notify_<category> toggle', async () => {
+    // push.js only skips a user when notify_<category> is explicitly
+    // false — a category with NO toggle in MOBILE_PERMISSIONS sends to
+    // everyone with no way to opt out (the expense_* gap). Guard the
+    // registry → toggle direction. (The inverse isn't asserted: some
+    // notify_* keys — instagram, checklist_*, issue_* — predate their
+    // registry entries.)
+    const { NOTIFICATION_REGISTRY } = await import('./notifications-registry.js')
+    const keys = new Set(MOBILE_PERMISSION_KEYS)
+    for (const entry of NOTIFICATION_REGISTRY) {
+      expect(
+        keys.has(`notify_${entry.category}`),
+        `registry category '${entry.category}' has no notify_${entry.category} toggle in MOBILE_PERMISSIONS`
+      ).toBe(true)
+    }
+  })
+
+  it('expense notify defaults: submitted = approver roles only, outcomes = everyone', () => {
+    // expense_submitted fans out to the approval queue → on for
+    // master/owner/manager/head_coach, off for staff. approved +
+    // declined go to the submitting FTE → on for every role.
+    const d = DEFAULT_MOBILE_PERMISSIONS_BY_ROLE
+    expect(d.master.notify_expense_submitted).toBe(true)
+    expect(d.owner.notify_expense_submitted).toBe(true)
+    expect(d.manager.notify_expense_submitted).toBe(true)
+    expect(d.head_coach.notify_expense_submitted).toBe(true)
+    expect(d.staff.notify_expense_submitted).toBe(false)
+    for (const r of ['master', ...ROLES]) {
+      expect(d[r].notify_expense_approved, `${r}.notify_expense_approved`).toBe(true)
+      expect(d[r].notify_expense_declined, `${r}.notify_expense_declined`).toBe(true)
+    }
+  })
+})
+
 describe('mig 093 — studio_management replaces door_unlock', () => {
   it('studio_management is a top-level web key (cross-platform)', () => {
     expect(WEB_PERMISSION_KEYS).toContain('studio_management')
