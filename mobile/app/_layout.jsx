@@ -25,6 +25,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useEffect } from 'react'
 import * as Notifications from 'expo-notifications'
 import { AuthProvider, useAuth } from '../lib/auth-context'
+import { routeForNotification } from '../lib/notification-nav'
 import { BiometricLockProvider } from '../lib/biometric-lock'
 import { StudioPinProvider } from '../lib/studio-pin'
 import RootErrorBoundary from '../components/RootErrorBoundary'
@@ -46,8 +47,9 @@ function SplashGate() {
 
 // NOTIF.2 — deep-link the user into the relevant detail screen when
 // they tap a push notification. The payload's `data` object carries
-// `type` ('task_reminder' | 'booking_reminder' | …) and the entity
-// id. We also handle the *cold-start* case via
+// `type` ('task_reminder' | 'swap_inbound' | …) and the entity id;
+// the type → route mapping lives in lib/notification-nav.js (pure,
+// unit-tested). We also handle the *cold-start* case via
 // getLastNotificationResponseAsync() — taps that opened the app
 // from killed state fire the listener before the navigation tree is
 // ready, so we replay them once on mount.
@@ -61,17 +63,13 @@ function NotificationRouter() {
     function handle(response) {
       const data = response?.notification?.request?.content?.data
       if (!data) return
-      switch (data.type) {
-        case 'task_reminder':
-          if (data.task_id) router.push(`/tasks/${data.task_id}`)
-          break
-        case 'booking_reminder':
-          if (data.booking_id) router.push(`/bookings/${data.booking_id}`)
-          break
-        default:
-          // Other categories (time_off, swap, contract_issued, etc.)
-          // already have screen-level handlers or no-op deep links.
-          break
+      const route = routeForNotification(data)
+      if (route) {
+        router.push(route)
+      } else if (route === undefined) {
+        // A data.type this build doesn't know — log it so the gap
+        // surfaces instead of a silent dead tap.
+        console.error('[notif-router] unhandled push type', data.type)
       }
     }
 
