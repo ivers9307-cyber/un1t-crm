@@ -19,7 +19,7 @@
 // verification (account-tools.js). Answers from knowledge or hands off.
 // Never throws.
 
-import { sendTextMessage, sendInteractiveOptions, sendTypingIndicator } from '@/lib/whatsapp'
+import { sendTextMessage, sendInteractiveOptions, sendTypingIndicator, sendCtaUrlMessage, splitTrailingUrl } from '@/lib/whatsapp'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -424,7 +424,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
       return { handled: true, action: 'handoff', reason: parsed.reason }
     }
 
-    const sent = await sendAndLog(db, adapter, { ...common, text: parsed.text, options: parsed.options })
+    const sent = await sendAndLog(db, adapter, { ...common, text: parsed.text, options: parsed.options, settings })
     if (!sent) return { handled: false, reason: 'send_failed' }
     return { handled: true, action: 'reply' }
   } finally {
@@ -437,7 +437,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
 // the customer got NOTHING and the caller must report it (a swallowed
 // send failure here returned { handled: true } during the 2026-06-12
 // dead-token incident and hid the outage from every surface).
-export async function sendAndLog(db, adapter, { conversationId, locationId, recipient, contactId, connection, text, options }) {
+export async function sendAndLog(db, adapter, { conversationId, locationId, recipient, contactId, connection, text, options, settings }) {
   // AGENT-UX.1 — tap choices. Channels with adapter.sendOptions render
   // real buttons; the rest get the choices appended as plain text so the
   // customer always sees them. recordedText is what actually reached the
@@ -452,7 +452,7 @@ export async function sendAndLog(db, adapter, { conversationId, locationId, reci
       recordedText = `${text}\n[Options: ${opts.join(' | ')}]`
     } else {
       const sendText = opts ? `${text}\n\n${opts.map(o => `• ${o}`).join('\n')}` : text
-      const r = await adapter.send(recipient, sendText, { locationId, connection })
+      const r = await adapter.send(recipient, sendText, { locationId, connection, settings })
       messageId = r?.messageId || null
       recordedText = sendText
     }
@@ -500,7 +500,7 @@ async function handoff(db, adapter, { conversationId, locationId, recipient, con
   }).eq('id', conversationId)
 
   try {
-    const r = await adapter.send(recipient, holding, { locationId, connection })
+    const r = await adapter.send(recipient, holding, { locationId, connection, settings })
     await recordAgentMessage(db, adapter,
       adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
     )
@@ -536,7 +536,7 @@ async function softHandoff(db, adapter, { conversationId, locationId, recipient,
   const holding = (settings?.holding_message || '').trim() || DEFAULT_HOLDING_MESSAGE
   const now = new Date().toISOString()
   try {
-    const r = await adapter.send(recipient, holding, { locationId, connection })
+    const r = await adapter.send(recipient, holding, { locationId, connection, settings })
     await recordAgentMessage(db, adapter,
       adapter.outboundRow({ conversationId, locationId, contactId, messageId: r?.messageId || null, text: holding, now })
     )
@@ -580,7 +580,22 @@ export const whatsappAdapter = {
     try { await sendTypingIndicator(waMessageId, { locationId }) }
     catch (e) { console.warn('[agent] typing indicator failed:', e?.message) }
   },
-  send: (recipient, text, { locationId }) => sendTextMessage(recipient, text, { locationId }),
+  // C3 — a reply that ends in a URL becomes a cta_url button message (body +
+  // tappable button) instead of a raw link. Operator-editable button text;
+  // plain text is byte-identical to before when no trailing URL.
+  send: async (recipient, text, { locationId, settings }) => {
+    const split = splitTrailingUrl(text)
+    if (split) {
+      const buttonText = (settings?.link_button_text || '').trim() || 'Open link'
+      try {
+        return await sendCtaUrlMessage(recipient, { bodyText: split.body, buttonText, url: split.url }, { locationId })
+      } catch (e) {
+        // cta_url rejected (rare) — fall back to the plain text send below.
+        console.warn('[agent] cta_url send failed, falling back to text:', e?.message)
+      }
+    }
+    return sendTextMessage(recipient, text, { locationId })
+  },
   sendOptions: (recipient, text, options, { locationId }) => sendInteractiveOptions(recipient, text, options, { locationId }),
   outboundRow: ({ conversationId, locationId, contactId, messageId, text, now }) => ({
     conversation_id: conversationId,

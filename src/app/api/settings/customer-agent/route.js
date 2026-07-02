@@ -20,6 +20,9 @@ const DEFAULTS = {
   // C2 — instant greeting sent when someone opens the chat without typing
   // (request_welcome). Null → code default (DEFAULT_WELCOME_GREETING).
   welcome_greeting: null,
+  // C3 — label on the tappable button of cta_url link messages.
+  // Null → code default ('Open link').
+  link_button_text: null,
   quiet_hours: null,
   limits: null,
   monthly_points_target: null,
@@ -49,6 +52,7 @@ const SettingsSchema = z.object({
   extra_rules: z.string().max(2000).nullable().optional(),
   holding_message: z.string().max(500).nullable().optional(),
   welcome_greeting: z.string().max(500).nullable().optional(),
+  link_button_text: z.string().max(25).nullable().optional(),
   quiet_hours: z.object({
     start: z.string().regex(/^\d{1,2}:\d{2}$/),
     end: z.string().regex(/^\d{1,2}:\d{2}$/),
@@ -134,6 +138,7 @@ export async function PUT(request) {
     extra_rules: v.data.extra_rules?.trim() || null,
     holding_message: v.data.holding_message?.trim() || null,
     welcome_greeting: v.data.welcome_greeting?.trim() || null,
+    link_button_text: v.data.link_button_text?.trim() || null,
     quiet_hours: v.data.quiet_hours || null,
     limits: v.data.limits || null,
     booking_mode: v.data.booking_mode === 'draft' ? 'draft' : 'auto',

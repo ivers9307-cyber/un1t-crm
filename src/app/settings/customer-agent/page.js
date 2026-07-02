@@ -55,6 +55,7 @@ export default function CustomerAgentSettingsPage() {
         extra_rules: settings.extra_rules || null,
         holding_message: settings.holding_message || null,
         welcome_greeting: settings.welcome_greeting || null,
+        link_button_text: (settings.link_button_text || '').trim() || null,
         quiet_hours: settings.quiet_hours?.start && settings.quiet_hours?.end
           ? { start: settings.quiet_hours.start, end: settings.quiet_hours.end, tz: settings.quiet_hours.tz || 'Europe/Dublin' }
           : null,
@@ -328,6 +329,16 @@ export default function CustomerAgentSettingsPage() {
             Sent instantly when someone opens a brand-new chat (e.g. from a click-to-WhatsApp ad) without sending a message.
             Uses the agent&apos;s on/off, test-mode, and quiet-hours switches above. Leave blank to use the default shown.
           </p>
+        </div>
+
+        {/* C3 — cta_url link messages: a reply ending in a URL becomes a
+            tappable button; this is the button's label. */}
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Link button label (shown on tappable link messages)</label>
+          <input className={inputCls} maxLength={25} value={settings.link_button_text || ''}
+            onChange={e => setField('link_button_text', e.target.value)}
+            placeholder="Open link" />
+          <p className="text-xs text-un1t-muted mt-1">When the agent sends a link, it appears as a tappable button with this label. Leave blank to use the default shown.</p>
         </div>
 
         <div>
