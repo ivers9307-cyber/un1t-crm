@@ -11,6 +11,7 @@ import {
   endAllAtLocation,
   finalizeSessionRewards,
   createParticipationSession,
+  isTestSession,
 } from './live-class.js'
 import { sendPostClassEmail } from '@/lib/hr-post-class-email'
 import { runDetectionForSession } from '@/lib/achievements'
@@ -321,10 +322,13 @@ describe('pairOverride', () => {
           ] })) })) })) })) }
         }
         if (table === 'heart_rate_sessions') {
+          // Two select chains: the contact-open lookup (.eq.eq.is.order…) and the
+          // Item-2 anon-adopt lookup (.eq.eq.is.is.order…). Both resolve null here
+          // (no open session, no anon session) so pairOverride creates fresh.
+          const terminal = { order: vi.fn(() => ({ limit: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: null, error: null })) })) })) }
+          const isNode = () => ({ ...terminal, is: vi.fn(() => terminal) })
           return {
-            select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => ({ order: vi.fn(() => ({
-              limit: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: null, error: null })) })),
-            })) })) })) })) })),
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(isNode) })) })) })),
             insert: vi.fn((row) => { insertedSession = row; return { select: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { id: 'sess-new' }, error: null })) })) } }),
           }
         }
@@ -341,6 +345,63 @@ describe('pairOverride', () => {
     expect(out.sessionId).toBe('sess-new')
     expect(insertedSession.class_link_source).toBe('booked')
     expect(insertedSession.glofox_event_id).toBe('ev1')
+  })
+
+  // Item 2 — a walk-in whose strap already spawned an ANONYMOUS session (holding
+  // their first minutes) must have that session ADOPTED (contact stamped), not a
+  // brand-new named session created that orphans the anon one.
+  it('adopts an open anonymous session for the same strap instead of orphaning it', async () => {
+    let adoptPatch = null
+    let inserted = null
+    const db = {
+      from: vi.fn((table) => {
+        if (table === 'contacts') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({
+            data: { id: 'c-1', max_hr_override: null, dob: '1990-05-08', glofox_member_id: null, location_id: 'loc-1' }, error: null,
+          })) })) })) })) }
+        }
+        if (table === 'class_bookings') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => Promise.resolve({ data: [] })) })) })) })) })) }
+        }
+        if (table === 'class_occurrences') {
+          // No live class — adopt keeps the anon session's null class link.
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => ({ is: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: [] })) })) })) })) })) })) }
+        }
+        if (table === 'heart_rate_sessions') {
+          // First select chain (.eq.eq.is.order): no NAMED open session for the
+          // contact → null. Second select chain (.eq.eq.is.is.order): an open
+          // ANON session for this strap → the row to adopt.
+          return {
+            select: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                eq: vi.fn(() => ({
+                  is: vi.fn(() => {
+                    // Named lookup: .is(ended_at).order(); anon: .is(contact).is(ended_at).order()
+                    const terminalNull = { order: vi.fn(() => ({ limit: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: null, error: null })) })) })) }
+                    const anonTerminal = { order: vi.fn(() => ({ limit: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'anon-sess', glofox_event_id: null }, error: null })) })) })) }
+                    return { ...terminalNull, is: vi.fn(() => anonTerminal) }
+                  }),
+                })),
+              })),
+            })),
+            update: vi.fn((patch) => { adoptPatch = patch; return { eq: vi.fn(() => Promise.resolve({ error: null })) } }),
+            insert: vi.fn((row) => { inserted = row; return { select: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { id: 'should-not-happen' }, error: null })) })) } }),
+          }
+        }
+        if (table === 'strap_assignments') {
+          return { insert: vi.fn(() => Promise.resolve({ error: null })) }
+        }
+        throw new Error(`unexpected ${table}`)
+      }),
+    }
+    const out = await pairOverride(db, {
+      locationId: 'loc-1', bridgeId: 'b-1', contactId: 'c-1', deviceKey: 'ant:45075',
+    })
+    expect(out.ok).toBe(true)
+    expect(out.sessionId).toBe('anon-sess')      // adopted, not created
+    expect(inserted).toBeNull()                  // NO new session inserted
+    expect(adoptPatch).toMatchObject({ contact_id: 'c-1' }) // anon → named
+    expect(typeof adoptPatch.max_hr_used).toBe('number')    // max HR re-stamped
   })
 })
 
@@ -531,6 +592,51 @@ describe('endSession', () => {
     const out = await endSession(db, 'sess-cal', { nowMs: Date.parse('2026-05-08T17:10:00Z') })
     expect(out.ok).toBe(true)
     expect(get().calories_kcal).toBeNull()
+  })
+
+  // Item 6 — calorie duration is the SAMPLED time (summary.totalSeconds), not
+  // wall-clock. An auto-closed session hits the 4h backstop; wall-clock would
+  // mint a ~3000 kcal ghost. Here samples span ~2 min but nowMs is 4h out.
+  it('bases calories on sampled duration, not the 4h auto-close wall clock', async () => {
+    let updated = null
+    const startIso = '2026-05-08T16:00:00Z'
+    // ~2 min of samples, one per 10s (12 samples) → totalSeconds ≈ 120.
+    const samples = Array.from({ length: 13 }, (_, i) => ({
+      recorded_at: new Date(Date.parse(startIso) + i * 10_000).toISOString(), bpm: 150,
+    }))
+    const db = {
+      from: vi.fn((table) => {
+        if (table === 'heart_rate_sessions') {
+          return {
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({
+              data: { id: 'sess-4h', contact_id: 'contact-1', location_id: 'loc-1', started_at: startIso, max_hr_used: 190, ended_at: null }, error: null,
+            })) })) })),
+            update: vi.fn((row) => { if (row.calories_kcal !== undefined) updated = row; return { eq: vi.fn(() => Promise.resolve({ error: null })) } }),
+          }
+        }
+        if (table === 'contacts') return { select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: { dob: '1990-01-01', gender: 'male', weight_kg: 80 }, error: null })) })) })) }
+        if (table === 'locations') return { select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'loc-1', settings: {} }, error: null })) })) })) }
+        if (table === 'hr_samples') return { select: vi.fn(() => ({ eq: vi.fn(() => ({ order: vi.fn(() => ({ range: vi.fn(() => Promise.resolve({ data: samples, error: null })) })) })) })) }
+        if (table === 'strap_assignments') return { update: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ error: null })) })) })) }
+        // finalizeSessionRewards reload + cascade — benign empties.
+        return {
+          select: vi.fn(() => ({ eq: vi.fn(() => ({
+            single: vi.fn(() => Promise.resolve({ data: { id: 'sess-4h', contact_id: 'contact-1', location_id: 'loc-1', effort_points: 0, ended_at: null, source: 'ble_bridge', glofox_event_id: null, class_name: null, raw_metadata: null }, error: null })),
+            maybeSingle: vi.fn(() => Promise.resolve({ data: null, error: null })),
+            eq: vi.fn(() => ({ is: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })),
+            not: vi.fn(() => ({ gte: vi.fn(() => Promise.resolve({ data: [], error: null })) })),
+          })) })),
+          insert: vi.fn(() => ({ select: vi.fn(() => Promise.resolve({ data: [], error: null })) })),
+          update: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ error: null })) })) })),
+        }
+      }),
+    }
+    // nowMs = started_at + 4h (the auto-close backstop).
+    const out = await endSession(db, 'sess-4h', { nowMs: Date.parse(startIso) + 4 * 3600 * 1000 })
+    expect(out.ok).toBe(true)
+    // ~2 min at 150bpm for an 80kg 36yo male ≈ tens of kcal, NOT thousands.
+    expect(updated.calories_kcal).toBeGreaterThan(0)
+    expect(updated.calories_kcal).toBeLessThan(200)
   })
 })
 
@@ -757,5 +863,31 @@ describe('finalizeSessionRewards', () => {
     })
     await finalizeSessionRewards(db, 'sess-apple')
     expect(enqueueExportsForSession).not.toHaveBeenCalled()
+  })
+
+  // Item 3 — a test-mode session must fire NONE of the member-facing rewards.
+  it('skips the ENTIRE reward cascade for a test-mode session (raw_metadata.test_mode)', async () => {
+    const db = dbForSession({
+      id: 'sess-test', contact_id: 'c-1', location_id: 'loc-1',
+      effort_points: 99, ended_at: '2026-06-20T06:00:00Z',
+      source: 'ble_bridge', glofox_event_id: 'ev-1', class_name: 'DR1VE',
+      raw_metadata: { test_mode: true },
+    })
+    await finalizeSessionRewards(db, 'sess-test')
+    expect(sendPostClassEmail).not.toHaveBeenCalled()
+    expect(runDetectionForSession).not.toHaveBeenCalled()
+    expect(enqueueExportsForSession).not.toHaveBeenCalled()
+  })
+})
+
+// ── isTestSession ──────────────────────────────────────────────
+describe('isTestSession', () => {
+  it('true only when raw_metadata.test_mode === true', () => {
+    expect(isTestSession({ raw_metadata: { test_mode: true } })).toBe(true)
+    expect(isTestSession({ raw_metadata: { test_mode: false } })).toBe(false)
+    expect(isTestSession({ raw_metadata: { source: 'strava' } })).toBe(false)
+    expect(isTestSession({ raw_metadata: null })).toBe(false)
+    expect(isTestSession({})).toBe(false)
+    expect(isTestSession(null)).toBe(false)
   })
 })

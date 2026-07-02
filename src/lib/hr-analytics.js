@@ -22,6 +22,8 @@
 // type) and percentile rounding is fine for "you were faster than
 // 8 of your last 10 RIDE classes".
 
+import { dublinDayStr, addDaysISO } from '@/lib/dublin-time'
+
 const RECENT_DAYS = 28
 const PRIOR_DAYS = 56
 
@@ -71,6 +73,16 @@ export function inWindow(sessions, fromDays, toDays, nowMs = Date.now()) {
     const t = new Date(s.started_at).getTime()
     return t >= olderMs && t < newerMs
   })
+}
+
+/**
+ * Sort a copy of `sessions` by started_at DESCENDING (most recent first).
+ * Non-mutating. Used before a "last N" slice so the slice is the N MOST RECENT.
+ */
+export function byStartedDesc(sessions) {
+  return [...(sessions || [])].sort(
+    (a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime()
+  )
 }
 
 // ── aggregates ──────────────────────────────────────────────────
@@ -225,21 +237,25 @@ export function pickHighlight({ thisSession, history, eventTypeName, nowMs = Dat
 // ── helpers ──────────────────────────────────────────────────────
 
 /**
- * Counts consecutive days ending today on which the member trained.
- * `thisSession` counts as today; we walk back through history
- * (sorted desc by started_at) accepting one calendar day at a time.
+ * Counts consecutive days ending on `thisSession`'s day on which the member
+ * trained. `thisSession` counts as its own day; we walk back through history
+ * one CALENDAR day at a time.
+ *
+ * Item 7 — the day boundary is Europe/Dublin, not UTC. A UTC boundary
+ * mis-buckets an evening session during BST (a 23:30 Dublin session is the
+ * previous UTC day at 22:30 in winter but the same day flips near midnight in
+ * summer), so the app's streak and this streak disagreed. dublinDayStr keys each
+ * session on its Dublin calendar day; addDaysISO steps calendar days purely.
  */
 function computeStreak(thisSession, history) {
-  const dayKey = (iso) => new Date(iso).toISOString().slice(0, 10)
-  const days = new Set([dayKey(thisSession.started_at)])
-  for (const s of history) days.add(dayKey(s.started_at))
+  const days = new Set([dublinDayStr(thisSession.started_at)])
+  for (const s of history) days.add(dublinDayStr(s.started_at))
 
   let streak = 0
-  let cursor = new Date(thisSession.started_at)
-  cursor.setUTCHours(0, 0, 0, 0)
-  while (days.has(cursor.toISOString().slice(0, 10))) {
+  let cursor = dublinDayStr(thisSession.started_at) // YYYY-MM-DD, Dublin
+  while (days.has(cursor)) {
     streak++
-    cursor = new Date(cursor.getTime() - 24 * 3600 * 1000)
+    cursor = addDaysISO(cursor, -1)
   }
   return streak
 }
@@ -263,9 +279,14 @@ function computeStreak(thisSession, history) {
  */
 export function currentStreak(sessions, nowMs = Date.now()) {
   const DAY = 24 * 3600 * 1000
+  // Item 7 — bucket each session on its Europe/Dublin calendar day, not UTC, so
+  // the streak matches what the member sees in the app. dublinDayStr → YYYY-MM-DD
+  // in Dublin; we then canonicalise that to a UTC-midnight epoch-ms purely so the
+  // ±DAY consecutive-day arithmetic below still holds (Dublin calendar days are
+  // exactly 24h apart in this y/m/d representation).
   const dayMs = (iso) => {
-    const d = new Date(iso)
-    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+    const [y, mo, d] = dublinDayStr(iso).split('-').map(Number)
+    return Date.UTC(y, mo - 1, d)
   }
   const days = new Set()
   for (const s of sessions || []) {
@@ -277,8 +298,7 @@ export function currentStreak(sessions, nowMs = Date.now()) {
   const sorted = [...days].sort((a, b) => b - a) // unique day-ms, most recent first
   const lastDayMs = sorted[0]
 
-  const n = new Date(nowMs)
-  const todayMs = Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate())
+  const todayMs = dayMs(nowMs)
 
   let current = 0
   if (lastDayMs === todayMs || lastDayMs === todayMs - DAY) {
@@ -308,7 +328,11 @@ export function currentStreak(sessions, nowMs = Date.now()) {
 export function buildSessionAnalytics({ thisSession, history, eventTypeName, nowMs = Date.now() }) {
   const historyExclThis = (history || []).filter((s) => s.id !== thisSession.id)
   const sameType = sameClass(historyExclThis, thisSession.class_name)
-  const sameTypeRecent = withinDays(sameType, RECENT_DAYS, nowMs).slice(0, 8)
+  // Item 7 — the "last 8" MUST be the 8 most RECENT qualifying sessions. The
+  // loader returns rows in no guaranteed order, so a bare .slice(0, 8) took an
+  // arbitrary 8 whenever a member had >8 in-window sessions of a class/category,
+  // making the mean/percentile non-deterministic. Sort started_at DESC first.
+  const sameTypeRecent = byStartedDesc(withinDays(sameType, RECENT_DAYS, nowMs)).slice(0, 8)
 
   const overallPointsTrend = trendDelta(historyExclThis, 'effort_points', nowMs)
   const overallPeakTrend = trendDelta(historyExclThis, 'peak_hr_bpm', nowMs)
@@ -319,7 +343,7 @@ export function buildSessionAnalytics({ thisSession, history, eventTypeName, now
   // Null when this session's class is unmapped.
   const category = thisSession.category || null
   const sameCat = sameCategory(historyExclThis, category)
-  const sameCatRecent = withinDays(sameCat, RECENT_DAYS, nowMs).slice(0, 8)
+  const sameCatRecent = byStartedDesc(withinDays(sameCat, RECENT_DAYS, nowMs)).slice(0, 8)
   const categoryMean = meanField(sameCatRecent, 'effort_points')
   const categoryPercentile = percentileOf(Number(thisSession.effort_points), sameCatRecent, 'effort_points')
 

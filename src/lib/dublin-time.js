@@ -15,18 +15,30 @@
 const DUBLIN_TZ = 'Europe/Dublin'
 
 /**
- * Returns today's date in Europe/Dublin as a YYYY-MM-DD string.
- * sv-SE locale formats as YYYY-MM-DD natively (more reliable than
- * en-* locales which return D/M/YYYY).
+ * Returns the Europe/Dublin calendar day (YYYY-MM-DD) for an arbitrary instant
+ * (Date | epoch-ms | ISO string). This is the day-boundary any Dublin streak /
+ * "same day?" logic must key off — a UTC day boundary mis-buckets a late-evening
+ * Dublin session during BST (e.g. 23:30 Dublin = 22:30 UTC same day, but a
+ * midnight-adjacent session can flip). sv-SE formats as YYYY-MM-DD natively.
+ * @param {Date|number|string} [instant=Date.now()]
  */
-export function dublinTodayStr() {
+export function dublinDayStr(instant = Date.now()) {
   const fmt = new Intl.DateTimeFormat('sv-SE', {
     timeZone: DUBLIN_TZ,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
   })
-  return fmt.format(new Date())
+  return fmt.format(instant instanceof Date ? instant : new Date(instant))
+}
+
+/**
+ * Returns today's date in Europe/Dublin as a YYYY-MM-DD string.
+ * sv-SE locale formats as YYYY-MM-DD natively (more reliable than
+ * en-* locales which return D/M/YYYY).
+ */
+export function dublinTodayStr() {
+  return dublinDayStr(new Date())
 }
 
 /**

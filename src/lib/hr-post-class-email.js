@@ -56,7 +56,7 @@ export async function loadContextForSession(db, sessionId) {
     .select(`
       id, contact_id, location_id, booking_id, started_at, ended_at,
       max_hr_used, avg_hr_bpm, peak_hr_bpm, zones_seconds, effort_points,
-      email_sent_at, source, device_identifier, class_name,
+      email_sent_at, source, device_identifier, class_name, raw_metadata,
       contact:contacts!heart_rate_sessions_contact_id_fkey ( id, name, email, hr_post_class_emails_enabled, pipeline_stage_slug ),
       booking:bookings!heart_rate_sessions_booking_id_fkey ( id, booking_date, start_time,
         event_type:event_types!bookings_event_type_id_fkey ( id, name )
@@ -489,6 +489,15 @@ export async function sendPostClassEmail(db, sessionId, { nowMs = Date.now() } =
   }
 
   const { contact, session } = ctx
+  // Item 3 — test-mode sessions (raw_metadata.test_mode, stamped at create in
+  // findOrCreateAutoSession) must NEVER email. The cron sweep calls this helper
+  // directly (not via finalizeSessionRewards, which also gates test sessions),
+  // so gate here too and stamp processed so the row + its "session ready" push
+  // leave the sweep after one pass.
+  if (session?.raw_metadata?.test_mode === true) {
+    await markProcessed(db, sessionId, nowMs)
+    return { ok: true, skipped: 'test-mode' }
+  }
   // The three permanent skips stamp the dedup column (markProcessed) so the
   // session leaves the auto-end sweep after ONE pass — otherwise it re-matches
   // and re-pushes every tick (the bug this fixes).
@@ -516,6 +525,31 @@ export async function sendPostClassEmail(db, sessionId, { nowMs = Date.now() } =
     return { ok: false, error: e.message }
   }
 
+  // Item 5 — CLAIM before send (no double email). The email_sent_at guard in
+  // loadContextForSession is read at LOAD time; the old code only stamped AFTER
+  // Postmark returned. A slow inline endSession→finalize send overlapping a
+  // 5-min cron tick both passed the load-time check and both sent. Atomically
+  // claim the row FIRST: UPDATE … WHERE id = ? AND email_sent_at IS NULL. Only
+  // the winner gets rows-affected = 1 and proceeds to Postmark; the loser sees 0
+  // and bails. This stamps email_sent_at slightly before the send returns — the
+  // documented tradeoff (a rare Postmark failure leaves it stamped-but-unsent) is
+  // strictly better than a double-send, and matches the comms-audit
+  // claim-before-send pattern.
+  const { data: claimed, error: claimErr } = await db
+    .from('heart_rate_sessions')
+    .update({ email_sent_at: new Date(nowMs).toISOString() })
+    .eq('id', sessionId)
+    .is('email_sent_at', null)
+    .select('id')
+  if (claimErr) {
+    logWarn('hr-post-class-email', 'claim email_sent_at failed', { sessionId, err: claimErr })
+    return { ok: false, error: claimErr.message }
+  }
+  if (!claimed || claimed.length === 0) {
+    // Another sender (the overlapping path) claimed it first — don't double-send.
+    return { ok: true, skipped: 'already-sent' }
+  }
+
   try {
     await sendTransactionalEmail({
       to: contact.email,
@@ -528,17 +562,6 @@ export async function sendPostClassEmail(db, sessionId, { nowMs = Date.now() } =
   } catch (e) {
     logError('hr-post-class-email', 'postmark send threw', { sessionId, err: e })
     return { ok: false, error: e.message }
-  }
-
-  // Stamp dedup column. If this fails we logged it but don't roll
-  // back the send — duplicate sends aren't catastrophic; missing
-  // sends are.
-  const { error: stampErr } = await db
-    .from('heart_rate_sessions')
-    .update({ email_sent_at: new Date(nowMs).toISOString() })
-    .eq('id', sessionId)
-  if (stampErr) {
-    logWarn('hr-post-class-email', 'stamp email_sent_at failed', { sessionId, err: stampErr })
   }
 
   logInfo('hr-post-class-email', 'sent', {

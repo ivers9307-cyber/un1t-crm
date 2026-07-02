@@ -140,7 +140,7 @@ describe('composeEmail', () => {
 describe('sendPostClassEmail', () => {
   // Build a minimal Supabase mock that returns canned shapes for
   // the three select calls + an update.
-  function mockDb({ session, history = [], stampError = null }) {
+  function mockDb({ session, history = [], stampError = null, claimedRows = [{ id: 'sess-1' }] }) {
     // Records every email_sent_at stamp (real send OR permanent-skip
     // markProcessed) so tests can assert the row leaves the auto-end sweep.
     const stamps = []
@@ -187,7 +187,15 @@ describe('sendPostClassEmail', () => {
             }),
             update: vi.fn((payload) => {
               stamps.push(payload)
-              return { eq: vi.fn(() => Promise.resolve({ error: stampError })) }
+              // Two shapes: markProcessed → .update().eq() (thenable), and the
+              // item-5 claim → .update().eq().is().select() returning claimed
+              // rows. `claimedRows` defaults to one row (claim wins).
+              const claimResult = Promise.resolve({ data: claimedRows, error: stampError })
+              const eqNode = {
+                then: (res) => Promise.resolve({ error: stampError }).then(res),
+                is: vi.fn(() => ({ select: vi.fn(() => claimResult) })),
+              }
+              return { eq: vi.fn(() => eqNode) }
             }),
           }
         }
@@ -277,6 +285,26 @@ describe('sendPostClassEmail', () => {
     const db = mockDb({ session: null })
     const out = await sendPostClassEmail(db, 'sess-missing', { nowMs: NOW })
     expect(out.ok).toBe(false)
+  })
+
+  // Item 3 — a test-mode session must never email; it's marked processed so it
+  // leaves the auto-end sweep (and its "session ready" push never fires).
+  it('skips (marks processed) a test-mode session without sending', async () => {
+    const db = mockDb({ session: fullSessionRow({ raw_metadata: { test_mode: true } }) })
+    const out = await sendPostClassEmail(db, 'sess-1', { nowMs: NOW })
+    expect(out).toEqual({ ok: true, skipped: 'test-mode' })
+    expect(sendTransactionalEmail).not.toHaveBeenCalled()
+    expect(db.__stamps).toHaveLength(1) // markProcessed stamp
+  })
+
+  // Item 5 — claim-before-send: if a concurrent path already claimed the row
+  // (our UPDATE … WHERE email_sent_at IS NULL affects 0 rows), we must NOT send.
+  it('does not double-send when the claim affects no rows (already claimed)', async () => {
+    sendTransactionalEmail.mockResolvedValue({ messageId: 'pm-1' })
+    const db = mockDb({ session: fullSessionRow(), claimedRows: [] }) // claim lost
+    const out = await sendPostClassEmail(db, 'sess-1', { nowMs: NOW })
+    expect(out).toEqual({ ok: true, skipped: 'already-sent' })
+    expect(sendTransactionalEmail).not.toHaveBeenCalled()
   })
 })
 

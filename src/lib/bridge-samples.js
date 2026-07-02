@@ -30,7 +30,7 @@
 import { logWarn } from '@/lib/log'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { lookupBookedMember, resolveClassLinkSource, resolveBookedOccurrenceForMember } from '@/lib/class-bookings'
-import { classSessionAction } from '@/lib/hr-session-lifecycle'
+import { classSessionAction, shouldCloseSupersededSession } from '@/lib/hr-session-lifecycle'
 
 // 90 min covers an hour-long class plus 15min before + 15min after.
 const BOOKING_WINDOW_MS = 90 * 60 * 1000
@@ -354,7 +354,12 @@ async function reselectOpenAnonSession(db, { locationId, deviceKey }) {
  * Find an existing open heart_rate_sessions row for this contact at this
  * location, or create one. Resolution, in priority:
  *   (a) an existing OPEN session → return it (rejoin across drop-outs),
- *       backfilling the class link booking-first.
+ *       backfilling the class link booking-first. EXCEPTION (item 1): if that
+ *       open session is linked to a DIFFERENT, already-ended class than the one
+ *       the member now resolves to (back-to-back classes — the 09:00 session
+ *       never went silent before the 10:00 class started), CLOSE the stale one
+ *       and fall through to create a fresh session for the new class. Closing
+ *       BEFORE the create keeps the mig-343 one-open-per-member index happy.
  *   (b) a class for this member → tie the session to it. Booking-first (the
  *       member's BOOKED occurrence, wide 45/30 window) else the location-wide
  *       live class (presence, tight OCC_PRE/POST). Class-keyed dedup: reopen a
@@ -398,16 +403,56 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
     : null
 
   if (existing?.id) {
-    if (!existing.glofox_event_id && occ) {
-      await db.from('heart_rate_sessions')
-        .update({ glofox_event_id: occ.glofox_event_id, class_name: occ.class_name, class_link_source: linkSource })
-        .eq('id', existing.id)
+    // Item 1 — back-to-back classes. If the open session belongs to a DIFFERENT
+    // class than the one the member now resolves to, and that older class has
+    // ended past grace, close the stale session so it stops absorbing this
+    // class's samples, then fall through to the create path for the new class.
+    let superseded = false
+    if (occ && existing.glofox_event_id && existing.glofox_event_id !== occ.glofox_event_id) {
+      // Fetch the OLD class's ends_at to decide whether it's safe to supersede.
+      const { data: oldOcc } = await db
+        .from('class_occurrences')
+        .select('ends_at')
+        .eq('location_id', locationId)
+        .eq('glofox_event_id', existing.glofox_event_id)
+        .is('cancelled_at', null)
+        .maybeSingle()
+      if (shouldCloseSupersededSession({
+        openEventId: existing.glofox_event_id,
+        newEventId: occ.glofox_event_id,
+        openClassEndsAt: oldOcc?.ends_at ?? null,
+        nowMs,
+      })) {
+        // Close BEFORE inserting the fresh session (mig 343: one open row per
+        // member/location). Stamp ended_at to now so the row leaves the index.
+        await db.from('heart_rate_sessions')
+          .update({ ended_at: new Date(nowMs).toISOString() })
+          .eq('id', existing.id)
+          .is('ended_at', null)
+        superseded = true
+      }
     }
-    return existing.id
+    if (!superseded) {
+      if (!existing.glofox_event_id && occ) {
+        await db.from('heart_rate_sessions')
+          .update({ glofox_event_id: occ.glofox_event_id, class_name: occ.class_name, class_link_source: linkSource })
+          .eq('id', existing.id)
+      }
+      return existing.id
+    }
+    // superseded → fall through to (b)/(c)/(d) to open a fresh session.
   }
 
   const maxHr = resolveMaxHrForBridgeInsert(contact)
   const nowIso = new Date(nowMs).toISOString()
+
+  // Item 3 — test-mode sessions (staff testing with a member-registered strap)
+  // must be born tagged so the reward cascade (email/push/achievements/goals/
+  // tiers/strava) can skip them. `heart_rate_sessions.raw_metadata` (jsonb, mig
+  // 110) is the existing bag other importers use — no migration needed. Stamped
+  // on EVERY create path here (not just c) so a test session that happens to
+  // land during a live class or a booking is still gated.
+  const testMeta = testModeActive ? { test_mode: true } : null
 
   // (b) Class-linked create (booking-first or presence). One session per
   // (member, class): reopen a closed one while the class is still live; skip
@@ -441,6 +486,7 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
         contact_id: contactId, location_id: locationId, booking_id: null, source: 'ble_bridge',
         device_identifier: deviceKey, started_at: nowIso, max_hr_used: maxHr,
         glofox_event_id: occ.glofox_event_id, class_name: occ.class_name, class_link_source: linkSource,
+        raw_metadata: testMeta,
       })
       .select('id').single()
     if (createErr) {
@@ -461,6 +507,7 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
         contact_id: contactId, location_id: locationId, booking_id: null, source: 'ble_bridge',
         device_identifier: deviceKey, started_at: nowIso, max_hr_used: maxHr,
         glofox_event_id: null, class_name: null, class_link_source: null,
+        raw_metadata: testMeta,
       })
       .select('id').single()
     if (tErr) {
@@ -503,6 +550,7 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
     .insert({
       contact_id: contactId, location_id: locationId, booking_id: activeBooking.id, source: 'ble_bridge',
       device_identifier: deviceKey, started_at: nowIso, max_hr_used: maxHr,
+      raw_metadata: testMeta,
     })
     .select('id').single()
   if (createErr) {

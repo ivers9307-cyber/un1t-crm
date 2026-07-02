@@ -11,6 +11,7 @@ import {
   pickHighlight,
   buildSessionAnalytics,
   currentStreak,
+  byStartedDesc,
 } from './hr-analytics.js'
 
 const NOW = new Date('2026-05-08T18:00:00Z').getTime()
@@ -230,6 +231,67 @@ describe('buildSessionAnalytics — category grouping', () => {
     const thisSession = base({ id: 'now', started_at: day(0), category: null })
     const a = buildSessionAnalytics({ thisSession, history: [], eventTypeName: 'RIDE', nowMs: NOW })
     expect(a.category).toBeNull()
+  })
+})
+
+// ── Item 7: last-8 must be the 8 MOST RECENT (sort before slice) ──
+describe('byStartedDesc', () => {
+  it('sorts most-recent-first, non-mutating', () => {
+    const input = [{ started_at: day(5) }, { started_at: day(1) }, { started_at: day(9) }]
+    const out = byStartedDesc(input)
+    expect(out.map((r) => r.started_at)).toEqual([day(1), day(5), day(9)])
+    expect(input[0].started_at).toBe(day(5)) // original untouched
+  })
+  it('tolerates empty/null', () => {
+    expect(byStartedDesc([])).toEqual([])
+    expect(byStartedDesc(null)).toEqual([])
+  })
+})
+
+describe('buildSessionAnalytics — last-8 determinism (item 7)', () => {
+  it('computes classType mean over the 8 MOST RECENT, not an arbitrary 8', () => {
+    // 12 in-window RIDE sessions: the 8 newest all score 100, the 4 OLDEST score
+    // 1000. A bare slice(0,8) over unsorted rows could grab the 1000s and blow up
+    // the mean; sorting DESC first fixes the mean to the recent 100s.
+    const thisSession = s({ id: 'now', startedDaysAgo: 0, points: 100 })
+    const recent = Array.from({ length: 8 }, (_, i) => s({ id: `r${i}`, startedDaysAgo: 1 + i, points: 100 }))
+    const older = Array.from({ length: 4 }, (_, i) => s({ id: `o${i}`, startedDaysAgo: 20 + i, points: 1000 }))
+    // Deliberately interleave so the input order is NOT started_at-sorted.
+    const history = [older[0], recent[0], older[1], recent[1], recent[2], older[2], recent[3], recent[4], older[3], recent[5], recent[6], recent[7]]
+    const out = buildSessionAnalytics({ thisSession, history, eventTypeName: 'RIDE', nowMs: NOW })
+    expect(out.classType.recentCount).toBe(8)
+    expect(out.classType.meanPoints).toBe(100) // recent 8, not the 1000s
+  })
+})
+
+// ── Item 7: streak day boundary is Europe/Dublin, not UTC ──────────
+describe('pickHighlight streak — Dublin day boundary (item 7)', () => {
+  // A just-after-midnight Dublin session during BST is the PREVIOUS UTC day:
+  //   2026-06-19 00:30 Dublin (+1) = 2026-06-18 23:30 UTC.
+  // This mix makes UTC vs Dublin diverge:
+  //   now : 2026-06-20 12:00 UTC          → Dublin 06-20, UTC 06-20
+  //   p1  : 2026-06-19 00:30 Dublin       → Dublin 06-19, UTC 06-18
+  //   p2  : 2026-06-18 12:00 UTC          → Dublin 06-18, UTC 06-18
+  // DUBLIN days = {20, 19, 18} consecutive → 3-day streak (highlight fires).
+  // UTC days    = {20, 18}                → streak breaks at 06-19 → 1 (no fire).
+  // So the highlight ONLY appears with the Dublin-day fix — a UTC key mis-counts.
+  const dub0030 = (dateStr) => {
+    const [y, mo, d] = dateStr.split('-').map(Number)
+    return new Date(Date.UTC(y, mo - 1, d, 0, 30) - 3600 * 1000).toISOString() // 00:30 Dublin BST
+  }
+  it('counts a 3-day Dublin streak that a UTC day boundary would break', () => {
+    const thisSession = {
+      id: 'now', started_at: '2026-06-20T12:00:00Z',
+      class_name: 'RIDE', category: null, effort_points: 10, peak_hr_bpm: 100, avg_hr_bpm: 90, zones_seconds: {},
+    }
+    const history = [
+      { id: 'p1', started_at: dub0030('2026-06-19'), class_name: 'RIDE', effort_points: 10, peak_hr_bpm: 100, zones_seconds: {} },
+      { id: 'p2', started_at: '2026-06-18T12:00:00Z', class_name: 'RIDE', effort_points: 10, peak_hr_bpm: 100, zones_seconds: {} },
+    ]
+    const nowMs = Date.parse('2026-06-20T13:00:00Z')
+    const hl = pickHighlight({ thisSession, history, eventTypeName: 'RIDE', nowMs })
+    expect(hl?.id).toBe('streak')
+    expect(hl.message).toMatch(/3-day streak/)
   })
 })
 

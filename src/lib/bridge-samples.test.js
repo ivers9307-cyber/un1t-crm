@@ -519,6 +519,16 @@ describe('resolveStrapsForBatch: registered booking-first + test mode', () => {
     const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:12511'], nowMs: NOW })
     expect(map.get('ant:12511')).toMatchObject({ sessionId: 'new-1', via: 'auto' })
     expect(inserted).toMatchObject({ device_identifier: 'ant:12511', glofox_event_id: null, class_link_source: null })
+    // Item 3 — a test-mode create is born tagged so the reward cascade skips it.
+    expect(inserted.raw_metadata).toEqual({ test_mode: true })
+  })
+
+  it('does NOT tag raw_metadata for a normal (non-test) class create', async () => {
+    let inserted = null
+    const db = makeDb({ bookings: [{ glofox_event_id: 'e8', status: 'BOOKED', starts_at: occ8.starts_at }], occs: [occ8], captureInsert: (r) => { inserted = r } })
+    await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:12511'], nowMs: NOW })
+    // Non-test create → raw_metadata is null (no test flag).
+    expect(inserted.raw_metadata).toBeNull()
   })
 
   it('reopens a closed session for the same class while the class is still live', async () => {
@@ -557,5 +567,103 @@ describe('resolveStrapsForBatch: registered booking-first + test mode', () => {
     })
     const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:12511'], nowMs: AFTER })
     expect(map.has('ant:12511')).toBe(false)
+  })
+})
+
+// ── Item 1: back-to-back classes supersede a stale open session ──────
+// A member's 09:00 session stays OPEN (closing waits on silence). At 10:05 the
+// bridge sees their strap again; they're now resolved to the 10:00 class. The
+// old 09:00 session (ended past grace) must be CLOSED and a fresh session opened
+// for the 10:00 class — not have the 10:00 samples absorbed into the 09:00 row.
+describe('resolveStrapsForBatch: back-to-back class supersede (item 1)', () => {
+  const NOW = Date.parse('2026-06-27T10:05:00Z')
+  const occNew = { glofox_event_id: 'e-new', name: 'TEMPO', starts_at: '2026-06-27T10:00:00Z', ends_at: '2026-06-27T11:00:00Z' }
+
+  function makeDb({ existingOpen, oldOccEndsAt, testModeUntil = null, captureClose, captureInsert }) {
+    let openCalls = 0
+    // path (a) existing-open lookup returns existingOpen; the post-supersede (b)
+    // priorForClass lookup returns null (no session yet for the NEW class).
+    const openLookup = () => Promise.resolve({ data: openCalls++ === 0 ? existingOpen : null })
+    return {
+      from: vi.fn((table) => {
+        if (table === 'ble_bridges') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: { test_mode_until: testModeUntil } })) })) })) }
+        }
+        if (table === 'strap_assignments') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => ({ not: vi.fn(() => Promise.resolve({ data: [] })) })) })) })) }
+        }
+        if (table === 'contact_devices') {
+          return { select: vi.fn(() => ({ in: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: [{ identifier: 'ant:12511', contact_id: 'c1', contacts: { id: 'c1', location_id: 'loc1' } }], error: null })) })) })) })) }
+        }
+        if (table === 'contacts') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { glofox_member_id: 'g1', max_hr_override: null, dob: null } })) })) })) }
+        }
+        if (table === 'class_bookings') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => Promise.resolve({ data: [{ glofox_event_id: 'e-new', status: 'BOOKED', starts_at: occNew.starts_at }] })) })) })) })) })) }
+        }
+        if (table === 'class_occurrences') {
+          return {
+            select: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                // resolveBookedOccurrenceForMember: .in(glofox_event_id).is(cancelled_at)
+                in: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ data: [occNew] })) })),
+                // resolveCurrentOccurrence: .gte().lte().is().order()
+                gte: vi.fn(() => ({ lte: vi.fn(() => ({ is: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: [] })) })) })) })),
+                // OLD-class ends_at lookup (item 1): .eq(glofox_event_id).is(cancelled_at).maybeSingle()
+                eq: vi.fn(() => ({ is: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: { ends_at: oldOccEndsAt } })) })) })),
+              })),
+            })),
+          }
+        }
+        if (table === 'bookings') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ in: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => Promise.resolve({ data: [] })) })) })) })) })) })) }
+        }
+        if (table === 'heart_rate_sessions') {
+          return {
+            select: vi.fn(() => ({
+              eq: vi.fn(() => ({
+                eq: vi.fn(() => ({
+                  is: vi.fn(() => ({ order: vi.fn(() => ({ limit: vi.fn(() => ({ maybeSingle: vi.fn(openLookup) })) })) })),
+                  order: vi.fn(() => ({ limit: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: null })) })) })),
+                })),
+              })),
+            })),
+            update: vi.fn((patch) => {
+              if (captureClose) captureClose(patch)
+              return { eq: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ error: null })) })) }
+            }),
+            insert: vi.fn((row) => { if (captureInsert) captureInsert(row); return { select: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { id: 'fresh-1' }, error: null })) })) } }),
+          }
+        }
+        throw new Error(`unexpected ${table}`)
+      }),
+    }
+  }
+
+  it('closes the stale open session and creates a fresh one for the new class', async () => {
+    let closed = null, inserted = null
+    const db = makeDb({
+      existingOpen: { id: 'old-sess', glofox_event_id: 'e-old' },
+      oldOccEndsAt: '2026-06-27T09:00:00Z', // old class ended 09:00; now 10:05 → past grace
+      captureClose: (p) => { closed = p },
+      captureInsert: (r) => { inserted = r },
+    })
+    const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:12511'], nowMs: NOW })
+    // Fresh session for the NEW class, not the stale one.
+    expect(map.get('ant:12511')).toMatchObject({ sessionId: 'fresh-1', via: 'auto' })
+    expect(closed).toMatchObject({ ended_at: expect.any(String) }) // old session closed
+    expect(inserted).toMatchObject({ glofox_event_id: 'e-new', device_identifier: 'ant:12511' })
+  })
+
+  it('KEEPS the open session (returns it) when the older class is still live', async () => {
+    let inserted = null
+    const db = makeDb({
+      existingOpen: { id: 'old-sess', glofox_event_id: 'e-old' },
+      oldOccEndsAt: '2026-06-27T10:30:00Z', // old class ends 10:30, now 10:05 within grace → still live
+      captureInsert: (r) => { inserted = r },
+    })
+    const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:12511'], nowMs: NOW })
+    expect(map.get('ant:12511')).toMatchObject({ sessionId: 'old-sess', via: 'auto' })
+    expect(inserted).toBeNull() // no fresh session created
   })
 })
