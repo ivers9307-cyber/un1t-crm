@@ -155,7 +155,7 @@ describe('sendPostClassEmail', () => {
           }
         }
         if (table === 'locations') {
-          // Return empty customer_agent settings — CTA will be null (no booking_url set).
+          // Return empty customer_agent settings — CTA will be null (no membership_signup_url set).
           return {
             select: vi.fn(() => ({
               eq: vi.fn(() => ({

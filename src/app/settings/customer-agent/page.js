@@ -71,8 +71,6 @@ export default function CustomerAgentSettingsPage() {
         booking_mode: settings.booking_mode === 'draft' ? 'draft' : 'auto',
         agent_name: (settings.agent_name || '').trim() || null,
         membership_signup_url: (settings.membership_signup_url || '').trim() || null,
-        booking_url: (settings.booking_url || '').trim() || null,
-        booking_cta_label: (settings.booking_cta_label || '').trim() || null,
         membership_cta_label: (settings.membership_cta_label || '').trim() || null,
         handoff_cooldown_hours: settings.handoff_cooldown_hours ?? 12,
         consultation_event_type_id: settings.consultation_event_type_id || null,
@@ -263,16 +261,6 @@ export default function CustomerAgentSettingsPage() {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-un1t-text mb-1">Class booking link</label>
-          <input className={inputCls} maxLength={512} value={settings.booking_url || ''}
-            onChange={e => setField('booking_url', e.target.value)}
-            placeholder="https://…" />
-          <p className="text-xs text-un1t-subtle mt-1">
-            Where active members go to book their next class — used by the post-class report CTA. Leave blank and members see no booking button.
-          </p>
-        </div>
-
-        <div>
           <label className="block text-sm font-medium text-un1t-text mb-1">Monthly UN1T-Points target</label>
           <p className="text-xs text-un1t-text-2 mb-1">Shared monthly goal that drives member tiers. Blank = tiers off.</p>
           <input type="number" min={0} step={50} className={inputCls}
@@ -290,17 +278,12 @@ export default function CustomerAgentSettingsPage() {
         </p>
 
         <div>
-          <label className="block text-sm font-medium text-un1t-text mb-1">Post-class CTA wording</label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <input className={inputCls} maxLength={60} value={settings.booking_cta_label || ''}
-              onChange={e => setField('booking_cta_label', e.target.value)}
-              placeholder="Book your next class" />
-            <input className={inputCls} maxLength={60} value={settings.membership_cta_label || ''}
-              onChange={e => setField('membership_cta_label', e.target.value)}
-              placeholder="Become a member" />
-          </div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Post-class join CTA wording</label>
+          <input className={inputCls} maxLength={60} value={settings.membership_cta_label || ''}
+            onChange={e => setField('membership_cta_label', e.target.value)}
+            placeholder="Become a member" />
           <p className="text-xs text-un1t-subtle mt-1">
-            Button text shown to members (left, booking) and to trials / prospects (right, join). Leave blank to use the defaults shown.
+            Button text shown to trials / prospects in the post-class report (the join CTA). Active members get no CTA — booking lives in the member app. Leave blank to use the default shown.
           </p>
         </div>
 
