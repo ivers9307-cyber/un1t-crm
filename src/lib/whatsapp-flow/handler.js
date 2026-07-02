@@ -53,7 +53,9 @@ export async function handleDataExchange(db, { decryptedBody, contact, locationI
       return slotScreen({ day: data.day, path, slots: slots.map((s) => ({ id: `${event.id}|${data.day}|${s.start}|${s.end}`, title: s.start })) })
     }
     const classes = (await listPublicClasses(db, locationId)).filter((c) => c.starts_at.slice(0, 10) === data.day)
-    return slotScreen({ day: data.day, path, slots: classes.map((c) => ({ id: `${c.event_id}|${c.starts_at}|${c.name}`, title: `${timeLabel(c.starts_at)} ${c.name}${c.spots_left != null ? ` (${c.spots_left} left)` : ''}` })) })
+    // Capacity / spaces-left is deliberately NOT shown to customers — matches the
+    // /start class-picker decision (PR #710: "removed the X-left badge"). Time + name only.
+    return slotScreen({ day: data.day, path, slots: classes.map((c) => ({ id: `${c.event_id}|${c.starts_at}|${c.name}`, title: `${timeLabel(c.starts_at)} ${c.name}` })) })
   }
 
   if (screen === SCREEN.SLOT) {

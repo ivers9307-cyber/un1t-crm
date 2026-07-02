@@ -46,6 +46,10 @@ describe('handleDataExchange', () => {
     expect(res.screen).toBe(SCREEN.SLOT)
     expect(res.data.slots[0].id).toBe('c1|2026-07-03T18:00:00Z|HIIT')
     expect(res.data.path).toBe('class')
+    // Capacity / spaces-left must NOT be exposed to customers (PR #710 decision).
+    // The mock class carries spots_left: 4 — it must not leak into the title.
+    expect(res.data.slots[0].title).not.toMatch(/left|\bspot|\bspace|\(\d/i)
+    expect(res.data.slots[0].title).toContain('HIIT')
   })
 
   it('consult DAY returns SLOT with slot id `event|date|start|end`', async () => {
