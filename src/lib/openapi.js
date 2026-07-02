@@ -1489,6 +1489,21 @@ registry.registerPath({
   },
 })
 
+// WhatsApp spend telemetry (cookie auth)
+registry.registerPath({
+  method: 'get',
+  path: '/api/whatsapp/spend',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'WhatsApp spend telemetry for a location',
+  description: 'Local rollup of per-message PMP pricing fields (category/type/billable, mig 341) plus Meta pricing_analytics (actual cost) when the number is configured.',
+  request: { query: z.object({ location_id: uuidLike.optional(), months: z.coerce.number().min(1).max(12).optional() }) },
+  responses: {
+    200: { description: 'Spend rollup + Meta pricing analytics' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Staff (cookie auth — owner-only)
 registry.registerPath({
   method: 'post',

@@ -13,6 +13,7 @@ import { applyTemplateEvent } from '@/lib/whatsapp-template-events'
 import { NUMBER_EVENT_FIELDS, applyNumberEvent } from '@/lib/whatsapp-number-events'
 import { FLOW_EVENT_FIELDS, applyFlowEvent } from '@/lib/whatsapp-flow-events'
 import { recordCtwaTouch } from '@/lib/meta-capi'
+import { pricingColumnsFromStatus } from '@/lib/whatsapp-pricing'
 import { ensureMediaRehosted } from '@/lib/whatsapp-media-server'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
@@ -469,6 +470,11 @@ async function handleStatusUpdate(db, status) {
       updates.error_message = status.errors?.[0]?.title || 'Delivery failed'
       break
   }
+
+  // WA-COST — the sent-status carries Meta's PMP pricing object; persist
+  // category/type/billable (mig 341) so spend is attributable locally.
+  const pricingPatch = pricingColumnsFromStatus(status)
+  if (pricingPatch) Object.assign(updates, pricingPatch)
 
   // Update message record
   await db.from('whatsapp_messages')
