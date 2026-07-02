@@ -118,7 +118,100 @@ export default function WhatsAppIntegrationTab({ location, canEdit }) {
               </button>
             )
           )}
+
+          <ChatOpenersCard location={location} canEdit={canEdit} />
         </>
+      )}
+    </div>
+  )
+}
+
+// C2 — Meta conversational components ("chat openers"): the welcome-message
+// event (fires the request_welcome webhook → instant greeting) plus up to 4
+// ice-breaker prompts shown to users opening a fresh chat with this number.
+function ChatOpenersCard({ location, canEdit }) {
+  const saved = location.settings?.conversational_automation || null
+  const [enableWelcome, setEnableWelcome] = useState(saved ? saved.enable_welcome !== false : true)
+  const [prompts, setPrompts] = useState(() => {
+    const p = Array.isArray(saved?.prompts) ? saved.prompts : []
+    return [p[0] || '', p[1] || '', p[2] || '', p[3] || '']
+  })
+  const [saving, setSaving] = useState(false)
+  const [savedAt, setSavedAt] = useState(null)
+  const [error, setError] = useState(null)
+
+  async function save() {
+    setSaving(true); setError(null); setSavedAt(null)
+    try {
+      const res = await fetch('/api/whatsapp/conversational-automation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          location_id: location.id,
+          enable_welcome: enableWelcome,
+          prompts: prompts.map((p) => p.trim()).filter(Boolean),
+        }),
+      })
+      const j = await res.json()
+      if (!j.success) throw new Error(j.error || 'Failed to save chat openers')
+      setSavedAt(Date.now())
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 space-y-2">
+      <div>
+        <h4 className="text-sm font-semibold text-un1t-text mb-1">Chat openers</h4>
+        <p className="text-xs text-un1t-subtle">
+          What a customer sees when they open a brand-new chat with this number (e.g. from a
+          click-to-WhatsApp ad). The greeting toggle makes Meta notify us the moment they open
+          the chat so the agent&apos;s welcome message sends instantly; ice breakers are tappable
+          prompts they can start with.
+        </p>
+      </div>
+      <label className="flex items-center gap-2 text-[11px] text-un1t-subtle">
+        <input
+          type="checkbox"
+          disabled={!canEdit}
+          checked={enableWelcome}
+          onChange={(e) => setEnableWelcome(e.target.checked)}
+        />
+        Greet users when they open the chat
+      </label>
+      {prompts.map((p, i) => (
+        <Row key={i} label={`Ice breaker ${i + 1} (optional, 80 chars)`}>
+          <input
+            disabled={!canEdit}
+            maxLength={80}
+            className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text"
+            value={p}
+            onChange={(e) => setPrompts((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
+            placeholder={i === 0 ? 'e.g. What classes do you run?' : ''}
+          />
+        </Row>
+      ))}
+      {error && (
+        <div className="text-xs text-red-400 inline-flex items-center gap-1.5">
+          <AlertCircle size={12} /> {error}
+        </div>
+      )}
+      {canEdit && (
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-un1t-text text-un1t-bg text-[11px] font-semibold hover:bg-un1t-accent disabled:opacity-50"
+          >
+            {saving ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />}
+            {saving ? 'Saving…' : 'Save chat openers'}
+          </button>
+          {savedAt && <span className="text-[11px] text-emerald-500">Saved ✓</span>}
+        </div>
       )}
     </div>
   )

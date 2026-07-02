@@ -329,6 +329,11 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
     case 'reaction':
       body = `Reacted: ${message.reaction?.emoji || ''}`
       break
+    case 'request_welcome':
+      // C2 — the user opened a fresh chat (e.g. from a click-to-WhatsApp ad)
+      // without typing. No content; the instant greeting is sent below.
+      body = '[Opened the chat]'
+      break
     default:
       body = `[${messageType} message]`
   }
@@ -443,18 +448,35 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
   // RADAR-AGENT.0 — customer-agent auto-reply. Gated OFF by default
   // (locations.settings.customer_agent) + test-mode allow-list; runs
   // only on text messages and never throws out of the webhook.
-  try {
-    await maybeAutoReply(db, {
-      conversationId,
-      locationId,
-      senderPhone,
-      contactId: contact?.id || null,
-      messageType,
-      body,
-      waMessageId: message.id || null,
-    })
-  } catch (err) {
-    console.error('[whatsapp webhook] agent auto-reply failed', err?.message)
+  // C2 — request_welcome (a chat opened without typing) must NOT reach the
+  // agent: shouldAgentReply would treat it as an unsupported type and send
+  // the soft-handoff acknowledgement to someone who hasn't said anything.
+  // The open-event gets the instant greeting below instead.
+  if (messageType !== 'request_welcome') {
+    try {
+      await maybeAutoReply(db, {
+        conversationId,
+        locationId,
+        senderPhone,
+        contactId: contact?.id || null,
+        messageType,
+        body,
+        waMessageId: message.id || null,
+      })
+    } catch (err) {
+      console.error('[whatsapp webhook] agent auto-reply failed', err?.message)
+    }
+  }
+
+  // C2 — first-touch chat open (no typed message): greet instantly instead of
+  // letting the agent treat it as an unsupported type.
+  if (messageType === 'request_welcome') {
+    try {
+      const { maybeSendWelcomeGreeting } = await import('@/lib/agent/welcome-greeting')
+      await maybeSendWelcomeGreeting(db, { conversationId, locationId, senderPhone, contactId: contact?.id || null })
+    } catch (err) {
+      console.error('[whatsapp webhook] welcome greeting failed', err?.message)
+    }
   }
 }
 

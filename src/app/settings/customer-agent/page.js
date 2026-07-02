@@ -54,6 +54,7 @@ export default function CustomerAgentSettingsPage() {
         tone: settings.tone || null,
         extra_rules: settings.extra_rules || null,
         holding_message: settings.holding_message || null,
+        welcome_greeting: settings.welcome_greeting || null,
         quiet_hours: settings.quiet_hours?.start && settings.quiet_hours?.end
           ? { start: settings.quiet_hours.start, end: settings.quiet_hours.end, tz: settings.quiet_hours.tz || 'Europe/Dublin' }
           : null,
@@ -313,6 +314,20 @@ export default function CustomerAgentSettingsPage() {
             onChange={e => setField('holding_message', e.target.value)}
             placeholder="Thanks! One of the UN1T team will get back to you shortly." />
           <p className="text-xs text-un1t-muted mt-1">Sent to the customer when the agent hands the chat to a human.</p>
+        </div>
+
+        {/* C2 — request_welcome instant greeting. Placeholder mirrors
+            DEFAULT_WELCOME_GREETING in src/lib/agent/welcome-greeting.js
+            (inlined — that module pulls server-only WhatsApp code). */}
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Welcome greeting (sent when someone opens the chat without typing)</label>
+          <textarea className={inputCls} rows={2} maxLength={500} value={settings.welcome_greeting || ''}
+            onChange={e => setField('welcome_greeting', e.target.value)}
+            placeholder="Hi! 👋 Welcome to UN1T. I'm Mia, the studio's assistant — ask me anything, or tell me if you'd like to book a free class or a consultation." />
+          <p className="text-xs text-un1t-muted mt-1">
+            Sent instantly when someone opens a brand-new chat (e.g. from a click-to-WhatsApp ad) without sending a message.
+            Uses the agent&apos;s on/off, test-mode, and quiet-hours switches above. Leave blank to use the default shown.
+          </p>
         </div>
 
         <div>

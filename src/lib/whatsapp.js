@@ -309,6 +309,29 @@ export async function setWhatsAppUserBlockState(waPhone, blocked, opts = {}) {
   return result
 }
 
+/**
+ * Configure Meta conversational components for this number: the welcome-message
+ * event (request_welcome webhook) and up to 4 ice-breaker prompts (max 80 chars
+ * each) shown to users opening a fresh chat.
+ */
+export async function setConversationalAutomation({ enableWelcome = true, prompts = [] }, opts = {}) {
+  const config = await resolveConfig(opts)
+  const response = await fetch(`${META_API_URL}/${config.phoneNumberId}/conversational_automation`, {
+    method: 'POST',
+    headers: headersFor(config),
+    body: JSON.stringify({
+      enable_welcome_message: !!enableWelcome,
+      prompts: (prompts || []).map((p) => String(p).slice(0, 80)).filter(Boolean).slice(0, 4),
+    }),
+  })
+  const result = await response.json()
+  if (result.error) {
+    console.error('WhatsApp conversational_automation error:', result.error)
+    throw new Error(result.error.message || 'Failed to update chat openers')
+  }
+  return result
+}
+
 // ============================================================
 // TEMPLATE MANAGEMENT
 // ============================================================
