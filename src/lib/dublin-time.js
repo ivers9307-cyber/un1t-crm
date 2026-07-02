@@ -84,3 +84,94 @@ export function dublinTimeLabel(iso) {
     timeZone: 'Europe/Dublin', hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(new Date(t))
 }
+
+// ---------------------------------------------------------------------------
+// Europe/Dublin day-boundary helpers — kept behaviour-identical to
+// champ-app/shared/dublin-time.js so the byte-synced twin
+// src/lib/challenges.js computes the same challenge windows on both surfaces.
+// Semantics: a "training day" is a Europe/Dublin calendar day. A window that
+// runs [D1 .. D2] inclusive spans the half-open UTC instant range
+// [00:00 Europe/Dublin on D1, 00:00 Europe/Dublin on (D2 + 1 day)). "Midnight"
+// always means Dublin local midnight (UTC+00:00 in GMT, UTC-01:00 in IST).
+// MUST match the un1t-crm challenge_standings RPC day boundaries.
+
+const DAY_MS = 24 * 3600 * 1000
+
+// 'en-CA' formats as 'YYYY-MM-DD'; the timeZone does the GMT/IST shift.
+const _dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: DUBLIN_TZ })
+
+/**
+ * Europe/Dublin calendar day key ('YYYY-MM-DD') for a UTC instant.
+ * Accepts a ms epoch, a Date, or an ISO/timestamptz string.
+ * @param {number|string|Date} isoOrMs
+ * @returns {string} 'YYYY-MM-DD' in Europe/Dublin
+ */
+export function dublinDateKey(isoOrMs) {
+  return _dayFmt.format(new Date(isoOrMs))
+}
+
+// Europe/Dublin wall-clock parts (Y/M/D/H/Min/S) for a UTC instant.
+const _partsFmt = new Intl.DateTimeFormat('en-GB', {
+  timeZone: DUBLIN_TZ,
+  year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit',
+  hour12: false,
+})
+function dublinParts(ms) {
+  const p = {}
+  for (const { type, value } of _partsFmt.formatToParts(new Date(ms))) p[type] = value
+  // 'en-GB' can emit hour '24' at midnight; normalise to 0.
+  const hour = p.hour === '24' ? 0 : Number(p.hour)
+  return {
+    y: Number(p.year), mo: Number(p.month), d: Number(p.day),
+    h: hour, mi: Number(p.minute), s: Number(p.second),
+  }
+}
+
+/**
+ * UTC-ms instant of 00:00 Europe/Dublin on the given calendar date.
+ *
+ * Robust across the DST transitions: we take the naive UTC-midnight for
+ * the date, read back what Dublin wall-clock that instant actually is,
+ * and correct by the observed offset. One correction pass is exact for
+ * Dublin's ±1h DST (the corrected instant never lands in the ambiguous
+ * hour of a transition for a *midnight* target — spring-forward skips
+ * 01:00→02:00, fall-back repeats 01:00→02:00, neither straddles 00:00).
+ *
+ * @param {string|{y:number,mo:number,d:number}} date  'YYYY-MM-DD' or parts
+ * @returns {number} UTC ms epoch of Dublin local midnight
+ */
+export function dublinDayStartMs(date) {
+  let y, mo, d
+  if (typeof date === 'string') {
+    ;[y, mo, d] = date.split('-').map(Number)
+  } else {
+    ;({ y, mo, d } = date)
+  }
+  // Naive guess: treat the wanted wall-clock as if it were UTC.
+  const guess = Date.UTC(y, mo - 1, d, 0, 0, 0)
+  // How far off is Dublin wall-clock at that instant from 00:00?
+  const p = dublinParts(guess)
+  const wallMsFromMidnight =
+    ((p.h * 60 + p.mi) * 60 + p.s) * 1000
+  // Dublin is ahead of UTC by (wall - utc); to land Dublin on 00:00 we
+  // subtract that offset. In GMT wall==0 → no shift; in IST wall==01:00
+  // → subtract 1h (so the instant is 23:00 UTC the previous day).
+  return guess - wallMsFromMidnight
+}
+
+/**
+ * Half-open UTC-ms window [start, endExclusive) for an inclusive
+ * Europe/Dublin calendar-day range [startDate .. endDate].
+ * @param {string} startDate 'YYYY-MM-DD'
+ * @param {string} endDate   'YYYY-MM-DD' (inclusive)
+ * @returns {{startMs:number, endMs:number}}
+ */
+export function dublinDayRangeMs(startDate, endDate) {
+  const startMs = dublinDayStartMs(startDate)
+  // end-exclusive = start of the day AFTER endDate.
+  const endMs = dublinDayStartMs(dublinDateKey(dublinDayStartMs(endDate) + DAY_MS))
+  return { startMs, endMs }
+}
+
+export { DAY_MS as DUBLIN_DAY_MS }
