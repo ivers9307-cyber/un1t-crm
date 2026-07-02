@@ -40,20 +40,28 @@ export async function GET(request) {
   // If sync requested, fetch from Meta and update local records
   if (sync === 'true') {
     try {
-      const metaTemplates = await getMetaTemplates()
+      // Fetch from THIS location's WABA (passing locationId) — not the env-default
+      // WABA — or a Meta-Manager-created template for this number is never seen.
+      const metaTemplates = await getMetaTemplates(100, { locationId })
 
       for (const mt of metaTemplates) {
-        await db.from('whatsapp_templates')
-          .upsert({
-            meta_template_id: mt.id,
-            name: mt.name,
-            language: mt.language,
-            category: mt.category,
-            components: mt.components || [],
-            status: mt.status,
-            rejection_reason: mt.rejected_reason || null,
-            location_id: locationId,
-          }, { onConflict: 'meta_template_id' })
+        const row = {
+          meta_template_id: mt.id,
+          name: mt.name,
+          language: mt.language,
+          category: mt.category,
+          components: mt.components || [],
+          status: mt.status,
+          rejection_reason: mt.rejected_reason || null,
+          location_id: locationId,
+        }
+        // Manual upsert keyed on (meta_template_id, location_id): there is NO unique
+        // constraint on meta_template_id, so a PostgREST `onConflict` upsert throws
+        // 42P10 and the whole sync was silently swallowed by the catch below.
+        const { data: existing } = await db.from('whatsapp_templates')
+          .select('id').eq('meta_template_id', mt.id).eq('location_id', locationId).maybeSingle()
+        if (existing) await db.from('whatsapp_templates').update(row).eq('id', existing.id)
+        else await db.from('whatsapp_templates').insert(row)
       }
     } catch (err) {
       console.error('Template sync error:', err)
