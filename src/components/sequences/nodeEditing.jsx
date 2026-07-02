@@ -4,8 +4,9 @@
 // (FlowEditor): the editable node card, the icon button, and the per-type config
 // form incl. the branch predicate. Field primitives live here too so any future
 // editor reuses the exact same inputs.
-import { ChevronUp, ChevronDown, Trash2, Pencil } from 'lucide-react'
+import { ChevronUp, ChevronDown, Trash2, Pencil, AlertTriangle } from 'lucide-react'
 import { describeNode } from '@/lib/sequences/graph'
+import { isPhantomTag } from '@/lib/sequences/tag-vocabulary'
 import { styleForType } from './nodeStyles'
 
 export function IconBtn({ children, label, onClick, disabled, danger }) {
@@ -42,7 +43,7 @@ export function NodeCardHeader({ node, isFirst, isLast, expanded, onToggle, onMo
 }
 
 // Full step card (non-branch). Branch cards are assembled in FlowEditor.
-export function EditableNodeCard({ node, isFirst, isLast, expanded, errors, onToggle, onMove, onRemove, onPatch, templates }) {
+export function EditableNodeCard({ node, isFirst, isLast, expanded, errors, onToggle, onMove, onRemove, onPatch, templates, tagVocabulary }) {
   const hasErr = errors.length > 0
   return (
     <div className={`w-72 bg-un1t-surface border rounded-lg shadow-sm ${hasErr ? 'border-rose-500/40' : 'border-un1t-border'}`}>
@@ -50,7 +51,7 @@ export function EditableNodeCard({ node, isFirst, isLast, expanded, errors, onTo
       {hasErr && !expanded && <p className="px-4 pb-2 -mt-1 text-xs text-rose-700">{errors[0]}</p>}
       {expanded && (
         <div className="border-t border-un1t-border px-4 py-3 space-y-3">
-          <NodeConfig node={node} onPatch={onPatch} templates={templates} />
+          <NodeConfig node={node} onPatch={onPatch} templates={templates} tagVocabulary={tagVocabulary} />
           {hasErr && <ul className="text-xs text-rose-700 list-disc pl-4">{errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}
         </div>
       )}
@@ -69,7 +70,7 @@ export function whatsappBodyVariables(template) {
   return [...set].sort((a, b) => Number(a) - Number(b))
 }
 
-export function NodeConfig({ node, onPatch, templates }) {
+export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
   const c = node.config || {}
   switch (node.type) {
     case 'email':
@@ -159,7 +160,24 @@ export function NodeConfig({ node, onPatch, templates }) {
               options={[['has_tag', 'Contact has a tag'], ['field_equals', 'Field equals a value'], ['field_in', 'Field is one of…']]} />
           </Labeled>
           {ptype === 'has_tag' && (
-            <Labeled label="Tag"><Text value={p.tag} onChange={v => setPred({ tag: v })} placeholder="e.g. vip" /></Labeled>
+            <>
+              <Labeled label="Tag"><Text value={p.tag} onChange={v => setPred({ tag: v })} placeholder="e.g. vip" /></Labeled>
+              {/* SEQ-GLOFOX.2 — phantom-tag warning. Soft on purpose: tags
+                  applied manually or by ANOTHER flow are legitimate, so this
+                  never blocks publish — it catches typos and tags nothing
+                  writes (a branch on one always takes the No path). */}
+              {tagVocabulary && isPhantomTag(p.tag, tagVocabulary) && (
+                <p className="flex items-start gap-1.5 text-[11px] text-amber-700 leading-relaxed">
+                  <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                  <span>
+                    Nothing in this flow or the platform&apos;s built-in tags writes &ldquo;{String(p.tag).trim()}&rdquo; —
+                    unless another flow or a staff member adds it, this branch will always take the No path.
+                    Tip: the platform stamps <span className="font-mono">glofox_first_booking</span> on a
+                    contact&apos;s first class booking.
+                  </span>
+                </p>
+              )}
+            </>
           )}
           {ptype === 'field_equals' && (
             <div className="grid grid-cols-2 gap-2">

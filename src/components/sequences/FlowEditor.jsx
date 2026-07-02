@@ -16,6 +16,7 @@ import {
 import { styleForType, ADDABLE_TYPES } from './nodeStyles'
 import { TriggerCard, Connector } from './parts'
 import { EditableNodeCard } from './nodeEditing'
+import { knownTagVocabulary } from '@/lib/sequences/tag-vocabulary'
 
 const PALETTE = [...ADDABLE_TYPES, 'branch']
 
@@ -56,6 +57,9 @@ export default function FlowEditor({ initialGraph, sequence }) {
 
   const graph = useMemo(() => treeToGraph(trigger, tree), [trigger, tree])
   const validation = useMemo(() => validateGraph(graph), [graph])
+  // SEQ-GLOFOX.2 — platform tags + tags this graph itself applies, for the
+  // branch editor's phantom-tag warning (recomputes as apply_tag nodes change).
+  const tagVocabulary = useMemo(() => knownTagVocabulary(graph), [graph])
   const errorsByNode = useMemo(() => {
     const m = new Map()
     for (const e of validation.errors) { if (!e.nodeId) continue; if (!m.has(e.nodeId)) m.set(e.nodeId, []); m.get(e.nodeId).push(e.message) }
@@ -81,7 +85,7 @@ export default function FlowEditor({ initialGraph, sequence }) {
     })); touch()
   }
   const toggle = (id) => setExpandedId(prev => prev === id ? null : id)
-  const ctx = { expandedId, errorsByNode, add, patch, remove, move, toggle, templates }
+  const ctx = { expandedId, errorsByNode, add, patch, remove, move, toggle, templates, tagVocabulary }
 
   const saveDraft = async () => {
     setBusy('save')
@@ -191,7 +195,8 @@ function BranchBlock({ item, lanePath, index, ctx }) {
     <div className="flex flex-col items-center">
       <EditableNodeCard
         node={item} expanded={ctx.expandedId === item.id} errors={ctx.errorsByNode.get(item.id) || []}
-        onToggle={() => ctx.toggle(item.id)} onRemove={() => ctx.remove(lanePath, index)} onPatch={(p) => ctx.patch(lanePath, index, p)} />
+        onToggle={() => ctx.toggle(item.id)} onRemove={() => ctx.remove(lanePath, index)} onPatch={(p) => ctx.patch(lanePath, index, p)}
+        tagVocabulary={ctx.tagVocabulary} />
       <Connector />
       <div className="flex flex-row gap-4 items-start">
         <LaneFrame label="Yes" tone="yes"><LaneView lane={item.yes} lanePath={[...lanePath, { i: index, lane: 'yes' }]} ctx={ctx} /></LaneFrame>
