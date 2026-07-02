@@ -19,6 +19,7 @@ export default function CustomerAgentSettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState(null)
+  const [checkinStats, setCheckinStats] = useState(null)
   const [error, setError] = useState(null)
 
   useEffect(() => {
@@ -30,7 +31,7 @@ export default function CustomerAgentSettingsPage() {
           fetch('/api/agent/knowledge').then(r => r.json()),
         ])
         if (cancelled) return
-        if (sRes.success) { setSettings(sRes.settings); setLocation(sRes.location || null) }
+        if (sRes.success) { setSettings(sRes.settings); setLocation(sRes.location || null); setCheckinStats(sRes.checkin_stats || null) }
         if (kRes.success) setEntries(kRes.entries || [])
       } catch {
         if (!cancelled) setError('Failed to load')
@@ -43,6 +44,14 @@ export default function CustomerAgentSettingsPage() {
   }, [])
 
   function setField(k, v) { setSettings(s => ({ ...s, [k]: v })) }
+
+  // AGENT-CHECKIN.2 — humanise the last tick's skip-reason tally.
+  function describeCheckinReasons(checkins) {
+    const reasons = checkins?.reasons || {}
+    const parts = Object.entries(reasons).map(([k, n]) => `${k.replace(/_/g, ' ')} ×${n}`)
+    if (checkins?.reason === 'quiet_hours') parts.unshift('quiet hours')
+    return parts.length ? ` (${parts.join(', ')})` : ''
+  }
 
   async function saveSettings() {
     setSaving(true); setError(null)
@@ -425,6 +434,30 @@ export default function CustomerAgentSettingsPage() {
             onChange={e => setCheckin('enabled', e.target.checked)} />
           Enable first-class check-ins
         </label>
+        {/* AGENT-CHECKIN.2 — live visibility so a silent day is diagnosable
+            from this card (sent counts, last outcome, last tick's skips). */}
+        {checkinStats && (
+          <div className="mb-4 rounded-md border border-un1t-border bg-un1t-bg/40 px-3 py-2 text-xs text-un1t-subtle space-y-1">
+            <p>
+              <span className="font-semibold text-un1t-text">
+                Sent today {checkinStats.sent_today}/{settings.first_class_checkin?.daily_cap ?? 20}
+              </span>
+              {' · '}All time {checkinStats.total}
+              {' · '}Last:{' '}
+              {checkinStats.last
+                ? `${checkinStats.last.contact_name || 'contact'} — ${checkinStats.last.note || 'sent'} (${new Date(checkinStats.last.at).toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })})`
+                : 'none yet'}
+            </p>
+            {checkinStats.last_run && (
+              <p>
+                Last run {new Date(checkinStats.last_run.at).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })}
+                {checkinStats.last_run.checkins
+                  ? ` — ${(checkinStats.last_run.checkins.freeform || 0) + (checkinStats.last_run.checkins.templates || 0)} sent · ${checkinStats.last_run.checkins.skipped || 0} skipped${describeCheckinReasons(checkinStats.last_run.checkins)}`
+                  : ' — no check-in summary yet (runs every 15 min, 9:00–20:00 Dublin)'}
+              </p>
+            )}
+          </div>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium text-un1t-text mb-1">Send after (hours)</label>

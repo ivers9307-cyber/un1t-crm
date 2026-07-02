@@ -500,7 +500,11 @@ async function stampCheckin(db, contact, locationId, className, via) {
  * Once ever per contact via contacts.first_class_checkin_at.
  */
 export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
-  const results = { freeform: 0, templates: 0, skipped: 0 }
+  const results = { freeform: 0, templates: 0, skipped: 0, reasons: {} }
+  // Per-tick skip-reason tally — persisted on the cron heartbeat so the
+  // settings card can answer "why didn't it send?" without server logs
+  // (lesson from the sequence-engine incidents, CHANGELOG #289/#291).
+  const bump = (reason) => { results.reasons[reason] = (results.reasons[reason] || 0) + 1 }
   if (!withinDublinDaytime(nowMs)) return { ...results, reason: 'quiet_hours' }
 
   const { data: locations } = await db.from('locations')
@@ -533,16 +537,17 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
           nowMs,
           delayHours: checkin.delay_hours,
         })
-        if (decision.action !== 'checkin') { results.skipped++; continue }
+        if (decision.action !== 'checkin') { bump(decision.reason || 'not_eligible'); results.skipped++; continue }
 
         const to = contact.wa_phone || contact.phone
-        if (!to || contact.opted_out === true) { results.skipped++; continue }
+        if (!to || contact.opted_out === true) { bump('no_phone_or_opted_out'); results.skipped++; continue }
         if (!settings?.enabled && settings?.test_mode &&
             !phoneMatchesAllowlist(to, settings?.test_phones)) {
-          results.skipped++; continue
+          bump('test_allowlist'); results.skipped++; continue
         }
         if ((await checkinsSentToday(db, location.id, nowMs)) >= checkin.daily_cap) {
           console.warn('[radar-agent] checkin-skip', JSON.stringify({ locationId: location.id, reason: 'daily_cap' }))
+          bump('daily_cap')
           break
         }
 
@@ -559,11 +564,11 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
           .order('last_message_at', { ascending: false })
           .limit(1)
         const existingConv = convRows?.[0] || null
-        if (existingConv?.agent_handed_off_at) { results.skipped++; continue }
+        if (existingConv?.agent_handed_off_at) { bump('handed_off'); results.skipped++; continue }
 
         let facts = { rows: [], lastInboundAtMs: null, humanSpokeAfterInbound: false }
         if (existingConv) facts = await lastInboundFacts(db, existingConv.id)
-        if (facts.humanSpokeAfterInbound) { results.skipped++; continue }
+        if (facts.humanSpokeAfterInbound) { bump('human_active'); results.skipped++; continue }
         const windowOpen = facts.lastInboundAtMs && (nowMs - facts.lastInboundAtMs) < 23 * H_MS
 
         if (windowOpen) {
@@ -573,17 +578,17 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
           )
           if (composed.error) {
             console.warn('[radar-agent] checkin-skip', JSON.stringify({ contactId: contact.id, reason: composed.error }))
-            results.skipped++; continue
+            bump('compose_error'); results.skipped++; continue
           }
           if (/\[\[SKIP\]\]/.test(composed.text || '')) {
             await stampCheckin(db, contact, location.id, className, 'skipped — already discussed')
-            results.skipped++; continue
+            bump('already_discussed'); results.skipped++; continue
           }
           const parsed = parseAgentResponse(composed.text)
-          if (parsed.handoff || !parsed.text) { results.skipped++; continue }
+          if (parsed.handoff || !parsed.text) { bump('compose_handoff'); results.skipped++; continue }
           const { sendTextMessage } = await import('@/lib/whatsapp')
           const res = await sendTextMessage(to, parsed.text, { locationId: location.id })
-          if (!res?.messageId) { results.skipped++; continue }
+          if (!res?.messageId) { bump('send_failed'); results.skipped++; continue }
           await recordProactiveMessage(db, { id: existingConv.id, contact_id: contact.id, location_id: location.id }, {
             body: parsed.text, waMessageId: res.messageId, messageType: 'text',
           })
@@ -595,7 +600,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         // Case B — template (marketing ⇒ marketing consent, like a campaign).
         if (!checkin.template_name) {
           console.warn('[radar-agent] checkin-skip', JSON.stringify({ contactId: contact.id, reason: 'no_template_configured' }))
-          results.skipped++; continue
+          bump('no_template_configured'); results.skipped++; continue
         }
         const { data: prefs } = await db.from('contact_preferences')
           .select('whatsapp_marketing')
@@ -603,7 +608,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
           .maybeSingle()
         if (prefs?.whatsapp_marketing !== true) {
           await stampCheckin(db, contact, location.id, className, 'skipped — no marketing consent')
-          results.skipped++; continue
+          bump('no_marketing_consent'); results.skipped++; continue
         }
         const { data: tRows } = await db.from('whatsapp_templates')
           .select('name, language, status, components, header_media_url')
@@ -614,7 +619,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         const template = tRows?.[0]
         if (!template || String(template.status || '').toUpperCase() !== 'APPROVED') {
           console.warn('[radar-agent] checkin-skip', JSON.stringify({ contactId: contact.id, reason: 'template_not_approved' }))
-          results.skipped++; continue
+          bump('template_not_approved'); results.skipped++; continue
         }
         const { extractTemplateBody } = await import('@/lib/radar-outreach')
         const { sendTemplateMessage, headerComponentFor, getOrCreateConversation } = await import('@/lib/whatsapp')
@@ -626,7 +631,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         const res = await sendTemplateMessage(to, template.name, template.language || 'en', components, {
           locationId: location.id,
         })
-        if (!res?.messageId) { results.skipped++; continue }
+        if (!res?.messageId) { bump('send_failed'); results.skipped++; continue }
         const conversationId = existingConv?.id
           || await getOrCreateConversation(db, { id: contact.id, wa_phone: contact.wa_phone, phone: contact.phone, name: contact.name }, location.id)
         if (conversationId) {
@@ -638,6 +643,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         await stampCheckin(db, contact, location.id, className, 'template')
         results.templates++
       } catch (e) {
+        bump('error')
         results.skipped++
         console.error('[radar-agent] checkin error:', e?.message || e)
       }

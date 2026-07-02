@@ -103,9 +103,41 @@ export async function GET() {
     // social_enabled lives top-level on locations.settings (sibling of customer_agent)
     social_enabled: loc?.settings?.social_enabled === true,
   }
+
+  // AGENT-CHECKIN.2 — visibility for the First-class check-in card. The
+  // sequence-engine incidents (CHANGELOG #289/#291) proved a silent
+  // automation is undebuggable from the UI: surface sent-today/total, the
+  // last outcome, and the last cron tick's skip-reason tally (persisted on
+  // the agent-followups heartbeat). UTC day boundary matches the daily-cap
+  // counter in lib/agent/followups.js on purpose.
+  const now = new Date()
+  const todayStartIso = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString()
+  const [todayRes, totalRes, lastRes, hbRes] = await Promise.all([
+    db.from('contacts').select('id', { count: 'exact', head: true })
+      .eq('location_id', locationId).gte('first_class_checkin_at', todayStartIso),
+    db.from('contacts').select('id', { count: 'exact', head: true })
+      .eq('location_id', locationId).not('first_class_checkin_at', 'is', null),
+    db.from('activities').select('note, created_at, contacts!contact_id(name)')
+      .eq('location_id', locationId).eq('type', 'agent_checkin')
+      .order('created_at', { ascending: false }).limit(1),
+    db.from('cron_heartbeats').select('last_ok_at, last_outcome').eq('name', 'agent-followups').maybeSingle(),
+  ])
+  const lastRow = lastRes.data?.[0] || null
+  const checkinStats = {
+    sent_today: todayRes.count || 0,
+    total: totalRes.count || 0,
+    last: lastRow
+      ? { at: lastRow.created_at, note: lastRow.note || null, contact_name: lastRow.contacts?.name || null }
+      : null,
+    last_run: hbRes.data
+      ? { at: hbRes.data.last_ok_at, checkins: hbRes.data.last_outcome?.checkins || null }
+      : null,
+  }
+
   return NextResponse.json({
     success: true,
     settings,
+    checkin_stats: checkinStats,
     location: { id: locationId, name: loc?.name || null },
   })
 }
