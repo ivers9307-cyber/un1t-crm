@@ -19,7 +19,7 @@
 // verification (account-tools.js). Answers from knowledge or hands off.
 // Never throws.
 
-import { sendTextMessage, sendInteractiveOptions } from '@/lib/whatsapp'
+import { sendTextMessage, sendInteractiveOptions, sendTypingIndicator } from '@/lib/whatsapp'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -206,6 +206,10 @@ async function runChannelAgentInner(db, adapter, ctx) {
   // already includes the burst), so nothing is lost.
   const claimed = await claimAgentTurn(db, adapter, conversationId)
   if (!claimed) return { handled: false, reason: 'in_flight' }
+
+  // The agent WILL run a turn now — let the channel show read + typing while
+  // Claude thinks. Best-effort; never blocks or fails the turn.
+  try { await adapter.onEngage?.(ctx) } catch { /* cosmetic only */ }
 
   try {
     // Cost / abuse ceilings, cheapest check first. The per-location daily
@@ -569,6 +573,13 @@ export const whatsappAdapter = {
   handoffType: 'whatsapp_agent_handoff',
   // Meta authenticates the sender's phone number — safe to use as identity.
   trustsSenderIdentity: true,
+  // Fires once the agent has committed to replying (gating + claim passed):
+  // marks the inbound read and shows "typing…" while Claude composes.
+  onEngage: async ({ waMessageId, locationId }) => {
+    if (!waMessageId) return
+    try { await sendTypingIndicator(waMessageId, { locationId }) }
+    catch (e) { console.warn('[agent] typing indicator failed:', e?.message) }
+  },
   send: (recipient, text, { locationId }) => sendTextMessage(recipient, text, { locationId }),
   sendOptions: (recipient, text, options, { locationId }) => sendInteractiveOptions(recipient, text, options, { locationId }),
   outboundRow: ({ conversationId, locationId, contactId, messageId, text, now }) => ({
@@ -597,5 +608,7 @@ export async function maybeAutoReply(db, ctx) {
     contactId: ctx.contactId,
     messageType: ctx.messageType,
     body: ctx.body,
+    // Inbound wamid — lets onEngage mark-read + show typing while Claude thinks.
+    waMessageId: ctx.waMessageId || null,
   })
 }

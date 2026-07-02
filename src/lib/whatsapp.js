@@ -268,6 +268,27 @@ export async function markAsRead(messageId, opts = {}) {
 }
 
 /**
+ * Mark an inbound message read AND show the "typing…" indicator (one Meta
+ * call does both). The indicator auto-dismisses after ~25s or when the reply
+ * lands. Per Meta guidance, only fire when a reply is actually coming — the
+ * agent calls this after its reply gating + turn claim succeed.
+ */
+export async function sendTypingIndicator(messageId, opts = {}) {
+  const config = await resolveConfig(opts)
+
+  await fetch(`${META_API_URL}/${config.phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: headersFor(config),
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: messageId,
+      typing_indicator: { type: 'text' },
+    }),
+  })
+}
+
+/**
  * WA-BLOCK — block or unblock a WhatsApp user on this phone number (Meta Block
  * API). Blocked users can't message the number and it can't message them —
  * the inbox's spam/abuse action, which also protects the number's quality
