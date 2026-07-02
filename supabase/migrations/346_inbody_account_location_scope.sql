@@ -38,17 +38,19 @@ WHERE account IS NOT NULL
   AND account <> lower(btrim(account));
 
 -- 2. Seed Stillorgan's InBody account config. Merge into existing settings so
---    we don't clobber settings.glofox / others. jsonb_set with create_missing.
+--    we don't clobber settings.glofox / others.
+--    NOTE: use `||` concat, NOT jsonb_set — jsonb_set('{}', '{inbody,accounts}', …)
+--    is a NO-OP when the intermediate `inbody` key is absent (jsonb_set never
+--    creates missing parent objects, even with create_missing=true). `||` does a
+--    top-level shallow merge: it sets/replaces the whole `inbody` key while
+--    preserving every other top-level key (glofox, etc.).
 UPDATE public.locations
-SET settings = jsonb_set(
-      coalesce(settings, '{}'::jsonb),
-      '{inbody,accounts}',
-      '["stillorganun1t"]'::jsonb,
-      true
-    )
+SET settings = coalesce(settings, '{}'::jsonb)
+             || jsonb_build_object('inbody', jsonb_build_object('accounts', jsonb_build_array('stillorganun1t')))
 WHERE id = 'a0000000-0000-0000-0000-000000000001'
-  -- Only if not already configured, so re-running (or a later hand-edit) is safe.
-  AND coalesce(settings #> '{inbody,accounts}', 'null'::jsonb) = 'null'::jsonb;
+  -- Only if not already configured, so re-running is safe (and won't overwrite a
+  -- hand-edited inbody config with more than just `accounts`).
+  AND (settings #> '{inbody,accounts}') IS NULL;
 
 -- 3. Backfill location_id on existing (unstamped) events from the account map.
 --    Driven off the config we just wrote so the map has a single source of truth.
