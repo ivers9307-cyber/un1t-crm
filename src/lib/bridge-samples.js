@@ -313,6 +313,44 @@ export async function resolveStrapsForBatch(db, { bridgeId, locationId, deviceKe
 }
 
 /**
+ * Re-select the current OPEN session for a member at a location. Used to
+ * recover from a unique-violation (23505) on the mig 343 partial index: a
+ * racing overlapping request already created/reopened the open session, so we
+ * return its id rather than null. Returns null only if it has since closed.
+ */
+async function reselectOpenMemberSession(db, { contactId, locationId }) {
+  const { data } = await db
+    .from('heart_rate_sessions')
+    .select('id')
+    .eq('contact_id', contactId)
+    .eq('location_id', locationId)
+    .is('ended_at', null)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return data?.id || null
+}
+
+/**
+ * Re-select the current OPEN anonymous session for a strap at a location, to
+ * recover from a 23505 on the mig 343 anon partial index (a racing request
+ * won the insert). Returns null only if it has since closed.
+ */
+async function reselectOpenAnonSession(db, { locationId, deviceKey }) {
+  const { data } = await db
+    .from('heart_rate_sessions')
+    .select('id')
+    .eq('location_id', locationId)
+    .eq('device_identifier', deviceKey)
+    .is('contact_id', null)
+    .is('ended_at', null)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return data?.id || null
+}
+
+/**
  * Find an existing open heart_rate_sessions row for this contact at this
  * location, or create one. Resolution, in priority:
  *   (a) an existing OPEN session → return it (rejoin across drop-outs),
@@ -388,7 +426,13 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
     if (action === 'return') return priorForClass.id
     if (action === 'skip') return null
     if (action === 'reopen') {
-      await db.from('heart_rate_sessions').update({ ended_at: null }).eq('id', priorForClass.id)
+      const { error: reopenErr } = await db
+        .from('heart_rate_sessions').update({ ended_at: null }).eq('id', priorForClass.id)
+      // A racing request already reopened/created this member's open session:
+      // the mig 343 index rejects a second open row. Return the existing one.
+      if (reopenErr?.code === '23505') {
+        return (await reselectOpenMemberSession(db, { contactId, locationId })) || priorForClass.id
+      }
       return priorForClass.id
     }
     const { data: created, error: createErr } = await db
@@ -400,6 +444,9 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
       })
       .select('id').single()
     if (createErr) {
+      // Lost the check-then-insert race: another request opened this member's
+      // session between our SELECT and INSERT. Return the winner (mig 343).
+      if (createErr.code === '23505') return reselectOpenMemberSession(db, { contactId, locationId })
       logWarn('bridge-samples', 'auto-create (class) session failed', { err: createErr, contactId, glofox_event_id: occ.glofox_event_id })
       return null
     }
@@ -417,6 +464,7 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
       })
       .select('id').single()
     if (tErr) {
+      if (tErr.code === '23505') return reselectOpenMemberSession(db, { contactId, locationId })
       logWarn('bridge-samples', 'auto-create (test mode) session failed', { err: tErr, contactId })
       return null
     }
@@ -458,6 +506,7 @@ async function findOrCreateAutoSession(db, { contactId, locationId, deviceKey, n
     })
     .select('id').single()
   if (createErr) {
+    if (createErr.code === '23505') return reselectOpenMemberSession(db, { contactId, locationId })
     logWarn('bridge-samples', 'auto-create session failed', { err: createErr, contactId, bookingId: activeBooking.id })
     return null
   }
@@ -500,6 +549,9 @@ async function findOrCreateAnonymousSession(db, { locationId, deviceKey, occ, no
     .select('id')
     .single()
   if (error) {
+    // Lost the race to another overlapping batch: the mig 343 anon index
+    // rejects a second open session for this strap. Return the winner.
+    if (error.code === '23505') return reselectOpenAnonSession(db, { locationId, deviceKey })
     logWarn('bridge-samples', 'anon session create failed', { err: error, deviceKey })
     return null
   }

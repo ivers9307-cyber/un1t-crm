@@ -222,6 +222,7 @@ export async function resolveBookedOccurrenceForMember(db, { locationId, glofoxM
     .select('glofox_event_id, name, starts_at, ends_at')
     .eq('location_id', locationId)
     .in('glofox_event_id', eventIds)
+    .is('cancelled_at', null)
   const occByEventId = new Map((occs || []).map((o) => [o.glofox_event_id, o]))
   return pickNearestBookedOccurrence(bookings, occByEventId, nowMs, { preMs, postMs })
 }

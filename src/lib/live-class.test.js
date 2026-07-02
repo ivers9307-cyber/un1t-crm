@@ -257,12 +257,15 @@ describe('pairOverride', () => {
         }
         if (table === 'class_occurrences') {
           // No live class running — existing session returned unchanged.
+          // resolveCurrentOccurrence: .eq().gte().lte().is(cancelled_at, null).order()
           return {
             select: vi.fn(() => ({
               eq: vi.fn(() => ({
                 gte: vi.fn(() => ({
                   lte: vi.fn(() => ({
-                    order: vi.fn(() => Promise.resolve({ data: [], error: null })),
+                    is: vi.fn(() => ({
+                      order: vi.fn(() => Promise.resolve({ data: [], error: null })),
+                    })),
                   })),
                 })),
               })),
@@ -312,10 +315,10 @@ describe('pairOverride', () => {
           })) })) })) }
         }
         if (table === 'class_occurrences') {
-          // resolveBookedOccurrenceForMember: .eq(location_id).in(glofox_event_id, [...])
-          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ in: vi.fn(() => Promise.resolve({ data: [
+          // resolveBookedOccurrenceForMember: .eq(location_id).in(glofox_event_id, [...]).is(cancelled_at, null)
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ in: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ data: [
             { glofox_event_id: 'ev1', name: 'DR1VE', starts_at: '2026-06-18T05:00:00Z', ends_at: '2026-06-18T06:00:00Z' },
-          ] })) })) })) }
+          ] })) })) })) })) }
         }
         if (table === 'heart_rate_sessions') {
           return {

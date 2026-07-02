@@ -372,7 +372,13 @@ describe('resolveStrapsForBatch: anonymous straps', () => {
 
   // db mock: no overrides, no contact_devices, a live (or no) class, and a
   // heart_rate_sessions branch handling the anon existing-lookup + insert.
-  const makeDb = ({ occRows, existingAnon = null, captureInsert } = {}) => ({
+  const makeDb = ({ occRows, existingAnon = null, reselectAnon, captureInsert, insertResult } = {}) => {
+    // The existing-open lookup AND the post-23505 re-select share the same
+    // chain shape. First call returns `existingAnon` (drives the create path);
+    // if `reselectAnon` is set, subsequent calls (the re-select) return it.
+    let lookupCalls = 0
+    const anonLookup = () => Promise.resolve({ data: lookupCalls++ === 0 ? existingAnon : (reselectAnon ?? existingAnon) })
+    return ({
     from: vi.fn((table) => {
       if (table === 'strap_assignments') {
         return { select: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => ({ not: vi.fn(() => Promise.resolve({ data: [] })) })) })) })) }
@@ -381,17 +387,19 @@ describe('resolveStrapsForBatch: anonymous straps', () => {
         return { select: vi.fn(() => ({ in: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })) })) }
       }
       if (table === 'class_occurrences') {
-        return { select: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: occRows })) })) })) })) })) }
+        // resolveCurrentOccurrence: .eq().gte().lte().is(cancelled_at, null).order()
+        return { select: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => ({ is: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: occRows })) })) })) })) })) })) }
       }
       if (table === 'heart_rate_sessions') {
         return {
-          select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => ({ is: vi.fn(() => ({ order: vi.fn(() => ({ limit: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: existingAnon })) })) })) })) })) })) })) })),
-          insert: vi.fn((row) => { if (captureInsert) captureInsert(row); return { select: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { id: 'anon-1' }, error: null })) })) } }),
+          select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => ({ is: vi.fn(() => ({ order: vi.fn(() => ({ limit: vi.fn(() => ({ maybeSingle: vi.fn(anonLookup) })) })) })) })) })) })) })),
+          insert: vi.fn((row) => { if (captureInsert) captureInsert(row); return { select: vi.fn(() => ({ single: vi.fn(() => Promise.resolve(insertResult || { data: { id: 'anon-1' }, error: null })) })) } }),
         }
       }
       throw new Error(`unexpected ${table}`)
     }),
   })
+  }
 
   it('creates an anonymous session for an unmatched strap during a live class', async () => {
     let inserted = null
@@ -414,13 +422,31 @@ describe('resolveStrapsForBatch: anonymous straps', () => {
     expect(map.get('ant:999')).toMatchObject({ sessionId: 'anon-existing', via: 'anon' })
     expect(inserted).toBeNull()
   })
+
+  it('recovers from a 23505 on anon insert by re-selecting the racing session', async () => {
+    // Two overlapping batches: our SELECT saw no open anon session, but a
+    // concurrent request inserted one first. The mig 343 unique index rejects
+    // our insert with 23505; we must re-select the winner, not return null.
+    const db = makeDb({
+      occRows: [liveOcc],
+      insertResult: { data: null, error: { code: '23505' } },
+      reselectAnon: { id: 'anon-race-winner' },
+    })
+    const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:999'], nowMs: NOW })
+    expect(map.get('ant:999')).toMatchObject({ sessionId: 'anon-race-winner', contactId: null, via: 'anon' })
+  })
 })
 
 describe('resolveStrapsForBatch: registered booking-first + test mode', () => {
   const NOW = Date.parse('2026-06-27T07:45:00Z')
   const occ8 = { glofox_event_id: 'e8', name: 'TEMPO', starts_at: '2026-06-27T08:00:00Z', ends_at: '2026-06-27T09:00:00Z' }
 
-  function makeDb({ bookings = [], occs = [], existingOpen = null, existingClass = null, testModeUntil = null, captureInsert, captureUpdate } = {}) {
+  function makeDb({ bookings = [], occs = [], existingOpen = null, reselectOpen, existingClass = null, testModeUntil = null, captureInsert, captureUpdate, insertResult } = {}) {
+    // The (a) existing-open lookup and the post-23505 re-select share the same
+    // chain shape. First call returns `existingOpen` (so the create path runs);
+    // later calls (the re-select) return `reselectOpen` when set.
+    let openCalls = 0
+    const openLookup = () => Promise.resolve({ data: openCalls++ === 0 ? existingOpen : (reselectOpen ?? existingOpen) })
     return {
       from: vi.fn((table) => {
         if (table === 'ble_bridges') {
@@ -443,8 +469,10 @@ describe('resolveStrapsForBatch: registered booking-first + test mode', () => {
           return {
             select: vi.fn(() => ({
               eq: vi.fn(() => ({
-                in: vi.fn(() => Promise.resolve({ data: occs })),
-                gte: vi.fn(() => ({ lte: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: [] })) })) })),
+                // resolveBookedOccurrenceForMember: .in().is(cancelled_at, null)
+                in: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ data: occs })) })),
+                // resolveCurrentOccurrence: .gte().lte().is(cancelled_at, null).order()
+                gte: vi.fn(() => ({ lte: vi.fn(() => ({ is: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: [] })) })) })) })),
               })),
             })),
           }
@@ -457,12 +485,12 @@ describe('resolveStrapsForBatch: registered booking-first + test mode', () => {
             select: vi.fn(() => ({
               eq: vi.fn(() => ({
                 eq: vi.fn(() => ({
-                  is: vi.fn(() => ({ order: vi.fn(() => ({ limit: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: existingOpen })) })) })) })),
+                  is: vi.fn(() => ({ order: vi.fn(() => ({ limit: vi.fn(() => ({ maybeSingle: vi.fn(openLookup) })) })) })),
                   order: vi.fn(() => ({ limit: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: existingClass })) })) })),
                 })),
               })),
             })),
-            insert: vi.fn((row) => { if (captureInsert) captureInsert(row); return { select: vi.fn(() => ({ single: vi.fn(() => Promise.resolve({ data: { id: 'new-1' }, error: null })) })) } }),
+            insert: vi.fn((row) => { if (captureInsert) captureInsert(row); return { select: vi.fn(() => ({ single: vi.fn(() => Promise.resolve(insertResult || { data: { id: 'new-1' }, error: null })) })) } }),
             update: vi.fn((patch) => { if (captureUpdate) captureUpdate(patch); return { eq: vi.fn(() => Promise.resolve({ error: null })) } }),
           }
         }
@@ -504,6 +532,20 @@ describe('resolveStrapsForBatch: registered booking-first + test mode', () => {
     const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:12511'], nowMs: NOW })
     expect(map.get('ant:12511')).toMatchObject({ sessionId: 'cls-1', via: 'auto' })
     expect(updated).toMatchObject({ ended_at: null })
+  })
+
+  it('recovers from a 23505 on member insert by re-selecting the racing open session', async () => {
+    // Test-mode create path (c): our (a) SELECT saw no open session, but a
+    // concurrent overlapping batch inserted one first. The mig 343 unique index
+    // rejects our insert with 23505; we must re-select the winner, not null.
+    const db = makeDb({
+      bookings: [], occs: [],
+      testModeUntil: new Date(NOW + 3600_000).toISOString(),
+      insertResult: { data: null, error: { code: '23505' } },
+      reselectOpen: { id: 'member-race-winner' },
+    })
+    const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:12511'], nowMs: NOW })
+    expect(map.get('ant:12511')).toMatchObject({ sessionId: 'member-race-winner', contactId: 'c1', via: 'auto' })
   })
 
   it('skips (no new session) when the class has ended past grace', async () => {
