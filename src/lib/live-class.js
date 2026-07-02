@@ -32,6 +32,18 @@ const MONTH_NAMES = ['January','February','March','April','May','June','July','A
 const RECENT_SAMPLE_WINDOW_MS = 30 * 1000  // current-BPM averaging window
 
 /**
+ * Item 3 — is this a test-mode session? Staff testing with a member-registered
+ * strap is stamped `raw_metadata.test_mode = true` at create
+ * (findOrCreateAutoSession). Such sessions must never trigger member-facing
+ * side-effects (email/push/achievements/goals/tiers/strava). Pure + exported so
+ * both the reward cascade and the cron push can gate on it identically.
+ * @param {{ raw_metadata?: any }|null|undefined} session
+ */
+export function isTestSession(session) {
+  return session?.raw_metadata?.test_mode === true
+}
+
+/**
  * Returns every open heart_rate_sessions at this location plus
  * recent-sample summary so the live view can render current BPM
  * + zone for each. Joins to contacts for the display name.
@@ -210,7 +222,43 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
     .limit(1)
     .maybeSingle()
 
-  let sessionId = existing?.id
+  // Item 2 — a walk-in whose strap already spawned an ANONYMOUS session (its
+  // first minutes live there) must NOT get a brand-new named session that
+  // orphans the anon one. If the member has no open named session yet but an
+  // open anon session exists for THIS strap at this location, ADOPT it: stamp
+  // contact_id + re-stamp max_hr_used from the contact + backfill the class
+  // link. Respects the mig 343 indexes — once contact_id is set the row leaves
+  // the anon index and (being the member's only open row) satisfies the member
+  // index.
+  let adoptedAnon = null
+  if (!existing?.id) {
+    const { data: anon } = await db
+      .from('heart_rate_sessions')
+      .select('id, glofox_event_id')
+      .eq('location_id', locationId)
+      .eq('device_identifier', deviceKey)
+      .is('contact_id', null)
+      .is('ended_at', null)
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (anon?.id) {
+      const patch = { contact_id: contactId, max_hr_used: maxHr }
+      if (!anon.glofox_event_id && liveClass) {
+        patch.glofox_event_id = liveClass.glofox_event_id
+        patch.class_name = liveClass.class_name
+        patch.class_link_source = linkSource
+      }
+      const { error: adoptErr } = await db
+        .from('heart_rate_sessions').update(patch).eq('id', anon.id)
+      // If a racing request already opened a NAMED session for this member the
+      // mig 343 member index rejects the adopt (23505). Fall through to the
+      // normal path, which will find/create the named session.
+      if (!adoptErr) adoptedAnon = anon.id
+    }
+  }
+
+  let sessionId = existing?.id || adoptedAnon
   if (!sessionId) {
     const { data: created, error: createErr } = await db
       .from('heart_rate_sessions')
@@ -232,9 +280,11 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
       return { ok: false, error: createErr?.message || 'Session create failed' }
     }
     sessionId = created.id
-  } else {
-    // Existing open session — follow a mid-class strap swap, and backfill
-    // the class link if the session predates the occurrence sync.
+  } else if (existing?.id) {
+    // Existing open NAMED session — follow a mid-class strap swap, and backfill
+    // the class link if the session predates the occurrence sync. (The adopted-
+    // anon branch above already stamped device + class link, so it needs no
+    // further patch here.)
     const patch = {}
     if (existing.device_identifier !== deviceKey) patch.device_identifier = deviceKey
     if (!existing.glofox_event_id && liveClass) {
@@ -310,11 +360,15 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
 
   // Calories — in-studio (bridge) sessions carry no provider value, so estimate
   // from HR + duration + the member's body metrics. Best-effort: null leaves it blank.
+  //
+  // Item 6 — duration is the ACTUAL sampled time (summary.totalSeconds, already
+  // gap-capped by summariseSession), NOT wall-clock (nowMs − started_at). An
+  // auto-closed session hits the 4h backstop, so wall-clock would mint a ~3000
+  // kcal ghost workout for a member who left after 20 minutes.
   let caloriesKcal = null
   if (session.contact_id) {
     try {
-      const startMs = new Date(session.started_at).getTime()
-      const durationMin = Number.isFinite(startMs) ? (nowMs - startMs) / 60000 : null
+      const durationMin = summary.totalSeconds > 0 ? summary.totalSeconds / 60 : null
       const bm = await resolveBodyMetrics(db, session.contact_id, nowMs)
       caloriesKcal = estimateCaloriesKcal({
         avgHr: summary.avgHrBpm, durationMin, age: bm.age, weightKg: bm.weightKg, gender: bm.gender,
@@ -383,12 +437,20 @@ export async function endSession(db, sessionId, { nowMs = Date.now() } = {}) {
 export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now() } = {}) {
   const { data: session } = await db
     .from('heart_rate_sessions')
-    .select('id, contact_id, location_id, effort_points, ended_at, source, glofox_event_id, class_name')
+    .select('id, contact_id, location_id, effort_points, ended_at, source, glofox_event_id, class_name, raw_metadata')
     .eq('id', sessionId)
     .single()
   // No contact → nothing to reward (anonymous walk-in). Preserves the
   // "walk-ins skip rewards" behaviour that endSession used to gate inline.
   if (!session || !session.contact_id) return
+
+  // Item 3 — test-mode sessions (staff testing with a member-registered strap,
+  // stamped raw_metadata.test_mode at create in findOrCreateAutoSession) must
+  // NOT fire ANY member-facing reward: no post-class email, no "session ready"
+  // push, no achievements, no goal/tier banking, no Strava export. The session
+  // row itself is still finalised (zones/points) by endSession — this only
+  // suppresses the cascade.
+  if (isTestSession(session)) return
 
   const effortPoints = Number(session.effort_points) || 0
 

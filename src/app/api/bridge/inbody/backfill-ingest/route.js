@@ -21,6 +21,7 @@ import { verifyBridgeToken } from '@/lib/bridge-auth'
 import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
 import { ingestScan } from '@/lib/inbody-ingest'
+import { isPhoneShaped } from '@/lib/inbody-location-scope'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -43,10 +44,20 @@ export async function POST(request) {
   const db = createServerClient()
   const { data: req } = await db
     .from('inbody_backfill_requests')
-    .select('id, phone, status')
+    .select('id, phone, status, location_id')
     .eq('id', requestId)
     .maybeSingle()
   if (!req) {
+    return NextResponse.json({ ok: false, error: 'request not found' }, { status: 404 })
+  }
+
+  // Cross-location guard (security audit W2-H / M1): a bridge for location A
+  // must not close / ingest location B's backfill request. 404 (not 403) so a
+  // foreign bridge can't distinguish "wrong location" from "no such request".
+  if (!bridge.locationId || req.location_id !== bridge.locationId) {
+    logWarn('bridge-inbody-backfill-ingest', 'rejected cross-location request', {
+      requestId, reqLocation: req.location_id, bridgeId: bridge.bridgeId, locationId: bridge.locationId,
+    })
     return NextResponse.json({ ok: false, error: 'request not found' }, { status: 404 })
   }
 
@@ -66,6 +77,15 @@ export async function POST(request) {
   // scan arriving later via the webhook (which carries InBody's TelHP too).
   // Fall back to the CRM phone if the Pi didn't send one.
   const telHp = (typeof body.usertoken === 'string' && body.usertoken) || req.phone
+
+  // Contact-matching keys off the phone tail; a non-phone usertoken (a
+  // compromised bridge relaying junk) must not attach scans to arbitrary
+  // members. Reject the whole batch if the resolved usertoken isn't phone-shaped
+  // (security audit M1). Leave the request pending so a corrected retry works.
+  if (!isPhoneShaped(telHp)) {
+    logWarn('bridge-inbody-backfill-ingest', 'rejected non-phone usertoken', { requestId, bridgeId: bridge.bridgeId })
+    return NextResponse.json({ ok: false, error: 'invalid usertoken' }, { status: 400 })
+  }
 
   const scans = Array.isArray(body.scans) ? body.scans.slice(0, MAX_SCANS) : []
   let ingested = 0

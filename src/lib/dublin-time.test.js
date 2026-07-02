@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { dublinTodayStr, dublinNowMinutes, addDaysISO, dublinTimeLabel } from './dublin-time.js'
+import {
+  dublinTodayStr, dublinNowMinutes, addDaysISO, dublinTimeLabel,
+  dublinDateKey, dublinDayStartMs, dublinDayRangeMs, DUBLIN_DAY_MS,
+} from './dublin-time.js'
+
+const isoOf = (ms) => new Date(ms).toISOString()
 
 describe('dublinTodayStr', () => {
   beforeEach(() => { vi.useFakeTimers() })
@@ -84,4 +89,64 @@ describe('dublinTimeLabel', () => {
     expect(dublinTimeLabel('nope')).toBeNull()
     expect(dublinTimeLabel(null)).toBeNull()
   })
+})
+
+// Day-boundary helpers kept byte-behaviour-identical to
+// champ-app/shared/dublin-time.js — these back the byte-synced challenges.js twin.
+describe('dublinDateKey', () => {
+  it('GMT winter: 23:30Z stays the same calendar day', () => {
+    expect(dublinDateKey('2026-01-15T23:30:00Z')).toBe('2026-01-15')
+  })
+  it('IST summer: 23:30Z is already the NEXT Dublin day', () => {
+    expect(dublinDateKey('2026-07-01T23:30:00Z')).toBe('2026-07-02')
+  })
+  it('IST summer: 22:30Z is still the same Dublin day (23:30 IST)', () => {
+    expect(dublinDateKey('2026-07-01T22:30:00Z')).toBe('2026-07-01')
+  })
+  it('accepts ms and Date as well as ISO strings', () => {
+    const ms = Date.parse('2026-07-01T23:30:00Z')
+    expect(dublinDateKey(ms)).toBe('2026-07-02')
+    expect(dublinDateKey(new Date(ms))).toBe('2026-07-02')
+  })
+})
+
+describe('dublinDayStartMs', () => {
+  it('GMT: Dublin midnight == UTC midnight', () => {
+    expect(isoOf(dublinDayStartMs('2026-01-15'))).toBe('2026-01-15T00:00:00.000Z')
+  })
+  it('IST: Dublin midnight == 23:00Z the previous day', () => {
+    expect(isoOf(dublinDayStartMs('2026-07-15'))).toBe('2026-07-14T23:00:00.000Z')
+  })
+  it('spring-forward Sunday still starts at 00:00Z (clocks jump at 01:00)', () => {
+    expect(isoOf(dublinDayStartMs('2026-03-29'))).toBe('2026-03-29T00:00:00.000Z')
+  })
+  it('the day AFTER spring-forward is IST → 23:00Z prior', () => {
+    expect(isoOf(dublinDayStartMs('2026-03-30'))).toBe('2026-03-29T23:00:00.000Z')
+  })
+  it('fall-back Sunday is IST at its midnight → 23:00Z prior', () => {
+    expect(isoOf(dublinDayStartMs('2026-10-25'))).toBe('2026-10-24T23:00:00.000Z')
+  })
+  it('the day AFTER fall-back is GMT → 00:00Z', () => {
+    expect(isoOf(dublinDayStartMs('2026-10-26'))).toBe('2026-10-26T00:00:00.000Z')
+  })
+  it('accepts a parts object', () => {
+    expect(isoOf(dublinDayStartMs({ y: 2026, mo: 7, d: 15 }))).toBe('2026-07-14T23:00:00.000Z')
+  })
+})
+
+describe('dublinDayRangeMs — inclusive [start .. end] → half-open [startMs, endMs)', () => {
+  it('IST June range', () => {
+    const { startMs, endMs } = dublinDayRangeMs('2026-06-10', '2026-06-20')
+    expect(isoOf(startMs)).toBe('2026-06-09T23:00:00.000Z')
+    expect(isoOf(endMs)).toBe('2026-06-20T23:00:00.000Z') // 00:00 Dublin Jun 21
+  })
+  it('GMT January range aligns with UTC midnight', () => {
+    const { startMs, endMs } = dublinDayRangeMs('2026-01-05', '2026-01-11')
+    expect(isoOf(startMs)).toBe('2026-01-05T00:00:00.000Z')
+    expect(isoOf(endMs)).toBe('2026-01-12T00:00:00.000Z')
+  })
+})
+
+describe('DUBLIN_DAY_MS', () => {
+  it('is 24h in ms', () => { expect(DUBLIN_DAY_MS).toBe(24 * 3600 * 1000) })
 })

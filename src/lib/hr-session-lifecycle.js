@@ -23,8 +23,44 @@ export function classSessionAction({ existing, occ, nowMs, classEndGraceMs = CLA
 }
 
 /**
+ * Should an existing OPEN session be CLOSED to make way for a fresh session on
+ * the member's newly-resolved class? True only when the open session is linked
+ * to a DIFFERENT class than the one now resolved AND that older class has ended
+ * (+ grace). This is the back-to-back-classes fix (HR wave-2 item 1): a 09:00
+ * session that stays open (closing waits on silence) must not absorb the 10:00
+ * class's samples.
+ *
+ * Preserves rejoin: same class (or no newly-resolved class) → don't close; the
+ * older class still live (within end+grace) → don't close (still rejoinable).
+ *
+ * @param {{
+ *   openEventId: string|null,           // existing open session's glofox_event_id
+ *   newEventId: string|null,            // the member's currently-resolved occurrence id
+ *   openClassEndsAt: string|null,       // ends_at of the open session's class (null if unknown)
+ *   nowMs: number,
+ *   classEndGraceMs?: number,
+ * }} args
+ * @returns {boolean}
+ */
+export function shouldCloseSupersededSession({
+  openEventId, newEventId, openClassEndsAt, nowMs, classEndGraceMs = CLASS_END_GRACE_MS,
+}) {
+  // No new class resolved, or the open session isn't class-linked, or it's the
+  // SAME class → keep the existing open session (rejoin).
+  if (!newEventId || !openEventId || openEventId === newEventId) return false
+  // Different class. Only supersede once the OLD class has ended past grace —
+  // while it's still live the member could legitimately still be in it.
+  const endMs = openClassEndsAt ? new Date(openClassEndsAt).getTime() : null
+  if (endMs == null || !Number.isFinite(endMs)) return true // unknown end → treat as ended
+  return nowMs > endMs + classEndGraceMs
+}
+
+/**
  * Should the stale-close cron finalise this open session now?
  * - 4h backstop → always close.
+ * - never sampled (item 4a: last_sample_at IS NULL) + open past staleMs → treat
+ *   as silent (a strap that never delivered — bridge crashed right after
+ *   create); same class-defer rule applies.
  * - still streaming (not silent) → keep open.
  * - silent + class-linked + class not yet ended+grace → defer (rejoinable).
  * - silent + non-class (or class ended) → close.
@@ -39,7 +75,12 @@ export function shouldCloseStaleSession({
   if (startedMs != null && Number.isFinite(startedMs) && nowMs - startedMs > maxLenMs) return true
 
   const lastMs = session?.last_sample_at ? new Date(session.last_sample_at).getTime() : null
-  const silent = lastMs != null && nowMs - lastMs > staleMs
+  // "Silent" = we've heard nothing recently. Either the last sample is older
+  // than staleMs, OR the strap NEVER delivered a sample (last_sample_at IS NULL)
+  // and the session has been open longer than staleMs (item 4a).
+  const silent = lastMs != null
+    ? nowMs - lastMs > staleMs
+    : startedMs != null && Number.isFinite(startedMs) && nowMs - startedMs > staleMs
   if (!silent) return false
 
   if (session?.glofox_event_id) {

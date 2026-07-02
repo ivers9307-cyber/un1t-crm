@@ -19,6 +19,10 @@ let builders = []
 let sweepRows = []
 // Phase-1 silent-candidate rows (the query that filters on last_sample_at).
 let silentRows = []
+// Phase-1 never-sampled rows (item 4a: last_sample_at IS NULL, open past stale).
+let neverSampledRows = []
+// item 4c stale-ended un-emailed rows to retire (ended_at < 48h cutoff).
+let staleRetireRows = []
 // class_occurrences rows the ends_at lookup resolves (matched on glofox_event_id).
 let occRows = []
 
@@ -32,13 +36,19 @@ function makeBuilder(table) {
     calls,
     then(resolve) {
       let data = []
+      const has = (method, arg0) => calls.some((c) => c.method === method && c.args[0] === arg0)
       if (table === 'class_occurrences') data = occRows
-      else if (calls.some((c) => c.method === 'is' && c.args[0] === 'email_sent_at')) data = sweepRows
-      else if (calls.some((c) => c.method === 'lt' && c.args[0] === 'last_sample_at')) data = silentRows
+      // The Phase-2 SEND sweep and the item-4c STALE-RETIRE query both filter
+      // on email_sent_at; the send sweep bounds ended_at with .gte, the retire
+      // query with .lt. Only feed rows to the send sweep (retire resolves empty).
+      else if (has('is', 'email_sent_at') && has('gte', 'ended_at')) data = sweepRows
+      else if (has('is', 'email_sent_at') && has('lt', 'ended_at')) data = staleRetireRows
+      else if (has('lt', 'last_sample_at')) data = silentRows
+      else if (has('is', 'last_sample_at')) data = neverSampledRows
       return Promise.resolve({ data, error: null }).then(resolve)
     },
   }
-  for (const method of ['select', 'eq', 'is', 'not', 'lt', 'order', 'limit', 'neq', 'gte', 'in']) {
+  for (const method of ['select', 'eq', 'is', 'not', 'lt', 'order', 'limit', 'neq', 'gte', 'in', 'or', 'update']) {
     builder[method] = vi.fn((...args) => { calls.push({ method, args }); return builder })
   }
   return builder
@@ -73,30 +83,67 @@ beforeEach(() => {
   builders = []
   sweepRows = []
   silentRows = []
+  neverSampledRows = []
+  staleRetireRows = []
   occRows = []
   vi.clearAllMocks()
   process.env.CRON_SECRET = 'test-secret'
 })
 
 describe('auto-end-stale-hr-sessions — Phase 2 email-sweep query', () => {
-  it("excludes BOTH participation and apple_health via .not('source','in', …)", async () => {
+  it("excludes participation + apple_health via .or() that ALSO admits NULL source", async () => {
     const res = await GET(req())
     expect(res.status).toBe(200)
 
-    // The Phase-2 sweep is the heart_rate_sessions query that filters on
-    // email_sent_at (Phase-1 queries filter on last_sample_at / started_at).
+    // The Phase-2 SEND sweep is the heart_rate_sessions query that filters on
+    // email_sent_at AND bounds ended_at with .gte (the item-4c retire query uses
+    // .lt). Phase-1 queries filter on last_sample_at / started_at.
     const phase2 = builders.find(
       (b) => b.table === 'heart_rate_sessions' &&
-        b.calls.some((c) => c.method === 'is' && c.args[0] === 'email_sent_at')
+        b.calls.some((c) => c.method === 'is' && c.args[0] === 'email_sent_at') &&
+        b.calls.some((c) => c.method === 'gte' && c.args[0] === 'ended_at')
     )
     expect(phase2, 'Phase-2 email sweep query not found').toBeTruthy()
 
-    const sourceNot = phase2.calls.find((c) => c.method === 'not' && c.args[0] === 'source')
-    expect(sourceNot, "no .not('source', …) exclusion on the sweep").toBeTruthy()
-    expect(sourceNot.args[1]).toBe('in')
-    // PostgREST "not in" list — both sources must be present.
-    expect(sourceNot.args[2]).toContain('participation')
-    expect(sourceNot.args[2]).toContain('apple_health')
+    // Item 4b — a bare .not('source','in',…) is UNKNOWN (→ excluded) for a null
+    // source, so the sweep must use an OR that explicitly admits null.
+    const or = phase2.calls.find((c) => c.method === 'or')
+    expect(or, 'no .or() source clause on the sweep').toBeTruthy()
+    expect(or.args[0]).toContain('source.is.null')
+    expect(or.args[0]).toContain('participation')
+    expect(or.args[0]).toContain('apple_health')
+  })
+
+  it('closes a never-sampled session (item 4a: last_sample_at IS NULL, open past stale)', async () => {
+    const now = Date.now()
+    // A session whose strap never delivered a sample: last_sample_at null,
+    // started 10 min ago (past the 5-min stale cutoff), no class link.
+    neverSampledRows = [{
+      id: 's-never', last_sample_at: null,
+      started_at: new Date(now - 10 * 60 * 1000).toISOString(), glofox_event_id: null,
+    }]
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    const endedIds = endSession.mock.calls.map((c) => c[1])
+    expect(endedIds).toContain('s-never')
+  })
+
+  it('retires a stale un-emailed session without sending (item 4c)', async () => {
+    // A session ended 3 days ago that still has email_sent_at null — a data
+    // artifact. It must be stamped processed, NOT emailed.
+    staleRetireRows = [{ id: 's-old' }]
+    const res = await GET(req())
+    expect(res.status).toBe(200)
+    // Never handed to the sender...
+    const emailedIds = sendPostClassEmail.mock.calls.map((c) => c[1])
+    expect(emailedIds).not.toContain('s-old')
+    // ...but an update stamping email_sent_at was issued for it.
+    const retireUpdate = builders.find(
+      (b) => b.table === 'heart_rate_sessions' &&
+        b.calls.some((c) => c.method === 'update') &&
+        b.calls.some((c) => c.method === 'eq' && c.args[0] === 'id' && c.args[1] === 's-old')
+    )
+    expect(retireUpdate, 'no retire UPDATE for the stale row').toBeTruthy()
   })
 
   it('401s without the CRON_SECRET bearer', async () => {

@@ -26,17 +26,36 @@ describe('challengePhase', () => {
   const at = (iso) => new Date(iso).getTime()
   const ch = { starts_on: '2026-06-10', ends_on: '2026-06-20' }
   it('upcoming before start', () => { expect(challengePhase(ch, at('2026-06-09T12:00:00Z'))).toBe('upcoming') })
-  it('active within window incl. end day', () => {
+  it('active within Europe/Dublin day window incl. end day', () => {
+    // June is IST (UTC+1): 00:00 Dublin June 10 == 2026-06-09T23:00Z, so
+    // 2026-06-10T00:00Z (= 01:00 Dublin) is already inside the window.
     expect(challengePhase(ch, at('2026-06-10T00:00:00Z'))).toBe('active')
-    expect(challengePhase(ch, at('2026-06-20T23:00:00Z'))).toBe('active')
+    // Last still-active instant: 21:59:59Z == 22:59:59 Dublin on June 20.
+    expect(challengePhase(ch, at('2026-06-20T21:59:59Z'))).toBe('active')
+    // 00:00 Dublin June 21 == 2026-06-20T23:00Z is the exclusive end.
+    expect(challengePhase(ch, at('2026-06-20T23:00:00Z'))).toBe('ended')
   })
   it('ended after end day', () => { expect(challengePhase(ch, at('2026-06-21T00:00:00Z'))).toBe('ended') })
+  it('session at 23:30 Dublin on the last IST day is still active', () => {
+    // 23:30 Dublin June 20 (IST) == 22:30Z June 20 — inside the window.
+    expect(challengePhase(ch, at('2026-06-20T22:30:00Z'))).toBe('active')
+  })
+  it('session at 00:30 Dublin the day after end is ended', () => {
+    // 00:30 Dublin June 21 (IST) == 23:30Z June 20 — past the exclusive end.
+    expect(challengePhase(ch, at('2026-06-20T23:30:00Z'))).toBe('ended')
+  })
 })
 
 describe('windowIso', () => {
-  it('inclusive day range → [start 00:00Z, end+1 00:00Z)', () => {
+  it('inclusive Europe/Dublin day range (IST/BST) → [00:00 Dublin start, 00:00 Dublin end+1)', () => {
+    // June IST: 00:00 Dublin renders as the prior 23:00Z instant.
     expect(windowIso({ starts_on: '2026-06-10', ends_on: '2026-06-20' }))
-      .toEqual({ fromIso: '2026-06-10T00:00:00.000Z', toIso: '2026-06-21T00:00:00.000Z' })
+      .toEqual({ fromIso: '2026-06-09T23:00:00.000Z', toIso: '2026-06-20T23:00:00.000Z' })
+  })
+  it('winter (GMT) day range aligns with UTC midnight', () => {
+    // Jan is GMT (UTC+0), so Dublin midnight == UTC midnight.
+    expect(windowIso({ starts_on: '2026-01-05', ends_on: '2026-01-11' }))
+      .toEqual({ fromIso: '2026-01-05T00:00:00.000Z', toIso: '2026-01-12T00:00:00.000Z' })
   })
 })
 

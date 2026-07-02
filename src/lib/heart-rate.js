@@ -24,9 +24,10 @@
 // UN1T Points: 1 point per minute in Z1, 2 in Z2, 3 in Z3, 4 in Z4,
 // 5 in Z5. Per-second sample → 1/60th of the per-minute weight.
 //
-// Max HR: contacts.max_hr_override if set, else 220 - age (Tanaka
-// is more accurate above 40 but the +/-10bpm CI on either formula
-// makes the difference noise; defer that until anyone complains).
+// Max HR: contacts.max_hr_override if set, else the Tanaka estimate
+// 208 − 0.7 × age (see resolveMaxHr below). Tanaka is more accurate
+// above 40 than the classic 220 − age; the +/-10bpm CI on either makes
+// the day-to-day difference noise.
 
 export const ZONE_DEFS = [
   { id: 1, label: 'Z1', name: 'Warm-up',  pctMin: 0,    pctMax: 0.60, color: '#9CA3AF', points: 1 },

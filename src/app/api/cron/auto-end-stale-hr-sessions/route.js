@@ -51,9 +51,15 @@ export async function GET(request) {
   const staleCutoff = new Date(nowMs - STALE_AFTER_MS).toISOString()
   const longCutoff  = new Date(nowMs - MAX_SESSION_LENGTH_MS).toISOString()
 
-  // Two separate queries combined — Supabase's .or() is awkward to
+  // Three separate queries combined — Supabase's .or() is awkward to
   // mix with the partial index, so we just union in JS.
-  const [{ data: silentRows }, { data: longRows }] = await Promise.all([
+  //   1. silent: has a sample, but the last one is older than STALE_AFTER_MS.
+  //   2. long:   open past the 4h backstop regardless of samples.
+  //   3. neverSampled (item 4a): a strap that NEVER delivered a sample (bridge
+  //      crashed right after create) has last_sample_at IS NULL, so query (1)
+  //      skips it and it sits on the board for the full 4h. Close it once it's
+  //      been open longer than STALE_AFTER_MS with still no sample.
+  const [{ data: silentRows }, { data: longRows }, { data: neverSampledRows }] = await Promise.all([
     db.from('heart_rate_sessions')
       .select('id, last_sample_at, started_at, glofox_event_id')
       .is('ended_at', null)
@@ -63,11 +69,17 @@ export async function GET(request) {
       .select('id, last_sample_at, started_at, glofox_event_id')
       .is('ended_at', null)
       .lt('started_at', longCutoff),
+    db.from('heart_rate_sessions')
+      .select('id, last_sample_at, started_at, glofox_event_id')
+      .is('ended_at', null)
+      .is('last_sample_at', null)
+      .lt('started_at', staleCutoff),
   ])
 
   const candidates = new Map()
-  for (const r of silentRows || []) candidates.set(r.id, r)
-  for (const r of longRows || [])   candidates.set(r.id, candidates.get(r.id) || r)
+  for (const r of silentRows || [])       candidates.set(r.id, r)
+  for (const r of longRows || [])         candidates.set(r.id, candidates.get(r.id) || r)
+  for (const r of neverSampledRows || []) candidates.set(r.id, candidates.get(r.id) || r)
 
   // Fetch ends_at for the class-linked candidates so we can defer closing a
   // session whose class is still running (mid-class drop-out is rejoinable).
@@ -93,9 +105,17 @@ export async function GET(request) {
     else if (!out.ok) endFailed++
   }
 
+  // Phase 2 recency bound (item 4c): a session must have ended within the last
+  // 48h to be a live email candidate. Anything older that STILL has a null
+  // email_sent_at is a data artifact (a backfill, a column reset, a long-dead
+  // pilot row) — emailing a member about a class from months ago is worse than
+  // silence, so we stamp those processed (below) instead of sending.
+  const EMAIL_RECENCY_MS = 48 * 3600 * 1000
+  const recencyCutoff = new Date(nowMs - EMAIL_RECENCY_MS).toISOString()
+
   // Phase 2: send the post-class email for any session that's
-  // ended_at = not null AND email_sent_at = null. That includes the
-  // ones we just closed AND any that were closed via /end-class
+  // ended_at = not null AND email_sent_at = null AND ended within 48h. That
+  // includes the ones we just closed AND any that were closed via /end-class
   // where the inline trigger failed.
   // Exclude source IN ('participation','apple_health') — sessions that are
   // finalised once, out-of-band, and never stamp email_sent_at:
@@ -104,17 +124,42 @@ export async function GET(request) {
   //   - apple_health (off-site wearable imports): finalised once by the webhook
   //     (IB5); non-class imports never email (finalizeSessionRewards gates the
   //     email to class sessions), so they never stamp email_sent_at.
-  // Without this exclusion either kind would match this sweep forever and
-  // re-fire the "session ready" push every 5-min tick. Both are already
-  // finalised + pushed once by their own finalizeSessionRewards call.
+  // Both would otherwise match this sweep forever and re-fire the "session
+  // ready" push every 5-min tick. NULL source (item 4b) must ALSO be swept: a
+  // bare `source NOT IN (…)` is UNKNOWN for a null source and silently EXCLUDES
+  // it, so a null-source class session would never get its email. Use an
+  // explicit OR so null passes.
   const { data: pendingEmails } = await db
     .from('heart_rate_sessions')
     .select('id, contact_id, effort_points, class_name')
     .not('ended_at', 'is', null)
     .is('email_sent_at', null)
-    .not('source', 'in', '("participation","apple_health")')
+    .gte('ended_at', recencyCutoff)
+    .or('source.is.null,source.not.in.(participation,apple_health)')
     .order('ended_at', { ascending: true })
     .limit(50)
+
+  // Item 4c — retire stale un-emailed rows without sending: stamp email_sent_at
+  // so they leave this sweep permanently. Same source filter as the send sweep
+  // (participation/apple_health already self-retire; NULL source must be caught).
+  const { data: staleUnEmailed } = await db
+    .from('heart_rate_sessions')
+    .select('id')
+    .not('ended_at', 'is', null)
+    .is('email_sent_at', null)
+    .lt('ended_at', recencyCutoff)
+    .or('source.is.null,source.not.in.(participation,apple_health)')
+    .limit(200)
+  let staleRetired = 0
+  for (const row of staleUnEmailed || []) {
+    const { error } = await db
+      .from('heart_rate_sessions')
+      .update({ email_sent_at: new Date(nowMs).toISOString() })
+      .eq('id', row.id)
+      .is('email_sent_at', null)
+    if (!error) staleRetired++
+    else logWarn('cron-auto-end-hr', 'stale-retire stamp failed', { err: error, sessionId: row.id })
+  }
 
   let emailsSent = 0
   let emailsSkipped = 0
@@ -141,11 +186,12 @@ export async function GET(request) {
     }
   }
 
-  if (toEnd.size > 0 || (pendingEmails || []).length > 0) {
+  if (toEnd.size > 0 || (pendingEmails || []).length > 0 || staleRetired > 0) {
     logInfo('cron-auto-end-hr', 'tick', {
       candidates: toEnd.size, ended: endedCount, end_failed: endFailed,
       email_candidates: pendingEmails?.length || 0,
       emails_sent: emailsSent, emails_skipped: emailsSkipped, emails_failed: emailsFailed,
+      stale_retired: staleRetired,
     })
   }
 
@@ -159,5 +205,6 @@ export async function GET(request) {
     emails_sent: emailsSent,
     emails_skipped: emailsSkipped,
     emails_failed: emailsFailed,
+    stale_retired: staleRetired,
   })
 }

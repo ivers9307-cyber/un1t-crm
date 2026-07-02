@@ -51,15 +51,33 @@ describe('sha256Hex', () => {
 
 // ── verifyBridgeToken ──────────────────────────────────────────
 
+// The lookup is now `.from().select().or().maybeSingle()` (matches either the
+// current OR the previous/grace token hash).
 function mockDb({ row, error } = {}) {
   return {
     from: vi.fn(() => ({
       select: vi.fn(() => ({
-        eq: vi.fn(() => ({
+        or: vi.fn(() => ({
           maybeSingle: vi.fn(() => Promise.resolve(error ? { data: null, error } : { data: row || null, error: null })),
         })),
       })),
     })),
+  }
+}
+
+// Convenience: build a full ble_bridges row whose current-token hash matches
+// the given raw token, so verifyBridgeToken sees a current-token match.
+function bridgeRow(rawToken, overrides = {}) {
+  return {
+    id: 'bridge-1',
+    location_id: 'loc-1',
+    hardware_id: 'pi-1',
+    name: 'b1',
+    status: 'online',
+    api_token_hash: sha256Hex(rawToken),
+    previous_token_hash: null,
+    previous_token_expires_at: null,
+    ...overrides,
   }
 }
 
@@ -103,15 +121,12 @@ describe('verifyBridgeToken', () => {
     expect(await verifyBridgeToken(fakeRequest)).toBe(null)
   })
 
-  it('happy path: returns bridge identity on hash match', async () => {
+  it('happy path: returns bridge identity on current-token hash match', async () => {
     createServerClient.mockReturnValue(mockDb({
-      row: {
-        id: 'bridge-1',
-        location_id: 'loc-1',
+      row: bridgeRow('bbr_validtoken', {
         hardware_id: 'pi-XYZ',
         name: 'UN1T Dublin Studio',
-        status: 'online',
-      },
+      }),
     }))
     const fakeRequest = new Request('http://localhost/api/bridge/heartbeat', {
       method: 'POST',
@@ -128,25 +143,87 @@ describe('verifyBridgeToken', () => {
   })
 
   it('also accepts a raw header string', async () => {
-    createServerClient.mockReturnValue(mockDb({
-      row: {
-        id: 'bridge-1', location_id: 'loc-1', hardware_id: 'pi-1',
-        name: 'b1', status: 'online',
-      },
-    }))
+    createServerClient.mockReturnValue(mockDb({ row: bridgeRow('bbr_validtoken') }))
     const out = await verifyBridgeToken('Bearer bbr_validtoken')
     expect(out?.bridgeId).toBe('bridge-1')
   })
 
   it('also accepts a Headers object directly', async () => {
-    createServerClient.mockReturnValue(mockDb({
-      row: {
-        id: 'bridge-1', location_id: 'loc-1', hardware_id: 'pi-1',
-        name: 'b1', status: 'online',
-      },
-    }))
+    createServerClient.mockReturnValue(mockDb({ row: bridgeRow('bbr_validtoken') }))
     const headers = new Headers({ authorization: 'Bearer bbr_validtoken' })
     const out = await verifyBridgeToken(headers)
     expect(out?.bridgeId).toBe('bridge-1')
+  })
+
+  // ── grace-window (rotated / previous) token ────────────────────
+
+  it('accepts a rotated (previous) token while within the grace window', async () => {
+    // Row's CURRENT hash is a different token; the request presents the OLD
+    // token, which the DB matched via previous_token_hash. Grace not expired.
+    const row = bridgeRow('bbr_newtoken', {
+      previous_token_hash: sha256Hex('bbr_oldtoken'),
+      previous_token_expires_at: new Date(Date.now() + 60_000).toISOString(),
+    })
+    createServerClient.mockReturnValue(mockDb({ row }))
+    const out = await verifyBridgeToken('Bearer bbr_oldtoken')
+    expect(out?.bridgeId).toBe('bridge-1')
+  })
+
+  it('rejects a rotated (previous) token after the grace window has expired', async () => {
+    const row = bridgeRow('bbr_newtoken', {
+      previous_token_hash: sha256Hex('bbr_oldtoken'),
+      previous_token_expires_at: new Date(Date.now() - 1_000).toISOString(),
+    })
+    createServerClient.mockReturnValue(mockDb({ row }))
+    const out = await verifyBridgeToken('Bearer bbr_oldtoken')
+    expect(out).toBe(null)
+  })
+
+  it('rejects a previous-token match with a null expiry (no active grace)', async () => {
+    const row = bridgeRow('bbr_newtoken', {
+      previous_token_hash: sha256Hex('bbr_oldtoken'),
+      previous_token_expires_at: null,
+    })
+    createServerClient.mockReturnValue(mockDb({ row }))
+    const out = await verifyBridgeToken('Bearer bbr_oldtoken')
+    expect(out).toBe(null)
+  })
+
+  it('still accepts the CURRENT token even while a grace window is active', async () => {
+    const row = bridgeRow('bbr_newtoken', {
+      previous_token_hash: sha256Hex('bbr_oldtoken'),
+      previous_token_expires_at: new Date(Date.now() + 60_000).toISOString(),
+    })
+    createServerClient.mockReturnValue(mockDb({ row }))
+    const out = await verifyBridgeToken('Bearer bbr_newtoken')
+    expect(out?.bridgeId).toBe('bridge-1')
+  })
+
+  // ── decommissioned status ──────────────────────────────────────
+
+  it('rejects a decommissioned bridge even with a correct current token', async () => {
+    const row = bridgeRow('bbr_validtoken', { status: 'decommissioned' })
+    createServerClient.mockReturnValue(mockDb({ row }))
+    const out = await verifyBridgeToken('Bearer bbr_validtoken')
+    expect(out).toBe(null)
+  })
+
+  it('rejects a decommissioned bridge presenting a still-in-grace previous token', async () => {
+    const row = bridgeRow('bbr_newtoken', {
+      status: 'decommissioned',
+      previous_token_hash: sha256Hex('bbr_oldtoken'),
+      previous_token_expires_at: new Date(Date.now() + 60_000).toISOString(),
+    })
+    createServerClient.mockReturnValue(mockDb({ row }))
+    const out = await verifyBridgeToken('Bearer bbr_oldtoken')
+    expect(out).toBe(null)
+  })
+
+  it('offline and error bridges still authenticate (liveness, not a block)', async () => {
+    for (const status of ['offline', 'error']) {
+      createServerClient.mockReturnValue(mockDb({ row: bridgeRow('bbr_validtoken', { status }) }))
+      const out = await verifyBridgeToken('Bearer bbr_validtoken')
+      expect(out?.status).toBe(status)
+    }
   })
 })

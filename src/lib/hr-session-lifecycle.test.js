@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   classSessionAction,
   shouldCloseStaleSession,
+  shouldCloseSupersededSession,
   CLASS_END_GRACE_MS,
   STALE_AFTER_MS,
   MAX_SESSION_LENGTH_MS,
@@ -50,5 +51,45 @@ describe('shouldCloseStaleSession', () => {
   it('closes any session past the 4h backstop regardless of silence', () => {
     const s = { started_at: new Date(duringClass - 5 * 3600_000).toISOString(), glofox_event_id: 'e', last_sample_at: new Date(duringClass - 10000).toISOString() }
     expect(shouldCloseStaleSession({ session: s, occ, nowMs: duringClass })).toBe(true)
+  })
+
+  // Item 4a — a strap that NEVER delivered a sample.
+  it('closes a never-sampled non-class session open past staleMs', () => {
+    const s = { started_at: silentMin(6), glofox_event_id: null, last_sample_at: null }
+    expect(shouldCloseStaleSession({ session: s, occ: null, nowMs: duringClass })).toBe(true)
+  })
+  it('keeps a never-sampled session that is still within staleMs', () => {
+    const s = { started_at: silentMin(2), glofox_event_id: null, last_sample_at: null }
+    expect(shouldCloseStaleSession({ session: s, occ: null, nowMs: duringClass })).toBe(false)
+  })
+  it('defers a never-sampled class session while the class is still live', () => {
+    const s = { started_at: silentMin(10), glofox_event_id: 'e', last_sample_at: null }
+    expect(shouldCloseStaleSession({ session: s, occ, nowMs: duringClass })).toBe(false)
+  })
+})
+
+// Item 1 — back-to-back classes: supersede a stale open session.
+describe('shouldCloseSupersededSession', () => {
+  const nowMs = Date.parse('2026-06-27T10:05:00Z')
+
+  it('does not close when no new class is resolved', () => {
+    expect(shouldCloseSupersededSession({ openEventId: 'e9', newEventId: null, openClassEndsAt: '2026-06-27T09:00:00Z', nowMs })).toBe(false)
+  })
+  it('does not close when the open session is not class-linked', () => {
+    expect(shouldCloseSupersededSession({ openEventId: null, newEventId: 'e10', openClassEndsAt: null, nowMs })).toBe(false)
+  })
+  it('does not close when the open session is the SAME class (rejoin)', () => {
+    expect(shouldCloseSupersededSession({ openEventId: 'e10', newEventId: 'e10', openClassEndsAt: '2026-06-27T09:00:00Z', nowMs })).toBe(false)
+  })
+  it('does not close a DIFFERENT class that has not yet ended past grace', () => {
+    // 09:00 class ends 10:00; now 10:05 is within +10m grace → still keep.
+    expect(shouldCloseSupersededSession({ openEventId: 'e9', newEventId: 'e10', openClassEndsAt: '2026-06-27T10:00:00Z', nowMs })).toBe(false)
+  })
+  it('closes a DIFFERENT class that ended past grace', () => {
+    // 09:00 class ended 09:00; now 10:05 is well past +10m grace → supersede.
+    expect(shouldCloseSupersededSession({ openEventId: 'e9', newEventId: 'e10', openClassEndsAt: '2026-06-27T09:00:00Z', nowMs })).toBe(true)
+  })
+  it('closes a DIFFERENT class with an unknown end (treated as ended)', () => {
+    expect(shouldCloseSupersededSession({ openEventId: 'e9', newEventId: 'e10', openClassEndsAt: null, nowMs })).toBe(true)
   })
 })
