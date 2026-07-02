@@ -11,10 +11,12 @@
 // the Pi needs to call GetFullInBodyData. Events missing tel_hp or
 // test_datetime are skipped — they can't be fetched.
 //
-// Single-location note: Stillorgan is the only InBody account today, so the
-// one Pi takes every unprocessed event and ingest stamps it with the bridge's
-// location. When a second location gets InBody (2c), scope this by the
-// bridge's configured account.
+// LOCATION SCOPING (security audit W2-H / M1): inbody_webhook_events.location_id
+// is NULL until ingest, so we CANNOT filter pending by it — that would return
+// nothing. Each event carries `account` (the Lookin'Body account id); we scope
+// to the accounts configured for the bridge's location
+// (locations.settings.inbody.accounts). A bridge with no configured accounts
+// gets an EMPTY queue — it must never be handed another location's scans.
 //
 // Auth: bearer bridge token via verifyBridgeToken. Anything else → 401.
 
@@ -22,6 +24,7 @@ import { NextResponse } from 'next/server'
 import { verifyBridgeToken } from '@/lib/bridge-auth'
 import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
+import { bridgeInbodyScope, eventAccountMatchesScope, isPhoneShaped } from '@/lib/inbody-location-scope'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -35,10 +38,26 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
+
+  // Resolve which InBody accounts this bridge's location owns. No config →
+  // no accounts → empty queue (fail safe: never leak another location's scans).
+  const scope = await bridgeInbodyScope(db, bridge)
+  if (scope.accounts.size === 0) {
+    logWarn('bridge-inbody-pending', 'no inbody accounts configured for location', {
+      bridgeId: bridge.bridgeId,
+      locationId: bridge.locationId,
+    })
+    return NextResponse.json({ ok: true, pending: [] })
+  }
+
+  // DB-side narrowing on `account` (normalised on capture, so `.in()` matches
+  // exactly). `select('account')` too so we can re-verify the scope in app code
+  // (defence-in-depth against any legacy row that predates capture-normalisation).
   const { data, error } = await db
     .from('inbody_webhook_events')
-    .select('id, tel_hp, test_datetime')
+    .select('id, account, tel_hp, test_datetime')
     .eq('processed', false)
+    .in('account', [...scope.accounts])
     .not('tel_hp', 'is', null)
     .not('test_datetime', 'is', null)
     .order('received_at', { ascending: true })
@@ -49,11 +68,16 @@ export async function GET(request) {
     return NextResponse.json({ ok: false, error: 'query_failed' }, { status: 200 })
   }
 
-  const pending = (data || []).map((r) => ({
-    event_id: r.id,
-    usertoken: r.tel_hp,
-    datetimes: r.test_datetime,
-  }))
+  const pending = (data || [])
+    // Re-check the account maps to this bridge's location (case-insensitive),
+    // and only hand out phone-shaped usertokens — the Pi matches contacts by
+    // phone, so a malformed tel_hp can't be fetched or trusted anyway.
+    .filter((r) => eventAccountMatchesScope(r.account, scope) && isPhoneShaped(r.tel_hp))
+    .map((r) => ({
+      event_id: r.id,
+      usertoken: r.tel_hp,
+      datetimes: r.test_datetime,
+    }))
 
   return NextResponse.json({ ok: true, pending })
 }

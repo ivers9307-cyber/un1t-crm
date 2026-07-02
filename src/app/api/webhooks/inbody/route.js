@@ -14,6 +14,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifyInbodySecret, parseInbodyNotification } from '@/lib/inbody-webhook'
+import { normaliseInbodyAccount } from '@/lib/inbody-location-scope'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 
 export const runtime = 'nodejs'
@@ -46,7 +47,9 @@ export async function POST(request) {
     const { error } = await db
       .from('inbody_webhook_events')
       .upsert({
-        account: n.account,
+        // Store the account canonicalised (lower/trim) so location scoping in
+        // the bridge routes can match it exactly (security audit W2-H / M1).
+        account: normaliseInbodyAccount(n.account),
         tel_hp: n.telHp,
         user_id: n.userId,
         test_datetime: n.testDatetime,
