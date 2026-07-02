@@ -100,6 +100,8 @@ describe('maybeSendCampaignWhatsappWelcome — Flow toggle', () => {
     expect(tplName).toBe('book_first_visit')
     const flowBtn = components.find((c) => c.sub_type === 'flow')
     expect(flowBtn.parameters[0].action.flow_token).toBe('c1.loc1')
+    // Meta requires the button index as a STRING '0' (a numeric 0 is rejected 131009).
+    expect(flowBtn.index).toBe('0')
   })
 
   it('when disabled → keeps the passed template, no flow button', async () => {
