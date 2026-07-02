@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { normalizeUrlish } from '@/lib/urlish'
 
 // C4 — operator-curated card sets for the in-session WhatsApp media
 // carousel (2-10 image cards, sent from the inbox composer while the 24h
@@ -13,11 +14,15 @@ import { uuidLike } from '@/lib/schemas'
 // button config across cards, so each set is all-links-or-none — enforced
 // here (refine) and in the settings UI. Registered in src/lib/openapi.js.
 
+// Operators type bare domains ("un1tdublin.com/start") — normalise to
+// https:// before the .url() check instead of rejecting with a generic 400.
+const urlish = z.preprocess((v) => (v == null || v === '' ? undefined : normalizeUrlish(v)), z.string().url())
+
 const CardSchema = z.object({
-  image_url: z.string().url(),
+  image_url: urlish,
   title: z.string().min(1).max(80),
   body: z.string().max(160).optional(),
-  link_url: z.string().url().optional(),
+  link_url: urlish.optional(),
   link_text: z.string().max(20).optional(),
 })
 
