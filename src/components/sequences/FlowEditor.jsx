@@ -7,7 +7,8 @@
 // validateGraph the publish endpoint gates on. Re-convergent graphs aren't trees
 // and stay read-only (SequenceFlowBuilder decides).
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, Check, Save, Rocket, AlertTriangle, X } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { Plus, Check, Save, Rocket, AlertTriangle, X, Pause, Play } from 'lucide-react'
 import { Button } from '@/components/ui'
 import {
   validateGraph, treeToGraph, graphToTree, flattenTreeIds, nextNodeId, defaultConfigForType,
@@ -30,6 +31,7 @@ function updateLaneAt(tree, path, fn) {
 }
 
 export default function FlowEditor({ initialGraph, sequence }) {
+  const router = useRouter()
   const trigger = useMemo(() => initialGraph?.trigger || { type: 'manual', config: {} }, [initialGraph])
   const [tree, setTree] = useState(() => cloneLane(graphToTree(initialGraph).tree || []))
   const [expandedId, setExpandedId] = useState(null)
@@ -38,6 +40,7 @@ export default function FlowEditor({ initialGraph, sequence }) {
   const [feedback, setFeedback] = useState(null)
   const [issues, setIssues] = useState([])
   const [templates, setTemplates] = useState([])
+  const status = sequence?.status || 'draft'
 
   // Approved WhatsApp templates for this location, for the whatsapp-node picker.
   useEffect(() => {
@@ -94,16 +97,42 @@ export default function FlowEditor({ initialGraph, sequence }) {
     try {
       const res = await fetch(`/api/sequences/${sequence.id}/graph/publish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ graph }) })
       const data = await res.json()
-      if (res.ok && data.success) { setDirty(false); setFeedback({ ok: true, text: `Published — ${data.steps} step${data.steps === 1 ? '' : 's'} live` }) }
+      if (res.ok && data.success) {
+        setDirty(false)
+        setFeedback({ ok: true, text: `Published — ${data.steps} step${data.steps === 1 ? '' : 's'} live` })
+        router.refresh() // re-read the sequence so the status badge flips to "active" + Pause appears
+      }
       else { setFeedback({ ok: false, text: data.error || 'Publish failed' }); setIssues(Array.isArray(data.issues) ? data.issues : []) }
     } catch { setFeedback({ ok: false, text: 'Network error publishing' }) } finally { setBusy(null) }
+  }
+
+  // Pause / Resume a LIVE sequence. Both the enrolment triggers and the runner
+  // gate on status='active', so 'paused' cleanly stops new enrolments + step
+  // sends (in-flight enrolments resume when reactivated). Graph edits are
+  // untouched, so a pure status change doesn't discard unsaved work.
+  const setStatus = async (next) => {
+    setBusy(next === 'paused' ? 'pause' : 'resume')
+    try {
+      const res = await fetch(`/api/sequences/${sequence.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: next }) })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        setFeedback({ ok: true, text: next === 'paused' ? 'Paused — no new enrolments' : 'Resumed — live again' })
+        router.refresh()
+      } else setFeedback({ ok: false, text: data.error || 'Could not update status' })
+    } catch { setFeedback({ ok: false, text: 'Network error' }) } finally { setBusy(null) }
   }
 
   return (
     <div>
       <div className="max-w-md mx-auto flex items-center gap-2 mb-4">
         <Button onClick={saveDraft} variant="secondary" size="sm" icon={Save} loading={busy === 'save'} disabled={!dirty || busy !== null}>Save draft</Button>
-        <Button onClick={publish} variant="primary" size="sm" icon={Rocket} loading={busy === 'publish'} disabled={busy !== null || !validation.ok}>Publish</Button>
+        <Button onClick={publish} variant="primary" size="sm" icon={Rocket} loading={busy === 'publish'} disabled={busy !== null || !validation.ok}>{status === 'active' || status === 'paused' ? 'Republish' : 'Publish'}</Button>
+        {status === 'active' && (
+          <Button onClick={() => setStatus('paused')} variant="secondary" size="sm" icon={Pause} loading={busy === 'pause'} disabled={busy !== null}>Pause</Button>
+        )}
+        {status === 'paused' && (
+          <Button onClick={() => setStatus('active')} variant="secondary" size="sm" icon={Play} loading={busy === 'resume'} disabled={busy !== null}>Resume</Button>
+        )}
         <div className="ml-auto text-xs">
           {dirty && !feedback && <span className="text-un1t-subtle">Unsaved changes</span>}
           {feedback && <span className={`flex items-center gap-1 ${feedback.ok ? 'text-emerald-700' : 'text-rose-700'}`}>{feedback.ok ? <Check size={13} /> : <AlertTriangle size={13} />}{feedback.text}</span>}
