@@ -6,6 +6,7 @@ import {
   rollingHeadroom, selectDripRecipients, dripOutcome,
 } from './whatsapp-drip.js'
 import { getLocationBranding } from './location-branding'
+import { extractNamedVariables } from './whatsapp-template-samples.js'
 
 // WA-MULTI.1 — config is now per-location. Resolution helper +
 // env fallback live in whatsapp-config.js; the META_API_URL +
@@ -352,7 +353,7 @@ export async function uploadMediaForTemplate(bytes, mimeType, opts = {}) {
  * multi-number locations sharing one WABA share templates. The
  * config's businessAccountId drives the target WABA.
  */
-export async function createTemplate({ name, category, language, components }, opts = {}) {
+export async function createTemplate({ name, category, language, components, parameterFormat }, opts = {}) {
   const config = await resolveConfig(opts)
   if (!config.businessAccountId) {
     throw new Error('WhatsApp Business Account ID is not configured for this number.')
@@ -366,6 +367,9 @@ export async function createTemplate({ name, category, language, components }, o
       category: category || 'MARKETING',
       language: language || 'en',
       components: components || [],
+      // NAMED {{param}} templates must declare the format at create time;
+      // POSITIONAL is Meta's default so we only send the flag when needed.
+      ...(parameterFormat === 'NAMED' ? { parameter_format: 'NAMED' } : {}),
     }),
   })
 
@@ -803,7 +807,7 @@ export async function sendBroadcast(broadcastId) {
 
     try {
       // Build template components with variable substitution
-      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName })
+      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName, locationId: broadcast.location_id })
 
       const result = await sendTemplateMessage(
         contact.wa_phone,
@@ -1000,7 +1004,7 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
 
   for (const contact of toSend) {
     try {
-      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName })
+      const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName, locationId: broadcast.location_id })
       const result = await sendTemplateMessage(contact.wa_phone, template.name, template.language, components, { config })
 
       // Upsert (not insert): a contact retried after a 'capped' park has an
@@ -1123,13 +1127,41 @@ export function buildTemplateComponents(template, contact, variableMapping, head
   // Check if template has body variables
   const bodyComp = templateComponents.find(c => c.type === 'BODY')
   if (bodyComp && bodyComp.text) {
-    const values = resolveTemplateVariableValues(template, contact, variableMapping, opts)
-    if (values.length > 0) {
+    const namedVars = extractNamedVariables(bodyComp.text)
+    if (namedVars.length) {
       components.push({
         type: 'body',
-        // Meta rejects empty strings — ' ' placeholder for blanks.
-        parameters: values.map((v) => ({ type: 'text', text: v || ' ' })),
+        parameters: namedVars.map((n) => ({
+          type: 'text',
+          parameter_name: n,
+          // mapping override wins; default: the param name IS the contact field.
+          // Meta rejects empty strings — ' ' placeholder for blanks.
+          text: resolveContactField((variableMapping || {})[n] || n, contact, opts) || ' ',
+        })),
       })
+    } else {
+      const values = resolveTemplateVariableValues(template, contact, variableMapping, opts)
+      if (values.length > 0) {
+        components.push({
+          type: 'body',
+          // Meta rejects empty strings — ' ' placeholder for blanks.
+          parameters: values.map((v) => ({ type: 'text', text: v || ' ' })),
+        })
+      }
+    }
+  }
+
+  // FLOW-button templates: Meta requires a per-send button action parameter
+  // (proven live: omitting it → 131009). Auto-attach the per-contact
+  // flow_token when the caller supplies locationId (broadcast/drip paths);
+  // callers that mint their own token (the welcome path) pass no locationId
+  // and keep appending their own component.
+  const buttonsComp = templateComponents.find(c => c.type === 'BUTTONS')
+  const flowIdx = (buttonsComp?.buttons || []).findIndex(b => String(b.type || '').toUpperCase() === 'FLOW')
+  if (flowIdx >= 0) {
+    const flowToken = opts.flowToken || (contact?.id && opts.locationId ? `${contact.id}.${opts.locationId}` : null)
+    if (flowToken) {
+      components.push({ type: 'button', sub_type: 'flow', index: String(flowIdx), parameters: [{ type: 'action', action: { flow_token: flowToken } }] })
     }
   }
 
@@ -1146,17 +1178,23 @@ export function buildTemplateComponents(template, contact, variableMapping, head
 export function resolveTemplateVariableValues(template, contact, variableMapping, opts = {}) {
   const bodyComp = (template.components || []).find(c => c.type === 'BODY')
   const varMatches = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
-  return varMatches.map((_, i) => {
-    const fieldName = (variableMapping || {})[String(i + 1)]
-    let value = ''
-    if (fieldName === 'first_name') value = contact.first_name || contact.name?.split(' ')[0] || ''
-    else if (fieldName === 'name') value = contact.name || ''
-    else if (fieldName === 'email') value = contact.email || ''
-    else if (fieldName === 'phone') value = contact.phone || contact.wa_phone || ''
-    else if (fieldName === 'location_name') value = opts.companyName || 'UN1T'
-    else if (fieldName) value = contact[fieldName] || fieldName  // Use as literal if not a field
-    return value
-  })
+  return varMatches.map((_, i) => resolveContactField((variableMapping || {})[String(i + 1)], contact, opts))
+}
+
+/**
+ * One contact field name → its concrete value for a send. Shared by the
+ * positional ({{1}} + variableMapping) and NAMED ({{first_name}}) paths so
+ * both resolve identically. Unknown names fall back to the literal string,
+ * matching the historical positional behaviour.
+ */
+function resolveContactField(fieldName, contact, opts = {}) {
+  if (!fieldName) return ''
+  if (fieldName === 'first_name') return contact.first_name || contact.name?.split(' ')[0] || ''
+  if (fieldName === 'name') return contact.name || ''
+  if (fieldName === 'email') return contact.email || ''
+  if (fieldName === 'phone') return contact.phone || contact.wa_phone || ''
+  if (fieldName === 'location_name') return opts.companyName || 'UN1T'
+  return contact[fieldName] || fieldName // literal fallback, as today
 }
 
 /** Positionally substitute {{n}} placeholders with resolved values. */
@@ -1177,6 +1215,17 @@ export function substituteTemplateBody(bodyText, values) {
 export function renderTemplateBody(template, contact, variableMapping, opts = {}) {
   const bodyComp = (template.components || []).find(c => c.type === 'BODY')
   if (!bodyComp?.text) return null
+  const namedVars = extractNamedVariables(bodyComp.text)
+  if (namedVars.length) {
+    // NAMED template: substitute each {{name}} with its resolved value
+    // (mapping override wins; default: the param name IS the contact field).
+    let text = bodyComp.text
+    for (const n of namedVars) {
+      const value = resolveContactField((variableMapping || {})[n] || n, contact, opts)
+      text = text.replace(new RegExp(`\\{\\{\\s*${n}\\s*\\}\\}`, 'g'), value == null ? '' : String(value))
+    }
+    return text
+  }
   return substituteTemplateBody(bodyComp.text, resolveTemplateVariableValues(template, contact, variableMapping, opts))
 }
 

@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { ArrowLeft, Save, Send, Trash2, Upload, FileText, Video, X } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import { validateTemplateMedia } from '@/lib/template-media'
-import { extractVariableIndexes, buildBodyExample, buildHeaderTextExample, missingSampleError, samplesFromExample } from '@/lib/whatsapp-template-samples'
+import { extractVariableIndexes, extractNamedVariables, buildBodyExample, buildNamedBodyExample, buildHeaderTextExample, missingSampleError, samplesFromExample, samplesFromNamedExample } from '@/lib/whatsapp-template-samples'
 
 // Parse a route response defensively. Infra layers answer in plain text
 // (Vercel's ~4.5 MB body cap returns a literal "Request Entity Too
@@ -82,10 +82,13 @@ export default function WATemplateEditor({ template, locationId, userId, events 
 
   // Meta requires an example (sample) value per {{n}} variable at CREATE time,
   // or the template is rejected. Seed from the existing template when editing.
-  const [bodySamples, setBodySamples] = useState(() => samplesFromExample(existingBody?.example?.body_text?.[0]))
+  const [bodySamples, setBodySamples] = useState(() => ({
+    ...samplesFromExample(existingBody?.example?.body_text?.[0]),
+    ...samplesFromNamedExample(existingBody?.example?.body_text_named_params),
+  }))
   const [headerSamples, setHeaderSamples] = useState(() => samplesFromExample(existingHeader?.example?.header_text))
-  const bodyVars = extractVariableIndexes(bodyText)
-  const headerVars = headerFormat === 'TEXT' ? extractVariableIndexes(headerText) : []
+  const bodyVars = [...extractVariableIndexes(bodyText), ...extractNamedVariables(bodyText)]
+  const headerVars = headerFormat === 'TEXT' ? [...extractVariableIndexes(headerText), ...extractNamedVariables(headerText)] : []
 
   // Header media — handle is what Meta needs at template-approval time;
   // url is what we feed Meta at SEND time. Both come back from
@@ -209,9 +212,10 @@ export default function WATemplateEditor({ template, locationId, userId, events 
 
     if (bodyText) {
       const bodyComp = { type: 'BODY', text: bodyText }
-      // Operator-entered sample values → Meta's example.body_text (required for
-      // approval when the body has {{n}} variables).
-      const bodyExample = buildBodyExample(bodyText, bodySamples)
+      // Operator-entered sample values → Meta's example payload (required for
+      // approval when the body has variables). NAMED {{param}} bodies use
+      // body_text_named_params; classic {{n}} bodies keep body_text.
+      const bodyExample = buildNamedBodyExample(bodyText, bodySamples) || buildBodyExample(bodyText, bodySamples)
       if (bodyExample) bodyComp.example = bodyExample
       components.push(bodyComp)
     }
@@ -234,6 +238,15 @@ export default function WATemplateEditor({ template, locationId, userId, events 
     }
     if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat) && !mediaHandle) {
       setError(`A ${headerFormat.toLowerCase()} file must be uploaded before submitting — Meta requires a real example asset for media headers.`)
+      return
+    }
+    if (buttons.some(b => b.type === 'FLOW' && (!b.flow_id?.trim() || !b.navigate_screen?.trim() || !b.text?.trim()))) {
+      setError('Flow buttons need text, a Flow ID and an entry screen')
+      return
+    }
+    // Meta rejects a body that mixes parameter formats — force one style.
+    if (extractVariableIndexes(bodyText).length && extractNamedVariables(bodyText).length) {
+      setError('Use either numbered ({{1}}) or named ({{first_name}}) variables, not both')
       return
     }
     const sampleError = missingSampleError({
@@ -259,6 +272,7 @@ export default function WATemplateEditor({ template, locationId, userId, events 
         category,
         language,
         components: buildComponents(),
+        parameter_format: extractNamedVariables(bodyText).length ? 'NAMED' : 'POSITIONAL',
         location_id: locationId,
         created_by: userId,
         // Persist the upload metadata so runtime sends can reach the
@@ -325,6 +339,8 @@ export default function WATemplateEditor({ template, locationId, userId, events 
       ? { type: 'URL', text: '', url: '' }
       : type === 'PHONE_NUMBER'
       ? { type: 'PHONE_NUMBER', text: '', phone_number: '' }
+      : type === 'FLOW'
+      ? { type: 'FLOW', text: '', flow_id: '', navigate_screen: '' }
       : { type: 'QUICK_REPLY', text: '' }
     setButtons([...buttons, newButton])
   }
@@ -652,6 +668,7 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                         <option value="QUICK_REPLY">Quick Reply</option>
                         <option value="URL">URL</option>
                         <option value="PHONE_NUMBER">Phone Number</option>
+                        <option value="FLOW">Flow</option>
                       </select>
                       <input
                         type="text"
@@ -683,6 +700,26 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                         className="w-full bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none disabled:opacity-50"
                       />
                     )}
+                    {btn.type === 'FLOW' && (
+                      <>
+                        <input
+                          type="text"
+                          value={btn.flow_id || ''}
+                          onChange={e => updateButton(i, { flow_id: e.target.value })}
+                          placeholder="Flow ID (from WhatsApp Manager → Flows)"
+                          disabled={(isSubmitted && !canResubmit)}
+                          className="w-full bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none disabled:opacity-50"
+                        />
+                        <input
+                          type="text"
+                          value={btn.navigate_screen || ''}
+                          onChange={e => updateButton(i, { navigate_screen: e.target.value })}
+                          placeholder="Entry screen id (e.g. PATH)"
+                          disabled={(isSubmitted && !canResubmit)}
+                          className="w-full bg-un1t-surface border border-un1t-border rounded-md px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none disabled:opacity-50"
+                        />
+                      </>
+                    )}
                   </div>
                   {!(isSubmitted && !canResubmit) && (
                     <button onClick={() => removeButton(i)} className="p-1 text-un1t-muted hover:text-red-400">
@@ -699,6 +736,9 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                   </button>
                   <button onClick={() => addButton('URL')} className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border px-3 py-1.5 rounded-md transition-colors">
                     + URL Button
+                  </button>
+                  <button onClick={() => addButton('FLOW')} className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border px-3 py-1.5 rounded-md transition-colors">
+                    + Flow Button
                   </button>
                   <button onClick={() => addButton('PHONE_NUMBER')} className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border px-3 py-1.5 rounded-md transition-colors">
                     + Call Button
