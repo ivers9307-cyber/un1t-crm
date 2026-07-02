@@ -145,6 +145,14 @@ export default function SequenceSettings({ sequence }) {
             <Labeled label="Trigger — what starts this flow">
               <Select value={triggerType} onChange={v => { setTriggerType(v); touch() }} options={TRIGGER_OPTIONS} />
             </Labeled>
+            {triggerType === 'contact_created' && (
+              <p className="text-[11px] text-un1t-subtle leading-relaxed">
+                Fires when a lead is created by staff in the CRM, through the website form, by the
+                assistant, or in Glofox (new-lead webhook, within seconds). It does <span className="font-semibold">not</span> fire
+                for CSV imports or the nightly Glofox bulk sync — those are mass-creates and would
+                enrol everyone at once.
+              </p>
+            )}
             {(triggerType === 'booking_created' || triggerType === 'first_booking') && (
               <Labeled label="Event type ID" hint="Optional — blank means any event type."><Text value={tcfg.event_type_id} onChange={v => setCfg({ event_type_id: v || undefined })} placeholder="event type id (optional)" /></Labeled>
             )}

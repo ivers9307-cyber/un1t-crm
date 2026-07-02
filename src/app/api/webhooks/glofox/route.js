@@ -13,7 +13,11 @@
 //   4. Record in glofox_webhook_events for idempotency + audit. The
 //      event_id UNIQUE constraint dedupes retried deliveries.
 //   5. Find the matching CRM contact by email, scoped to the
-//      resolved location.
+//      resolved location. MEMBER_CREATED for an unknown member
+//      CREATES the contact in real time (single-member fetch +
+//      applyMemberSync) and fires contact_created sequences
+//      (SEQ-GLOFOX.1) — the nightly bulk sync stays excluded from
+//      that trigger (mass-create guard).
 //   6. Apply the mapped CRM tags (event type → tag list) and fire
 //      any tag_added sequences listening for them.
 //
@@ -35,7 +39,7 @@ import {
   glofoxCredentialsByBranchId,
   glofoxFetch,
 } from '@/lib/glofox'
-import { triggerSequencesForTagsAdded } from '@/lib/sequences/triggers'
+import { triggerSequencesForTagsAdded, triggerSequencesForContactCreated } from '@/lib/sequences/triggers'
 import { applyInvoiceWebhook } from '@/lib/glofox-invoices'
 import { applyMemberSync } from '@/lib/glofox-sync'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
@@ -215,6 +219,45 @@ export async function POST(request) {
       }
       contact = contactRows?.[0] || null
     }
+    // 6b. SEQ-GLOFOX.1 — real-time contact creation for brand-new Glofox
+    // leads/members. MEMBER_CREATED for a contact we don't know used to
+    // dead-end as contact_not_found: the webhook never creates, and the
+    // nightly 3am bulk sync (which would eventually create the row)
+    // deliberately does NOT fire contact_created sequences (mass-create
+    // guard). Net effect: "new lead created in Glofox" automations never
+    // fired. This path is per-event (one member per webhook), so the
+    // mass-create concern doesn't apply: fetch the canonical member,
+    // create through the shared sync write-path, and fire contact_created
+    // ONLY on a genuine insert — applyMemberSync returning 'update' means
+    // it matched an existing contact (e.g. same email), not a new person.
+    let memberSyncResult = null
+    const evUpper = String(parsed.eventType || '').toUpperCase().replace(/[.\-]/g, '_')
+    if (!contact && parsed.userId && evUpper === 'MEMBER_CREATED') {
+      try {
+        const r = await glofoxFetch(creds, `/2.0/members/${encodeURIComponent(parsed.userId)}`)
+        if (r.ok) {
+          const body = await r.json()
+          const fullMember = body?.data || body?.member || body
+          memberSyncResult = await applyMemberSync(db, creds.locationId, fullMember, { creds })
+          if (memberSyncResult?.contact_id) {
+            contact = { id: memberSyncResult.contact_id }
+            if (memberSyncResult.action === 'create') {
+              try {
+                await triggerSequencesForContactCreated(memberSyncResult.contact_id)
+              } catch (e) {
+                logWarn('glofox-webhook', 'contact_created trigger threw', { err: e?.message, contact_id: memberSyncResult.contact_id })
+              }
+            }
+          }
+        } else {
+          memberSyncResult = { ok: false, status: r.status, reason: 'glofox_fetch_failed' }
+        }
+      } catch (e) {
+        logWarn('glofox-webhook', 'lead-create member sync threw', { err: e?.message, user_id: parsed.userId })
+        memberSyncResult = { ok: false, reason: 'threw', error: e?.message }
+      }
+    }
+
     if (!contact) {
       await markEvent(db, eventRow.id, 'contact_not_found', null, null)
       return NextResponse.json({
@@ -295,14 +338,15 @@ export async function POST(request) {
     //   - applyMemberSync needs the canonical member shape to compute
     //     credits + booking counts correctly
     // Best-effort: failures here log but don't fail the webhook.
-    let memberSyncResult = null
     const MEMBER_SYNC_EVENTS = new Set([
       'MEMBER_UPDATED', 'MEMBER_CREATED',
       'BOOKING_CREATED', 'BOOKING_UPDATED', 'BOOKING_DELETED',
       'MEMBERSHIP_CREATED', 'MEMBERSHIP_UPDATED', 'MEMBERSHIP_DELETED',
       'COURSE_BOOKING_CREATED', 'COURSE_BOOKING_DELETED',
     ])
-    if (parsed.userId && MEMBER_SYNC_EVENTS.has(String(parsed.eventType || '').toUpperCase())) {
+    // `!memberSyncResult` — 6b already fetched + synced this exact member
+    // when it created the contact; don't do it twice in one delivery.
+    if (!memberSyncResult && parsed.userId && MEMBER_SYNC_EVENTS.has(evUpper)) {
       try {
         const r = await glofoxFetch(creds, `/2.0/members/${encodeURIComponent(parsed.userId)}`)
         if (r.ok) {

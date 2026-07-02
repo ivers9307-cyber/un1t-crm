@@ -617,8 +617,13 @@ export async function triggerSequencesForFirstBooking(bookingId) {
  * every active sequence with trigger_type='contact_created' whose
  * audience_filter the contact matches.
  *
- * Deliberately NOT wired into bulk-import or Glofox-sync (the mass-create
- * guard) — same scoping as the curated glofox_lead_provisioning hook.
+ * Also fired from the Glofox webhook (SEQ-GLOFOX.1) when MEMBER_CREATED
+ * arrives for an unknown member and the real-time sync INSERTS the contact
+ * — per-event single-member creation, so it sits outside the guard below.
+ *
+ * Deliberately NOT wired into bulk-import or the nightly Glofox bulk sync
+ * (the mass-create guard) — same scoping as the curated
+ * glofox_lead_provisioning hook.
  *
  * Best-effort — errors swallowed + logged so it can never fail the upstream
  * contact insert.
