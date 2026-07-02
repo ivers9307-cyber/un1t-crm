@@ -27,6 +27,10 @@ vi.mock('@/lib/whatsapp', () => ({
   sendTemplateMessage: vi.fn(),
   buildTemplateComponents: vi.fn(),
   getOrCreateConversation: vi.fn(),
+  renderTemplateBody: vi.fn(() => ''),
+}))
+vi.mock('@/lib/location-branding', () => ({
+  getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T' })),
 }))
 vi.mock('@/lib/twilio', () => ({
   sendLocationSms: vi.fn(),
@@ -612,5 +616,66 @@ describe('glofoxProvisionStep', () => {
       sequence: { id: 's1', location_id: 'loc-1' },
       _findOrCreateGlofoxMember: fake,
     })).resolves.toBeUndefined()
+  })
+})
+
+// SEQ-LOOP-FIX (2026-07-02) — send-step handlers must return OUR send-log
+// row uuid, never a provider id. sequence_enrollments.last_step_send_id is a
+// uuid column; returning Meta's "wamid.…" (or a Twilio "SM…" sid) made the
+// runner's cursor-advance update fail with 22P02 — silently — so the claim
+// lease expired and the step RE-SENT every ~10 minutes (live double-send).
+describe('send-step return ids are row uuids, never provider ids (re-send loop guard)', () => {
+  const WA_TEMPLATE = { id: 't1', status: 'APPROVED', location_id: 'loc-1', name: 'book_first_visit', language: 'en', components: [] }
+
+  function sendStepDb({ msgRowResult, activityRowId } = {}) {
+    return {
+      from: (table) => {
+        if (table === 'whatsapp_templates') return { select: () => ({ eq: () => ({ single: async () => ({ data: WA_TEMPLATE }) }) }) }
+        if (table === 'whatsapp_messages') return { insert: () => ({ select: () => ({ single: async () => (msgRowResult ?? { data: { id: 'aaaaaaaa-0000-0000-0000-000000000001' } }) }) }) }
+        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', name: 'Stillorgan', twilio_alpha_sender_id: 'UN1T' } }) }) }) }
+        if (table === 'activities') return { insert: () => ({ select: () => ({ single: async () => ({ data: { id: activityRowId ?? 'bbbbbbbb-0000-0000-0000-000000000002' } }) }) }) }
+        throw new Error(`unexpected table ${table}`)
+      },
+      rpc: async () => ({}),
+    }
+  }
+
+  it('whatsapp step returns the whatsapp_messages row id, NOT the Meta wamid', async () => {
+    const wa = await import('@/lib/whatsapp')
+    wa.sendTemplateMessage.mockResolvedValue({ messageId: 'wamid.PROVIDER==' })
+    wa.buildTemplateComponents.mockReturnValue([])
+    wa.getOrCreateConversation.mockResolvedValue('conv-1')
+    const out = await steps.sendWhatsappStep(sendStepDb(), {
+      step: { id: 'step-1', whatsapp_template_id: 't1', whatsapp_variables: {} },
+      sequence: { id: 'seq-1', location_id: 'loc-1' },
+      contact: { id: 'c1', wa_phone: '353860000000' },
+    })
+    expect(out).toBe('aaaaaaaa-0000-0000-0000-000000000001')
+    expect(String(out)).not.toContain('wamid')
+  })
+
+  it('whatsapp step returns null when the message-log insert yields no row (never the wamid)', async () => {
+    const wa = await import('@/lib/whatsapp')
+    wa.sendTemplateMessage.mockResolvedValue({ messageId: 'wamid.PROVIDER==' })
+    wa.buildTemplateComponents.mockReturnValue([])
+    wa.getOrCreateConversation.mockResolvedValue('conv-1')
+    const out = await steps.sendWhatsappStep(sendStepDb({ msgRowResult: { data: null, error: { message: 'insert failed' } } }), {
+      step: { id: 'step-1', whatsapp_template_id: 't1', whatsapp_variables: {} },
+      sequence: { id: 'seq-1', location_id: 'loc-1' },
+      contact: { id: 'c1', wa_phone: '353860000000' },
+    })
+    expect(out).toBeNull()
+  })
+
+  it('sms step returns the activities row id, NOT the Twilio SM sid', async () => {
+    const tw = await import('@/lib/twilio')
+    tw.sendLocationSms.mockResolvedValue({ sid: 'SM_PROVIDER' })
+    const out = await steps.sendSmsStep(sendStepDb(), {
+      step: { id: 'step-2', sms_body: 'Hi there' },
+      sequence: { id: 'seq-1', location_id: 'loc-1', name: 'Nudge' },
+      contact: { id: 'c1', phone: '+353860000000', sms_status: 'active' },
+    })
+    expect(out).toBe('bbbbbbbb-0000-0000-0000-000000000002')
+    expect(String(out)).not.toContain('SM')
   })
 })
