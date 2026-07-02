@@ -1489,6 +1489,35 @@ registry.registerPath({
   },
 })
 
+// WhatsApp chat openers — Meta conversational components (cookie auth)
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/conversational-automation',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Configure WhatsApp chat openers (welcome event + ice breakers)',
+  description: "Sets Meta conversational components on the location's WhatsApp number: enable the welcome-message event (fires the request_welcome webhook so a fresh chat open gets an instant greeting) and up to 4 ice-breaker prompts (80 chars each). The applied config is mirrored into locations.settings.conversational_automation.",
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            location_id: uuidLike,
+            enable_welcome: z.boolean().optional(),
+            prompts: z.array(z.string().max(80)).max(4).optional(),
+          }).openapi('WaConversationalAutomation'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Chat openers updated at Meta and mirrored locally' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Meta conversational_automation call failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // WhatsApp inbox block action (cookie auth)
 registry.registerPath({
   method: 'post',
