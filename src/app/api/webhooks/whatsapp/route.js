@@ -11,6 +11,7 @@ import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { maybeAutoReply } from '@/lib/agent/auto-reply'
 import { applyTemplateEvent } from '@/lib/whatsapp-template-events'
 import { NUMBER_EVENT_FIELDS, applyNumberEvent } from '@/lib/whatsapp-number-events'
+import { FLOW_EVENT_FIELDS, applyFlowEvent } from '@/lib/whatsapp-flow-events'
 import { ensureMediaRehosted } from '@/lib/whatsapp-media-server'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
@@ -90,6 +91,10 @@ export async function POST(request) {
         }
         if (NUMBER_EVENT_FIELDS.has(change.field)) {
           await handleNumberEvent(db, change.field, change.value)
+          continue
+        }
+        if (FLOW_EVENT_FIELDS.has(change.field)) {
+          await handleFlowEvent(db, change.value)
           continue
         }
         if (change.field !== 'messages') continue
@@ -517,6 +522,25 @@ async function handleStatusUpdate(db, status) {
         } catch {}
       }
     }
+  }
+}
+
+// WA-FLOW-HEALTH — a Flow status change (THROTTLED/BLOCKED = booking-funnel
+// outage) pages managers at the owning location. Best-effort; never throws.
+async function handleFlowEvent(db, value) {
+  try {
+    const { locations, notify } = await applyFlowEvent(db, value)
+    if (!notify) return
+    for (const locationId of locations) {
+      await sendPushToRolesAtLocation(locationId, MANAGER_ROLES, {
+        title: notify.title,
+        body: notify.body,
+        category: 'whatsapp',
+        data: { type: 'flow_health', flow_id: String(value?.flow_id || '') },
+      })
+    }
+  } catch (err) {
+    console.error('[wa-webhook] flow event failed:', err?.message)
   }
 }
 
