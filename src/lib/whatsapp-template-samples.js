@@ -39,6 +39,29 @@ export function samplesFromExample(arr) {
   return out
 }
 
+/** Distinct named {{param}} variables (lowercase/underscore, non-numeric), in first-appearance order. */
+export function extractNamedVariables(text) {
+  const out = []
+  for (const m of String(text ?? '').matchAll(/\{\{\s*([a-z][a-z0-9_]*)\s*\}\}/g)) {
+    if (!out.includes(m[1])) out.push(m[1])
+  }
+  return out
+}
+
+/** Meta NAMED body example `{ body_text_named_params: [{param_name, example}] }`, or null without named vars. */
+export function buildNamedBodyExample(bodyText, samples = {}) {
+  const names = extractNamedVariables(bodyText)
+  if (!names.length) return null
+  return { body_text_named_params: names.map((n) => ({ param_name: n, example: String(samples[n] ?? '') })) }
+}
+
+/** Turn Meta's body_text_named_params back into a {name: sample} map. */
+export function samplesFromNamedExample(arr) {
+  const out = {}
+  if (Array.isArray(arr)) for (const e of arr) { if (e?.param_name) out[e.param_name] = String(e.example ?? '') }
+  return out
+}
+
 /**
  * First missing/blank sample as a user-facing error string, or null when every
  * variable (body first, then header) has a non-empty sample.
@@ -49,6 +72,12 @@ export function missingSampleError({ bodyText = '', headerText = '', bodySamples
   }
   for (const i of extractVariableIndexes(headerText)) {
     if (!String(headerSamples[i] ?? '').trim()) return `Add a sample value for header variable {{${i}}}`
+  }
+  for (const n of extractNamedVariables(bodyText)) {
+    if (!String(bodySamples[n] ?? '').trim()) return `Add a sample value for body variable {{${n}}}`
+  }
+  for (const n of extractNamedVariables(headerText)) {
+    if (!String(headerSamples[n] ?? '').trim()) return `Add a sample value for header variable {{${n}}}`
   }
   return null
 }

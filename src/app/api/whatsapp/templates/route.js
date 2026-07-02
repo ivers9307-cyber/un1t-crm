@@ -11,6 +11,9 @@ const WaTemplateCreateSchema = z.object({
   category: z.enum(['MARKETING', 'UTILITY', 'AUTHENTICATION']).optional(),
   language: z.string().max(20).optional(),
   components: z.array(z.unknown()),
+  // NAMED = {{first_name}}-style params (Meta stores the format; the synced
+  // components carry the named examples — no local column needed).
+  parameter_format: z.enum(['POSITIONAL', 'NAMED']).optional(),
   example_values: z.unknown().optional(),
   location_id: uuidLike.optional(),
   // Media-header upload metadata (mig 045). header_handle goes into
@@ -110,6 +113,7 @@ export async function POST(request) {
       category: body.category || 'MARKETING',
       language: body.language || 'en',
       components: body.components || [],
+      parameterFormat: body.parameter_format,
     })
 
     // Save locally with Meta's ID and status
