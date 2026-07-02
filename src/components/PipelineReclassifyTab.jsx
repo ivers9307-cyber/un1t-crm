@@ -10,26 +10,28 @@
 //      out-of-place deal and writes a real audit row to
 //      pipeline_classification_runs.
 //
-// The dry-run is the answer to "I tweaked HOT_MIN_ATTENDED, what
-// will move?" — it shows the delta without touching the deals
-// table. The same endpoint is what powers tonight's 03:30 cron;
-// running the button just shifts the source string from 'cron' to
+// The dry-run is the answer to "I tweaked a PIPELINE_THRESHOLDS
+// value (e.g. TRIAL_DONE_MIN_ATTENDED in pipeline-classifier.js),
+// what will move?" — it shows the delta without touching the deals
+// table.
+// The same endpoint is what powers tonight's 03:30 cron; running
+// the button just shifts the source string from 'cron' to
 // 'backfill' / 'manual'.
 
 import { useState } from 'react'
 import { Loader2, Sparkles, CheckCircle2, AlertTriangle, Eye, Play } from 'lucide-react'
 
+// FUNNEL.1 taxonomy — labels mirror the mig 343 stage rows.
 const STAGE_LABELS = {
-  new_lead:          'New Lead',
-  active_trial:     'Active Trial',
-  hot_conversion:   'Hot Conversion',
-  active_member:    'Active Member',
-  at_risk_member:   'At Risk Member',
-  classpass_active: 'ClassPass (Active)',
-  lapsed:           'Lapsed',
-  dormant:          'Dormant',
-  dormant_classpass: 'ClassPass (Dormant)',
-  '':               '(no deal yet)',
+  new_lead:     'New Leads',
+  first_class:  '1st Class',
+  second_class: '2nd Class',
+  trial_done:   'Trial Done',
+  converted:    'Converted',
+  member:       'Member',
+  classpass:    'ClassPass',
+  dormant:      'Dormant',
+  '':           '(no deal yet)',
 }
 
 function fmtSlug(slug) {

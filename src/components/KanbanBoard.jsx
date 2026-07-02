@@ -2,34 +2,17 @@
 
 import { useState } from 'react'
 import DealCard from './DealCard'
-import { createBrowserClient } from '@/lib/supabase'
 
-// Stage dot colors. PIPELINE5.8 introduces the new engagement-aware
-// taxonomy (top block) — these match the hex values in mig 147 so
-// the column dot agrees with whatever the operator picked in the
-// stage settings. The legacy block stays for the transition period
-// (stages still exist + may carry deals until the 5.7 backfill +
-// the post-5.7 cleanup migration archives them).
+// FUNNEL.1 — funnel taxonomy. Hexes match mig 343 stage rows.
 const stageColors = {
-  // PIPELINE5.x taxonomy
-  new_lead:           '#3B82F6',
-  active_trial:       '#10B981',
-  hot_conversion:     '#F59E0B',
-  active_member:      '#059669',
-  at_risk_member:     '#EAB308',
-  classpass_active:   '#A855F7',
-  lapsed:             '#EF4444',
-  dormant:            '#6B7280',
-  dormant_classpass:  '#94A3B8',
-  // Legacy stages — kept until cleanup migration retires them
-  new_lead_social:    '#8B5CF6',
-  trial_active:       '#10B981',
-  conversion_ready:   '#F59E0B',
-  follow_up_needed:   '#EF4444',
-  member:             '#059669',
-  cold_email_only:    '#9CA3AF',
-  lost_member:        '#DC2626',
-  returning_member:   '#6366F1',
+  new_lead:     '#3B82F6',
+  first_class:  '#10B981',
+  second_class: '#14B8A6',
+  trial_done:   '#F59E0B',
+  converted:    '#059669',
+  member:       '#64748B',
+  classpass:    '#A855F7',
+  dormant:      '#6B7280',
 }
 
 // PERF.3 — per-column initial render cap. At 8.1k open deals
@@ -42,52 +25,31 @@ const stageColors = {
 // most operator workflows only ever look at the top of each column.
 const PER_COLUMN_CAP = 50
 
+// FUNNEL.1 — the board is read-only. Drag-drop was removed
+// deliberately: every column is fully classifier-derived (webhook +
+// nightly cron), so a manual drag would be silently overwritten by
+// the next classify pass.
 export default function KanbanBoard({ initialStages, initialDeals, locationId }) {
-  const [deals, setDeals] = useState(initialDeals)
-  const [draggedDeal, setDraggedDeal] = useState(null)
-  const [dragOverStage, setDragOverStage] = useState(null)
   // Per-column expand state — operator click on "Show all" flips
-  // the stage_id to true and unmasks the rest of that column. Drag
-  // operations are unaffected: the deal data is in state, just
-  // un-rendered, so it can still move.
+  // the stage_id to true and unmasks the rest of that column.
   const [expandedColumns, setExpandedColumns] = useState({})
-
-  async function handleDrop(stageId) {
-    if (!draggedDeal || draggedDeal.stage_id === stageId) {
-      setDraggedDeal(null)
-      setDragOverStage(null)
-      return
-    }
-
-    // Optimistic update
-    setDeals(prev =>
-      prev.map(d => d.id === draggedDeal.id ? { ...d, stage_id: stageId } : d)
-    )
-
-    // Persist to Supabase
-    const db = createBrowserClient()
-    await db.from('deals').update({ stage_id: stageId }).eq('id', draggedDeal.id)
-
-    setDraggedDeal(null)
-    setDragOverStage(null)
-  }
 
   return (
     <div className="flex gap-4 overflow-x-auto pb-4 min-h-[calc(100vh-8rem)]">
       {initialStages.map(stage => {
-        const stageDeals = deals.filter(d => d.stage_id === stage.id)
+        // Cards with no upcoming class sort first — that's the
+        // follow-up list; a booked next class means the funnel is
+        // working on its own.
+        const stageDeals = initialDeals
+          .filter(d => d.stage_id === stage.id)
+          .sort((a, b) =>
+            (a.contacts?.next_class_at ? 1 : 0) - (b.contacts?.next_class_at ? 1 : 0))
         const color = stageColors[stage.slug] || '#6B7280'
-        const isOver = dragOverStage === stage.id
 
         return (
           <div
             key={stage.id}
-            className={`shrink-0 w-64 bg-un1t-surface rounded-lg border transition-colors ${
-              isOver ? 'border-un1t-text/40' : 'border-un1t-border'
-            }`}
-            onDragOver={e => { e.preventDefault(); setDragOverStage(stage.id) }}
-            onDragLeave={() => setDragOverStage(null)}
-            onDrop={() => handleDrop(stage.id)}
+            className="shrink-0 w-64 bg-un1t-surface rounded-lg border border-un1t-border"
           >
             {/* Stage Header */}
             <div className="flex items-center gap-2 p-3 border-b border-un1t-border">
@@ -104,15 +66,7 @@ export default function KanbanBoard({ initialStages, initialDeals, locationId })
                 so the operator can see what's hidden. */}
             <div className="p-2 space-y-0 min-h-[100px]">
               {(expandedColumns[stage.id] ? stageDeals : stageDeals.slice(0, PER_COLUMN_CAP)).map(deal => (
-                <div
-                  key={deal.id}
-                  draggable
-                  onDragStart={() => setDraggedDeal(deal)}
-                  onDragEnd={() => { setDraggedDeal(null); setDragOverStage(null) }}
-                  className={`${draggedDeal?.id === deal.id ? 'opacity-40' : ''}`}
-                >
-                  <DealCard deal={deal} locationId={locationId} />
-                </div>
+                <DealCard key={deal.id} deal={deal} locationId={locationId} />
               ))}
               {!expandedColumns[stage.id] && stageDeals.length > PER_COLUMN_CAP && (
                 <button

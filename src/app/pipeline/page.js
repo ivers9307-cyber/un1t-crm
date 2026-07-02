@@ -1,22 +1,27 @@
-// PIPELINE5.8 — Kanban for the new engagement-aware taxonomy.
+// FUNNEL.1 — read-only funnel board.
 //
-// What changed vs pre-5.8:
-//   1. Tabs: Active (default) vs Dormant. The dormant view surfaces
-//      stages flagged is_dormant=true (mig 147 — currently
-//      `dormant` and `dormant_classpass`). Operator can still target
-//      these via audience filters; the tab gives a one-click view.
-//   2. Server-side filtering on stages — only fetch deals belonging
-//      to the selected view's stages. Cuts the payload after the
-//      Glofox import roughly in half because most ghost deals end
-//      up in dormant.
-//   3. Limit raised from Supabase's implicit 1000 to 10_000. UN1T
-//      currently has ~8.1k open deals; this gives headroom without
-//      switching to per-stage pagination yet.
-//   4. archived=false filter so the future cleanup migration that
-//      retires the OLD 1:1-Glofox-status stages doesn't need a UI
-//      change — flipping archived=true on those rows hides them.
+// Tabs: Funnel (default) vs Off funnel. The funnel view shows the
+// classifier-derived journey stages (new_lead → first_class →
+// second_class → trial_done → converted, is_dormant=false); the
+// Off funnel view (?view=dormant) shows the parked piles
+// (member / classpass / dormant, is_dormant=true).
+//
+// The board is read-only: every column is derived by the classifier
+// (webhook + nightly cron), so drag-drop was removed — a manual move
+// would be silently overwritten on the next classify pass.
+//
+// Funnel view only: each deal's contact ships a server-derived
+// `next_class_at` badge (soonest future BOOKED class from
+// contacts.recent_bookings), and the raw jsonb is stripped before
+// the payload leaves the server.
+//
+// Still true from PIPELINE5.8:
+//   - Server-side filtering on stages — only fetch deals belonging
+//     to the selected view's stages.
+//   - archived=false filter so retiring old stages needs no UI change.
 
 import { createServerClient } from '@/lib/supabase'
+import { nextBookedClass } from '@/lib/pipeline-classifier'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import KanbanBoard from '@/components/KanbanBoard'
@@ -72,7 +77,14 @@ export default async function PipelinePage(props) {
   const deals = []
   if (visibleStageIds.length > 0) {
     let pageStart = 0
-     
+
+    // FUNNEL.1 — recent_bookings only ships on the funnel view (it
+    // feeds the next-class badge). The off-funnel view has thousands
+    // of deals and no badge, so it keeps the lean field list.
+    const contactFields = view === 'dormant'
+      ? 'id, name, lead_source, pipeline_stage_slug, trial_credits_remaining'
+      : 'id, name, lead_source, pipeline_stage_slug, trial_credits_remaining, recent_bookings'
+
     while (true) {
       const pageEnd = Math.min(pageStart + PAGE_SIZE - 1, DEALS_HARD_LIMIT - 1)
       // PERF.2 — narrow the SELECT to fields actually rendered by
@@ -84,9 +96,7 @@ export default async function PipelinePage(props) {
         .from('deals')
         .select(`
           id, title, stage_id, created_at,
-          contacts (
-            id, name, lead_source, pipeline_stage_slug, trial_credits_remaining
-          )
+          contacts ( ${contactFields} )
         `)
         .eq('status', 'open')
         .eq('location_id', locationId)
@@ -101,6 +111,16 @@ export default async function PipelinePage(props) {
       pageStart += PAGE_SIZE
     }
   }
+
+  // FUNNEL.1 — derive the badge server-side and strip recent_bookings
+  // so the client payload stays card-sized (PERF.2 discipline).
+  const boardDeals = deals.map((d) => {
+    const { recent_bookings, ...contact } = d.contacts || {}
+    return {
+      ...d,
+      contacts: { ...contact, next_class_at: nextBookedClass(recent_bookings) },
+    }
+  })
 
   // 3. Tab badges — total open-deal counts per view. Use HEAD count
   //    queries (no row payload) so this stays cheap.
@@ -122,7 +142,7 @@ export default async function PipelinePage(props) {
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">Pipeline</h2>
         <span className="text-sm text-un1t-subtle">
-          {deals.length.toLocaleString()} {view === 'dormant' ? 'dormant' : 'active'} deals
+          {deals.length.toLocaleString()} {view === 'dormant' ? 'off-funnel' : 'funnel'} deals
           {deals.length === DEALS_HARD_LIMIT && (
             <span className="ml-2 text-amber-400">(showing first {DEALS_HARD_LIMIT.toLocaleString()})</span>
           )}
@@ -137,7 +157,7 @@ export default async function PipelinePage(props) {
 
       <KanbanBoard
         initialStages={visibleStages}
-        initialDeals={deals}
+        initialDeals={boardDeals}
         locationId={locationId}
       />
     </div>
