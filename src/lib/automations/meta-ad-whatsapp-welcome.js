@@ -79,7 +79,7 @@ export async function maybeSendCampaignWhatsappWelcome({ db, locationId, contact
     // FLOW-button template: attach the per-lead flow_token to the button so the
     // tapped Flow round-trips it back to /api/whatsapp/flow.
     if (flowToken) {
-      components.push({ type: 'button', sub_type: 'flow', index: 0, parameters: [{ type: 'action', action: { flow_token: flowToken } }] })
+      components.push({ type: 'button', sub_type: 'flow', index: '0', parameters: [{ type: 'action', action: { flow_token: flowToken } }] })
     }
 
     const result = await sendTemplateMessage(
