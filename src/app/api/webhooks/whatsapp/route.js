@@ -451,6 +451,7 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
       contactId: contact?.id || null,
       messageType,
       body,
+      waMessageId: message.id || null,
     })
   } catch (err) {
     console.error('[whatsapp webhook] agent auto-reply failed', err?.message)
