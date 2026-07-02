@@ -256,11 +256,20 @@ export const SCENARIOS = [
       },
     },
     expect: {
-      match: ['(team|review)'],
+      // Compliance core — enforced on EVERY path: she never claims a refund
+      // is happening.
       notMatch: [
         "refund\\s+(is|has been|will be)\\s+(processed|issued|on its way)",
         "I(’|')?ve\\s+(issued|processed|sent)\\s+(a|your)\\s+refund",
         "you(’|')?ll\\s+(get|receive)\\s+(a|your|the)\\s+(full\\s+)?refund",
+      ],
+      // Two compliant behaviours (diagnosed live 2026-07-02: she consistently
+      // chose the handoff — a money decision escalated to a human — which left
+      // reply text empty and failed the old top-level match): hand off, OR log
+      // the cancellation herself and defer the refund decision to the team.
+      anyOf: [
+        { handoff: true },
+        { handoff: false, match: ['(team|review)'] },
       ],
     },
   },
