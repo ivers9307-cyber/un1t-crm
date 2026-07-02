@@ -40,6 +40,7 @@ import { personGroupResolver } from '@/lib/person-links'
 import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account-tools'
 import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
 import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
+import { CARD_TOOLS, CARD_TOOL_NAMES, executeCardTool } from './card-tools'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 export const AGENT_MODEL = 'claude-sonnet-4-6'
@@ -54,7 +55,7 @@ export const AGENT_MODEL = 'claude-sonnet-4-6'
 // AGENT-HANDS.1 — the booking tools join the cached block. Still one
 // byte-identical stable prefix; the ephemeral marker moves to the last
 // tool of the COMBINED array so the whole block caches.
-export const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS, ...EVENT_TOOLS]
+export const ALL_AGENT_TOOLS = [...ACCOUNT_TOOLS, ...BOOKING_TOOLS, ...EVENT_TOOLS, ...CARD_TOOLS]
 const CACHED_ACCOUNT_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
   i === ALL_AGENT_TOOLS.length - 1
     ? { ...tool, cache_control: { type: 'ephemeral' } }
@@ -301,6 +302,11 @@ async function runChannelAgentInner(db, adapter, ctx) {
       tone: settings?.tone || null,
       extraRules: settings?.extra_rules || null,
       knowledge: knowledge || [],
+      // MIA-CARDS.1 — card sets are WhatsApp-only (Instagram has no carousel
+      // surface), so only the WhatsApp prompt lists them. Lives on the raw
+      // location settings blob, NOT settings.customer_agent — the inbox
+      // composer shares the same sets.
+      cardSets: adapter.name === 'whatsapp' ? (loc?.settings?.wa_card_sets || []) : [],
       today: dublinTodayStr(),
       // Tell the model "already verified — don't re-ask" for a phone match OR a
       // still-fresh prior (quiz) verification, so a returning member isn't
@@ -377,7 +383,9 @@ async function runChannelAgentInner(db, adapter, ctx) {
               ? await executeAccountTool(block.name, block.input || {}, toolCtx)
               : EVENT_TOOL_NAMES.has(block.name)
                 ? await executeEventTool(block.name, block.input || {}, toolCtx)
-                : await executeBookingTool(block.name, block.input || {}, toolCtx)
+                : CARD_TOOL_NAMES.has(block.name)
+                  ? await executeCardTool(block.name, block.input || {}, toolCtx)
+                  : await executeBookingTool(block.name, block.input || {}, toolCtx)
             if (block.name === 'verify_identity' && result?.verified) {
               // Re-read the contact id the server just stamped so the
               // follow-up lookups in this same turn are authorised.

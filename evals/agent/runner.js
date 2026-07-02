@@ -38,6 +38,9 @@ export function buildScenarioRequest(scenario) {
     tone: p.tone ?? null,
     extraRules: p.extraRules ?? null,
     knowledge: p.knowledge ?? [],
+    // MIA-CARDS.1 — card sets the scenario's prompt should offer (production
+    // passes these on the WhatsApp channel only; evals replay that channel).
+    cardSets: p.cardSets ?? [],
     // Fixed date so scenario wording ("tomorrow") stays coherent run to run.
     today: p.today ?? '2026-06-13',
     identityPreverified: !!p.identityPreverified,

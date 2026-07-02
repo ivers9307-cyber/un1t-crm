@@ -1522,6 +1522,7 @@ registry.registerPath({
 const WaCardSet = z.object({
   id: uuidLike,
   name: z.string().min(1).max(60),
+  description: z.string().max(200).optional().openapi({ description: 'When the AI agent should send this set (shown to the model, not customers)' }),
   body_text: z.string().max(1024).optional(),
   cards: z.array(z.object({
     image_url: z.string().url(),

@@ -164,12 +164,33 @@ export function buildKnowledgeBlock(entries) {
 }
 
 /**
+ * Format the location's WhatsApp card sets into a prompt section. Pure.
+ * Sets are operator-curated (locations.settings.wa_card_sets); the
+ * description says when each is relevant, so Mia's knowledge of what she
+ * can show grows automatically as operators add sets. Sets need a name
+ * and >=2 cards (Meta's carousel minimum) to be offered at all.
+ * @param {Array<{name?:string,description?:string,cards?:Array}>} cardSets
+ * @returns {string|null} the prompt block, or null when nothing is sendable
+ */
+export function buildCardSetsBlock(cardSets) {
+  const sets = (cardSets || []).filter((s) => s?.name && Array.isArray(s.cards) && s.cards.length >= 2)
+  if (!sets.length) return null
+  const lines = sets.map((s) => `- "${s.name}" (${s.cards.length} cards)${s.description ? ` — send when: ${s.description}` : ''}`)
+  return [
+    'VISUAL CARD SETS',
+    'You can send these swipeable card sets with the send_card_set tool (WhatsApp only). Send at most ONE set per conversation, only when it directly answers what the customer is asking, and always alongside a short text reply of your own:',
+    ...lines,
+  ].join('\n')
+}
+
+/**
  * Split the customer-agent system prompt into a location-stable prefix and a
  * per-request volatile suffix, for prompt caching (CACHE.2). Pure.
  *
  * `stable` holds everything that is byte-identical for a location until an
  * operator edits it (identity + base rules + membership link + tone + extra
- * rules + the KNOWLEDGE block) — this is the big chunk and the cache target.
+ * rules + the KNOWLEDGE block + the card-sets block) — this is the big chunk
+ * and the cache target.
  * `volatile` holds what changes per request or per conversation (today's date
  * and the WhatsApp phone-match identity override), which must render AFTER the
  * cache breakpoint so it never busts the cached prefix. The cache key is a
@@ -182,6 +203,7 @@ export function buildKnowledgeBlock(entries) {
  * @param {string} [opts.tone]        operator-set personality/voice notes
  * @param {string} [opts.extraRules]  operator-set extra guardrails
  * @param {Array}  [opts.knowledge]   agent_knowledge rows
+ * @param {Array}  [opts.cardSets]    locations.settings.wa_card_sets (WhatsApp channel only)
  * @param {string} [opts.today]       date string (for "today" awareness)
  * @param {string} [opts.agentName]
  * @param {string} [opts.membershipUrl]
@@ -189,7 +211,7 @@ export function buildKnowledgeBlock(entries) {
  * @returns {{ stable: string, volatile: string }}
  */
 export function buildCustomerSystemPromptParts(opts = {}) {
-  const { businessName, locationName, tone, extraRules, knowledge, today, agentName, membershipUrl } = opts
+  const { businessName, locationName, tone, extraRules, knowledge, cardSets, today, agentName, membershipUrl } = opts
   const name = String(agentName || '').trim()
   const identity = name
     ? `You are ${name}, the AI assistant for ${businessName || 'UN1T'}, a boutique fitness studio.`
@@ -208,6 +230,12 @@ export function buildCustomerSystemPromptParts(opts = {}) {
   if (tone && tone.trim()) stableParts.push('## Tone & voice (from the studio)\n' + tone.trim())
   if (extraRules && extraRules.trim()) stableParts.push('## Extra rules (from the studio)\n' + extraRules.trim())
   stableParts.push(buildKnowledgeBlock(knowledge))
+  // Card sets are location-stable operator config (they change about as often
+  // as knowledge does) — keep them in the cached prefix; an operator edit
+  // changes the bytes and invalidates the cache naturally. The caller only
+  // passes cardSets on channels that can actually send carousels (WhatsApp).
+  const cardSetsBlock = buildCardSetsBlock(cardSets)
+  if (cardSetsBlock) stableParts.push(cardSetsBlock)
 
   // VOLATILE — re-rendered every call, never cached. The whole Context block
   // (incl. business/studio, which are stable but tiny) stays together so the

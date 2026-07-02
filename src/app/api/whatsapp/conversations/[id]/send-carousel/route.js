@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
-import { sendMediaCarousel } from '@/lib/whatsapp'
+import { sendCardSetToConversation } from '@/lib/whatsapp-carousel-send'
 
 const SendCarouselSchema = z.object({ card_set_id: uuidLike })
 
@@ -37,32 +37,13 @@ export async function POST(request, props) {
   const set = sets.find((s) => s.id === card_set_id)
   if (!set) return NextResponse.json({ success: false, error: 'Card set not found' }, { status: 404 })
 
-  let sendResult
+  // Shared with the agent's send_card_set tool (whatsapp-carousel-send.js):
+  // Meta call + best-effort thread row. Staff sends carry no source stamp.
   try {
-    sendResult = await sendMediaCarousel(
-      conversation.wa_phone,
-      { bodyText: set.body_text || set.name, cards: set.cards },
-      { locationId: conversation.location_id }
-    )
+    await sendCardSetToConversation(db, { set, conversation, locationId: conversation.location_id })
   } catch (e) {
     return NextResponse.json({ success: false, error: e?.message || 'Meta carousel call failed' }, { status: 502 })
   }
-
-  // Best-effort thread row — a logging failure never fails the send.
-  // wa_message_id lets the carousel's status webhooks match the row.
-  try {
-    await db.from('whatsapp_messages').insert({
-      conversation_id: conversation.id,
-      contact_id: conversation.contact_id || null,
-      location_id: conversation.location_id,
-      wa_message_id: sendResult?.messageId || null,
-      direction: 'outbound',
-      message_type: 'carousel',
-      body: `[Card set: ${set.name}]`,
-      status: 'sent',
-      sent_at: new Date().toISOString(),
-    })
-  } catch (e) { console.error('[wa-carousel] thread row insert failed:', e?.message) }
 
   return NextResponse.json({ success: true })
 }

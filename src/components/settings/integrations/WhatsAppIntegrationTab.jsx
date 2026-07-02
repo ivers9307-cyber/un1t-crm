@@ -256,6 +256,7 @@ function normalizeCardSet(draft) {
   return {
     id: draft.id,
     name: draft.name.trim(),
+    ...(draft.description.trim() ? { description: draft.description.trim() } : {}),
     ...(draft.body_text.trim() ? { body_text: draft.body_text.trim() } : {}),
     cards: draft.cards.map((c) => ({
       image_url: normalizeUrlish(c.image_url),
@@ -277,7 +278,7 @@ function CardSetsCard({ location, canEdit }) {
   const [error, setError] = useState(null)
 
   function startNew() {
-    setEditing({ id: crypto.randomUUID(), name: '', body_text: '', cards: [emptyCard(), emptyCard()] })
+    setEditing({ id: crypto.randomUUID(), name: '', description: '', body_text: '', cards: [emptyCard(), emptyCard()] })
     setError(null); setSavedAt(null)
   }
 
@@ -285,6 +286,7 @@ function CardSetsCard({ location, canEdit }) {
     setEditing({
       id: s.id,
       name: s.name || '',
+      description: s.description || '',
       body_text: s.body_text || '',
       cards: (s.cards || []).map((c) => ({
         image_url: c.image_url || '', title: c.title || '', body: c.body || '',
@@ -416,6 +418,15 @@ function CardSetsCard({ location, canEdit }) {
               value={editing.name}
               onChange={(e) => setEditing((prev) => ({ ...prev, name: e.target.value }))}
               placeholder="e.g. Membership options"
+            />
+          </Row>
+          <Row label="When should Mia send this? (shown to the AI, 200 chars)">
+            <input
+              maxLength={200}
+              className="w-full bg-un1t-surface border border-un1t-border rounded px-2 py-1 text-[11px] text-un1t-text"
+              value={editing.description}
+              onChange={(e) => setEditing((prev) => ({ ...prev, description: e.target.value }))}
+              placeholder="When someone asks about membership options or pricing"
             />
           </Row>
           <Row label="Message text (optional — sent above the cards; defaults to the set name)">
