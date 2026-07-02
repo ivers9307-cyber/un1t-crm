@@ -152,19 +152,20 @@ export default function StartFunnel() {
       {step === 'classdone' && (
         <div className="text-center py-6">
           <p className="font-display font-extrabold uppercase text-3xl text-white mb-3">You&apos;re being booked in 🎉</p>
-          <p className="text-white/70">Watch for a WhatsApp confirming your class. See you at UN1T Stillorgan!</p>
+          <p className="text-white/70">That&apos;s the first of your 3 free classes — watch for a WhatsApp confirming it. See you at UN1T Stillorgan!</p>
         </div>
       )}
       {step === 'choose' && (
         <div className="space-y-4">
-          <h1 className="font-display font-extrabold uppercase text-3xl mb-6">How do you want to start?</h1>
-          <button onClick={chooseConsult} className="w-full text-left rounded-2xl border-2 border-white/20 hover:border-white p-6 transition-colors">
-            <div className="font-bold text-lg">Book a free consultation</div>
-            <div className="text-white/60 text-sm mt-1">Meet a coach, talk goals, get a plan.</div>
-          </button>
+          <h1 className="font-display font-extrabold uppercase text-3xl mb-2">Your first 3 classes are free</h1>
+          <p className="text-white/60 text-sm mb-6">Book your first one now — how do you want to start?</p>
           <button onClick={chooseClass} className="w-full text-left rounded-2xl border-2 border-white/20 hover:border-white p-6 transition-colors">
-            <div className="font-bold text-lg">Book a free class</div>
-            <div className="text-white/60 text-sm mt-1">Jump straight into a session.</div>
+            <div className="font-bold text-lg">Book your first free class</div>
+            <div className="text-white/60 text-sm mt-1">Jump straight in — classes 2 and 3 are on us too.</div>
+          </button>
+          <button onClick={chooseConsult} className="w-full text-left rounded-2xl border-2 border-white/20 hover:border-white p-6 transition-colors">
+            <div className="font-bold text-lg">Start with a free consultation</div>
+            <div className="text-white/60 text-sm mt-1">Meet a coach, talk goals, get a plan.</div>
           </button>
         </div>
       )}

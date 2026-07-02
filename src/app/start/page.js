@@ -30,11 +30,11 @@ const HERO_IMAGE =
 
 // CTA everywhere on the page just scrolls back up to the funnel.
 const CTA_HREF = '#start'
-const CTA_LABEL = 'Book your free start'
+const CTA_LABEL = 'Claim 3 free classes'
 
 export const metadata = {
-  title: 'Book your free start — UN1T Stillorgan',
-  description: 'Book a free consultation or first class at UN1T Stillorgan — coach-led strength & conditioning.',
+  title: '3 Free Classes — UN1T Stillorgan',
+  description: 'Your first 3 classes at UN1T Stillorgan are free — coach-led strength & conditioning. Book your first session now.',
   robots: { index: false, follow: false },
 }
 
