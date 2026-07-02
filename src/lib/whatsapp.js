@@ -169,6 +169,50 @@ export async function sendFlowMessage(to, opts = {}) {
   return { messageId: result.messages?.[0]?.id, status: result.messages?.[0]?.message_status || 'sent' }
 }
 
+// C3 — session cta_url message: a tappable, branded URL button instead of a
+// raw pasted link (higher tap-through; opens in-chat webview). 24h window only,
+// same as any session message.
+export function buildCtaUrlPayload(to, { bodyText, buttonText, url }) {
+  return {
+    messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive',
+    interactive: {
+      type: 'cta_url',
+      body: { text: bodyText },
+      action: { name: 'cta_url', parameters: { display_text: buttonText, url } },
+    },
+  }
+}
+
+export async function sendCtaUrlMessage(to, { bodyText, buttonText, url }, opts = {}) {
+  const config = await resolveConfig(opts)
+  const response = await fetch(`${META_API_URL}/${config.phoneNumberId}/messages`, {
+    method: 'POST', headers: headersFor(config), body: JSON.stringify(buildCtaUrlPayload(to, { bodyText, buttonText, url })),
+  })
+  const result = await response.json()
+  if (result.error) {
+    console.error('WhatsApp cta_url send error:', result.error)
+    throw new Error(result.error.message || 'Failed to send WhatsApp link message')
+  }
+  return { messageId: result.messages?.[0]?.id, status: result.messages?.[0]?.message_status || 'sent' }
+}
+
+/**
+ * If `text` ENDS with a single http(s) URL (optionally wrapped in trailing
+ * punctuation/whitespace), split it: { body, url }. Returns null when the text
+ * doesn't end in a URL, is ONLY a URL (no body left), or contains additional
+ * URLs earlier (ambiguous — leave as plain text). Pure.
+ */
+export function splitTrailingUrl(text) {
+  const s = String(text || '').trim()
+  const m = s.match(/(https?:\/\/[^\s]+?)[)\].,!?]*$/)
+  if (!m) return null
+  const url = m[1]
+  const body = s.slice(0, m.index).trim().replace(/[:\-–—]\s*$/, '').trim()
+  if (!body) return null
+  if (/(https?:\/\/)/.test(body)) return null // another URL earlier — ambiguous
+  return { body, url }
+}
+
 /**
  * Send a template message (works anytime — no 24h window needed)
  */
