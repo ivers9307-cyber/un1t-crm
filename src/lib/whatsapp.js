@@ -514,6 +514,16 @@ export function isUndeliverableError({ code, message } = {}) {
   return /undeliverable/i.test(String(message || ''))
 }
 
+// Meta 131049: the recipient hit the CROSS-BUSINESS marketing frequency cap
+// ("to maintain a healthy ecosystem engagement"). Temporary saturation, not a
+// bad number — drips park these as 'capped' and retry after CAPPED_RETRY_HOURS.
+export function isFrequencyCapError({ code, message } = {}) {
+  if (code != null && String(code) === '131049') return true
+  return /healthy ecosystem/i.test(String(message || ''))
+}
+
+export const CAPPED_RETRY_HOURS = 20
+
 // A contact is flagged undeliverable after this many undeliverable failures.
 // Operator policy (Richard, 2026-06-29): suppress on the FIRST undeliverable
 // failure — stop marketing re-hitting a number that looks dead rather than
@@ -614,19 +624,26 @@ export async function fetchAllWhatsAppAudience(db, filter, locationId) {
 export async function fetchDripDoneContactIds(db, broadcastId) {
   const PAGE = 1000
   const HARD_LIMIT = 200_000
+  // 'capped' rows (Meta frequency cap, 131049) re-open after this long — the
+  // recipient is retried by a later tick instead of being done forever.
+  const retryBefore = Date.now() - CAPPED_RETRY_HOURS * 60 * 60 * 1000
   const ids = []
   let start = 0
   while (true) {
     const end = Math.min(start + PAGE - 1, HARD_LIMIT - 1)
     const { data: page, error } = await db
       .from('whatsapp_broadcast_recipients')
-      .select('contact_id')
+      .select('contact_id, status, failed_at')
       .eq('broadcast_id', broadcastId)
       .order('contact_id', { ascending: true })
       .range(start, end)
     if (error) throw new Error(`Recipients query failed: ${error.message}`)
     if (!Array.isArray(page) || page.length === 0) break
-    for (const r of page) if (r.contact_id) ids.push(r.contact_id)
+    for (const r of page) {
+      if (!r.contact_id) continue
+      const retryable = r.status === 'capped' && r.failed_at && new Date(r.failed_at).getTime() <= retryBefore
+      if (!retryable) ids.push(r.contact_id)
+    }
     if (page.length < PAGE) break
     if (ids.length >= HARD_LIMIT) break
     start += PAGE
@@ -930,6 +947,13 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
 
   if (toSend.length === 0) {
     if (exhausted) {
+      // 'capped' rows (frequency cap, 131049) are still owed a retry — hold the
+      // drip open so a later tick re-picks them once their park expires.
+      const { count: cappedPending } = await db.from('whatsapp_broadcast_recipients')
+        .select('id', { count: 'exact', head: true }).eq('broadcast_id', broadcastId).eq('status', 'capped')
+      if ((cappedPending || 0) > 0) {
+        return { status: 'sending', skipped: 'awaiting_capped_retry', capped: cappedPending, sent: 0, failed: 0 }
+      }
       let deliverySummary = null
       try {
         const summary = await computeWhatsAppReachabilitySummary(db, broadcast.audience_filter, broadcast.location_id)
@@ -951,17 +975,19 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   // AGENT-TAKEOVER — pause Mia on each recipient thread for an individual send
   // (audience of 1) or an opt-in bulk drip the operator is handling.
   const pauseAgent = shouldPauseAgentForBroadcast(broadcast, audience.length)
-  let sent = 0, failed = 0, consecutiveFailures = 0, autoPaused = false
+  let sent = 0, failed = 0, capped = 0, consecutiveFailures = 0, autoPaused = false
 
   for (const contact of toSend) {
     try {
       const components = buildTemplateComponents(template, contact, variableMapping, broadcast.header_media_url, { companyName: branding.companyName })
       const result = await sendTemplateMessage(contact.wa_phone, template.name, template.language, components, { config })
 
-      await db.from('whatsapp_broadcast_recipients').insert({
+      // Upsert (not insert): a contact retried after a 'capped' park has an
+      // existing (broadcast, contact) row that this success must overwrite.
+      await db.from('whatsapp_broadcast_recipients').upsert({
         broadcast_id: broadcastId, contact_id: contact.id,
         wa_message_id: result.messageId, status: 'sent', sent_at: new Date().toISOString(),
-      })
+      }, { onConflict: 'broadcast_id,contact_id' })
       const conversationId = await getOrCreateConversation(db, contact, broadcast.location_id)
       await db.from('whatsapp_messages').insert({
         conversation_id: conversationId,
@@ -974,11 +1000,25 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
       if (pauseAgent) await pauseAgentOnThread(db, conversationId)
       sent++; consecutiveFailures = 0
     } catch (err) {
+      // Meta's cross-business per-user marketing frequency cap (131049) is a
+      // SOFT failure: the user is temporarily saturated, not unreachable. Park
+      // the row as 'capped' — fetchDripDoneContactIds re-opens it after
+      // CAPPED_RETRY_HOURS so the next day's tick retries — and never let it
+      // mark the number undeliverable or trip the auto-pause.
+      if (isFrequencyCapError({ message: err.message })) {
+        console.warn(`[drip ${broadcastId}] frequency-capped ${contact.wa_phone} — retrying next day`)
+        await db.from('whatsapp_broadcast_recipients').upsert({
+          broadcast_id: broadcastId, contact_id: contact.id,
+          status: 'capped', error_message: err.message, failed_at: new Date().toISOString(),
+        }, { onConflict: 'broadcast_id,contact_id' })
+        capped++
+        continue
+      }
       console.error(`[drip ${broadcastId}] send to ${contact.wa_phone} failed:`, err.message)
-      await db.from('whatsapp_broadcast_recipients').insert({
+      await db.from('whatsapp_broadcast_recipients').upsert({
         broadcast_id: broadcastId, contact_id: contact.id,
         status: 'failed', error_message: err.message, failed_at: new Date().toISOString(),
-      })
+      }, { onConflict: 'broadcast_id,contact_id' })
       // Permanently-undeliverable number → flag so future audiences skip it.
       await markUndeliverableIfPermanent(db, contact.id, { message: err.message })
       failed++; consecutiveFailures++
@@ -997,8 +1037,15 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
     .select('id', { count: 'exact', head: true }).eq('broadcast_id', broadcastId).eq('status', 'failed')
 
   // We truly exhausted the audience only if we sent the last batch WITHOUT auto-
-  // pausing partway (a pause leaves unsent contacts for the resume).
-  const reallyExhausted = exhausted && !autoPaused && (sent + failed) >= toSend.length
+  // pausing partway (a pause leaves unsent contacts for the resume), and no
+  // 'capped' rows are still owed a next-day retry.
+  let cappedPending = 0
+  if (exhausted && !autoPaused) {
+    const { count } = await db.from('whatsapp_broadcast_recipients')
+      .select('id', { count: 'exact', head: true }).eq('broadcast_id', broadcastId).eq('status', 'capped')
+    cappedPending = count || 0
+  }
+  const reallyExhausted = exhausted && !autoPaused && (sent + failed + capped) >= toSend.length && cappedPending === 0
   const outcome = dripOutcome({ autoPaused, exhausted: reallyExhausted }, new Date().toISOString())
 
   await db.from('whatsapp_broadcasts').update({

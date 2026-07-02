@@ -108,3 +108,44 @@ export async function applyWhatsappConsentKeyword({ db, contact, waPhone, locati
 
   return { applied: true, action }
 }
+
+/**
+ * Meta's user_preferences webhook — the in-app "stop marketing messages" /
+ * "resume" control (a SEPARATE signal from STOP/START keywords). Applies the
+ * same three writes as the keyword path (preference flag + wa_status +
+ * consent_log) but sends NO ack: Meta shows its own confirmation UX.
+ * pref = { wa_id, category, value: 'stop'|'resume' }.
+ */
+export async function applyMetaUserPreference(db, pref = {}) {
+  if (pref.category && pref.category !== 'marketing_messages') return { applied: false, reason: 'unknown_category' }
+  if (!['stop', 'resume'].includes(pref.value)) return { applied: false, reason: 'unknown_value' }
+  const waId = String(pref.wa_id || '').replace(/\D/g, '')
+  if (!waId) return { applied: false, reason: 'no_wa_id' }
+
+  const { data: contacts } = await db.from('contacts')
+    .select('id')
+    .or(`wa_phone.eq.${waId},wa_phone.eq.+${waId},phone.eq.${waId},phone.eq.+${waId}`)
+    .limit(1)
+  const contact = contacts?.[0]
+  if (!contact) return { applied: false, reason: 'no_contact' }
+
+  const optingOut = pref.value === 'stop'
+  try {
+    await db.from('contact_preferences')
+      .update({ whatsapp_marketing: !optingOut })
+      .eq('contact_id', contact.id)
+    await db.from('contacts')
+      .update({ wa_status: optingOut ? 'opted_out' : 'active' })
+      .eq('id', contact.id)
+    await db.from('consent_log').insert({
+      contact_id: contact.id,
+      channel: 'whatsapp_marketing',
+      action: optingOut ? 'opted_out' : 'opted_in',
+      source: 'meta_user_preferences',
+    })
+  } catch (e) {
+    console.error(`[wa-consent] user_preferences write failed for contact ${contact.id}:`, e?.message || e)
+    return { applied: false, reason: 'write_failed' }
+  }
+  return { applied: true, action: optingOut ? 'opted_out' : 'opted_in', contactId: contact.id }
+}

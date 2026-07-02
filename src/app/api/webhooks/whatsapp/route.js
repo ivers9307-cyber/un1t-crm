@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { refreshWindow, parseConsentKeyword, markUndeliverableIfPermanent } from '@/lib/whatsapp'
-import { applyWhatsappConsentKeyword } from '@/lib/whatsapp-consent'
+import { applyWhatsappConsentKeyword, applyMetaUserPreference } from '@/lib/whatsapp-consent'
 import { handleFlowCompletion } from '@/lib/whatsapp-flow/completion.js'
 import { resolveWhatsAppNumberByPhoneNumberId } from '@/lib/whatsapp-config'
 import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
@@ -97,6 +97,15 @@ export async function POST(request) {
         }
         if (FLOW_EVENT_FIELDS.has(change.field)) {
           await handleFlowEvent(db, change.value)
+          continue
+        }
+        if (change.field === 'user_preferences') {
+          // Meta's in-app "stop marketing messages" control — a consent signal
+          // separate from STOP keywords. Best-effort per entry; never throws out.
+          for (const pref of change.value?.user_preferences || []) {
+            try { await applyMetaUserPreference(db, pref) }
+            catch (e) { console.error('[wa-webhook] user_preferences failed:', e?.message) }
+          }
           continue
         }
         if (change.field !== 'messages') continue
