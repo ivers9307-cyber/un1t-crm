@@ -45,6 +45,9 @@ describe('buildMediaCarouselPayload', () => {
       ],
     })
     const cards = p.interactive.action.cards
+    // Live-verified: Meta requires a card-level `type` naming the button kind.
+    expect(cards[0].type).toBe('cta_url')
+    expect(cards[1].type).toBe('cta_url')
     expect(cards[0].action).toEqual({
       name: 'cta_url',
       parameters: { display_text: 'A twenty-plus charac', url: 'https://un1t.test/a' },
