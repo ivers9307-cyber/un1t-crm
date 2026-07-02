@@ -135,6 +135,12 @@ export async function sendWhatsappStep(db, { step, sequence, contact }) {
   }
 
   // Variable mapping resolution mirrors the broadcasts flow exactly.
+  // locationId matters beyond branding: buildTemplateComponents needs it to
+  // mint the per-contact flow_token for FLOW-button templates (e.g.
+  // book_first_visit) — without it the button component is omitted and Meta
+  // rejects the send with (#131009). Proven live by the First Class Booking
+  // Nudge, whose WhatsApp step failed while broadcasts sent the same
+  // template fine (they always passed locationId).
   const variableMapping = step.whatsapp_variables || {}
   const branding = await getLocationBranding(db, sequence.location_id)
   const components = buildTemplateComponents(
@@ -142,7 +148,7 @@ export async function sendWhatsappStep(db, { step, sequence, contact }) {
     contact,
     variableMapping,
     step.whatsapp_header_media_url || null,
-    { companyName: branding.companyName },
+    { companyName: branding.companyName, locationId: sequence.location_id },
   )
 
   const result = await sendTemplateMessage(
