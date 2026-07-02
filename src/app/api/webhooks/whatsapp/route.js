@@ -10,6 +10,7 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { maybeAutoReply } from '@/lib/agent/auto-reply'
 import { applyTemplateEvent } from '@/lib/whatsapp-template-events'
+import { NUMBER_EVENT_FIELDS, applyNumberEvent } from '@/lib/whatsapp-number-events'
 import { ensureMediaRehosted } from '@/lib/whatsapp-media-server'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
@@ -85,6 +86,10 @@ export async function POST(request) {
       for (const change of changes) {
         if (TEMPLATE_FIELDS.has(change.field)) {
           await handleTemplateEvent(db, change.field, change.value)
+          continue
+        }
+        if (NUMBER_EVENT_FIELDS.has(change.field)) {
+          await handleNumberEvent(db, change.field, change.value)
           continue
         }
         if (change.field !== 'messages') continue
@@ -512,6 +517,26 @@ async function handleStatusUpdate(db, status) {
         } catch {}
       }
     }
+  }
+}
+
+// WA-HEALTH — number/account health webhooks (quality flags, limit tiers,
+// display-name decisions, account restrictions) → whatsapp_numbers columns +
+// manager push per affected location. Best-effort; never throws.
+async function handleNumberEvent(db, field, value) {
+  try {
+    const { locations, notify } = await applyNumberEvent(db, field, value)
+    if (!notify) return
+    for (const locationId of locations) {
+      await sendPushToRolesAtLocation(locationId, MANAGER_ROLES, {
+        title: notify.title,
+        body: notify.body,
+        category: 'whatsapp', // rides the existing notify_whatsapp opt-in
+        data: { type: 'number_health', field },
+      })
+    }
+  } catch (err) {
+    console.error('[wa-webhook] number event failed:', err?.message)
   }
 }
 
