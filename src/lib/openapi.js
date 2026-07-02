@@ -1518,6 +1518,72 @@ registry.registerPath({
   },
 })
 
+// WhatsApp card sets — operator-curated media-carousel cards (cookie auth)
+const WaCardSet = z.object({
+  id: uuidLike,
+  name: z.string().min(1).max(60),
+  body_text: z.string().max(1024).optional(),
+  cards: z.array(z.object({
+    image_url: z.string().url(),
+    title: z.string().min(1).max(80),
+    body: z.string().max(160).optional(),
+    link_url: z.string().url().optional(),
+    link_text: z.string().max(20).optional(),
+  })).min(2).max(10),
+}).openapi('WaCardSet')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/whatsapp/card-sets',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "List a location's WhatsApp card sets",
+  description: "Card sets are operator-curated 2-10 image-card collections stored on locations.settings.wa_card_sets, sent from the inbox composer as Meta's in-session interactive media carousel (24h window only, no template approval).",
+  request: { query: z.object({ location_id: uuidLike }) },
+  responses: {
+    200: { description: 'Card sets for the location', content: { 'application/json': { schema: z.object({ success: z.literal(true), sets: z.array(WaCardSet) }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/whatsapp/card-sets',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Replace a location's WhatsApp card sets",
+  description: 'Replaces the whole locations.settings.wa_card_sets array (ids minted client-side). Meta requires consistent button config across carousel cards, so each set must have links on all cards or none.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({ location_id: uuidLike, sets: z.array(WaCardSet).max(20) }).openapi('WaCardSetsPut') } } },
+  },
+  responses: {
+    200: { description: 'Card sets saved' },
+    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// WhatsApp inbox carousel send (cookie auth)
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/conversations/{id}/send-carousel',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Send a curated card set as an in-session media carousel',
+  description: "Sends one of the location's card sets to the conversation as Meta's interactive media carousel (2-10 swipeable image cards). Session message — only works while the 24h window is open; a Meta rejection surfaces as 502. Logs a thread row on success.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ card_set_id: uuidLike }).openapi('WaSendCarousel') } } },
+  },
+  responses: {
+    200: { description: 'Carousel sent' },
+    404: { description: 'Conversation or card set not found', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Meta carousel call failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // WhatsApp inbox block action (cookie auth)
 registry.registerPath({
   method: 'post',

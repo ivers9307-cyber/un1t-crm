@@ -108,6 +108,12 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   })
   const [addingContact, setAddingContact] = useState(false)
   const [templates, setTemplates] = useState([])
+  // C4 — operator-curated card sets (settings → WhatsApp → Card sets), sent
+  // as an in-session media carousel. null = not fetched yet (lazy — loaded
+  // the first time an open-window composer renders, then cached).
+  const [cardSets, setCardSets] = useState(null)
+  const [selectedCardSetId, setSelectedCardSetId] = useState('')
+  const [sendingCardSet, setSendingCardSet] = useState(false)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState(null)
   const [templateVars, setTemplateVars] = useState({})
@@ -255,6 +261,21 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // C4 — lazy card-set fetch: the first time a conversation with an open
+  // 24h window renders, load the location's card sets once and cache them
+  // for the session. [] (loaded-but-empty or fetch failure) hides the
+  // composer control entirely.
+  useEffect(() => {
+    if (cardSets !== null || !locationId) return
+    if (!(conversation?.window_expires_at && new Date(conversation.window_expires_at) > new Date())) return
+    let cancelled = false
+    fetch(`/api/whatsapp/card-sets?location_id=${locationId}`)
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled) setCardSets(j.success ? (j.sets || []) : []) })
+      .catch(() => { if (!cancelled) setCardSets([]) })
+    return () => { cancelled = true }
+  }, [cardSets, locationId, conversation])
+
   async function fetchMessages(convId) {
     try {
       const res = await fetch(`/api/whatsapp/conversations/${convId}`)
@@ -392,6 +413,32 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       alert('Failed to send template')
     } finally {
       setSendingTemplate(false)
+    }
+  }
+
+  // C4 — send the selected card set as an in-session media carousel; the
+  // route logs the thread row, so on success just clear + refresh.
+  async function handleSendCardSet() {
+    if (!selectedCardSetId || !selectedId) return
+    setSendingCardSet(true)
+    try {
+      const res = await fetch(`/api/whatsapp/conversations/${selectedId}/send-carousel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ card_set_id: selectedCardSetId }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setSelectedCardSetId('')
+        await fetchMessages(selectedId)
+        await fetchConversations()
+      } else {
+        alert(data.error || 'Failed to send card set')
+      }
+    } catch {
+      alert('Failed to send card set')
+    } finally {
+      setSendingCardSet(false)
     }
   }
 
@@ -770,6 +817,32 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                       <Send size={16} className="text-un1t-text ml-0.5" />
                     </button>
                   </div>
+                  {/* C4 — send a curated card set as a media carousel (hidden
+                      when the location has none configured) */}
+                  {Array.isArray(cardSets) && cardSets.length > 0 && (
+                    <div className="flex items-center gap-2 mt-2">
+                      <ImageIcon size={12} className="text-un1t-muted shrink-0" />
+                      <select
+                        value={selectedCardSetId}
+                        onChange={e => setSelectedCardSetId(e.target.value)}
+                        disabled={sendingCardSet}
+                        className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-xs text-un1t-text focus:outline-none focus:border-un1t-muted disabled:opacity-50"
+                      >
+                        <option value="">Send cards…</option>
+                        {cardSets.map(s => (
+                          <option key={s.id} value={s.id}>{s.name} ({s.cards?.length || 0} cards)</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={handleSendCardSet}
+                        disabled={sendingCardSet || !selectedCardSetId}
+                        className="text-xs bg-green-600 text-white px-3 py-1 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50"
+                      >
+                        {sendingCardSet ? 'Sending…' : 'Send cards'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : (
                 /* Template picker when window is closed */
