@@ -65,10 +65,14 @@ export async function POST(request, props) {
     if (insError) return NextResponse.json({ success: false, error: insError.message }, { status: 500 })
   }
 
-  // Promote the graph to canonical + clear the draft. Store the normalised
-  // shape so the `graph` column stays clean (defaults applied).
+  // Promote the graph to canonical + clear the draft + GO LIVE. Setting
+  // status='active' is what actually makes the sequence run: both the
+  // enrolment triggers (lib/sequences/triggers.js) and the runner
+  // (scheduler.js) gate on status='active', so a published-but-still-'draft'
+  // sequence would materialise steps yet never enrol anyone. Store the
+  // normalised graph shape so the column stays clean (defaults applied).
   const { error: seqError } = await db.from('email_sequences')
-    .update({ graph: parseGraphShape(graph).data, draft_graph: null })
+    .update({ graph: parseGraphShape(graph).data, draft_graph: null, status: 'active' })
     .eq('id', params.id)
   if (seqError) return NextResponse.json({ success: false, error: seqError.message }, { status: 500 })
 
