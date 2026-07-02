@@ -387,7 +387,8 @@ describe('resolveStrapsForBatch: anonymous straps', () => {
         return { select: vi.fn(() => ({ in: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })) })) }
       }
       if (table === 'class_occurrences') {
-        return { select: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: occRows })) })) })) })) })) }
+        // resolveCurrentOccurrence: .eq().gte().lte().is(cancelled_at, null).order()
+        return { select: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => ({ is: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: occRows })) })) })) })) })) })) }
       }
       if (table === 'heart_rate_sessions') {
         return {
@@ -468,8 +469,10 @@ describe('resolveStrapsForBatch: registered booking-first + test mode', () => {
           return {
             select: vi.fn(() => ({
               eq: vi.fn(() => ({
-                in: vi.fn(() => Promise.resolve({ data: occs })),
-                gte: vi.fn(() => ({ lte: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: [] })) })) })),
+                // resolveBookedOccurrenceForMember: .in().is(cancelled_at, null)
+                in: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ data: occs })) })),
+                // resolveCurrentOccurrence: .gte().lte().is(cancelled_at, null).order()
+                gte: vi.fn(() => ({ lte: vi.fn(() => ({ is: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: [] })) })) })) })),
               })),
             })),
           }

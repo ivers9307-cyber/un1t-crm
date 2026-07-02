@@ -129,6 +129,7 @@ export async function GET(request) {
         .from('class_occurrences')
         .select('glofox_event_id, ends_at')
         .in('glofox_event_id', chunk)
+        .is('cancelled_at', null)
       if (oErr) {
         logWarn('cron-credit-attendance', 'occurrences load failed', { err: oErr })
         continue

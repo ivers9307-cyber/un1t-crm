@@ -40,6 +40,7 @@ export async function GET(request, { params }) {
     .select('glofox_event_id, name, starts_at, ends_at, capacity, instructor, synced_at')
     .eq('location_id', locationId)
     .gte('starts_at', sinceIso)
+    .is('cancelled_at', null)
     .order('starts_at', { ascending: true })
     .limit(50)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })

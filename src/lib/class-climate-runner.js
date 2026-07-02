@@ -45,6 +45,7 @@ export async function runClassClimateForLocation(db, automationRow, { nowMs = Da
     .eq('location_id', locationId)
     .gte('starts_at', sinceIso)
     .lte('starts_at', untilIso)
+    .is('cancelled_at', null) // P0-8: never fire the AC for a cancelled class
     .order('starts_at', { ascending: true })
   if (occErr) {
     result.errors.push(`occurrences_read_failed: ${occErr.message}`)

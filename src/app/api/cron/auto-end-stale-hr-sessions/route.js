@@ -75,7 +75,7 @@ export async function GET(request) {
   let occByEvent = new Map()
   if (eventIds.length) {
     const { data: occs } = await db
-      .from('class_occurrences').select('glofox_event_id, ends_at').in('glofox_event_id', eventIds)
+      .from('class_occurrences').select('glofox_event_id, ends_at').in('glofox_event_id', eventIds).is('cancelled_at', null)
     occByEvent = new Map((occs || []).map((o) => [o.glofox_event_id, o]))
   }
 

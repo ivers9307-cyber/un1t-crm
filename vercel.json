@@ -138,7 +138,7 @@
     },
     {
       "path": "/api/cron/sync-class-occurrences",
-      "schedule": "0 4 * * *"
+      "schedule": "*/15 * * * *"
     },
     {
       "path": "/api/cron/class-climate",

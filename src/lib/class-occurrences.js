@@ -87,9 +87,32 @@ export function mapEventToOccurrence(event, locationId) {
 }
 
 /**
- * IO: pull the next `windowHours` of Glofox events for one location and
- * upsert them into class_occurrences. Inactive + private events are
- * skipped. Returns stats.
+ * IO: pull the next `windowHours` of Glofox events for one location, upsert
+ * the active ones into class_occurrences, and reconcile cancellations within
+ * the fetched window. Returns stats.
+ *
+ * Reconciliation (P0-8): after a SUCCESSFUL fetch we know the full set of
+ * events Glofox currently reports for [nowMs, nowMs + windowHours]. Any
+ * class_occurrences row in that window whose glofox_event_id was NOT among the
+ * events we "saw" as active/live has been cancelled (event returned
+ * active:false) or deleted (absent entirely) — so we stamp cancelled_at. Rows
+ * we DID see get cancelled_at cleared back to null (a cancelled-then-reinstated
+ * class un-cancels). Every live/current/booked read filters cancelled_at IS
+ * NULL, so a stamped row stops firing the AC / HR-linking.
+ *
+ * PRIVATE EVENTS: a private event (`private === true`) is a real class that
+ * still happens — we just don't break it out into the spine's own columns.
+ * We therefore treat private events as SEEN (they count toward "active", so
+ * their existing spine row is NOT cancelled) even though we don't upsert them.
+ * This keeps the AC running for a private class. Only inactive events
+ * (`active === false`) are treated as gone.
+ *
+ * CRITICAL GUARD: reconciliation only runs when the fetch actually succeeded
+ * (`result.ok`) AND returned a usable events array. A failed fetch — or one
+ * that returns zero events (a Glofox blip) — cancels NOTHING, so a transient
+ * outage can never nuke the whole spine and silently disable AC/HR-linking.
+ * The reconcile UPDATE is bounded strictly to this location and the fetched
+ * [nowMs, nowMs + windowHours] window.
  *
  * @param {object} db  service-role client
  * @param {{ locationId: string, creds: object, windowHours?: number, nowMs?: number }} opts
@@ -102,22 +125,68 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
     return { ok: false, error: result.body?.message || `HTTP ${result.status}`, upserted: 0 }
   }
 
+  // Events Glofox currently reports as real (active OR private — private
+  // classes still happen). Their spine rows must NOT be cancelled.
+  const seenEventIds = new Set()
   const rows = []
-  for (const e of result.events) {
-    if (e?.active === false || e?.private === true) continue
+  for (const e of result.events || []) {
+    if (e?.active === false) continue // inactive → treat as gone (don't mark seen)
+    if (e?._id) seenEventIds.add(String(e._id))
+    if (e?.private === true) continue // real class, but not upserted into spine columns
     const row = mapEventToOccurrence(e, locationId)
     if (row) rows.push(row)
   }
-  if (rows.length === 0) return { ok: true, upserted: 0, seen: result.events.length }
 
-  const { error } = await db
-    .from('class_occurrences')
-    .upsert(rows, { onConflict: 'location_id,glofox_event_id' })
-  if (error) {
-    logWarn('class-occurrences', 'upsert failed', { locationId, error: error.message })
-    return { ok: false, error: error.message, upserted: 0 }
+  // GUARD: only reconcile off a usable payload. Zero events back = likely a
+  // Glofox blip; do NOT cancel anything (never nuke the spine on an outage).
+  const canReconcile = Array.isArray(result.events) && result.events.length > 0
+
+  let upserted = 0
+  if (rows.length > 0) {
+    // Un-cancel anything we're re-upserting (reinstated class).
+    for (const r of rows) r.cancelled_at = null
+    const { error } = await db
+      .from('class_occurrences')
+      .upsert(rows, { onConflict: 'location_id,glofox_event_id' })
+    if (error) {
+      logWarn('class-occurrences', 'upsert failed', { locationId, error: error.message })
+      return { ok: false, error: error.message, upserted: 0 }
+    }
+    upserted = rows.length
   }
-  return { ok: true, upserted: rows.length, seen: result.events.length }
+
+  let cancelled = 0
+  if (canReconcile) {
+    // Rows in THIS location within the fetched window that we did NOT see as
+    // active/private → cancelled or deleted. Bound strictly to the window.
+    const windowStartIso = new Date(nowMs).toISOString()
+    const windowEndIso = new Date(nowMs + windowHours * 3600 * 1000).toISOString()
+    const { data: existing } = await db
+      .from('class_occurrences')
+      .select('glofox_event_id')
+      .eq('location_id', locationId)
+      .gte('starts_at', windowStartIso)
+      .lte('starts_at', windowEndIso)
+      .is('cancelled_at', null)
+    const goneIds = (existing || [])
+      .map((r) => r.glofox_event_id)
+      .filter((id) => id && !seenEventIds.has(String(id)))
+    if (goneIds.length > 0) {
+      const { error: cancelErr } = await db
+        .from('class_occurrences')
+        .update({ cancelled_at: new Date().toISOString() })
+        .eq('location_id', locationId)
+        .in('glofox_event_id', goneIds)
+        .is('cancelled_at', null)
+      if (cancelErr) {
+        logWarn('class-occurrences', 'cancel reconcile failed', { locationId, error: cancelErr.message })
+      } else {
+        cancelled = goneIds.length
+      }
+    }
+  }
+
+  return { ok: true, upserted, cancelled, seen: (result.events || []).length }
 }
 
 // ── "which class is on right now?" (HR-CLASS-ALLOC.1) ────────────
@@ -158,6 +227,7 @@ export async function resolveCurrentOccurrence(db, { locationId, nowMs = Date.no
     .eq('location_id', locationId)
     .gte('starts_at', sinceIso)
     .lte('starts_at', untilIso)
+    .is('cancelled_at', null)
     .order('starts_at', { ascending: false })
   for (const occ of data || []) {
     if (occurrenceIsLive(occ, nowMs)) {
@@ -183,6 +253,7 @@ export async function resolveCurrentClassForTv(db, { locationId, nowMs = Date.no
     .eq('location_id', locationId)
     .gte('starts_at', sinceIso)
     .lte('starts_at', untilIso)
+    .is('cancelled_at', null)
     .order('starts_at', { ascending: false })
   for (const occ of data || []) {
     if (occurrenceIsLive(occ, nowMs)) {
