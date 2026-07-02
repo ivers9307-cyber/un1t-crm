@@ -292,8 +292,11 @@ export const SCENARIOS = [
       handoff: false,
       mustCall: ['send_card_set'],
       argMatch: [{ tool: 'send_card_set', field: 'set_name', pattern: '^\\s*membership\\s*$' }],
-      // The cards never replace a text reply of her own.
-      match: ['(membership|month|€|option)'],
+      // The cards never replace a text reply of her own — but the cards carry
+      // the membership details, so a short companion line ("sent over some
+      // cards…") is IDEAL; demanding the text restate prices failed good
+      // behaviour in live runs. Keep this loose.
+      match: ['(card|plan|membership|option|detail)'],
     },
   },
   {

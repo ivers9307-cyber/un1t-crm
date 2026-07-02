@@ -44,27 +44,40 @@ describe('buildCardSetsBlock', () => {
     expect(buildCardSetsBlock([])).toBeNull()
   })
 
-  it('renders each set with its name, card count, and send-when description', () => {
+  it('renders each described set with its name, card count, and send-when description', () => {
     const out = buildCardSetsBlock([
       { name: 'Membership', description: 'When someone asks about membership options or pricing', cards: [{}, {}, {}] },
-      { name: 'Studio tour', cards: twoCards },
+      { name: 'Studio tour', description: 'When someone asks what the studio looks like', cards: twoCards },
     ])
     expect(out).toContain('VISUAL CARD SETS')
     expect(out).toContain('send_card_set')
     expect(out).toContain('- "Membership" (3 cards) — send when: When someone asks about membership options or pricing')
-    expect(out).toContain('- "Studio tour" (2 cards)')
+    expect(out).toContain('- "Studio tour" (2 cards) — send when: When someone asks what the studio looks like')
     expect(out).toMatch(/at most ONE set per conversation/i)
   })
 
+  it('the send-when description is the opt-in: undescribed sets stay staff-only', () => {
+    const out = buildCardSetsBlock([
+      { name: 'Handed to Mia', description: 'When someone asks about plans', cards: twoCards },
+      { name: 'Test cards', cards: twoCards },              // no description → invisible
+      { name: 'Blank context', description: '   ', cards: twoCards }, // whitespace → invisible
+    ])
+    expect(out).toContain('Handed to Mia')
+    expect(out).not.toContain('Test cards')
+    expect(out).not.toContain('Blank context')
+    expect(buildCardSetsBlock([{ name: 'Test cards', cards: twoCards }])).toBeNull()
+  })
+
   it('excludes unsendable sets: <2 cards, no name, or no cards array', () => {
+    const desc = { description: 'When relevant' }
     expect(buildCardSetsBlock([
-      { name: 'One card', cards: [{}] },
-      { name: '', cards: twoCards },
-      { name: 'No cards' },
+      { name: 'One card', ...desc, cards: [{}] },
+      { name: '', ...desc, cards: twoCards },
+      { name: 'No cards', ...desc },
     ])).toBeNull()
     const out = buildCardSetsBlock([
-      { name: 'One card', cards: [{}] },
-      { name: 'Good set', cards: twoCards },
+      { name: 'One card', ...desc, cards: [{}] },
+      { name: 'Good set', ...desc, cards: twoCards },
     ])
     expect(out).toContain('Good set')
     expect(out).not.toContain('One card')

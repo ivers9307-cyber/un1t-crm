@@ -173,9 +173,12 @@ export function buildKnowledgeBlock(entries) {
  * @returns {string|null} the prompt block, or null when nothing is sendable
  */
 export function buildCardSetsBlock(cardSets) {
-  const sets = (cardSets || []).filter((s) => s?.name && Array.isArray(s.cards) && s.cards.length >= 2)
+  // The "when to send" description is the operator's OPT-IN: sets without one
+  // stay staff-only and invisible to the agent, so test/draft sets never reach
+  // customer conversations until deliberately handed to Mia.
+  const sets = (cardSets || []).filter((s) => s?.name && s?.description?.trim() && Array.isArray(s.cards) && s.cards.length >= 2)
   if (!sets.length) return null
-  const lines = sets.map((s) => `- "${s.name}" (${s.cards.length} cards)${s.description ? ` — send when: ${s.description}` : ''}`)
+  const lines = sets.map((s) => `- "${s.name}" (${s.cards.length} cards) — send when: ${s.description.trim()}`)
   return [
     'VISUAL CARD SETS',
     'You can send these swipeable card sets with the send_card_set tool (WhatsApp only). Send at most ONE set per conversation, only when it directly answers what the customer is asking, and always alongside a short text reply of your own:',
