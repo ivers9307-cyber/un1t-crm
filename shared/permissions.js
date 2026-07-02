@@ -443,6 +443,15 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // toggles are still listed but default off for non-contractors.
   { key: 'notify_invoice_approved', label: '… Invoice approved',   hint: 'Notify when an invoice you submitted is approved',              mobileOnly: true, isNotify: true },
   { key: 'notify_invoice_declined', label: '… Invoice declined',   hint: 'Notify when an invoice you submitted needs adjustment',         mobileOnly: true, isNotify: true },
+  // FTE expense claims (FTE-EXPENSES.1) — the expense mirror of the
+  // contractor invoice toggles above. `submitted` fans out to the
+  // approval queue (owners at the location + masters), so it defaults
+  // on for master/owner/manager/head_coach and off for staff;
+  // approved + declined go to the submitting FTE, so they default on
+  // for every role (same as the invoice outcome toggles).
+  { key: 'notify_expense_submitted', label: '… Expense submitted',  hint: 'Notify when an FTE at your studio submits an expense claim for approval (approver roles by default)', mobileOnly: true, isNotify: true },
+  { key: 'notify_expense_approved',  label: '… Expense approved',   hint: 'Notify when an expense claim you submitted is approved',        mobileOnly: true, isNotify: true },
+  { key: 'notify_expense_declined',  label: '… Expense declined',   hint: 'Notify when an expense claim you submitted needs adjustment',   mobileOnly: true, isNotify: true },
   // Partial-shift overrides (mig 099/100). Coach gets a push when a
   // manager adjusts their times — the schedule effectively shifted
   // out from under them, so a heads-up is high-value.
@@ -501,6 +510,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
+    notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
@@ -531,6 +541,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: false, notify_whatsapp: false, notify_instagram: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
+    // Staff submit expenses — outcomes on, but not the approval-queue
+    // ping (they aren't approvers).
+    notify_expense_submitted: false, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: false,
@@ -562,6 +575,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
+    // Approval-queue ping on by default (senior role covering the
+    // studio); own-claim outcomes on like every role.
+    notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
@@ -593,6 +609,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
+    // Managers run the approval queue day-to-day — submitted ping on;
+    // own-claim outcomes on (parity-superset of staff too).
+    notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
@@ -626,6 +645,9 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
+    // Owner IS the expense approver (per the routes: owner-at-location
+    // + master) — submitted ping on; own-claim outcomes on.
+    notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
     notify_contract_issued: true,
     notify_tasks: true, notify_bookings: true,
