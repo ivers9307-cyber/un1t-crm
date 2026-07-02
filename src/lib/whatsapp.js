@@ -261,7 +261,10 @@ export async function sendTemplateMessage(to, templateName, language = 'en', com
 }
 
 /**
- * Send a media message (image, video, document) — 24h window only
+ * Send a media message (image, video, document, audio) — 24h window only.
+ * `opts.voice: true` (audio only) renders a true voice note — mic icon,
+ * sender avatar, waveform — instead of an audio-file card. Captions are
+ * unsupported on audio either way.
  */
 export async function sendMediaMessage(to, type, mediaUrl, caption, opts = {}) {
   const config = await resolveConfig(opts)
@@ -270,7 +273,7 @@ export async function sendMediaMessage(to, type, mediaUrl, caption, opts = {}) {
     image: { image: { link: mediaUrl, caption } },
     video: { video: { link: mediaUrl, caption } },
     document: { document: { link: mediaUrl, caption, filename: caption || 'document' } },
-    audio: { audio: { link: mediaUrl } },
+    audio: { audio: opts.voice === true ? { link: mediaUrl, voice: true } : { link: mediaUrl } },
   }
 
   const response = await fetch(`${META_API_URL}/${config.phoneNumberId}/messages`, {
@@ -292,6 +295,34 @@ export async function sendMediaMessage(to, type, mediaUrl, caption, opts = {}) {
     messageId: result.messages?.[0]?.id,
     status: result.messages?.[0]?.message_status || 'sent',
   }
+}
+
+/**
+ * React to a message with an emoji (empty string removes the reaction).
+ * Reactions only get a 'sent' status webhook — no delivered/read.
+ */
+export async function sendReaction(to, messageId, emoji, opts = {}) {
+  const config = await resolveConfig(opts)
+
+  const response = await fetch(`${META_API_URL}/${config.phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: headersFor(config),
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'reaction',
+      reaction: { message_id: messageId, emoji: emoji || '' },
+    }),
+  })
+
+  const result = await response.json()
+  if (result.error) {
+    console.error('WhatsApp reaction error:', result.error)
+    throw new Error(result.error.message || 'Failed to send reaction')
+  }
+
+  return { messageId: result.messages?.[0]?.id }
 }
 
 /**

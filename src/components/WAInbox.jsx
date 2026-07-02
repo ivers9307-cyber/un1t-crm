@@ -84,6 +84,22 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       setAgentFeedback(f => ({ ...f, [msg.id]: undefined }))
     }
   }
+  // C6 — emoji reactions on inbound messages. The route sends via Meta and
+  // logs a thread row; no optimistic rendering (the row shows on refresh).
+  const [reactingId, setReactingId] = useState(null)
+  async function reactToMessage(msg, emoji) {
+    if (!conversation?.id || !msg.wa_message_id) return
+    setReactingId(msg.id)
+    try {
+      await fetch(`/api/whatsapp/conversations/${conversation.id}/react`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: msg.wa_message_id, emoji }),
+      })
+    } catch {} finally {
+      setReactingId(null)
+    }
+  }
   const [sending, setSending] = useState(false)
   const [loading, setLoading] = useState(true)
   const [showAddContact, setShowAddContact] = useState(false)
@@ -689,6 +705,21 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                       <p className="text-sm whitespace-pre-wrap">{msg.body || `[${msg.message_type}]`}</p>
                     )}
                     <div className="flex items-center justify-end gap-1 mt-0.5">
+                      {/* C6 — react to a customer message (👍 ❤️ 🔥) */}
+                      {msg.direction === 'inbound' && msg.wa_message_id && (
+                        <span className="flex items-center gap-1 mr-auto">
+                          {['👍', '❤️', '🔥'].map(emoji => (
+                            <button
+                              key={emoji}
+                              type="button"
+                              onClick={() => reactToMessage(msg, emoji)}
+                              disabled={reactingId === msg.id}
+                              className="text-[11px] leading-none opacity-40 hover:opacity-90 disabled:opacity-20"
+                              title="React"
+                            >{emoji}</button>
+                          ))}
+                        </span>
+                      )}
                       {/* AGENT-QA.1 — rate Mia's replies; feeds the analytics quality list */}
                       {msg.source === 'agent' && (
                         <span className="flex items-center gap-1 mr-auto">
