@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import { validateTemplateMedia } from '@/lib/template-media'
+import { normalizeUrlish } from '@/lib/urlish'
 
 export default function WhatsAppIntegrationTab({ location, canEdit }) {
   const [numbers, setNumbers] = useState([])
@@ -248,16 +249,19 @@ function validateCardSetDraft(draft) {
 }
 
 // Trim + drop empty optional fields so the payload matches the API schema.
+// URLs get https:// prefixed when the operator typed a bare domain — the
+// server normalises identically, but doing it here keeps what's stored equal
+// to what was validated.
 function normalizeCardSet(draft) {
   return {
     id: draft.id,
     name: draft.name.trim(),
     ...(draft.body_text.trim() ? { body_text: draft.body_text.trim() } : {}),
     cards: draft.cards.map((c) => ({
-      image_url: c.image_url.trim(),
+      image_url: normalizeUrlish(c.image_url),
       title: c.title.trim(),
       ...(c.body.trim() ? { body: c.body.trim() } : {}),
-      ...(c.link_url.trim() ? { link_url: c.link_url.trim() } : {}),
+      ...(c.link_url.trim() ? { link_url: normalizeUrlish(c.link_url) } : {}),
       ...(c.link_url.trim() && c.link_text.trim() ? { link_text: c.link_text.trim() } : {}),
     })),
   }
@@ -299,7 +303,13 @@ function CardSetsCard({ location, canEdit }) {
         body: JSON.stringify({ location_id: location.id, sets: nextSets }),
       })
       const j = await res.json()
-      if (!j.success) throw new Error(j.error || 'Failed to save card sets')
+      if (!j.success) {
+        // Surface the first zod issue instead of the generic message — a bare
+        // "Invalid request body" cost real debugging time on first use.
+        const issue = Array.isArray(j.issues) && j.issues[0]
+        const detail = issue ? ` — ${[issue.path?.join?.('.'), issue.message].filter(Boolean).join(': ')}` : ''
+        throw new Error((j.error || 'Failed to save card sets') + detail)
+      }
       setSets(j.sets || nextSets)
       setEditing(null)
       setSavedAt(Date.now())
