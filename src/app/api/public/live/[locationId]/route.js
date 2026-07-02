@@ -20,6 +20,8 @@ import { isBridgeOnline, latestBridgeSeenMs, maskStrapLabel } from '@/lib/bridge
 import { getAvailableStraps } from '@/lib/live-class'
 import { resolveCurrentClassForTv } from '@/lib/class-occurrences'
 import { dublinTimeLabel } from '@/lib/dublin-time'
+import { selectAll } from '@/lib/select-all'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -27,11 +29,30 @@ export const dynamic = 'force-dynamic'
 const RECENT_BPM_WINDOW_MS = 30 * 1000   // moving-avg window for "current"
 const STALE_AFTER_MS = 2 * 60 * 1000     // strap silent for 2min → flag
 
-export async function GET(_request, props) {
+// Never let an edge/browser cache serve a stale board — the TV polls every 2s
+// for liveness and each response is location-specific.
+const NO_STORE = { 'Cache-Control': 'no-store' }
+
+// Rate limit: the TV polls at 2s (≈30 req/min) and a studio may run one board
+// plus a spare/preview, so allow generous headroom while still capping a public,
+// unauthenticated endpoint against abuse. Keyed per client IP AND per location
+// so one busy studio can't starve another's bucket.
+const RATE_MAX = 240
+const RATE_WINDOW_MS = 60 * 1000
+
+export async function GET(request, props) {
   const params = await props.params;
   const db = createServerClient()
   const locationId = params.locationId
   const nowMs = Date.now()
+
+  // Abuse limiter (fail-open — a limiter outage must not black out the TV).
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `public-live:${locationId}:${ip}`, {
+    max: RATE_MAX,
+    windowMs: RATE_WINDOW_MS,
+  })
+  if (!limit.allowed) return rateLimitResponse(limit)
 
   // Confirm the location exists. Also lets the TV page render the
   // studio name in the header without a separate API call.
@@ -41,7 +62,7 @@ export async function GET(_request, props) {
     .eq('id', locationId)
     .single()
   if (!location) {
-    return NextResponse.json({ ok: false, error: 'Location not found' }, { status: 404 })
+    return NextResponse.json({ ok: false, error: 'Location not found' }, { status: 404, headers: NO_STORE })
   }
 
   // Bridge liveness for the TV connection dot. Keyed off last_seen_at
@@ -99,26 +120,40 @@ export async function GET(_request, props) {
       available_straps: availableStraps,
       timer: timerRun || null,
       current_class: currentClass,
-    })
+    }, { headers: NO_STORE })
   }
 
   const sessionIds = sessions.map((s) => s.id)
 
-  // Two queries:
+  // Two reads:
   //   - last 30s of samples per session (for current BPM)
   //   - all samples per session (for cumulative zones + points)
-  // Could combine but the live-window aggregation is small enough
-  // to keep readable as two passes.
+  //
+  // BOTH must page. Every `.select()` silently caps at 1000 rows (db-max-rows),
+  // and both reads span EVERY open session in the class:
+  //   - the "all samples" read is unbounded — a 20-strap class at ~1Hz crosses
+  //     1000 rows in ~50s, so an un-paged, recorded_at-ascending select froze
+  //     zones/points/peak/avg on the first ~minute for the rest of the session.
+  //   - the 30s recent window also breaches the cap above ~33 concurrent straps
+  //     (33 × 30 samples > 1000), which would truncate current-BPM tiles.
+  // selectAll pages by a stable order until the final short page. Wave 2:
+  // replace per-poll full-scan with incremental zone aggregates on
+  // heart_rate_sessions so we stop re-reading the whole class every 2s.
   const recentSince = new Date(nowMs - RECENT_BPM_WINDOW_MS).toISOString()
-  const [{ data: recentSamples }, { data: allSamples }] = await Promise.all([
-    db.from('hr_samples')
+  const [recentSamples, allSamples] = await Promise.all([
+    selectAll((from, to) => db
+      .from('hr_samples')
       .select('session_id, recorded_at, bpm')
       .in('session_id', sessionIds)
-      .gte('recorded_at', recentSince),
-    db.from('hr_samples')
+      .gte('recorded_at', recentSince)
+      .order('recorded_at', { ascending: true })
+      .range(from, to)),
+    selectAll((from, to) => db
+      .from('hr_samples')
       .select('session_id, recorded_at, bpm')
       .in('session_id', sessionIds)
-      .order('recorded_at', { ascending: true }),
+      .order('recorded_at', { ascending: true })
+      .range(from, to)),
   ])
 
   // Bucket per session.
@@ -195,5 +230,5 @@ export async function GET(_request, props) {
     available_straps: availableStraps,
     timer: timerRun || null,
     current_class: currentClass,
-  })
+  }, { headers: NO_STORE })
 }
