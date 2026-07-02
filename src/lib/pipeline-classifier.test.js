@@ -107,6 +107,20 @@ describe('classifyContact — funnel exits', () => {
       last_attended_at: daysAgo(5), recent_bookings: [],
     }, NOW)).toBe('first_class')
   })
+  it('FUTURE last_attended_at (check-in flagged before class start) counts as active, not dormant', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'trial', joined_at: daysAgo(20),
+      last_attended_at: new Date(NOW + 60 * 60 * 1000).toISOString(), // 1h ahead
+      recent_bookings: [attendedBooking(0)],
+    }, NOW)).toBe('first_class')
+  })
+  it('lead joined at EXACTLY the new-lead window boundary is still new_lead (pins <= semantics)', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'lead',
+      joined_at: daysAgo(PIPELINE_THRESHOLDS.NEW_LEAD_WINDOW_DAYS),
+      recent_bookings: [],
+    }, NOW)).toBe('new_lead')
+  })
 })
 
 describe('classifyContact — converted & members', () => {
@@ -146,8 +160,14 @@ describe('classifyContact — exclusions', () => {
 })
 
 describe('idempotency', () => {
-  it('same input twice → same output', () => {
-    const c = { glofox_membership_status: 'trial', joined_at: daysAgo(10), last_attended_at: daysAgo(3), recent_bookings: [attendedBooking(3)] }
+  it('same input twice → same output, and the input is never mutated', () => {
+    const c = Object.freeze({
+      glofox_membership_status: 'trial', joined_at: daysAgo(10),
+      last_attended_at: daysAgo(3),
+      recent_bookings: Object.freeze([Object.freeze(attendedBooking(3))]),
+    })
+    // Frozen fixture: any mutation attempt throws in strict mode (ESM),
+    // so passing = pure function that leaves its input alone.
     expect(classifyContact(c, NOW)).toBe(classifyContact(c, NOW))
   })
 })

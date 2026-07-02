@@ -38,12 +38,16 @@ export const PIPELINE_THRESHOLDS = {
   TRIAL_DONE_MIN_ATTENDED: 3,
 }
 
-// Helper: number of days between two ISO timestamps. Returns null
-// when either is missing.
+// Helper: days elapsed between an ISO timestamp and `now` (epoch ms).
+// Returns null when the timestamp is missing/unparseable. A FUTURE
+// timestamp clamps to 0 ("0 days ago") — check-in can flag attendance
+// before class start, and that freshly-flagged attendance must count
+// as active, not fall out of every recency window.
 function daysSince(iso, now = Date.now()) {
   if (!iso) return null
   const ms = now - new Date(iso).getTime()
-  if (!Number.isFinite(ms) || ms < 0) return null
+  if (!Number.isFinite(ms)) return null
+  if (ms < 0) return 0
   return ms / DAY_MS
 }
 
