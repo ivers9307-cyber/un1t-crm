@@ -1,4 +1,6 @@
-node_modules/
+# No trailing slash: `node_modules/` only matches directories, which is how a
+# stray node_modules SYMLINK once got committed and wiped installs on checkout.
+node_modules
 .next/
 .env
 .env.local
