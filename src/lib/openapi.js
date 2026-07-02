@@ -1489,6 +1489,25 @@ registry.registerPath({
   },
 })
 
+// WhatsApp inbox block action (cookie auth)
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/conversations/{id}/block',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Block or unblock a WhatsApp sender (Meta Block API)',
+  description: 'Blocks/unblocks the sender at Meta and mirrors the state locally (conversation.is_blocked + contacts.wa_status). Meta only allows blocking users who messaged within the last 24h.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ action: z.enum(['block', 'unblock']) }).openapi('WaBlockAction') } } },
+  },
+  responses: {
+    200: { description: 'Block state updated' },
+    404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Meta block call failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // WhatsApp spend telemetry (cookie auth)
 registry.registerPath({
   method: 'get',

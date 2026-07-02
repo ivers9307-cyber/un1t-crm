@@ -128,6 +128,27 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   const needsReply = (c) => !c.resolved_at && c.last_message_direction === 'inbound'
   const visibleConversations = queueFilter === 'all' ? conversations : conversations.filter(needsReply)
 
+  // WA-BLOCK — block/unblock the sender at Meta (spam/abuse; protects the
+  // number's quality rating). Confirmed action; mirrors is_blocked locally.
+  async function toggleBlocked(conv) {
+    const next = !conv.is_blocked
+    const msg = next
+      ? 'Block this sender? They will no longer be able to message this number (and it cannot message them).'
+      : 'Unblock this sender?'
+    if (!window.confirm(msg)) return
+    try {
+      const res = await fetch(`/api/whatsapp/conversations/${conv.id}/block`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: next ? 'block' : 'unblock' }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!j.success) { window.alert(j.error || 'Block update failed'); return }
+      setConversations(prev => prev.map(c => c.id === conv.id ? { ...c, is_blocked: next } : c))
+      setConversation(prev => prev && prev.id === conv.id ? { ...prev, is_blocked: next } : prev)
+    } catch { /* leave state as-is */ }
+  }
+
   async function toggleResolved(conv) {
     const next = !conv.resolved_at
     try {
@@ -521,6 +542,19 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                   >
                     <Check size={12} />
                     {conversation.resolved_at ? 'Reopen' : 'Resolve'}
+                  </button>
+                )}
+                {conversation && (
+                  <button
+                    onClick={() => toggleBlocked(conversation)}
+                    title={conversation.is_blocked ? 'Unblock this sender' : 'Block this sender (spam/abuse)'}
+                    className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-colors ${
+                      conversation.is_blocked
+                        ? 'bg-red-600 border-transparent text-white hover:bg-red-700'
+                        : 'border-un1t-border text-un1t-subtle hover:text-red-600'
+                    }`}
+                  >
+                    {conversation.is_blocked ? 'Blocked — unblock' : 'Block'}
                   </button>
                 )}
                 {isUnknown ? (
