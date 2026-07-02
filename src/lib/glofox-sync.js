@@ -924,29 +924,41 @@ export function detectTrialTransitionTags({
 const MEMBER_STATUSES = new Set(['member', 'credit_member'])
 const CONVERSION_CREATE_WINDOW_DAYS = 60
 
+// True when joinedAt is a valid, non-future timestamp within the
+// direct-join window — the "is this actually a fresh conversion?" gate.
+function joinedWithinConversionWindow(joinedAt, now) {
+  if (!joinedAt) return false
+  const ms = now - new Date(joinedAt).getTime()
+  return Number.isFinite(ms) && ms >= 0 && ms <= CONVERSION_CREATE_WINDOW_DAYS * 24 * 60 * 60 * 1000
+}
+
 /**
  * FUNNEL.1 — should this sync stamp contacts.converted_at?
  *
  * Write-once: never when already set. Update path: only on a real
  * transition INTO member/credit_member from a non-member status
  * (incl. classpass_payg and ex_member — any status flip into paying
- * counts; the classifier decides what the board shows). Create path:
- * a contact appearing for the first time already AS a member is a
- * direct join only if they joined recently — the nightly full sync
- * also creates unseen contacts, and stamping a 2022 member as a fresh
- * conversion would pollute the Converted column.
+ * counts; the classifier decides what the board shows). A NULL
+ * previousStatus on the update path is NOT a transition — it's a
+ * pre-existing CRM contact (web form / import) being linked to a
+ * Glofox member for the first time, which may be a long-standing
+ * member — so it takes the same join-recency gate as the create path.
+ * Create path: a contact appearing for the first time already AS a
+ * member is a direct join only if they joined recently — the nightly
+ * full sync also creates unseen contacts, and stamping a 2022 member
+ * as a fresh conversion would pollute the Converted column.
  *
  * Pure function — caller writes the timestamp.
  */
 export function shouldStampConversion({ action, previousStatus, newStatus, existingConvertedAt, joinedAt, now = Date.now() }) {
   if (existingConvertedAt) return false
   if (!MEMBER_STATUSES.has(newStatus)) return false
-  if (action === 'update') return !MEMBER_STATUSES.has(previousStatus)
-  if (action === 'create') {
-    if (!joinedAt) return false
-    const ms = now - new Date(joinedAt).getTime()
-    return Number.isFinite(ms) && ms >= 0 && ms <= CONVERSION_CREATE_WINDOW_DAYS * 24 * 60 * 60 * 1000
+  if (action === 'update') {
+    if (MEMBER_STATUSES.has(previousStatus)) return false
+    if (previousStatus == null) return joinedWithinConversionWindow(joinedAt, now)
+    return true
   }
+  if (action === 'create') return joinedWithinConversionWindow(joinedAt, now)
   return false
 }
 
@@ -1844,9 +1856,12 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
 
   // FUNNEL.1 — stamp the conversion moment. Runs on the webhook path
   // (MEMBER_UPDATED → applyMemberSync), so the Converted column moves
-  // near-instantly; the nightly sync is the catch-all. Write-once —
-  // .is('converted_at', null) makes a concurrent double-fire harmless.
-  // Best-effort: a stamp failure must not roll back the contact write.
+  // near-instantly; the nightly sync is a catch-all for MISSED WEBHOOKS
+  // only — a FAILED stamp is permanent (the next sync sees
+  // member→member, never restamps), so every failure must be logged to
+  // be diagnosable. Write-once — .is('converted_at', null) makes a
+  // concurrent double-fire harmless. Best-effort: a stamp failure must
+  // not roll back the contact write.
   let convertedAt = preview.existing?.converted_at ?? null
   if (shouldStampConversion({
     action: preview.action,
@@ -1861,6 +1876,7 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
         .eq('id', contactId)
         .is('converted_at', null)
       if (!stampErr) convertedAt = now
+      else logWarn('glofox-sync', 'converted_at stamp failed', { contactId, err: stampErr.message })
     } catch (e) {
       logWarn('glofox-sync', 'converted_at stamp threw', { err: e?.message })
     }

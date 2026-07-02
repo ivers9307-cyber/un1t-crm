@@ -2006,4 +2006,27 @@ describe('shouldStampConversion (FUNNEL.1)', () => {
       existingConvertedAt: null, joinedAt: daysAgo(5), now: NOW,
     })).toBe(false)
   })
+
+  // Null previousStatus on the update path = pre-existing CRM contact
+  // (web form / import) being LINKED to a Glofox member for the first
+  // time — same pollution risk as the create path, so the same
+  // join-recency gate applies.
+  it('update path, null previousStatus: stamps a fresh join (lead-form contact linked to a recent member)', () => {
+    expect(shouldStampConversion({
+      action: 'update', previousStatus: null, newStatus: 'member',
+      existingConvertedAt: null, joinedAt: daysAgo(5), now: NOW,
+    })).toBe(true)
+  })
+  it('update path, null previousStatus: does NOT stamp a long-standing member first linked', () => {
+    expect(shouldStampConversion({
+      action: 'update', previousStatus: null, newStatus: 'member',
+      existingConvertedAt: null, joinedAt: daysAgo(200), now: NOW,
+    })).toBe(false)
+  })
+  it('update path, null previousStatus: does NOT stamp when joinedAt is missing', () => {
+    expect(shouldStampConversion({
+      action: 'update', previousStatus: null, newStatus: 'member',
+      existingConvertedAt: null, joinedAt: null, now: NOW,
+    })).toBe(false)
+  })
 })
