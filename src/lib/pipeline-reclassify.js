@@ -4,8 +4,9 @@
 //
 // Used by:
 //   - Nightly cron (/api/cron/pipeline-classify) — keeps stages
-//     in sync with engagement decay (member silent for 31 days
-//     becomes at_risk_member without needing a Glofox event).
+//     in sync with time-based decay (FUNNEL.1: a lead ages out to
+//     dormant, a converted member falls off the 60d window to
+//     member, without needing a Glofox event).
 //   - Manual one-shot via the admin UI / PIPELINE5.7 — operator-
 //     triggered re-classification of the whole 8k contact base
 //     after the classifier first ships.
@@ -37,6 +38,14 @@ const SELECT_COLS = [
   'joined_at',
   'created_at',
   'trial_credits_remaining',
+  // FUNNEL.1 — the funnel classifier keys on attended counts
+  // (recent_bookings) and the Converted-column gate (converted_at).
+  // The nightly run MUST read the same signals as the webhook path
+  // (applyMemberSync) or it re-classifies with attended=0 /
+  // converted_at=null and drags every webhook-placed deal back
+  // overnight (PIPELINE-FLAP).
+  'recent_bookings',
+  'converted_at',
 ].join(', ')
 
 /**
@@ -226,6 +235,10 @@ export async function reclassifyAllContacts(db, args) {
       joined_at: c.joined_at,
       created_at: c.created_at,
       trial_credits_remaining: c.trial_credits_remaining,
+      // FUNNEL.1 — must reach the classifier or nightly runs see
+      // attended=0 / never-converted and flap webhook-placed deals.
+      recent_bookings: c.recent_bookings,
+      converted_at: c.converted_at,
     })
     const targetStageId = stageIdBySlug.get(targetSlug)
     if (!targetStageId) {

@@ -1,4 +1,6 @@
 // PIPELINE5.6 — orchestrator tests for reclassifyAllContacts.
+// (FUNNEL.1: fixtures use the acquisition-funnel taxonomy and the
+// recent_bookings / converted_at classifier inputs.)
 //
 // Covers the four shapes that matter for the cron:
 //   1. Empty location (no contacts) → ok with zero counts
@@ -15,17 +17,26 @@ import { reclassifyAllContacts } from './pipeline-reclassify.js'
 
 const isoDaysAgo = (d) => new Date(Date.now() - d * 86_400_000).toISOString()
 
-// Minimal stage set covering every classifier output.
+// recent_bookings entry for an attended class `d` days ago.
+// time_start is unix SECONDS (Glofox payload convention) and must be
+// in the PAST for an attended booking.
+const attendedBooking = (d) => ({
+  status: 'BOOKED',
+  attended: true,
+  time_start: Math.floor((Date.now() - d * 86_400_000) / 1000),
+})
+
+// Minimal stage set covering every classifier output (FUNNEL.1
+// acquisition-funnel taxonomy).
 const STAGES = [
   { id: 'stage-new', slug: 'new_lead' },
-  { id: 'stage-active-trial', slug: 'active_trial' },
-  { id: 'stage-hot', slug: 'hot_conversion' },
-  { id: 'stage-active', slug: 'active_member' },
-  { id: 'stage-at-risk', slug: 'at_risk_member' },
-  { id: 'stage-cp', slug: 'classpass_active' },
-  { id: 'stage-lapsed', slug: 'lapsed' },
+  { id: 'stage-first', slug: 'first_class' },
+  { id: 'stage-second', slug: 'second_class' },
+  { id: 'stage-trial-done', slug: 'trial_done' },
+  { id: 'stage-converted', slug: 'converted' },
+  { id: 'stage-member', slug: 'member' },
+  { id: 'stage-cp', slug: 'classpass' },
   { id: 'stage-dormant', slug: 'dormant' },
-  { id: 'stage-dormant-cp', slug: 'dormant_classpass' },
 ]
 
 /**
@@ -119,25 +130,27 @@ describe('reclassifyAllContacts', () => {
   })
 
   it('dry-run computes moves but writes nothing', async () => {
-    // Active-member contact stuck in 'lapsed' should move to active_member.
-    // status='member' (not 'active') — only member/credit_member/etc.
-    // are real classifier inputs. attended7d=0 to avoid hot_conversion
-    // (which only fires for trial-family statuses anyway, but keeping
-    // the fixture clean).
+    // Freshly-converted member whose deal is still parked in new_lead
+    // should move to 'converted' (converted_at 10d ago, inside the
+    // 60d window). Exercises the FUNNEL.1 converted_at read — without
+    // it the classifier would say 'member' instead.
     const contacts = [{
       id: 'c1', name: 'Member A', email: 'a@x.com',
       glofox_membership_status: 'member',
-      last_attended_at: isoDaysAgo(2), total_attended_30d: 8, total_attended_7d: 0,
-      last_payment_at: isoDaysAgo(20), joined_at: isoDaysAgo(120), created_at: isoDaysAgo(120),
+      converted_at: isoDaysAgo(10),
+      recent_bookings: [attendedBooking(12), attendedBooking(5)],
+      last_attended_at: isoDaysAgo(5),
+      joined_at: isoDaysAgo(40), created_at: isoDaysAgo(40),
       trial_credits_remaining: null,
     }]
-    const deals = [{ id: 'd1', contact_id: 'c1', stage_id: 'stage-lapsed' }]
+    const deals = [{ id: 'd1', contact_id: 'c1', stage_id: 'stage-new' }]
     const { db, writes } = fakeDb({ contacts, deals })
 
     const out = await reclassifyAllContacts(db, { locationId: 'loc-1', dryRun: true })
     expect(out.ok).toBe(true)
     expect(out.deals_moved).toBe(1)
-    expect(out.movement_matrix).toHaveProperty('lapsed')
+    expect(out.movement_matrix).toHaveProperty('new_lead')
+    expect(out.movement_matrix.new_lead).toEqual({ converted: 1 })
     expect(out.samples).toHaveLength(1)
     // No DB writes on dry-run — not even the audit row.
     expect(writes.runInsert).toBeNull()
@@ -145,32 +158,40 @@ describe('reclassifyAllContacts', () => {
   })
 
   it('groups moves by target stage and bulk-UPDATEs once per stage', async () => {
-    // Three contacts: two should land in active_member, one in dormant.
-    // Both "should-be-active" deals are currently in 'lapsed'.
+    // Three contacts: two long-since-converted members should land in
+    // 'member' (converted_at outside / never inside the 60d window),
+    // one ex_member in 'dormant'. Both member deals are currently
+    // parked in 'converted'.
     const contacts = [
       {
         id: 'c1', name: 'A', email: 'a@x.com',
         glofox_membership_status: 'member',
-        last_attended_at: isoDaysAgo(3), total_attended_30d: 8, total_attended_7d: 0,
-        last_payment_at: isoDaysAgo(20), joined_at: isoDaysAgo(120), created_at: isoDaysAgo(120),
+        converted_at: isoDaysAgo(120), // aged past the 60d Converted window
+        recent_bookings: [attendedBooking(3)],
+        last_attended_at: isoDaysAgo(3),
+        joined_at: isoDaysAgo(180), created_at: isoDaysAgo(180),
       },
       {
         id: 'c2', name: 'B', email: 'b@x.com',
         glofox_membership_status: 'member',
-        last_attended_at: isoDaysAgo(5), total_attended_30d: 6, total_attended_7d: 0,
-        last_payment_at: isoDaysAgo(30), joined_at: isoDaysAgo(200), created_at: isoDaysAgo(200),
+        converted_at: null, // pre-existing member, never stamped
+        recent_bookings: [attendedBooking(5)],
+        last_attended_at: isoDaysAgo(5),
+        joined_at: isoDaysAgo(200), created_at: isoDaysAgo(200),
       },
       {
         id: 'c3', name: 'C', email: 'c@x.com',
         glofox_membership_status: 'ex_member',
-        last_attended_at: isoDaysAgo(400), total_attended_30d: 0, total_attended_7d: 0,
-        last_payment_at: isoDaysAgo(400), joined_at: isoDaysAgo(800), created_at: isoDaysAgo(800),
+        converted_at: isoDaysAgo(700),
+        recent_bookings: [attendedBooking(400)],
+        last_attended_at: isoDaysAgo(400),
+        joined_at: isoDaysAgo(800), created_at: isoDaysAgo(800),
       },
     ]
     const deals = [
-      { id: 'd1', contact_id: 'c1', stage_id: 'stage-lapsed' },
-      { id: 'd2', contact_id: 'c2', stage_id: 'stage-lapsed' },
-      { id: 'd3', contact_id: 'c3', stage_id: 'stage-active' }, // wrong: should be dormant
+      { id: 'd1', contact_id: 'c1', stage_id: 'stage-converted' },
+      { id: 'd2', contact_id: 'c2', stage_id: 'stage-converted' },
+      { id: 'd3', contact_id: 'c3', stage_id: 'stage-member' }, // wrong: should be dormant
     ]
     const { db, writes } = fakeDb({ contacts, deals })
 
@@ -178,11 +199,11 @@ describe('reclassifyAllContacts', () => {
     expect(out.ok).toBe(true)
     expect(out.contacts_seen).toBe(3)
     expect(out.deals_moved).toBe(3)
-    // Two bulk UPDATEs — one for stage-active (2 deals), one for stage-dormant (1).
+    // Two bulk UPDATEs — one for stage-member (2 deals), one for stage-dormant (1).
     expect(writes.dealUpdates).toHaveLength(2)
-    const activeUpdate = writes.dealUpdates.find((u) => u.fields.stage_id === 'stage-active')
+    const memberUpdate = writes.dealUpdates.find((u) => u.fields.stage_id === 'stage-member')
     const dormantUpdate = writes.dealUpdates.find((u) => u.fields.stage_id === 'stage-dormant')
-    expect(activeUpdate.ids.sort()).toEqual(['d1', 'd2'])
+    expect(memberUpdate.ids.sort()).toEqual(['d1', 'd2'])
     expect(dormantUpdate.ids).toEqual(['d3'])
     // Audit closed with success.
     expect(writes.runUpdates.at(-1)).toMatchObject({
@@ -191,11 +212,14 @@ describe('reclassifyAllContacts', () => {
   })
 
   it('creates a deal for a contact with no open deal', async () => {
+    // Fresh lead (joined 5d ago, 0 classes attended) with no deal row
+    // yet → orchestrator creates one in new_lead.
     const contacts = [{
       id: 'c1', name: 'New Lead', email: 'nl@x.com',
       glofox_membership_status: null,
-      last_attended_at: null, total_attended_30d: 0, total_attended_7d: 0,
-      last_payment_at: null, joined_at: null, created_at: isoDaysAgo(5),
+      converted_at: null, recent_bookings: [],
+      last_attended_at: null,
+      joined_at: isoDaysAgo(5), created_at: isoDaysAgo(5),
       trial_credits_remaining: null,
     }]
     const { db, writes } = fakeDb({ contacts, deals: [] })
@@ -205,18 +229,24 @@ describe('reclassifyAllContacts', () => {
     expect(writes.dealInserts).toHaveLength(1)
     expect(writes.dealInserts[0]).toMatchObject({
       contact_id: 'c1', location_id: 'loc-1', status: 'open',
+      stage_id: 'stage-new',
     })
   })
 
   it('counts unchanged when classifier matches current stage', async () => {
-    // Contact already in active_member, classifier agrees → unchanged.
+    // Mid-trial lead (2 classes attended, active) already in
+    // second_class, classifier agrees → unchanged. Exercises the
+    // FUNNEL.1 recent_bookings attended count — without it the
+    // nightly run would see attended≈0 and drag the deal back.
     const contacts = [{
-      id: 'c1', name: 'Stable Member', email: 'sm@x.com',
-      glofox_membership_status: 'member',
-      last_attended_at: isoDaysAgo(3), total_attended_30d: 8, total_attended_7d: 0,
-      last_payment_at: isoDaysAgo(20), joined_at: isoDaysAgo(120), created_at: isoDaysAgo(120),
+      id: 'c1', name: 'Trial Lead', email: 'tl@x.com',
+      glofox_membership_status: null,
+      converted_at: null,
+      recent_bookings: [attendedBooking(10), attendedBooking(3)],
+      last_attended_at: isoDaysAgo(3),
+      joined_at: isoDaysAgo(20), created_at: isoDaysAgo(20),
     }]
-    const deals = [{ id: 'd1', contact_id: 'c1', stage_id: 'stage-active' }]
+    const deals = [{ id: 'd1', contact_id: 'c1', stage_id: 'stage-second' }]
     const { db, writes } = fakeDb({ contacts, deals })
 
     const out = await reclassifyAllContacts(db, { locationId: 'loc-1' })
