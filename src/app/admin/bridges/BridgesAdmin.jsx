@@ -57,7 +57,7 @@ export default function BridgesAdmin({ locations }) {
 
   async function handleRotate(bridge) {
     if (!confirm(
-      `Rotate the token for "${bridge.name}"? The bridge will stop authenticating until the Pi is updated with the new token.`,
+      `Rotate the token for "${bridge.name}"? The previous token keeps working for 24h, so live HR ingest won't drop while you update the Pi.`,
     )) return
     setRotatingId(bridge.id)
     setError(null)
@@ -65,7 +65,12 @@ export default function BridgesAdmin({ locations }) {
       const res = await fetch(`/api/admin/bridges/${bridge.id}/rotate-token`, { method: 'POST' })
       const data = await res.json()
       if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to rotate token')
-      setReveal({ token: data.token, bridge: data.bridge, kind: 'rotated' })
+      setReveal({
+        token: data.token,
+        bridge: data.bridge,
+        kind: 'rotated',
+        previousExpiresAt: data.previous_token_expires_at,
+      })
       await load()
     } catch (e) {
       setError(e.message)
@@ -176,7 +181,7 @@ export default function BridgesAdmin({ locations }) {
 // ── token reveal ─────────────────────────────────────────────────
 
 function TokenReveal({ reveal, onDone }) {
-  const { token, bridge, kind } = reveal
+  const { token, bridge, kind, previousExpiresAt } = reveal
   const envSnippet = `CHAMP_BRIDGE_TOKEN=${token}\nCHAMP_API_URL=https://crm.un1tdublin.com`
 
   return (
@@ -191,6 +196,13 @@ function TokenReveal({ reveal, onDone }) {
         This token is shown <strong>once</strong>. Copy it now — if you
         lose it you&apos;ll have to rotate again.
       </p>
+      {kind === 'rotated' && previousExpiresAt && (
+        <p className="mt-1 text-xs text-amber-800">
+          The previous token still works until{' '}
+          <strong>{formatUntil(previousExpiresAt)}</strong>, so the bridge
+          keeps sending HR data while you update the Pi.
+        </p>
+      )}
 
       <div className="mt-3">
         <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-amber-800">Token</p>
@@ -348,4 +360,12 @@ function formatSince(iso) {
   if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`
   if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ago`
   return `${Math.floor(ms / 86_400_000)}d ago`
+}
+
+function formatUntil(iso) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return 'in 24h'
+  return d.toLocaleString('en-IE', {
+    weekday: 'short', hour: '2-digit', minute: '2-digit',
+  })
 }

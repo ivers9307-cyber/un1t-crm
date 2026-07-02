@@ -20,17 +20,35 @@
 // so a leaked token in a log is obviously a bridge token (matches
 // the Stripe / Postmark prefix pattern).
 //
-// Rotation
-// --------
-// Operator can rotate any bridge's token. The route updates the
-// hash; the bridge software either reloads its config and reconnects,
-// or stops authenticating until reflashed. We don't keep prior
-// hashes — rotation is "the previous token is dead immediately".
+// Rotation (grace window)
+// -----------------------
+// Operator can rotate any bridge's token. To avoid a hard mid-day cut
+// (which took live HR ingest down until the Pi was reflashed, and so
+// discouraged rotation entirely), rotation is dual-token: the route
+// moves the current hash into previous_token_hash with an expiry of
+// now() + TOKEN_GRACE_MS, and installs the new hash as api_token_hash.
+// The OLD token keeps authenticating until previous_token_expires_at,
+// giving the operator a window to update the Pi with zero downtime.
+//
+// Decommissioning
+// ---------------
+// A bridge whose row survives but whose status is 'decommissioned' is
+// refused here — a retired Pi must not keep authenticating just because
+// its row (and token hash) still exists (security audit L2).
 
 import { createHash, randomBytes } from 'node:crypto'
 import { createServerClient } from '@/lib/supabase'
 
 const TOKEN_PREFIX = 'bbr_'
+
+// Rotation grace window: how long the PREVIOUS token keeps authenticating
+// after a rotation, so live HR ingest doesn't drop while the Pi is updated.
+export const TOKEN_GRACE_MS = 24 * 60 * 60 * 1000 // 24h
+
+// Statuses that are NOT allowed to authenticate. 'online'/'offline'/'error'
+// are all live states a working bridge passes through; only an operator-set
+// terminal state blocks auth.
+const BLOCKED_STATUSES = new Set(['decommissioned'])
 
 /**
  * Generate a fresh raw token + its sha256 hash. Returns BOTH —
@@ -81,12 +99,38 @@ export async function verifyBridgeToken(requestOrHeaderValue) {
   if (!raw) return null
   const hash = sha256Hex(raw)
   const db = createServerClient()
-  const { data, error } = await db
-    .from('ble_bridges')
-    .select('id, location_id, hardware_id, name, status')
-    .eq('api_token_hash', hash)
-    .maybeSingle()
+  // Match either the current token OR the grace-window previous token. The
+  // hash is 64 hex chars (no PostgREST-filter metacharacters), so it is safe
+  // to interpolate into the .or() filter. Callers treat any non-object return
+  // as 401 and never wrap this in try/catch, so we own error handling here —
+  // a builder throw (e.g. maybeSingle seeing >1 row, impossible with 256-bit
+  // tokens but cheap to guard) resolves to null, not a 500.
+  let data, error
+  try {
+    ;({ data, error } = await db
+      .from('ble_bridges')
+      .select('id, location_id, hardware_id, name, status, api_token_hash, previous_token_hash, previous_token_expires_at')
+      .or(`api_token_hash.eq.${hash},previous_token_hash.eq.${hash}`)
+      .maybeSingle())
+  } catch {
+    return null
+  }
   if (error || !data) return null
+
+  // A retired bridge must not authenticate even though its row (and hash)
+  // survive (security audit L2).
+  if (BLOCKED_STATUSES.has(data.status)) return null
+
+  // If the match was on the current token, accept. Otherwise it matched the
+  // previous token — accept only inside the grace window.
+  const currentMatch = data.api_token_hash === hash
+  if (!currentMatch) {
+    const expiresAt = data.previous_token_expires_at
+      ? new Date(data.previous_token_expires_at).getTime()
+      : 0
+    if (!(expiresAt > Date.now())) return null
+  }
+
   return {
     bridgeId: data.id,
     locationId: data.location_id,
