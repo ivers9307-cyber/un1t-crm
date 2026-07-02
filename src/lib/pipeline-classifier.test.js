@@ -1,571 +1,153 @@
-// Pipeline classifier tests. The classifier replaces the simpler
-// Glofox-status → stage map that left 8k pipeline ghosts after the
-// bulk import (see PIPELINE5 diagnosis). Every branch deserves a
-// concrete fixture so the operator's mental model and the code
-// stay aligned — a future refactor that drops a clause here would
-// silently mis-stage contacts.
-
+// FUNNEL.1 — acquisition-funnel classifier tests. Fixtures are named
+// people so failures read like a story (repo convention from PIPELINE5).
 import { describe, it, expect } from 'vitest'
-import { classifyContact, PIPELINE_THRESHOLDS } from './pipeline-classifier.js'
+import {
+  classifyContact,
+  countAttendedBookings,
+  nextBookedClass,
+  PIPELINE_THRESHOLDS,
+} from './pipeline-classifier.js'
 
-// Fixed "now" so day-math is deterministic. 2026-05-12 12:00 UTC.
-const NOW = new Date('2026-05-12T12:00:00Z').getTime()
-const daysAgo = (d) => new Date(NOW - d * 86_400_000).toISOString()
+const NOW = new Date('2026-07-02T12:00:00Z').getTime()
+const daysAgo = (n) => new Date(NOW - n * 24 * 60 * 60 * 1000).toISOString()
+const unixDaysFromNow = (n) => Math.floor((NOW + n * 24 * 60 * 60 * 1000) / 1000)
 
-// ── Defensive ──────────────────────────────────────────────────
+// recent_bookings entries mirror the Glofox sync shape (GLOFOX2.1.18).
+const attendedBooking = (nDaysAgo) => ({
+  status: 'BOOKED', attended: true, time_start: unixDaysFromNow(-nDaysAgo),
+})
+const futureBooking = (nDaysAhead) => ({
+  status: 'BOOKED', attended: false, time_start: unixDaysFromNow(nDaysAhead),
+})
 
-describe('classifyContact — defensive', () => {
-  it('returns dormant for null / non-object input', () => {
-    expect(classifyContact(null)).toBe('dormant')
-    expect(classifyContact('string')).toBe('dormant')
-    expect(classifyContact(undefined)).toBe('dormant')
+describe('countAttendedBookings', () => {
+  it('counts only attended=true entries', () => {
+    expect(countAttendedBookings([attendedBooking(3), futureBooking(2), attendedBooking(10)])).toBe(2)
   })
-
-  it('returns dormant for an empty contact (no signals at all)', () => {
-    expect(classifyContact({}, NOW)).toBe('dormant')
+  it('is 0 for null / non-array', () => {
+    expect(countAttendedBookings(null)).toBe(0)
+    expect(countAttendedBookings('nope')).toBe(0)
   })
 })
 
-// ── ClassPass — dedicated columns ──────────────────────────────
-
-describe('classifyContact — ClassPass paths', () => {
-  it('classifies classpass_payg with recent attendance as classpass_active', () => {
-    const c = {
-      glofox_membership_status: 'classpass_payg',
-      last_attended_at: daysAgo(3),
-      total_attended_30d: 5,
-    }
-    expect(classifyContact(c, NOW)).toBe('classpass_active')
+describe('nextBookedClass', () => {
+  it('returns the SOONEST future BOOKED class as ISO', () => {
+    const iso = nextBookedClass([futureBooking(5), futureBooking(2), attendedBooking(1)], NOW)
+    expect(iso).toBe(new Date(unixDaysFromNow(2) * 1000).toISOString())
   })
-
-  it('classifies classpass_payg with NO recent attendance as dormant_classpass', () => {
-    const c = {
-      glofox_membership_status: 'classpass_payg',
-      last_attended_at: daysAgo(45),
-      total_attended_30d: 0,
-    }
-    expect(classifyContact(c, NOW)).toBe('dormant_classpass')
+  it('ignores past bookings and cancelled statuses', () => {
+    expect(nextBookedClass([attendedBooking(1), { status: 'CANCELLED', time_start: unixDaysFromNow(3) }], NOW)).toBeNull()
   })
-
-  it('classifies classpass_payg with NO attendance ever as dormant_classpass', () => {
-    const c = {
-      glofox_membership_status: 'classpass_payg',
-      last_attended_at: null,
-    }
-    expect(classifyContact(c, NOW)).toBe('dormant_classpass')
+  it('is null for empty/missing', () => {
+    expect(nextBookedClass(null, NOW)).toBeNull()
   })
 })
 
-// ── Upcoming (membership_state='future') — GLOFOX-CLASSIFY.2 ───
-
-describe('classifyContact — future membership state', () => {
-  it('recent future-state signup → active_trial (kept visible in funnel)', () => {
-    const c = {
-      glofox_membership_status: 'trial',
-      glofox_membership_state: 'future',
-      joined_at: daysAgo(10),
-      last_attended_at: null,
-    }
-    expect(classifyContact(c, NOW)).toBe('active_trial')
+describe('classifyContact — funnel columns', () => {
+  it('Nora: joined last week, no classes → new_lead', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'lead', joined_at: daysAgo(7), recent_bookings: [],
+    }, NOW)).toBe('new_lead')
   })
-
-  it('recent future-state PAID membership → active_trial (upcoming, not dormant)', () => {
-    const c = {
-      glofox_membership_status: 'member',
-      glofox_membership_state: 'future',
-      glofox_membership_type: 'time',
-      joined_at: daysAgo(5),
-      last_attended_at: null,
-    }
-    expect(classifyContact(c, NOW)).toBe('active_trial')
+  it('Nora with a class BOOKED but not attended stays new_lead (badge carries the signal)', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'lead', joined_at: daysAgo(7),
+      recent_bookings: [futureBooking(2)],
+    }, NOW)).toBe('new_lead')
   })
-
-  it('OLD future-state signup (never started) → dormant via recency fallthrough', () => {
-    // The real 741: opened an account >1yr ago, never booked a class.
-    const c = {
-      glofox_membership_status: 'trial',
-      glofox_membership_state: 'future',
-      joined_at: daysAgo(2 * 365),
-      last_attended_at: null,
-      trial_credits_remaining: 3,
-    }
-    expect(classifyContact(c, NOW)).toBe('dormant')
+  it('Fiona: 1 class attended recently → first_class', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'trial', joined_at: daysAgo(20),
+      last_attended_at: daysAgo(5), recent_bookings: [attendedBooking(5)],
+    }, NOW)).toBe('first_class')
   })
-
-  it('future-state with no joined_at → dormant (no freshness signal)', () => {
-    const c = {
-      glofox_membership_status: 'trial',
-      glofox_membership_state: 'future',
-      joined_at: null,
-      last_attended_at: null,
-    }
-    expect(classifyContact(c, NOW)).toBe('dormant')
+  it('Sean: 2 attended → second_class', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'trial', joined_at: daysAgo(20),
+      last_attended_at: daysAgo(3), recent_bookings: [attendedBooking(3), attendedBooking(9)],
+    }, NOW)).toBe('second_class')
   })
-})
-
-// ── Hot Conversion — signal-driven ────────────────────────────
-
-describe('classifyContact — Hot Conversion (engagement-driven)', () => {
-  it('fires on a trial with ≥2 attended in last 7d', () => {
-    const c = {
-      glofox_membership_status: 'trial',
-      total_attended_7d: 2,
-      total_attended_30d: 3,
-      joined_at: daysAgo(20),
-      last_attended_at: daysAgo(1),
-    }
-    expect(classifyContact(c, NOW)).toBe('hot_conversion')
-  })
-
-  it('fires on a trial with exactly 1 credit remaining', () => {
-    const c = {
-      glofox_membership_status: 'trial',
-      trial_credits_remaining: 1,
-      joined_at: daysAgo(10),
-      total_attended_7d: 0,
-      total_attended_30d: 1,
-    }
-    expect(classifyContact(c, NOW)).toBe('hot_conversion')
-  })
-
-  it('fires on a trial with 0 credits remaining (last class used)', () => {
-    const c = {
-      glofox_membership_status: 'trial',
-      trial_credits_remaining: 0,
-      joined_at: daysAgo(10),
-    }
-    expect(classifyContact(c, NOW)).toBe('hot_conversion')
-  })
-
-  it('fires on a no_sale_trial that came back ≥2 times last week', () => {
-    // Someone who let their trial lapse but is now booking
-    // classes again — strong reactivation signal.
-    const c = {
-      glofox_membership_status: 'no_sale_trial',
-      total_attended_7d: 3,
+  it('Aoife: 3 attended, no membership → trial_done (decision point)', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'trial', joined_at: daysAgo(30),
       last_attended_at: daysAgo(2),
-    }
-    expect(classifyContact(c, NOW)).toBe('hot_conversion')
+      recent_bookings: [attendedBooking(2), attendedBooking(6), attendedBooking(12)],
+    }, NOW)).toBe('trial_done')
   })
-
-  it('fires on a tour-booker who attended ≥2 times in last 7d', () => {
-    const c = {
-      glofox_membership_status: 'tour',
-      total_attended_7d: 2,
-      joined_at: daysAgo(5),
-    }
-    expect(classifyContact(c, NOW)).toBe('hot_conversion')
-  })
-
-  it('does NOT fire when credits > 1 AND attended < 2 in 7d', () => {
-    const c = {
-      glofox_membership_status: 'trial',
-      trial_credits_remaining: 2,
-      total_attended_7d: 1,
-      joined_at: daysAgo(3),
-    }
-    // Not hot — drops to active_trial (recently joined, on trial).
-    expect(classifyContact(c, NOW)).toBe('active_trial')
-  })
-})
-
-// ── Active Trial ──────────────────────────────────────────────
-
-describe('classifyContact — Active Trial', () => {
-  it('classifies a trial with recent attendance + plenty of credits as active_trial', () => {
-    const c = {
-      glofox_membership_status: 'trial',
-      last_attended_at: daysAgo(5),
-      total_attended_7d: 1,
-      total_attended_30d: 2,
-      trial_credits_remaining: 3,
-      joined_at: daysAgo(20),
-    }
-    expect(classifyContact(c, NOW)).toBe('active_trial')
-  })
-
-  it('classifies a brand-new trial joiner as active_trial even with no attendance yet', () => {
-    // Grace period for someone who joined this week — they
-    // haven't booked their first class but they ARE in the active
-    // funnel.
-    const c = {
-      glofox_membership_status: 'trial',
-      joined_at: daysAgo(3),
-      last_attended_at: null,
-      trial_credits_remaining: 3,
-    }
-    expect(classifyContact(c, NOW)).toBe('active_trial')
-  })
-
-  it('does NOT classify a stale trial (joined 4 years ago, no recent activity)', () => {
-    // The exact case the operator hit post-import: 2,854 of 3,608
-    // trial_active deals had joined > 2 years ago. They should
-    // fall through to dormant, not stay in the active funnel.
-    const c = {
-      glofox_membership_status: 'trial',
-      joined_at: daysAgo(4 * 365),
-      last_attended_at: null,
-      trial_credits_remaining: 3,
-    }
-    expect(classifyContact(c, NOW)).toBe('dormant')
-  })
-})
-
-// ── Active Member + At Risk ───────────────────────────────────
-
-describe('classifyContact — Active Member / At Risk', () => {
-  it('classifies a member with recent attendance as active_member', () => {
-    const c = {
-      glofox_membership_status: 'member',
-      last_attended_at: daysAgo(5),
-      total_attended_30d: 8,
-    }
-    expect(classifyContact(c, NOW)).toBe('active_member')
-  })
-
-  it('classifies a member who attends rarely but paid recently as active_member', () => {
-    // Subscription-style member — pays monthly, only attends
-    // occasionally. Recent payment keeps them in the active
-    // column.
-    const c = {
-      glofox_membership_status: 'member',
-      last_attended_at: daysAgo(50),
-      last_payment_at: daysAgo(10),
-    }
-    expect(classifyContact(c, NOW)).toBe('active_member')
-  })
-
-  it('classifies a member with 30-90d silence + no recent payment as at_risk_member', () => {
-    const c = {
-      glofox_membership_status: 'member',
-      last_attended_at: daysAgo(60),
-      last_payment_at: daysAgo(90),
-    }
-    expect(classifyContact(c, NOW)).toBe('at_risk_member')
-  })
-
-  it('credit_member is treated identically to member for the active/at_risk distinction', () => {
-    // PIPELINE5 collapses the old separate credit_member stage —
-    // they're real paying customers and belong in active_member.
+  it('4+ attended without converting folds into trial_done', () => {
     expect(classifyContact({
-      glofox_membership_status: 'credit_member',
-      last_attended_at: daysAgo(2),
-    }, NOW)).toBe('active_member')
-
-    expect(classifyContact({
-      glofox_membership_status: 'credit_member',
-      last_attended_at: daysAgo(60),
-    }, NOW)).toBe('at_risk_member')
-  })
-
-  it('drops a member with 90-180d silence into lapsed', () => {
-    const c = {
-      glofox_membership_status: 'member',
-      last_attended_at: daysAgo(120),
-      last_payment_at: daysAgo(120),
-    }
-    expect(classifyContact(c, NOW)).toBe('lapsed')
-  })
-
-  it('drops a member with no attendance signal at all into dormant', () => {
-    // The 815 "members" with last_attended_at=null in the audit
-    // diagnostic. Glofox still says MEMBER but they have no
-    // engagement history we can see.
-    const c = {
-      glofox_membership_status: 'member',
-      last_attended_at: null,
-      last_payment_at: null,
-    }
-    expect(classifyContact(c, NOW)).toBe('dormant')
-  })
-
-  // GLOFOX-CLASSIFY.1 — live membership_state override
-  it('overdue member (state=locked) → at_risk_member even if they attended yesterday', () => {
-    expect(classifyContact({
-      glofox_membership_status: 'member',
-      glofox_membership_state: 'locked',
-      last_attended_at: daysAgo(1),
-    }, NOW)).toBe('at_risk_member')
-  })
-
-  it('overdue credit_member (state=locked) → at_risk_member despite credits + recent class', () => {
-    expect(classifyContact({
-      glofox_membership_status: 'credit_member',
-      glofox_membership_state: 'locked',
-      last_attended_at: daysAgo(1),
-      trial_credits_remaining: 5,
-    }, NOW)).toBe('at_risk_member')
-  })
-
-  it('state=active is NOT an override — member still classifies on engagement', () => {
-    expect(classifyContact({
-      glofox_membership_status: 'member',
-      glofox_membership_state: 'active',
-      last_attended_at: daysAgo(5),
-    }, NOW)).toBe('active_member')
-  })
-
-  it('null-safe: member with no membership_state falls through to recency logic', () => {
-    expect(classifyContact({
-      glofox_membership_status: 'member',
-      last_attended_at: daysAgo(5),
-    }, NOW)).toBe('active_member')
-  })
-})
-
-// ── Live-membership floor (GLOFOX-CLASSIFY.3) ─────────────────
-// A future membership expiry = paid-up subscription. A paid-up
-// member is never silently dropped to lapsed/dormant — only the
-// active vs at_risk split applies. Fixes paid members buried in the
-// hidden dormant bucket because last_payment_at is barely synced.
-
-const daysFromNow = (d) => new Date(NOW + d * 86_400_000).toISOString()
-
-describe('classifyContact — live-membership floor', () => {
-  it('paid-up member, quiet (200d since attended, no payment) → at_risk_member, NOT dormant', () => {
-    expect(classifyContact({
-      glofox_membership_status: 'member',
-      glofox_membership_expiry: daysFromNow(20),
-      last_attended_at: daysAgo(200),
-    }, NOW)).toBe('at_risk_member')
-  })
-
-  it('paid-up member with NO attendance signal at all → at_risk_member, NOT dormant', () => {
-    expect(classifyContact({
-      glofox_membership_status: 'member',
-      glofox_membership_expiry: daysFromNow(5),
-      last_attended_at: null,
-      last_payment_at: null,
-    }, NOW)).toBe('at_risk_member')
-  })
-
-  it('paid-up member, recently attended → active_member', () => {
-    expect(classifyContact({
-      glofox_membership_status: 'member',
-      glofox_membership_expiry: daysFromNow(20),
-      last_attended_at: daysAgo(3),
-    }, NOW)).toBe('active_member')
-  })
-
-  it('paused-but-paid member who is still attending stays active_member (NOT demoted)', () => {
-    // The trap the floor avoids: a dedicated paused→at_risk branch
-    // would wrongly demote paused members who are still showing up.
-    expect(classifyContact({
-      glofox_membership_status: 'member',
-      glofox_membership_state: 'paused',
-      glofox_membership_expiry: daysFromNow(40),
+      glofox_membership_status: 'no_sale_trial', joined_at: daysAgo(40),
       last_attended_at: daysAgo(4),
-    }, NOW)).toBe('active_member')
-  })
-
-  it('paused-but-paid member who is quiet → at_risk_member (surfaced, not hidden)', () => {
-    expect(classifyContact({
-      glofox_membership_status: 'member',
-      glofox_membership_state: 'paused',
-      glofox_membership_expiry: daysFromNow(40),
-      last_attended_at: daysAgo(120),
-    }, NOW)).toBe('at_risk_member')
-  })
-
-  it('locked override beats the floor: paid-up but frozen → at_risk_member', () => {
-    expect(classifyContact({
-      glofox_membership_status: 'member',
-      glofox_membership_state: 'locked',
-      glofox_membership_expiry: daysFromNow(20),
-      last_attended_at: daysAgo(2),
-    }, NOW)).toBe('at_risk_member')
-  })
-
-  it('PAST expiry does NOT trigger the floor — falls to recency (lapsed)', () => {
-    expect(classifyContact({
-      glofox_membership_status: 'member',
-      glofox_membership_expiry: daysAgo(30),
-      last_attended_at: daysAgo(120),
-      last_payment_at: daysAgo(120),
-    }, NOW)).toBe('lapsed')
-  })
-
-  it('credit_member with a future expiry but quiet → at_risk_member', () => {
-    expect(classifyContact({
-      glofox_membership_status: 'credit_member',
-      glofox_membership_expiry: daysFromNow(15),
-      last_attended_at: daysAgo(200),
-    }, NOW)).toBe('at_risk_member')
+      recent_bookings: [attendedBooking(4), attendedBooking(8), attendedBooking(15), attendedBooking(22)],
+    }, NOW)).toBe('trial_done')
   })
 })
 
-// ── New Lead ──────────────────────────────────────────────────
-
-describe('classifyContact — New Lead', () => {
-  it('classifies a recently-created lead with no attendance as new_lead', () => {
-    const c = {
-      glofox_membership_status: 'lead',
-      created_at: daysAgo(10),
-      joined_at: daysAgo(10),
-      last_attended_at: null,
-    }
-    expect(classifyContact(c, NOW)).toBe('new_lead')
-  })
-
-  it('classifies a cold prospect joined recently as new_lead', () => {
-    const c = {
-      glofox_membership_status: 'cold',
-      joined_at: daysAgo(30),
-      last_attended_at: null,
-    }
-    expect(classifyContact(c, NOW)).toBe('new_lead')
-  })
-
-  it('classifies a recent tour-booker who has NOT attended as new_lead', () => {
-    const c = {
-      glofox_membership_status: 'tour',
-      joined_at: daysAgo(7),
-      last_attended_at: null,
-    }
-    expect(classifyContact(c, NOW)).toBe('new_lead')
-  })
-
-  it('does NOT classify a 4-year-old "lead" as new_lead — drops to dormant', () => {
-    // 1,404 of 1,706 new_lead deals in the audit were >2 years
-    // old. Those are not actionable leads — they're archive.
-    const c = {
-      glofox_membership_status: 'lead',
-      joined_at: daysAgo(4 * 365),
-      last_attended_at: null,
-    }
-    expect(classifyContact(c, NOW)).toBe('dormant')
-  })
-
-  // GLOFOX-CLASSIFY.1 — created_at is the import date, not real freshness
-  it('lead with only a recent created_at (no joined_at) → dormant', () => {
+describe('classifyContact — funnel exits', () => {
+  it('lead joined 70d ago with no classes ages out → dormant (60d window on joined_at, NOT lead_created_at)', () => {
     expect(classifyContact({
-      glofox_membership_status: 'lead',
-      created_at: daysAgo(10),
-      last_attended_at: null,
+      glofox_membership_status: 'lead', joined_at: daysAgo(70), recent_bookings: [],
     }, NOW)).toBe('dormant')
   })
-
-  it('recent created_at does NOT rescue an old joined_at lead', () => {
+  it('mid-funnel lead does NOT vanish at day 60 — window keys on activity, not joined_at', () => {
     expect(classifyContact({
-      glofox_membership_status: 'lead',
-      joined_at: daysAgo(200),
-      created_at: daysAgo(5),
-      last_attended_at: null,
+      glofox_membership_status: 'trial', joined_at: daysAgo(65),
+      last_attended_at: daysAgo(10), recent_bookings: [attendedBooking(10), attendedBooking(20)],
+    }, NOW)).toBe('second_class')
+  })
+  it('funnel lead gone quiet 61+d since last class → dormant', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'trial', joined_at: daysAgo(100),
+      last_attended_at: daysAgo(61), recent_bookings: [attendedBooking(61)],
     }, NOW)).toBe('dormant')
   })
-})
-
-// ── Lapsed ────────────────────────────────────────────────────
-
-describe('classifyContact — Lapsed', () => {
-  it('classifies anyone with 60-180d-old attendance who didnt fit other buckets', () => {
-    // ex_member status — Glofox flipped them but they're still in
-    // the recovery window.
-    const c = {
-      glofox_membership_status: 'ex_member',
-      last_attended_at: daysAgo(90),
-    }
-    expect(classifyContact(c, NOW)).toBe('lapsed')
-  })
-
-  it('respects the 180-day ceiling — older than that goes to dormant', () => {
-    const c = {
-      glofox_membership_status: 'ex_member',
-      last_attended_at: daysAgo(200),
-    }
-    expect(classifyContact(c, NOW)).toBe('dormant')
+  it('last_attended_at set but recent_bookings pruned still counts as attended once', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'trial', joined_at: daysAgo(20),
+      last_attended_at: daysAgo(5), recent_bookings: [],
+    }, NOW)).toBe('first_class')
   })
 })
 
-// ── Threshold sanity check ────────────────────────────────────
-
-describe('PIPELINE_THRESHOLDS — exported for operator tuning', () => {
-  it('matches the operator-confirmed numbers (2026-05-12 sign-off)', () => {
-    // If any of these change without an operator conversation,
-    // the test fails — forces the next developer to ask.
-    expect(PIPELINE_THRESHOLDS.HOT_RECENT_DAYS).toBe(7)
-    expect(PIPELINE_THRESHOLDS.HOT_MIN_ATTENDED).toBe(2)
-    expect(PIPELINE_THRESHOLDS.HOT_CREDITS_REMAINING_MAX).toBe(1)
-    expect(PIPELINE_THRESHOLDS.ACTIVE_RECENT_DAYS).toBe(30)
-    expect(PIPELINE_THRESHOLDS.AT_RISK_MAX_DAYS).toBe(90)
-    expect(PIPELINE_THRESHOLDS.LAPSED_MIN_DAYS).toBe(60)
-    expect(PIPELINE_THRESHOLDS.LAPSED_MAX_DAYS).toBe(180)
-    expect(PIPELINE_THRESHOLDS.NEW_LEAD_RECENT_DAYS).toBe(90)
-    expect(PIPELINE_THRESHOLDS.TRIAL_GRACE_DAYS).toBe(14)
+describe('classifyContact — converted & members', () => {
+  it('converted 10d ago → converted, regardless of class count (early converter after 1 class)', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'member', converted_at: daysAgo(10),
+      joined_at: daysAgo(15), recent_bookings: [attendedBooking(12)],
+    }, NOW)).toBe('converted')
+  })
+  it('converted 61d ago rolls off the board → member', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'member', converted_at: daysAgo(61), joined_at: daysAgo(200),
+    }, NOW)).toBe('member')
+  })
+  it('pre-existing member with no converted_at → member', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'credit_member', joined_at: daysAgo(400),
+    }, NOW)).toBe('member')
   })
 })
 
-// ── Real-world fixtures from the diagnostic ───────────────────
-
-describe('classifyContact — real fixtures from the post-import audit', () => {
-  it('Paula Glynn — fresh trial, no transitions yet', () => {
-    // From the audit: trial, joined 3 days ago, 0 credits used
-    // (no last_attended_at yet because no booking).
-    const c = {
-      glofox_membership_status: 'trial',
-      joined_at: daysAgo(3),
-      last_attended_at: null,
-      trial_credits_remaining: null,
-    }
-    expect(classifyContact(c, NOW)).toBe('active_trial')
+describe('classifyContact — exclusions', () => {
+  it('ClassPass PAYG is NEVER in the funnel → classpass', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'classpass_payg', joined_at: daysAgo(5),
+      last_attended_at: daysAgo(2), recent_bookings: [attendedBooking(2)],
+    }, NOW)).toBe('classpass')
   })
-
-  it('ClassPass user who hasnt booked in 2 years — dormant_classpass not pipeline', () => {
-    // 1,533 contacts in the audit were classpass_payg with
-    // last_attended_at IS NULL. They cluttered the conversion_ready
-    // column. Now they correctly go to the dormant ClassPass
-    // archive.
-    const c = {
-      glofox_membership_status: 'classpass_payg',
-      joined_at: daysAgo(2 * 365 + 30),
-      last_attended_at: null,
-    }
-    expect(classifyContact(c, NOW)).toBe('dormant_classpass')
+  it('ex_member → dormant (winback, not a funnel lead)', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'ex_member', joined_at: daysAgo(300),
+    }, NOW)).toBe('dormant')
   })
-
-  it('Ancient "member" with no recent signal — dormant not active_member', () => {
-    // The 657 "members" who joined >2y ago and have no recent
-    // booking. Glofox marks them MEMBER (subscription possibly
-    // cancelled but record not updated). They should NOT be in
-    // the active member column.
-    const c = {
-      glofox_membership_status: 'member',
-      joined_at: daysAgo(3 * 365),
-      last_attended_at: null,
-      last_payment_at: null,
-    }
-    expect(classifyContact(c, NOW)).toBe('dormant')
+  it('null/garbage input → dormant', () => {
+    expect(classifyContact(null, NOW)).toBe('dormant')
   })
 })
 
-// PIPELINE-FLAP regression — root cause of the Simon Goldsmith
-// "Active Member ⇄ Dormant" flapping (May 2026). A member's
-// classification diverges depending on whether attendance data is
-// present. The full sync supplies it (→ active_member); the detail-
-// backfill skips the booking fetch, leaving attendance null (→ dormant).
-// The fix is to NOT reclassify when there's no booking signal
-// (applyMemberSync opts.skipReclassify / skipBookings); these tests
-// pin the divergent classifier outputs that made the guard necessary.
-describe('PIPELINE-FLAP: member classification depends on attendance presence', () => {
-  const NOW = new Date('2026-05-31T03:30:00Z').getTime()
-  const recentlyAttendedMember = {
-    glofox_membership_status: 'member',
-    last_attended_at: '2026-05-23T07:00:00Z', // 8 days before NOW
-    total_attended_30d: 10,
-    total_attended_7d: 0,
-  }
-
-  it('classifies a recently-attended member as active_member (full-sync data)', () => {
-    expect(classifyContact(recentlyAttendedMember, NOW)).toBe('active_member')
-  })
-
-  it('drops the SAME member to dormant when attendance is blanked (backfill data)', () => {
-    const noAttendanceSignal = {
-      glofox_membership_status: 'member',
-      last_attended_at: null,        // skipBookings → never set
-      total_attended_30d: 0,
-      total_attended_7d: 0,
-    }
-    expect(classifyContact(noAttendanceSignal, NOW)).toBe('dormant')
+describe('idempotency', () => {
+  it('same input twice → same output', () => {
+    const c = { glofox_membership_status: 'trial', joined_at: daysAgo(10), last_attended_at: daysAgo(3), recent_bookings: [attendedBooking(3)] }
+    expect(classifyContact(c, NOW)).toBe(classifyContact(c, NOW))
   })
 })
