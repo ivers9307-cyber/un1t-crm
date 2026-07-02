@@ -39,22 +39,25 @@ export function resolveClassReminderLeadTimes(notificationConfig) {
 
 /**
  * Pick the (booking, lead-time) pairs that are due to fire right now: a
- * class whose start is within ±windowMin of (now + leadMinutes). One
- * booking can match more than one lead time (e.g. a 24h + 30m reminder);
- * each pair dedups independently downstream.
+ * class whose start is within the fire window around (now + leadMinutes)
+ * — up to windowMin early, up to lateWindowMin late (see inLeadWindow
+ * for the missed-cron-tick rationale). One booking can match more than
+ * one lead time (e.g. a 24h + 30m reminder); each pair dedups
+ * independently downstream.
  *
  * @param {Array<{id, contact_id, location_id?, class_name?, starts_at}>} bookings
  * @param {number} nowMs
  * @param {number[]} leadTimes  minutes-before values
- * @param {number} windowMin    half-width of the fire window (default 5)
+ * @param {number} windowMin    early half of the fire window (default 5)
+ * @param {number} [lateWindowMin]  late half (default = windowMin, i.e. symmetric)
  * @returns {Array<{bookingId, contactId, locationId, className, startsAt, leadMinutes}>}
  */
-export function selectDueClassReminders(bookings, nowMs, leadTimes, windowMin = 5) {
+export function selectDueClassReminders(bookings, nowMs, leadTimes, windowMin = 5, lateWindowMin = windowMin) {
   const out = []
   for (const b of bookings || []) {
     if (!b || !b.id || !b.contact_id || !b.starts_at) continue
     for (const lead of leadTimes || []) {
-      if (inLeadWindow(b.starts_at, nowMs, lead, windowMin)) {
+      if (inLeadWindow(b.starts_at, nowMs, lead, windowMin, lateWindowMin)) {
         out.push({
           bookingId: b.id,
           contactId: b.contact_id,

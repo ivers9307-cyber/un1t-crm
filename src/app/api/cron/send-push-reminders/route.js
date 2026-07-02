@@ -5,9 +5,14 @@
 // (default: 60 min and 1440 min before due, configurable per-location
 // via locations.notification_config — mig 170).
 //
-// The ±5 min spread around each lead time is wider than the 5-minute
-// cron tick so we never miss a row sitting on the boundary; the
-// push_reminder_sends ledger (mig 169) guarantees we never
+// The fire window around each lead time is ASYMMETRIC: up to 5 min
+// early but up to 15 min late. A symmetric ±5 window (matching the
+// 5-minute cron tick) meant two consecutive missed Vercel cron ticks
+// silently lost the reminder forever — by the next successful tick it
+// was outside the window and had never reached the ledger, so nothing
+// ever retried it. The 15-min late side gives up to three missed ticks
+// a catch-up runway (a reminder 15 min late still beats no reminder);
+// the push_reminder_sends ledger (mig 169) guarantees we never
 // double-send via UNIQUE (entity, recipient, lead_time_minutes).
 //
 // Routing:
@@ -37,7 +42,19 @@ import { selectAll } from '@/lib/select-all'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const WINDOW_MIN = 5 // ±5 min around each target lead time
+const WINDOW_MIN = 5       // fire up to 5 min EARLY (matches the cron tick)
+const LATE_WINDOW_MIN = 15 // fire up to 15 min LATE — catch-up runway for missed cron ticks
+
+// True when `minutesAway` (minutes until the entity is due) is inside
+// the asymmetric fire window for `lead`: [lead - LATE_WINDOW_MIN,
+// lead + WINDOW_MIN]. Once now is past (due - lead + LATE_WINDOW_MIN)
+// the pair stops matching — that's also the natural cap on Fix-C send
+// retries (a permanently-failing send retries for at most ~15 min,
+// then falls out of the window).
+function inFireWindow(minutesAway, lead) {
+  const delta = minutesAway - lead // > 0 = early, < 0 = late
+  return delta <= WINDOW_MIN && delta >= -LATE_WINDOW_MIN
+}
 
 export async function POST(request) { return GET(request) }
 
@@ -76,9 +93,10 @@ export async function GET(request) {
     }
   }
 
-  // DB-side time window: anything due between now+5min and now+max+5min
-  // could be in *some* location's lead-time window. We refine in JS.
-  const fetchLowerDate = new Date(nowMs - WINDOW_MIN * 60 * 1000)
+  // DB-side time window: anything due between now-15min (late catch-up)
+  // and now+max+5min could be in *some* location's lead-time window.
+  // We refine in JS.
+  const fetchLowerDate = new Date(nowMs - LATE_WINDOW_MIN * 60 * 1000)
   const fetchUpperDate = new Date(nowMs + (maxLeadMinutes + WINDOW_MIN) * 60 * 1000)
   const fetchLowerDay = fetchLowerDate.toISOString().slice(0, 10)
   const fetchUpperDay = fetchUpperDate.toISOString().slice(0, 10)
@@ -88,9 +106,11 @@ export async function GET(request) {
     task_pushed: 0,
     task_skipped_dup: 0,
     task_skipped_no_recipient: 0,
+    task_send_failed: 0,
     booking_candidates: 0,
     booking_pushed: 0,
     booking_skipped_dup: 0,
+    booking_send_failed: 0,
     lead_time_buckets: [], // for logging / debugging
   }
 
@@ -160,7 +180,7 @@ export async function GET(request) {
         const minutesAway = (dueUtc.getTime() - nowMs) / 60000
 
         for (const lead of leadTimes) {
-          if (Math.abs(minutesAway - lead) > WINDOW_MIN) continue
+          if (!inFireWindow(minutesAway, lead)) continue
           summary.task_candidates++
 
           // Per-(task, assignee, lead) dedup.
@@ -182,18 +202,30 @@ export async function GET(request) {
             data: { type: 'task_reminder', task_id: t.id, lead_minutes: lead },
           })
 
-          await db.from('push_reminder_sends').insert({
+          // Ledger only when the send didn't outright FAIL. sent=0 with
+          // failed=0 means "nothing to send" (opt-out / no tokens) — write
+          // the row so we don't re-check forever. sent=0 with failed>0
+          // means the Expo pipeline fell over after retries — skip the
+          // row so the next tick retries; the late fire-window bounds how
+          // long a permanently-failing send can keep retrying (~15 min).
+          const sendFailed = (result.sent || 0) === 0 && (result.failed || 0) > 0
+          if (sendFailed) {
+            summary.task_send_failed++
+            logWarn('cron-push-reminders', 'task push send failed — ledger skipped for retry', { t: t.id, lead })
+            continue
+          }
+
+          const { error: ledgerErr } = await db.from('push_reminder_sends').insert({
             entity_type: 'task',
             entity_id: t.id,
             recipient_id: t.assignee_id,
             lead_time_minutes: lead,
             push_count: result.sent || 0,
             push_invalidated: result.invalidated || 0,
-          }).then(({ error }) => {
-            if (error && error.code !== '23505') {
-              logWarn('cron-push-reminders', 'task ledger insert failed', { err: error, t: t.id })
-            }
           })
+          if (ledgerErr && ledgerErr.code !== '23505') {
+            logWarn('cron-push-reminders', 'task ledger insert failed', { err: ledgerErr, t: t.id })
+          }
 
           if (result.sent > 0) summary.task_pushed++
           else summary.task_skipped_no_recipient++
@@ -285,7 +317,7 @@ export async function GET(request) {
           if (!leadTimes.length) continue
 
           for (const lead of leadTimes) {
-            if (Math.abs(minutesAway - lead) > WINDOW_MIN) continue
+            if (!inFireWindow(minutesAway, lead)) continue
             summary.booking_candidates++
 
             // Dedup per (booking, recipient, lead).
@@ -307,18 +339,28 @@ export async function GET(request) {
               data: { type: 'booking_reminder', booking_id: b.id, lead_minutes: lead },
             })
 
-            await db.from('push_reminder_sends').insert({
+            // Same failed-vs-nothing-to-send split as the task block:
+            // a pipeline failure (sent=0, failed>0) skips the ledger so
+            // the next tick retries inside the late window; an opt-out /
+            // no-token zero still writes the row.
+            const sendFailed = (result.sent || 0) === 0 && (result.failed || 0) > 0
+            if (sendFailed) {
+              summary.booking_send_failed++
+              logWarn('cron-push-reminders', 'booking push send failed — ledger skipped for retry', { b: b.id, lead })
+              continue
+            }
+
+            const { error: ledgerErr } = await db.from('push_reminder_sends').insert({
               entity_type: 'booking',
               entity_id: b.id,
               recipient_id: recipient.profile_id,
               lead_time_minutes: lead,
               push_count: result.sent || 0,
               push_invalidated: result.invalidated || 0,
-            }).then(({ error }) => {
-              if (error && error.code !== '23505') {
-                logWarn('cron-push-reminders', 'booking ledger insert failed', { err: error, b: b.id })
-              }
             })
+            if (ledgerErr && ledgerErr.code !== '23505') {
+              logWarn('cron-push-reminders', 'booking ledger insert failed', { err: ledgerErr, b: b.id })
+            }
 
             if (result.sent > 0) summary.booking_pushed++
           }

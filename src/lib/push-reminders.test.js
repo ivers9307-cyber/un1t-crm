@@ -108,4 +108,32 @@ describe('inLeadWindow', () => {
     expect(inLeadWindow(due, now, 60, 5)).toBe(false)
     expect(inLeadWindow(due, now, 60, 15)).toBe(true)
   })
+
+  describe('asymmetric late window (missed-cron-tick catch-up)', () => {
+    it('defaults to symmetric when lateWindowMin is omitted', () => {
+      // 1h lead, due 54min away = running 6 min late → out with default ±5.
+      const due = new Date(now + 54 * 60 * 1000).toISOString()
+      expect(inLeadWindow(due, now, 60, 5)).toBe(false)
+    })
+
+    it('fires LATE inside lateWindowMin (due 46min away on a 60min lead = 14 min late)', () => {
+      const due = new Date(now + 46 * 60 * 1000).toISOString()
+      expect(inLeadWindow(due, now, 60, 5, 15)).toBe(true)
+    })
+
+    it('fires at the late boundary exactly (15 min late)', () => {
+      const due = new Date(now + 45 * 60 * 1000).toISOString()
+      expect(inLeadWindow(due, now, 60, 5, 15)).toBe(true)
+    })
+
+    it('stops matching past the late boundary (16 min late)', () => {
+      const due = new Date(now + 44 * 60 * 1000).toISOString()
+      expect(inLeadWindow(due, now, 60, 5, 15)).toBe(false)
+    })
+
+    it('the EARLY side stays capped at windowMin (does not widen with lateWindowMin)', () => {
+      const due = new Date(now + 66 * 60 * 1000).toISOString() // 6 min early
+      expect(inLeadWindow(due, now, 60, 5, 15)).toBe(false)
+    })
+  })
 })

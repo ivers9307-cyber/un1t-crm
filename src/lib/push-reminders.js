@@ -60,12 +60,22 @@ export function formatLocalTime(timeStr) {
 }
 
 /**
- * Returns true if `dueUtcIso` falls inside the ±windowMin minutes
- * window around (nowMs + leadMinutes). Pure: makes the cron's
- * window-membership decision testable without faking dates.
+ * Returns true if `dueUtcIso` falls inside the fire window around
+ * (nowMs + leadMinutes). Pure: makes the cron's window-membership
+ * decision testable without faking dates.
+ *
+ * The window is ASYMMETRIC: up to `windowMin` minutes early, but up to
+ * `lateWindowMin` minutes late. A symmetric ±5 window with a 5-minute
+ * cron meant two consecutive missed Vercel ticks silently dropped the
+ * reminder forever (by the next tick it was outside the window and had
+ * never reached the dedup ledger). The wider late side gives missed
+ * ticks a catch-up runway; the ledger's UNIQUE constraint still
+ * guarantees at-most-once on normal operation. Omitting lateWindowMin
+ * keeps the old symmetric behaviour.
  */
-export function inLeadWindow(dueUtcIso, nowMs, leadMinutes, windowMin = 5) {
+export function inLeadWindow(dueUtcIso, nowMs, leadMinutes, windowMin = 5, lateWindowMin = windowMin) {
   const targetMs = nowMs + leadMinutes * 60 * 1000
   const t = new Date(dueUtcIso).getTime()
-  return Math.abs(t - targetMs) <= windowMin * 60 * 1000
+  const deltaMs = t - targetMs // > 0 = we're early, < 0 = we're late
+  return deltaMs <= windowMin * 60 * 1000 && deltaMs >= -lateWindowMin * 60 * 1000
 }

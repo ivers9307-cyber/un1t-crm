@@ -80,7 +80,7 @@ import { sendPush, resolvePushAllowedIds } from './push.js'
 describe('sendPush — permission filtering (reads profile_locations, mig 058)', () => {
   it('returns zero counts when no userIds are passed', async () => {
     const result = await sendPush([], { title: 't', body: 'b' })
-    expect(result).toEqual({ sent: 0, skipped: 0, invalidated: 0 })
+    expect(result).toEqual({ sent: 0, skipped: 0, invalidated: 0, failed: 0 })
     expect(global.fetch).not.toHaveBeenCalled()
   })
 
@@ -176,7 +176,99 @@ describe('sendPush — permission filtering (reads profile_locations, mig 058)',
     const result = await sendPush(['a'], { title: 't', body: 'b' })
     expect(result.sent).toBe(0)
     expect(result.invalidated).toBe(1)
+    expect(result.failed).toBe(0) // DeviceNotRegistered is handled, not a pipeline failure
     expect(deletedTokenIds).toContain('t-bad')
+  })
+})
+
+describe('sendPush — Expo failure handling (retry + failed count)', () => {
+  // All the retry tests run on fake timers so the 500ms/2s backoff
+  // doesn't slow the suite down.
+  const allowUser = () => {
+    fakeProfiles = [{ id: 'a', active: true }]
+    fakeLinks = [{ profile_id: 'a', permissions: { mobile: { push_notifications: true } } }]
+    fakeTokens = [{ id: 't1', user_id: 'a', expo_push_token: 'ExponentPushToken[x]' }]
+  }
+  const okResponse = { ok: true, json: async () => ({ data: [{ status: 'ok' }] }) }
+
+  async function runWithFakeTimers(fn) {
+    vi.useFakeTimers()
+    try {
+      const p = fn()
+      await vi.runAllTimersAsync()
+      return await p
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
+  it('retries a 429 and succeeds on the second attempt', async () => {
+    allowUser()
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 429, text: async () => 'rate limited' })
+      .mockResolvedValueOnce(okResponse)
+
+    const result = await runWithFakeTimers(() => sendPush(['a'], { title: 't', body: 'b' }))
+    expect(result.sent).toBe(1)
+    expect(result.failed).toBe(0)
+    expect(global.fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('retries a fetch exception and a 500, then succeeds on the third attempt', async () => {
+    allowUser()
+    global.fetch = vi.fn()
+      .mockRejectedValueOnce(new Error('ECONNRESET'))
+      .mockResolvedValueOnce({ ok: false, status: 503, text: async () => 'unavailable' })
+      .mockResolvedValueOnce(okResponse)
+
+    const result = await runWithFakeTimers(() => sendPush(['a'], { title: 't', body: 'b' }))
+    expect(result.sent).toBe(1)
+    expect(result.failed).toBe(0)
+    expect(global.fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('gives up after 3 attempts and counts the batch as failed', async () => {
+    allowUser()
+    global.fetch = vi.fn().mockRejectedValue(new Error('network down'))
+
+    const result = await runWithFakeTimers(() => sendPush(['a'], { title: 't', body: 'b' }))
+    expect(result.sent).toBe(0)
+    expect(result.failed).toBe(1)
+    expect(global.fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('does NOT retry a non-429 4xx (bad request will not get better)', async () => {
+    allowUser()
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 400, text: async () => 'bad request' })
+
+    const result = await sendPush(['a'], { title: 't', body: 'b' })
+    expect(result.sent).toBe(0)
+    expect(result.failed).toBe(1)
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('counts an unparseable 2xx response as failed (was a silent no-op)', async () => {
+    allowUser()
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => { throw new Error('not json') } })
+
+    const result = await runWithFakeTimers(() => sendPush(['a'], { title: 't', body: 'b' }))
+    expect(result.sent).toBe(0)
+    expect(result.failed).toBe(1)
+    expect(global.fetch).toHaveBeenCalledTimes(3) // unparseable is retried — could be a proxy blip
+  })
+
+  it('counts non-DeviceNotRegistered ticket errors as failed without pruning', async () => {
+    allowUser()
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ status: 'error', details: { error: 'MessageTooBig' } }] }),
+    })
+
+    const result = await sendPush(['a'], { title: 't', body: 'b' })
+    expect(result.sent).toBe(0)
+    expect(result.failed).toBe(1)
+    expect(result.invalidated).toBe(0)
+    expect(deletedTokenIds).toHaveLength(0)
   })
 })
 
