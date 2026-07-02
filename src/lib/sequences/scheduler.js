@@ -407,7 +407,7 @@ export async function runSequences({ now = new Date() } = {}) {
       // followingOrder == step.step_order + 1, so this is identical
       // to the previous behaviour. For a branch it implements the
       // jump.
-      await db.from('sequence_enrollments').update({
+      const { error: advanceErr } = await db.from('sequence_enrollments').update({
         current_step_order: followingOrder - 1,
         next_step_at: nextFireAt,
         status: newStatus,
@@ -416,6 +416,17 @@ export async function runSequences({ now = new Date() } = {}) {
         last_error: null,
         error_count: 0,
       }).eq('id', enrollment.id)
+      // A rejected advance is the WORST failure mode: the step may already
+      // have SENT, and swallowing the error leaves the cursor behind — the
+      // claim lease expires and the send repeats every ~10 minutes, forever,
+      // with nothing visible anywhere. Live 2026-07-02: the whatsapp step
+      // returned Meta's wamid string as sendId, Postgres rejected it for the
+      // uuid last_step_send_id column (22P02), and a lead got the same
+      // template twice. Throwing routes to the catch below: visible
+      // last_error + 30-min backoff + pause after MAX_ERRORS.
+      if (advanceErr) {
+        throw new Error(`Cursor advance failed after step ${step.step_order} (${step.step_type}): ${advanceErr.message}`)
+      }
 
       if (newStatus === 'completed') {
         // supabase-js builders don't have .catch — try/catch around await.

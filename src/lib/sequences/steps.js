@@ -160,9 +160,17 @@ export async function sendWhatsappStep(db, { step, sequence, contact }) {
 
   // Log to whatsapp_messages so the inbox + analytics see it.
   // Conversation is upserted via the helper to attribute correctly.
+  //
+  // The inserted row's id is ALSO this step's send id. Handlers MUST return
+  // OUR row uuids, never provider ids: sequence_enrollments.last_step_send_id
+  // is a uuid column, and returning Meta's "wamid.…" string here made the
+  // runner's cursor-advance update fail with 22P02 — silently — so the claim
+  // lease expired and the step RE-SENT every ~10 minutes (the live Tim Ivers
+  // double-send, 2026-07-02).
   const conversationId = await getOrCreateConversation(db, contact, sequence.location_id)
+  let sendRowId = null
   if (conversationId && result?.messageId) {
-    await db.from('whatsapp_messages').insert({
+    const { data: msgRow } = await db.from('whatsapp_messages').insert({
       conversation_id: conversationId,
       contact_id: contact.id,
       location_id: sequence.location_id,
@@ -174,14 +182,15 @@ export async function sendWhatsappStep(db, { step, sequence, contact }) {
       body: renderTemplateBody(template, contact, variableMapping, { companyName: branding.companyName }),
       status: 'sent',
       sent_at: new Date().toISOString(),
-    })
+    }).select('id').single()
+    sendRowId = msgRow?.id || null
   }
 
   // Bump per-step metric.
   // supabase-js builders don't have .catch — try/catch around await.
   try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
 
-  return result?.messageId || null
+  return sendRowId
 }
 
 // ── sms (mig 062) ───────────────────────────────────────────────
@@ -232,20 +241,22 @@ export async function sendSmsStep(db, { step, sequence, contact }) {
 
   // Activity timeline entry. Same shape as the broadcast + ad-hoc
   // send paths (type='sms_sent', cyan chip in the contact page's
-  // activityIcons map).
-  await db.from('activities').insert({
+  // activityIcons map). Its id doubles as the step's send id — a Twilio
+  // "SM…" sid is NOT a uuid and would hit the same 22P02 re-send loop
+  // the WhatsApp step did (last_step_send_id is a uuid column).
+  const { data: activityRow } = await db.from('activities').insert({
     contact_id: contact.id,
     location_id: sequence.location_id,
     type: 'sms_sent',
     subject: `SMS sequence step: ${sequence.name || 'Untitled sequence'}`,
     note: renderedBody,
-  })
+  }).select('id').single()
 
   // Bump per-step metric.
   // supabase-js builders don't have .catch — try/catch around await.
   try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
 
-  return result?.sid || null
+  return activityRow?.id || null
 }
 
 // ── apply_tag (Tier 1B / mig 087) ───────────────────────────────
