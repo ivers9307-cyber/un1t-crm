@@ -14,9 +14,9 @@
 //   - Header is sparse: studio name + clock + 'Live'
 //   - No interactivity — touch input on TV browsers is unreliable
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { buildTimeline, computeEffectiveElapsedMs, resolveTimerState, SEG_COLOR } from '@/lib/class-timer'
-import { shouldPlayIntro, INTRO_DURATION_MS } from '@/lib/tv-class-intro'
+import { planIntroTimers } from '@/lib/tv-class-intro'
 import { isKioskParam, showReconnecting } from '@/lib/tv-kiosk'
 
 const POLL_MS = 2000
@@ -176,20 +176,40 @@ function ClassStartIntro({ current, serverTime }) {
   const [shown, setShown] = useState(false) // drives the fade/scale-in transition
   const cls = current
 
+  // The 2s poll changes `serverTime` (and can re-supply `starts_at`) on every
+  // tick. If the play-sequence effect depended on those, each poll would tear
+  // down the in-flight fade/hide timers and re-run — and because the
+  // occurrence is already marked played, early-return without rearming them,
+  // stranding the full-screen overlay over the live board. So we read the
+  // freshest clock/start via refs (kept current by a separate effect that does
+  // NOT own any timers) and key the sequence effect purely on the occurrence.
+  const serverTimeRef = useRef(serverTime)
+  const startsAtRef = useRef(cls?.starts_at)
   useEffect(() => {
-    if (!cls?.glofox_event_id || !serverTime) return
-    const nowMs = Date.parse(serverTime)
+    serverTimeRef.current = serverTime
+    startsAtRef.current = cls?.starts_at
+  }, [serverTime, cls?.starts_at])
+
+  const eventId = cls?.glofox_event_id
+  useEffect(() => {
+    if (!eventId) return
+    const nowMs = serverTimeRef.current ? Date.parse(serverTimeRef.current) : Date.now()
     let lastPlayedKey = null
     try { lastPlayedKey = sessionStorage.getItem('tvIntroLastKey') } catch {}
-    if (!shouldPlayIntro({ currentClass: cls, lastPlayedKey, nowMs })) return
-    try { sessionStorage.setItem('tvIntroLastKey', cls.glofox_event_id) } catch {}
+    const plan = planIntroTimers({ eventId, startsAt: startsAtRef.current, lastPlayedKey, nowMs })
+    if (!plan.play) return
+    try { sessionStorage.setItem('tvIntroLastKey', plan.key) } catch {}
     setVisible(true)
-    const inT = setTimeout(() => setShown(true), 30)
-    const outT = setTimeout(() => setShown(false), INTRO_DURATION_MS - 600)
-    const hideT = setTimeout(() => setVisible(false), INTRO_DURATION_MS)
+    setShown(false)
+    const inT = setTimeout(() => setShown(true), plan.timers.showMs)
+    const outT = setTimeout(() => setShown(false), plan.timers.fadeMs)
+    const hideT = setTimeout(() => setVisible(false), plan.timers.hideMs)
     return () => { clearTimeout(inT); clearTimeout(outT); clearTimeout(hideT) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cls?.glofox_event_id, serverTime])
+    // Depend ONLY on the occurrence identity — NOT serverTime — so the 2s poll
+    // never clears the fade/hide timers mid-play. Cleanup fires only on unmount
+    // or a genuine occurrence change. (Deps are exhaustive: the clock/start are
+    // read via refs and setVisible/setShown are stable — no disable needed.)
+  }, [eventId])
 
   if (!visible || !cls) return null
   const meta = [cls.starts_at_label, cls.program].filter(Boolean).join('  ·  ')
