@@ -114,7 +114,7 @@ export default function LocationFeatures({ location }) {
             User-level permissions and role defaults are still applied <em>within</em> the features that are on.
           </p>
           {error && (
-            <div className="mt-3 bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-md p-2 flex items-start gap-2">
+            <div className="mt-3 bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
               <AlertCircle size={12} className="mt-0.5" /> {error}
             </div>
           )}

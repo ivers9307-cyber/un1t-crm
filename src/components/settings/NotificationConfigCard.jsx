@@ -84,7 +84,7 @@ export default function NotificationConfigCard({ locationId, callerRole }) {
   }
   if (error) {
     return (
-      <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-300 inline-flex items-center gap-2">
+      <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-700 inline-flex items-center gap-2">
         <AlertTriangle size={14} /> {error}
       </div>
     )
@@ -225,13 +225,13 @@ function CategoryEditor({ meta, slice, savedSlice, editable, locationId, onChang
       )}
 
       {sliceErrors.length > 0 && (
-        <div className="mt-3 bg-red-500/10 border border-red-500/30 rounded p-2 text-xs text-red-300">
+        <div className="mt-3 bg-red-500/10 border border-red-500/30 rounded p-2 text-xs text-red-700">
           {sliceErrors.map(([k, v]) => <div key={k}>{v}</div>)}
         </div>
       )}
 
       {err && (
-        <div className="mt-3 bg-red-500/10 border border-red-500/30 rounded p-2 text-xs text-red-300 inline-flex items-center gap-1.5">
+        <div className="mt-3 bg-red-500/10 border border-red-500/30 rounded p-2 text-xs text-red-700 inline-flex items-center gap-1.5">
           <AlertTriangle size={12} /> {err}
         </div>
       )}

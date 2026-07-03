@@ -14,12 +14,12 @@ import { Send, CheckCircle2, Clock, AlertCircle, ExternalLink, RefreshCw, Mail, 
 const CANCELLABLE_STATUSES = new Set(['sent', 'terms_accepted', 'failed'])
 
 const STATUS_META = {
-  sent:            { label: 'Link sent',       cls: 'bg-blue-500/20 text-blue-400',     icon: Send },
-  terms_accepted:  { label: 'Terms accepted',  cls: 'bg-amber-500/20 text-amber-400',   icon: CheckCircle2 },
-  paid:            { label: 'Deposit paid',    cls: 'bg-green-500/20 text-green-400',   icon: CheckCircle2 },
-  failed:          { label: 'Payment failed',  cls: 'bg-red-500/20 text-red-400',       icon: AlertCircle },
+  sent:            { label: 'Link sent',       cls: 'bg-blue-500/20 text-blue-700',     icon: Send },
+  terms_accepted:  { label: 'Terms accepted',  cls: 'bg-amber-500/20 text-amber-700',   icon: CheckCircle2 },
+  paid:            { label: 'Deposit paid',    cls: 'bg-green-500/20 text-green-700',   icon: CheckCircle2 },
+  failed:          { label: 'Payment failed',  cls: 'bg-red-500/20 text-red-700',       icon: AlertCircle },
   cancelled:       { label: 'Cancelled',       cls: 'bg-un1t-border/40 text-un1t-subtle',  icon: Clock },
-  refunded:        { label: 'Refunded',        cls: 'bg-purple-500/20 text-purple-400', icon: RefreshCw },
+  refunded:        { label: 'Refunded',        cls: 'bg-purple-500/20 text-purple-700', icon: RefreshCw },
 }
 
 // Client-side mirror of getDepositBaseUrl(). Configured at deploy time —
@@ -224,7 +224,7 @@ export default function DepositCard({ car, setCar, setError, disabled, defaultAm
       )}
 
       {lastResult?.errors?.length > 0 && (
-        <div className="mt-3 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-md p-2">
+        <div className="mt-3 text-xs text-amber-700 bg-amber-500/10 border border-amber-500/30 rounded-md p-2">
           <AlertCircle size={12} className="inline-block mr-1 mb-0.5" />
           Partial delivery: {lastResult.errors.join('; ')}
         </div>

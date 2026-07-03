@@ -81,7 +81,7 @@ export default function CreateInGlofoxButton({ contact }) {
         className={`w-full inline-flex items-center justify-center gap-2 text-xs font-medium py-2 rounded-md transition-colors ${
           disabled
             ? 'bg-un1t-border/30 text-un1t-muted cursor-not-allowed border border-un1t-border/40'
-            : 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/25'
+            : 'bg-emerald-500/15 text-emerald-700 border border-emerald-500/40 hover:bg-emerald-500/25'
         }`}
       >
         {busy ? <Loader2 size={12} className="animate-spin" /> : <UserPlus size={12} />}

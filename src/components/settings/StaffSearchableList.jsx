@@ -11,11 +11,11 @@ import Link from 'next/link'
 import { Search, X } from 'lucide-react'
 
 const ROLE_COLORS = {
-  master: 'bg-amber-500/20 text-amber-400',
-  owner: 'bg-purple-500/20 text-purple-400',
-  manager: 'bg-blue-500/20 text-blue-400',
-  head_coach: 'bg-emerald-500/20 text-emerald-400',
-  staff: 'bg-gray-500/20 text-gray-400',
+  master: 'bg-amber-500/20 text-amber-700',
+  owner: 'bg-purple-500/20 text-purple-700',
+  manager: 'bg-blue-500/20 text-blue-700',
+  head_coach: 'bg-emerald-500/20 text-emerald-700',
+  staff: 'bg-gray-500/20 text-gray-700',
 }
 
 const ROLE_LABELS = {
@@ -138,7 +138,7 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns }) 
                     {(s.profile_locations || []).map(pl => pl.locations?.name).filter(Boolean).join(', ') || '—'}
                   </td>
                   <td className="p-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${s.active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${s.active ? 'bg-green-500/20 text-green-700' : 'bg-red-500/20 text-red-700'}`}>
                       {s.active ? 'Active' : 'Inactive'}
                     </span>
                   </td>

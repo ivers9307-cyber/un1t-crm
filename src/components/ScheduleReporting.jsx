@@ -244,7 +244,7 @@ export default function ScheduleReporting({ user }) {
                           <td className="px-4 py-3 font-medium">{s.name}</td>
                           <td className="px-4 py-3 text-un1t-subtle capitalize">{s.role}</td>
                           <td className="px-4 py-3">
-                            <span className={`text-xs px-2 py-0.5 rounded-full ${s.employment_type === 'contractor' ? 'bg-amber-500/20 text-amber-400' : 'bg-blue-500/20 text-blue-400'}`}>
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${s.employment_type === 'contractor' ? 'bg-amber-500/20 text-amber-700' : 'bg-blue-500/20 text-blue-700'}`}>
                               {s.employment_type === 'contractor' ? 'Contractor' : 'FTE'}
                             </span>
                           </td>

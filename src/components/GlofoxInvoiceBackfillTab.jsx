@@ -88,7 +88,7 @@ export default function GlofoxInvoiceBackfillTab() {
           <button
             type="submit"
             disabled={csvBusy || !csvFile}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-blue-500/20 text-blue-300 border border-blue-500/40 hover:bg-blue-500/30 disabled:opacity-50 text-sm font-medium"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-blue-500/20 text-blue-700 border border-blue-500/40 hover:bg-blue-500/30 disabled:opacity-50 text-sm font-medium"
           >
             {csvBusy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
             {csvBusy ? 'Importing…' : 'Import CSV'}

@@ -143,7 +143,7 @@ export default function XeroLocationCard({ location, connection }) {
               <button
                 onClick={onDisconnect}
                 disabled={busy}
-                className="flex items-center gap-1 text-xs px-3 py-1.5 border border-red-500/40 hover:bg-red-500/10 text-red-400 rounded-md disabled:opacity-50"
+                className="flex items-center gap-1 text-xs px-3 py-1.5 border border-red-500/40 hover:bg-red-500/10 text-red-700 rounded-md disabled:opacity-50"
               >
                 <Unlink size={12} /> Disconnect
               </button>

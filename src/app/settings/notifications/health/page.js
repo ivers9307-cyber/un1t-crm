@@ -252,9 +252,9 @@ function SummaryCard({ label, value, kind }) {
 
 function StatusPill({ status }) {
   const styles = {
-    green: 'bg-emerald-500/20 text-emerald-300',
+    green: 'bg-emerald-500/20 text-emerald-700',
     amber: 'bg-amber-500/20 text-amber-200',
-    red:   'bg-red-500/20 text-red-300',
+    red:   'bg-red-500/20 text-red-700',
   }
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] uppercase font-semibold ${styles[status.kind]}`}>

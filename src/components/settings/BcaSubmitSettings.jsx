@@ -127,12 +127,12 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
   return (
     <div className="space-y-5 max-w-2xl">
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-md p-3 flex items-start gap-2">
+        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-md p-3 flex items-start gap-2">
           <AlertCircle size={14} className="mt-0.5 shrink-0" /> {error}
         </div>
       )}
       {savedAt && !error && (
-        <div className="bg-green-500/10 border border-green-500/30 text-green-400 text-sm rounded-md p-3 flex items-center gap-2">
+        <div className="bg-green-500/10 border border-green-500/30 text-green-700 text-sm rounded-md p-3 flex items-center gap-2">
           <Check size={14} /> Saved at {savedAt.toLocaleTimeString()}
         </div>
       )}
@@ -251,7 +251,7 @@ export default function BcaSubmitSettings({ location, initialConfig, sampleCar }
           (min {MIN_BCA_DOCUMENTS}, max {MAX_BCA_DOCUMENTS}).
         </p>
         {fieldErrors.documents && (
-          <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-md p-2 mb-3">
+          <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 mb-3">
             {fieldErrors.documents}
           </div>
         )}

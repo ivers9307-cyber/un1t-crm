@@ -28,11 +28,11 @@ import Link from 'next/link'
 import { Mail, Calendar, MessageSquare, RefreshCw, Tag, Zap, AlertCircle, Check, ChevronLeft, Loader2 } from 'lucide-react'
 
 const TRIGGER_META = {
-  manual:           { label: 'Manual',          icon: Zap,            cls: 'bg-blue-500/20 text-blue-400' },
-  booking_created:  { label: 'Booking',         icon: Calendar,       cls: 'bg-purple-500/20 text-purple-400' },
-  status_change:    { label: 'Status change',   icon: RefreshCw,      cls: 'bg-amber-500/20 text-amber-400' },
-  event_reminder:   { label: 'Event reminder',  icon: Calendar,       cls: 'bg-emerald-500/20 text-emerald-400' },
-  tag_added:        { label: 'Tag',             icon: Tag,            cls: 'bg-pink-500/20 text-pink-400' },
+  manual:           { label: 'Manual',          icon: Zap,            cls: 'bg-blue-500/20 text-blue-700' },
+  booking_created:  { label: 'Booking',         icon: Calendar,       cls: 'bg-purple-500/20 text-purple-700' },
+  status_change:    { label: 'Status change',   icon: RefreshCw,      cls: 'bg-amber-500/20 text-amber-700' },
+  event_reminder:   { label: 'Event reminder',  icon: Calendar,       cls: 'bg-emerald-500/20 text-emerald-700' },
+  tag_added:        { label: 'Tag',             icon: Tag,            cls: 'bg-pink-500/20 text-pink-700' },
 }
 
 export default function SequencePicker({ contactIds, locationId, variant = 'popover', onClose, onSuccess }) {
@@ -168,7 +168,7 @@ export default function SequencePicker({ contactIds, locationId, variant = 'popo
 
       {/* Step 3: Success summary after a real enrol. */}
       {step === 'done' && result && !result.error && (
-        <div className="mb-3 p-2 rounded bg-green-500/10 border border-green-500/30 text-xs text-green-400 flex items-start gap-2">
+        <div className="mb-3 p-2 rounded bg-green-500/10 border border-green-500/30 text-xs text-green-700 flex items-start gap-2">
           <Check size={12} className="shrink-0 mt-0.5" />
           <div>
             Added to <span className="font-semibold">{result.sequence.name}</span>:
@@ -181,7 +181,7 @@ export default function SequencePicker({ contactIds, locationId, variant = 'popo
 
       {/* Errors at any step. */}
       {result?.error && (
-        <div className="mb-3 p-2 rounded bg-red-500/10 border border-red-500/30 text-xs text-red-400 flex items-start gap-2">
+        <div className="mb-3 p-2 rounded bg-red-500/10 border border-red-500/30 text-xs text-red-700 flex items-start gap-2">
           <AlertCircle size={12} className="shrink-0 mt-0.5" />
           <div>{result.error}</div>
         </div>

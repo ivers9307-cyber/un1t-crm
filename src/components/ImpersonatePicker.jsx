@@ -10,10 +10,10 @@ import { UserCog, Search, ChevronDown, Crown, ShieldCheck } from 'lucide-react'
 
 const ROLE_BADGES = {
   master: { label: 'Master', cls: 'bg-amber-500/30 text-amber-300', icon: Crown },
-  owner: { label: 'Owner', cls: 'bg-purple-500/20 text-purple-300', icon: ShieldCheck },
-  manager: { label: 'Manager', cls: 'bg-blue-500/20 text-blue-300' },
-  head_coach: { label: 'Head Coach', cls: 'bg-emerald-500/20 text-emerald-300' },
-  staff: { label: 'Staff', cls: 'bg-gray-500/20 text-gray-300' },
+  owner: { label: 'Owner', cls: 'bg-purple-500/20 text-purple-700', icon: ShieldCheck },
+  manager: { label: 'Manager', cls: 'bg-blue-500/20 text-blue-700' },
+  head_coach: { label: 'Head Coach', cls: 'bg-emerald-500/20 text-emerald-700' },
+  staff: { label: 'Staff', cls: 'bg-gray-500/20 text-gray-700' },
 }
 
 export default function ImpersonatePicker() {
@@ -87,7 +87,7 @@ export default function ImpersonatePicker() {
     <div className="px-2 py-1 relative" ref={ref}>
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-amber-400 hover:bg-amber-500/10 rounded-md border border-amber-500/30"
+        className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-amber-700 hover:bg-amber-500/10 rounded-md border border-amber-500/30"
       >
         <span className="flex items-center gap-2">
           <UserCog size={14} /> View as user
@@ -121,7 +121,7 @@ export default function ImpersonatePicker() {
               <p className="p-3 text-xs text-un1t-subtle">No users match.</p>
             )}
             {filtered.map(u => {
-              const badge = ROLE_BADGES[u.role] || { label: u.role, cls: 'bg-gray-500/20 text-gray-300' }
+              const badge = ROLE_BADGES[u.role] || { label: u.role, cls: 'bg-gray-500/20 text-gray-700' }
               const BadgeIcon = badge.icon
               return (
                 <button

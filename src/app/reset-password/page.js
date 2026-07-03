@@ -210,7 +210,7 @@ export default function ResetPasswordPage() {
           </div>
 
           {!ready && (
-            <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-xs rounded-md p-3">
+            <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-700 text-xs rounded-md p-3">
               {flowType === 'invite'
                 ? 'Verifying your invitation… If this persists, ask the person who invited you to send a fresh link.'
                 : 'Verifying your reset link… If this persists, request a new link from the login page.'}
@@ -255,7 +255,7 @@ export default function ResetPasswordPage() {
           </div>
 
           {error && (
-            <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-md p-3">
+            <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-3">
               {error}
             </div>
           )}

@@ -65,7 +65,7 @@ export default function GlofoxAdminTabs(props) {
               <Icon size={14} />
               {label}
               {showBadge && (
-                <span className="ml-1 inline-flex items-center justify-center min-w-[18px] px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                <span className="ml-1 inline-flex items-center justify-center min-w-[18px] px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-amber-500/20 text-amber-700 border border-amber-500/40">
                   {reviewCount}
                 </span>
               )}

@@ -88,11 +88,11 @@ const SOURCE_TYPE_LABEL = {
 }
 
 const SOURCE_TYPE_TONE = {
-  supplier_email:     'bg-blue-500/20 text-blue-300 border-blue-500/40',
-  contractor_invoice: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
-  fte_expense_item:   'bg-orange-500/20 text-orange-300 border-orange-500/40',
-  card_receipt:       'bg-pink-500/20 text-pink-300 border-pink-500/40',
-  car_document:       'bg-teal-500/20 text-teal-300 border-teal-500/40',
+  supplier_email:     'bg-blue-500/20 text-blue-700 border-blue-500/40',
+  contractor_invoice: 'bg-purple-500/20 text-purple-700 border-purple-500/40',
+  fte_expense_item:   'bg-orange-500/20 text-orange-700 border-orange-500/40',
+  card_receipt:       'bg-pink-500/20 text-pink-700 border-pink-500/40',
+  car_document:       'bg-teal-500/20 text-teal-700 border-teal-500/40',
 }
 
 // INVOICES — order-insensitive comparison for the edit form's dirty
@@ -337,7 +337,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
       </div>
 
       {error && (
-        <div className="border border-red-500/40 bg-red-500/10 text-red-300 rounded-lg p-3 text-sm">
+        <div className="border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-3 text-sm">
           {error}
         </div>
       )}
@@ -616,7 +616,7 @@ function BulkActionBar({
       )}
 
       {error && (
-        <div className="max-w-7xl mx-auto mt-3 border border-red-500/40 bg-red-500/10 text-red-300 rounded-lg p-2 text-xs">
+        <div className="max-w-7xl mx-auto mt-3 border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-2 text-xs">
           {error}
         </div>
       )}
@@ -638,16 +638,16 @@ function StatusPill({ status, stage, queuedAt = null, claimedAt = null }) {
   // static label so the operator sees it move through the queue.
   if (queuedAt && (status === 'quality_approved' || status === 'received')) {
     return claimedAt
-      ? <span className="text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 whitespace-nowrap bg-blue-500/20 text-blue-300 border-blue-500/40 animate-pulse">Analysing…</span>
-      : <span className="text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 whitespace-nowrap bg-amber-500/20 text-amber-300 border-amber-500/40">Queued</span>
+      ? <span className="text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 whitespace-nowrap bg-blue-500/20 text-blue-700 border-blue-500/40 animate-pulse">Analysing…</span>
+      : <span className="text-[10px] uppercase tracking-wide border rounded px-1.5 py-0.5 whitespace-nowrap bg-amber-500/20 text-amber-700 border-amber-500/40">Queued</span>
   }
   const map = {
-    received:         { label: 'Awaiting review',  cls: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40' },
-    quality_approved: { label: 'Awaiting extract', cls: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
-    extracted:        { label: 'Awaiting data',    cls: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
-    data_approved:    { label: 'Awaiting send',    cls: 'bg-purple-500/20 text-purple-300 border-purple-500/40' },
-    forwarded:        { label: 'Sent to Xero',     cls: 'bg-green-500/20 text-green-300 border-green-500/40' },
-    rejected:         { label: `Rejected (${stage || 'quality'})`, cls: 'bg-red-500/20 text-red-300 border-red-500/40' },
+    received:         { label: 'Awaiting review',  cls: 'bg-yellow-500/20 text-yellow-700 border-yellow-500/40' },
+    quality_approved: { label: 'Awaiting extract', cls: 'bg-blue-500/20 text-blue-700 border-blue-500/40' },
+    extracted:        { label: 'Awaiting data',    cls: 'bg-blue-500/20 text-blue-700 border-blue-500/40' },
+    data_approved:    { label: 'Awaiting send',    cls: 'bg-purple-500/20 text-purple-700 border-purple-500/40' },
+    forwarded:        { label: 'Sent to Xero',     cls: 'bg-green-500/20 text-green-700 border-green-500/40' },
+    rejected:         { label: `Rejected (${stage || 'quality'})`, cls: 'bg-red-500/20 text-red-700 border-red-500/40' },
   }
   const it = map[status] || { label: status, cls: 'bg-un1t-border/30 text-un1t-subtle border-un1t-border' }
   return (
@@ -746,7 +746,7 @@ function InboxDetail({ row, onChanged }) {
       <DetailHeader row={row} />
 
       {actionError && (
-        <div className="border border-red-500/40 bg-red-500/10 text-red-300 rounded-lg p-3 text-sm">
+        <div className="border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-3 text-sm">
           {actionError}
         </div>
       )}
@@ -896,7 +896,7 @@ function ExtractAction({ busy, extractionError, onExtract }) {
         {extractionError && ' Previous run failed — see the error below.'}
       </p>
       {extractionError && (
-        <div className="border border-red-500/40 bg-red-500/10 text-red-300 rounded-lg p-3 text-xs">
+        <div className="border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-3 text-xs">
           {extractionError}
         </div>
       )}
@@ -977,7 +977,7 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
       </p>
 
       {row.xero_error && (
-        <div className="border border-red-500/40 bg-red-500/10 text-red-300 rounded-lg p-3 text-sm">
+        <div className="border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-3 text-sm">
           Xero forward failed: {row.xero_error}
         </div>
       )}
@@ -1172,7 +1172,7 @@ function ForwardedSummary({ row }) {
   // only have xero_email_message_id — render whichever is present.
   return (
     <div className="space-y-3">
-      <div className="border border-green-500/40 bg-green-500/10 text-green-300 rounded-lg p-3 text-sm">
+      <div className="border border-green-500/40 bg-green-500/10 text-green-700 rounded-lg p-3 text-sm">
         <div>Sent to Xero at {formatDateTime(row.forwarded_at)}.</div>
         {row.xero_bill_id && (
           <div className="mt-1.5 flex flex-wrap items-center gap-3">
@@ -1228,7 +1228,7 @@ function ForwardedSummary({ row }) {
 function RejectedSummary({ row, busy, onDelete }) {
   return (
     <div className="space-y-3">
-      <div className="border border-red-500/40 bg-red-500/10 text-red-300 rounded-lg p-3 text-sm">
+      <div className="border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-3 text-sm">
         Rejected at {formatDateTime(row.rejected_at)} ({row.rejected_stage} stage). Reason: {row.reject_reason || '(no reason)'}
       </div>
       <button

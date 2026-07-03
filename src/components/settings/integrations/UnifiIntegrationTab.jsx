@@ -76,12 +76,12 @@ export default function UnifiIntegrationTab({ location, canEdit }) {
       </p>
 
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-md p-2 flex items-start gap-2">
+        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
           <AlertCircle size={12} className="mt-0.5" /> {error}
         </div>
       )}
       {savedAt && !error && (
-        <div className="bg-green-500/10 border border-green-500/30 text-green-400 text-xs rounded-md p-2 inline-flex items-center gap-2">
+        <div className="bg-green-500/10 border border-green-500/30 text-green-700 text-xs rounded-md p-2 inline-flex items-center gap-2">
           <Check size={12} /> Saved at {savedAt.toLocaleTimeString()}
         </div>
       )}

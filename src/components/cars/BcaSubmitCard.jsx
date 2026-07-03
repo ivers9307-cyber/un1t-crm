@@ -179,7 +179,7 @@ export default function BcaSubmitCard({ car }) {
       )}
 
       {state.error && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-md p-2 mb-3 flex items-start gap-2">
+        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 mb-3 flex items-start gap-2">
           <AlertCircle size={12} className="mt-0.5 shrink-0" /> {state.error}
         </div>
       )}
@@ -201,7 +201,7 @@ export default function BcaSubmitCard({ car }) {
       </div>
 
       {submitResult && (
-        <div className="bg-green-500/10 border border-green-500/30 text-green-400 text-xs rounded-md p-3 mb-3 flex items-start gap-2">
+        <div className="bg-green-500/10 border border-green-500/30 text-green-700 text-xs rounded-md p-3 mb-3 flex items-start gap-2">
           <Check size={14} className="mt-0.5 shrink-0" />
           <div>
             <div className="font-semibold">Sent to BCA</div>
@@ -443,7 +443,7 @@ function shortDate(iso) {
 function BcaSubmissionStatus({ row }) {
   if (row.postmark_error_code) {
     return (
-      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-red-500/20 text-red-400">
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-red-500/20 text-red-700">
         <AlertCircle size={9} /> Failed
       </span>
     )
@@ -457,13 +457,13 @@ function BcaSubmissionStatus({ row }) {
   }
   if (row.postmark_message_id) {
     return (
-      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-green-500/20 text-green-400">
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-green-500/20 text-green-700">
         <Check size={9} /> Active
       </span>
     )
   }
   return (
-    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-amber-500/20 text-amber-400">
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-amber-500/20 text-amber-700">
       Pending
     </span>
   )
@@ -472,27 +472,27 @@ function BcaSubmissionStatus({ row }) {
 function BcaStatusPill({ hasActive, filled, totalSlots, ukVatRefunded }) {
   if (ukVatRefunded) {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-green-500/20 text-green-400">
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-green-500/20 text-green-700">
         <Check size={10} /> Refunded
       </span>
     )
   }
   if (hasActive) {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-amber-500/20 text-amber-400">
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-amber-500/20 text-amber-700">
         <Send size={10} /> Submitted — awaiting refund
       </span>
     )
   }
   if (filled === totalSlots) {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-blue-500/20 text-blue-400">
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-blue-500/20 text-blue-700">
         Ready to submit
       </span>
     )
   }
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-red-500/20 text-red-400">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] uppercase font-semibold bg-red-500/20 text-red-700">
       <AlertCircle size={10} /> Not submitted
     </span>
   )

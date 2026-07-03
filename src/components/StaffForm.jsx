@@ -372,7 +372,7 @@ export default function StaffForm({
       </Link>
 
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg p-3">
+        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3">
           {error}
         </div>
       )}
@@ -1091,7 +1091,7 @@ function DeactivateButton({ staffId, staffName }) {
     <button
       type="button"
       onClick={() => setState('confirming')}
-      className="text-xs bg-red-500/15 text-red-300 border border-red-500/30 hover:bg-red-500/25 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
+      className="text-xs bg-red-500/15 text-red-700 border border-red-500/30 hover:bg-red-500/25 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
     >
       <UserX size={12} /> Deactivate staff member
     </button>
@@ -1131,7 +1131,7 @@ function ReactivateButton({ staffId }) {
         type="button"
         onClick={run}
         disabled={state === 'working'}
-        className="text-xs bg-green-500/15 text-green-300 border border-green-500/30 hover:bg-green-500/25 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
+        className="text-xs bg-green-500/15 text-green-700 border border-green-500/30 hover:bg-green-500/25 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
       >
         {state === 'working' ? <Loader2 size={11} className="animate-spin" /> : <UserCheck size={12} />}
         {state === 'working' ? 'Reactivating…' : 'Reactivate staff member'}
@@ -1233,7 +1233,7 @@ function PermanentDeleteButton({ staffId, staffName }) {
     <button
       type="button"
       onClick={() => setState('confirming')}
-      className="text-xs bg-red-500/15 text-red-300 border border-red-500/40 hover:bg-red-500/25 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
+      className="text-xs bg-red-500/15 text-red-700 border border-red-500/40 hover:bg-red-500/25 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
     >
       <Skull size={12} /> Permanently delete (GDPR)
     </button>

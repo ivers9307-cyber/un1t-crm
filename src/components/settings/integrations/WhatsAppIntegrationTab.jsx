@@ -70,7 +70,7 @@ export default function WhatsAppIntegrationTab({ location, canEdit }) {
       </div>
 
       {error && (
-        <div className="text-xs text-red-400 bg-red-950/30 border border-red-900/50 rounded p-2 inline-flex items-center gap-1.5">
+        <div className="text-xs text-red-700 bg-red-500/10 border border-red-200 rounded p-2 inline-flex items-center gap-1.5">
           <AlertCircle size={12} /> {error}
         </div>
       )}

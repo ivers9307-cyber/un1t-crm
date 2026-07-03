@@ -414,10 +414,10 @@ function Row({ row, isOpen, onToggle }) {
 
 function CategoryPill({ category }) {
   const styles = {
-    auth: 'bg-blue-500/10 text-blue-300 border-blue-500/30',
-    business: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
-    mutation: 'bg-orange-500/10 text-orange-300 border-orange-500/30',
-    assignment: 'bg-purple-500/10 text-purple-300 border-purple-500/30',
+    auth: 'bg-blue-500/10 text-blue-700 border-blue-500/30',
+    business: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/30',
+    mutation: 'bg-orange-500/10 text-orange-700 border-orange-500/30',
+    assignment: 'bg-purple-500/10 text-purple-700 border-purple-500/30',
   }
   const cls = styles[category] || 'bg-un1t-border/20 text-un1t-subtle border-un1t-border'
   return (

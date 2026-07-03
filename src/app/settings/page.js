@@ -162,7 +162,7 @@ export default async function SettingsPage() {
                 <p className="text-xs text-un1t-subtle mt-0.5">{loc.address || loc.slug}</p>
               </div>
               <div className="flex items-center gap-3">
-                <span className={`text-xs px-2 py-0.5 rounded-full ${loc.active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${loc.active ? 'bg-green-500/20 text-green-700' : 'bg-red-500/20 text-red-700'}`}>
                   {loc.active ? 'Active' : 'Inactive'}
                 </span>
                 <Link

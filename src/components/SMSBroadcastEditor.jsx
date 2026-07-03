@@ -277,7 +277,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
       </div>
 
       {error && (
-        <div className="mb-4 bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg p-3">
+        <div className="mb-4 bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3">
           {error}
         </div>
       )}
@@ -355,7 +355,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
               <Calendar size={16} className="text-un1t-subtle" />
               <h3 className="text-sm font-semibold">Schedule (optional)</h3>
               {isScheduled && (
-                <span className="text-[11px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 ml-auto flex items-center gap-1">
+                <span className="text-[11px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-700 ml-auto flex items-center gap-1">
                   <Clock size={10} /> Queued for{' '}
                   {broadcast?.scheduled_at
                     ? new Date(broadcast.scheduled_at).toLocaleString()
@@ -408,7 +408,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
                 {broadcastId && !isScheduled && (
                   <button
                     onClick={handleDelete}
-                    className="flex items-center gap-1.5 text-sm text-red-400 px-3 py-2 rounded-md hover:bg-red-500/10"
+                    className="flex items-center gap-1.5 text-sm text-red-700 px-3 py-2 rounded-md hover:bg-red-500/10"
                   >
                     <Trash2 size={14} /> Delete
                   </button>

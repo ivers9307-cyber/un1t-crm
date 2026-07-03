@@ -44,6 +44,17 @@ const config = [
       'guardrails/no-uncapped-supabase-limit': 'error',
       'guardrails/no-zulu-template-date': 'error',
       'guardrails/no-utc-today': 'error',
+      'guardrails/no-low-contrast-chip': 'error',
+    },
+  },
+  {
+    // Genuinely DARK surfaces — TV boards + the presentation screen render on
+    // black; low text ramps are the correct idiom there, so the light-theme
+    // chip-contrast rule does not apply.
+    files: ['src/app/tv/**', 'src/app/present/**', 'src/components/RaceDisplayBoard.jsx'],
+    plugins: { guardrails },
+    rules: {
+      'guardrails/no-low-contrast-chip': 'off',
     },
   },
 ]

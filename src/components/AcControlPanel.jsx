@@ -57,7 +57,7 @@ export default function AcControlPanel() {
     return (
       <Card>
         <Header />
-        <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded p-3 inline-flex items-start gap-2">
+        <div className="text-sm text-red-700 bg-red-500/10 border border-red-500/30 rounded p-3 inline-flex items-start gap-2">
           <AlertCircle size={14} className="mt-0.5 shrink-0" /> {loadError}
         </div>
       </Card>
@@ -328,7 +328,7 @@ function DeviceCard({ device }) {
                 call('turn-off', 'off')
               }}
               disabled={busy === 'off'}
-              className="bg-red-500/15 text-red-300 border border-red-500/30 hover:bg-red-500/25 text-xs font-semibold px-3 py-2 rounded-md inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
+              className="bg-red-500/15 text-red-700 border border-red-500/30 hover:bg-red-500/25 text-xs font-semibold px-3 py-2 rounded-md inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
             >
               {busy === 'off' ? <Loader2 size={12} className="animate-spin" /> : <Power size={12} />}
               Turn off
@@ -338,7 +338,7 @@ function DeviceCard({ device }) {
       )}
 
       {actionError && (
-        <div className="mt-2 text-[11px] text-red-300 bg-red-500/10 border border-red-500/30 rounded p-2 inline-flex items-start gap-2">
+        <div className="mt-2 text-[11px] text-red-700 bg-red-500/10 border border-red-500/30 rounded p-2 inline-flex items-start gap-2">
           <AlertCircle size={11} className="mt-0.5 shrink-0" /> {actionError}
         </div>
       )}

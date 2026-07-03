@@ -366,10 +366,10 @@ export default function WATemplateEditor({ template, locationId, userId, events 
           </h2>
           {template?.status && (
             <span className={`text-xs px-2 py-0.5 rounded-full ${
-              template.status === 'APPROVED' ? 'bg-green-500/20 text-green-400' :
-              template.status === 'REJECTED' ? 'bg-red-500/20 text-red-400' :
-              template.status === 'PENDING' ? 'bg-yellow-500/20 text-yellow-400' :
-              'bg-gray-500/20 text-gray-400'
+              template.status === 'APPROVED' ? 'bg-green-500/20 text-green-700' :
+              template.status === 'REJECTED' ? 'bg-red-500/20 text-red-700' :
+              template.status === 'PENDING' ? 'bg-yellow-500/20 text-yellow-700' :
+              'bg-gray-500/20 text-gray-700'
             }`}>
               {template.status}
             </span>
@@ -387,19 +387,19 @@ export default function WATemplateEditor({ template, locationId, userId, events 
       </div>
 
       {error && (
-        <div className="bg-red-500/10 border-b border-red-500/30 text-red-400 text-sm px-5 py-2">
+        <div className="bg-red-500/10 border-b border-red-500/30 text-red-700 text-sm px-5 py-2">
           {error}
         </div>
       )}
 
       {template?.rejection_reason && (
-        <div className="bg-red-500/10 border-b border-red-500/30 text-red-400 text-sm px-5 py-2">
+        <div className="bg-red-500/10 border-b border-red-500/30 text-red-700 text-sm px-5 py-2">
           Rejection reason: {template.rejection_reason}
         </div>
       )}
 
       {isSubmitted && (
-        <div className="bg-blue-500/10 border-b border-blue-500/30 text-blue-400 text-sm px-5 py-2">
+        <div className="bg-blue-500/10 border-b border-blue-500/30 text-blue-700 text-sm px-5 py-2">
           This template has been submitted to Meta and cannot be edited. Create a new template if you need changes.
         </div>
       )}

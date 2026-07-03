@@ -205,7 +205,7 @@ export default async function CommunicationsHub() {
           <ActionCard
             href="/communications/inbox"
             icon={MessageCircle}
-            color="bg-green-500/20 text-green-400"
+            color="bg-green-500/20 text-green-700"
             title="WhatsApp inbox"
             desc={unreadConvos > 0 ? `${unreadConvos} unread conversation${unreadConvos === 1 ? '' : 's'}` : 'View and reply to conversations'}
           />
@@ -214,7 +214,7 @@ export default async function CommunicationsHub() {
           <ActionCard
             href="/automations"
             icon={Repeat}
-            color="bg-purple-500/20 text-purple-400"
+            color="bg-purple-500/20 text-purple-700"
             title="Sequences"
             desc={`${activeSequences} active drip flow${activeSequences === 1 ? '' : 's'}`}
           />
@@ -223,7 +223,7 @@ export default async function CommunicationsHub() {
           <ActionCard
             href="/communications/sent"
             icon={Megaphone}
-            color="bg-cyan-500/20 text-cyan-400"
+            color="bg-cyan-500/20 text-cyan-700"
             title="Sends"
             desc={
               smsScheduled > 0

@@ -87,7 +87,7 @@ export default function TVAdmin({ initialDisplays, initialTemplates, locationId,
       </p>
 
       {error && (
-        <div className="mb-4 flex items-center gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">
+        <div className="mb-4 flex items-center gap-2 text-xs text-red-700 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">
           <AlertCircle size={12} /> {error}
         </div>
       )}

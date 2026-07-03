@@ -136,7 +136,7 @@ export default function ContactComposer({
       </div>
 
       {flash && (
-        <p className="mb-2 text-xs text-green-400 bg-green-500/10 border border-green-500/30 rounded px-2 py-1.5">
+        <p className="mb-2 text-xs text-green-700 bg-green-500/10 border border-green-500/30 rounded px-2 py-1.5">
           {flash}
         </p>
       )}
@@ -239,7 +239,7 @@ export default function ContactComposer({
       )}
 
       {error && (
-        <p className="mt-2 text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded px-2 py-1.5">
+        <p className="mt-2 text-xs text-red-700 bg-red-500/10 border border-red-500/30 rounded px-2 py-1.5">
           {error}
         </p>
       )}

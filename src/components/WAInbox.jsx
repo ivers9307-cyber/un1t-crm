@@ -523,7 +523,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                         {displayName}
                       </p>
                       {unknown && (
-                        <span className="bg-orange-500/20 text-orange-400 text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0">
+                        <span className="bg-orange-500/20 text-orange-700 text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0">
                           NEW
                         </span>
                       )}
@@ -570,7 +570,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                     {conversation?.contacts?.name || conversation?.wa_profile_name || conversation?.wa_phone}
                   </p>
                   {isUnknown && (
-                    <span className="bg-orange-500/20 text-orange-400 text-[9px] font-bold px-1.5 py-0.5 rounded">
+                    <span className="bg-orange-500/20 text-orange-700 text-[9px] font-bold px-1.5 py-0.5 rounded">
                       Not in contacts
                     </span>
                   )}

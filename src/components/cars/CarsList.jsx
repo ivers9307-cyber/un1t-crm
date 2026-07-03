@@ -20,7 +20,7 @@ function fmtMoney(n) {
 
 function StatusBadge({ status }) {
   const cls =
-    status === 'new'       ? 'bg-blue-500/20 text-blue-400'  :
+    status === 'new'       ? 'bg-blue-500/20 text-blue-700'  :
     status === 'pending'   ? 'bg-amber-500/20 text-amber-500' :
                               'bg-green-500/20 text-green-500'
   return (
@@ -60,7 +60,7 @@ export default function CarsList({ statuses, locationId, addButton, emptyText, l
     <div>
       {addButton}
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg p-3 mb-3">
+        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3 mb-3">
           {error}
         </div>
       )}

@@ -47,19 +47,19 @@ function formatTime(time) {
 }
 
 const activityIcons = {
-  note: { bg: 'bg-blue-500/20', color: 'text-blue-400', label: 'Note' },
-  call: { bg: 'bg-yellow-500/20', color: 'text-yellow-400', label: 'Call' },
-  email: { bg: 'bg-purple-500/20', color: 'text-purple-400', label: 'Email' },
-  meeting: { bg: 'bg-green-500/20', color: 'text-green-400', label: 'Meeting' },
-  task: { bg: 'bg-orange-500/20', color: 'text-orange-400', label: 'Task' },
-  booking: { bg: 'bg-indigo-500/20', color: 'text-indigo-400', label: 'Booking' },
-  pipeline: { bg: 'bg-emerald-500/20', color: 'text-emerald-400', label: 'Pipeline' },
-  whatsapp_sent: { bg: 'bg-green-500/20', color: 'text-green-400', label: 'WhatsApp Sent' },
-  whatsapp_received: { bg: 'bg-green-500/20', color: 'text-green-300', label: 'WhatsApp Received' },
+  note: { bg: 'bg-blue-500/20', color: 'text-blue-700', label: 'Note' },
+  call: { bg: 'bg-yellow-500/20', color: 'text-yellow-700', label: 'Call' },
+  email: { bg: 'bg-purple-500/20', color: 'text-purple-700', label: 'Email' },
+  meeting: { bg: 'bg-green-500/20', color: 'text-green-700', label: 'Meeting' },
+  task: { bg: 'bg-orange-500/20', color: 'text-orange-700', label: 'Task' },
+  booking: { bg: 'bg-indigo-500/20', color: 'text-indigo-700', label: 'Booking' },
+  pipeline: { bg: 'bg-emerald-500/20', color: 'text-emerald-700', label: 'Pipeline' },
+  whatsapp_sent: { bg: 'bg-green-500/20', color: 'text-green-700', label: 'WhatsApp Sent' },
+  whatsapp_received: { bg: 'bg-green-500/20', color: 'text-green-700', label: 'WhatsApp Received' },
   // mig 059 — ad-hoc and (later) sequence/broadcast SMS sends.
   // No 'sms_received' counterpart yet; alpha sender IDs are
   // send-only in IE/UK/EU.
-  sms_sent: { bg: 'bg-cyan-500/20', color: 'text-cyan-400', label: 'SMS Sent' },
+  sms_sent: { bg: 'bg-cyan-500/20', color: 'text-cyan-700', label: 'SMS Sent' },
 }
 
 export default async function ContactDetailPage(props) {
@@ -295,10 +295,10 @@ export default async function ContactDetailPage(props) {
   // local `statusColors` map this page kept was removed with the rewire.
 
   const bookingStatusColors = {
-    confirmed: 'bg-blue-500/20 text-blue-400',
-    completed: 'bg-green-500/20 text-green-400',
-    cancelled: 'bg-red-500/20 text-red-400',
-    no_show: 'bg-yellow-500/20 text-yellow-400',
+    confirmed: 'bg-blue-500/20 text-blue-700',
+    completed: 'bg-green-500/20 text-green-700',
+    cancelled: 'bg-red-500/20 text-red-700',
+    no_show: 'bg-yellow-500/20 text-yellow-700',
   }
 
   // PERSON-LINK.1 — at-a-glance lifetime metrics. Prefer the unified
@@ -892,16 +892,16 @@ function InfoRow({ label, value }) {
 // relationship without scrolling between cards.
 
 const GLOFOX_STATUS_META = {
-  cold:           { label: 'Cold',                  cls: 'bg-gray-500/20    text-gray-300    border-gray-500/30' },
-  tour:           { label: 'Tour booked',           cls: 'bg-blue-500/20    text-blue-300    border-blue-500/30' },
-  no_sale_tour:   { label: 'No sale (tour)',        cls: 'bg-amber-500/20   text-amber-300   border-amber-500/30' },
-  trial:          { label: 'Trial',                 cls: 'bg-blue-500/20    text-blue-300    border-blue-500/30' },
-  no_sale_trial:  { label: 'No sale (trial)',       cls: 'bg-amber-500/20   text-amber-300   border-amber-500/30' },
-  member:         { label: 'Member',                cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' },
-  credit_member:  { label: 'Credit Member',         cls: 'bg-teal-500/20    text-teal-300    border-teal-500/30' },
-  classpass_payg: { label: 'ClassPass PAYG',        cls: 'bg-purple-500/20  text-purple-300  border-purple-500/30' },
-  ex_member:      { label: 'Ex-member',             cls: 'bg-red-500/20     text-red-300     border-red-500/30' },
-  lead:           { label: 'Lead',                  cls: 'bg-gray-500/20    text-gray-300    border-gray-500/30' },
+  cold:           { label: 'Cold',                  cls: 'bg-gray-500/20    text-gray-700    border-gray-500/30' },
+  tour:           { label: 'Tour booked',           cls: 'bg-blue-500/20    text-blue-700    border-blue-500/30' },
+  no_sale_tour:   { label: 'No sale (tour)',        cls: 'bg-amber-500/20   text-amber-700   border-amber-500/30' },
+  trial:          { label: 'Trial',                 cls: 'bg-blue-500/20    text-blue-700    border-blue-500/30' },
+  no_sale_trial:  { label: 'No sale (trial)',       cls: 'bg-amber-500/20   text-amber-700   border-amber-500/30' },
+  member:         { label: 'Member',                cls: 'bg-emerald-500/20 text-emerald-700 border-emerald-500/30' },
+  credit_member:  { label: 'Credit Member',         cls: 'bg-teal-500/20    text-teal-700    border-teal-500/30' },
+  classpass_payg: { label: 'ClassPass PAYG',        cls: 'bg-purple-500/20  text-purple-700  border-purple-500/30' },
+  ex_member:      { label: 'Ex-member',             cls: 'bg-red-500/20     text-red-700     border-red-500/30' },
+  lead:           { label: 'Lead',                  cls: 'bg-gray-500/20    text-gray-700    border-gray-500/30' },
 }
 
 // GLOFOX-PLAN-BLOCK (Stage 1b) -- LIVE membership lifecycle state
@@ -911,15 +911,15 @@ const GLOFOX_STATUS_META = {
 // frozen for non-payment, so the live state is how the operator spots
 // a misclassification. Glofox 'locked' = frozen on a failed payment.
 const GLOFOX_STATE_META = {
-  active: { label: 'Active',   cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' },
-  paused: { label: 'Paused',   cls: 'bg-amber-500/20   text-amber-300   border-amber-500/30' },
-  locked: { label: 'Overdue',  cls: 'bg-red-500/20     text-red-300     border-red-500/30' },
+  active: { label: 'Active',   cls: 'bg-emerald-500/20 text-emerald-700 border-emerald-500/30' },
+  paused: { label: 'Paused',   cls: 'bg-amber-500/20   text-amber-700   border-amber-500/30' },
+  locked: { label: 'Overdue',  cls: 'bg-red-500/20     text-red-700     border-red-500/30' },
   // GLOFOX-CLASSIFY.2 — 'future' = a Glofox membership/trial that hasn't
   // started yet. For a trial this means the account exists but the first
   // class is unbooked (the trial only "starts" on first booking); for a
   // paid membership it's a genuine upcoming start date. Surfaced so the
   // operator can tell an unstarted signup from a live member.
-  future: { label: 'Upcoming', cls: 'bg-blue-500/20    text-blue-300    border-blue-500/30' },
+  future: { label: 'Upcoming', cls: 'bg-blue-500/20    text-blue-700    border-blue-500/30' },
 }
 
 function formatTenure(joinedAtIso) {
@@ -1096,7 +1096,7 @@ function GlofoxProfileCard({ contact }) {
                 {statusMeta.label}
               </span>
             ) : (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-300 border border-gray-500/30">
+              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-700 border border-gray-500/30">
                 {contact.glofox_membership_status || 'Unknown'}
               </span>
             )}
@@ -1238,15 +1238,15 @@ function BookingRow({ b, when }) {
   const isCancelled = status === 'CANCELED' || status === 'CANCELLED'
   let badge = null
   if (isCancelled) {
-    badge = { label: 'Cancelled', cls: 'bg-red-500/20 text-red-300' }
+    badge = { label: 'Cancelled', cls: 'bg-red-500/20 text-red-700' }
   } else if (status === 'WAITING') {
-    badge = { label: 'Waitlist', cls: 'bg-purple-500/20 text-purple-300' }
+    badge = { label: 'Waitlist', cls: 'bg-purple-500/20 text-purple-700' }
   } else if (when === 'past' && status === 'BOOKED') {
     badge = b.attended === true
-      ? { label: 'Attended', cls: 'bg-green-500/20 text-green-300' }
-      : { label: 'No-show',  cls: 'bg-amber-500/20 text-amber-300' }
+      ? { label: 'Attended', cls: 'bg-green-500/20 text-green-700' }
+      : { label: 'No-show',  cls: 'bg-amber-500/20 text-amber-700' }
   } else if (when === 'future' && status === 'BOOKED') {
-    badge = { label: 'Booked', cls: 'bg-blue-500/20 text-blue-300' }
+    badge = { label: 'Booked', cls: 'bg-blue-500/20 text-blue-700' }
   }
   const ts = Number(b.time_start) ? new Date(Number(b.time_start) * 1000) : null
   const dateStr = ts

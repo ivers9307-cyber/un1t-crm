@@ -9,10 +9,10 @@ import { Search, Crown, ShieldCheck } from 'lucide-react'
 
 const ROLE_BADGES = {
   master: { label: 'Master', cls: 'bg-amber-500/30 text-amber-300', icon: Crown },
-  owner: { label: 'Owner', cls: 'bg-purple-500/20 text-purple-300', icon: ShieldCheck },
-  manager: { label: 'Manager', cls: 'bg-blue-500/20 text-blue-300' },
-  head_coach: { label: 'Head Coach', cls: 'bg-emerald-500/20 text-emerald-300' },
-  staff: { label: 'Staff', cls: 'bg-gray-500/20 text-gray-300' },
+  owner: { label: 'Owner', cls: 'bg-purple-500/20 text-purple-700', icon: ShieldCheck },
+  manager: { label: 'Manager', cls: 'bg-blue-500/20 text-blue-700' },
+  head_coach: { label: 'Head Coach', cls: 'bg-emerald-500/20 text-emerald-700' },
+  staff: { label: 'Staff', cls: 'bg-gray-500/20 text-gray-700' },
 }
 
 const ROLE_FILTERS = [
@@ -105,7 +105,7 @@ export default function ImpersonatePickerFull({ users }) {
           />
         </div>
         {error && (
-          <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-md p-2">{error}</div>
+          <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2">{error}</div>
         )}
       </div>
 
@@ -114,7 +114,7 @@ export default function ImpersonatePickerFull({ users }) {
       ) : (
         <div className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden divide-y divide-un1t-border">
           {filtered.map(u => {
-            const badge = ROLE_BADGES[u.role] || { label: u.role, cls: 'bg-gray-500/20 text-gray-300' }
+            const badge = ROLE_BADGES[u.role] || { label: u.role, cls: 'bg-gray-500/20 text-gray-700' }
             const BadgeIcon = badge.icon
             return (
               <div key={u.id} className="flex items-center gap-3 p-3 hover:bg-un1t-border/20">

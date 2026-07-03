@@ -559,9 +559,9 @@ function DevicesTable({ title, rows, locName, loading, onRevoke }) {
 // ============================================================
 
 const TONE_CLASSES = {
-  success: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30',
-  warn: 'text-amber-300 bg-amber-500/10 border-amber-500/30',
-  error: 'text-red-300 bg-red-500/10 border-red-500/30',
+  success: 'text-emerald-700 bg-emerald-500/10 border-emerald-500/30',
+  warn: 'text-amber-700 bg-amber-500/10 border-amber-500/30',
+  error: 'text-red-700 bg-red-500/10 border-red-500/30',
   muted: 'text-un1t-subtle bg-un1t-border/30 border-un1t-border',
 }
 

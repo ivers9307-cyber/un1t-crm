@@ -55,7 +55,7 @@ export default function PipelineViewSwitcher({ view, activeCount, dormantCount }
             {label}
             <span className={`ml-1 inline-flex items-center justify-center min-w-[20px] px-1.5 py-0.5 text-[10px] font-semibold rounded-full tabular-nums ${
               on
-                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                ? 'bg-emerald-500/20 text-emerald-700 border border-emerald-500/40'
                 : 'bg-un1t-border/30 text-un1t-subtle border border-un1t-border'
             }`}>
               {count.toLocaleString()}

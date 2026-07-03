@@ -201,9 +201,9 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
           />
           {broadcast?.status && (
             <span className={`text-xs px-2 py-0.5 rounded-full ${
-              broadcast.status === 'sent' ? 'bg-green-500/20 text-green-400'
-                : broadcast.status === 'cancelled' ? 'bg-rose-500/20 text-rose-400'
-                : 'bg-gray-500/20 text-gray-400'
+              broadcast.status === 'sent' ? 'bg-green-500/20 text-green-700'
+                : broadcast.status === 'cancelled' ? 'bg-rose-500/20 text-rose-700'
+                : 'bg-gray-500/20 text-gray-700'
             }`}>
               {broadcast.status}
             </span>
@@ -233,7 +233,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
       </div>
 
       {error && (
-        <div className="bg-red-500/10 border-b border-red-500/30 text-red-400 text-sm px-5 py-2">
+        <div className="bg-red-500/10 border-b border-red-500/30 text-red-700 text-sm px-5 py-2">
           {error}
         </div>
       )}
