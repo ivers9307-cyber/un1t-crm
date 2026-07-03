@@ -67,14 +67,14 @@ describe('logPipelineEvent', () => {
     expect(insertSpy).not.toHaveBeenCalled()
   })
 
-  it('falls back to the raw status code if the label is unknown', async () => {
+  it('title-cases unmapped slugs (FUNNEL.1 — historical/retired stages)', async () => {
     const { db, insertSpy } = mockDb()
     await logPipelineEvent(db, {
       contactId: 'c1', locationId: 'loc1',
-      oldStatus: 'unknown_status', newStatus: 'member',
+      oldStatus: 'active_trial', newStatus: 'member',
     })
     const inserted = insertSpy.mock.calls[0][0]
-    expect(inserted.subject).toContain('unknown_status')
+    expect(inserted.subject).toContain('Active Trial')
     expect(inserted.subject).toContain('Member')
   })
 

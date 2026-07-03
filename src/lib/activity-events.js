@@ -28,7 +28,8 @@ const STATUS_LABELS = {
 }
 
 function humanise(status) {
-  return STATUS_LABELS[status] || status
+  if (STATUS_LABELS[status]) return STATUS_LABELS[status]
+  return String(status).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 /**
