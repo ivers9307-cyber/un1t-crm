@@ -210,22 +210,73 @@ describe('insertHrSamples', () => {
     expect(db.from).not.toHaveBeenCalled()
   })
 
-  function makeDb({ upsertResult = { error: null, count: 0 }, sessionUpdateError = null } = {}) {
+  // Mock DB modelling the reads/writes insertHrSamples now performs:
+  //   hr_samples.upsert(...)                                   → upsertResult
+  //   hr_samples.select().eq().order().range(...)              → full-recompute page read
+  //   heart_rate_sessions.select().eq().maybeSingle()          → the session row (running state)
+  //   heart_rate_sessions.update({...}).eq()                   → the aggregate write
+  // `sessionsById` seeds the current running state per session; `allSamplesById`
+  // seeds the full persisted sample set the fallback pages. Every update is
+  // captured on the session's `updates[]`.
+  function makeDb({ upsertResult = { error: null, count: 0 }, sessionsById = {}, allSamplesById = {}, sessionSelectError = null, sessionUpdateError = null } = {}) {
+    const state = JSON.parse(JSON.stringify(sessionsById))
+    const updates = []
     const upsert = vi.fn(() => Promise.resolve(upsertResult))
-    const sessionEq = vi.fn(() => Promise.resolve({ error: sessionUpdateError }))
-    const sessionUpdate = vi.fn(() => ({ eq: sessionEq }))
+
+    const hrSamplesSelect = (sessionId) => {
+      // .select('recorded_at, bpm').eq('session_id', id).order(...).range(from,to)
+      const all = allSamplesById[sessionId] || []
+      const chain = {
+        eq: () => chain,
+        order: () => chain,
+        range: (from, to) => Promise.resolve({ data: all.slice(from, to + 1), error: null }),
+      }
+      // capture session id at .eq()
+      chain.eq = (col, val) => { chain._sid = val; return chain }
+      chain.range = (from, to) => {
+        const arr = allSamplesById[chain._sid] || []
+        return Promise.resolve({ data: arr.slice(from, to + 1), error: null })
+      }
+      return chain
+    }
+
+    const sessionsSelect = () => {
+      const chain = {}
+      chain.eq = (col, id) => { chain._id = id; return chain }
+      chain.maybeSingle = () => Promise.resolve({
+        data: sessionSelectError ? null : (state[chain._id] || null),
+        error: sessionSelectError,
+      })
+      return chain
+    }
+
+    const sessionsUpdate = (patch) => ({
+      eq: (col, id) => {
+        updates.push({ id, patch })
+        if (state[id]) Object.assign(state[id], patch)
+        return Promise.resolve({ error: sessionUpdateError })
+      },
+    })
+
     return {
       from: vi.fn((table) => {
-        if (table === 'hr_samples') return { upsert }
-        if (table === 'heart_rate_sessions') return { update: sessionUpdate }
+        if (table === 'hr_samples') return { upsert, select: () => hrSamplesSelect() }
+        if (table === 'heart_rate_sessions') return { select: sessionsSelect, update: sessionsUpdate }
         throw new Error(`unexpected table ${table}`)
       }),
-      _spies: { upsert, sessionUpdate, sessionEq },
+      _updates: updates,
+      _state: state,
+      _spies: { upsert },
     }
   }
 
+  const updatesFor = (db, id) => db._updates.filter((u) => u.id === id)
+
   it('upserts with onConflict ignoreDuplicates', async () => {
-    const db = makeDb({ upsertResult: { error: null, count: 3 } })
+    const db = makeDb({
+      upsertResult: { error: null, count: 3 },
+      sessionsById: { s: { id: 's', max_hr_used: 200 } },
+    })
     const rows = [
       { session_id: 's', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 145 },
       { session_id: 's', recorded_at: '2026-05-21T16:00:01.000Z', bpm: 146 },
@@ -239,22 +290,123 @@ describe('insertHrSamples', () => {
     }))
   })
 
-  it('touches last_sample_at to the LATEST recorded_at per session', async () => {
-    const db = makeDb({ upsertResult: { error: null, count: 4 } })
+  it('writes the running aggregate + advances last_sample_at on a fresh session (fast path)', async () => {
+    const db = makeDb({
+      upsertResult: { error: null, count: 3 },
+      sessionsById: { s: { id: 's', max_hr_used: 200 } }, // no live_* state yet
+    })
+    // 145 bpm = Z3 at max 200. 3 samples 1s apart.
+    const rows = [
+      { session_id: 's', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 145 },
+      { session_id: 's', recorded_at: '2026-05-21T16:00:01.000Z', bpm: 145 },
+      { session_id: 's', recorded_at: '2026-05-21T16:00:02.000Z', bpm: 145 },
+    ]
+    await insertHrSamples(db, rows)
+    const u = updatesFor(db, 's')
+    expect(u).toHaveLength(1)
+    const p = u[0].patch
+    // Two 1s gaps counted; last sample pending (0). Z3 = 2s so far.
+    expect(p.zones_seconds[3]).toBe(2)
+    expect(p.live_sample_count).toBe(3)
+    expect(p.live_sum_bpm).toBe(435)
+    expect(p.avg_hr_bpm).toBe(145)
+    expect(p.peak_hr_bpm).toBe(145)
+    expect(p.live_last_bpm).toBe(145)
+    expect(p.live_last_at).toBe('2026-05-21T16:00:02.000Z')
+    expect(p.last_sample_at).toBe('2026-05-21T16:00:02.000Z')
+  })
+
+  it('continues the fold from persisted running state (second in-order batch)', async () => {
+    // Session already has one pending sample at :02 (145 bpm), Z3=2s, count 3.
+    const db = makeDb({
+      upsertResult: { error: null, count: 2 },
+      sessionsById: {
+        s: {
+          id: 's', max_hr_used: 200,
+          zones_seconds: { 1: 0, 2: 0, 3: 2, 4: 0, 5: 0 },
+          live_sum_bpm: 435, live_sample_count: 3,
+          live_last_bpm: 145, live_last_at: '2026-05-21T16:00:02.000Z',
+        },
+      },
+    })
+    const rows = [
+      { session_id: 's', recorded_at: '2026-05-21T16:00:03.000Z', bpm: 145 },
+      { session_id: 's', recorded_at: '2026-05-21T16:00:04.000Z', bpm: 145 },
+    ]
+    await insertHrSamples(db, rows)
+    const p = updatesFor(db, 's')[0].patch
+    // Pending :02 now gets its 1s gap → Z3 3s; :03 gets 1s → Z3 4s; :04 pending.
+    expect(p.zones_seconds[3]).toBe(4)
+    expect(p.live_sample_count).toBe(5)
+    expect(p.live_last_at).toBe('2026-05-21T16:00:04.000Z')
+  })
+
+  it('falls back to a FULL recompute when a batch is out-of-order / a duplicate retry', async () => {
+    // live_last_at is :05, but the incoming batch starts at :02 (older) — a
+    // retry of already-folded samples. Fold-again would double-count, so we
+    // recompute from all persisted samples instead.
+    const persisted = [
+      { recorded_at: '2026-05-21T16:00:00.000Z', bpm: 145 },
+      { recorded_at: '2026-05-21T16:00:01.000Z', bpm: 145 },
+      { recorded_at: '2026-05-21T16:00:02.000Z', bpm: 145 },
+    ]
+    const db = makeDb({
+      upsertResult: { error: null, count: 0 }, // duplicates → nothing inserted
+      sessionsById: {
+        s: {
+          id: 's', max_hr_used: 200,
+          zones_seconds: { 1: 0, 2: 0, 3: 99, 4: 0, 5: 0 }, // deliberately wrong
+          live_sum_bpm: 9999, live_sample_count: 99,
+          live_last_bpm: 145, live_last_at: '2026-05-21T16:00:05.000Z',
+        },
+      },
+      allSamplesById: { s: persisted },
+    })
+    const rows = [
+      { session_id: 's', recorded_at: '2026-05-21T16:00:01.000Z', bpm: 145 },
+      { session_id: 's', recorded_at: '2026-05-21T16:00:02.000Z', bpm: 145 },
+    ]
+    await insertHrSamples(db, rows)
+    const p = updatesFor(db, 's')[0].patch
+    // Recompute from the 3 persisted samples: two 1s gaps folded, last pending → Z3 2s.
+    expect(p.zones_seconds[3]).toBe(2)
+    expect(p.live_sample_count).toBe(3)
+    expect(p.live_sum_bpm).toBe(435)
+    expect(p.avg_hr_bpm).toBe(145)
+  })
+
+  it('handles a batch spanning MULTIPLE sessions independently', async () => {
+    const db = makeDb({
+      upsertResult: { error: null, count: 4 },
+      sessionsById: {
+        sA: { id: 'sA', max_hr_used: 200 },
+        sB: { id: 'sB', max_hr_used: 200 },
+      },
+    })
     const rows = [
       { session_id: 'sA', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 145 },
-      { session_id: 'sA', recorded_at: '2026-05-21T16:00:02.000Z', bpm: 147 },
-      { session_id: 'sA', recorded_at: '2026-05-21T16:00:01.000Z', bpm: 146 },
+      { session_id: 'sA', recorded_at: '2026-05-21T16:00:02.000Z', bpm: 145 },
+      { session_id: 'sA', recorded_at: '2026-05-21T16:00:01.000Z', bpm: 145 }, // out of input order
       { session_id: 'sB', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 130 },
     ]
     await insertHrSamples(db, rows)
-    expect(db._spies.sessionUpdate).toHaveBeenCalledTimes(2)
-    expect(db._spies.sessionUpdate).toHaveBeenCalledWith({ last_sample_at: '2026-05-21T16:00:02.000Z' })
-    expect(db._spies.sessionUpdate).toHaveBeenCalledWith({ last_sample_at: '2026-05-21T16:00:00.000Z' })
+    // sA sorted → :00,:01,:02 → two 1s gaps → Z3 2s, last_sample_at :02.
+    const pA = updatesFor(db, 'sA')[0].patch
+    expect(pA.zones_seconds[3]).toBe(2)
+    expect(pA.last_sample_at).toBe('2026-05-21T16:00:02.000Z')
+    // sB single sample → pending, 0 zone seconds yet, last_sample_at :00.
+    const pB = updatesFor(db, 'sB')[0].patch
+    expect(pB.last_sample_at).toBe('2026-05-21T16:00:00.000Z')
+    expect(pB.live_sample_count).toBe(1)
   })
 
-  it('still returns inserted on a touch failure (best-effort)', async () => {
-    const db = makeDb({ upsertResult: { error: null, count: 1 }, sessionUpdateError: { message: 'rls' } })
+  it('still returns inserted, and advances last_sample_at, on an aggregate failure (best-effort)', async () => {
+    // The session read fails → aggregate throws internally → we still touch
+    // last_sample_at and never fail the ack.
+    const db = makeDb({
+      upsertResult: { error: null, count: 1 },
+      sessionSelectError: { message: 'boom' },
+    })
     const out = await insertHrSamples(db, [{ session_id: 's', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 145 }])
     expect(out.error).toBe(null)
     expect(out.inserted).toBe(1)

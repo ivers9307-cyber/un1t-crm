@@ -31,6 +31,8 @@ import { logWarn } from '@/lib/log'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { lookupBookedMember, resolveClassLinkSource, resolveBookedOccurrenceForMember } from '@/lib/class-bookings'
 import { classSessionAction, shouldCloseSupersededSession } from '@/lib/hr-session-lifecycle'
+import { applyBatchToRunningSummary, normaliseRunningState } from '@/lib/heart-rate'
+import { selectAll } from '@/lib/select-all'
 
 // 90 min covers an hour-long class plus 15min before + 15min after.
 const BOOKING_WINDOW_MS = 90 * 60 * 1000
@@ -661,8 +663,11 @@ function resolveMaxHrForBridgeInsert(contact) {
  * Upsert with onConflict (session_id, recorded_at) ignoreDuplicates.
  * Bridge retries after a network blip don't 409.
  *
- * Also opportunistically touches heart_rate_sessions.last_sample_at
- * for each session represented in the batch.
+ * Also, per session represented in the batch:
+ *   - touches heart_rate_sessions.last_sample_at (the stale-flag signal), and
+ *   - maintains the INCREMENTAL running HR aggregate (audit W2/#11) so the live
+ *     TV board reads a single session row instead of re-scanning every sample
+ *     every 2s poll. See updateRunningAggregateForSession.
  */
 export async function insertHrSamples(db, rows) {
   if (rows.length === 0) return { inserted: 0, error: null }
@@ -674,23 +679,151 @@ export async function insertHrSamples(db, rows) {
     return { inserted: 0, error }
   }
 
-  const latestPerSession = new Map()
+  // Per-session ordered slices of THIS batch. Rows arrive in bridge order but a
+  // batch interleaves sessions, so bucket then sort each by recorded_at — both
+  // the last_sample_at touch and the running-aggregate fold need the ordering.
+  const bySession = new Map()
   for (const r of rows) {
-    const prev = latestPerSession.get(r.session_id)
-    if (!prev || r.recorded_at > prev) latestPerSession.set(r.session_id, r.recorded_at)
+    const arr = bySession.get(r.session_id) || []
+    arr.push(r)
+    bySession.set(r.session_id, arr)
   }
+  for (const arr of bySession.values()) arr.sort((a, b) => (a.recorded_at < b.recorded_at ? -1 : a.recorded_at > b.recorded_at ? 1 : 0))
+
   await Promise.all(
-    Array.from(latestPerSession.entries()).map(([sessionId, ts]) =>
-      db.from('heart_rate_sessions')
-        .update({ last_sample_at: ts })
-        .eq('id', sessionId)
-        .then(({ error: e }) => {
-          if (e) logWarn('bridge-samples', 'last_sample_at touch failed', { err: e, sessionId })
-        }),
-    ),
+    Array.from(bySession.entries()).map(async ([sessionId, batch]) => {
+      const latestTs = batch[batch.length - 1].recorded_at
+      try {
+        await updateRunningAggregateForSession(db, sessionId, batch, latestTs)
+      } catch (e) {
+        logWarn('bridge-samples', 'running aggregate update failed', { err: e?.message || e, sessionId })
+        // Aggregate is best-effort — it self-heals on the next batch (or the
+        // out-of-order fallback) and endSession recomputes authoritatively. Do
+        // NOT let it fail the insert ack: the samples are already persisted.
+        // Still make sure last_sample_at advances so the stale flag is honest.
+        await db.from('heart_rate_sessions')
+          .update({ last_sample_at: latestTs })
+          .eq('id', sessionId)
+          .then(({ error: le }) => { if (le) logWarn('bridge-samples', 'last_sample_at touch failed', { err: le, sessionId }) })
+      }
+    }),
   )
 
   return { inserted: count ?? rows.length, error: null }
+}
+
+/**
+ * Maintain the incremental running HR aggregate (zones_seconds / effort_points /
+ * peak_hr_bpm / avg_hr_bpm + the fold state live_sum_bpm / live_sample_count /
+ * live_last_bpm / live_last_at) on ONE heart_rate_sessions row after a batch of
+ * that session's samples has been inserted.
+ *
+ * `batch` is this session's slice of the just-inserted rows, sorted ascending by
+ * recorded_at. The row's max_hr_used fixes the zone boundaries (same value the
+ * finalisation uses), so live and finalised zones agree.
+ *
+ * FAST PATH (the overwhelming common case): the batch is strictly newer than the
+ * session's pending last sample → fold it in via applyBatchToRunningSummary and
+ * write the running columns. The live board's rendered value trails the eventual
+ * finalisation by at most the pending sample's not-yet-known gap (≤5s) — the
+ * documented, bounded live tail; endSession's full recompute closes it.
+ *
+ * FALLBACK (rare): the batch's EARLIEST sample is at/older than live_last_at —
+ * i.e. an out-of-order batch, OR a bridge retry re-sending already-folded
+ * samples (the upsert ignoreDuplicates makes those inserts no-ops, but folding
+ * them again would double-count). Either way we can't safely fold, so we do a
+ * FULL recompute for the session: page every persisted sample and run the
+ * one-shot summariseSession, then overwrite. Correctness is never violated; the
+ * running fold state is re-seeded so subsequent in-order batches take the fast
+ * path again. Logged so we can watch the rate.
+ */
+async function updateRunningAggregateForSession(db, sessionId, batch, latestTs) {
+  const { data: session, error: sErr } = await db
+    .from('heart_rate_sessions')
+    .select('id, max_hr_used, zones_seconds, live_sum_bpm, live_sample_count, live_last_bpm, live_last_at')
+    .eq('id', sessionId)
+    .maybeSingle()
+  if (sErr || !session) {
+    // Session read failed or vanished (ended + purged mid-batch) — skip the
+    // aggregate but keep the stale flag honest by advancing last_sample_at.
+    if (sErr) logWarn('bridge-samples', 'aggregate: session load failed', { err: sErr, sessionId })
+    await db.from('heart_rate_sessions')
+      .update({ last_sample_at: latestTs })
+      .eq('id', sessionId)
+      .then(({ error: e }) => { if (e) logWarn('bridge-samples', 'last_sample_at touch failed', { err: e, sessionId }) })
+    return
+  }
+  const maxHr = session.max_hr_used
+
+  const prevLastMs = session.live_last_at ? new Date(session.live_last_at).getTime() : null
+  const firstMs = new Date(batch[0].recorded_at).getTime()
+  const outOfOrder = prevLastMs != null && Number.isFinite(firstMs) && firstMs <= prevLastMs
+
+  if (outOfOrder) {
+    logWarn('bridge-samples', 'aggregate: out-of-order/duplicate batch → full recompute', {
+      sessionId, batchFirst: batch[0].recorded_at, liveLastAt: session.live_last_at,
+    })
+    await fullRecomputeRunningAggregate(db, sessionId, maxHr, latestTs)
+    return
+  }
+
+  const prevState = normaliseRunningState(session)
+  const next = applyBatchToRunningSummary(prevState, batch, maxHr)
+  await db.from('heart_rate_sessions')
+    .update({
+      zones_seconds: next.zonesSeconds,
+      effort_points: next.effortPoints,
+      peak_hr_bpm: next.peakBpm != null ? Math.round(next.peakBpm) : null,
+      avg_hr_bpm: next.sampleCount > 0 ? Math.round(next.sumBpm / next.sampleCount) : null,
+      live_sum_bpm: next.sumBpm,
+      live_sample_count: next.sampleCount,
+      live_last_bpm: next.lastBpm,
+      live_last_at: next.lastAtMs != null ? new Date(next.lastAtMs).toISOString() : null,
+      last_sample_at: latestTs,
+    })
+    .eq('id', sessionId)
+}
+
+/**
+ * Rebuild the running aggregate for a session from ALL its persisted samples and
+ * re-seed the incremental fold state so the next in-order batch resumes on the
+ * fast path. Used by the out-of-order / duplicate-retry fallback in
+ * updateRunningAggregateForSession. Pages the full sample set (>1000-row cap)
+ * ordered by recorded_at.
+ *
+ * CRUCIAL: we fold the whole stream through applyBatchToRunningSummary (one
+ * batch, from empty) — NOT summariseSession — precisely so the stored state is
+ * in the RUNNING (un-flushed) form where the pending last sample has contributed
+ * 0 to zones_seconds. summariseSession would bake the last sample's flat-1s tail
+ * into zones_seconds; then the next in-order batch's step-(1) "close the pending
+ * sample" would add its gap ON TOP of that 1s and double-count. Folding leaves
+ * the pending sample at 0 (its live_last_bpm/at stashed), so the resumed fast
+ * path is byte-identical to an uninterrupted fold. The live board still reads
+ * the same running columns; it under-reads the pending tail by ≤5s as always.
+ */
+async function fullRecomputeRunningAggregate(db, sessionId, maxHr, latestTs) {
+  const samples = await selectAll((from, to) => db
+    .from('hr_samples')
+    .select('recorded_at, bpm')
+    .eq('session_id', sessionId)
+    .order('recorded_at', { ascending: true })
+    .range(from, to))
+
+  const state = applyBatchToRunningSummary(undefined, samples, maxHr)
+
+  await db.from('heart_rate_sessions')
+    .update({
+      zones_seconds: state.zonesSeconds,
+      effort_points: state.effortPoints,
+      peak_hr_bpm: state.peakBpm != null ? Math.round(state.peakBpm) : null,
+      avg_hr_bpm: state.sampleCount > 0 ? Math.round(state.sumBpm / state.sampleCount) : null,
+      live_sum_bpm: state.sumBpm,
+      live_sample_count: state.sampleCount,
+      live_last_bpm: state.lastBpm,
+      live_last_at: state.lastAtMs != null ? new Date(state.lastAtMs).toISOString() : null,
+      last_sample_at: latestTs,
+    })
+    .eq('id', sessionId)
 }
 
 // ── back-compat shim ────────────────────────────────────────────

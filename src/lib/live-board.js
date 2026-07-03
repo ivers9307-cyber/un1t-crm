@@ -12,7 +12,7 @@
 // still scores for them, it is just not rendered publicly. Anonymous walk-in
 // (null-contact) sessions have no member to opt out, so they are always kept.
 
-import { summariseSession, zoneForBpm } from '@/lib/heart-rate'
+import { zoneForBpm } from '@/lib/heart-rate'
 import { isBridgeOnline, latestBridgeSeenMs, maskStrapLabel } from '@/lib/bridge-samples'
 import { getAvailableStraps } from '@/lib/live-class'
 import { resolveCurrentClassForTv } from '@/lib/class-occurrences'
@@ -55,10 +55,13 @@ export async function buildLiveBoardPayload(db, { location, nowMs = Date.now() }
     currentBpm: s.lastBpm ?? null,
   }))
 
-  // Open sessions at this location.
+  // Open sessions at this location. The running HR aggregate (zones_seconds /
+  // effort_points / peak_hr_bpm / avg_hr_bpm) is maintained INCREMENTALLY at
+  // ingest (mig 354; src/lib/bridge-samples.js insertHrSamples), so we read it
+  // straight off the row — NO per-poll re-scan of every sample in the class.
   const { data: rawSessions } = await db
     .from('heart_rate_sessions')
-    .select('id, contact_id, device_identifier, started_at, max_hr_used, last_sample_at, contacts!contact_id(id, name, location_id, hr_leaderboard_opt_out)')
+    .select('id, contact_id, device_identifier, started_at, max_hr_used, last_sample_at, zones_seconds, effort_points, peak_hr_bpm, avg_hr_bpm, contacts!contact_id(id, name, location_id, hr_leaderboard_opt_out)')
     .eq('location_id', locationId)
     .is('ended_at', null)
     .order('started_at', { ascending: true })
@@ -100,49 +103,31 @@ export async function buildLiveBoardPayload(db, { location, nowMs = Date.now() }
 
   const sessionIds = sessions.map((s) => s.id)
 
-  // Two reads:
-  //   - last 30s of samples per session (for current BPM)
-  //   - all samples per session (for cumulative zones + points)
+  // ONE small read: the last 30s of samples per session, for the "current BPM"
+  // moving average on each tile. The cumulative zones/points/peak/avg are NO
+  // LONGER scanned here — they're maintained incrementally at ingest and read
+  // off the session row above (mig 354, audit W2/#11), so the O(minutes ×
+  // attendees) full-class re-scan every 2s poll is gone.
   //
-  // BOTH must page. Every `.select()` silently caps at 1000 rows (db-max-rows),
-  // and both reads span EVERY open session in the class:
-  //   - the "all samples" read is unbounded — a 20-strap class at ~1Hz crosses
-  //     1000 rows in ~50s, so an un-paged, recorded_at-ascending select froze
-  //     zones/points/peak/avg on the first ~minute for the rest of the session.
-  //   - the 30s recent window also breaches the cap above ~33 concurrent straps
-  //     (33 × 30 samples > 1000), which would truncate current-BPM tiles.
-  // selectAll pages by a stable order until the final short page. Wave 2:
-  // replace per-poll full-scan with incremental zone aggregates on
-  // heart_rate_sessions so we stop re-reading the whole class every 2s.
+  // This read must still page: the 30s window breaches the 1000-row cap above
+  // ~33 concurrent straps (33 × 30 samples > 1000), which would truncate
+  // current-BPM tiles. selectAll pages by a stable order until the final short
+  // page.
   const recentSince = new Date(nowMs - RECENT_BPM_WINDOW_MS).toISOString()
-  const [recentSamples, allSamples] = await Promise.all([
-    selectAll((from, to) => db
-      .from('hr_samples')
-      .select('session_id, recorded_at, bpm')
-      .in('session_id', sessionIds)
-      .gte('recorded_at', recentSince)
-      .order('recorded_at', { ascending: true })
-      .range(from, to)),
-    selectAll((from, to) => db
-      .from('hr_samples')
-      .select('session_id, recorded_at, bpm')
-      .in('session_id', sessionIds)
-      .order('recorded_at', { ascending: true })
-      .range(from, to)),
-  ])
+  const recentSamples = await selectAll((from, to) => db
+    .from('hr_samples')
+    .select('session_id, recorded_at, bpm')
+    .in('session_id', sessionIds)
+    .gte('recorded_at', recentSince)
+    .order('recorded_at', { ascending: true })
+    .range(from, to))
 
   // Bucket per session.
   const recentBySession = new Map()
-  const allBySession = new Map()
   for (const s of recentSamples || []) {
     const arr = recentBySession.get(s.session_id) || []
     arr.push(s.bpm)
     recentBySession.set(s.session_id, arr)
-  }
-  for (const s of allSamples || []) {
-    const arr = allBySession.get(s.session_id) || []
-    arr.push(s)
-    allBySession.set(s.session_id, arr)
   }
 
   const tiles = sessions.map((sess) => {
@@ -152,8 +137,15 @@ export async function buildLiveBoardPayload(db, { location, nowMs = Date.now() }
       : null
     const zone = currentBpm != null ? zoneForBpm(currentBpm, sess.max_hr_used) : null
 
-    const samples = allBySession.get(sess.id) || []
-    const summary = summariseSession(samples, sess.max_hr_used)
+    // Cumulative aggregate straight off the row (incrementally maintained at
+    // ingest). Normalise jsonb string keys + null-on-fresh-session to a stable
+    // shape so the payload keys never change. effort_points/peak/avg are null
+    // until the session's first batch — coalesce points to 0, leave peak/avg
+    // null (same as summariseSession returned for an empty session).
+    const zonesSeconds = normaliseZones(sess.zones_seconds)
+    const effortPoints = Number(sess.effort_points) || 0
+    const peakBpm = sess.peak_hr_bpm != null ? Number(sess.peak_hr_bpm) : null
+    const avgBpm = sess.avg_hr_bpm != null ? Number(sess.avg_hr_bpm) : null
 
     // HR-CLASS-ALLOC.2 — anonymous (null-contact) walk-in sessions are labelled
     // by their device id (e.g. "ant:45075") instead of a name.
@@ -177,10 +169,10 @@ export async function buildLiveBoardPayload(db, { location, nowMs = Date.now() }
       displayName,
       currentBpm,
       currentZone: zone ? { id: zone.id, label: zone.label, color: zone.color } : null,
-      zonesSeconds: summary.zonesSeconds,
-      effortPoints: summary.effortPoints,
-      peakBpm: summary.peakHrBpm,
-      avgBpm: summary.avgHrBpm,
+      zonesSeconds,
+      effortPoints,
+      peakBpm,
+      avgBpm,
       startedAt: sess.started_at,
       stale,
     }
@@ -206,4 +198,20 @@ export async function buildLiveBoardPayload(db, { location, nowMs = Date.now() }
     timer: timerRun || null,
     current_class: currentClass,
   }
+}
+
+/**
+ * Normalise a persisted zones_seconds into the exact { 1..5: number } shape the
+ * TV client expects, tolerating jsonb string keys and null (fresh session).
+ * Mirrors what summariseSession returned before the aggregate moved onto the
+ * row, so the payload shape is byte-stable.
+ */
+function normaliseZones(zonesSeconds) {
+  const out = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
+  if (zonesSeconds && typeof zonesSeconds === 'object') {
+    for (const id of [1, 2, 3, 4, 5]) {
+      out[id] = Number(zonesSeconds[id] ?? zonesSeconds[String(id)] ?? 0) || 0
+    }
+  }
+  return out
 }
