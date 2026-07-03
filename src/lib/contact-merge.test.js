@@ -5,7 +5,31 @@
 // gets dedicated unit coverage here.
 
 import { describe, it, expect } from 'vitest'
-import { pickMergedFields, mergeTagArrays } from './contact-merge.js'
+import { pickMergedFields, mergeTagArrays, redactInBodyForContact } from './contact-merge.js'
+
+// Minimal fake supabase builder that records .from(table).delete().eq(col, val)
+// chains so we can assert the InBody erasure hits the right tables/columns.
+function makeFakeDb({ failOn = null } = {}) {
+  const calls = []
+  return {
+    calls,
+    from(table) {
+      const ctx = { table, op: null, eqs: {} }
+      const builder = {
+        delete() { ctx.op = 'delete'; return builder },
+        eq(col, val) {
+          ctx.eqs[col] = val
+          // Terminal — record + return a thenable-ish result. The real code
+          // awaits this; simulate a rejection when asked to test resilience.
+          calls.push(ctx)
+          if (failOn && failOn === table) return Promise.reject(new Error(`boom:${table}`))
+          return Promise.resolve({ error: null })
+        },
+      }
+      return builder
+    },
+  }
+}
 
 describe('pickMergedFields — survivor wins, loser fills empty', () => {
   it('survivor non-empty value wins over loser', () => {
@@ -116,5 +140,33 @@ describe('mergeTagArrays — union, deduped, trims preserved order', () => {
     // Important for the operator's mental model — their own tags
     // stay at the head of the list; loser's tags appended after.
     expect(mergeTagArrays(['a', 'b'], ['c', 'a', 'd'])).toEqual(['a', 'b', 'c', 'd'])
+  })
+})
+
+describe('redactInBodyForContact — GDPR erasure gap (audit M3)', () => {
+  it('hard-deletes inbody_webhook_events (by matched_contact_id) and inbody_scans (by contact_id)', async () => {
+    const db = makeFakeDb()
+    await redactInBodyForContact(db, 'contact-123')
+
+    const events = db.calls.find(c => c.table === 'inbody_webhook_events')
+    expect(events).toBeDefined()
+    expect(events.op).toBe('delete')
+    expect(events.eqs).toEqual({ matched_contact_id: 'contact-123' })
+
+    const scans = db.calls.find(c => c.table === 'inbody_scans')
+    expect(scans).toBeDefined()
+    expect(scans.op).toBe('delete')
+    expect(scans.eqs).toEqual({ contact_id: 'contact-123' })
+  })
+
+  it('throws when contactId is missing (guards a mass wipe)', async () => {
+    await expect(redactInBodyForContact(makeFakeDb(), '')).rejects.toThrow(/contactId required/)
+  })
+
+  it('is best-effort — a failure on one table still attempts the other', async () => {
+    // If the webhook-events delete rejects, inbody_scans must still be tried.
+    const db = makeFakeDb({ failOn: 'inbody_webhook_events' })
+    await expect(redactInBodyForContact(db, 'contact-9')).resolves.toBeUndefined()
+    expect(db.calls.some(c => c.table === 'inbody_scans')).toBe(true)
   })
 })

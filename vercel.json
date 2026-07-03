@@ -172,6 +172,7 @@
       "path": "/api/cron/webhook-replay",
       "schedule": "*/5 * * * *"
     },
-    { "path": "/api/cron/process-class-bookings", "schedule": "* * * * *" }
+    { "path": "/api/cron/process-class-bookings", "schedule": "* * * * *" },
+    { "path": "/api/cron/prune-hr-samples", "schedule": "0 2 * * 0" }
   ]
 }

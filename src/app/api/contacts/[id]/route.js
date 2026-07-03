@@ -6,7 +6,7 @@ import { validateBody } from '@/lib/validate'
 import { email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/schemas'
 import { triggerSequencesForTagsAdded } from '@/lib/sequences'
 import { getCurrentUser } from '@/lib/auth'
-import { redactWhatsAppForContact } from '@/lib/contact-merge'
+import { redactWhatsAppForContact, redactInBodyForContact } from '@/lib/contact-merge'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { logWarn } from '@/lib/log'
 
@@ -179,6 +179,13 @@ export async function DELETE(_request, props) {
   // partially fails the delete still proceeds (the FK rules will
   // null the contact_id link automatically).
   await redactWhatsAppForContact(db, params.id)
+
+  // GDPR erasure gap (audit M3): the InBody tables SET NULL their
+  // contact FK, so raw body-composition payloads + the member's phone
+  // would otherwise survive an erasure orphaned. Hard-delete them
+  // BEFORE the contact row is removed (once the FK nulls, they can't
+  // be found by contact_id). Best-effort, same posture as the WA scrub.
+  await redactInBodyForContact(db, params.id)
 
   const { error } = await db.from('contacts').delete().eq('id', params.id)
   if (error) {
