@@ -19,8 +19,8 @@ import {
 // title-cased version of the key.
 const STATUS_LABEL = {
   new_lead: 'New leads',
-  first_class: '1st class',
-  second_class: '2nd class',
+  first_class: '1st Class Completed',
+  second_class: '2nd Class Completed',
   trial_done: 'Trial done',
   converted: 'Converted',
   member: 'Members',

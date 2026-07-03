@@ -24,8 +24,8 @@ import { Loader2, Sparkles, CheckCircle2, AlertTriangle, Eye, Play } from 'lucid
 // FUNNEL.1 taxonomy — labels mirror the mig 350 stage rows.
 const STAGE_LABELS = {
   new_lead:     'New Leads',
-  first_class:  '1st Class',
-  second_class: '2nd Class',
+  first_class:  '1st Class Completed',
+  second_class: '2nd Class Completed',
   trial_done:   'Trial Done',
   converted:    'Converted',
   member:       'Member',
