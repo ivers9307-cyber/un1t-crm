@@ -240,7 +240,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
           }
         }
       )
-      // INBOX-APPROVALS.7 — refresh approval cards live (mig 357 publishes
+      // INBOX-APPROVALS.7 — refresh approval cards live (mig 363 publishes
       // this table to supabase_realtime). Until that migration lands in
       // prod this listener simply never fires; fetch-on-open still works.
       .on(

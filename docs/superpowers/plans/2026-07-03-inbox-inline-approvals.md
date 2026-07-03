@@ -418,12 +418,12 @@ git commit -m "INBOX-APPROVALS.2 — shared summary + timeline-merge helpers for
 ### Task 3: Migration — staff-wide SELECT + realtime publication
 
 **Files:**
-- Create: `supabase/migrations/357_agent_requests_staff_read_realtime.sql` (**verify 357 is still the next free number**: `ls supabase/migrations/ | sort -n | tail -3`; bump if taken)
+- Create: `supabase/migrations/363_agent_requests_staff_read_realtime.sql` (numbered 357 at planning; renumbered 363 after rebase — prod history had advanced to 362)
 
 - [ ] **Step 1: Write the migration file**
 
 ```sql
--- 357: Inline inbox approvals — staff-wide read + realtime.
+-- 363: Inline inbox approvals — staff-wide read + realtime.
 --
 -- Approval cards render inside /communications/inbox threads and update
 -- live (INBOX-APPROVALS). Two prerequisites:
@@ -463,8 +463,8 @@ END $$;
 The orchestrator applies this via Supabase MCP (`apply_migration` on project `iyvtbjjxdggiadzwwvdj`, then `get_advisors` type=security) at deploy time, before the PR merges. Executors never apply migrations.
 
 ```bash
-git add supabase/migrations/357_agent_requests_staff_read_realtime.sql
-git commit -m "INBOX-APPROVALS.3 — mig 357: staff-wide SELECT + realtime for agent_membership_requests"
+git add supabase/migrations/363_agent_requests_staff_read_realtime.sql
+git commit -m "INBOX-APPROVALS.3 — mig 363: staff-wide SELECT + realtime for agent_membership_requests"
 ```
 
 ---
@@ -1114,7 +1114,7 @@ INBOX-APPROVALS — Mia approval requests render as decidable cards inline
 in /communications/inbox threads (WA + IG): merge into timeline, realtime,
 decline reason → Mia-voiced composer prefill, rule-based next steps
 (shared/approvals-next-steps), pending-approval queue badges, decisions
-opened to location staff (mig 357 + route gates), settings deep link.
+opened to location staff (mig 363 + route gates), settings deep link.
 ```
 
 - [ ] **Step 3: Push + PR**
@@ -1126,25 +1126,25 @@ gh pr create --base main --fill --title "INBOX-APPROVALS — inline agent approv
 Wave 1 of the inline-approvals program (spec: docs/superpowers/specs/2026-07-03-inbox-inline-approvals-design.md).
 
 - Approval cards inline in WA + IG threads, realtime, decidable in place
-- Decision rights follow the comms surface (staff at location; mig 357 widens SELECT for realtime)
+- Decision rights follow the comms surface (staff at location; mig 363 widens SELECT for realtime)
 - Rule-based next steps: composer prefill / Book tab / SequencePicker
 - Decline → staff-reviewed Mia-voiced draft in the composer
 - Pending-approval badges on the queue; settings page deep-links to the thread
 
-⚠️ Mig 357 must be applied (Supabase MCP) BEFORE merge.
+⚠️ Mig 363 must be applied (Supabase MCP) BEFORE merge.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 )"
 ```
-Report the PR URL. **Do not merge** — the orchestrator applies mig 357 + advisors first, then Richard merges.
+Report the PR URL. **Do not merge** — the orchestrator applies mig 363 + advisors first, then Richard merges.
 
 ---
 
 ## Deployment sequence (orchestrator, not executors)
 
 1. All tasks committed + CI mirror green + PR open.
-2. Apply `357_agent_requests_staff_read_realtime.sql` via Supabase MCP `apply_migration` on project `iyvtbjjxdggiadzwwvdj` (confirm project ref via `list_projects` first).
+2. Apply `363_agent_requests_staff_read_realtime.sql` via Supabase MCP `apply_migration` on project `iyvtbjjxdggiadzwwvdj` (confirm project ref via `list_projects` first).
 3. Run `get_advisors` (security) — expect no new findings beyond the 2 known intentional SECURITY DEFINER warnings.
 4. Manual smoke on prod after merge: open `/communications/inbox`, find/create a pending request (test conversation), approve one booking end-to-end, verify Mia's confirmation lands in-thread, verify a decline prefills the composer, verify badge + realtime with a second browser window.
 

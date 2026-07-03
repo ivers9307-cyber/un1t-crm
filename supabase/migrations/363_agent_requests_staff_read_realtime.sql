@@ -1,4 +1,4 @@
--- 357: Inline inbox approvals — staff-wide read + realtime.
+-- 363: Inline inbox approvals — staff-wide read + realtime.
 --
 -- Approval cards render inside /communications/inbox threads and update
 -- live (INBOX-APPROVALS). Two prerequisites:
