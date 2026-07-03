@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { timeOffStatusSchema , MANAGER_ROLES} from '@/lib/schemas'
-import { notifyUsers } from '@/lib/notify'
+import { notifyUsersOnce } from '@/lib/push-dedup'
 
 const TimeOffReviewSchema = z.object({
   status: timeOffStatusSchema,
@@ -82,7 +82,7 @@ export async function PUT(request, props) {
     // requester has no device tokens, they get a fallback email
     // via Postmark (category 'time_off' opts in via fallbackEmail:
     // true in notifications-registry).
-    notifyUsers([existing.profile_id], {
+    notifyUsersOnce(db, `time_off_decision:${existing.id}:${status}`, [existing.profile_id], {
       title: `Time off ${verb}`,
       body: `Your ${existing.type} request for ${range} was ${verb}${review_note ? ` — “${review_note}”` : ''}.`,
       category: 'time_off',

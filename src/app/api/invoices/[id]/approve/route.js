@@ -17,7 +17,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { computeScheduledForPeriod, periodLabel } from '@/lib/contractor-invoices'
 import { sendInvoiceApprovedEmail } from '@/lib/contractor-invoice-email'
-import { notifyUsers } from '@/lib/notify'
+import { notifyUsersOnce } from '@/lib/push-dedup'
 import { enqueueFromContractorInvoice } from '@/lib/invoices-queue/enqueue'
 import { logWarn } from '@/lib/log'
 
@@ -120,7 +120,7 @@ export async function POST(_request, props) {
   // Honours notify_invoice_approved + the master push_notifications
   // switch the same way sendPush did.
   try {
-    await notifyUsers([approved.contractor_id], {
+    await notifyUsersOnce(db, `invoice_approved:${approved.id}:${approved.reviewed_at || ''}`, [approved.contractor_id], {
       title: 'Invoice approved',
       body: `€${Number(approved.invoice_amount).toFixed(2)} for ${periodLabel(approved.period_start)} has been approved and forwarded to accounts.`,
       category: 'invoice_approved',

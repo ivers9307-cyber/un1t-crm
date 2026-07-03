@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { authenticateApiKey, requireApiKeyOrManager, orgLocationIds } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email, phone, leadSourceSchema, MANAGER_ROLES } from '@/lib/schemas'
-import { sendPushToRolesAtLocation } from '@/lib/push'
+import { sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
 import { triggerSequencesForPipelineStageChange } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
 
@@ -98,7 +98,9 @@ export async function POST(request) {
   // permissions.mobile.notify_lead inside sendPush(). Best-effort.
   if (data.location_id) {
     const sourceLabel = data.lead_source ? ` from ${data.lead_source}` : ''
-    sendPushToRolesAtLocation(
+    sendPushToRolesAtLocationOnce(
+      db,
+      `lead_new:${data.id}`,
       data.location_id,
       MANAGER_ROLES,
       {

@@ -31,7 +31,7 @@
 // Best-effort throughout — never throws.
 
 import { createServerClient } from './supabase'
-import { sendPush, resolvePushAllowedIds } from './push'
+import { sendPush, resolvePushAllowedIds, resolveRoleRecipientIds } from './push'
 import { sendEmail } from './postmark'
 import { getNotificationCategory } from './notifications-registry'
 import { logInfo, logWarn } from './log'
@@ -50,7 +50,7 @@ import { logInfo, logWarn } from './log'
  */
 export async function notifyUsers(userIds, payload) {
   const ids = Array.isArray(userIds) ? userIds : [userIds]
-  const totals = { sent: 0, skipped: 0, invalidated: 0, emailed: 0, email_failed: 0 }
+  const totals = { sent: 0, skipped: 0, invalidated: 0, failed: 0, emailed: 0, email_failed: 0 }
   if (!ids.length) return totals
 
   const category = payload.category
@@ -65,6 +65,10 @@ export async function notifyUsers(userIds, payload) {
   totals.sent += pushResult.sent
   totals.skipped += pushResult.skipped
   totals.invalidated += pushResult.invalidated
+  // Propagated so claim-before-send callers (push-dedup.js) can tell a
+  // pipeline failure ("release the claim, retry later") apart from a
+  // quiet no-op ("no tokens" — keep the claim, nothing to retry against).
+  totals.failed += pushResult.failed || 0
 
   if (!shouldFallback) return totals
 
@@ -180,17 +184,9 @@ function escapeHtml(s) {
  */
 export async function notifyUsersAtRoles(locationId, roles, payload) {
   if (!locationId || !roles?.length) {
-    return { sent: 0, skipped: 0, invalidated: 0, emailed: 0, email_failed: 0 }
+    return { sent: 0, skipped: 0, invalidated: 0, failed: 0, emailed: 0, email_failed: 0 }
   }
   const db = createServerClient()
-  const { data: links } = await db
-    .from('profile_locations')
-    .select('profile_id, profiles!inner(id, role, active)')
-    .eq('location_id', locationId)
-
-  const ids = (links || [])
-    .filter(l => l.profiles?.active && roles.includes(l.profiles.role))
-    .map(l => l.profile_id)
-
+  const ids = await resolveRoleRecipientIds(db, locationId, roles)
   return notifyUsers(ids, payload)
 }

@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds, assertLocationAccess } from '@/lib/auth'
 import { validateBody, uuidLike } from '@/lib/validate'
 import { timeOffTypeSchema } from '@/lib/schemas'
-import { notifyUsersAtRoles } from '@/lib/notify'
+import { notifyUsersAtRolesOnce } from '@/lib/push-dedup'
 
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
 
@@ -153,7 +153,7 @@ export async function POST(request) {
     // NOTIF.9 — migrated to notifyUsersAtRoles. Owners/managers
     // who don't have the mobile app get the request by email so
     // they can still review and decide within reasonable hours.
-    notifyUsersAtRoles(targetLocation, ['owner', 'manager'], {
+    notifyUsersAtRolesOnce(db, `time_off_inbound:${data.id}`, targetLocation, ['owner', 'manager'], {
       title: 'New time-off request',
       body: `${user.full_name} requested ${data.type} for ${range}.`,
       category: 'time_off',

@@ -251,6 +251,29 @@ export async function sendPush(userIds, payload) {
 }
 
 /**
+ * Resolve the active profile ids holding one of `roles` at `locationId`.
+ * Shared by the role fan-out senders here, in notify.js, and in
+ * push-dedup.js (which must know the recipient list BEFORE sending so it
+ * can claim per-recipient dedup rows).
+ *
+ * @param {object} db          service-role supabase client
+ * @param {string} locationId
+ * @param {string[]} roles     e.g. ['owner', 'manager']
+ * @returns {Promise<string[]>} profile ids
+ */
+export async function resolveRoleRecipientIds(db, locationId, roles) {
+  if (!locationId || !roles?.length) return []
+  const { data: links } = await db
+    .from('profile_locations')
+    .select('profile_id, profiles!inner(id, role, active)')
+    .eq('location_id', locationId)
+
+  return (links || [])
+    .filter(l => l.profiles?.active && roles.includes(l.profiles.role))
+    .map(l => l.profile_id)
+}
+
+/**
  * Convenience: send a notification to every user with a given role at a
  * given location. Useful for fan-out events like "new time-off request
  * needs approval" → notify all managers at the requester's location.
@@ -261,15 +284,7 @@ export async function sendPush(userIds, payload) {
  */
 export async function sendPushToRolesAtLocation(locationId, roles, payload) {
   const db = createServerClient()
-  const { data: links } = await db
-    .from('profile_locations')
-    .select('profile_id, profiles!inner(id, role, active)')
-    .eq('location_id', locationId)
-
-  const ids = (links || [])
-    .filter(l => l.profiles?.active && roles.includes(l.profiles.role))
-    .map(l => l.profile_id)
-
+  const ids = await resolveRoleRecipientIds(db, locationId, roles)
   if (!ids.length) return { sent: 0, skipped: 0, invalidated: 0, failed: 0 }
   return sendPush(ids, payload)
 }

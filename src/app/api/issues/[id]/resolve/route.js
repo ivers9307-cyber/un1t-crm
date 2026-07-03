@@ -8,7 +8,7 @@ import { z } from 'zod'
 import { withAuth } from '@/lib/with-auth'
 import { resolveIssue, getInboxIssue } from '@/lib/issues'
 import { logAuditEvent } from '@/lib/audit'
-import { sendPush } from '@/lib/push'
+import { sendPushOnce } from '@/lib/push-dedup'
 import { logWarn } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 
@@ -79,7 +79,7 @@ export const POST = withAuth(
     // a push delivery failure should not unwind the state change.
     if (existing.submitter_id && existing.submitter_id !== user.id) {
       const notes = (out.data.resolution_notes || '').slice(0, 180)
-      sendPush(existing.submitter_id, {
+      sendPushOnce(db, `issue_resolved:${existing.id}`, existing.submitter_id, {
         title: 'Your report has been resolved',
         body: notes ? `${notes}` : 'A handler at the studio has marked your report resolved.',
         category: 'issue_resolved',

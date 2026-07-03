@@ -6,7 +6,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { swapStatusSchema } from '@/lib/schemas'
 import { resolveSwapTransition } from '@/lib/swap-lifecycle'
-import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
+import { sendPushOnce, sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
 import { MANAGER_ROLES } from '@/lib/schemas'
 
 const SwapReviewSchema = z.object({
@@ -61,37 +61,43 @@ export async function PUT(request, props) {
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
   // Best-effort pushes — never block or fail the response.
-  dispatchSwapPushes(decision, swap, user).catch(err => console.error('[swaps] push failed', err))
+  dispatchSwapPushes(db, decision, swap, user).catch(err => console.error('[swaps] push failed', err))
 
   return NextResponse.json({ success: true, data })
 }
 
 // Map the resolver's notify intents to Expo pushes. Bodies live here because
 // they need user.full_name and human copy (the resolver stays pure).
-async function dispatchSwapPushes(decision, swap, user) {
+// PUSH.2 — deduped per transition. Keys include the acting user where the
+// same transition can legitimately recur with a different actor (a swap
+// re-opened by a withdrawal can be claimed again — by the SAME actor too,
+// which the key suppresses for 30 days; accepted as rare vs the
+// double-invoke double-push this closes). The decision key includes the
+// status so a decline followed by a re-review approval still notifies.
+async function dispatchSwapPushes(db, decision, swap, user) {
   const actor = user.full_name || 'A coach'
   for (const n of decision.notify) {
     switch (n.kind) {
       case 'claim_for_requester':
-        await sendPush(n.to, { title: 'Shift claimed', body: `${actor} claimed your shift — awaiting manager approval.`, category: 'swap', data: { type: 'swap_claimed', swap_id: swap.id } })
+        await sendPushOnce(db, `swap_claimed:${swap.id}:${user.id}`, n.to, { title: 'Shift claimed', body: `${actor} claimed your shift — awaiting manager approval.`, category: 'swap', data: { type: 'swap_claimed', swap_id: swap.id } })
         break
       case 'accept_for_requester':
-        await sendPush(n.to, { title: 'Swap accepted', body: `${actor} accepted your swap — awaiting manager approval.`, category: 'swap', data: { type: 'swap_accepted', swap_id: swap.id } })
+        await sendPushOnce(db, `swap_accepted:${swap.id}:${user.id}`, n.to, { title: 'Swap accepted', body: `${actor} accepted your swap — awaiting manager approval.`, category: 'swap', data: { type: 'swap_accepted', swap_id: swap.id } })
         break
       case 'claim_for_managers':
       case 'accept_for_managers':
-        await sendPushToRolesAtLocation(swap.location_id, MANAGER_ROLES, { title: 'Swap awaiting approval', body: `${actor} took a shift. Tap to approve.`, category: 'swap', data: { type: 'swap_awaiting', swap_id: swap.id } })
+        await sendPushToRolesAtLocationOnce(db, `swap_awaiting:${swap.id}:${user.id}`, swap.location_id, MANAGER_ROLES, { title: 'Swap awaiting approval', body: `${actor} took a shift. Tap to approve.`, category: 'swap', data: { type: 'swap_awaiting', swap_id: swap.id } })
         break
       case 'withdraw_for_requester':
-        await sendPush(n.to, { title: 'Swap re-opened', body: `${actor} withdrew — your shift is open for swap again.`, category: 'swap', data: { type: 'swap_withdrawn', swap_id: swap.id } })
+        await sendPushOnce(db, `swap_withdrawn:${swap.id}:${user.id}`, n.to, { title: 'Swap re-opened', body: `${actor} withdrew — your shift is open for swap again.`, category: 'swap', data: { type: 'swap_withdrawn', swap_id: swap.id } })
         break
       case 'decline_for_requester':
-        await sendPush(n.to, { title: 'Swap declined', body: `${actor} declined your swap request.`, category: 'swap', data: { type: 'swap_declined', swap_id: swap.id } })
+        await sendPushOnce(db, `swap_declined:${swap.id}:${user.id}`, n.to, { title: 'Swap declined', body: `${actor} declined your swap request.`, category: 'swap', data: { type: 'swap_declined', swap_id: swap.id } })
         break
       case 'decision_for_requester':
       case 'decision_for_taker': {
         const verb = decision.swapUpdates.status === 'approved' ? 'approved' : 'declined'
-        await sendPush(n.to, { title: `Swap ${verb}`, body: `Your shift swap was ${verb}${decision.swapUpdates.review_note ? ` — “${decision.swapUpdates.review_note}”` : ''}.`, category: 'swap', data: { type: 'swap_decision', swap_id: swap.id, status: decision.swapUpdates.status } })
+        await sendPushOnce(db, `swap_decision:${swap.id}:${decision.swapUpdates.status}`, n.to, { title: `Swap ${verb}`, body: `Your shift swap was ${verb}${decision.swapUpdates.review_note ? ` — “${decision.swapUpdates.review_note}”` : ''}.`, category: 'swap', data: { type: 'swap_decision', swap_id: swap.id, status: decision.swapUpdates.status } })
         break
       }
       default:

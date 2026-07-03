@@ -25,6 +25,7 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const STALE_AFTER_DAYS = 90
+const LEDGER_RETENTION_DAYS = 30 // push_event_sends rows (PUSH.2, mig 348)
 
 export async function POST(request) { return GET(request) }
 
@@ -75,12 +76,36 @@ export async function GET(request) {
     })
   }
 
+  // PUSH.2 — prune the event-push dedup ledger alongside the token
+  // sweep (same daily hygiene job, mig 348). Event keys never repeat
+  // legitimately inside 30 days, so anything older is dead weight.
+  // Best-effort: a failed prune must not fail the token sweep.
+  let ledgerPruned = 0
+  const ledgerCutoffIso = new Date(Date.now() - LEDGER_RETENTION_DAYS * 86400 * 1000).toISOString()
+  const { data: prunedRows, error: pruneErr } = await db
+    .from('push_event_sends')
+    .delete()
+    .lt('sent_at', ledgerCutoffIso)
+    .select('id')
+  if (pruneErr) {
+    logWarn('cron-sweep-stale-push-tokens', 'push_event_sends prune failed', { err: pruneErr })
+  } else {
+    ledgerPruned = (prunedRows || []).length
+    if (ledgerPruned > 0) {
+      logInfo('cron-sweep-stale-push-tokens', 'pruned event-push dedup ledger', {
+        count: ledgerPruned,
+        cutoff_iso: ledgerCutoffIso,
+      })
+    }
+  }
+
   await stampHeartbeat('sweep-stale-push-tokens').catch((err) =>
     logWarn('cron-sweep-stale-push-tokens', 'heartbeat failed', { err }))
 
   return NextResponse.json({
     ok: true,
     deleted,
+    ledger_pruned: ledgerPruned,
     cutoff_iso: cutoffIso,
     stale_after_days: STALE_AFTER_DAYS,
   })
