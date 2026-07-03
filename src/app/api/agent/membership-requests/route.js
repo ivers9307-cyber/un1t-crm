@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 import { selectAll } from '@/lib/select-all'
 
 // RADAR-AGENT Phase 2 — operator approval queue for agent-captured
@@ -25,6 +25,11 @@ export async function GET(request) {
   const conversationId = searchParams.get('conversation_id')
 
   if (conversationId) {
+    if (!uuidLike.safeParse(conversationId).success) {
+      // Malformed id — same oracle-free empty shape as unknown/foreign ids
+      // (a raw non-uuid would otherwise 500 on the PostgREST uuid cast).
+      return NextResponse.json({ success: true, requests: [] })
+    }
     const { data, error } = await db.from('agent_membership_requests')
       .select('id, kind, channel, conversation_id, location_id, contact_id, status, details, customer_note, retention_flagged, decided_at, decision_note, created_at, contacts(id, name, first_name)')
       .eq('conversation_id', conversationId)
