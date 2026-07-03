@@ -31,3 +31,12 @@ BEGIN
 EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
+
+-- Partial index for the inbox queue-badge lookup
+-- (.eq status='pending' .in conversation_id — INBOX-APPROVALS.10):
+-- neither existing index covers conversation_id, and the table grows
+-- unbounded as an audit trail. Pending rows are transient, so this
+-- index stays tiny forever.
+CREATE INDEX IF NOT EXISTS idx_agent_membership_requests_pending_conv
+  ON public.agent_membership_requests (conversation_id)
+  WHERE status = 'pending';
