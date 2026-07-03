@@ -53,7 +53,7 @@ export async function POST(request) {
   // Mig 144 (GLOFOX3.2): also pull create_in_glofox + location_id so
   // we can fire the opt-in CRM → Glofox push after the booking lands.
   const { data: event } = await db.from('event_types')
-    .select('duration_minutes, custom_fields, create_in_glofox, location_id')
+    .select('name, duration_minutes, custom_fields, create_in_glofox, location_id')
     .eq('id', body.event_type_id)
     .single()
 
@@ -176,6 +176,24 @@ export async function POST(request) {
       await writeContactTag(db, { contactId: data.contact_id, locationId: data.location_id, tag: 'stillorgan-start' })
     }
   } catch (e) { logWarn('book', 'meta_book attribution failed', { err: e }) }
+
+  // CAPI: /start consult bookings emit website Lead + Schedule (booking-keyed
+  // event_ids so retries dedupe at Meta). meta_book only — this route serves
+  // every public booking page. Dataset gating lives in the helper.
+  try {
+    if (body.source === 'meta_book') {
+      const { sendWebsiteConversion } = await import('@/lib/meta-capi')
+      const capi = {
+        locationId: data.location_id,
+        email: data.customer_email,
+        phone: data.customer_phone,
+        eventSourceUrl: 'https://www.un1tdublin.com/start',
+        contentName: event.name || 'Consultation',
+      }
+      await sendWebsiteConversion(db, { ...capi, eventName: 'Lead', eventId: `bookinglead-${data.id}` })
+      await sendWebsiteConversion(db, { ...capi, eventName: 'Schedule', eventId: `booking-${data.id}` })
+    }
+  } catch (e) { logWarn('book', 'capi events failed', { err: e }) }
 
   // Campaign WhatsApp confirmation (the /start funnel sends source='meta_book').
   // Best-effort; never blocks the booking response. UTILITY template; Dublin

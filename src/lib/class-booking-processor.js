@@ -6,7 +6,7 @@ import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, crea
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
-import { sendCtwaConversion } from '@/lib/meta-capi'
+import { sendCtwaConversion, sendWebsiteConversion } from '@/lib/meta-capi'
 import { logWarn } from '@/lib/log'
 
 const labelFmt = new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false })
@@ -62,7 +62,7 @@ export async function processClassBookingRequest(db, request) {
   const { data: contact } = await db.from('contacts')
     // last_name is REQUIRED: findOrCreateGlofoxMember's create path hard-guards on
     // first_name AND last_name — omitting it would fail every brand-new lead.
-    .select('id, first_name, last_name, name, email, phone, wa_phone, glofox_member_id, last_attended_at')
+    .select('id, first_name, last_name, name, email, phone, wa_phone, glofox_member_id, last_attended_at, ctwa_clid')
     .eq('id', request.contact_id).maybeSingle()
   if (!contact) {
     await setStatus(db, request.id, { status: 'failed', last_error: 'contact_missing' })
@@ -138,5 +138,19 @@ export async function processClassBookingRequest(db, request) {
   try {
     await sendCtwaConversion(db, { locationId: request.location_id, contactId: request.contact_id, eventName: 'Schedule', contentName: request.class_name || 'Class' })
   } catch (e) { logWarn('cbp', 'ctwa conversion failed', { err: e }) }
+  // Website Schedule for non-CTWA contacts (the /start funnel). CTWA contacts
+  // are covered by the business_messaging event above — don't double-fire the
+  // same booking down both channels.
+  try {
+    if (!contact.ctwa_clid) {
+      await sendWebsiteConversion(db, {
+        locationId: request.location_id, eventName: 'Schedule',
+        email: contact.email, phone: contact.phone,
+        eventSourceUrl: 'https://www.un1tdublin.com/start',
+        eventId: `classbooking-${request.id}`,
+        contentName: request.class_name || 'Class',
+      })
+    }
+  } catch (e) { logWarn('cbp', 'website conversion failed', { err: e }) }
   return { outcome: 'booked' }
 }
