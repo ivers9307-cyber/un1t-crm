@@ -67,6 +67,7 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
   const [selected, setSelected] = useState(
     initialConversationId ? { ch: initialChannel === 'ig' ? 'ig' : 'wa', id: initialConversationId } : null
   )
+  const [ccTab, setCcTab] = useState('profile')
 
   const loadConversations = useCallback(async () => {
     const qs = locationId ? `?location_id=${encodeURIComponent(locationId)}` : ''
@@ -101,6 +102,7 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
     for (const table of [
       'whatsapp_conversations', 'whatsapp_messages',
       'instagram_conversations', 'instagram_messages',
+      'agent_membership_requests',
     ]) {
       channel.on('postgres_changes', { event: '*', schema: 'public', table }, () => {
         loadConversations()
@@ -243,7 +245,7 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
             return (
               <button
                 key={`${conv._ch}:${conv.id}`}
-                onClick={() => setSelected({ ch: conv._ch, id: conv.id })}
+                onClick={() => { setSelected({ ch: conv._ch, id: conv.id }); setCcTab('profile') }}
                 className={`w-full text-left px-4 py-3 border-b border-un1t-border/50 transition-colors ${
                   isSelected ? 'bg-un1t-border/50' : 'hover:bg-un1t-border/20'
                 }`}
@@ -260,6 +262,11 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
                       </span>
                     )}
                     {conv.resolved_at && <Check size={12} className="text-green-600 shrink-0" />}
+                    {conv.pending_approval && (
+                      <span className="text-[10px] font-semibold text-purple-700 bg-purple-500/10 px-1.5 py-0.5 rounded-full shrink-0">
+                        Approval
+                      </span>
+                    )}
                   </span>
                   <span className="text-xs text-un1t-muted shrink-0">{formatTime(conv.last_message_at)}</span>
                 </div>
@@ -316,12 +323,14 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
                   locationId={locationId}
                   userId={userId}
                   initialConversationId={selected.id}
+                  onOpenBookTab={() => setCcTab('book')}
                 />
               ) : (
                 <IGInbox
                   embedded
                   locationId={locationId}
                   initialConversationId={selected.id}
+                  onOpenBookTab={() => setCcTab('book')}
                 />
               )}
             </div>
@@ -340,6 +349,8 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
               canEditConsent={canEditConsent}
               channel={selected.ch}
               conversationId={selected.id}
+              tab={ccTab}
+              onTabChange={setCcTab}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center p-6 text-center text-xs text-un1t-subtle">
