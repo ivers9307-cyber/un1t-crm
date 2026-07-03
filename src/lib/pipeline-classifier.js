@@ -12,10 +12,13 @@
 //   trial_done   — 3+ attended, not yet a member. THE decision point.
 //   converted    — became member/credit_member ≤60d ago (converted_at,
 //                  stamped by applyMemberSync on the status transition)
-//   member       — converted >60d ago, pre-existing member, OR a pack
-//                  customer (4+ active credits — FUNNEL.3; Glofox
-//                  lead-status hygiene can't be trusted) (off funnel)
-//   classpass    — classpass_payg, always (off funnel — distinct motion)
+//   member       — converted >60d ago, or pre-existing member (off funnel)
+//   pack_member  — Class Pack customer (FUNNEL.3): stamped
+//                  pack_customer_at, or live 4+ active credits. A pack
+//                  purchase IS a conversion — reported here, never back
+//                  in the funnel. Membership outranks it. (off funnel)
+//   classpass    — classpass_payg, always (off funnel — distinct motion;
+//                  the ClassPass PLATFORM, not our Class Packs)
 //   dormant      — aged-out leads, ex_members, ghosts (off funnel)
 //
 // Attended counts come from contacts.recent_bookings (last 10 from the
@@ -39,8 +42,9 @@ export const PIPELINE_THRESHOLDS = {
   // 3 classes ≈ a completed trial pack → decision point.
   TRIAL_DONE_MIN_ATTENDED: 3,
   // 4+ active credits can't come from a trial (ours are ≤3) — the
-  // contact bought a class pack and counts as a paying customer
-  // regardless of their (often stale) Glofox lead status. FUNNEL.3.
+  // contact bought a class pack. Buying a pack IS a conversion: they
+  // classify to the off-funnel pack_member stage (sticky via
+  // contacts.pack_customer_at) and never re-enter the funnel. FUNNEL.3.
   PACK_CUSTOMER_MIN_CREDITS: 4,
 }
 
@@ -100,26 +104,27 @@ export function classifyContact(contact, now = Date.now()) {
   if (status === 'ex_member') return 'dormant'
 
   // ── Pack customers (FUNNEL.3) ──────────────────────────────────
-  // Glofox lead-status hygiene can't be relied on (operator-confirmed
-  // 2026-07-03: regulars like Wendy Bertrand sat on 'cold' with a
-  // 16-credit active pack). The pack itself is the stronger signal:
-  // UN1T trials are ≤3 credits, so 4+ ACTIVE credits means they BOUGHT
-  // a class pack — a paying customer, off-funnel — but only while they
-  // are actually attending: 304 dormant contacts hold leftover pack
-  // credits (dry-run 2026-07-03) and those are winback targets, not
-  // members. When an active pack runs down to ≤3 they re-enter the
-  // funnel (usually trial_done) — exactly when the membership-upgrade
-  // conversation is due. The ≥4 floor also makes the mig-001 schema
-  // default of 3 harmless.
+  // Operator decision (Richard, 2026-07-03): the funnel exists to get
+  // NEW leads across the line to a membership OR a class pack — buying
+  // a pack IS the conversion. Pack customers are reported in their own
+  // off-funnel stage and must NEVER cycle back into the funnel when
+  // credits run low ("clogging it with these users is not what we
+  // need"). Two signals, either qualifies:
+  //   - pack_customer_at (mig 356): the durable write-once stamp, set
+  //     by applyMemberSync the first time a non-member is observed
+  //     holding 4+ active credits. Sticky — survives the pack running
+  //     out. Membership status outranks it (checked above).
+  //   - live credits ≥4: covers the sync tick before the stamp lands.
+  // The ≥4 floor exists because UN1T trials are ≤3 credits and the
+  // mig-001 schema default of 3 must stay harmless. Glofox lead-status
+  // hygiene can't be relied on (Wendy Bertrand: 'cold' with a 16-credit
+  // active pack; Sarah Cousins: 'cold' with 206 credits).
   const credits = Number.isFinite(contact.trial_credits_remaining)
     ? contact.trial_credits_remaining
     : null
-  const sinceAttendedForPack = daysSince(contact.last_attended_at, now)
-  const packHolderActive = sinceAttendedForPack !== null
-    && sinceAttendedForPack <= PIPELINE_THRESHOLDS.FUNNEL_ACTIVITY_DAYS
-  if (credits !== null && credits >= PIPELINE_THRESHOLDS.PACK_CUSTOMER_MIN_CREDITS && packHolderActive) {
-    return 'member'
-  }
+  const isPackCustomer = Boolean(contact.pack_customer_at)
+    || (credits !== null && credits >= PIPELINE_THRESHOLDS.PACK_CUSTOMER_MIN_CREDITS)
+  if (isPackCustomer) return 'pack_member'
 
   // ── Funnel candidates: lead/cold/tour/no_sale_*/trial/null ─────
   // last_attended_at backstops the count: it's advance-only on the

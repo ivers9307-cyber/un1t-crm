@@ -34,6 +34,7 @@ const statusBadge = {
   trial_done:   'bg-amber-500/20 text-amber-700',
   converted:    'bg-emerald-500/20 text-emerald-700',
   member:       'bg-slate-500/20 text-slate-700',
+  pack_member:  'bg-cyan-500/20 text-cyan-700',
   classpass:    'bg-purple-500/20 text-purple-700',
   dormant:      'bg-gray-500/20 text-gray-700',
 }

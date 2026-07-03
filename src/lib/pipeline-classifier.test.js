@@ -160,42 +160,44 @@ describe('classifyContact — exclusions', () => {
 })
 
 describe('classifyContact — pack customers (FUNNEL.3)', () => {
-  // Wendy Bertrand's case (operator-reported 2026-07-03): Glofox status
-  // stuck on cold/lead, but an ACTIVE credit pack with more credits than
-  // any trial we sell — a paying customer, not a funnel prospect.
-  it('Wendy: cold status + 16-credit active pack + attending → member (off funnel)', () => {
+  // Operator decision (Richard, 2026-07-03): buying a class pack IS the
+  // conversion — pack customers are reported in their own off-funnel
+  // 'pack_member' stage and NEVER cycle back into the acquisition funnel.
+  // Sticky via contacts.pack_customer_at; live 4+ credits also qualify
+  // (covers the sync tick before the stamp lands).
+  it('Wendy: cold status + 16-credit active pack → pack_member (reported as a pack customer)', () => {
     expect(classifyContact({
       glofox_membership_status: 'cold', joined_at: daysAgo(220),
       last_attended_at: daysAgo(1), trial_credits_remaining: 16,
       recent_bookings: [attendedBooking(1), attendedBooking(2), attendedBooking(4), attendedBooking(7)],
-    }, NOW)).toBe('member')
+    }, NOW)).toBe('pack_member')
   })
-  it('lead status + big pack + attending → member', () => {
+  it('pack used up (2 credits left) but stamped → STAYS pack_member, never re-clogs the funnel', () => {
     expect(classifyContact({
-      glofox_membership_status: 'lead', joined_at: daysAgo(10),
-      last_attended_at: daysAgo(8), trial_credits_remaining: 92,
-      recent_bookings: [attendedBooking(8)],
-    }, NOW)).toBe('member')
+      glofox_membership_status: 'cold', joined_at: daysAgo(220),
+      last_attended_at: daysAgo(1), trial_credits_remaining: 2,
+      pack_customer_at: daysAgo(90),
+      recent_bookings: [attendedBooking(1), attendedBooking(2), attendedBooking(4)],
+    }, NOW)).toBe('pack_member')
   })
-  it('pack holder gone quiet 60d+ is a WINBACK target, not a member → dormant', () => {
+  it('lapsed pack holder (no attendance for 120d) is still reported as a pack customer', () => {
     expect(classifyContact({
       glofox_membership_status: 'cold', joined_at: daysAgo(300),
       last_attended_at: daysAgo(120), trial_credits_remaining: 10,
       recent_bookings: [attendedBooking(120)],
-    }, NOW)).toBe('dormant')
+    }, NOW)).toBe('pack_member')
   })
-  it('big-pack buyer who has never attended follows normal funnel rules → new_lead', () => {
+  it('big-pack buyer who has never attended is already a pack customer, not a lead', () => {
     expect(classifyContact({
       glofox_membership_status: 'lead', joined_at: daysAgo(10),
       trial_credits_remaining: 92, recent_bookings: [],
-    }, NOW)).toBe('new_lead')
+    }, NOW)).toBe('pack_member')
   })
-  it('pack running low (≤3 credits) re-enters the funnel at the decision point', () => {
+  it('membership OUTRANKS the pack stamp — a pack customer who joins shows as converted/member', () => {
     expect(classifyContact({
-      glofox_membership_status: 'cold', joined_at: daysAgo(220),
-      last_attended_at: daysAgo(1), trial_credits_remaining: 2,
-      recent_bookings: [attendedBooking(1), attendedBooking(2), attendedBooking(4)],
-    }, NOW)).toBe('trial_done')
+      glofox_membership_status: 'member', converted_at: daysAgo(5),
+      pack_customer_at: daysAgo(100), joined_at: daysAgo(300),
+    }, NOW)).toBe('converted')
   })
   it('a genuine 3-credit trial is NOT a pack customer (also the mig-001 schema default)', () => {
     expect(classifyContact({

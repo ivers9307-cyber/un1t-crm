@@ -21,6 +21,7 @@ const STAGE_PILL = {
   trial_done:   'bg-amber-500/10 text-amber-700',
   converted:    'bg-emerald-500/10 text-emerald-700',
   member:       'bg-slate-500/10 text-slate-700',
+  pack_member:  'bg-cyan-500/10 text-cyan-700',
   classpass:    'bg-purple-500/10 text-purple-700',
   dormant:      'bg-slate-500/10 text-slate-700',
 }

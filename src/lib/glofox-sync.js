@@ -461,7 +461,7 @@ export async function findStageIdBySlug(db, locationId, stageSlug) {
  * @param {object}  contactSnapshot   shape consumed by classifyContact:
  *   { glofox_membership_status, last_attended_at, total_attended_7d,
  *     total_attended_30d, last_payment_at, joined_at, created_at,
- *     trial_credits_remaining, recent_bookings, converted_at }
+ *     trial_credits_remaining, recent_bookings, converted_at, pack_customer_at }
  * @param {string?} contactName       fallback for deals.title on create
  */
 export async function ensureDealForContact(db, locationId, contactId, contactSnapshot, contactName = null) {
@@ -962,6 +962,30 @@ export function shouldStampConversion({ action, previousStatus, newStatus, exist
   return false
 }
 
+// FUNNEL.3 — statuses that can never be a Class Pack customer: members
+// outrank the pack stage, ClassPass is a distinct motion, ex-members are
+// winback targets.
+const PACK_EXCLUDED_STATUSES = new Set(['member', 'credit_member', 'classpass_payg', 'ex_member'])
+const PACK_CUSTOMER_MIN_CREDITS = 4 // trials are ≤3; mig-001 default of 3 stays harmless
+
+/**
+ * FUNNEL.3 — should this sync stamp contacts.pack_customer_at?
+ *
+ * Buying a class pack IS a conversion (operator decision 2026-07-03):
+ * a non-member observed holding 4+ ACTIVE credits gets the durable
+ * write-once stamp, which keeps them in the off-funnel pack_member
+ * stage even after the pack runs out — pack customers never cycle
+ * back into the acquisition funnel. Membership later supersedes the
+ * stamp in the classifier, so no un-stamping is ever needed.
+ *
+ * Pure function — caller writes the timestamp.
+ */
+export function shouldStampPackCustomer({ newStatus, credits, existingPackCustomerAt }) {
+  if (existingPackCustomerAt) return false
+  if (PACK_EXCLUDED_STATUSES.has(newStatus)) return false
+  return Number.isFinite(credits) && credits >= PACK_CUSTOMER_MIN_CREDITS
+}
+
 export function computeCreditsRemaining(credits) {
   if (!Array.isArray(credits) || credits.length === 0) return null
   const active = credits.filter(c => c?.active === true)
@@ -1114,7 +1138,7 @@ export async function findExistingContact(db, locationId, mapped) {
   // set: the funnel classifier counts attended classes from recent_bookings
   // and gates the Converted column on converted_at, and a LIST/skipBookings
   // sync doesn't recompute either.
-  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, created_at, glofox_member_id, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, lead_source, last_booked_at, last_attended_at, last_payment_at, total_bookings_30d, total_attended_30d, total_attended_7d, total_noshow_30d, trial_credits_remaining, recent_bookings, converted_at'
+  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, created_at, glofox_member_id, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, lead_source, last_booked_at, last_attended_at, last_payment_at, total_bookings_30d, total_attended_30d, total_attended_7d, total_noshow_30d, trial_credits_remaining, recent_bookings, converted_at, pack_customer_at'
   const queries = []
   queries.push(
     db.from('contacts')
@@ -1558,8 +1582,11 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     // recent_bookings and gates the Converted column on converted_at.
     recent_bookings: mapped.recent_bookings ?? existingRow?.recent_bookings ?? null,
     // Preview can't know about a not-yet-written stamp (apply stamps it);
-    // the persisted value is the best dry-run signal.
+    // the persisted value is the best dry-run signal. Same for the
+    // FUNNEL.3 pack stamp — though live credits ≥4 also classify to
+    // pack_member, so a brand-new pack still previews correctly.
     converted_at: existingRow?.converted_at ?? null,
+    pack_customer_at: existingRow?.pack_customer_at ?? null,
   })
 
   // Ambiguous: same email already linked to a DIFFERENT glofox member.
@@ -1882,6 +1909,29 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     }
   }
 
+  // FUNNEL.3 — stamp the Class Pack moment. Same write-once/best-effort
+  // discipline as converted_at above. Unlike conversion this is NOT a
+  // transition edge — any sync observing 4+ active credits on a
+  // non-member qualifies — so a failed stamp self-heals on the next
+  // sync while the credits are still ≥4; logging stays for parity.
+  let packCustomerAt = preview.existing?.pack_customer_at ?? null
+  if (shouldStampPackCustomer({
+    newStatus,
+    credits: preview.mapped?.trial_credits_remaining ?? preview.existing?.trial_credits_remaining ?? null,
+    existingPackCustomerAt: packCustomerAt,
+  })) {
+    try {
+      const { error: packErr } = await db.from('contacts')
+        .update({ pack_customer_at: now })
+        .eq('id', contactId)
+        .is('pack_customer_at', null)
+      if (!packErr) packCustomerAt = now
+      else logWarn('glofox-sync', 'pack_customer_at stamp failed', { contactId, err: packErr.message })
+    } catch (e) {
+      logWarn('glofox-sync', 'pack_customer_at stamp threw', { err: e?.message })
+    }
+  }
+
   // HR-CLASS-ALLOC.2 — refresh this member's slice of the class_bookings roster
   // from the same bookings list previewMemberSync fetched. Best-effort: a roster
   // write must never roll back the member sync.
@@ -1950,8 +2000,11 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
         trial_credits_remaining: m.trial_credits_remaining ?? ex.trial_credits_remaining ?? null,
         // FUNNEL.1 — the funnel classifier counts attended classes from
         // recent_bookings and gates the Converted column on converted_at.
+        // FUNNEL.3 — pack_customer_at (just-stamped value included) keeps
+        // Class Pack customers in the off-funnel pack_member stage.
         recent_bookings: m.recent_bookings ?? ex.recent_bookings ?? null,
         converted_at:    convertedAt,
+        pack_customer_at: packCustomerAt,
       }
       dealResult = await ensureDealForContact(
         db, locationId, contactId, contactSnapshot,

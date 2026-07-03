@@ -27,7 +27,7 @@ import ContactsTable from './ContactsTable'
 // slugs (mig 350): four lead columns, the win column, and the three
 // off-funnel pools.
 const STATUSES = ['', 'new_lead', 'first_class', 'second_class', 'trial_done',
-  'converted', 'member', 'classpass', 'dormant']
+  'converted', 'member', 'pack_member', 'classpass', 'dormant']
 
 export default function ContactsView({
   initialContacts,
