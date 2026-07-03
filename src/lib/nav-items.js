@@ -23,7 +23,7 @@ import {
   LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare,
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
   Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
-  Workflow, Timer, Projector, Trophy,
+  Workflow, Timer, Projector, Trophy, Activity,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -120,6 +120,13 @@ export const ALL_NAV = [
   // ENGAGEMENT-CHALLENGES — operator CRUD for member challenges.
   // Manager+ by default (same as events). Backed by the challenges table.
   { href: '/challenges', label: 'Challenges',   icon: Trophy,          permission: 'challenges', section: 'gym' },
+  // PULSE-90.4 — the /pulse operator hub. Management home for the Pulse
+  // customer app: the first-90-days journey lane (9-classes-in-6-weeks
+  // pace), plus future Pulse features (leaderboards, seasonal challenge).
+  // Cross-links to /dashboard/engagement + /challenges rather than
+  // duplicating them. Owner + manager + head_coach by default (retention
+  // oversight — same shape as engagement_analytics).
+  { href: '/pulse',      label: 'Pulse',        icon: Activity,        permission: 'pulse_admin', section: 'gym' },
   // Live class — coach view of in-studio HR (mig 110-113). Renders
   // attendees with current zone color, available straps panel, and
   // override-pairing flow. /live redirects to /live/<activeLocation>.

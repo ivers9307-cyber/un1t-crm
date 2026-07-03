@@ -56,6 +56,13 @@ export const WEB_PERMISSIONS = Object.freeze([
   // attendance ("members with more friends churn less") and tracks app /
   // social adoption. Retention oversight — owner + manager + head_coach.
   { key: 'engagement_analytics', label: 'Engagement Analytics',  hint: 'Member engagement vs churn — friend-count tiers against at-risk % + attendance, plus app/social adoption. Owner + manager + head coach by default.' },
+  // PULSE-90.4 — the /pulse operator hub: management home for the
+  // first-90-days journey (the 9-classes-in-6-weeks pace lane) and the
+  // future Pulse app features (leaderboards, seasonal challenge). Links
+  // out to the engagement dashboard + challenges admin rather than
+  // duplicating them. Desktop operator surface (WEB_ONLY_OK). Owner +
+  // manager + head_coach by default — a retention oversight tool, staff off.
+  { key: 'pulse_admin', label: 'Pulse app',                      hint: 'Manage the Pulse customer app — the first-90-days member journey (9-classes-in-6-weeks pace lane, coach touches) plus the wider Pulse engagement features. Owner + manager + head coach by default.' },
   // — Calendly bookings + standalone race events —
   { key: 'events',     label: 'Calendly events',                hint: 'Booking event types (recurring availability, slot picker, /events + /bookings hub).' },
   { key: 'bookings',   label: 'Bookings list',                  hint: 'Enables the /bookings sub-tab inside the Calendly hub. Operators usually want this on alongside Events.' },
@@ -174,6 +181,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: true,
     lead_radar: true,
     engagement_analytics: true,
+    pulse_admin: true,
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,
@@ -199,6 +207,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: false,                            // retention oversight — not a staff surface
     lead_radar: false,                             // acquisition oversight — not a staff surface
     engagement_analytics: false,                   // retention analytics — not a staff surface
+    pulse_admin: false,                            // Pulse operator hub — retention oversight, not a staff surface
     events: true, bookings: true, races: true,    // race-day starts/finishes are a front-of-house duty
     email: false, whatsapp: false, sms: false,
     schedule: true, attendance_reports: false, assistant: false, studio_management: false,
@@ -224,6 +233,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: true,                             // head coaches own member retention
     lead_radar: true,                              // head coaches own lead/trial conversion
     engagement_analytics: true,                    // retention analytics — head coaches own retention
+    pulse_admin: true,                             // Pulse operator hub — head coaches own retention
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: false,    // head coaches don't see attendance — owner/manager only
@@ -250,6 +260,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: false,                            // owner + head_coach by default; grant per-user if needed
     lead_radar: false,                             // owner + head_coach by default; grant per-user if needed
     engagement_analytics: true,                    // managers track engagement / retention by default
+    pulse_admin: true,                             // managers run the Pulse operator hub
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,
@@ -277,6 +288,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: true,
     lead_radar: true,
     engagement_analytics: true,
+    pulse_admin: true,
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,

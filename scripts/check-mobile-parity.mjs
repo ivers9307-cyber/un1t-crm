@@ -171,6 +171,11 @@ const WEB_ONLY_OK = {
   // triage surface (cross-tab table + headline), like the full radar
   // dashboards; the mobile radar glance covers the at-risk list, not this report.
   engagement_analytics: 'engagement→churn analytics dashboard (/dashboard/engagement) — desktop operator analytics surface, like the full radar dashboards. No mobile counterpart by design.',
+  // PULSE-90.4 — the /pulse operator hub (first-90-days journey lane +
+  // future Pulse features). Desktop management surface, like the radar
+  // dashboards; the member-facing side ships in the champ app, not the
+  // staff mobile app, so there is no staff-mobile counterpart by design.
+  pulse_admin: 'Pulse operator hub (/pulse) — desktop management surface for the first-90-days journey lane + future Pulse features. The member-facing side is the champ app; no staff-mobile counterpart by design.',
 }
 
 const webDrift = []
