@@ -60,6 +60,10 @@ export default function ScoringSettingsPage() {
   function setParticipation(value) {
     setScoring(s => ({ ...s, participation_points: value }))
   }
+  function setTierWindow(value) {
+    // '' (No decay) → null; otherwise the integer month count.
+    setScoring(s => ({ ...s, tier_window_months: value === '' ? null : Number(value) }))
+  }
 
   async function saveSettings() {
     setSaving(true); setError(null)
@@ -70,6 +74,9 @@ export default function ScoringSettingsPage() {
           return acc
         }, {}),
         participation_points: Number(scoring.participation_points ?? 0),
+        // null = No decay (cumulative). Only send a positive int otherwise.
+        tier_window_months:
+          scoring.tier_window_months == null ? null : Number(scoring.tier_window_months),
       }
       const res = await fetch('/api/settings/scoring', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
@@ -136,6 +143,27 @@ export default function ScoringSettingsPage() {
           />
           <p className="text-xs text-un1t-subtle mt-1">
             Awarded when a member attends a class but has no heart-rate data to score from. Default: {participationDefault}.
+          </p>
+        </div>
+
+        <div className="pt-4 border-t border-un1t-border">
+          <label className="block text-sm font-medium text-un1t-text mb-1">Tier decay window</label>
+          <select
+            className={inputCls}
+            value={scoring.tier_window_months == null ? '' : String(scoring.tier_window_months)}
+            onChange={e => setTierWindow(e.target.value)}
+          >
+            <option value="">No decay — tier never drops (default)</option>
+            <option value="6">Rolling 6 months</option>
+            <option value="12">Rolling 12 months</option>
+            <option value="18">Rolling 18 months</option>
+            <option value="24">Rolling 24 months</option>
+          </select>
+          <p className="text-xs text-un1t-subtle mt-1">
+            By default a member&apos;s status tier reflects every month they&apos;ve ever hit target and
+            never drops. Pick a rolling window to make tier reflect only the months hit within the last
+            N calendar months — so a member who stops training gradually decays back down. Changing this
+            affects future tier calculations only.
           </p>
         </div>
 

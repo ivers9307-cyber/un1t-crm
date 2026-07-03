@@ -28,9 +28,24 @@ const zonePointsSchema = z.object({
   5: z.number().int().min(0).max(100),
 })
 
+// Tier decay window (approved decision #4, default-off). An integer N >= 1
+// = rolling window of the last N calendar months; null/absent = NO DECAY
+// (cumulative all-time count, the unchanged behaviour). Capped at 120 months
+// (10y) as a sane ceiling. z.coerce so an empty-string → null upstream and a
+// JSON number both land as a number; 0 / negatives / non-integers are rejected.
+const tierWindowMonthsSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(120)
+  .nullable()
+
 export const ScoringSchema = z.object({
   zone_points: zonePointsSchema,
   participation_points: z.number().int().min(0).max(1000),
+  // Optional in the payload: a client that never touched decay omits it and
+  // the stored value is left untouched (see PUT merge).
+  tier_window_months: tierWindowMonthsSchema.optional(),
 })
 
 export async function GET() {
@@ -45,9 +60,17 @@ export async function GET() {
   // the page consumes the snake_case stored shape, so re-shape here so GET and
   // PUT speak the same language.
   const resolved = resolveScoringConfig(loc || {})
+  // tier_window_months isn't part of resolveScoringConfig (that's the points
+  // engine's concern); read it straight off the stored scoring object. Absent
+  // → null = no decay.
+  const rawWindow = loc?.settings?.scoring?.tier_window_months
+  const tierWindow = Number.isInteger(Number(rawWindow)) && Number(rawWindow) >= 1
+    ? Number(rawWindow)
+    : null
   const scoring = {
     zone_points: { ...resolved.zonePoints },
     participation_points: resolved.participationPoints,
+    tier_window_months: tierWindow,
   }
   return NextResponse.json({
     success: true,
@@ -91,9 +114,26 @@ export async function PUT(request) {
     },
     participation_points: v.data.participation_points,
   }
+  // Tier decay: null (or omitted-as-null) = no decay. Only persist a positive
+  // integer; anything else clears the key so "No decay" is the stored default.
+  // If the field is absent from the payload entirely, preserve the existing
+  // value (a client that predates the control never clears it by accident).
+  if ('tier_window_months' in v.data) {
+    if (Number.isInteger(v.data.tier_window_months) && v.data.tier_window_months >= 1) {
+      scoring.tier_window_months = v.data.tier_window_months
+    }
+    // else: leave unset → no decay
+  } else if (settings.scoring?.tier_window_months != null) {
+    scoring.tier_window_months = settings.scoring.tier_window_months
+  }
   settings.scoring = scoring
 
   const { error: updErr } = await db.from('locations').update({ settings }).eq('id', locationId).select('id').single()
   if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
-  return NextResponse.json({ success: true, scoring })
+  // Echo a normalised shape (tier_window_months always present, null = no decay)
+  // so the client can setScoring(res.scoring) without special-casing.
+  return NextResponse.json({
+    success: true,
+    scoring: { ...scoring, tier_window_months: scoring.tier_window_months ?? null },
+  })
 }

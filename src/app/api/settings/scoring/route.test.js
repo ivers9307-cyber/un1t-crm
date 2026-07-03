@@ -135,6 +135,87 @@ describe('ScoringSchema (unit)', () => {
   })
 })
 
+describe('ScoringSchema — tier_window_months', () => {
+  it('accepts null (no decay)', () => {
+    expect(ScoringSchema.safeParse({ ...validBody, tier_window_months: null }).success).toBe(true)
+  })
+  it('accepts omission (field is optional → no decay)', () => {
+    expect(ScoringSchema.safeParse(validBody).success).toBe(true)
+  })
+  it('accepts a positive integer window', () => {
+    expect(ScoringSchema.safeParse({ ...validBody, tier_window_months: 6 }).success).toBe(true)
+    expect(ScoringSchema.safeParse({ ...validBody, tier_window_months: 1 }).success).toBe(true)
+    expect(ScoringSchema.safeParse({ ...validBody, tier_window_months: 120 }).success).toBe(true)
+  })
+  it('rejects 0', () => {
+    expect(ScoringSchema.safeParse({ ...validBody, tier_window_months: 0 }).success).toBe(false)
+  })
+  it('rejects a negative window', () => {
+    expect(ScoringSchema.safeParse({ ...validBody, tier_window_months: -6 }).success).toBe(false)
+  })
+  it('rejects a non-integer window', () => {
+    expect(ScoringSchema.safeParse({ ...validBody, tier_window_months: 6.5 }).success).toBe(false)
+  })
+  it('rejects a window above the ceiling (120)', () => {
+    expect(ScoringSchema.safeParse({ ...validBody, tier_window_months: 121 }).success).toBe(false)
+  })
+  it('rejects a string window', () => {
+    expect(ScoringSchema.safeParse({ ...validBody, tier_window_months: '12' }).success).toBe(false)
+  })
+})
+
+describe('PUT /api/settings/scoring — tier_window_months persistence', () => {
+  it('persists a positive window under settings.scoring', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    const getWritten = mockDb()
+    await PUT(putReq({ ...validBody, tier_window_months: 12 }))
+    expect(getWritten().settings.scoring.tier_window_months).toBe(12)
+  })
+
+  it('null clears the key → stored as no-decay (absent)', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    // existing has a window; sending null must remove it
+    const getWritten = mockDb({ scoring: { zone_points: { 1: 1, 2: 2, 3: 3, 4: 4, 5: 5 }, participation_points: 50, tier_window_months: 6 } })
+    await PUT(putReq({ ...validBody, tier_window_months: null }))
+    expect('tier_window_months' in getWritten().settings.scoring).toBe(false)
+  })
+
+  it('omitting the field preserves an existing stored window (no accidental clear)', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    const getWritten = mockDb({ scoring: { zone_points: { 1: 1, 2: 2, 3: 3, 4: 4, 5: 5 }, participation_points: 50, tier_window_months: 18 } })
+    await PUT(putReq(validBody)) // no tier_window_months in payload
+    expect(getWritten().settings.scoring.tier_window_months).toBe(18)
+  })
+
+  it('echoes tier_window_months (null when no decay) in the response', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    mockDb()
+    const json = await (await PUT(putReq(validBody))).json()
+    expect(json.scoring.tier_window_months).toBeNull()
+  })
+})
+
+describe('GET /api/settings/scoring — tier_window_months', () => {
+  it('returns null when no window is configured (default-off)', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    mockDb({ scoring: { zone_points: { 5: 9 } } })
+    const json = await (await GET()).json()
+    expect(json.scoring.tier_window_months).toBeNull()
+  })
+  it('returns the stored positive window', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    mockDb({ scoring: { tier_window_months: 12 } })
+    const json = await (await GET()).json()
+    expect(json.scoring.tier_window_months).toBe(12)
+  })
+  it('normalises a bogus stored window (0) to null', async () => {
+    getCurrentUser.mockResolvedValue(manager)
+    mockDb({ scoring: { tier_window_months: 0 } })
+    const json = await (await GET()).json()
+    expect(json.scoring.tier_window_months).toBeNull()
+  })
+})
+
 describe('GET /api/settings/scoring', () => {
   it('401 when unauthenticated', async () => {
     getCurrentUser.mockResolvedValue(null)

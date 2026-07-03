@@ -23,3 +23,59 @@ export function nextTier(monthsHit) {
   for (const t of TIERS) { if (n < t.months) return t }
   return null
 }
+
+// --- Tier decay (rolling window) -------------------------------------------
+// Config lives at location.settings.scoring.tier_window_months: an integer
+// N >= 1 = count only the months hit within the last N calendar months
+// (inclusive of the current month); absent/null/0 = NO DECAY, i.e. the
+// cumulative all-time count (unchanged behaviour). Default-off: with no N
+// set, every member keeps exactly today's tier.
+//
+// Months are counted over 'YYYY-MM' period keys, which are discrete and
+// lexicographically ordered, so windowing is pure string arithmetic — no DST
+// or day-boundary hazard. The ONLY timezone-sensitive step is deciding which
+// month "now" is (near a midnight month-boundary during BST); callers pass a
+// Dublin-derived nowMonth for that. KEEP IN SYNC with champ-app/shared/tiers.js.
+
+/** Coerce settings.scoring.tier_window_months to a positive int, else null (no decay). */
+export function tierWindowMonths(location) {
+  const raw = location?.settings?.scoring?.tier_window_months
+  if (raw == null) return null
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 1) return null
+  return n
+}
+
+/** Shift a 'YYYY-MM' key by `delta` months (delta may be negative). */
+export function shiftMonthKey(monthKey, delta) {
+  const [y, m] = String(monthKey).split('-').map(Number)
+  // month index 0-based for arithmetic, then back to 1-based
+  const total = y * 12 + (m - 1) + delta
+  const ny = Math.floor(total / 12)
+  const nm = (total % 12 + 12) % 12
+  return `${String(ny).padStart(4, '0')}-${String(nm + 1).padStart(2, '0')}`
+}
+
+/**
+ * Distinct months a member banked, applying the rolling window if set.
+ * @param periodMonths  array of banked 'YYYY-MM' keys (dupes tolerated)
+ * @param windowMonths  N >= 1 (rolling window) or null/absent (cumulative)
+ * @param nowMonth      current 'YYYY-MM' in the member's (Dublin) calendar —
+ *                      only used when windowMonths is set.
+ * @returns count of distinct qualifying months.
+ */
+export function windowedMonthsHit(periodMonths, windowMonths, nowMonth) {
+  const distinct = new Set()
+  for (const p of periodMonths || []) {
+    if (typeof p === 'string' && /^\d{4}-\d{2}$/.test(p)) distinct.add(p)
+  }
+  const n = Number(windowMonths)
+  if (!Number.isInteger(n) || n < 1) return distinct.size // no decay: cumulative
+  // Window is the N months ending at nowMonth inclusive: [floor, nowMonth].
+  const floor = shiftMonthKey(nowMonth, -(n - 1))
+  let count = 0
+  for (const p of distinct) {
+    if (p >= floor && p <= nowMonth) count++
+  }
+  return count
+}
