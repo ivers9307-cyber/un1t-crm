@@ -1365,6 +1365,36 @@ registry.registerPath({
   },
 })
 
+// COACH KUDOS — staff sends a member a short congratulatory note
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/kudos',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Send a kudo to a member (consultations permission)',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            message: z.string().min(1).max(500),
+            emoji: z.string().max(8).nullish(),
+            session_id: uuidLike.nullish(),
+          }).openapi('CoachKudosCreateBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Kudo sent', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — consultations permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'put',
   path: '/api/contacts/{id}/consultations/{cid}',
