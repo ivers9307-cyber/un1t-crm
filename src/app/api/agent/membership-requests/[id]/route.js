@@ -20,8 +20,12 @@ import { validateBody } from '@/lib/validate'
 // the confirmation into the originating WhatsApp/Instagram thread —
 // staff touch exactly one button.
 
+// Client-settable outcomes only — 'actioned'/'failed' are written by the
+// server's own execution branches, never accepted as caller input (a raw
+// PATCH {status:'actioned'} would phantom-complete a pending request
+// without the Glofox action ever running).
 const DecisionSchema = z.object({
-  status: z.enum(['approved', 'declined', 'saved', 'actioned']),
+  status: z.enum(['approved', 'declined', 'saved']),
   decision_note: z.string().max(2000).nullable().optional(),
 })
 
