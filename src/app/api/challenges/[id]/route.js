@@ -11,13 +11,16 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD')
-const PatchSchema = z.object({
+export const PatchSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
   mode: z.enum(['individual', 'collective']).optional(),
   metric: z.enum(['points', 'classes', 'z4plus_minutes']).optional(),
   starts_on: DATE.optional(),
   ends_on: DATE.optional(),
   target: z.number().int().positive().max(100000000).nullable().optional(),
+  // Flagship transformation challenge — always individual (enforced against the
+  // effective mode in the handler, since a patch may only carry one of the two).
+  is_flagship: z.boolean().optional(),
 })
 
 function authz(user) {
@@ -38,8 +41,15 @@ export async function PUT(request, props) {
   const validation = await validateBody(request, PatchSchema)
   if (!validation.ok) return validation.response
   let patch = validation.data
-  // Once started, only name + target are editable (metric/window/mode would invalidate standings).
+  // Once started, only name + target are editable (metric/window/mode/flag would invalidate standings).
   if (challengePhase(existing, Date.now()) !== 'upcoming') patch = { name: patch.name, target: patch.target }
+  // A flagship challenge must be individual — check against the effective mode
+  // (the patched mode if present, otherwise the existing row's mode).
+  const effectiveMode = patch.mode ?? existing.mode
+  const effectiveFlagship = patch.is_flagship ?? existing.is_flagship
+  if (effectiveFlagship && effectiveMode !== 'individual') {
+    return NextResponse.json({ success: false, error: 'A flagship transformation challenge must be an individual challenge.' }, { status: 400 })
+  }
   const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined))
   clean.updated_at = new Date().toISOString()
   const { data, error } = await db.from('challenges').update(clean).eq('id', params.id).select().single()

@@ -10,7 +10,7 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD')
-const CreateSchema = z.object({
+export const CreateSchema = z.object({
   location_id: uuidLike,
   name: z.string().trim().min(1).max(200),
   mode: z.enum(['individual', 'collective']),
@@ -18,9 +18,14 @@ const CreateSchema = z.object({
   starts_on: DATE,
   ends_on: DATE,
   target: z.number().int().positive().max(100000000).nullable().optional(),
+  // Flagship transformation challenge (Pulse sub-project 3): turns this into the
+  // marquee event — InBody bookend + Challenge Wrapped + consistency scoring in
+  // the member app. A flagship is always an individual challenge.
+  is_flagship: z.boolean().optional().default(false),
 })
   .refine((d) => d.mode !== 'collective' || (d.target != null && d.target > 0), { message: 'Collective challenges need a positive target.', path: ['target'] })
   .refine((d) => d.ends_on >= d.starts_on, { message: 'ends_on must be on or after starts_on.', path: ['ends_on'] })
+  .refine((d) => !d.is_flagship || d.mode === 'individual', { message: 'A flagship transformation challenge must be an individual challenge.', path: ['is_flagship'] })
 
 function guard(user) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
@@ -54,6 +59,7 @@ export async function POST(request) {
     location_id: body.location_id, name: body.name, mode: body.mode, metric: body.metric,
     starts_on: body.starts_on, ends_on: body.ends_on,
     target: body.mode === 'collective' ? body.target : null,
+    is_flagship: body.is_flagship,
     created_by: user.id,
   }).select().single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
