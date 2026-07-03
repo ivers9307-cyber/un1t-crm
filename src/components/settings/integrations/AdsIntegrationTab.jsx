@@ -32,6 +32,7 @@ const PROVIDERS = [
 export default function AdsIntegrationTab({ location, canEdit }) {
   const router = useRouter()
   const [rows, setRows] = useState({}) // provider -> masked row (or null)
+  const [recipients, setRecipients] = useState('')
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
 
@@ -44,6 +45,7 @@ export default function AdsIntegrationTab({ location, canEdit }) {
       const byProvider = {}
       for (const row of j.data || []) byProvider[row.provider] = row
       setRows(byProvider)
+      setRecipients((j.report_recipients || []).join(', '))
     } catch (e) {
       setLoadError(e.message)
     } finally {
@@ -72,6 +74,13 @@ export default function AdsIntegrationTab({ location, canEdit }) {
         </div>
       ) : (
         <div className="space-y-4">
+          <ReportRecipientsSection
+            locationId={location.id}
+            recipients={recipients}
+            setRecipients={setRecipients}
+            canEdit={canEdit}
+          />
+
           {PROVIDERS.map((p) => (
             <ProviderCard
               key={p.key}
@@ -88,6 +97,84 @@ export default function AdsIntegrationTab({ location, canEdit }) {
             />
           ))}
         </div>
+      )}
+    </div>
+  )
+}
+
+function ReportRecipientsSection({ locationId, recipients, setRecipients, canEdit }) {
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+  const [savedAt, setSavedAt] = useState(null)
+
+  async function save() {
+    setSaving(true); setError(null); setSavedAt(null)
+    try {
+      const report_recipients = recipients.split(',').map((s) => s.trim()).filter(Boolean)
+      const res = await fetch('/api/settings/ads', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ locationId, report_recipients }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!j.success) throw new Error(j.error || 'Failed to save')
+      setRecipients((j.report_recipients || []).join(', '))
+      setSavedAt(new Date())
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 space-y-3">
+      <h4 className="text-sm font-semibold text-un1t-text">Daily report recipients</h4>
+      <p className="text-[11px] text-un1t-muted">
+        Who gets the daily ads performance email. Empty = no report for this studio.
+      </p>
+
+      {!canEdit ? (
+        <div className="text-xs text-un1t-subtle">
+          Ads integration settings are owner/master-only.
+        </div>
+      ) : (
+        <>
+          <input
+            type="text"
+            value={recipients}
+            onChange={(e) => setRecipients(e.target.value)}
+            disabled={saving}
+            placeholder="owner@example.com, manager@example.com"
+            className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text disabled:opacity-50"
+          />
+
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
+              <AlertCircle size={12} className="mt-0.5" /> {error}
+            </div>
+          )}
+          {savedAt && !error && (
+            <div className="bg-green-500/10 border border-green-500/30 text-green-700 text-xs rounded-md p-2 inline-flex items-center gap-2">
+              <Check size={12} /> Saved at {savedAt.toLocaleTimeString()}
+            </div>
+          )}
+
+          <div className="flex justify-end pt-2 border-t border-un1t-border/40">
+            <button
+              type="button"
+              onClick={save}
+              disabled={saving}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
+            >
+              {saving
+                ? <><Loader2 size={12} className="animate-spin" /> Saving…</>
+                : <><Save size={12} /> Save</>
+              }
+            </button>
+          </div>
+        </>
       )}
     </div>
   )
