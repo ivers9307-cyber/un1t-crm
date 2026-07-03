@@ -3,11 +3,12 @@
 // permission gating (a registered token = opted in). Self-contained so it never
 // touches the load-bearing staff push path. Prunes DeviceNotRegistered tokens.
 //
-// Returns { sent, invalidated, failed }: `sent` counts tokens Expo actually
-// ticketed 'ok' (NOT just "tokens we tried"), `failed` counts tokens that got
-// no ok ticket after retries. Callers with a "was this nudge sent?" ledger
-// (send-class-booking-reminders) use `failed` to tell a pipeline failure
-// apart from "nothing to send".
+// Returns { sent, invalidated, failed, skipped }: `sent` counts tokens Expo
+// actually ticketed 'ok' (NOT just "tokens we tried"), `failed` counts tokens
+// that got no ok ticket after retries, and `skipped` counts recipients dropped
+// by their own notification preferences (contacts.push_prefs, mig 352).
+// Callers with a "was this nudge sent?" ledger (send-class-booking-reminders)
+// use `failed` to tell a pipeline failure apart from "nothing to send".
 
 import { customerAndroidChannelId } from '@shared/customer-push-channels'
 
@@ -63,18 +64,43 @@ async function postExpoBatch(chunk) {
 
 export async function sendCustomerPush(db, contactIds, payload) {
   const ids = (Array.isArray(contactIds) ? contactIds : [contactIds]).filter(Boolean)
-  if (!ids.length) return { sent: 0, invalidated: 0, failed: 0 }
-
-  const { data: rows } = await db
-    .from('champ_push_tokens')
-    .select('id, expo_push_token')
-    .in('contact_id', ids)
-  if (!rows || !rows.length) return { sent: 0, invalidated: 0, failed: 0 }
+  if (!ids.length) return { sent: 0, invalidated: 0, failed: 0, skipped: 0 }
 
   // Android: per-type channel (created by champ-app's push registrar from
   // the same shared map — customer payloads carry data.type, not category).
   // Unknown types resolve to the legacy 'default' channel. iOS ignores it.
   const channelId = customerAndroidChannelId(payload.data?.type)
+
+  // Per-category notification preferences (contacts.push_prefs JSONB, mig 352).
+  // The channel ids double as the pref keys: prefs[channelId] === false → the
+  // member turned this category off, drop them. Absent key/row = enabled, and
+  // the 'default' channel (unknown type) always sends. A failed prefs query
+  // fails OPEN (send) with a warn — matching absent-=-enabled semantics rather
+  // than silently dropping time-sensitive reminders on a transient DB blip.
+  let allowedIds = ids
+  let skipped = 0
+  if (channelId !== 'default') {
+    const { data: prefRows, error: prefErr } = await db
+      .from('contacts')
+      .select('id, push_prefs')
+      .in('id', ids)
+    if (prefErr) {
+      console.warn(`[customer-push] push_prefs lookup failed (sending to all): ${prefErr.message || prefErr}`)
+    } else if (prefRows) {
+      const optedOut = new Set(
+        prefRows.filter((r) => r.push_prefs?.[channelId] === false).map((r) => r.id)
+      )
+      allowedIds = ids.filter((id) => !optedOut.has(id))
+      skipped = ids.length - allowedIds.length
+      if (!allowedIds.length) return { sent: 0, invalidated: 0, failed: 0, skipped }
+    }
+  }
+
+  const { data: rows } = await db
+    .from('champ_push_tokens')
+    .select('id, expo_push_token')
+    .in('contact_id', allowedIds)
+  if (!rows || !rows.length) return { sent: 0, invalidated: 0, failed: 0, skipped }
 
   const messages = rows.map((r) => ({
     to: r.expo_push_token,
@@ -118,5 +144,5 @@ export async function sendCustomerPush(db, contactIds, payload) {
     if (error) console.warn(`[customer-push] dead-token prune failed: ${error.message || error}`)
     else invalidated = deadTokens.length
   }
-  return { sent, invalidated, failed }
+  return { sent, invalidated, failed, skipped }
 }
