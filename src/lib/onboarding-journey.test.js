@@ -308,3 +308,44 @@ describe('buildOnboardingPacePush', () => {
     }
   })
 })
+
+describe('journeyStatus — completion tracking (completedAt / completedDaysAgo)', () => {
+  it('is null until the target is reached', () => {
+    const s = journeyStatus({ joinedAt: JOINED, attendedAt: attendances(8), now: atDay(20) })
+    expect(s.attended).toBe(8)
+    expect(s.status).not.toBe('completed')
+    expect(s.completedAt).toBeNull()
+    expect(s.completedDaysAgo).toBeNull()
+  })
+
+  it('dates completion at the target-th attendance chronologically, not the last', () => {
+    // 9 attendances on days 1..9; the 9th (Dublin 2026-05-10) crossed the line.
+    // now = journey day 20 (Dublin 2026-05-21) → completed 11 Dublin days ago.
+    const s = journeyStatus({ joinedAt: JOINED, attendedAt: attendances(9), now: atDay(20) })
+    expect(s.status).toBe('completed')
+    expect(s.completedAt).toBe(new Date(atDay(9, 17)).toISOString())
+    expect(s.completedDaysAgo).toBe(11)
+  })
+
+  it('ignores attendances beyond the target when dating completion', () => {
+    const s = journeyStatus({ joinedAt: JOINED, attendedAt: attendances(12), now: atDay(12) })
+    expect(s.status).toBe('completed')
+    expect(s.completedAt).toBe(new Date(atDay(9, 17)).toISOString())
+    expect(s.completedDaysAgo).toBe(3)
+  })
+
+  it('dates completion from the target-th even when attendances arrive out of order', () => {
+    const shuffled = [attIso(9), attIso(2), attIso(5), attIso(1), attIso(8), attIso(4), attIso(7), attIso(3), attIso(6)]
+    const s = journeyStatus({ joinedAt: JOINED, attendedAt: shuffled, now: atDay(15) })
+    expect(s.status).toBe('completed')
+    expect(s.completedAt).toBe(new Date(atDay(9, 17)).toISOString())
+    expect(s.completedDaysAgo).toBe(6)
+  })
+
+  it('respects a reduced target for the completion instant', () => {
+    const s = journeyStatus({ joinedAt: JOINED, attendedAt: attendances(8), now: atDay(10), config: { targetClasses: 6 } })
+    expect(s.status).toBe('completed')
+    expect(s.completedAt).toBe(new Date(atDay(6, 17)).toISOString())
+    expect(s.completedDaysAgo).toBe(4)
+  })
+})

@@ -70,8 +70,16 @@ function dayKeyToEpochDays(key) {
   return Date.UTC(y, m - 1, d) / 86400000
 }
 
-/** Whole Dublin-calendar-days from instant a to instant b (b − a). */
-function dublinDaysBetween(aMs, bMs) {
+/**
+ * Whole Dublin-calendar-days from instant a to instant b (b − a).
+ *
+ * Exported for the data layer (onboarding-journey-data.js), which uses the
+ * SAME day arithmetic to decide whether a class_bookings.starts_at falls
+ * inside a member's window — keeping every piece of pace math in this one
+ * pure lib (a 23:30 UTC session during IST belongs to the next Dublin day,
+ * so a UTC/ms comparison would disagree with dayIndex at the boundary).
+ */
+export function dublinDaysBetween(aMs, bMs) {
   return dayKeyToEpochDays(dublinDateKey(bMs)) - dayKeyToEpochDays(dublinDateKey(aMs))
 }
 
@@ -101,7 +109,10 @@ function dublinDaysBetween(aMs, bMs) {
  *   windowDays: number, attended: number, target: number,
  *   expectedByNow: number, status: 'on_track'|'behind'|'at_risk'|'completed'|'expired',
  *   lastAttendedAt: string|number|Date|null, daysSinceLastAttended: number|null,
- * }}  null when joinedAt is missing/unparseable
+ *   completedAt: string|null, completedDaysAgo: number|null,
+ * }}  null when joinedAt is missing/unparseable (completedAt/completedDaysAgo
+ *   are null until attended ≥ target — the app hides the celebration once
+ *   completedDaysAgo exceeds a few days)
  */
 export function journeyStatus({ joinedAt, attendedAt, now, config } = {}) {
   const joinedMs = toMs(joinedAt)
@@ -118,20 +129,33 @@ export function journeyStatus({ joinedAt, attendedAt, now, config } = {}) {
   const totalWeeks = Math.ceil(windowDays / DAYS_IN_WEEK)
   const weekIndex = Math.min(Math.floor(dayIndex / DAYS_IN_WEEK) + 1, totalWeeks)
 
-  // Most recent parseable attendance (entries arrive window-filtered).
-  let attended = 0
+  // Parseable attendances (entries arrive window-filtered).
+  const entries = []
   let lastAttendedAt = null
   let lastAttendedMs = null
   for (const at of attendedAt || []) {
     const ms = toMs(at)
     if (ms == null) continue
-    attended += 1
+    entries.push(ms)
     if (lastAttendedMs == null || ms > lastAttendedMs) {
       lastAttendedMs = ms
       lastAttendedAt = at
     }
   }
+  const attended = entries.length
   const daysSinceLastAttended = lastAttendedMs == null ? null : dublinDaysBetween(lastAttendedMs, nowMs)
+
+  // Completion instant = the target-th attendance chronologically (the class
+  // that crossed the line). Drives the app's "hide the celebration a few days
+  // after finishing" rule so an early finisher isn't shown a stale card for
+  // the rest of their window; null until they actually hit target.
+  let completedAt = null
+  let completedDaysAgo = null
+  if (attended >= target) {
+    const completionMs = entries.slice().sort((a, b) => a - b)[target - 1]
+    completedAt = new Date(completionMs).toISOString()
+    completedDaysAgo = dublinDaysBetween(completionMs, nowMs)
+  }
 
   const expectedByNow = Math.min(Math.floor((dayIndex / windowDays) * target), target)
 
@@ -154,6 +178,7 @@ export function journeyStatus({ joinedAt, attendedAt, now, config } = {}) {
     inWindow, dayIndex, weekIndex, windowDays,
     attended, target, expectedByNow, status,
     lastAttendedAt, daysSinceLastAttended,
+    completedAt, completedDaysAgo,
   }
 }
 

@@ -2072,8 +2072,116 @@ registry.registerPath({
 })
 
 // ============================================================================
+// Pulse — first-90-days journey (PULSE-90)
+// ============================================================================
+
+const JourneyRow = z.object({
+  contactId: uuidLike,
+  name: z.string(),
+  joinedAt: z.string(),
+  inWindow: z.boolean(),
+  dayIndex: z.number().int(),
+  weekIndex: z.number().int(),
+  windowDays: z.number().int(),
+  attended: z.number().int(),
+  target: z.number().int(),
+  expectedByNow: z.number().int(),
+  status: z.enum(['on_track', 'behind', 'at_risk', 'completed', 'expired']),
+  lastAttendedAt: z.string().nullable(),
+  daysSinceLastAttended: z.number().int().nullable(),
+  completedAt: z.string().nullable(),
+  completedDaysAgo: z.number().int().nullable(),
+}).openapi('JourneyRow')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/pulse/journey',
+  tags: ['Pulse'],
+  security: [{ CookieAuth: [] }],
+  summary: 'First-90-days journey lane (staff)',
+  description: 'Every new member at the location scored against the 9-classes-in-6-weeks pace, worst-first, each with their latest coach touch. Requires the pulse_admin permission.',
+  request: { query: z.object({ location_id: uuidLike.optional() }) },
+  responses: {
+    200: {
+      description: 'Journey lane + resolved per-location config',
+      content: {
+        'application/json': {
+          schema: SuccessResponse(z.object({
+            config: z.object({ windowDays: z.number().int(), targetClasses: z.number().int() }),
+            lane: z.array(JourneyRow.extend({
+              lastTouch: z.object({ action: z.string(), at: z.string() }).nullable(),
+            })),
+          })).openapi('JourneyLaneResponse'),
+        },
+      },
+    },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'pulse_admin permission or location scope required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/pulse/journey/touch',
+  tags: ['Pulse'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Log a coach touch on a journey member',
+  description: 'Writes a contacted action to the shared churn_radar_actions audit log; powers the lane\'s "last coach touch" column. Requires the pulse_admin permission.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            contact_id: uuidLike,
+            note: z.string().max(500).optional(),
+          }).openapi('JourneyTouchBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Touch logged',
+      content: {
+        'application/json': {
+          schema: SuccessResponse(z.object({
+            action: z.literal('contacted'),
+            at: z.string(),
+          })).openapi('JourneyTouchResponse'),
+        },
+      },
+    },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'pulse_admin permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not in the caller\'s active location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
 // Customer (champ-app member) self-service
 // ============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/me/journey',
+  tags: ['Me'],
+  security: [{ BearerAuth: [] }],
+  summary: 'Own first-90-days journey (champ-app member)',
+  description: 'The caller\'s journey pace row, or journey: null when there is nothing to show (never joined / window expired / past the celebration tail) — the app renders no card on null.',
+  responses: {
+    200: {
+      description: 'Journey row or null',
+      content: {
+        'application/json': {
+          schema: SuccessResponse(z.object({
+            journey: JourneyRow.nullable(),
+          })).openapi('MyJourneyResponse'),
+        },
+      },
+    },
+    401: { description: 'Invalid or missing member JWT', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
 
 registry.registerPath({
   method: 'post',
