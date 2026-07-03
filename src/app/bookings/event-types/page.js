@@ -144,7 +144,7 @@ export default async function BookingTypesPage(props) {
                         {event.name}
                       </Link>
                       {!event.active && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-400">Inactive</span>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-700">Inactive</span>
                       )}
                     </div>
                     {event.description && (

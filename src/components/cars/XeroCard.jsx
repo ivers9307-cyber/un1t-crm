@@ -103,12 +103,12 @@ export default function XeroCard({ car, setCar, setError, busy, setBusy, disable
                 {/* Paid status from Xero webhook (mig 040). PAID = green chip,
                     VOIDED = red, anything else (DRAFT/SUBMITTED/AUTHORISED) = subtle. */}
                 {car.xero_invoice_paid_at
-                  ? <span className="text-[10px] uppercase font-semibold bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full" title={`Paid ${new Date(car.xero_invoice_paid_at).toLocaleString()}${car.xero_invoice_amount_paid ? ` · €${Number(car.xero_invoice_amount_paid).toFixed(2)}` : ''}`}>Paid</span>
+                  ? <span className="text-[10px] uppercase font-semibold bg-green-500/20 text-green-700 px-2 py-0.5 rounded-full" title={`Paid ${new Date(car.xero_invoice_paid_at).toLocaleString()}${car.xero_invoice_amount_paid ? ` · €${Number(car.xero_invoice_amount_paid).toFixed(2)}` : ''}`}>Paid</span>
                   : car.xero_invoice_status === 'VOIDED'
-                    ? <span className="text-[10px] uppercase font-semibold bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full">Voided</span>
+                    ? <span className="text-[10px] uppercase font-semibold bg-red-500/20 text-red-700 px-2 py-0.5 rounded-full">Voided</span>
                     : car.xero_invoice_status
                       ? <span className="text-[10px] uppercase font-semibold bg-un1t-border/40 text-un1t-subtle px-2 py-0.5 rounded-full">{car.xero_invoice_status}</span>
-                      : <span className="text-[10px] uppercase font-semibold bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-full">Awaiting payment</span>}
+                      : <span className="text-[10px] uppercase font-semibold bg-amber-500/20 text-amber-700 px-2 py-0.5 rounded-full">Awaiting payment</span>}
               </div>
               <div className="text-xs text-un1t-subtle flex flex-wrap gap-x-3 gap-y-1">
                 {car.xero_invoice_url && (
@@ -159,7 +159,7 @@ export default function XeroCard({ car, setCar, setError, busy, setBusy, disable
             <button
               onClick={voidAndReissue}
               disabled={busy || disabled}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-400 text-xs font-semibold hover:bg-amber-500/30 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-700 text-xs font-semibold hover:bg-amber-500/30 disabled:opacity-50"
               title={`Sale price changed from €${issuedAmount.toFixed(2)} to €${currentAmount.toFixed(2)}`}
             >
               <RefreshCw size={14} /> Void & reissue
@@ -171,7 +171,7 @@ export default function XeroCard({ car, setCar, setError, busy, setBusy, disable
       </div>
 
       {drift && (
-        <div className="mt-3 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-md p-2">
+        <div className="mt-3 text-xs text-amber-700 bg-amber-500/10 border border-amber-500/30 rounded-md p-2">
           <AlertCircle size={12} className="inline-block mr-1 mb-0.5" />
           Sale price (€{currentAmount.toFixed(2)}) differs from the issued invoice (€{issuedAmount.toFixed(2)}).
           Use Void &amp; reissue to send the buyer a corrected invoice.

@@ -730,7 +730,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                 }}
                 className={`flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg border transition-colors ${
                   selectMode
-                    ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                    ? 'bg-amber-500/20 border-amber-500/50 text-amber-700'
                     : 'border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/30'
                 }`}
                 title={selectMode ? 'Exit multi-select' : 'Select multiple shifts to assign a coach in bulk'}
@@ -943,7 +943,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                       </span>
                       <div className="flex items-center gap-1">
                         {unstaffedCount > 0 && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300" title={`${unstaffedCount} unstaffed`}>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-700" title={`${unstaffedCount} unstaffed`}>
                             !{unstaffedCount}
                           </span>
                         )}
@@ -1018,7 +1018,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
               const headerCls = isToday
                 ? 'bg-blue-600 text-white'
                 : holiday
-                  ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                  ? 'bg-amber-500/15 text-amber-700 border border-amber-500/30'
                   : 'bg-un1t-surface text-un1t-subtle'
 
               return (
@@ -1093,7 +1093,7 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
                             <span
                               className={`text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
                                 unstaffed
-                                  ? 'bg-red-500/20 text-red-300'
+                                  ? 'bg-red-500/20 text-red-700'
                                   : atCapacity
                                     ? 'bg-un1t-border/60 text-un1t-text'
                                     : ''
@@ -1331,9 +1331,9 @@ export default function ScheduleCalendar({ user, onRangeChange, onDataChange }) 
           closed select mode, so the operator sees what happened. */}
       {!selectMode && bulkToast && (
         <div className={`fixed bottom-4 right-4 z-40 max-w-md rounded-md border px-4 py-3 text-sm shadow-2xl ${
-          bulkToast.kind === 'error' ? 'border-red-500/50 bg-red-950/80 text-red-200' :
-          bulkToast.kind === 'warning' ? 'border-amber-500/50 bg-amber-950/80 text-amber-200' :
-          'border-emerald-500/50 bg-emerald-950/80 text-emerald-200'
+          bulkToast.kind === 'error' ? 'border-red-500/50 bg-red-500/10 text-red-700' :
+          bulkToast.kind === 'warning' ? 'border-amber-500/50 bg-amber-500/10 text-amber-700' :
+          'border-emerald-500/50 bg-emerald-500/10 text-emerald-700'
         }`}>
           <div className="flex items-start justify-between gap-3">
             <span>{bulkToast.message}</span>
@@ -1819,7 +1819,7 @@ function BlockDetailModal({
           {isManager && !atCapacity ? (
             <button
               onClick={onAddCoach}
-              className="text-xs bg-blue-500/20 text-blue-300 border border-blue-500/40 hover:bg-blue-500/30 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
+              className="text-xs bg-blue-500/20 text-blue-700 border border-blue-500/40 hover:bg-blue-500/30 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
             >
               <Plus size={12} /> Add coach
             </button>
@@ -1827,7 +1827,7 @@ function BlockDetailModal({
           {isManager && (
             <button
               onClick={onDeleteBlock}
-              className="text-xs bg-red-500/15 text-red-300 border border-red-500/30 hover:bg-red-500/25 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
+              className="text-xs bg-red-500/15 text-red-700 border border-red-500/30 hover:bg-red-500/25 px-3 py-2 rounded-md font-medium inline-flex items-center gap-1.5"
               title="Delete this entire shift slot"
             >
               <X size={12} /> Delete this slot
@@ -1941,7 +1941,7 @@ function AssignmentRow({ assignment, block, isMe, canEdit, onUnassign, onSave, o
           {canEdit && !editing && (
             <button
               onClick={onUnassign}
-              className="text-[11px] text-un1t-subtle hover:text-red-400 inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-red-500/10"
+              className="text-[11px] text-un1t-subtle hover:text-red-700 inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-red-500/10"
               title="Remove coach"
             >
               <X size={11} />

@@ -559,7 +559,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                             selected
                               ? 'border-gray-900 bg-gray-900 text-white'
                               : full
-                                ? 'border-gray-200 bg-gray-50 text-gray-400 line-through cursor-not-allowed'
+                                ? 'border-gray-200 bg-gray-50 text-gray-700 line-through cursor-not-allowed'
                                 : 'border-gray-300 hover:border-gray-500 bg-white text-gray-900'
                           }`}
                         >

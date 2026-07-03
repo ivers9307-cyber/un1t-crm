@@ -59,7 +59,7 @@ export default async function BookingTypeDetailPage(props) {
             <div className="w-3 h-8 rounded-full" style={{ backgroundColor: event.color }} />
             <h2 className="text-2xl font-bold">{event.name}</h2>
             {!event.active && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-400">Inactive</span>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-700">Inactive</span>
             )}
           </div>
           {event.description && <p className="text-sm text-un1t-subtle mt-1 ml-6">{event.description}</p>}

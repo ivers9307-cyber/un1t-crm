@@ -177,7 +177,7 @@ export default function TemplateEditor({ template, locationId, userId }) {
       </div>
 
       {error && (
-        <div className="bg-red-500/10 border-b border-red-500/30 text-red-400 text-sm px-5 py-2">
+        <div className="bg-red-500/10 border-b border-red-500/30 text-red-700 text-sm px-5 py-2">
           {error}
         </div>
       )}

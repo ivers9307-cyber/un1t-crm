@@ -152,7 +152,7 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg p-3">
+        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3">
           {error}
         </div>
       )}
@@ -281,7 +281,7 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
               type="button"
               onClick={() => setActive(!active)}
               className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                active ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                active ? 'bg-green-500/20 text-green-700' : 'bg-red-500/20 text-red-700'
               }`}
             >
               {active ? 'Active' : 'Inactive'}

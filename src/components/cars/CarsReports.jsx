@@ -111,7 +111,7 @@ export default function CarsReports({ metrics, error, fx }) {
   return (
     <div>
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg p-3 mb-4 flex items-start gap-2">
+        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3 mb-4 flex items-start gap-2">
           <AlertCircle size={16} className="mt-0.5" />
           <span>{error}</span>
         </div>

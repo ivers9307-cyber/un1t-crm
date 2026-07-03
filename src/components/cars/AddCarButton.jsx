@@ -134,7 +134,7 @@ export default function AddCarButton({ locationId, liveFxRate = null }) {
       </div>
 
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg p-3">
+        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3">
           {error}
         </div>
       )}

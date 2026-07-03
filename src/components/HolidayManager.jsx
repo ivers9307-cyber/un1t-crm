@@ -72,7 +72,7 @@ export default function HolidayManager({ locationId, initialHolidays }) {
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
         <h3 className="text-sm font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Add Custom Holiday</h3>
         {error && (
-          <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-md p-2.5 mb-3">
+          <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-md p-2.5 mb-3">
             {error}
           </div>
         )}
@@ -124,11 +124,11 @@ export default function HolidayManager({ locationId, initialHolidays }) {
                       <td className="p-3">
                         <div className="flex items-center gap-2">
                           {h.source === 'national' ? (
-                            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-300">
+                            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-700">
                               <Flag size={10} /> National
                             </span>
                           ) : (
-                            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300">
+                            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700">
                               <Building2 size={10} /> Custom
                             </span>
                           )}

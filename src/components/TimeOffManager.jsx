@@ -22,9 +22,9 @@ const TYPE_CONFIG = {
 const FALLBACK_TYPE = { label: 'Time off', color: '#64748B', bg: '#64748B20', icon: CircleEllipsis }
 
 const STATUS_STYLES = {
-  pending:   'bg-yellow-500/20 text-yellow-400',
-  approved:  'bg-green-500/20 text-green-400',
-  rejected:  'bg-red-500/20 text-red-400',
+  pending:   'bg-yellow-500/20 text-yellow-700',
+  approved:  'bg-green-500/20 text-green-700',
+  rejected:  'bg-red-500/20 text-red-700',
   cancelled: 'bg-un1t-border/30 text-un1t-muted',
 }
 
@@ -278,14 +278,14 @@ export default function TimeOffManager({ user }) {
                     <>
                       <button
                         onClick={() => handleApprove(req.id)}
-                        className="p-2 rounded-lg bg-green-500/20 hover:bg-green-500/30 text-green-400 transition-colors"
+                        className="p-2 rounded-lg bg-green-500/20 hover:bg-green-500/30 text-green-700 transition-colors"
                         title="Approve"
                       >
                         <Check size={16} />
                       </button>
                       <button
                         onClick={() => handleReject(req.id)}
-                        className="p-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-400 transition-colors"
+                        className="p-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-700 transition-colors"
                         title="Reject"
                       >
                         <X size={16} />
@@ -368,7 +368,7 @@ function TimeOffFormModal({ user, allowance, onClose, onSubmit }) {
         </div>
 
         {error && (
-          <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg p-3 mb-4">
+          <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-sm rounded-lg p-3 mb-4">
             {error}
           </div>
         )}

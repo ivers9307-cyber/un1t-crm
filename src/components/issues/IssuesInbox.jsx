@@ -65,7 +65,7 @@ export default function IssuesInbox() {
 
   if (error) {
     return (
-      <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded p-3 inline-flex items-start gap-2">
+      <div className="text-sm text-red-700 bg-red-500/10 border border-red-500/30 rounded p-3 inline-flex items-start gap-2">
         <AlertCircle size={14} className="mt-0.5 shrink-0" /> {error}
       </div>
     )
@@ -265,7 +265,7 @@ function IssueDrawer({ id, onClose, onChanged }) {
               )}
 
               {error && (
-                <div className="text-[12px] text-red-300 bg-red-500/10 border border-red-500/30 rounded p-2 inline-flex items-start gap-2">
+                <div className="text-[12px] text-red-700 bg-red-500/10 border border-red-500/30 rounded p-2 inline-flex items-start gap-2">
                   <AlertCircle size={12} className="mt-0.5 shrink-0" /> {error}
                 </div>
               )}

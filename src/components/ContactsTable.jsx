@@ -28,14 +28,14 @@ const ContactBulkDeleteModal = dynamic(() => import('./ContactBulkDeleteModal'),
 // Badge palette keyed by pipeline_stage_slug (FUNNEL.1 taxonomy).
 // Unmapped slugs fall back to the neutral grey badge.
 const statusBadge = {
-  new_lead:     'bg-blue-500/20 text-blue-400',
-  first_class:  'bg-green-500/20 text-green-400',
-  second_class: 'bg-teal-500/20 text-teal-400',
-  trial_done:   'bg-amber-500/20 text-amber-400',
-  converted:    'bg-emerald-500/20 text-emerald-400',
-  member:       'bg-slate-500/20 text-slate-400',
-  classpass:    'bg-purple-500/20 text-purple-400',
-  dormant:      'bg-gray-500/20 text-gray-400',
+  new_lead:     'bg-blue-500/20 text-blue-700',
+  first_class:  'bg-green-500/20 text-green-700',
+  second_class: 'bg-teal-500/20 text-teal-700',
+  trial_done:   'bg-amber-500/20 text-amber-700',
+  converted:    'bg-emerald-500/20 text-emerald-700',
+  member:       'bg-slate-500/20 text-slate-700',
+  classpass:    'bg-purple-500/20 text-purple-700',
+  dormant:      'bg-gray-500/20 text-gray-700',
 }
 
 function formatStage(slug) {

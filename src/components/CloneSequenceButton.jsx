@@ -51,7 +51,7 @@ export default function CloneSequenceButton({ sequenceId, sequenceName }) {
       aria-label={`Clone ${sequenceName}`}
       className={
         error
-          ? 'text-red-400 hover:bg-red-500/10'
+          ? 'text-red-700 hover:bg-red-500/10'
           : 'text-un1t-subtle hover:text-un1t-text hover:bg-un1t-border/40'
       }
     />

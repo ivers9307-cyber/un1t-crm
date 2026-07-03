@@ -69,7 +69,7 @@ export default function DealCard({ deal, locationId }) {
           </span>
         )}
         {contact.trial_credits_remaining != null && BADGE_SLUGS.has(contact.pipeline_stage_slug) && (
-          <span className="inline-block mt-1.5 ml-1 text-[10px] px-1.5 py-0.5 bg-green-900/40 rounded text-green-400">
+          <span className="inline-block mt-1.5 ml-1 text-[10px] px-1.5 py-0.5 bg-green-500/10 rounded text-green-700">
             {contact.trial_credits_remaining} credits
           </span>
         )}

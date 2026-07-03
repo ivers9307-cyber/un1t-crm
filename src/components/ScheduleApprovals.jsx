@@ -117,8 +117,8 @@ export default function ScheduleApprovals({ user }) {
                           <span className="text-sm" style={{ color: conf.color }}>{conf.label}</span>
                           {!isPending && (
                             <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium uppercase ${
-                              req.status === 'approved' ? 'bg-green-500/20 text-green-400' :
-                              req.status === 'rejected' ? 'bg-red-500/20 text-red-400' :
+                              req.status === 'approved' ? 'bg-green-500/20 text-green-700' :
+                              req.status === 'rejected' ? 'bg-red-500/20 text-red-700' :
                               'bg-un1t-border/30 text-un1t-muted'
                             }`}>
                               {req.status}
@@ -140,14 +140,14 @@ export default function ScheduleApprovals({ user }) {
                         <div className="flex items-center gap-2 shrink-0">
                           <button
                             onClick={() => handleTimeOffAction(req.id, 'approved')}
-                            className="p-2 rounded-lg bg-green-500/20 hover:bg-green-500/30 text-green-400 transition-colors"
+                            className="p-2 rounded-lg bg-green-500/20 hover:bg-green-500/30 text-green-700 transition-colors"
                             title="Approve"
                           >
                             <Check size={16} />
                           </button>
                           <button
                             onClick={() => handleTimeOffAction(req.id, 'rejected')}
-                            className="p-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-400 transition-colors"
+                            className="p-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-700 transition-colors"
                             title="Reject"
                           >
                             <X size={16} />
@@ -185,8 +185,8 @@ export default function ScheduleApprovals({ user }) {
                           <span className="text-sm text-blue-400">Swap Request</span>
                           {!isPending && (
                             <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium uppercase ${
-                              req.status === 'approved' ? 'bg-green-500/20 text-green-400' :
-                              req.status === 'rejected' ? 'bg-red-500/20 text-red-400' :
+                              req.status === 'approved' ? 'bg-green-500/20 text-green-700' :
+                              req.status === 'rejected' ? 'bg-red-500/20 text-red-700' :
                               'bg-un1t-border/30 text-un1t-muted'
                             }`}>
                               {req.status}
@@ -203,14 +203,14 @@ export default function ScheduleApprovals({ user }) {
                         <div className="flex items-center gap-2 shrink-0">
                           <button
                             onClick={() => handleSwapAction(req.id, 'approved')}
-                            className="p-2 rounded-lg bg-green-500/20 hover:bg-green-500/30 text-green-400 transition-colors"
+                            className="p-2 rounded-lg bg-green-500/20 hover:bg-green-500/30 text-green-700 transition-colors"
                             title="Approve"
                           >
                             <Check size={16} />
                           </button>
                           <button
                             onClick={() => handleSwapAction(req.id, 'rejected')}
-                            className="p-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-400 transition-colors"
+                            className="p-2 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-700 transition-colors"
                             title="Reject"
                           >
                             <X size={16} />

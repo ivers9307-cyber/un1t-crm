@@ -28,13 +28,13 @@ const STATUS_LABEL = {
 }
 const STATUS_TONE = {
   draft:     'bg-un1t-border/30 text-un1t-subtle',
-  submitted: 'bg-amber-500/20 text-amber-300',
-  approved:  'bg-emerald-500/20 text-emerald-300',
+  submitted: 'bg-amber-500/20 text-amber-700',
+  approved:  'bg-emerald-500/20 text-emerald-700',
   // Same green palette as approved — both are happy-path post-
   // approval states. The label difference (With accountant) tells
   // the submitter where the claim actually sits.
-  awaiting_accountant_review: 'bg-emerald-500/20 text-emerald-300',
-  declined:  'bg-red-500/20 text-red-300',
+  awaiting_accountant_review: 'bg-emerald-500/20 text-emerald-700',
+  declined:  'bg-red-500/20 text-red-700',
   revoked:   'bg-un1t-border/30 text-un1t-muted',
 }
 
@@ -110,7 +110,7 @@ export default function ExpensesManager({ userId, isFte, isApprover, locations }
       </div>
 
       {error && (
-        <div className="text-xs text-red-400 bg-red-950/30 border border-red-900/50 rounded p-2 inline-flex items-center gap-1.5">
+        <div className="text-xs text-red-700 bg-red-500/10 border border-red-200 rounded p-2 inline-flex items-center gap-1.5">
           <AlertCircle size={12} /> {error}
         </div>
       )}
@@ -253,7 +253,7 @@ function ClaimDetail({ claimId, canEdit, canSubmit, canRevoke, canApprove, onCha
   return (
     <div className="border-t border-un1t-border bg-un1t-bg/30 p-4 space-y-3">
       {error && (
-        <div className="text-xs text-red-400 bg-red-950/30 border border-red-900/50 rounded p-2 inline-flex items-center gap-1.5">
+        <div className="text-xs text-red-700 bg-red-500/10 border border-red-200 rounded p-2 inline-flex items-center gap-1.5">
           <AlertCircle size={12} /> {error}
         </div>
       )}
@@ -265,7 +265,7 @@ function ClaimDetail({ claimId, canEdit, canSubmit, canRevoke, canApprove, onCha
       )}
 
       {claim.status === 'declined' && claim.decline_reason && (
-        <div className="text-xs text-red-300 bg-red-950/30 border border-red-900/50 rounded p-2">
+        <div className="text-xs text-red-700 bg-red-500/10 border border-red-200 rounded p-2">
           <strong>Decline reason:</strong> {claim.decline_reason}
         </div>
       )}
@@ -276,7 +276,7 @@ function ClaimDetail({ claimId, canEdit, canSubmit, canRevoke, canApprove, onCha
           submitter's own claim (approvers viewing don't need this
           copy — they already understand the queue handoff). */}
       {claim.status === 'awaiting_accountant_review' && claim.viewer_role === 'self' && (
-        <div className="text-xs text-emerald-200 bg-emerald-950/30 border border-emerald-900/50 rounded p-2">
+        <div className="text-xs text-emerald-700 bg-emerald-500/10 border border-emerald-200 rounded p-2">
           <strong>Approved by your manager.</strong> Awaiting accountant sign-off before forwarding to Xero — no further action needed from you.
         </div>
       )}

@@ -78,3 +78,30 @@ ruleTester.run('no-utc-today', plugin.rules['no-utc-today'], {
     { code: "new Date().toISOString().split('T')[0]", errors: [{ messageId: 'utcToday' }] },
   ],
 })
+
+ruleTester.run('no-low-contrast-chip', plugin.rules['no-low-contrast-chip'], {
+  valid: [
+    // the light chip idiom — -700 ramp on a tint
+    '"bg-emerald-500/10 text-emerald-700"',
+    '"bg-red-500/10 rounded text-red-700"',
+    // -400 text with NO chip bg in the same string (icons on white, muted text)
+    '"text-gray-400"',
+    // dark bg with light-enough text is a dark-surface idiom; only flagged with low ramps
+    '"bg-gray-900 text-white"',
+    // recipe split across separate strings (ternary halves) — precision-first, not flagged
+    '"bg-green-500/20" + (x ? "text-green-700" : "text-white")',
+    // solid -500 bg with white text (buttons) — fine
+    '"bg-red-500 text-white"',
+  ],
+  invalid: [
+    // THE credits pill (2026-07-03 operator report): dark chip on light theme
+    { code: '"bg-green-900/40 rounded text-green-400"', errors: [{ messageId: 'darkChip' }] },
+    { code: '"text-red-400 bg-red-950/30 border border-red-900/50"', errors: [{ messageId: 'darkChip' }] },
+    // washed-out tint chips
+    { code: '"bg-amber-500/20 text-amber-400"', errors: [{ messageId: 'lowContrast' }] },
+    { code: '"bg-purple-500/10 text-purple-300"', errors: [{ messageId: 'lowContrast' }] },
+    { code: '"bg-red-50 text-red-400"', errors: [{ messageId: 'lowContrast' }] },
+    // template literal with both halves in static text
+    { code: 'const c = `px-2 bg-teal-500/20 ${x} text-teal-400`', errors: [{ messageId: 'lowContrast' }] },
+  ],
+})

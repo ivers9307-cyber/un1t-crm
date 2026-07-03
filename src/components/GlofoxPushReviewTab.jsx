@@ -205,7 +205,7 @@ export default function GlofoxPushReviewTab() {
                 type="button"
                 onClick={() => retry(ev)}
                 disabled={isBusy}
-                className="text-[11px] px-2.5 py-1 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/25 disabled:opacity-50 inline-flex items-center gap-1"
+                className="text-[11px] px-2.5 py-1 rounded-md bg-emerald-500/15 text-emerald-700 border border-emerald-500/40 hover:bg-emerald-500/25 disabled:opacity-50 inline-flex items-center gap-1"
               >
                 {isBusy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
                 Retry

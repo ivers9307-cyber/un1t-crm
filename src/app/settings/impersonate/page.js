@@ -69,7 +69,7 @@ export default async function ImpersonatePage() {
       </p>
 
       {user.impersonatingFrom && (
-        <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 text-sm rounded-lg p-3 mb-4">
+        <div className="bg-amber-500/10 border border-amber-500/30 text-amber-700 text-sm rounded-lg p-3 mb-4">
           You are currently viewing as <strong>{user.full_name}</strong>. Pick a different user below to switch, or use the sidebar &ldquo;Stop impersonating&rdquo; button to end the session.
         </div>
       )}

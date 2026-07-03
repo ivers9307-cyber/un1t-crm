@@ -174,7 +174,7 @@ export default function ShiftTemplateManager({ user }) {
                   </button>
                   <button
                     onClick={() => handleDeactivate(t.id)}
-                    className="p-2 rounded hover:bg-red-500/20 text-un1t-subtle hover:text-red-400 transition-colors"
+                    className="p-2 rounded hover:bg-red-500/20 text-un1t-subtle hover:text-red-700 transition-colors"
                     title="Deactivate"
                   >
                     <Trash2 size={16} />

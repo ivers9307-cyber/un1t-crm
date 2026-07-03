@@ -114,7 +114,7 @@ React 19 + Next.js 16 (App Router) · Tailwind 3.4 · Supabase (Postgres + Auth 
 
 Full set in [`docs/architecture/REFERENCE.md`](docs/architecture/REFERENCE.md); the high-frequency ones:
 
-- **UI primitives** live in `src/components/ui/` (`Button`/`Modal`/`Card`/`Field`/`Table` from `@/components/ui`); compose them, don't re-roll. Colours use intent-named `un1t-*` tokens (the palette is a **light theme with inverted token names** — `un1t-black` is white). Status text on light cards needs the **-700 ramp**, not -300.
+- **UI primitives** live in `src/components/ui/` (`Button`/`Modal`/`Card`/`Field`/`Table` from `@/components/ui`); compose them, don't re-roll. Colours use intent-named `un1t-*` tokens (the palette is a **light theme with inverted token names** — `un1t-black` is white). **Status chips: `bg-<c>-500/10 text-<c>-700`** — text on light cards needs the -700 ramp, never -300/-400, and never the dark-theme recipe (`bg-*-900` + low ramp; the unreadable green-on-green credits pill, operator-reported 2026-07-03). Lint-enforced via `check:guardrails` (`no-low-contrast-chip`); genuinely dark surfaces (TV/present) are path-excluded in `eslint.guardrails.config.mjs`.
 - **Mutation route skeleton:** `getCurrentUser()` → role check (403) → `validateBody` → `assertLocationAccess` → `createServerClient()` → work → `{ success, data }`. Register new routes in `src/lib/openapi.js`.
 - **Reuse shared Zod blocks** from `@/lib/schemas` (`uuidLike` — Postgres-permissive, NOT `z.string().uuid()`).
 - **No new `console.log` in prod paths** (gate on `NODE_ENV` or use `console.error`).

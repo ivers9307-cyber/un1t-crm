@@ -196,11 +196,70 @@ const noUtcToday = {
   },
 }
 
+// Low-contrast status chips on the light theme (operator feedback 2026-07-03:
+// the pipeline credits pill rendered green-on-green and was unreadable).
+// Two banned recipes, both requiring bg + text in the SAME string so we don't
+// false-positive on classes split across ternaries (precision-first, like
+// no-zulu-template-date):
+//   1. dark-theme chip ported to the light theme: bg-*-900/950 + text-*-100..400
+//   2. light tint chip with washed-out text:      bg-*-50 | bg-*-500/10..25 + text-*-300/400
+// The fix is the CLAUDE.md convention: status text on light cards uses the
+// -700 ramp. Dark surfaces (src/app/tv, src/app/present) are excluded in
+// eslint.guardrails.config.mjs, not here.
+const DARK_CHIP_BG = /\bbg-[a-z]+-9[05]0(?:\/\d+)?\b/
+const DARK_CHIP_TEXT = /\btext-[a-z]+-[1-4]00\b/
+const LIGHT_TINT_BG = /\bbg-[a-z]+-(?:50\b|500\/(?:10|15|20|25)\b)/
+const LOW_RAMP_TEXT = /\btext-[a-z]+-[34]00\b/
+
+function chipViolation(str) {
+  if (typeof str !== 'string' || !str.includes('text-')) return null
+  if (DARK_CHIP_BG.test(str) && DARK_CHIP_TEXT.test(str)) return 'darkChip'
+  if (LIGHT_TINT_BG.test(str) && LOW_RAMP_TEXT.test(str)) return 'lowContrast'
+  return null
+}
+
+const noLowContrastChip = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description:
+        'Disallow low-contrast status-chip class recipes on the light theme: dark-theme chips (bg-*-900 + text-*-400) and washed-out tints (bg-*-500/10..25 + text-*-300/400). Status text on light cards uses the -700 ramp.',
+    },
+    schema: [],
+    messages: {
+      darkChip:
+        'Dark-theme chip recipe (bg-*-900/950 + low text ramp) on the light theme — unreadable (the green-on-green credits pill, 2026-07-03). Use the light chip idiom: bg-<color>-500/10 text-<color>-700. Genuinely dark surfaces (TV/present) are path-excluded in eslint.guardrails.config.mjs.',
+      lowContrast:
+        'Status text on light cards needs the -700 ramp (CLAUDE.md) — text-*-300/400 on a light tint is unreadable. Change text-<color>-300/400 → text-<color>-700.',
+    },
+  },
+  create(context) {
+    function check(node, value) {
+      const id = chipViolation(value)
+      if (id) context.report({ node, messageId: id })
+    }
+    return {
+      Literal(node) {
+        if (typeof node.value === 'string') check(node, node.value)
+      },
+      TemplateLiteral(node) {
+        // Join the literal parts: a recipe split across ${...} boundaries is
+        // still caught when both halves live in the template's static text.
+        const joined = (node.quasis || [])
+          .map((q) => (q.value && q.value.cooked) || '')
+          .join(' ')
+        check(node, joined)
+      },
+    }
+  },
+}
+
 export default {
   rules: {
     'no-catch-on-supabase-builder': noCatchOnSupabaseBuilder,
     'no-uncapped-supabase-limit': noUncappedSupabaseLimit,
     'no-zulu-template-date': noZuluTemplateDate,
     'no-utc-today': noUtcToday,
+    'no-low-contrast-chip': noLowContrastChip,
   },
 }

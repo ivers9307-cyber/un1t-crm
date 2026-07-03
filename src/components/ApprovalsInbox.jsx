@@ -112,7 +112,7 @@ export default function ApprovalsInbox() {
       </div>
 
       {error && (
-        <div className="border border-red-500/40 bg-red-500/10 text-red-300 rounded-lg p-3 text-sm">
+        <div className="border border-red-500/40 bg-red-500/10 text-red-700 rounded-lg p-3 text-sm">
           {error}
         </div>
       )}

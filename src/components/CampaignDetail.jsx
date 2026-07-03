@@ -84,7 +84,7 @@ export default function CampaignDetail({ campaign, recipients = [], locationId: 
         </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-un1t-subtle">{sentDate}</span>
-          <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">
+          <span className="text-xs bg-green-500/20 text-green-700 px-2 py-0.5 rounded-full">
             Sent
           </span>
         </div>

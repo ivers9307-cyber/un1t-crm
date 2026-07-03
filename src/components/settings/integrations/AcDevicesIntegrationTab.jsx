@@ -258,12 +258,12 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
           Save credentials
       ============================================================ */}
       {credsError && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-md p-2 flex items-start gap-2">
+        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
           <AlertCircle size={12} className="mt-0.5" /> {credsError}
         </div>
       )}
       {credsSavedAt && !credsError && (
-        <div className="bg-green-500/10 border border-green-500/30 text-green-400 text-xs rounded-md p-2 inline-flex items-center gap-2">
+        <div className="bg-green-500/10 border border-green-500/30 text-green-700 text-xs rounded-md p-2 inline-flex items-center gap-2">
           <Check size={12} /> Credentials saved at {credsSavedAt.toLocaleTimeString()}
         </div>
       )}
@@ -331,7 +331,7 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
               </div>
             )}
             {discoveryError && (
-              <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded p-2 inline-flex items-start gap-2">
+              <div className="text-xs text-red-700 bg-red-500/10 border border-red-500/30 rounded p-2 inline-flex items-start gap-2">
                 <AlertCircle size={11} className="mt-0.5" /> {discoveryError}
               </div>
             )}
@@ -372,7 +372,7 @@ export default function AcDevicesIntegrationTab({ location, canEdit }) {
           </div>
         )}
         {devicesError && (
-          <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded p-2 inline-flex items-start gap-2">
+          <div className="text-xs text-red-700 bg-red-500/10 border border-red-500/30 rounded p-2 inline-flex items-start gap-2">
             <AlertCircle size={11} className="mt-0.5" /> {devicesError}
           </div>
         )}
@@ -454,7 +454,7 @@ function DeviceRow({ device, onPatch, onDisable }) {
               {device.provider === 'thinq' ? 'LG ThinQ' : 'Sensibo'}
             </span>
             {device.device_group && (
-              <span className="text-[10px] uppercase tracking-wider text-blue-300 bg-blue-500/15 px-1.5 py-0.5 rounded">
+              <span className="text-[10px] uppercase tracking-wider text-blue-700 bg-blue-500/15 px-1.5 py-0.5 rounded">
                 {device.device_group}
               </span>
             )}
