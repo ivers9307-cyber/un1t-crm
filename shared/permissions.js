@@ -35,6 +35,13 @@ export const WEB_PERMISSIONS = Object.freeze([
   { key: 'dashboard_personal', label: 'Dashboard · Today',     hint: 'Personal home view — your shifts, swaps, inbox' },
   { key: 'dashboard_studio',   label: 'Dashboard · Studio',    hint: 'Operational view — leads, members, approvals' },
   { key: 'dashboard_business', label: 'Dashboard · Business',  hint: 'Owner-level — pipeline, won deals, payroll' },
+  // ADS-REPORT.0 — paid-ad performance dashboard (/dashboard/ads).
+  // Desktop analytics surface, like the other radar/analytics
+  // dashboards — no mobile counterpart (see WEB_ONLY_OK in
+  // scripts/check-mobile-parity.mjs). Owner + manager by default;
+  // head_coach + staff off (acquisition-spend oversight, not a
+  // staff surface).
+  { key: 'dashboard_ads', label: 'Ads Dashboard',                hint: 'Paid-ad performance and cost-per-booking analytics.' },
   // — CRM —
   { key: 'pipeline',   label: 'Pipeline & Deals' },
   { key: 'contacts',   label: 'Contacts' },
@@ -176,7 +183,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
   // of these values, so this map is mainly here for completeness +
   // the parity / shared-permissions tests that iterate every role.
   master: {
-    dashboard_personal: true, dashboard_studio: true, dashboard_business: true,
+    dashboard_personal: true, dashboard_studio: true, dashboard_business: true, dashboard_ads: true,
     pipeline: true, contacts: true, activities: true,
     churn_radar: true,
     lead_radar: true,
@@ -202,7 +209,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     landing_page: true,
   },
   staff: {
-    dashboard_personal: true, dashboard_studio: false, dashboard_business: false,
+    dashboard_personal: true, dashboard_studio: false, dashboard_business: false, dashboard_ads: false,
     pipeline: true, contacts: true, activities: true,
     churn_radar: false,                            // retention oversight — not a staff surface
     lead_radar: false,                             // acquisition oversight — not a staff surface
@@ -228,7 +235,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     landing_page: false,                          // marketing copy isn't a staff concern
   },
   head_coach: {
-    dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
+    dashboard_personal: true, dashboard_studio: true, dashboard_business: false, dashboard_ads: false,
     pipeline: true, contacts: true, activities: true,
     churn_radar: true,                             // head coaches own member retention
     lead_radar: true,                              // head coaches own lead/trial conversion
@@ -255,7 +262,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     landing_page: false,
   },
   manager: {
-    dashboard_personal: true, dashboard_studio: true, dashboard_business: false,
+    dashboard_personal: true, dashboard_studio: true, dashboard_business: false, dashboard_ads: true,
     pipeline: true, contacts: true, activities: true,
     churn_radar: false,                            // owner + head_coach by default; grant per-user if needed
     lead_radar: false,                             // owner + head_coach by default; grant per-user if needed
@@ -283,7 +290,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     landing_page: false,                          // owner/master decision; per-user override available
   },
   owner: {
-    dashboard_personal: true, dashboard_studio: true, dashboard_business: true,
+    dashboard_personal: true, dashboard_studio: true, dashboard_business: true, dashboard_ads: true,
     pipeline: true, contacts: true, activities: true,
     churn_radar: true,
     lead_radar: true,
