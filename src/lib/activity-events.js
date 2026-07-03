@@ -14,12 +14,17 @@
 
 import { logWarn } from '@/lib/log'
 
+// FUNNEL.1 taxonomy. Historical timeline rows may carry retired slugs
+// (active_trial et al) — humanise() falls back to title-casing them.
 const STATUS_LABELS = {
-  active_trial: 'Active Trial',
-  cold: 'Cold',
-  lost_member: 'Lost Member',
+  new_lead: 'New Lead',
+  first_class: '1st Class',
+  second_class: '2nd Class',
+  trial_done: 'Trial Done',
+  converted: 'Converted',
   member: 'Member',
-  returning: 'Returning',
+  classpass: 'ClassPass',
+  dormant: 'Dormant',
 }
 
 function humanise(status) {

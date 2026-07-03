@@ -15,12 +15,13 @@ export const dynamic = 'force-dynamic'
 
 const STATUS_LABEL = {
   new_lead: 'New leads',
-  active_trial: 'On trial',
-  trial_complete: 'Trial done',
-  active_member: 'Members',
-  lapsed: 'Lapsed',
-  lost: 'Lost',
-  archived: 'Archived',
+  first_class: '1st class',
+  second_class: '2nd class',
+  trial_done: 'Trial done',
+  converted: 'Converted',
+  member: 'Members',
+  classpass: 'ClassPass',
+  dormant: 'Dormant',
   unknown: 'Other',
 }
 
@@ -45,10 +46,11 @@ export default async function StudioDashboardPage() {
     totalUnreadWhatsapp,
   } = res.data
 
-  // Funnel is keyed by pipeline_stage_slug — use the real member slug
-  // ('active_member'), not 'member' (which never matched, so the
-  // Members card silently rendered 0).
-  const headlineStatuses = ['new_lead', 'active_trial', 'active_member', 'lapsed']
+  // Funnel is keyed by pipeline_stage_slug (FUNNEL.1 taxonomy): the four
+  // tiles an operator glances at — top of funnel, first engagement, the
+  // decision point, wins. The old keys (active_trial / active_member /
+  // lapsed) stop existing after the cutover reclassify.
+  const headlineStatuses = ['new_lead', 'first_class', 'trial_done', 'converted']
   const headline = headlineStatuses.map(k => ({ key: k, count: funnel[k] || 0 }))
 
   return (

@@ -19,14 +19,13 @@ import {
 // title-cased version of the key.
 const STATUS_LABEL = {
   new_lead: 'New leads',
-  active_trial: 'On trial',
-  hot_conversion: 'Hot conversion',
-  active_member: 'Members',
-  at_risk_member: 'At risk',
-  classpass_active: 'ClassPass',
-  lapsed: 'Lapsed',
+  first_class: '1st class',
+  second_class: '2nd class',
+  trial_done: 'Trial done',
+  converted: 'Converted',
+  member: 'Members',
+  classpass: 'ClassPass',
   dormant: 'Dormant',
-  dormant_classpass: 'Dormant CP',
   unknown: 'Other',
 }
 
@@ -72,8 +71,9 @@ export default function StudioDashboard({ refreshKey }) {
   } = data
 
   // Funnel display: pull the headline statuses to a 2x2 grid; everything
-  // else is rolled into the contact total.
-  const headlineStatuses = ['new_lead', 'active_trial', 'active_member', 'lapsed']
+  // else is rolled into the contact total. FUNNEL.1 taxonomy — the old
+  // keys (active_trial / active_member / lapsed) no longer exist.
+  const headlineStatuses = ['new_lead', 'first_class', 'trial_done', 'converted']
   const headline = headlineStatuses.map(k => ({ key: k, count: funnel[k] || 0 }))
 
   return (
