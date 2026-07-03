@@ -8,6 +8,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { createBrowserClient } from '@/lib/supabase'
+import { mergeTimeline } from '@shared/approval-cards'
+import ApprovalActionCard from '@/components/ApprovalActionCard'
 import {
   ArrowLeft, Send, MessageCircle, Clock, Check, AlertCircle,
   RefreshCw, Bot, UserCheck, Instagram,
@@ -34,12 +36,15 @@ function displayName(conv) {
 
 // `embedded` (UIX-P1b): thread-pane-only mode for the unified inbox —
 // the internal list is hidden and selection follows initialConversationId.
-export default function IGInbox({ locationId, initialConversationId, embedded = false }) {
+export default function IGInbox({ locationId, initialConversationId, embedded = false, onOpenBookTab }) {
   const [conversations, setConversations] = useState([])
   const [selectedId, setSelectedId] = useState(initialConversationId || null)
   const [conversation, setConversation] = useState(null)
   const [messages, setMessages] = useState([])
   const [newMessage, setNewMessage] = useState('')
+  // INBOX-APPROVALS.8 — pending/decided agent approval requests for the
+  // open conversation, merged into the message timeline below.
+  const [approvals, setApprovals] = useState([])
   // AGENT-QA.1 — see WAInbox twin.
   const [agentFeedback, setAgentFeedback] = useState({})
   async function rateAgentMessage(msg, rating) {
@@ -117,6 +122,22 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
     }
   }, [])
 
+  // INBOX-APPROVALS.8 — approval requests tied to this conversation, for
+  // the inline cards in the timeline. Never errors for a valid session
+  // (returns { success:true, requests:[] } for foreign/unknown ids), so
+  // failure here just means the cards silently don't render. The GET
+  // route filters by conversation_id only — channel-agnostic, so IG rows
+  // (channel='instagram') resolve through the same endpoint as WA.
+  const fetchApprovals = useCallback(async (convId) => {
+    try {
+      const res = await fetch(`/api/agent/membership-requests?conversation_id=${convId}`)
+      const data = await res.json()
+      if (data.success) setApprovals(data.requests || [])
+    } catch {
+      /* non-fatal — cards just don't render */
+    }
+  }, [])
+
   // Realtime needs the current selection without re-subscribing per
   // click — same ref pattern as WAInbox.
   const selectedIdRef = useRef(initialConversationId || null)
@@ -151,15 +172,32 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
           }
         }
       )
+      // INBOX-APPROVALS.8 — refresh approval cards live (mig 357 publishes
+      // this table to supabase_realtime). Until that migration lands in
+      // prod this listener simply never fires; fetch-on-open still works.
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'agent_membership_requests' },
+        (payload) => {
+          const convId = payload?.new?.conversation_id || payload?.old?.conversation_id
+          if (convId && convId === selectedIdRef.current) fetchApprovals(convId)
+        }
+      )
       .subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [locationId, loadConversations, loadThread])
+  }, [locationId, loadConversations, loadThread, fetchApprovals])
 
   useEffect(() => {
     const t = setInterval(loadConversations, 60000)
     return () => clearInterval(t)
   }, [loadConversations])
-  useEffect(() => { if (selectedId) loadThread(selectedId) }, [selectedId, loadThread])
+  useEffect(() => {
+    setApprovals([])
+    if (selectedId) {
+      loadThread(selectedId)
+      fetchApprovals(selectedId)
+    }
+  }, [selectedId, loadThread, fetchApprovals])
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
   async function handleSend(e) {
@@ -178,6 +216,7 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
       if (!data.success) { setError(data.error || 'Failed to send'); return }
       setNewMessage('')
       await loadThread(selectedId)
+      await fetchApprovals(selectedId)
       await loadConversations()
     } catch (err) {
       setError(err.message || 'Failed to send')
@@ -195,7 +234,10 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
         body: JSON.stringify({ active }),
       })
       const data = await res.json()
-      if (data.success) await loadThread(selectedId)
+      if (data.success) {
+        await loadThread(selectedId)
+        await fetchApprovals(selectedId)
+      }
     } catch {
       /* ignore */
     }
@@ -332,11 +374,26 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
-              {messages.map((m) => {
+              {mergeTimeline(messages, approvals).map(item => {
+                if (item.kind === 'approval') {
+                  return (
+                    <ApprovalActionCard
+                      key={item.key}
+                      request={item.request}
+                      contactId={conversation?.contact_id || null}
+                      locationId={locationId}
+                      contactFirstName={conversation?.contacts?.first_name || conversation?.ig_username || null}
+                      onDecided={updated => setApprovals(prev => prev.map(r => (r.id === updated.id ? updated : r)))}
+                      onPrefillComposer={text => setNewMessage(text)}
+                      onOpenBookTab={onOpenBookTab}
+                    />
+                  )
+                }
+                const m = item.message
                 const outbound = m.direction === 'outbound'
                 const fromAgent = outbound && m.source && m.source !== 'operator'
                 return (
-                  <div key={m.id} className={`flex ${outbound ? 'justify-end' : 'justify-start'}`}>
+                  <div key={item.key} className={`flex ${outbound ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${outbound ? 'bg-un1t-accent text-un1t-bg' : 'bg-un1t-surface text-un1t-text'}`}>
                       {m.body}
                       <div className={`flex items-center gap-1 mt-1 text-[10px] ${outbound ? 'text-un1t-bg/70' : 'text-un1t-muted'}`}>
