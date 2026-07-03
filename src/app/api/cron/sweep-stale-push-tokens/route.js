@@ -25,7 +25,7 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const STALE_AFTER_DAYS = 90
-const LEDGER_RETENTION_DAYS = 30 // push_event_sends rows (PUSH.2, mig 348)
+const LEDGER_RETENTION_DAYS = 30 // push_event_sends rows (PUSH.2, mig 349)
 
 export async function POST(request) { return GET(request) }
 
@@ -77,7 +77,7 @@ export async function GET(request) {
   }
 
   // PUSH.2 — prune the event-push dedup ledger alongside the token
-  // sweep (same daily hygiene job, mig 348). Event keys never repeat
+  // sweep (same daily hygiene job, mig 349). Event keys never repeat
   // legitimately inside 30 days, so anything older is dead weight.
   // Best-effort: a failed prune must not fail the token sweep.
   let ledgerPruned = 0
