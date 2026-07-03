@@ -28,9 +28,11 @@ export async function PUT(request, props) {
   const db = createServerClient()
 
   // Fetch the swap. requester_shift_id / target_shift_id are shift_assignments.id.
-  // Only profile_id is read off the embeds (for the reciprocal-swap reassign).
+  // Only profile_id is read off the embeds for the reciprocal-swap reassign;
+  // the nested block embed carries block_date for the decision push (mobile
+  // week-preselects the schedule tab on it).
   const { data: swap } = await db.from('shift_swap_requests')
-    .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id)')
+    .select('*, requester_shift:shift_assignments!requester_shift_id(id, profile_id, block_id, block:shift_blocks!block_id(block_date)), target_shift:shift_assignments!target_shift_id(id, profile_id, block_id)')
     .eq('id', params.id)
     .single()
 
@@ -97,7 +99,10 @@ async function dispatchSwapPushes(db, decision, swap, user) {
       case 'decision_for_requester':
       case 'decision_for_taker': {
         const verb = decision.swapUpdates.status === 'approved' ? 'approved' : 'declined'
-        await sendPushOnce(db, `swap_decision:${swap.id}:${decision.swapUpdates.status}`, n.to, { title: `Swap ${verb}`, body: `Your shift swap was ${verb}${decision.swapUpdates.review_note ? ` — “${decision.swapUpdates.review_note}”` : ''}.`, category: 'swap', data: { type: 'swap_decision', swap_id: swap.id, status: decision.swapUpdates.status } })
+        // block_date = the requester's shift date (the shift the swap is
+        // about, and the one the taker now holds) — mobile week-preselects
+        // the schedule tab on it.
+        await sendPushOnce(db, `swap_decision:${swap.id}:${decision.swapUpdates.status}`, n.to, { title: `Swap ${verb}`, body: `Your shift swap was ${verb}${decision.swapUpdates.review_note ? ` — “${decision.swapUpdates.review_note}”` : ''}.`, category: 'swap', data: { type: 'swap_decision', swap_id: swap.id, status: decision.swapUpdates.status, block_date: swap.requester_shift?.block?.block_date ?? null } })
         break
       }
       default:
