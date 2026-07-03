@@ -30,18 +30,22 @@ export async function GET(_request, props) {
   for (const ch of defs || []) {
     if (challengePhase(ch, nowMs) !== 'active') continue
     const { fromIso, toIso } = windowIso(ch)
+    // DECISION #1 (mig 348) — this is a PUBLIC render surface, so exclude
+    // members who opted out of the leaderboard. They still score for
+    // themselves and can still win (the run-challenge-events cron computes
+    // winners WITHOUT this flag); they're just not shown on the TV board.
     if (ch.mode === 'collective') {
-      const collective = await computeCollective(db, { locationId, metric: ch.metric, fromIso, toIso, target: ch.target })
+      const collective = await computeCollective(db, { locationId, metric: ch.metric, fromIso, toIso, target: ch.target, excludeOptedOut: true })
       challenges.push({ id: ch.id, name: ch.name, mode: 'collective', metric: ch.metric, endsOn: ch.ends_on, collective })
     } else {
-      const standings = await computeStandings(db, { locationId, metric: ch.metric, fromIso, toIso })
+      const standings = await computeStandings(db, { locationId, metric: ch.metric, fromIso, toIso, excludeOptedOut: true })
       challenges.push({ id: ch.id, name: ch.name, mode: 'individual', metric: ch.metric, endsOn: ch.ends_on, standings: project(standings) })
     }
   }
 
   const d = new Date(nowMs)
   const monthFrom = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString()
-  const gym = await computeStandings(db, { locationId, metric: 'points', fromIso: monthFrom, toIso: new Date(nowMs).toISOString() })
+  const gym = await computeStandings(db, { locationId, metric: 'points', fromIso: monthFrom, toIso: new Date(nowMs).toISOString(), excludeOptedOut: true })
 
   return NextResponse.json({
     ok: true, server_time: new Date().toISOString(),

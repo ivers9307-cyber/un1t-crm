@@ -48,6 +48,10 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
   const [tagsCsv, setTagsCsv] = useState(
     Array.isArray(contact?.tags) ? contact.tags.join(', ') : ''
   )
+  // DECISION #1 — shown on the studio leaderboard by default (opt-out).
+  // The toggle reads "Show on studio leaderboard" (checked = shown), so the
+  // stored flag is the inverse.
+  const [showOnLeaderboard, setShowOnLeaderboard] = useState(!contact?.hr_leaderboard_opt_out)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
@@ -77,6 +81,11 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
       lead_source: leadSource || undefined,
       label: label.trim() || null,
       glofox_member_id: glofoxId.trim() || null,
+    }
+    // DECISION #1 — persist the leaderboard opt-out (edit only; the flag is the
+    // inverse of the "Show on studio leaderboard" checkbox).
+    if (isEditing) {
+      payload.hr_leaderboard_opt_out = !showOnLeaderboard
     }
     // Tags only sent when provided so a blank input on edit doesn't
     // wipe existing tags. Edit-only — POST doesn't take tags today.
@@ -225,6 +234,24 @@ export default function ContactForm({ contact = null, onCancelHref = '/contacts'
             />
             <p className="text-[11px] text-un1t-muted mt-1">
               Adding a tag here also fires any sequence with trigger=&quot;Tag Added&quot;.
+            </p>
+          </div>
+        )}
+        {isEditing && (
+          <div>
+            <label className="flex items-center gap-2 text-sm text-un1t-text">
+              <input
+                type="checkbox"
+                checked={showOnLeaderboard}
+                onChange={e => setShowOnLeaderboard(e.target.checked)}
+                className="h-4 w-4 rounded border-un1t-border bg-un1t-bg"
+              />
+              Show on studio leaderboard
+            </label>
+            <p className="text-[11px] text-un1t-muted mt-1">
+              On by default. Uncheck to hide this member from the in-studio TV
+              leaderboard and challenge boards. Their heart-rate data still
+              records and still counts toward their own points.
             </p>
           </div>
         )}

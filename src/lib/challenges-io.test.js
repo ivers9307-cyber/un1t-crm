@@ -76,3 +76,30 @@ describe('computeCollective classes metric (attendance rule)', () => {
     expect(out).toEqual({ total: 2, target: 4, pct: 0.5 })
   })
 })
+
+// DECISION #1 (mig 348) — the PUBLIC challenge board passes excludeOptedOut:true
+// to hide members who opted out of the leaderboard. Their sessions still score
+// for THEM (the winner-announcing cron omits the flag → default false), so this
+// affects only the public render.
+describe('computeStandings leaderboard opt-out', () => {
+  const shown = { contact_id: 'a', effort_points: 500, zones_seconds: {}, contacts: { name: 'Sarah Kelly', hr_leaderboard_opt_out: false } }
+  const optedOut = { contact_id: 'b', effort_points: 900, zones_seconds: {}, contacts: { name: 'Mike Doyle', hr_leaderboard_opt_out: true } }
+
+  it('excludes opted-out members from the PUBLIC standings but keeps their data by default', async () => {
+    // Default (cron path): both members present — the opted-out member still
+    // scores and would still be the winner.
+    const included = await computeStandings(fakeDb([shown, optedOut]), { locationId: 'L', metric: 'points', fromIso: 'x', toIso: 'y' })
+    expect(included.map((r) => r.name)).toEqual(['Mike D.', 'Sarah K.'])
+
+    // Public path: opted-out member dropped from the rendered board.
+    const publicOut = await computeStandings(fakeDb([shown, optedOut]), { locationId: 'L', metric: 'points', fromIso: 'x', toIso: 'y', excludeOptedOut: true })
+    expect(publicOut.map((r) => r.name)).toEqual(['Sarah K.'])
+  })
+
+  it('opt-out also drops the member from the collective total on the public board', async () => {
+    const included = await computeCollective(fakeDb([shown, optedOut]), { locationId: 'L', metric: 'points', fromIso: 'x', toIso: 'y', target: 2000 })
+    expect(included.total).toBe(1400)
+    const publicOut = await computeCollective(fakeDb([shown, optedOut]), { locationId: 'L', metric: 'points', fromIso: 'x', toIso: 'y', target: 2000, excludeOptedOut: true })
+    expect(publicOut.total).toBe(500)
+  })
+})
