@@ -18,8 +18,8 @@ import { logWarn } from '@/lib/log'
 // (active_trial et al) — humanise() falls back to title-casing them.
 const STATUS_LABELS = {
   new_lead: 'New Lead',
-  first_class: '1st Class',
-  second_class: '2nd Class',
+  first_class: '1st Class Completed',
+  second_class: '2nd Class Completed',
   trial_done: 'Trial Done',
   converted: 'Converted',
   member: 'Member',
