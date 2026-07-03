@@ -20,7 +20,7 @@ export const DECLINE_REASONS = Object.freeze([
   ['other', 'Other'],
 ])
 
-const BOOKING_KINDS = new Set(['class_booking', 'event_booking', 'consultation'])
+export const BOOKING_KINDS = new Set(['class_booking', 'event_booking', 'consultation'])
 
 function firstName(ctx) {
   return (ctx && ctx.firstName) || 'there'

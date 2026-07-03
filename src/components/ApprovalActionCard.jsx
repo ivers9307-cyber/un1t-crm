@@ -9,7 +9,7 @@
 'use client'
 
 import { useState } from 'react'
-import { getNextSteps, buildDeclineDraft, DECLINE_REASONS } from '@shared/approvals-next-steps'
+import { getNextSteps, buildDeclineDraft, DECLINE_REASONS, BOOKING_KINDS } from '@shared/approvals-next-steps'
 import { approvalCardSummary, APPROVAL_KIND_LABELS } from '@shared/approval-cards'
 import SequencePicker from '@/components/SequencePicker'
 
@@ -32,14 +32,16 @@ export default function ApprovalActionCard({
 }) {
   const [busy, setBusy] = useState(null)          // 'approved' | 'declined' | 'saved' | null
   const [declineOpen, setDeclineOpen] = useState(false)
-  const [reason, setReason] = useState('class_full')
+  const [reason, setReason] = useState(BOOKING_KINDS.has(request.kind) ? 'class_full' : 'other')
   const [note, setNote] = useState('')
   const [error, setError] = useState(null)
   const [showSequencePicker, setShowSequencePicker] = useState(false)
 
+  // reason reflects local state; after a remount the decline reason resets to the default — accepted tradeoff (see plan Known non-goals), don't re-parse decision_note.
   const ctx = { firstName: contactFirstName, details: request.details, reason }
 
   async function decide(status) {
+    if (busy) return
     setBusy(status)
     setError(null)
     try {
@@ -78,6 +80,10 @@ export default function ApprovalActionCard({
   const decided = status !== 'pending'
   const steps = decided ? getNextSteps(request.kind, status, ctx) : []
   const kindLabel = APPROVAL_KIND_LABELS[request.kind] || 'Agent request'
+  // class_full / already_booked only make sense for booking-shaped requests.
+  const reasonOptions = BOOKING_KINDS.has(request.kind)
+    ? DECLINE_REASONS
+    : DECLINE_REASONS.filter(([k]) => k === 'not_eligible' || k === 'other')
 
   return (
     <div className="flex justify-center my-2">
@@ -99,7 +105,7 @@ export default function ApprovalActionCard({
               className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-600 text-white hover:bg-green-700 disabled:opacity-50">
               {busy === 'approved' ? 'Approving…' : 'Approve'}
             </button>
-            <button type="button" disabled={!!busy} onClick={() => setDeclineOpen(true)}
+            <button type="button" disabled={!!busy} onClick={() => { setDeclineOpen(true); setError(null) }}
               className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-un1t-border text-un1t-text hover:bg-un1t-border/30 disabled:opacity-50">
               Decline
             </button>
@@ -116,7 +122,7 @@ export default function ApprovalActionCard({
           <div className="mt-2.5 space-y-2">
             <select value={reason} onChange={e => setReason(e.target.value)}
               className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-2 py-1.5 text-xs text-un1t-text">
-              {DECLINE_REASONS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+              {reasonOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
             </select>
             <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)"
               className="w-full bg-un1t-bg border border-un1t-border rounded-lg px-2 py-1.5 text-xs text-un1t-text placeholder:text-un1t-muted" />
@@ -125,7 +131,7 @@ export default function ApprovalActionCard({
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 text-white hover:bg-red-700 disabled:opacity-50">
                 {busy === 'declined' ? 'Declining…' : 'Confirm decline'}
               </button>
-              <button type="button" onClick={() => setDeclineOpen(false)}
+              <button type="button" onClick={() => { setDeclineOpen(false); setError(null) }}
                 className="px-3 py-1.5 rounded-lg text-xs text-un1t-muted hover:text-un1t-text">
                 Back
               </button>
@@ -156,8 +162,9 @@ export default function ApprovalActionCard({
 
         {error && <p className="text-xs text-red-700 mt-1.5">{error}</p>}
 
+        {/* opens upward — the card usually sits at the bottom of a scroll-clipped thread */}
         {showSequencePicker && contactId && (
-          <div className="absolute left-0 right-0 top-full z-10 mt-1">
+          <div className="absolute left-0 right-0 bottom-full z-10 mb-1">
             <SequencePicker
               contactIds={[contactId]}
               locationId={locationId}
