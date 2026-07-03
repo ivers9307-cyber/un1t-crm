@@ -58,7 +58,8 @@ export const XERO_SCOPES = [
   'accounting.contacts',
   'accounting.invoices',
   'accounting.attachments',  // upload source doc onto the bill
-  'accounting.settings',     // GET /BrandingThemes for the "Car" theme
+  'accounting.settings',     // GET /BrandingThemes for the "Car" theme; GET /Accounts
+  'accounting.reports.read', // RCOV.P0 — GET /Reports/BankStatement (unreconciled lines)
   'offline_access',
 ]
 
