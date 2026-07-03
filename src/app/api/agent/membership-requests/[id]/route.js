@@ -3,11 +3,12 @@ import { z } from 'zod'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES } from '@/lib/schemas'
 
-// PATCH /api/agent/membership-requests/[id] — manager decides a queued
-// agent request. 'approved' + 'declined' apply to every kind; 'saved'
-// is the retention outcome on a cancellation (member kept).
+// PATCH /api/agent/membership-requests/[id] — staff decides a queued
+// agent request. Decision rights follow the comms surface (any staff
+// at the request's location — INBOX-APPROVALS, Richard 2026-07-03).
+// 'approved' + 'declined' apply to every kind; 'saved' is the
+// retention outcome on a cancellation (member kept).
 //
 // Pause/cancel: the actual Glofox change is made by staff manually
 // after approving (the Glofox API can't fully automate those yet).
@@ -28,12 +29,9 @@ export async function PATCH(request, { params }) {
   const { id } = await params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
   const db = createServerClient()
 
-  // Confirm the request belongs to a location this manager can act on.
+  // Confirm the request belongs to a location this user can act on.
   const { data: row } = await db.from('agent_membership_requests')
     .select('id, location_id, kind, status, details, contact_id, channel, conversation_id')
     .eq('id', id).maybeSingle()
