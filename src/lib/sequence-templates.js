@@ -324,7 +324,11 @@ export const SEQUENCE_TEMPLATES = [
     description: 'Fires when Glofox sends a membership.cancelled or membership.ended webhook (tags: glofox_membership_cancelled OR glofox_membership_ended). Three-touch comeback drip starting two days after cancellation: ask why, offer a return path, then a final discount. 180-day cooldown so the same ex-member doesn\'t keep getting cycled through.',
     trigger_type: 'tag_added',
     trigger_config: { tag: 'glofox_membership_cancelled' },
-    goal_config: { type: 'pipeline_stage', value: 'dormant' },
+    // FUNNEL.1 — goal is the win-back SUCCEEDING (rejoin stamps
+    // converted_at → 'converted'). The old 'dormant' goal inverted under
+    // the funnel classifier: ex_member → dormant IMMEDIATELY, so every
+    // enrolment would have goal-exited on the first tick before step 1.
+    goal_config: { type: 'pipeline_stage', value: 'converted' },
     re_enrolment_cooldown_days: 180,
     send_window: { start_hour: 10, end_hour: 18, skip_days: [0, 6] },
     steps: [
