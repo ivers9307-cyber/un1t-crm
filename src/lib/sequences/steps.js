@@ -307,10 +307,11 @@ export async function applyTagStep(db, { step, contact, sequence }) {
  * update_field step. Whitelisted fields only — operators can't
  * stamp arbitrary columns. Currently allows 'label' only.
  *
- * CLASSIFY.2: lead_status was removed from the whitelist. To move
- * a contact between pipeline stages use the move_pipeline_stage
- * step type instead — pipeline_stage_slug is trigger-derived from
- * deals.stage_id and must not be written directly by app code.
+ * CLASSIFY.2: lead_status was removed from the whitelist.
+ * FUNNEL.1: pipeline stages are classifier-derived and cannot be
+ * moved by sequences at all (the move_pipeline_stage step type was
+ * retired) — pipeline_stage_slug / deals.stage_id must never be
+ * written by sequence code.
  */
 export async function updateFieldStep(db, { step, contact }) {
   const WHITELIST = new Set(['label'])
@@ -542,101 +543,41 @@ export async function internalTaskStep(db, { step, contact, sequence }) {
   })
 }
 
-// ── move_pipeline_stage (GLOFOX4.3) ──────────────────────────────
+// ── move_pipeline_stage (GLOFOX4.3 — RETIRED, FUNNEL.1) ──────────
 //
-// Lets a sequence push a contact's open deal to a target pipeline
-// stage as part of an automated flow. Use case: "trial member has
-// attended 2 classes → move them to Conversion Ready AND email
-// them about membership". Pairs cleanly with the trial-transition
-// tags (GLOFOX4.2) on the trigger side.
+// Stage placement is classifier-derived (webhook + nightly cron); a
+// sequence step writing deals.stage_id fights the classifier and is
+// silently reverted by the next sync, so the step type was retired.
+// The builder palette + AI vocabulary no longer offer it; this
+// handler exists only for legacy step rows still on disk (at
+// retirement: two never-executed drafts targeting the extinct
+// 'conversion_ready' slug).
 //
-// Config:
-//   stage_slug (required) — the target pipeline_stages.slug at the
-//                            sequence's location (e.g. 'conversion_ready')
-//
-// Semantics:
-//   - No open deal → no-op (logged on the timeline as an info entry)
-//   - Already at target stage → no-op (logged)
-//   - Otherwise → UPDATE deals.stage_id AND log activity row
-//                 ("Pipeline: trial_active → conversion_ready ·
-//                  via sequence 'X'") so the operator can audit why.
-//
-// Idempotent — running the step twice with the same target is a
-// no-op the second time (the already-at-target branch).
+// It MUST resolve without throwing and MUST NOT write deals.stage_id.
+// The runner treats a thrown handler as a failed advance, and a step
+// that can never succeed wedges the enrolment on the same step
+// forever — exactly the failed-advance send-LOOP incident
+// (SEQ-LOOP-FIX: WhatsApp/SMS steps re-sent every ~10 min). A legacy
+// row must advance PAST this step, never retry it.
 export async function movePipelineStageStep(db, { step, contact, sequence }) {
-  const cfg = step.config || {}
-  const targetSlug = String(cfg.stage_slug || '').trim()
-  if (!targetSlug) {
-    throw new Error('move_pipeline_stage step: config.stage_slug is required')
-  }
-
-  // Lazy import to avoid a top-level circular dep — sequences/steps
-  // is imported transitively by glofox-sync via the trigger module
-  // (status_change cascade in updateFieldStep), and glofox-sync
-  // owns these helpers.
-  const { getOpenDealWithStage, findStageIdBySlug } = await import('../glofox-sync.js')
-
-  const locationId = sequence?.location_id || contact.location_id
-  const existing = await getOpenDealWithStage(db, contact.id)
-
   const seqLabel = sequence?.name ? `sequence "${sequence.name}"` : 'sequence'
+  const targetSlug = String(step?.config?.stage_slug || '').trim() || '(unset)'
 
-  if (!existing) {
-    // No open deal to move — log + continue. Don't throw: the
-    // sequence might also have an email step that's still useful
-    // for a contact without a pipeline entry yet.
+  // Timeline entry — this handler's existing no-op logging idiom — so
+  // an operator auditing the enrolment sees the step executed and why
+  // nothing moved. Best-effort: a logging failure must never block
+  // the advance (see the incident note above).
+  try {
     await db.from('activities').insert({
       contact_id: contact.id,
-      location_id: locationId,
+      location_id: sequence?.location_id || contact.location_id,
       kind: 'event',
       type: 'pipeline',
-      subject: `Pipeline move skipped (no open deal) — via ${seqLabel}`,
-      note: `Target stage was '${targetSlug}'. Sequence proceeded; no deal was modified.`,
+      subject: 'move_pipeline_stage retired (FUNNEL.1) — stage is classifier-derived; step skipped',
+      note: `Target stage was '${targetSlug}' — via ${seqLabel}. No deal was modified.`,
       done: false,
     })
-    return
-  }
-
-  if (existing.stage_slug === targetSlug) {
-    // Already at target — log a no-op so the operator sees the
-    // sequence actually executed this step (vs. silently skipping).
-    await db.from('activities').insert({
-      contact_id: contact.id,
-      location_id: locationId,
-      kind: 'event',
-      type: 'pipeline',
-      subject: `Pipeline already at ${targetSlug} — via ${seqLabel}`,
-      note: 'No move required; deal was already at the target stage.',
-      done: false,
-    })
-    return
-  }
-
-  const targetStageId = await findStageIdBySlug(db, locationId, targetSlug)
-  if (!targetStageId) {
-    throw new Error(`move_pipeline_stage step: target stage '${targetSlug}' not found at this location`)
-  }
-
-  const { error: moveErr } = await db
-    .from('deals')
-    .update({ stage_id: targetStageId })
-    .eq('id', existing.id)
-  if (moveErr) {
-    throw new Error(`move_pipeline_stage step: ${moveErr.message}`)
-  }
-
-  // Audit row on the contact timeline — same shape as
-  // logPipelineEvent's CRM-side moves so the activity feed
-  // surfaces both in one consistent format.
-  await db.from('activities').insert({
-    contact_id: contact.id,
-    location_id: locationId,
-    kind: 'event',
-    type: 'pipeline',
-    subject: `Pipeline: ${existing.stage_slug} → ${targetSlug}`,
-    note: `Moved by ${seqLabel}.`,
-    done: false,
-  })
+  } catch { /* best-effort logging only — never wedge the runner */ }
 }
 
 // ── glofox_provision (AUTOMATIONS Phase 1) ───────────────────────
@@ -651,7 +592,8 @@ export async function movePipelineStageStep(db, { step, contact, sequence }) {
 //
 // Config: none — uses the location's settings.glofox trial config.
 // `_findOrCreateGlofoxMember` is a test seam; production resolves the
-// real helper via dynamic import (mirrors movePipelineStageStep).
+// real helper via dynamic import (avoids a top-level circular dep
+// with the glofox modules).
 export async function glofoxProvisionStep(db, { contact, sequence, _findOrCreateGlofoxMember }) {
   const findOrCreate = _findOrCreateGlofoxMember
     || (await import('../glofox-push.js')).findOrCreateGlofoxMember

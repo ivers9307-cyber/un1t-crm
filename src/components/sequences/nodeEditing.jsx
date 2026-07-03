@@ -148,7 +148,15 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
         </>
       )
     case 'move_pipeline_stage':
-      return <Labeled label="Move to stage" hint="Pipeline stage slug, e.g. converted"><Text value={c.stage_slug} onChange={v => onPatch({ stage_slug: v })} placeholder="stage slug" /></Labeled>
+      // RETIRED (FUNNEL.1) — stage is classifier-derived and the runner
+      // skips this step. No config editor: legacy drafts render this
+      // notice instead so the operator knows to delete the node.
+      return (
+        <p className="text-xs text-un1t-subtle">
+          This step type was retired — pipeline stages are set automatically
+          by the classifier. The runner skips this step; you can delete it.
+        </p>
+      )
     case 'branch': {
       const p = c.predicate || {}
       const setPred = (patch) => onPatch({ predicate: { ...p, ...patch } })

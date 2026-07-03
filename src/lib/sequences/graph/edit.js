@@ -75,7 +75,8 @@ export function defaultConfigForType(type) {
     case 'update_field': return { field: '', value: '' }
     case 'internal_task': return { subject: '', note: '' }
     case 'webhook': return { url: '', method: 'POST' }
-    case 'move_pipeline_stage': return { stage_slug: '' }
+    // move_pipeline_stage intentionally absent — RETIRED (FUNNEL.1),
+    // never offered as a new node.
     case 'glofox_provision': return {}
     default: return {}
   }

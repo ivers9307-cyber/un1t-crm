@@ -17,7 +17,9 @@ export const NODE_STYLES = {
   internal_task: { icon: ClipboardList, chip: 'bg-sky-500/10 text-sky-700', label: 'Internal task' },
   webhook: { icon: Webhook, chip: 'bg-fuchsia-500/10 text-fuchsia-700', label: 'Webhook' },
   branch: { icon: GitBranch, chip: 'bg-purple-500/10 text-purple-700', label: 'Branch' },
-  move_pipeline_stage: { icon: ArrowRightCircle, chip: 'bg-emerald-500/10 text-emerald-700', label: 'Move pipeline' },
+  // RETIRED (FUNNEL.1) — not addable (see ADDABLE_TYPES); style kept so
+  // legacy drafts containing the node still render a labelled card.
+  move_pipeline_stage: { icon: ArrowRightCircle, chip: 'bg-un1t-border/50 text-un1t-subtle', label: 'Move pipeline (retired)' },
   glofox_provision: { icon: UserPlus, chip: 'bg-teal-500/10 text-teal-700', label: 'Create in Glofox' },
 }
 
@@ -27,8 +29,9 @@ export function styleForType(type) {
 
 // Types an operator can add in the linear builder. `branch` is excluded here —
 // branch authoring (two-lane wiring) lands in the next PR; existing branchy
-// graphs render read-only until then.
+// graphs render read-only until then. `move_pipeline_stage` was retired in
+// FUNNEL.1 (stage is classifier-derived; the executor no-ops).
 export const ADDABLE_TYPES = [
   'email', 'whatsapp', 'sms', 'wait',
-  'apply_tag', 'update_field', 'internal_task', 'move_pipeline_stage', 'glofox_provision', 'webhook',
+  'apply_tag', 'update_field', 'internal_task', 'glofox_provision', 'webhook',
 ]

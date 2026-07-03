@@ -8,10 +8,21 @@ export const CONFIG_NODE_TYPES = [
   'apply_tag', 'update_field', 'internal_task', 'webhook', 'branch', 'move_pipeline_stage', 'glofox_provision',
 ]
 // Order matters for the test + for stable UI listing.
+//
+// 'move_pipeline_stage' is RETIRED (FUNNEL.1): stage placement is
+// classifier-derived, the executor no-ops, and nothing offers it as a
+// NEW step (palette + AI vocabulary use ACTIVE_NODE_TYPES below). It
+// stays in NODE_TYPES because draft-save shape-checks the WHOLE graph
+// (parseGraphShape → z.enum(NODE_TYPES)) — dropping it would brick the
+// legacy drafts that still contain the node.
 export const NODE_TYPES = [
   'email', 'whatsapp', 'sms', 'wait',
   'apply_tag', 'update_field', 'internal_task', 'webhook', 'branch', 'move_pipeline_stage', 'glofox_provision',
 ]
+export const RETIRED_NODE_TYPES = ['move_pipeline_stage']
+// The offer-side vocabulary: what the builder palette + the AI agent
+// may create. Valid-but-retired types are excluded.
+export const ACTIVE_NODE_TYPES = NODE_TYPES.filter((t) => !RETIRED_NODE_TYPES.includes(t))
 
 // The engine's trigger vocabulary (triggers.js + cron-triggers.js). Kept as a
 // flat list; trigger-specific config is validated per-type in validate.js.

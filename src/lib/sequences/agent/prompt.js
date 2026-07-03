@@ -3,7 +3,9 @@
 // and the runner executes (via compileGraphToSteps). The agent's output is
 // shape-checked + validated with the SAME validateGraph the publish gate uses,
 // with a self-correct retry loop (see ./run.js). Nothing here calls the API.
-import { NODE_TYPES, CHANNEL_NODE_TYPES, TRIGGER_TYPES, TRIGGER_SOURCE_ID } from '../graph/schema.js'
+// ACTIVE_NODE_TYPES (not NODE_TYPES): the agent must never be offered
+// retired-but-still-parseable types (move_pipeline_stage, FUNNEL.1).
+import { ACTIVE_NODE_TYPES, CHANNEL_NODE_TYPES, TRIGGER_TYPES, TRIGGER_SOURCE_ID } from '../graph/schema.js'
 
 // JSON schema for the forced emit tool — intentionally permissive (the real
 // gate is validateGraph); it just shapes the structured output.
@@ -40,7 +42,7 @@ GRAPH SHAPE (emit via the emit_sequence_graph tool):
   "edges": [ { "from": "${TRIGGER_SOURCE_ID}", "to": "n1" }, { "from": "n1", "to": "n2" }, ... ]
 }
 
-NODE TYPES (${NODE_TYPES.join(', ')}). Channel/timing nodes are ${CHANNEL_NODE_TYPES.join(', ')}. Required config per type:
+NODE TYPES (${ACTIVE_NODE_TYPES.join(', ')}). Channel/timing nodes are ${CHANNEL_NODE_TYPES.join(', ')}. Required config per type:
 - email:   { subject } (required) and optionally { html_content } — plain HTML.
 - whatsapp:{ template_id } of an APPROVED template, plus { variables: { "1": "first_name", ... } } if it has placeholders.
 - sms:     { body } (required, short).
@@ -49,7 +51,6 @@ NODE TYPES (${NODE_TYPES.join(', ')}). Channel/timing nodes are ${CHANNEL_NODE_T
 - update_field:     { field, value }.
 - internal_task:    { subject } (+ optional note, due_offset_minutes).
 - webhook:          { url } (MUST be https), { method }.
-- move_pipeline_stage: { stage_slug } — one of new_lead, first_class, second_class, trial_done, converted, member, classpass, dormant.
 - glofox_provision: {} (no config). Creates the contact's Glofox account + attaches the studio trial. Use when the request is about registering/adding a new lead in Glofox (e.g. "when a new lead comes in, add them to Glofox with a trial").
 - branch:  { predicate } where predicate is { type:"has_tag", tag } OR { type:"field_equals", field, value } OR { type:"field_in", field, values:[...] }.
 

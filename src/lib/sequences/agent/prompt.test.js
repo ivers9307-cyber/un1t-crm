@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { EMIT_TOOL, buildAgentSystemPrompt, buildAgentUserMessage, buildFixMessage } from './prompt.js'
-import { NODE_TYPES, TRIGGER_SOURCE_ID } from '../graph/schema.js'
+import { ACTIVE_NODE_TYPES, TRIGGER_SOURCE_ID } from '../graph/schema.js'
 
 describe('flow agent prompt', () => {
   it('system prompt teaches the graph vocabulary + the structural rules', () => {
     const p = buildAgentSystemPrompt()
-    // every node type is described
-    for (const t of NODE_TYPES) expect(p).toContain(t)
+    // every ACTIVE node type is described; retired types (FUNNEL.1:
+    // move_pipeline_stage) must NOT be offered to the agent at all.
+    for (const t of ACTIVE_NODE_TYPES) expect(p).toContain(t)
+    expect(p).not.toContain('move_pipeline_stage')
     // the reserved trigger source id + the key rules
     expect(p).toContain(TRIGGER_SOURCE_ID)
     expect(p).toContain('EXACTLY TWO outgoing edges')

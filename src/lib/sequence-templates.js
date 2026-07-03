@@ -52,15 +52,16 @@ export const SEQUENCE_TEMPLATES = [
   // operator reviews copy, fills in any TODOs, then activates per
   // location.
   //
-  // The "move_pipeline_stage" step (GLOFOX4.3) lets these sequences
-  // graduate trial members along the funnel as they hit engagement
-  // signals — exactly the gap the operator flagged ("2/3 credits
-  // used → move to Conversion Ready").
+  // FUNNEL.1 — these templates are comms-only now. They used to open
+  // with a move_pipeline_stage step (GLOFOX4.3), but stage placement
+  // is classifier-derived: an engaged / credits-low trial classifies
+  // into its funnel column automatically, so the move was redundant
+  // (and would have been reverted by the next sync anyway).
   {
     id: 'glofox_trial_engaged_to_conversion',
     category: 'Lead conversion',
-    name: 'Trial engaged → move to Conversion Ready',
-    description: 'Fires when a trial member crosses 2 attended classes in the last 30 days (tag: glofox_trial_engaged). Moves the contact\'s pipeline deal to Conversion Ready AND sends an email + SMS asking if they\'re ready to talk membership. Use this to catch warm trials before their credits run out.',
+    name: 'Trial engaged → conversion push',
+    description: 'Fires when a trial member crosses 2 attended classes in the last 30 days (tag: glofox_trial_engaged). Sends an email + SMS asking if they\'re ready to talk membership — the funnel board already shows them in the right column (stage placement is automatic). Use this to catch warm trials before their credits run out.',
     trigger_type: 'tag_added',
     trigger_config: { tag: 'glofox_trial_engaged' },
     goal_config: null,
@@ -68,19 +69,10 @@ export const SEQUENCE_TEMPLATES = [
     send_window: { start_hour: 9, end_hour: 20, skip_days: [] },
     steps: [
       {
-        // First — move the deal so the operator sees the pipeline
-        // shift immediately on the Kanban. Idempotent: if the deal
-        // is already at conversion_ready (e.g. ClassPass PAYG)
-        // this step logs a no-op and the sequence continues.
-        step_type: 'move_pipeline_stage',
-        delay_days: 0,
-        delay_hours: 0,
-        config: { stage_slug: 'conversion_ready' },
-      },
-      {
-        // Small wait so the email doesn't land at the exact second
-        // the operator sees the Kanban move — keeps the operator
-        // narrative cleaner.
+        // Small wait so the email doesn't land the instant the tag
+        // fires — preserves the ~2h send timing this template had
+        // before its move_pipeline_stage step was retired (FUNNEL.1:
+        // the classifier places the contact automatically).
         step_type: 'wait',
         delay_days: 0,
         delay_hours: 2,
@@ -107,19 +99,13 @@ export const SEQUENCE_TEMPLATES = [
     id: 'glofox_trial_credits_low_push',
     category: 'Lead conversion',
     name: 'Trial credits low → conversion push',
-    description: 'Fires when a trial member\'s credits drop to ≤1 (tag: glofox_trial_credits_low). Moves to Conversion Ready and sends an SMS-first conversion push — "last class this week, let\'s talk membership". Pairs with the engagement template above; together they cover both "trying hard" and "running out of time" signals.',
+    description: 'Fires when a trial member\'s credits drop to ≤1 (tag: glofox_trial_credits_low). Sends an SMS-first conversion push — "last class this week, let\'s talk membership" (the funnel board places them automatically). Pairs with the engagement template above; together they cover both "trying hard" and "running out of time" signals.',
     trigger_type: 'tag_added',
     trigger_config: { tag: 'glofox_trial_credits_low' },
     goal_config: null,
     re_enrolment_cooldown_days: 365,
     send_window: { start_hour: 9, end_hour: 20, skip_days: [] },
     steps: [
-      {
-        step_type: 'move_pipeline_stage',
-        delay_days: 0,
-        delay_hours: 0,
-        config: { stage_slug: 'conversion_ready' },
-      },
       {
         step_type: 'sms',
         delay_days: 0,
