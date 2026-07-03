@@ -17,11 +17,11 @@ import {
   ActivityIndicator, Alert, Modal, TextInput, KeyboardAvoidingView,
   Platform, Image,
 } from 'react-native'
-import { useRouter, useFocusEffect } from 'expo-router'
+import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import {
-  weekStart, addDays, daysOfWeek, isoDate, DAY_LABELS,
+  weekStart, addDays, daysOfWeek, isoDate, parseIsoDate, DAY_LABELS,
   shortDate, timeRange, hoursBetween,
 } from '../../lib/dates'
 import {
@@ -294,8 +294,16 @@ export default function Schedule() {
   const { activeLocation, profile } = useAuth()
   const router = useRouter()
   const isTablet = useIsTablet()
-  const [anchor, setAnchor] = useState(() => weekStart(new Date()))
-  const [selected, setSelected] = useState(() => new Date())
+  // NOTIF.4 — optional `?date=YYYY-MM-DD` deep-link param (set by
+  // lib/notification-nav.js for schedule_published / schedule_updated /
+  // shift_adjusted pushes) preselects the affected week + day instead of
+  // landing on the current week. Absent/malformed values are ignored
+  // (parseIsoDate returns null → today). Normalised to a string so the
+  // sync effect below can key on a stable primitive.
+  const params = useLocalSearchParams()
+  const dateParam = typeof params.date === 'string' ? params.date : ''
+  const [anchor, setAnchor] = useState(() => weekStart(parseIsoDate(dateParam) || new Date()))
+  const [selected, setSelected] = useState(() => parseIsoDate(dateParam) || new Date())
   const [shifts, setShifts] = useState([])
   const [timeOff, setTimeOff] = useState([])
   const [loading, setLoading] = useState(true)
@@ -303,6 +311,16 @@ export default function Schedule() {
   const [error, setError] = useState(null)
   const [view, setView] = useState('me') // 'me' | 'team' | 'manage'
   const [manageRefreshKey, setManageRefreshKey] = useState(0)
+
+  // A push tap can re-target an already-mounted tab (router.push just
+  // updates the search params), so jump the visible week/day whenever the
+  // param changes — the initialisers above only cover first mount.
+  useEffect(() => {
+    const d = parseIsoDate(dateParam)
+    if (!d) return
+    setAnchor(weekStart(d))
+    setSelected(d)
+  }, [dateParam])
 
   const start = useMemo(() => isoDate(anchor), [anchor])
   const end = useMemo(() => isoDate(addDays(anchor, 6)), [anchor])

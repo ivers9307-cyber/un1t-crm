@@ -44,6 +44,16 @@ describe('routeForNotification', () => {
     }
   })
 
+  it('appends ?focus= for decision-queue types when the payload carries the entity id', () => {
+    expect(routeForNotification({ type: 'swap_open', swap_id: 's1' })).toBe('/approvals?focus=s1')
+    expect(routeForNotification({ type: 'swap_awaiting', swap_id: 's2' })).toBe('/approvals?focus=s2')
+    expect(routeForNotification({ type: 'time_off_inbound', request_id: 'r1' })).toBe('/approvals?focus=r1')
+    expect(routeForNotification({ type: 'expense_submitted', claim_id: 'c1' })).toBe('/approvals?focus=c1')
+    // Unsafe id shapes are dropped rather than built into the URL.
+    expect(routeForNotification({ type: 'swap_open', swap_id: 'a?b=c' })).toBe('/approvals')
+    expect(routeForNotification({ type: 'time_off_inbound', request_id: 42 })).toBe('/approvals')
+  })
+
   it('routes staff swap-response types to the dashboard (swap cards live there)', () => {
     for (const type of ['swap_inbound', 'swap_claimed', 'swap_accepted', 'swap_withdrawn', 'swap_declined']) {
       expect(routeForNotification({ type, swap_id: 's1' })).toBe('/(tabs)')
@@ -54,6 +64,21 @@ describe('routeForNotification', () => {
     for (const type of ['swap_decision', 'time_off_decision', 'schedule_published', 'schedule_updated', 'shift_adjusted']) {
       expect(routeForNotification({ type })).toBe('/(tabs)/schedule')
     }
+  })
+
+  it('appends ?date= for roster types when the payload carries the affected date', () => {
+    expect(routeForNotification({ type: 'schedule_published', start_date: '2026-07-06', end_date: '2026-07-12' }))
+      .toBe('/(tabs)/schedule?date=2026-07-06')
+    expect(routeForNotification({ type: 'schedule_updated', start_date: '2026-07-13', end_date: '2026-07-19' }))
+      .toBe('/(tabs)/schedule?date=2026-07-13')
+    expect(routeForNotification({ type: 'shift_adjusted', assignment_id: 'a1', block_date: '2026-07-10' }))
+      .toBe('/(tabs)/schedule?date=2026-07-10')
+    // Malformed dates fall back to the bare tab rather than a junk URL.
+    expect(routeForNotification({ type: 'schedule_published', start_date: 'next week' })).toBe('/(tabs)/schedule')
+    expect(routeForNotification({ type: 'shift_adjusted', block_date: '2026-7-1' })).toBe('/(tabs)/schedule')
+    // swap_decision / time_off_decision payloads carry no date — bare tab.
+    expect(routeForNotification({ type: 'time_off_decision', request_id: 'r1' })).toBe('/(tabs)/schedule')
+    expect(routeForNotification({ type: 'swap_decision', swap_id: 's1' })).toBe('/(tabs)/schedule')
   })
 
   it('routes WhatsApp health/template alerts to the WhatsApp tab', () => {

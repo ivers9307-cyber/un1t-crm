@@ -13,6 +13,18 @@ export function isoDate(d) {
   return `${y}-${m}-${day}`
 }
 
+// Parse a YYYY-MM-DD string into a local-time Date (midnight). Returns
+// null for anything malformed or impossible (e.g. 2026-02-31), so it's
+// safe to feed values arriving from route params / push payloads.
+// Deliberately NOT `new Date('YYYY-MM-DD')` — that parses as UTC
+// midnight and shifts a day in negative-offset timezones.
+export function parseIsoDate(str) {
+  if (typeof str !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(str)) return null
+  const [y, m, d] = str.split('-').map(Number)
+  const date = new Date(y, m - 1, d)
+  return isoDate(date) === str ? date : null
+}
+
 // Monday of the week containing `date` (Monday=0 ... Sunday=6 layout
 // matches the web schedule grid).
 export function weekStart(date) {

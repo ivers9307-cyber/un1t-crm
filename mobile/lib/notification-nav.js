@@ -15,6 +15,12 @@
 //     cards live on the personal dashboard (home tab), not /schedule.
 //   swap_open / swap_awaiting / time_off_inbound / expense_submitted — sent
 //     to managers/owners; their decision queue is the /approvals inbox.
+//     The payload id (swap_id / request_id / claim_id) equals the pending-
+//     approvals item id, so it rides along as ?focus= and the inbox
+//     highlights the matching card.
+//   schedule_published / schedule_updated / shift_adjusted — carry the
+//     affected date (start_date / block_date); ?date= preselects that
+//     week+day on the schedule tab instead of landing on the current week.
 //   instagram fallback — the WhatsApp tab is the unified inbox (it lists IG
 //     conversations too), and there is no /instagram index screen.
 //   wa_quality / number_health / flow_health / template_status — WhatsApp
@@ -23,6 +29,12 @@
 //   checklist_compliance — manager-side alert about a coach's checklist;
 //     there is no manager checklist surface on mobile, so land on home
 //     (the studio dashboard for managers).
+
+// Param guards — server payload fields become URL search params, so only
+// well-formed values are appended; anything else falls back to the bare
+// route rather than building a junk URL.
+const isIsoDay = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)
+const isSafeId = (s) => typeof s === 'string' && /^[A-Za-z0-9_-]+$/.test(s)
 
 export function routeForNotification(data) {
   if (!data?.type) return null
@@ -42,21 +54,23 @@ export function routeForNotification(data) {
       return '/(tabs)'
     case 'swap_open':      // manager: open swap posted
     case 'swap_awaiting':  // manager: swap awaiting approval
-      return '/approvals'
+      return isSafeId(data.swap_id) ? `/approvals?focus=${data.swap_id}` : '/approvals'
     case 'swap_decision':  // requester/taker: final decision — roster changed
       return '/(tabs)/schedule'
 
     // ── Time off ────────────────────────────────────────────────────
     case 'time_off_inbound': // manager: new request
-      return '/approvals'
-    case 'time_off_decision': // staff: approved/declined
+      return isSafeId(data.request_id) ? `/approvals?focus=${data.request_id}` : '/approvals'
+    case 'time_off_decision': // staff: approved/declined — payload has no
+      // date (only request_id + status), so no ?date preselect here.
       return '/(tabs)/schedule'
 
     // ── Roster (roster-notify, rosters republish, assignment adjust) ─
     case 'schedule_published':
     case 'schedule_updated':
+      return isIsoDay(data.start_date) ? `/(tabs)/schedule?date=${data.start_date}` : '/(tabs)/schedule'
     case 'shift_adjusted':
-      return '/(tabs)/schedule'
+      return isIsoDay(data.block_date) ? `/(tabs)/schedule?date=${data.block_date}` : '/(tabs)/schedule'
 
     // ── Leads (POST /api/contacts) ──────────────────────────────────
     case 'lead_new':
@@ -84,7 +98,7 @@ export function routeForNotification(data) {
 
     // ── FTE expenses (expenses submit/approve/decline) ──────────────
     case 'expense_submitted': // owner: awaiting approval
-      return '/approvals'
+      return isSafeId(data.claim_id) ? `/approvals?focus=${data.claim_id}` : '/approvals'
     case 'expense_approved':
     case 'expense_declined':
       return data.claim_id ? `/expenses/${data.claim_id}` : '/(tabs)/expenses'
