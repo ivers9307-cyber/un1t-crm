@@ -32,6 +32,7 @@ import { formatLastSeen } from '@/lib/person-view'
 // CONSULTATIONS SP1 — coach/web surface (mig 272 tables), permission-gated.
 import ContactGoalsCard from '@/components/ContactGoalsCard'
 import ConsultationsList from '@/components/ConsultationsList'
+import SendKudosCard from '@/components/SendKudosCard'
 import ProgressPhotos from '@/components/ProgressPhotos'
 import InBodyProgress from '@/components/InBodyProgress'
 
@@ -267,6 +268,7 @@ export default async function ContactDetailPage(props) {
 
     consultationsTab = (
       <div className="space-y-5">
+        <SendKudosCard contactId={contact.id} />
         <ContactGoalsCard contactId={contact.id} goals={contactGoals} />
         <ConsultationsList
           contactId={contact.id}
