@@ -13,14 +13,10 @@ import {
 } from '@/lib/schemas'
 import {
   WEB_PERMISSIONS as allPermissions,
-  DEFAULT_WEB_PERMISSIONS_BY_ROLE as defaultPermissionsByRole,
   isFeatureGatedByLocation,
   MOBILE_PERMISSIONS as allMobilePermissions,
-  DEFAULT_MOBILE_PERMISSIONS_BY_ROLE as defaultMobilePermissionsByRole,
+  hydratePermissions,
 } from '@shared/permissions'
-
-const defaultPermissions = defaultPermissionsByRole.staff
-const defaultMobilePermissions = defaultMobilePermissionsByRole.staff
 
 const ROLE_LABELS = {
   owner: 'Owner / Studio Admin',
@@ -71,24 +67,19 @@ export default function StaffForm({
   // the per-location override is explicit (even if it matches the
   // default at write time — keeps StaffForm's UX simple).
   function defaultPermsForRole(role) {
-    const web = defaultPermissionsByRole[role] || defaultPermissions
-    const mob = defaultMobilePermissionsByRole[role] || defaultMobilePermissions
-    return { ...web, mobile: { ...mob } }
+    return hydratePermissions(null, role)
   }
 
-  // Hydrate per-assignment permissions from the staff payload. If the
-  // server returned the assignment with a non-empty permissions blob,
-  // use that. Empty {} → fall back to role defaults so toggles render
-  // truthfully (admin sees what the user effectively gets, can flip
-  // individual ones to override).
+  // Hydrate per-assignment permissions from the staff payload via the
+  // shared canonical helper (also used by the mobile editor): role
+  // defaults for the assignment's CURRENT role are merged UNDER the
+  // stored blob — web keys AND the mobile sub-object — so toggles
+  // render the effective state even for keys added after the blob was
+  // saved (PR #754 Q1). Stored explicit values always win; the save
+  // then writes the full explicit blob.
   const initialAssignments = (staff?.assignments || []).map(a => ({
     ...a,
-    permissions: a.permissions && Object.keys(a.permissions).length > 0
-      ? {
-          ...a.permissions,
-          mobile: { ...(a.permissions.mobile || defaultMobilePermissionsByRole[a.role] || defaultMobilePermissions) },
-        }
-      : defaultPermsForRole(a.role),
+    permissions: hydratePermissions(a.permissions, a.role),
   }))
 
   const [form, setForm] = useState({

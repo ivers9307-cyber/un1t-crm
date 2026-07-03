@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   resolvePermission,
+  hydratePermissions,
   DEFAULT_WEB_PERMISSIONS_BY_ROLE,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
 } from './permissions.js'
@@ -185,5 +186,57 @@ describe('resolvePermission — order of resolution', () => {
       defaults: DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
       key: 'schedule',
     })).toBe(true)
+  })
+})
+
+// PR #754 Q1 — editor hydration. Both permission editors (web
+// StaffForm.jsx + mobile staff/permissions/[id].jsx) hydrate stored
+// blobs through this helper: role defaults merge UNDER stored values
+// so a key added after the blob was saved renders at its effective
+// (role-default) state instead of a phantom OFF. The hydrated blob is
+// what saves write back, so these semantics ARE the save semantics.
+describe('hydratePermissions — role defaults merged under the stored blob', () => {
+  it('empty / null / undefined blob → the role full web+mobile default blob', () => {
+    const expected = {
+      ...DEFAULT_WEB_PERMISSIONS_BY_ROLE.staff,
+      mobile: { ...DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.staff },
+    }
+    expect(hydratePermissions({}, 'staff')).toEqual(expected)
+    expect(hydratePermissions(null, 'staff')).toEqual(expected)
+    expect(hydratePermissions(undefined, 'staff')).toEqual(expected)
+  })
+
+  it('missing keys hydrate to the role default; stored explicit values (true AND false) win', () => {
+    const out = hydratePermissions(
+      { email: true, pipeline: false, mobile: { notify_lead: true, schedule: false } },
+      'staff'
+    )
+    expect(out.email).toBe(true)                 // explicit true beats staff default false
+    expect(out.pipeline).toBe(false)             // explicit false beats staff default true
+    expect(out.mobile.notify_lead).toBe(true)    // explicit true beats staff default false
+    expect(out.mobile.schedule).toBe(false)      // explicit false beats staff default true
+    expect(out.contacts).toBe(DEFAULT_WEB_PERMISSIONS_BY_ROLE.staff.contacts)
+    expect(out.mobile.notify_time_off).toBe(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.staff.notify_time_off)
+  })
+
+  it('role-default OFF + missing key hydrates to OFF', () => {
+    expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.staff.notify_checklist_compliance).toBe(false) // guard the premise
+    const out = hydratePermissions({ mobile: { schedule: true } }, 'staff')
+    expect(out.mobile.notify_checklist_compliance).toBe(false)
+  })
+
+  it('uses the role passed in, so the CURRENT role drives the defaults', () => {
+    const owner = hydratePermissions({ mobile: {} }, 'owner')
+    const staff = hydratePermissions({ mobile: {} }, 'staff')
+    expect(owner.mobile.notify_issue_submitted).toBe(true)
+    expect(staff.mobile.notify_issue_submitted).toBe(false)
+  })
+
+  it('never mutates the stored blob (fresh objects for blob + .mobile)', () => {
+    const raw = { pipeline: false, mobile: { schedule: false } }
+    const out = hydratePermissions(raw, 'staff')
+    out.pipeline = true
+    out.mobile.schedule = true
+    expect(raw).toEqual({ pipeline: false, mobile: { schedule: false } })
   })
 })

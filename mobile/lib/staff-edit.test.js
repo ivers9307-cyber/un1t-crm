@@ -131,21 +131,61 @@ describe('hydratePermissions (C2c-ii)', () => {
     expect(hydratePermissions(undefined, 'manager')).toEqual(expected)
   })
 
-  it('non-empty blob is used as-is, with .mobile hydrated from role defaults when absent', () => {
+  it('non-empty blob: stored values win, missing keys hydrate from role defaults (web + mobile)', () => {
     const out = hydratePermissions({ pipeline: false, contacts: true }, 'staff')
     expect(out.pipeline).toBe(false)
     expect(out.contacts).toBe(true)
     expect(out.mobile).toEqual(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.staff)
   })
 
-  it('preserves an explicit .mobile sub-object (does not overwrite with defaults)', () => {
+  // PR #754 Q1 — the phantom-OFF fix. A blob saved before a notify_*
+  // key existed must render that toggle at its role-default effective
+  // value, not a silent "off".
+  it('missing mobile key in a PARTIAL .mobile blob hydrates to the role default', () => {
     const out = hydratePermissions({ pipeline: true, mobile: { schedule: false } }, 'staff')
-    expect(out.mobile).toEqual({ schedule: false })
+    // schedule: stored explicit false survives (staff default is true)
+    expect(out.mobile.schedule).toBe(false)
+    // notify_expense_approved: missing → staff role default (true)
+    expect(out.mobile.notify_expense_approved).toBe(true)
+    // every default key is present alongside the stored override
+    expect(out.mobile).toEqual({ ...DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.staff, schedule: false })
   })
 
-  it('does NOT back-fill sparse web keys (mirrors web — no over-hydration)', () => {
-    const out = hydratePermissions({ pipeline: true, mobile: { schedule: true } }, 'staff')
-    expect(out.contacts).toBeUndefined()
+  it('stored explicit false survives a role default of true', () => {
+    expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.manager.notify_lead).toBe(true) // guard the premise
+    const out = hydratePermissions({ mobile: { notify_lead: false } }, 'manager')
+    expect(out.mobile.notify_lead).toBe(false)
+  })
+
+  it('stored explicit true survives a role default of false', () => {
+    expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.staff.notify_whatsapp).toBe(false) // guard the premise
+    const out = hydratePermissions({ mobile: { notify_whatsapp: true } }, 'staff')
+    expect(out.mobile.notify_whatsapp).toBe(true)
+  })
+
+  it('role-default OFF + missing key hydrates to OFF (the one real behaviour change on save)', () => {
+    expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.staff.notify_bookings).toBe(false) // guard the premise
+    const out = hydratePermissions({ mobile: { schedule: true } }, 'staff')
+    expect(out.mobile.notify_bookings).toBe(false)
+  })
+
+  it('back-fills sparse web keys from role defaults (stored web values still win)', () => {
+    const out = hydratePermissions({ pipeline: false, mobile: { schedule: true } }, 'staff')
+    expect(out.pipeline).toBe(false)                                   // stored wins
+    expect(out.contacts).toBe(DEFAULT_WEB_PERMISSIONS_BY_ROLE.staff.contacts) // missing → default
+    expect(out.email).toBe(DEFAULT_WEB_PERMISSIONS_BY_ROLE.staff.email)       // default-OFF stays OFF
+  })
+
+  it('hydrates from the CURRENT role passed in (a promoted user picks up the new role defaults)', () => {
+    const out = hydratePermissions({ mobile: { schedule: true } }, 'manager')
+    expect(out.mobile.notify_expense_submitted).toBe(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.manager.notify_expense_submitted)
+    expect(out.whatsapp).toBe(DEFAULT_WEB_PERMISSIONS_BY_ROLE.manager.whatsapp)
+  })
+
+  it('preserves non-boolean extras riding on the blob (mobile.lead_time_overrides)', () => {
+    const overrides = { tasks: [60] }
+    const out = hydratePermissions({ mobile: { lead_time_overrides: overrides } }, 'staff')
+    expect(out.mobile.lead_time_overrides).toEqual(overrides)
   })
 })
 

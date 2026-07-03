@@ -662,6 +662,47 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   },
 })
 
+// ============================================================
+// Editor hydration
+//
+// Single canonical hydration for the two permission editors —
+// web StaffForm.jsx and mobile staff/permissions/[id].jsx. Turns
+// a stored per-assignment blob into a FULL truthful blob for
+// display + save: role defaults are merged UNDER the stored
+// values, for both the flat web keys and the `.mobile` sub-object.
+//
+// Why merge-under (PR #754 Q1): resolvePermission (tier 3) and the
+// push gate (src/lib/push.js — suppresses only an EXPLICIT false)
+// both treat a MISSING key as "role default applies" / "send". A
+// blob saved before a key existed therefore rendered as OFF in the
+// editors (falsy read of a missing key) while the server behaved
+// as the role default — a phantom "shows OFF but is ON". Hydrating
+// missing keys from the CURRENT role's defaults makes the toggles
+// show the effective state, and the next save writes the full
+// explicit blob (explicit value == role default is behaviourally
+// identical to missing for both resolvePermission and the push
+// gate's defaulted-ON categories).
+//
+// Stored explicit values ALWAYS win — only genuinely-missing keys
+// pick up the role default. Non-boolean extras riding on the blob
+// (e.g. `mobile.lead_time_overrides`) are preserved by the spread.
+// An empty/null blob (the "use role defaults" sentinel) hydrates
+// to the role's full default blob. Unknown roles hydrate nothing
+// (missing keys stay missing → toggles show OFF, matching
+// resolvePermission's false for an unknown role).
+//
+// @param {object|null|undefined} rawPermissions  stored profile_locations.permissions blob
+// @param {string} role  the assignment's CURRENT per-location role
+// @returns {object} a full { ...web, mobile: { ...mobile } } blob
+// ============================================================
+
+export function hydratePermissions(rawPermissions, role) {
+  const web = DEFAULT_WEB_PERMISSIONS_BY_ROLE[role] || {}
+  const mob = DEFAULT_MOBILE_PERMISSIONS_BY_ROLE[role] || {}
+  const raw = rawPermissions || {}
+  return { ...web, ...raw, mobile: { ...mob, ...(raw.mobile || {}) } }
+}
+
 // Cross-platform dashboard keys — top-level on profiles.permissions,
 // not nested under mobile.* . Listed here so the parity linter knows
 // they're shared by design (no webEquivalent needed since they ARE
