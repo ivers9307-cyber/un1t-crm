@@ -5,7 +5,7 @@
 // fires a WhatsApp confirm on source='meta_book'). Class enqueues to the async
 // pipeline (POST /api/public/class-booking) → the cron books + WhatsApp-confirms.
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 
 const CONSULT_SLUG = 'free-un1t-consultation'
@@ -32,6 +32,29 @@ export default function StartFunnel() {
   const [error, setError] = useState(null)
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }))
+
+  // Ad-click attribution (ADS-REPORT.2) — capture UTM/meta ad params from the
+  // landing URL on mount, client-side only (never during SSR). Held in a ref
+  // (not state) so it doesn't trigger a re-render; read once at submit time.
+  const attributionRef = useRef(null)
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search)
+    attributionRef.current = {
+      utm_campaign: p.get('utm_campaign') || undefined,
+      utm_content: p.get('utm_content') || undefined,
+      utm_term: p.get('utm_term') || undefined,
+      meta_ad_id: p.get('meta_ad_id') || undefined,
+    }
+  }, [])
+
+  function buildAttribution() {
+    const p = attributionRef.current || {}
+    const hasSignal = p.meta_ad_id || p.utm_campaign || p.utm_content || p.utm_term
+    return hasSignal ? {
+      utm_campaign: p.utm_campaign, utm_content: p.utm_content, utm_term: p.utm_term,
+      ad_provider: 'meta', ad_external_id: p.meta_ad_id,
+    } : undefined
+  }
 
   // Consultation: load the event once chosen.
   useEffect(() => {
@@ -109,6 +132,7 @@ export default function StartFunnel() {
           customer_name: `${form.first_name.trim()} ${form.last_name.trim()}`.trim(),
           customer_email: form.email.trim(), customer_phone: form.phone.trim(),
           marketing_consent: form.consent, source: 'meta_book',
+          attribution: buildAttribution(),
         }),
       })
       const j = await r.json().catch(() => ({}))
@@ -127,6 +151,7 @@ export default function StartFunnel() {
           event_id: c.event_id, class_name: c.name, starts_at: c.starts_at,
           first_name: form.first_name.trim(), last_name: form.last_name.trim(),
           email: form.email.trim(), phone: form.phone.trim(), consent: form.consent,
+          attribution: buildAttribution(),
         }),
       })
       const j = await r.json().catch(() => ({}))

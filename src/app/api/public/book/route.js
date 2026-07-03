@@ -22,6 +22,16 @@ const BookingSchema = z.object({
   // preserve back-compat for any older form deployments still in
   // a customer's browser cache.
   marketing_consent: z.boolean().optional(),
+  // ADS-REPORT.2 — optional first-touch ad-click attribution captured by the
+  // /start funnel from the landing URL's UTM/meta_ad_id params. Low-trust:
+  // sanitised + length-capped before it ever reaches the DB (see below).
+  attribution: z.object({
+    utm_campaign: z.string().max(200).optional(),
+    utm_content: z.string().max(200).optional(),
+    utm_term: z.string().max(200).optional(),
+    ad_provider: z.string().max(50).optional(),
+    ad_external_id: z.string().max(200).optional(),
+  }).optional(),
 })
 
 // POST /api/public/book — Public: create a booking
@@ -176,6 +186,24 @@ export async function POST(request) {
       await writeContactTag(db, { contactId: data.contact_id, locationId: data.location_id, tag: 'stillorgan-start' })
     }
   } catch (e) { logWarn('book', 'meta_book attribution failed', { err: e }) }
+
+  // ADS-REPORT.2 — first-touch ad-click attribution (stamp-if-null). Marketing
+  // params are low-trust: sanitised + length-capped. Only stamp when a real ad
+  // signal is present so organic /start visitors never get ad_provider='meta'.
+  try {
+    if (data?.contact_id) {
+      const a = body.attribution || {}
+      const patch = {}
+      for (const k of ['utm_campaign', 'utm_content', 'utm_term', 'ad_external_id']) {
+        if (a[k] && String(a[k]).length <= 200) patch[k] = String(a[k])
+      }
+      if (Object.keys(patch).length) {
+        if (a.ad_provider && String(a.ad_provider).length <= 50) patch.ad_provider = String(a.ad_provider)
+        patch.attributed_at = new Date().toISOString()
+        await db.from('contacts').update(patch).eq('id', data.contact_id).is('ad_external_id', null)
+      }
+    }
+  } catch (e) { logWarn('attribution', 'utm persist failed', { err: e }) }
 
   // CAPI: /start consult bookings emit website Lead + Schedule (booking-keyed
   // event_ids so retries dedupe at Meta). meta_book only — this route serves

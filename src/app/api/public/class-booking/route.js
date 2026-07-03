@@ -24,6 +24,16 @@ const Schema = z.object({
   email: z.string().trim().email().max(320),
   phone: z.string().trim().min(1).max(50).refine(isValidMobileNumber, 'Enter a valid mobile number'),
   consent: z.boolean().refine((v) => v === true, { message: 'Please tick consent to continue' }),
+  // ADS-REPORT.2 — optional first-touch ad-click attribution captured by the
+  // /start funnel from the landing URL's UTM/meta_ad_id params. Low-trust:
+  // sanitised + length-capped before it ever reaches the DB (see below).
+  attribution: z.object({
+    utm_campaign: z.string().max(200).optional(),
+    utm_content: z.string().max(200).optional(),
+    utm_term: z.string().max(200).optional(),
+    ad_provider: z.string().max(50).optional(),
+    ad_external_id: z.string().max(200).optional(),
+  }).optional(),
 })
 
 export async function POST(request) {
@@ -65,6 +75,21 @@ export async function POST(request) {
   if (!contactId) return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
 
   try { await db.from('contacts').update({ lead_source: 'meta_book' }).eq('id', contactId).is('lead_source', null) } catch (e) { logWarn('classbook', 'lead_source failed', { err: e }) }
+  // ADS-REPORT.2 — first-touch ad-click attribution (stamp-if-null). Marketing
+  // params are low-trust: sanitised + length-capped. Only stamp when a real ad
+  // signal is present so organic /start visitors never get ad_provider='meta'.
+  try {
+    const a = b.attribution || {}
+    const patch = {}
+    for (const k of ['utm_campaign', 'utm_content', 'utm_term', 'ad_external_id']) {
+      if (a[k] && String(a[k]).length <= 200) patch[k] = String(a[k])
+    }
+    if (Object.keys(patch).length) {
+      if (a.ad_provider && String(a.ad_provider).length <= 50) patch.ad_provider = String(a.ad_provider)
+      patch.attributed_at = new Date().toISOString()
+      await db.from('contacts').update(patch).eq('id', contactId).is('ad_external_id', null)
+    }
+  } catch (e) { logWarn('attribution', 'utm persist failed', { err: e }) }
   try { await writeContactTag(db, { contactId, locationId, tag: 'stillorgan-start' }) } catch (e) { logWarn('classbook', 'tag failed', { err: e }) }
   try {
     const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
