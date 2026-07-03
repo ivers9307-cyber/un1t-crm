@@ -29,19 +29,25 @@ const ZONE_BG = {
   5: '#b91c1c', // red
 }
 
-export default function LiveTvClient({ locationId }) {
+export default function LiveTvClient({ locationId, endpoint }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [now, setNow] = useState(new Date())
   const [kiosk] = useState(() => typeof window !== 'undefined' && isKioskParam(window.location.search))
   const [failures, setFailures] = useState(0)
 
+  // P0-3: the data URL. Defaults to the location-keyed endpoint (unchanged for
+  // the live /tv/[locationId] TV). The token-gated /tv/live/[token] page passes
+  // an explicit `endpoint` so the same client polls /api/public/tv-live/[token]
+  // instead. Same payload either way — the client is agnostic to which it hits.
+  const dataUrl = endpoint || `/api/public/live/${locationId}`
+
   // Poll the public endpoint.
   useEffect(() => {
     let cancelled = false
     async function tick() {
       try {
-        const res = await fetch(`/api/public/live/${locationId}`, { cache: 'no-store' })
+        const res = await fetch(dataUrl, { cache: 'no-store' })
         const json = await res.json()
         if (cancelled) return
         if (!res.ok || !json.ok) throw new Error(json.error || 'Live fetch failed')
@@ -58,7 +64,7 @@ export default function LiveTvClient({ locationId }) {
     tick()
     const t = setInterval(tick, POLL_MS)
     return () => { cancelled = true; clearInterval(t) }
-  }, [locationId])
+  }, [dataUrl])
 
   // Screen Wake Lock (kiosk only) — prevents display sleep on the Pi.
   useEffect(() => {

@@ -19,12 +19,18 @@ export function countsAsAttendance(session) {
   return session?.glofox_event_id != null && src !== 'participation' && src !== 'manual'
 }
 
-async function loadWindowSessions(db, { locationId, fromIso, toIso }) {
+// DECISION #1 (mig 348): `excludeOptedOut` drops sessions whose member has
+// opted out of the PUBLIC HR leaderboard. The public challenge board passes
+// true (hide them from the rendered standings/gym board); the run-challenge-
+// events cron leaves it false — an opted-out member still SCORES and can still
+// win/contribute, they are only hidden from the public render. We embed the
+// flag either way (cheap) and filter only when asked.
+async function loadWindowSessions(db, { locationId, fromIso, toIso, excludeOptedOut = false }) {
   const out = []
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await db
       .from('heart_rate_sessions')
-      .select('contact_id, source, glofox_event_id, effort_points, zones_seconds, contacts!heart_rate_sessions_contact_id_fkey(name)')
+      .select('contact_id, source, glofox_event_id, effort_points, zones_seconds, contacts!heart_rate_sessions_contact_id_fkey(name, hr_leaderboard_opt_out)')
       .eq('location_id', locationId)
       .not('contact_id', 'is', null)
       .not('ended_at', 'is', null)
@@ -37,11 +43,11 @@ async function loadWindowSessions(db, { locationId, fromIso, toIso }) {
     if (!data || data.length < PAGE) break
     if (out.length >= HARD_LIMIT) break
   }
-  return out
+  return excludeOptedOut ? out.filter((s) => !s.contacts?.hr_leaderboard_opt_out) : out
 }
 
-export async function computeStandings(db, { locationId, metric, fromIso, toIso }) {
-  const sessions = await loadWindowSessions(db, { locationId, fromIso, toIso })
+export async function computeStandings(db, { locationId, metric, fromIso, toIso, excludeOptedOut = false }) {
+  const sessions = await loadWindowSessions(db, { locationId, fromIso, toIso, excludeOptedOut })
   const byContact = new Map()
   for (const s of sessions) {
     const cur = byContact.get(s.contact_id) || { contactId: s.contact_id, value: 0, c: s.contacts }
@@ -62,8 +68,8 @@ export async function computeStandings(db, { locationId, metric, fromIso, toIso 
   return rankStandings(rows)
 }
 
-export async function computeCollective(db, { locationId, metric, fromIso, toIso, target }) {
-  const sessions = await loadWindowSessions(db, { locationId, fromIso, toIso })
+export async function computeCollective(db, { locationId, metric, fromIso, toIso, target, excludeOptedOut = false }) {
+  const sessions = await loadWindowSessions(db, { locationId, fromIso, toIso, excludeOptedOut })
   const contribute = metric === 'classes'
     ? (s) => (countsAsAttendance(s) ? 1 : 0)
     : (s) => metricValue(s, metric)

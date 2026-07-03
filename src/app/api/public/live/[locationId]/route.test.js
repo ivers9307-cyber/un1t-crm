@@ -25,7 +25,7 @@ const PAGE = 1000
 
 // Build a mock supabase client whose `hr_samples` select honours `.range(from,to)`
 // over a synthetic sample array, so selectAll's paging loop is exercised for real.
-function makeDb({ samples }) {
+function makeDb({ samples, sessions }) {
   // Terminal chain for hr_samples: .select().in().[gte()].order().range(from,to)
   function hrSamplesQuery() {
     // `.order()` is awaitable and, like a real un-paged select, returns only the
@@ -44,15 +44,16 @@ function makeDb({ samples }) {
     return chain
   }
 
-  const sessionRow = {
+  const defaultSession = {
     id: 'sess-1',
     contact_id: 'c-1',
     device_identifier: null,
     started_at: '2026-07-02T09:00:00Z',
     max_hr_used: 190,
     last_sample_at: new Date().toISOString(),
-    contacts: { id: 'c-1', name: 'Alice Smith', location_id: 'loc-1' },
+    contacts: { id: 'c-1', name: 'Alice Smith', location_id: 'loc-1', hr_leaderboard_opt_out: false },
   }
+  const sessionRows = sessions || [defaultSession]
 
   return {
     rpc: vi.fn(() => Promise.resolve({ data: 1, error: null })), // rate_limit_hit → count 1
@@ -64,7 +65,7 @@ function makeDb({ samples }) {
         return { select: () => ({ eq: () => Promise.resolve({ data: [], error: null }) }) }
       }
       if (table === 'heart_rate_sessions') {
-        return { select: () => ({ eq: () => ({ is: () => ({ order: () => Promise.resolve({ data: [sessionRow], error: null }) }) }) }) }
+        return { select: () => ({ eq: () => ({ is: () => ({ order: () => Promise.resolve({ data: sessionRows, error: null }) }) }) }) }
       }
       if (table === 'class_timer_runs') {
         return { select: () => ({ eq: () => ({ in: () => ({ order: () => ({ limit: () => ({ maybeSingle: () => Promise.resolve({ data: null, error: null }) }) }) }) }) }) }
@@ -114,5 +115,28 @@ describe('GET /api/public/live/[locationId]', () => {
     db.rpc = vi.fn(() => Promise.resolve({ data: 100000, error: null }))
     const res = await callRoute(db)
     expect(res.status).toBe(429)
+  })
+
+  // DECISION #1 (mig 348) — opted-out members are dropped from the public tiles;
+  // opted-in members and anonymous (null-contact) walk-ins are kept.
+  it('excludes opted-out members from the tiles, keeps opted-in + anonymous walk-ins', async () => {
+    const base = Date.parse('2026-07-02T09:00:00Z')
+    const samples = []
+    for (const sid of ['shown', 'anon']) {
+      for (let i = 0; i < 3; i++) samples.push({ session_id: sid, recorded_at: new Date(base + i * 1000).toISOString(), bpm: 150 })
+    }
+    const sessions = [
+      { id: 'shown', contact_id: 'c-shown', device_identifier: null, started_at: '2026-07-02T09:00:00Z', max_hr_used: 190, last_sample_at: new Date().toISOString(), contacts: { id: 'c-shown', name: 'Alice Smith', location_id: 'loc-1', hr_leaderboard_opt_out: false } },
+      { id: 'hidden', contact_id: 'c-hidden', device_identifier: null, started_at: '2026-07-02T09:01:00Z', max_hr_used: 190, last_sample_at: new Date().toISOString(), contacts: { id: 'c-hidden', name: 'Bob Jones', location_id: 'loc-1', hr_leaderboard_opt_out: true } },
+      { id: 'anon', contact_id: null, device_identifier: 'ant:45075', started_at: '2026-07-02T09:02:00Z', max_hr_used: 190, last_sample_at: new Date().toISOString(), contacts: null },
+    ]
+    const db = makeDb({ samples, sessions })
+    const res = await callRoute(db)
+    const body = await res.json()
+    expect(body.ok).toBe(true)
+    const ids = body.sessions.map((s) => s.id)
+    expect(ids).toContain('shown')
+    expect(ids).toContain('anon')      // anonymous walk-in unaffected
+    expect(ids).not.toContain('hidden') // opted-out member dropped
   })
 })

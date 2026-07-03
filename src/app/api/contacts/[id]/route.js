@@ -20,6 +20,10 @@ const ContactUpdateSchema = z.object({
   glofox_member_id: z.string().max(100).nullable().optional(),
   trial_credits_remaining: z.number().int().min(0).max(100).optional(),
   lead_source: leadSourceSchema.optional(),
+  // DECISION #1 (mig 348) — opt this member out of the public HR leaderboard /
+  // studio TV. Shown by default (false); set true to hide. Exposed here so the
+  // CRM edit form (and, later, a champ-app member-facing toggle) can write it.
+  hr_leaderboard_opt_out: z.boolean().optional(),
   // tags is a TEXT[] in Postgres. Frontend code that wants to "add a tag"
   // fetches current tags, appends, and PUTs the full new array. Sequence
   // tag_added triggers (sequences.js) fire on the set difference of
