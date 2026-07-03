@@ -10,10 +10,12 @@ function formatAmount(amount, currency) {
   return `${sym}${Number(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
-export default function ApprovalCard({ item, busy, onApprove, onDecline }) {
+// `highlight` — amber ring marking the card a push tap was about
+// (?focus= deep link from lib/notification-nav.js). Display-only.
+export default function ApprovalCard({ item, busy, onApprove, onDecline, highlight }) {
   const amount = formatAmount(item.amount, item.currency)
   return (
-    <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-3.5 mb-2">
+    <View className={`bg-un1t-surface border rounded-2xl p-3.5 mb-2 ${highlight ? 'border-amber-400' : 'border-un1t-border'}`}>
       <View className="flex-row items-start justify-between">
         <Text className="text-sm font-semibold text-un1t-text flex-1 mr-2" numberOfLines={1}>{item.title}</Text>
         {amount ? <Text className="text-sm font-semibold text-un1t-text">{amount}</Text> : null}

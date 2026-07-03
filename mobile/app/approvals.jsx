@@ -4,7 +4,7 @@
 // More tab. No client-side role logic — the aggregator role-scopes server-side.
 import { useState, useCallback } from 'react'
 import { View, Text, ScrollView, RefreshControl, ActivityIndicator, Alert } from 'react-native'
-import { Stack, useFocusEffect } from 'expo-router'
+import { Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../lib/auth-context'
 import BackHeaderLeft from '../components/BackHeaderLeft'
@@ -21,6 +21,12 @@ const REASON_REQUIRED = new Set(['fte_expenses', 'contractor_invoices'])
 export default function ApprovalsInbox() {
   const { activeLocation } = useAuth()
   const locationId = activeLocation?.id
+  // NOTIF.4 — optional `?focus=<id>` deep-link param (set by
+  // lib/notification-nav.js for swap_open / swap_awaiting /
+  // time_off_inbound / expense_submitted pushes). The payload id equals
+  // the pending-approvals item id, so the matching card gets a highlight
+  // ring. Absent/unmatched values are simply ignored.
+  const { focus } = useLocalSearchParams()
   const [sections, setSections] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -110,6 +116,7 @@ export default function ApprovalsInbox() {
               <ApprovalCard
                 key={item.id}
                 item={item}
+                highlight={typeof focus === 'string' && focus === item.id}
                 busy={busyId === item.id}
                 onApprove={() => onApprove(sec.key, item)}
                 onDecline={() => setDeclineFor({ key: sec.key, id: item.id })}
