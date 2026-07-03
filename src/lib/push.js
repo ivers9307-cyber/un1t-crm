@@ -39,6 +39,7 @@
  */
 
 import { createServerClient } from './supabase'
+import { androidChannelId } from '@shared/push-channels'
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 const BATCH_SIZE = 100 // Expo accepts up to 100 messages per request
@@ -193,12 +194,23 @@ export async function sendPush(userIds, payload) {
   // Build Expo messages — one per token. Expo will silently drop
   // malformed tokens; we additionally prune any reported as
   // DeviceNotRegistered after the response.
+  // Android: route to the per-category channel (created by
+  // mobile/lib/push-register.js from the same shared map). An unknown
+  // channelId would make Android auto-create a system default channel,
+  // so unmapped categories resolve to the legacy 'default' channel
+  // instead. iOS ignores channelId.
+  const channelId = androidChannelId({
+    category: payload.category,
+    type: payload.data?.type,
+  })
+
   const messages = tokens.map(t => ({
     to: t.expo_push_token,
     title: payload.title,
     body: payload.body,
     sound: payload.sound === null ? null : 'default',
     badge: payload.badge,
+    channelId,
     data: payload.data || {},
   }))
 

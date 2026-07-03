@@ -9,6 +9,8 @@
 // (send-class-booking-reminders) use `failed` to tell a pipeline failure
 // apart from "nothing to send".
 
+import { customerAndroidChannelId } from '@shared/customer-push-channels'
+
 const EXPO_URL = 'https://exp.host/--/api/v2/push/send'
 const BATCH = 100
 
@@ -69,12 +71,18 @@ export async function sendCustomerPush(db, contactIds, payload) {
     .in('contact_id', ids)
   if (!rows || !rows.length) return { sent: 0, invalidated: 0, failed: 0 }
 
+  // Android: per-type channel (created by champ-app's push registrar from
+  // the same shared map — customer payloads carry data.type, not category).
+  // Unknown types resolve to the legacy 'default' channel. iOS ignores it.
+  const channelId = customerAndroidChannelId(payload.data?.type)
+
   const messages = rows.map((r) => ({
     to: r.expo_push_token,
     title: payload.title,
     body: payload.body,
     data: payload.data || {},
     sound: 'default',
+    channelId,
   }))
 
   let sent = 0

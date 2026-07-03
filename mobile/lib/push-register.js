@@ -17,6 +17,7 @@ import * as Notifications from 'expo-notifications'
 import Constants from 'expo-constants'
 import { Platform } from 'react-native'
 import { api } from './api'
+import { ANDROID_CHANNELS } from '../../shared/push-channels'
 
 // Show notifications even when the app is in the foreground (default
 // is to silence them). Iconic "banner from the top" iOS behaviour.
@@ -46,12 +47,22 @@ export async function registerForPushNotifications() {
     return { skipped: true, reason: 'permission_denied' }
   }
 
-  // Android needs an explicit channel before tokens work.
+  // Android needs an explicit channel before tokens work. Create every
+  // per-category channel (shared/push-channels.js — the same map the
+  // server derives each message's channelId from). setNotificationChannelAsync
+  // is idempotent per id, but note channels are IMMUTABLE once created on a
+  // device: re-registering an existing id with a new spec is a no-op, and
+  // importance can never be raised later — a re-spec needs a NEW channel id.
   if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('default', {
-      name: 'default',
-      importance: Notifications.AndroidImportance.DEFAULT,
-    })
+    for (const [id, spec] of Object.entries(ANDROID_CHANNELS)) {
+      await Notifications.setNotificationChannelAsync(id, {
+        name: spec.name,
+        description: spec.description,
+        importance:
+          Notifications.AndroidImportance[spec.importance.toUpperCase()] ??
+          Notifications.AndroidImportance.DEFAULT,
+      })
+    }
   }
 
   const projectId = Constants.expoConfig?.extra?.eas?.projectId
