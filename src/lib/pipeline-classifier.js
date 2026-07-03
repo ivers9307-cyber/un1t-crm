@@ -12,7 +12,9 @@
 //   trial_done   — 3+ attended, not yet a member. THE decision point.
 //   converted    — became member/credit_member ≤60d ago (converted_at,
 //                  stamped by applyMemberSync on the status transition)
-//   member       — converted >60d ago, or pre-existing member (off funnel)
+//   member       — converted >60d ago, pre-existing member, OR a pack
+//                  customer (4+ active credits — FUNNEL.3; Glofox
+//                  lead-status hygiene can't be trusted) (off funnel)
 //   classpass    — classpass_payg, always (off funnel — distinct motion)
 //   dormant      — aged-out leads, ex_members, ghosts (off funnel)
 //
@@ -36,6 +38,10 @@ export const PIPELINE_THRESHOLDS = {
   CONVERTED_WINDOW_DAYS:   60,
   // 3 classes ≈ a completed trial pack → decision point.
   TRIAL_DONE_MIN_ATTENDED: 3,
+  // 4+ active credits can't come from a trial (ours are ≤3) — the
+  // contact bought a class pack and counts as a paying customer
+  // regardless of their (often stale) Glofox lead status. FUNNEL.3.
+  PACK_CUSTOMER_MIN_CREDITS: 4,
 }
 
 // Helper: days elapsed between an ISO timestamp and `now` (epoch ms).
@@ -92,6 +98,28 @@ export function classifyContact(contact, now = Date.now()) {
 
   // ── Ex-members are winback targets, not funnel leads ───────────
   if (status === 'ex_member') return 'dormant'
+
+  // ── Pack customers (FUNNEL.3) ──────────────────────────────────
+  // Glofox lead-status hygiene can't be relied on (operator-confirmed
+  // 2026-07-03: regulars like Wendy Bertrand sat on 'cold' with a
+  // 16-credit active pack). The pack itself is the stronger signal:
+  // UN1T trials are ≤3 credits, so 4+ ACTIVE credits means they BOUGHT
+  // a class pack — a paying customer, off-funnel — but only while they
+  // are actually attending: 304 dormant contacts hold leftover pack
+  // credits (dry-run 2026-07-03) and those are winback targets, not
+  // members. When an active pack runs down to ≤3 they re-enter the
+  // funnel (usually trial_done) — exactly when the membership-upgrade
+  // conversation is due. The ≥4 floor also makes the mig-001 schema
+  // default of 3 harmless.
+  const credits = Number.isFinite(contact.trial_credits_remaining)
+    ? contact.trial_credits_remaining
+    : null
+  const sinceAttendedForPack = daysSince(contact.last_attended_at, now)
+  const packHolderActive = sinceAttendedForPack !== null
+    && sinceAttendedForPack <= PIPELINE_THRESHOLDS.FUNNEL_ACTIVITY_DAYS
+  if (credits !== null && credits >= PIPELINE_THRESHOLDS.PACK_CUSTOMER_MIN_CREDITS && packHolderActive) {
+    return 'member'
+  }
 
   // ── Funnel candidates: lead/cold/tour/no_sale_*/trial/null ─────
   // last_attended_at backstops the count: it's advance-only on the

@@ -159,6 +159,64 @@ describe('classifyContact — exclusions', () => {
   })
 })
 
+describe('classifyContact — pack customers (FUNNEL.3)', () => {
+  // Wendy Bertrand's case (operator-reported 2026-07-03): Glofox status
+  // stuck on cold/lead, but an ACTIVE credit pack with more credits than
+  // any trial we sell — a paying customer, not a funnel prospect.
+  it('Wendy: cold status + 16-credit active pack + attending → member (off funnel)', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'cold', joined_at: daysAgo(220),
+      last_attended_at: daysAgo(1), trial_credits_remaining: 16,
+      recent_bookings: [attendedBooking(1), attendedBooking(2), attendedBooking(4), attendedBooking(7)],
+    }, NOW)).toBe('member')
+  })
+  it('lead status + big pack + attending → member', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'lead', joined_at: daysAgo(10),
+      last_attended_at: daysAgo(8), trial_credits_remaining: 92,
+      recent_bookings: [attendedBooking(8)],
+    }, NOW)).toBe('member')
+  })
+  it('pack holder gone quiet 60d+ is a WINBACK target, not a member → dormant', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'cold', joined_at: daysAgo(300),
+      last_attended_at: daysAgo(120), trial_credits_remaining: 10,
+      recent_bookings: [attendedBooking(120)],
+    }, NOW)).toBe('dormant')
+  })
+  it('big-pack buyer who has never attended follows normal funnel rules → new_lead', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'lead', joined_at: daysAgo(10),
+      trial_credits_remaining: 92, recent_bookings: [],
+    }, NOW)).toBe('new_lead')
+  })
+  it('pack running low (≤3 credits) re-enters the funnel at the decision point', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'cold', joined_at: daysAgo(220),
+      last_attended_at: daysAgo(1), trial_credits_remaining: 2,
+      recent_bookings: [attendedBooking(1), attendedBooking(2), attendedBooking(4)],
+    }, NOW)).toBe('trial_done')
+  })
+  it('a genuine 3-credit trial is NOT a pack customer (also the mig-001 schema default)', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'trial', joined_at: daysAgo(5),
+      last_attended_at: daysAgo(2), trial_credits_remaining: 3,
+      recent_bookings: [attendedBooking(2)],
+    }, NOW)).toBe('first_class')
+  })
+  it('null credits → normal funnel rules', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'lead', joined_at: daysAgo(5),
+      trial_credits_remaining: null, recent_bookings: [],
+    }, NOW)).toBe('new_lead')
+  })
+  it('classpass_payg with credits stays classpass (distinct motion wins)', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'classpass_payg', trial_credits_remaining: 20,
+    }, NOW)).toBe('classpass')
+  })
+})
+
 describe('idempotency', () => {
   it('same input twice → same output, and the input is never mutated', () => {
     const c = Object.freeze({
