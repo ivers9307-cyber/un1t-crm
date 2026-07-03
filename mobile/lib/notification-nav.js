@@ -18,9 +18,10 @@
 //     The payload id (swap_id / request_id / claim_id) equals the pending-
 //     approvals item id, so it rides along as ?focus= and the inbox
 //     highlights the matching card.
-//   schedule_published / schedule_updated / shift_adjusted — carry the
-//     affected date (start_date / block_date); ?date= preselects that
-//     week+day on the schedule tab instead of landing on the current week.
+//   schedule_published / schedule_updated / shift_adjusted / swap_decision /
+//     time_off_decision — carry the affected date (start_date / block_date);
+//     ?date= preselects that week+day on the schedule tab instead of
+//     landing on the current week.
 //   instagram fallback — the WhatsApp tab is the unified inbox (it lists IG
 //     conversations too), and there is no /instagram index screen.
 //   wa_quality / number_health / flow_health / template_status — WhatsApp
@@ -56,14 +57,15 @@ export function routeForNotification(data) {
     case 'swap_awaiting':  // manager: swap awaiting approval
       return isSafeId(data.swap_id) ? `/approvals?focus=${data.swap_id}` : '/approvals'
     case 'swap_decision':  // requester/taker: final decision — roster changed
-      return '/(tabs)/schedule'
+      // on the requester-shift's date; preselect that week+day.
+      return isIsoDay(data.block_date) ? `/(tabs)/schedule?date=${data.block_date}` : '/(tabs)/schedule'
 
     // ── Time off ────────────────────────────────────────────────────
     case 'time_off_inbound': // manager: new request
       return isSafeId(data.request_id) ? `/approvals?focus=${data.request_id}` : '/approvals'
-    case 'time_off_decision': // staff: approved/declined — payload has no
-      // date (only request_id + status), so no ?date preselect here.
-      return '/(tabs)/schedule'
+    case 'time_off_decision': // staff: approved/declined — preselect the
+      // week+day of the request's first day.
+      return isIsoDay(data.start_date) ? `/(tabs)/schedule?date=${data.start_date}` : '/(tabs)/schedule'
 
     // ── Roster (roster-notify, rosters republish, assignment adjust) ─
     case 'schedule_published':

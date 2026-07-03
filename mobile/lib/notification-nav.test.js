@@ -73,10 +73,15 @@ describe('routeForNotification', () => {
       .toBe('/(tabs)/schedule?date=2026-07-13')
     expect(routeForNotification({ type: 'shift_adjusted', assignment_id: 'a1', block_date: '2026-07-10' }))
       .toBe('/(tabs)/schedule?date=2026-07-10')
+    expect(routeForNotification({ type: 'swap_decision', swap_id: 's1', status: 'approved', block_date: '2026-07-08' }))
+      .toBe('/(tabs)/schedule?date=2026-07-08')
+    expect(routeForNotification({ type: 'time_off_decision', request_id: 'r1', status: 'approved', start_date: '2026-07-20' }))
+      .toBe('/(tabs)/schedule?date=2026-07-20')
     // Malformed dates fall back to the bare tab rather than a junk URL.
     expect(routeForNotification({ type: 'schedule_published', start_date: 'next week' })).toBe('/(tabs)/schedule')
     expect(routeForNotification({ type: 'shift_adjusted', block_date: '2026-7-1' })).toBe('/(tabs)/schedule')
-    // swap_decision / time_off_decision payloads carry no date — bare tab.
+    expect(routeForNotification({ type: 'swap_decision', swap_id: 's1', block_date: null })).toBe('/(tabs)/schedule')
+    // Older payloads without the date still land on the schedule tab.
     expect(routeForNotification({ type: 'time_off_decision', request_id: 'r1' })).toBe('/(tabs)/schedule')
     expect(routeForNotification({ type: 'swap_decision', swap_id: 's1' })).toBe('/(tabs)/schedule')
   })

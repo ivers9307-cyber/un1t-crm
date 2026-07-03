@@ -91,6 +91,8 @@ export async function PUT(request, props) {
         type: 'time_off_decision',
         request_id: existing.id,
         status,
+        // Mobile week-preselects the schedule tab on the request's first day.
+        start_date: existing.start_date,
       },
     }).catch(err => {
       // Best-effort — never block the API response on notify.
