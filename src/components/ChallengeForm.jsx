@@ -40,6 +40,13 @@ export default function ChallengeForm({ challenge, locationId, onSaved }) {
   const [target,   setTarget]   = useState(
     challenge?.target != null ? String(challenge.target) : ''
   )
+  const [isFlagship, setIsFlagship] = useState(!!challenge?.is_flagship)
+
+  // Flagship is individual-only — switching to collective clears the flag.
+  function handleModeChange(next) {
+    setMode(next)
+    if (next !== 'individual') setIsFlagship(false)
+  }
 
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState(null)
@@ -76,6 +83,7 @@ export default function ChallengeForm({ challenge, locationId, onSaved }) {
         metric,
         starts_on: startsOn,
         ends_on:   endsOn,
+        is_flagship: mode === 'individual' ? isFlagship : false,
       }),
       target: mode === 'collective' ? Number(target) : null,
     }
@@ -134,7 +142,7 @@ export default function ChallengeForm({ challenge, locationId, onSaved }) {
           <label className="block text-sm text-un1t-subtle mb-1">Mode *</label>
           <select
             value={mode}
-            onChange={(e) => setMode(e.target.value)}
+            onChange={(e) => handleModeChange(e.target.value)}
             disabled={started}
             className={inputCls}
           >
@@ -207,6 +215,34 @@ export default function ChallengeForm({ challenge, locationId, onSaved }) {
             />
             <p className="text-[11px] text-un1t-muted mt-1">
               Total the group needs to hit together.
+            </p>
+          </div>
+        )}
+
+        {/* Flagship — individual-only; locked once started (changes scoring). */}
+        {mode === 'individual' && (
+          <div>
+            <label className="inline-flex items-start gap-2 text-sm text-un1t-text">
+              <input
+                type="checkbox"
+                checked={isFlagship}
+                onChange={(e) => setIsFlagship(e.target.checked)}
+                disabled={started}
+                className="mt-0.5 shrink-0 disabled:opacity-50"
+              />
+              <span>
+                Flagship transformation challenge
+                {isFlagship && (
+                  <span className="ml-2 align-middle inline-flex items-center rounded-full bg-amber-500/10 text-amber-700 text-[11px] font-medium px-2 py-0.5">
+                    Flagship
+                  </span>
+                )}
+              </span>
+            </label>
+            <p className="text-[11px] text-un1t-muted mt-1 ml-6">
+              Switches on the InBody transformation bookend + a Challenge Wrapped
+              finisher in the member app.
+              {started && ' Locked — challenge has already started.'}
             </p>
           </div>
         )}
