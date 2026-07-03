@@ -68,7 +68,12 @@ const BulkSyncBody = z.object({
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-export const maxDuration = 60 // Vercel hobby tier ceiling
+// 300s to match the glofox-sync cron (which regularly runs ~125s on the same
+// per-member work). The old 60s cap ("hobby tier ceiling" — stale, the plan
+// allows 300) killed slow pages mid-flight: Vercel returned a plain-text
+// FUNCTION_INVOCATION_TIMEOUT and the import UI blew up parsing it as JSON
+// (operator-reported 2026-07-03; error cluster went back to 2026-05-13).
+export const maxDuration = 300
 
 export async function POST(request) {
   const user = await getCurrentUser()

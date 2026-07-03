@@ -82,7 +82,18 @@ export default function GlofoxImportClient({
         dry_run: dryRun,
       }),
     })
-    const json = await res.json()
+    // A gateway kill (function timeout, 502/504) returns plain text/HTML, not
+    // JSON — parse defensively so the operator sees an actionable message
+    // instead of a raw SyntaxError (the 2026-07-03 "JSON error" report).
+    let json
+    try {
+      json = await res.json()
+    } catch {
+      if (res.status === 504 || res.status === 502) {
+        throw new Error(`The page took too long and was cut off (HTTP ${res.status}). Lower the page size and retry — already-processed members were saved.`)
+      }
+      throw new Error(`Unexpected non-JSON response (HTTP ${res.status}). Retry, or check the Vercel logs if it persists.`)
+    }
     if (!json.ok) throw new Error(json.error || 'bulk-sync failed')
     return json
   }, [activeLocationId, mode, filterBody, limit])
