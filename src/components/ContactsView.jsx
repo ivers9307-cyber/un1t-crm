@@ -24,7 +24,7 @@ import AudienceBuilder from './AudienceBuilder'
 import ContactsTable from './ContactsTable'
 
 // FUNNEL.1 — chip values are the canonical classifier-derived funnel
-// slugs (mig 343): four lead columns, the win column, and the three
+// slugs (mig 350): four lead columns, the win column, and the three
 // off-funnel pools.
 const STATUSES = ['', 'new_lead', 'first_class', 'second_class', 'trial_done',
   'converted', 'member', 'classpass', 'dormant']

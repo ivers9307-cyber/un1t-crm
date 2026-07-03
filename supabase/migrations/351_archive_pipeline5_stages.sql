@@ -5,7 +5,7 @@
 
 -- 0. Ensure every location has the off-funnel 'dormant' catch-all the
 --    FUNNEL.1 classifier depends on. Already applied to production as
---    ad-hoc DML during the mig 343 rollout (SourceIt + Test Studio were
+--    ad-hoc DML during the mig 350 rollout (SourceIt + Test Studio were
 --    provisioned before dormant existed and never got one); repeated
 --    here idempotently so any restored/branched environment converges.
 INSERT INTO pipeline_stages (location_id, name, slug, display_order, color, archived, is_dormant)

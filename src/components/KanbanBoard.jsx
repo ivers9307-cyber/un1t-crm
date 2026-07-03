@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import DealCard from './DealCard'
 
-// FUNNEL.1 — funnel taxonomy. Hexes match mig 343 stage rows.
+// FUNNEL.1 — funnel taxonomy. Hexes match mig 350 stage rows.
 const stageColors = {
   new_lead:     '#3B82F6',
   first_class:  '#10B981',

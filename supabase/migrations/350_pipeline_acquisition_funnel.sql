@@ -1,18 +1,25 @@
 -- FUNNEL.1 — acquisition-funnel pipeline redesign (operator-approved 2026-07-02).
 -- Design doc: docs/superpowers/plans/2026-07-02-pipeline-acquisition-funnel.md
 --
+-- ALREADY APPLIED to prod 2026-07-02 via Supabase MCP under the
+-- migration-history name '343_pipeline_acquisition_funnel' (history is
+-- timestamp-keyed, so the name mismatch is harmless). The FILE was
+-- renumbered 343 → 350 pre-merge because main independently shipped its
+-- own 343/344 (hr_session_open_unique_indexes / class_occurrences_
+-- cancelled_at) — repo precedent: the 348→349 renumber.
+--
 -- Adds contacts.converted_at + the new funnel stage rows + retargets the
 -- one draft sequence that referenced the old taxonomy. The 7 retired
--- PIPELINE5 stages are archived LATER (mig 344), after the new classifier
+-- PIPELINE5 stages are archived LATER (mig 351), after the new classifier
 -- has moved every deal — deploy order: this migration → code → reclassify
--- commit → mig 344.
+-- commit → mig 351.
 
 -- 1. Conversion moment. Write-once, stamped by applyMemberSync when
 --    glofox_membership_status transitions into member/credit_member
 --    (webhook path = near-instant; nightly sync = catch-all).
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS converted_at timestamptz;
 COMMENT ON COLUMN contacts.converted_at IS
-  'FUNNEL.1 — first observed transition into member/credit_member. Drives the pipeline Converted column (60d window). Seeded from joined_at for members who joined within 60d of mig 343; accurate from webhook stamping onward.';
+  'FUNNEL.1 — first observed transition into member/credit_member. Drives the pipeline Converted column (60d window). Seeded from joined_at for members who joined within 60d of mig 350; accurate from webhook stamping onward.';
 
 -- 2. Launch-cohort seed. joined_at is a proxy for the conversion moment
 --    (~15 contacts at Stillorgan on 2026-07-02). NOT accurate for members
@@ -32,7 +39,7 @@ UPDATE pipeline_stages
  WHERE slug = 'member';
 
 -- 4. New funnel stages for every location (mig 147 CROSS JOIN pattern).
---    display_order 301+ sorts after the PIPELINE5 200-block until mig 344
+--    display_order 301+ sorts after the PIPELINE5 200-block until mig 351
 --    archives that block. is_dormant=true = "Off funnel" tab (hidden from
 --    the default board view; the existing view switcher mechanism).
 INSERT INTO pipeline_stages (location_id, name, slug, display_order, color, archived, is_dormant)

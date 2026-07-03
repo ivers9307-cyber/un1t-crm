@@ -21,7 +21,7 @@
 import { useState } from 'react'
 import { Loader2, Sparkles, CheckCircle2, AlertTriangle, Eye, Play } from 'lucide-react'
 
-// FUNNEL.1 taxonomy — labels mirror the mig 343 stage rows.
+// FUNNEL.1 taxonomy — labels mirror the mig 350 stage rows.
 const STAGE_LABELS = {
   new_lead:     'New Leads',
   first_class:  '1st Class',
@@ -34,7 +34,7 @@ const STAGE_LABELS = {
   '':           '(no deal yet)',
   // Legacy labels kept for the one-time FUNNEL.1 migration matrix
   // (migration-day runs render old-slug → new-stage rows in the
-  // From column); safe to prune after mig 344.
+  // From column); safe to prune after mig 351.
   active_trial:      'Active Trial',
   hot_conversion:    'Hot Conversion',
   active_member:     'Active Member',

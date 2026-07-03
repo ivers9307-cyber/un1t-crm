@@ -21,14 +21,14 @@
 | off-board | `classpass` | all `classpass_payg` | same |
 | off-board | `dormant` (reused) | aged-out leads, ex_members, ghosts | same |
 
-Stages being retired (archived in mig 344, **after** reclassify): `active_trial`, `hot_conversion`, `active_member`, `at_risk_member`, `classpass_active`, `lapsed`, `dormant_classpass`.
+Stages being retired (archived in mig 351, **after** reclassify): `active_trial`, `hot_conversion`, `active_member`, `at_risk_member`, `classpass_active`, `lapsed`, `dormant_classpass`.
 
 **Key data facts (verified against live DB 2026-07-02):**
 - `contacts.lead_created_at` is import-poisoned (5,531 contacts stamped week of 2026-05-11). **`joined_at` is the real Glofox date — use it.**
 - No conversion timestamp exists anywhere. `converted_at` is new; seeded from `joined_at` for members joined ≤60d (proxy, ~15 contacts), accurate from webhook stamping onward.
 - Booking history lives ONLY in `contacts.recent_bookings` (jsonb, last 10, includes future bookings: `{time_start (unix s), attended (bool), status ('BOOKED'), event_name, ...}`). The `class_bookings` table is empty — do not use it.
 - ClassPass = `glofox_membership_status='classpass_payg'` (also `lead_source='classpass'`).
-- Zero saved broadcast audiences reference old slugs; ONE draft sequence ("New member welcome") has `trigger_type='pipeline_stage_change'`, `trigger_config={"to_status":"member"}` → retarget to `converted` in mig 343.
+- Zero saved broadcast audiences reference old slugs; ONE draft sequence ("New member welcome") has `trigger_type='pipeline_stage_change'`, `trigger_config={"to_status":"member"}` → retarget to `converted` in mig 350.
 - CCF Autos / SourceIt have zero deals — no manual kanban usage exists outside the gym; removing drag-drop is safe.
 
 **Deploy sequencing (critical — order matters):**
@@ -44,7 +44,7 @@ Stages being retired (archived in mig 344, **after** reclassify): `active_trial`
 ### Task 1: Migration 343 — converted_at, seed, new stages, sequence-config fixes
 
 **Files:**
-- Create: `supabase/migrations/343_pipeline_acquisition_funnel.sql`
+- Create: `supabase/migrations/350_pipeline_acquisition_funnel.sql`
 
 - [ ] **Step 1: Write the migration file**
 
@@ -54,16 +54,16 @@ Stages being retired (archived in mig 344, **after** reclassify): `active_trial`
 --
 -- Adds contacts.converted_at + the new funnel stage rows + retargets the
 -- one draft sequence that referenced the old taxonomy. The 7 retired
--- PIPELINE5 stages are archived LATER (mig 344), after the new classifier
+-- PIPELINE5 stages are archived LATER (mig 351), after the new classifier
 -- has moved every deal — deploy order: this migration → code → reclassify
--- commit → mig 344.
+-- commit → mig 351.
 
 -- 1. Conversion moment. Write-once, stamped by applyMemberSync when
 --    glofox_membership_status transitions into member/credit_member
 --    (webhook path = near-instant; nightly sync = catch-all).
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS converted_at timestamptz;
 COMMENT ON COLUMN contacts.converted_at IS
-  'FUNNEL.1 — first observed transition into member/credit_member. Drives the pipeline Converted column (60d window). Seeded from joined_at for members who joined within 60d of mig 343; accurate from webhook stamping onward.';
+  'FUNNEL.1 — first observed transition into member/credit_member. Drives the pipeline Converted column (60d window). Seeded from joined_at for members who joined within 60d of mig 350; accurate from webhook stamping onward.';
 
 -- 2. Launch-cohort seed. joined_at is a proxy for the conversion moment
 --    (~15 contacts at Stillorgan on 2026-07-02). NOT accurate for members
@@ -83,7 +83,7 @@ UPDATE pipeline_stages
  WHERE slug = 'member';
 
 -- 4. New funnel stages for every location (mig 147 CROSS JOIN pattern).
---    display_order 301+ sorts after the PIPELINE5 200-block until mig 344
+--    display_order 301+ sorts after the PIPELINE5 200-block until mig 351
 --    archives that block. is_dormant=true = "Off funnel" tab (hidden from
 --    the default board view; the existing view switcher mechanism).
 INSERT INTO pipeline_stages (location_id, name, slug, display_order, color, archived, is_dormant)
@@ -131,7 +131,7 @@ UPDATE email_sequences
 
 - [ ] **Step 2: Apply via Supabase MCP**
 
-Use `apply_migration` (name `343_pipeline_acquisition_funnel`) against project `iyvtbjjxdggiadzwwvdj` (NOT the sentinel project). Migrations are forward-only.
+Use `apply_migration` (name `350_pipeline_acquisition_funnel`) against project `iyvtbjjxdggiadzwwvdj` (NOT the sentinel project). Migrations are forward-only.
 
 - [ ] **Step 3: Verify**
 
@@ -159,14 +159,14 @@ GROUP BY 1, 2 HAVING count(*) > 1;  -- Expect: 0 rows
 - [ ] **Step 5: Commit**
 
 ```bash
-git add supabase/migrations/343_pipeline_acquisition_funnel.sql
-git commit -m "FUNNEL.1 — mig 343: converted_at + acquisition-funnel stages
+git add supabase/migrations/350_pipeline_acquisition_funnel.sql
+git commit -m "FUNNEL.1 — mig 350: converted_at + acquisition-funnel stages
 
 Adds contacts.converted_at (write-once conversion moment, seeded from
 joined_at ≤60d proxy), inserts the funnel stage rows for all locations,
 revives Stillorgan's archived legacy 'member' row as the off-funnel
 Member bucket, and retargets the one draft sequence referencing the old
-taxonomy. Old PIPELINE5 stages stay live until mig 344 (post-reclassify)."
+taxonomy. Old PIPELINE5 stages stay live until mig 351 (post-reclassify)."
 ```
 
 ---
@@ -733,7 +733,7 @@ Pass `boardDeals` (not `deals`) to `<KanbanBoard initialDeals={boardDeals} …>`
 The columns are now fully derived — a drag would be overwritten by the next webhook/nightly run, so the affordance is a lie. Remove: `draggedDeal`/`dragOverStage` state, `handleDrop`, the `createBrowserClient` import, and the `draggable`/`onDragStart`/`onDragEnd`/`onDragOver`/`onDragLeave`/`onDrop` props (keep the `expandedColumns` cap logic and `isOver` styling removal). Replace `stageColors` with:
 
 ```javascript
-// FUNNEL.1 — funnel taxonomy. Hexes match mig 343 stage rows.
+// FUNNEL.1 — funnel taxonomy. Hexes match mig 350 stage rows.
 const stageColors = {
   new_lead:     '#3B82F6',
   first_class:  '#10B981',
@@ -961,7 +961,7 @@ git commit -m "FUNNEL.1 — funnel-slug display maps (web badges/pills + mobile 
 **Files:**
 - Modify: `docs/CHANGELOG.md` (new numbered entry)
 - Modify: `docs/architecture/REFERENCE.md` (update any PIPELINE5 stage-list mentions — `grep -n "hot_conversion\|active_trial" docs/architecture/REFERENCE.md docs/LESSONS.md`)
-- Create: `supabase/migrations/344_archive_pipeline5_stages.sql` (committed now, applied in Task 10)
+- Create: `supabase/migrations/351_archive_pipeline5_stages.sql` (committed now, applied in Task 10)
 
 - [ ] **Step 1: Write migration 344 (apply LATER — Task 10)**
 
@@ -997,8 +997,8 @@ Append the next numbered entry to `docs/CHANGELOG.md` following the file's exist
 - [ ] **Step 4: Commit**
 
 ```bash
-git add docs/CHANGELOG.md docs/architecture/REFERENCE.md supabase/migrations/344_archive_pipeline5_stages.sql
-git commit -m "FUNNEL.1 — docs + guarded mig 344 (archive PIPELINE5 stages post-reclassify)"
+git add docs/CHANGELOG.md docs/architecture/REFERENCE.md supabase/migrations/351_archive_pipeline5_stages.sql
+git commit -m "FUNNEL.1 — docs + guarded mig 351 (archive PIPELINE5 stages post-reclassify)"
 ```
 
 ---
@@ -1050,7 +1050,7 @@ Same surface with Commit. Verify `pipeline_classification_runs` shows `status='s
 
 - [ ] **Step 5: Apply migration 344 via MCP + advisors**
 
-`apply_migration` name `344_archive_pipeline5_stages` (content from Task 8). The guard raises if Step 3 didn't complete. Then `get_advisors` (type=security).
+`apply_migration` name `351_archive_pipeline5_stages` (content from Task 8). The guard raises if Step 3 didn't complete. Then `get_advisors` (type=security).
 
 - [ ] **Step 6: Live conversion smoke test**
 
@@ -1060,6 +1060,6 @@ Next real conversion (or a Glofox sandbox status flip): confirm the contact gets
 
 ## Self-review notes
 
-- **Spec coverage:** 5 columns ✔ (Task 1 stages + Task 2 classifier); attended-not-booked ✔ (Task 2); next-class badge on cols 1–4 ✔ (Task 5); ClassPass excluded ✔ (classifier + off-funnel stage); webhook-instant conversion ✔ (Task 3); comms/automations filters ✔ (Task 6); cleanup of old platform ✔ (drag-drop removal Task 5, slug sweeps Tasks 6–7, mig 344 Task 10).
+- **Spec coverage:** 5 columns ✔ (Task 1 stages + Task 2 classifier); attended-not-booked ✔ (Task 2); next-class badge on cols 1–4 ✔ (Task 5); ClassPass excluded ✔ (classifier + off-funnel stage); webhook-instant conversion ✔ (Task 3); comms/automations filters ✔ (Task 6); cleanup of old platform ✔ (drag-drop removal Task 5, slug sweeps Tasks 6–7, mig 351 Task 10).
 - **Deliberately out of scope (YAGNI, agreed):** no `deals.status='won'` usage; no backfill of historical conversions beyond the 60d joined_at seed; churn radar untouched (keys on Glofox status, verified); `lead-radar.js` untouched (uses `glofox_membership_status`, not slugs).
 - **Known approximation:** launch-cohort Converted column uses joined_at proxy; accurate from webhook stamping onward.

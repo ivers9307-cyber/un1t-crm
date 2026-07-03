@@ -5,7 +5,7 @@ import { Plus, Trash2, Users } from 'lucide-react'
 
 const FIELD_OPTIONS = [
   // FUNNEL.1 — primary funnel-stage filter (canonical funnel slugs,
-  // mig 343). Denormalised onto contacts.pipeline_stage_slug (originally
+  // mig 350). Denormalised onto contacts.pipeline_stage_slug (originally
   // mig 155, synced from deals.stage_id via trigger). Stage placement is
   // classifier-derived (webhook + nightly cron) — operators never write
   // it. It replaced the legacy "Lead Status" filter that was effectively
