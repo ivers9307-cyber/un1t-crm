@@ -34,11 +34,22 @@ create index idx_coach_kudos_contact on public.coach_kudos(contact_id, created_a
 
 alter table public.coach_kudos enable row level security;
 
--- Staff: full access to kudos in a location they belong to (both USING + WITH CHECK).
-create policy coach_kudos_loc on public.coach_kudos for all to authenticated
-  using (private.auth_is_in_location(location_id)) with check (private.auth_is_in_location(location_id));
+-- Consolidated-policy shape (mirrors mig 320 for coaching_goals; enforces the
+-- "one permissive policy per (table, command)" invariant): ONE SELECT policy
+-- OR-ing staff-in-location + member-self, then per-command staff write policies.
+-- A staff FOR ALL + a separate member SELECT would both apply to the
+-- authenticated role on SELECT → multiple_permissive_policies advisor warning.
+--
+-- Read: staff in the location OR the member themselves.
+create policy coach_kudos_read on public.coach_kudos for select to public
+  using (private.auth_is_in_location(location_id) or contact_id = private.auth_contact_id());
 
--- Member: read own kudos only. No INSERT/UPDATE/DELETE — seen_at is stamped by
--- a champ-app service-role route, never by the member's authenticated session.
-create policy coach_kudos_self on public.coach_kudos for select to public
-  using (contact_id = private.auth_contact_id());
+-- Write: staff in the location only, per-command. NO member write policy — a
+-- member's seen_at is stamped by a champ-app service-role route, never their
+-- own authenticated session.
+create policy coach_kudos_ins on public.coach_kudos for insert to authenticated
+  with check (private.auth_is_in_location(location_id));
+create policy coach_kudos_upd on public.coach_kudos for update to authenticated
+  using (private.auth_is_in_location(location_id)) with check (private.auth_is_in_location(location_id));
+create policy coach_kudos_del on public.coach_kudos for delete to authenticated
+  using (private.auth_is_in_location(location_id));

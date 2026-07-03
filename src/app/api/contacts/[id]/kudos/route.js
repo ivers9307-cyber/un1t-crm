@@ -34,6 +34,13 @@ export async function POST(request, props) {
   const params = await props.params
   const { id } = params
 
+  // Validate the path param up front (matches the openapi contract) rather than
+  // letting a non-uuid reach PostgREST as a 22P02. Fails closed either way, but
+  // 404 keeps ids non-enumerable and avoids a noisy DB error.
+  if (!uuidLike.safeParse(id).success) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
