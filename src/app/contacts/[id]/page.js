@@ -424,12 +424,13 @@ export default async function ContactDetailPage(props) {
         </p>
       )}
 
-      {/* PULSE-90.4 — first-90-days journey. Compact block shown only for
-          members currently in their onboarding window (loadContactJourney
-          returns null otherwise). Day X / windowDays, attended / target, and
-          a status chip on the light-theme contrast ramp (bg-<c>-500/10
-          text-<c>-700). The full lane + "Log touch" live on /pulse. */}
-      {journey && (
+      {/* PULSE-90.4 — first-90-days journey. Compact block shown while a
+          member is inside their onboarding window (guarded on inWindow, so a
+          finisher's block clears once the window ends rather than reading
+          "Day 50/42"). Day X / windowDays, attended / target, and a status
+          chip on the light-theme contrast ramp (bg-<c>-500/10 text-<c>-700).
+          The full lane + "Log touch" live on /pulse. */}
+      {journey?.inWindow && (
         <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">First 90 days</h3>
