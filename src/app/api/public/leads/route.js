@@ -71,6 +71,20 @@ export async function POST(request) {
     await db.from('contacts').update({ lead_source: leadSource }).eq('id', contactId).is('lead_source', null)
   } catch (e) { logWarn('leads', 'lead_source set failed', { err: e }) }
 
+  // CAPI: paid-funnel website Lead event. Contact-keyed event_id so repeat
+  // submits dedupe at Meta; dataset gating lives in the helper.
+  try {
+    const { sendWebsiteConversion } = await import('@/lib/meta-capi')
+    await sendWebsiteConversion(db, {
+      locationId, eventName: 'Lead', email, phone,
+      eventSourceUrl: camp && camp.locationPublicPath === publicPath
+        ? 'https://www.un1tdublin.com/free-class'
+        : `https://www.un1tdublin.com/${publicPath}`,
+      eventId: `weblead-${contactId}`,
+      contentName: leadSource || 'website_lead',
+    })
+  } catch (e) { logWarn('leads', 'capi lead failed', { err: e }) }
+
   // Marketing consent (best-effort; helper short-circuits ClassPass).
   try {
     const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')

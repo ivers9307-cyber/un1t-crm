@@ -102,5 +102,19 @@ export async function POST(request) {
     logWarn('classbook', 'enqueue failed', { err: insErr })
     return NextResponse.json({ success: false, error: 'Could not start your booking. Please try again.' }, { status: 500 })
   }
+
+  // CAPI: a captured /start class lead is a website Lead event. The contact+
+  // class-keyed event_id makes double-submits dedupe at Meta; gated on
+  // settings.meta_ads.dataset_id inside the helper. Never blocks the response.
+  try {
+    const { sendWebsiteConversion } = await import('@/lib/meta-capi')
+    await sendWebsiteConversion(db, {
+      locationId, eventName: 'Lead', email: b.email, phone: b.phone,
+      eventSourceUrl: 'https://www.un1tdublin.com/start',
+      eventId: `classlead-${contactId}-${b.event_id}`,
+      contentName: chosen.name,
+    })
+  } catch (e) { logWarn('classbook', 'capi lead failed', { err: e }) }
+
   return NextResponse.json({ success: true, data: { queued: true } })
 }
