@@ -25,7 +25,8 @@ import { runDetectionForSession } from '@/lib/achievements'
 import { enqueueExportsForSession } from '@/lib/external-export'
 import { buildSessionPush, buildGoalPush, buildTargetHitPush, buildTierUpPush, periodKey } from '@/lib/customer-notifications'
 import { GOAL_DEFS, computeProgress, startOfMonth, startOfIsoWeek } from '@/lib/goals'
-import { tierForMonths, nextTier } from '@/lib/tiers'
+import { tierForMonths, nextTier, tierWindowMonths, windowedMonthsHit } from '@/lib/tiers'
+import { dublinMonthStr } from '@/lib/dublin-time'
 
 const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
@@ -571,13 +572,26 @@ export async function finalizeSessionRewards(db, sessionId, { nowMs = Date.now()
           })
           .select('id')
         if (!bankErr && banked && banked.length) {
-          const { count } = await db
+          // Tier decay (approved decision #4, default-off). When the operator
+          // sets settings.scoring.tier_window_months = N, tier is derived from
+          // the DISTINCT months banked within the last N Dublin calendar months
+          // (inclusive of the current month) rather than the cumulative all-time
+          // count. N absent/null → cumulative, so no member's tier changes until
+          // an operator opts in. `newTier` reflects state after this bank;
+          // `oldTier` reflects the window WITHOUT the just-banked month, so the
+          // tier-up detection still fires exactly once per crossing.
+          const windowN = tierWindowMonths(loc || {})
+          const { data: banks } = await db
             .from('member_monthly_targets')
-            .select('id', { count: 'exact', head: true })
+            .select('period_month')
             .eq('contact_id', session.contact_id)
-          const monthsHit = count || 1
+          const bankedMonths = (banks || []).map((b) => b.period_month)
+          const nowMonth = dublinMonthStr(nowMs)
+          const monthsHit = windowedMonthsHit(bankedMonths, windowN, nowMonth)
+          const priorMonths = bankedMonths.filter((p) => p !== monthKey)
+          const priorHit = windowedMonthsHit(priorMonths, windowN, nowMonth)
           const newTier = tierForMonths(monthsHit)
-          const oldTier = tierForMonths(monthsHit - 1)
+          const oldTier = tierForMonths(priorHit)
           if (newTier && (!oldTier || newTier.slug !== oldTier.slug)) {
             const { data: nins } = await db
               .from('customer_engagement_nudges')

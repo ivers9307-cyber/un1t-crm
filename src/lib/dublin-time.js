@@ -42,6 +42,17 @@ export function dublinTodayStr() {
 }
 
 /**
+ * Returns the Europe/Dublin calendar month (YYYY-MM) for an arbitrary instant.
+ * The `period_month` key used for banked monthly targets is a Dublin month;
+ * a late-evening session near a month boundary during BST would mis-bucket
+ * under a UTC month, so tier-window math must derive "current month" from this.
+ * @param {Date|number|string} [instant=Date.now()]
+ */
+export function dublinMonthStr(instant = Date.now()) {
+  return dublinDayStr(instant).slice(0, 7)
+}
+
+/**
  * Returns the current time in Europe/Dublin as minutes since
  * midnight (0-1439). Used by slot generators to filter "past" slots
  * for the current day — slot.start strings are stored as Dublin
