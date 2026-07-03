@@ -23,6 +23,7 @@ const STATUS_LABELS = {
   trial_done: 'Trial Done',
   converted: 'Converted',
   member: 'Member',
+  pack_member: 'Class Pack',
   classpass: 'ClassPass',
   dormant: 'Dormant',
 }

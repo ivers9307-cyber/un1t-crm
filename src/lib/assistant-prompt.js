@@ -45,7 +45,8 @@ The home page showing key metrics: total contacts, open deals, upcoming bookings
 
 ### Pipeline (/pipeline)
 Kanban-style deal board with funnel stages:
-- New Lead → First Class → Second Class → Trial Done → Converted (plus off-funnel: Member, ClassPass, Dormant)
+- New Lead → First Class → Second Class → Trial Done → Converted (plus off-funnel: Member, Class Pack, ClassPass, Dormant)
+- "Class Pack" (slug pack_member) = bought a UN1T credit pack of 4+ classes — that purchase IS a conversion, so they are reported there and never re-enter the funnel. Distinct from "ClassPass" (the third-party aggregator platform).
 Stage placement is automatic — derived by the classifier from booking/attendance/membership activity (webhook + nightly sync). Deals CANNOT be moved manually; a manual stage change would be reverted by the next sync. Click a deal to see details. Each deal is linked to a contact.
 
 ### Contacts (/contacts)

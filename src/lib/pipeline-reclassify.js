@@ -46,6 +46,8 @@ const SELECT_COLS = [
   // overnight (PIPELINE-FLAP).
   'recent_bookings',
   'converted_at',
+  // FUNNEL.3 — the sticky Class Pack stamp; same parity rule applies.
+  'pack_customer_at',
 ].join(', ')
 
 /**
@@ -239,6 +241,7 @@ export async function reclassifyAllContacts(db, args) {
       // attended=0 / never-converted and flap webhook-placed deals.
       recent_bookings: c.recent_bookings,
       converted_at: c.converted_at,
+      pack_customer_at: c.pack_customer_at,
     })
     const targetStageId = stageIdBySlug.get(targetSlug)
     if (!targetStageId) {

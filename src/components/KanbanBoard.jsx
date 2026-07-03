@@ -11,6 +11,7 @@ const stageColors = {
   trial_done:   '#F59E0B',
   converted:    '#059669',
   member:       '#64748B',
+  pack_member:  '#0891B2',
   classpass:    '#A855F7',
   dormant:      '#6B7280',
 }

@@ -27,6 +27,7 @@ const statusColors = {
   trial_done:   'border-l-amber-500',
   converted:    'border-l-emerald-500',
   member:       'border-l-slate-500',
+  pack_member:  'border-l-cyan-600',
   classpass:    'border-l-purple-500',
   dormant:      'border-l-gray-500',
 }

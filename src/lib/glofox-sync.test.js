@@ -17,6 +17,7 @@ import {
   computeCreditsRemaining,
   detectTrialTransitionTags,
   shouldStampConversion,
+  shouldStampPackCustomer,
   extractMembershipPlan,
   extractMembershipState,
   extractMemberProfile,
@@ -1951,6 +1952,30 @@ describe('mergeBookingAggregates', () => {
       { ...counts, last_attended_at: null, last_booked_at: '2026-04-01T00:00:00.000Z' },
     )
     expect(patch).not.toHaveProperty('last_booked_at')
+  })
+})
+
+describe('shouldStampPackCustomer (FUNNEL.3)', () => {
+  it('stamps a non-member holding 4+ active credits (Wendy: cold + 16cr)', () => {
+    expect(shouldStampPackCustomer({ newStatus: 'cold', credits: 16, existingPackCustomerAt: null })).toBe(true)
+  })
+  it('stamps at exactly the 4-credit floor', () => {
+    expect(shouldStampPackCustomer({ newStatus: 'lead', credits: 4, existingPackCustomerAt: null })).toBe(true)
+  })
+  it('write-once: never restamps', () => {
+    expect(shouldStampPackCustomer({ newStatus: 'cold', credits: 16, existingPackCustomerAt: '2026-06-01T00:00:00Z' })).toBe(false)
+  })
+  it('3 credits (a genuine trial / the mig-001 default) never stamps', () => {
+    expect(shouldStampPackCustomer({ newStatus: 'trial', credits: 3, existingPackCustomerAt: null })).toBe(false)
+  })
+  it('members, ClassPass and ex-members never stamp', () => {
+    for (const s of ['member', 'credit_member', 'classpass_payg', 'ex_member']) {
+      expect(shouldStampPackCustomer({ newStatus: s, credits: 50, existingPackCustomerAt: null })).toBe(false)
+    }
+  })
+  it('null/undefined credits never stamp', () => {
+    expect(shouldStampPackCustomer({ newStatus: 'lead', credits: null, existingPackCustomerAt: null })).toBe(false)
+    expect(shouldStampPackCustomer({ newStatus: 'lead', credits: undefined, existingPackCustomerAt: null })).toBe(false)
   })
 })
 
