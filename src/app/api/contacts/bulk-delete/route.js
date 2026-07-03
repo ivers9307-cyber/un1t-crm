@@ -30,7 +30,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
-import { redactWhatsAppForContact } from '@/lib/contact-merge'
+import { redactWhatsAppForContact, redactInBodyForContact } from '@/lib/contact-merge'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -87,6 +87,10 @@ export async function POST(request) {
     // us trying the delete, since the FK rules now SET NULL on
     // conversations + messages anyway.
     await redactWhatsAppForContact(db, id)
+    // GDPR erasure gap (audit M3): InBody tables SET NULL their contact
+    // FK, so raw body-composition payloads + phone survive orphaned.
+    // Hard-delete them before the contact row (must run pre-delete).
+    await redactInBodyForContact(db, id)
     const { error } = await db.from('contacts').delete().eq('id', id)
     if (error) {
       // After mig 094 there shouldn't be FK-blocked deletes, but

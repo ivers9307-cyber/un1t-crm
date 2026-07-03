@@ -247,6 +247,65 @@ export async function redactWhatsAppForContact(db, contactId) {
 }
 
 /**
+ * GDPR erasure for InBody body-composition data (audit M3).
+ *
+ * The InBody tables were created with `ON DELETE SET NULL` FKs to
+ * contacts, so deleting a contact leaves their raw body-composition
+ * payloads + phone orphaned but intact:
+ *   - inbody_webhook_events.matched_contact_id → SET NULL (mig 284):
+ *     the row survives carrying `tel_hp` (member phone) + `payload`
+ *     (full raw notification jsonb).
+ *   - inbody_scans.contact_id → SET NULL (mig 272): the row survives
+ *     carrying `matched_phone`, `raw` (raw scan jsonb) + the actual
+ *     body-composition metrics (weight/pbf/smm/…).
+ * (inbody_backfill_requests.contact_id is already ON DELETE CASCADE —
+ * mig 305 — so it needs no explicit handling here.)
+ *
+ * Body-composition data is special-category-adjacent health data and
+ * has no value once its member is erased, so we HARD-DELETE the rows
+ * for this contact rather than merely null the link. This must run
+ * BEFORE the contact row is deleted, because once the FK nulls the
+ * link we can no longer find the rows by contact_id.
+ *
+ * Best-effort + independent per table, matching redactWhatsAppForContact:
+ * a failure on one table logs and lets the others (and the parent
+ * delete) proceed. Idempotent — safe to call for a contact with no
+ * InBody history.
+ *
+ * @param {SupabaseClient} db          service-role client
+ * @param {string}        contactId
+ */
+export async function redactInBodyForContact(db, contactId) {
+  if (!contactId) throw new Error('redactInBodyForContact: contactId required')
+
+  // inbody_webhook_events — hard-delete the staging notifications for
+  // this contact (tel_hp + raw payload). SET NULL FK means these would
+  // otherwise survive erasure orphaned.
+  try {
+    await db
+      .from('inbody_webhook_events')
+      .delete()
+      .eq('matched_contact_id', contactId)
+  } catch (e) {
+    logWarn('contact-merge', 'redact inbody_webhook_events failed', { contactId, err: e })
+  }
+
+  // inbody_scans — hard-delete the enriched body-composition scans for
+  // this contact (matched_phone + raw jsonb + metrics).
+  try {
+    await db
+      .from('inbody_scans')
+      .delete()
+      .eq('contact_id', contactId)
+  } catch (e) {
+    logWarn('contact-merge', 'redact inbody_scans failed', { contactId, err: e })
+  }
+
+  // inbody_backfill_requests is ON DELETE CASCADE (mig 305) — the
+  // parent contact delete removes it automatically. Listed for symmetry.
+}
+
+/**
  * Compute the merged scalar field-set: survivor wins, but loser's
  * value is copied across when survivor's is null/empty. Pure helper
  * — no DB side-effects — so it's easily unit-tested. Tags are NOT
