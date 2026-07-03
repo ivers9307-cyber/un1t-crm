@@ -23,7 +23,7 @@ import {
   LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare,
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
   Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
-  Workflow, Timer, Projector, Trophy, Activity,
+  Workflow, Timer, Projector, Trophy, Activity, TrendingUp,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -38,6 +38,10 @@ export const DASHBOARD_LINK_PERM_KEYS = [
   'churn_radar',
   'lead_radar',
   'engagement_analytics',
+  // ADS-REPORT.3 — /dashboard/ads joined the dashboard tab family
+  // (paid-ad performance + cost-per-booking). Same OR-in-the-
+  // Dashboard-link treatment as the radars/engagement above.
+  'dashboard_ads',
 ]
 
 // Every top-level item carries a `section` (UI-FOUND.4) so the sidebar
@@ -95,6 +99,12 @@ export const ALL_NAV = [
   // PERSON-LINK.2 — duplicate review is now a tab on /contacts?tab=duplicates,
   // not a standalone sidebar entry. No sidebar item needed.
   { href: '/activities',          label: 'Tasks',     icon: CheckSquare, permission: 'activities',     section: 'sales' },
+  // ADS-REPORT.3 — paid-ad performance dashboard (spend, cost per
+  // booked class, blended CTR, per-ad breakdown). Own permission key
+  // (dashboard_ads) — owner/manager/head_coach by default, not staff.
+  // Also OR'd into DASHBOARD_LINK_PERM_KEYS so the pinned Dashboard
+  // link stays visible for a user holding only this permission.
+  { href: '/dashboard/ads',       label: 'Ads',       icon: TrendingUp,  permission: 'dashboard_ads',   section: 'sales' },
 
   // ── Gym — what's on at the gym ─────────────────────────────────
   //
