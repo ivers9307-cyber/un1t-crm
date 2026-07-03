@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { selectAll } from '@/lib/select-all'
@@ -32,10 +32,16 @@ export async function GET(request) {
       .limit(100)
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
     const rows = data || []
-    // All rows share the conversation's location; empty result leaks nothing.
-    if (rows.length) {
-      const guard = assertLocationAccess(user, rows[0].location_id)
-      if (guard) return guard
+    // Cross-tenant probe and unknown id are indistinguishable: both get
+    // the same 200-empty shape (no existence oracle — a 403 form would
+    // tell a staffer at location A that a foreign conversation id exists).
+    // getUserLocationIds returns every active location for master (their
+    // user.locations is the full set), so masters always pass. The
+    // `!== null` guard mirrors the PATCH sibling's pattern in case the
+    // helper ever adopts null-means-unrestricted semantics.
+    const allowedIds = getUserLocationIds(user)
+    if (rows.length && allowedIds !== null && !allowedIds.includes(rows[0].location_id)) {
+      return NextResponse.json({ success: true, requests: [] })
     }
     return NextResponse.json({ success: true, requests: rows })
   }
