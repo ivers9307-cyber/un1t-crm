@@ -1,5 +1,10 @@
--- 350 — contacts.push_prefs: per-category customer push-notification
+-- 352 — contacts.push_prefs: per-category customer push-notification
 -- preferences for the champ-app native app.
+--
+-- RENUMBERED 350 → 352: PRs #762 (FUNNEL.1) and #763 (this file) merged
+-- within the hour and both claimed 350. Applied to prod under its
+-- timestamp-keyed history name, so DB-side nothing changes — repo hygiene
+-- only, same precedent as the 348→349 renumber (commit 5b42c65e).
 --
 -- Shape: JSONB of channel-id → boolean, e.g. {"social": false}. The keys are
 -- the Android channel ids from shared/customer-push-channels.js
@@ -26,4 +31,4 @@ alter table public.contacts
   add column if not exists push_prefs jsonb not null default '{}'::jsonb;
 
 comment on column public.contacts.push_prefs is
-  'Per-category customer push preferences (mig 350): JSONB of channel-id → boolean, keys = shared/customer-push-channels.js ids (reminders|social|progress). Absent key = enabled (opt-out model, no backfill). Enforced server-side in both repos'' sendCustomerPush; the default channel always sends. Written only via champ-app /api/notification-prefs.';
+  'Per-category customer push preferences (mig 352): JSONB of channel-id → boolean, keys = shared/customer-push-channels.js ids (reminders|social|progress). Absent key = enabled (opt-out model, no backfill). Enforced server-side in both repos'' sendCustomerPush; the default channel always sends. Written only via champ-app /api/notification-prefs.';

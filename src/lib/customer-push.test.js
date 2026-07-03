@@ -55,7 +55,7 @@ describe('sendCustomerPush', () => {
   })
 })
 
-describe('sendCustomerPush — push_prefs filter (contacts.push_prefs, mig 350)', () => {
+describe('sendCustomerPush — push_prefs filter (contacts.push_prefs, mig 352)', () => {
   const ok = (n = 1) => ({ ok: true, json: async () => ({ data: Array.from({ length: n }, () => ({ status: 'ok' })) }) })
   const token = (c) => ({ id: c, expo_push_token: `ExponentPushToken[${c}]` })
 
