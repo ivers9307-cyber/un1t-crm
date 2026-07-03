@@ -1,4 +1,4 @@
--- 358: flagship transformation challenge flag.
+-- 362: flagship transformation challenge flag.
 --
 -- Operator decision (Richard, 2026-07-03) — sub-project 3 of the Pulse
 -- engagement roadmap: an operator turns a normal challenge into the marquee
