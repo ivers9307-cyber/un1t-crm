@@ -4,7 +4,9 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { createBrowserClient } from '@/lib/supabase'
 import { isServableMedia } from '@shared/whatsapp-media'
+import { mergeTimeline } from '@shared/approval-cards'
 import WAMediaContent from '@/components/WAMediaContent'
+import ApprovalActionCard from '@/components/ApprovalActionCard'
 import {
   ArrowLeft, Send, MessageCircle, Clock, CheckCheck,
   Check, Image as ImageIcon, FileText, Mic, AlertCircle, RefreshCw,
@@ -58,12 +60,15 @@ function isUnknownSender(conv) {
 // `embedded` (UIX-P1b): thread-pane-only mode for the unified inbox —
 // the internal conversation list is hidden and selection is driven by
 // the `initialConversationId` prop (synced on change, not just mount).
-export default function WAInbox({ locationId, userId, initialConversationId, embedded = false }) {
+export default function WAInbox({ locationId, userId, initialConversationId, embedded = false, onOpenBookTab }) {
   const [conversations, setConversations] = useState([])
   const [selectedId, setSelectedId] = useState(initialConversationId || null)
   const [messages, setMessages] = useState([])
   const [conversation, setConversation] = useState(null)
   const [newMessage, setNewMessage] = useState('')
+  // INBOX-APPROVALS.7 — pending/decided agent approval requests for the
+  // open conversation, merged into the message timeline below.
+  const [approvals, setApprovals] = useState([])
   // AGENT-QA.1 — local rating state (id → 'up'|'down'); persisted via
   // /api/agent/feedback (upsert per rater, server re-checks the message).
   const [agentFeedback, setAgentFeedback] = useState({})
@@ -235,6 +240,17 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
           }
         }
       )
+      // INBOX-APPROVALS.7 — refresh approval cards live (mig 357 publishes
+      // this table to supabase_realtime). Until that migration lands in
+      // prod this listener simply never fires; fetch-on-open still works.
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'agent_membership_requests' },
+        (payload) => {
+          const convId = payload?.new?.conversation_id || payload?.old?.conversation_id
+          if (convId && convId === selectedIdRef.current) fetchApprovals(convId)
+        }
+      )
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [locationId, fetchConversations])
@@ -245,8 +261,10 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   // clicks a different thread.
   useEffect(() => {
     selectedIdRef.current = selectedId
+    setApprovals([])
     if (selectedId) {
       fetchMessages(selectedId)
+      fetchApprovals(selectedId)
       setShowAddContact(false)
     }
   }, [selectedId])
@@ -299,6 +317,20 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     }
   }
 
+  // INBOX-APPROVALS.7 — approval requests tied to this conversation, for
+  // the inline cards in the timeline. Never errors for a valid session
+  // (returns { success:true, requests:[] } for foreign/unknown ids), so
+  // failure here just means the cards silently don't render.
+  async function fetchApprovals(convId) {
+    try {
+      const res = await fetch(`/api/agent/membership-requests?conversation_id=${convId}`)
+      const data = await res.json()
+      if (data.success) setApprovals(data.requests || [])
+    } catch {
+      /* non-fatal — cards just don't render */
+    }
+  }
+
   async function handleSend() {
     if (!newMessage.trim() || !selectedId) return
 
@@ -319,6 +351,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       if (data.success) {
         setNewMessage('')
         await fetchMessages(selectedId)
+        await fetchApprovals(selectedId)
         await fetchConversations()
       } else if (data.window_expired) {
         alert('The 24-hour messaging window has expired. You can only send approved template messages now.')
@@ -347,6 +380,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       if (data.success) {
         setShowAddContact(false)
         await fetchMessages(selectedId)
+        await fetchApprovals(selectedId)
         await fetchConversations()
       } else {
         alert(data.error || 'Failed to add contact')
@@ -405,6 +439,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
         setSelectedTemplate(null)
         setTemplateVars({})
         await fetchMessages(selectedId)
+        await fetchApprovals(selectedId)
         await fetchConversations()
       } else {
         alert(data.error || 'Failed to send template')
@@ -431,6 +466,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       if (data.success) {
         setSelectedCardSetId('')
         await fetchMessages(selectedId)
+        await fetchApprovals(selectedId)
         await fetchConversations()
       } else {
         alert(data.error || 'Failed to send card set')
@@ -732,66 +768,83 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
 
             {/* Messages */}
             <div className="flex-1 overflow-auto p-4 space-y-2 bg-[#0b141a]">
-              {messages.map(msg => (
-                <div
-                  key={msg.id}
-                  className={`flex ${msg.direction === 'outbound' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div className={`max-w-[65%] rounded-lg px-3 py-2 ${
-                    msg.direction === 'outbound'
-                      ? 'bg-[#005c4b] text-un1t-text'
-                      : 'bg-un1t-surface text-un1t-text'
-                  }`}>
-                    {msg.message_type === 'template' && (
-                      <p className="text-[10px] text-green-300 mb-1">Template: {msg.template_name}</p>
-                    )}
-                    {isServableMedia(msg)
-                      ? <WAMediaContent message={msg} />
-                      : <MessageTypeIcon type={msg.message_type} />}
-                    {(msg.body || !isServableMedia(msg)) && (
-                      <p className="text-sm whitespace-pre-wrap">{msg.body || `[${msg.message_type}]`}</p>
-                    )}
-                    <div className="flex items-center justify-end gap-1 mt-0.5">
-                      {/* C6 — react to a customer message (👍 ❤️ 🔥) */}
-                      {msg.direction === 'inbound' && msg.wa_message_id && (
-                        <span className="flex items-center gap-1 mr-auto">
-                          {['👍', '❤️', '🔥'].map(emoji => (
+              {mergeTimeline(messages, approvals).map(item => {
+                if (item.kind === 'approval') {
+                  return (
+                    <ApprovalActionCard
+                      key={item.key}
+                      request={item.request}
+                      contactId={conversation?.contact_id || null}
+                      locationId={locationId}
+                      contactFirstName={conversation?.contacts?.first_name || conversation?.wa_profile_name?.split(' ')[0] || null}
+                      onDecided={updated => setApprovals(prev => prev.map(r => (r.id === updated.id ? updated : r)))}
+                      onPrefillComposer={text => setNewMessage(text)}
+                      onOpenBookTab={onOpenBookTab}
+                    />
+                  )
+                }
+                const msg = item.message
+                return (
+                  <div
+                    key={item.key}
+                    className={`flex ${msg.direction === 'outbound' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div className={`max-w-[65%] rounded-lg px-3 py-2 ${
+                      msg.direction === 'outbound'
+                        ? 'bg-[#005c4b] text-un1t-text'
+                        : 'bg-un1t-surface text-un1t-text'
+                    }`}>
+                      {msg.message_type === 'template' && (
+                        <p className="text-[10px] text-green-300 mb-1">Template: {msg.template_name}</p>
+                      )}
+                      {isServableMedia(msg)
+                        ? <WAMediaContent message={msg} />
+                        : <MessageTypeIcon type={msg.message_type} />}
+                      {(msg.body || !isServableMedia(msg)) && (
+                        <p className="text-sm whitespace-pre-wrap">{msg.body || `[${msg.message_type}]`}</p>
+                      )}
+                      <div className="flex items-center justify-end gap-1 mt-0.5">
+                        {/* C6 — react to a customer message (👍 ❤️ 🔥) */}
+                        {msg.direction === 'inbound' && msg.wa_message_id && (
+                          <span className="flex items-center gap-1 mr-auto">
+                            {['👍', '❤️', '🔥'].map(emoji => (
+                              <button
+                                key={emoji}
+                                type="button"
+                                onClick={() => reactToMessage(msg, emoji)}
+                                disabled={reactingId === msg.id}
+                                className="text-[11px] leading-none opacity-40 hover:opacity-90 disabled:opacity-20"
+                                title="React"
+                              >{emoji}</button>
+                            ))}
+                          </span>
+                        )}
+                        {/* AGENT-QA.1 — rate Mia's replies; feeds the analytics quality list */}
+                        {msg.source === 'agent' && (
+                          <span className="flex items-center gap-1 mr-auto">
                             <button
-                              key={emoji}
                               type="button"
-                              onClick={() => reactToMessage(msg, emoji)}
-                              disabled={reactingId === msg.id}
-                              className="text-[11px] leading-none opacity-40 hover:opacity-90 disabled:opacity-20"
-                              title="React"
-                            >{emoji}</button>
-                          ))}
+                              onClick={() => rateAgentMessage(msg, 'up')}
+                              className={`text-[11px] leading-none ${agentFeedback[msg.id] === 'up' ? 'opacity-100' : 'opacity-40 hover:opacity-90'}`}
+                              title="Good reply"
+                            >👍</button>
+                            <button
+                              type="button"
+                              onClick={() => rateAgentMessage(msg, 'down')}
+                              className={`text-[11px] leading-none ${agentFeedback[msg.id] === 'down' ? 'opacity-100' : 'opacity-40 hover:opacity-90'}`}
+                              title="Bad reply — add a note"
+                            >👎</button>
+                          </span>
+                        )}
+                        <span className="text-[10px] text-un1t-text/50">
+                          {new Date(msg.sent_at || msg.created_at).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })}
                         </span>
-                      )}
-                      {/* AGENT-QA.1 — rate Mia's replies; feeds the analytics quality list */}
-                      {msg.source === 'agent' && (
-                        <span className="flex items-center gap-1 mr-auto">
-                          <button
-                            type="button"
-                            onClick={() => rateAgentMessage(msg, 'up')}
-                            className={`text-[11px] leading-none ${agentFeedback[msg.id] === 'up' ? 'opacity-100' : 'opacity-40 hover:opacity-90'}`}
-                            title="Good reply"
-                          >👍</button>
-                          <button
-                            type="button"
-                            onClick={() => rateAgentMessage(msg, 'down')}
-                            className={`text-[11px] leading-none ${agentFeedback[msg.id] === 'down' ? 'opacity-100' : 'opacity-40 hover:opacity-90'}`}
-                            title="Bad reply — add a note"
-                          >👎</button>
-                        </span>
-                      )}
-                      <span className="text-[10px] text-un1t-text/50">
-                        {new Date(msg.sent_at || msg.created_at).toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                      {msg.direction === 'outbound' && <StatusIcon status={msg.status} />}
+                        {msg.direction === 'outbound' && <StatusIcon status={msg.status} />}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
               <div ref={messagesEndRef} />
             </div>
 
