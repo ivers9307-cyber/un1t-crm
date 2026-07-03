@@ -192,6 +192,50 @@ export function zoneBreakdown(zonesSeconds) {
   })
 }
 
+// ── The Burn ─────────────────────────────────────────────────────
+//
+// A named, binary per-session win condition (like Orangetheory's
+// "splat"): a session earns a **Burn** when the member spent ≥ 12
+// minutes in Zone 4 or Zone 5 combined. Chantable, screenshot-worthy.
+//
+// Mirrors the existing z4plus concept (challenges.js metricValue
+// z4plus_minutes = (z4+z5)/60) — same numerator, expressed in seconds
+// so the threshold comparison is exact and unit-free.
+//
+// KEEP IN SYNC with the un1t-crm copy of this file (champ-app is canon)
+// so the CRM TV renders the identical Burn boolean.
+
+/** 12 minutes in Zone 4+ (Z4+Z5), in seconds. */
+export const BURN_THRESHOLD_SECONDS = 720
+
+/**
+ * Combined seconds in Zone 4 + Zone 5 for a persisted zones_seconds
+ * tally. Tolerates missing/partial/non-object input and postgres jsonb
+ * string keys ('4'/'5'). Returns 0 rather than throwing.
+ *
+ * @param {object|null|undefined} zonesSeconds  { '1'..'5': seconds }
+ * @returns {number} seconds in Z4 + Z5 (>= 0)
+ */
+export function burnSeconds(zonesSeconds) {
+  if (!zonesSeconds || typeof zonesSeconds !== 'object') return 0
+  const sec = (id) => {
+    const v = Number(zonesSeconds[id] ?? zonesSeconds[String(id)] ?? 0)
+    return Number.isFinite(v) && v > 0 ? v : 0
+  }
+  return sec(4) + sec(5)
+}
+
+/**
+ * Did this session earn a Burn? True when Z4+Z5 combined ≥ 12 min.
+ * Safe on missing/partial data (no Burn, no throw).
+ *
+ * @param {object|null|undefined} zonesSeconds
+ * @returns {boolean}
+ */
+export function isBurn(zonesSeconds) {
+  return burnSeconds(zonesSeconds) >= BURN_THRESHOLD_SECONDS
+}
+
 // ── internals ────────────────────────────────────────────────────
 
 export function computeAge(dob, refMs) {

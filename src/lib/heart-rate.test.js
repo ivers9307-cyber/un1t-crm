@@ -9,6 +9,9 @@ import {
   zoneForBpm,
   summariseSession,
   zoneBreakdown,
+  BURN_THRESHOLD_SECONDS,
+  burnSeconds,
+  isBurn,
 } from './heart-rate.js'
 
 // ── ZONE_DEFS shape ──────────────────────────────────────────────
@@ -232,5 +235,57 @@ describe('summariseSession with configurable zonePoints', () => {
     const base = summariseSession(minuteInZ5, 200, { zonePoints: { 1:1,2:2,3:3,4:4,5:5 } })
     const dbl = summariseSession(minuteInZ5, 200, { zonePoints: { 1:1,2:2,3:3,4:4,5:10 } })
     expect(dbl.effortPoints).toBeGreaterThan(base.effortPoints)
+  })
+})
+
+// ── The Burn (burnSeconds / isBurn) ──────────────────────────────
+
+describe('burnSeconds', () => {
+  it('sums Zone 4 + Zone 5 seconds', () => {
+    expect(burnSeconds({ 4: 300, 5: 120 })).toBe(420)
+  })
+  it('ignores Zones 1-3', () => {
+    expect(burnSeconds({ 1: 1000, 2: 1000, 3: 1000, 4: 60 })).toBe(60)
+  })
+  it('handles zone5-only', () => {
+    expect(burnSeconds({ 5: 800 })).toBe(800)
+  })
+  it('handles postgres jsonb string keys', () => {
+    expect(burnSeconds({ '4': 300, '5': 120 })).toBe(420)
+  })
+  it('returns 0 for missing/partial/invalid input (no throw)', () => {
+    expect(burnSeconds(null)).toBe(0)
+    expect(burnSeconds(undefined)).toBe(0)
+    expect(burnSeconds({})).toBe(0)
+    expect(burnSeconds('nope')).toBe(0)
+    expect(burnSeconds({ 4: 'x', 5: NaN })).toBe(0)
+    expect(burnSeconds({ 1: 500 })).toBe(0) // no Z4/Z5 keys at all
+  })
+})
+
+describe('isBurn', () => {
+  it('exposes the 12-minute (720s) threshold', () => {
+    expect(BURN_THRESHOLD_SECONDS).toBe(720)
+  })
+  it('earns a Burn at exactly 720s combined (boundary)', () => {
+    expect(isBurn({ 4: 720 })).toBe(true)
+    expect(isBurn({ 4: 600, 5: 120 })).toBe(true) // Z4+Z5 combo = 720
+  })
+  it('no Burn just under threshold (719s)', () => {
+    expect(isBurn({ 4: 600, 5: 119 })).toBe(false)
+    expect(isBurn({ 4: 719 })).toBe(false)
+  })
+  it('earns a Burn on zone5 alone when ≥ threshold', () => {
+    expect(isBurn({ 5: 720 })).toBe(true)
+    expect(isBurn({ 5: 900 })).toBe(true)
+  })
+  it('does not earn a Burn from Zones 1-3 no matter how long', () => {
+    expect(isBurn({ 1: 5000, 2: 5000, 3: 5000 })).toBe(false)
+  })
+  it('safe on missing/partial zones (no Burn, no throw)', () => {
+    expect(isBurn(null)).toBe(false)
+    expect(isBurn(undefined)).toBe(false)
+    expect(isBurn({})).toBe(false)
+    expect(isBurn({ 4: 300 })).toBe(false) // 5 min only
   })
 })

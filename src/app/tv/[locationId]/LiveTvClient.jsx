@@ -18,8 +18,25 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { buildTimeline, computeEffectiveElapsedMs, resolveTimerState, SEG_COLOR } from '@/lib/class-timer'
 import { planIntroTimers } from '@/lib/tv-class-intro'
 import { isKioskParam, showReconnecting } from '@/lib/tv-kiosk'
+import { isBurn } from '@/lib/heart-rate'
+import {
+  roomTotalPoints,
+  stableTileOrder,
+  sameOrder,
+  zoneWord,
+  snapshotSessions,
+  detectToastEvents,
+  toastDedupeKey,
+  selectPodium,
+  classDidEnd,
+} from '@/lib/tv-theatre'
 
 const POLL_MS = 2000
+
+// How long a toast stays on screen before auto-dismiss.
+const TOAST_MS = 6000
+// Outro podium dwell before returning to the idle board.
+const OUTRO_MS = 40000
 
 const ZONE_BG = {
   1: '#374151', // grey
@@ -93,9 +110,83 @@ export default function LiveTvClient({ locationId, endpoint }) {
 
   const reconnecting = showReconnecting({ consecutiveFailures: failures })
 
-  const sessions = data?.sessions || []
+  const sessions = useMemo(() => data?.sessions || [], [data])
   const availableStraps = data?.available_straps || []
-  const cols = gridColsFor(sessions.length)
+
+  // ── Fixed tile positions (mockup C) ──────────────────────────────
+  // The payload arrives sorted by points, which would teleport tiles
+  // every 2s. Re-order by a STABLE key so each member keeps their slot
+  // all class — colour is the drama, not position. A points-rank badge
+  // still conveys the leaderboard. `slotOrder` (state) carries the
+  // established slot order across polls; the memo consumes it, and an
+  // effect feeds the new order back (only when it actually changes, so
+  // we don't loop).
+  const [slotOrder, setSlotOrder] = useState([])
+  const { tiles, order } = useMemo(
+    () => stableTileOrder(sessions, slotOrder),
+    [sessions, slotOrder],
+  )
+  useEffect(() => {
+    setSlotOrder((prev) => (sameOrder(prev, order) ? prev : order))
+  }, [order])
+  const cols = gridColsFor(tiles.length)
+
+  // ── Room-total ticker (replaces "N active") ──────────────────────
+  const roomTotal = useMemo(() => roomTotalPoints(sessions), [sessions])
+
+  // ── Mid-class toasts (cross-poll threshold crossings) ────────────
+  // Track previous per-session zone/burn state + the set of already-
+  // announced member+event pairs, both across polls (refs — no re-render).
+  const prevSnapshotRef = useRef(new Map())
+  const announcedRef = useRef(new Set())
+  const [toastQueue, setToastQueue] = useState([])
+  useEffect(() => {
+    if (!data) return
+    const fresh = detectToastEvents(sessions, prevSnapshotRef.current, announcedRef.current)
+    prevSnapshotRef.current = snapshotSessions(sessions)
+    if (fresh.length > 0) {
+      for (const t of fresh) announcedRef.current.add(toastDedupeKey(t.key, t.event))
+      setToastQueue((q) => [...q, ...fresh])
+    }
+  }, [data, sessions])
+
+  // ── Outro podium (class-end) ─────────────────────────────────────
+  // Fires ONCE per class occurrence. hadClassRef tracks whether a live
+  // class has been seen; firedForKeyRef records which occurrence already
+  // triggered a podium so a timer-finished-but-class-still-present state
+  // (or the class going null) can't loop it. A genuinely NEW occurrence
+  // (different glofox_event_id) re-arms.
+  const hadClassRef = useRef(false)
+  const firedForKeyRef = useRef(null)
+  const outroClassKeyRef = useRef(null)
+  const [outro, setOutro] = useState(null) // { podium, total } while showing
+  useEffect(() => {
+    if (!data) return
+    const currentClass = data.current_class || null
+    const classKey = currentClass?.glofox_event_id || (currentClass ? 'live' : null)
+
+    // A new occurrence appeared → re-arm (allow a fresh podium later).
+    if (classKey && classKey !== firedForKeyRef.current) {
+      hadClassRef.current = true
+      outroClassKeyRef.current = classKey
+    }
+
+    const timerFinished = isTimerFinished(data.timer, data.server_time)
+    const ended = classDidEnd({ hadClass: hadClassRef.current, currentClass, timerFinished })
+    const armedKey = outroClassKeyRef.current
+    if (ended && armedKey && armedKey !== firedForKeyRef.current) {
+      firedForKeyRef.current = armedKey
+      hadClassRef.current = false
+      setOutro({ podium: selectPodium(sessions), total: roomTotalPoints(sessions) })
+    }
+  }, [data, sessions])
+
+  // Auto-dismiss the outro after its dwell, returning to the idle board.
+  useEffect(() => {
+    if (!outro) return
+    const t = setTimeout(() => setOutro(null), OUTRO_MS)
+    return () => clearTimeout(t)
+  }, [outro])
 
   // Green dot to the right of "Live" = the studio's HR bridge (Pi) is
   // streaming. Driven by last_seen_at freshness server-side (see the
@@ -125,13 +216,23 @@ export default function LiveTvClient({ locationId, endpoint }) {
           </p>
           <h1 className="mt-1 text-2xl font-bold">{data?.location?.name || 'Studio'}</h1>
         </div>
-        <div className="text-right">
-          <p className="text-xl font-mono tabular-nums">
-            {now.toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-          </p>
-          <p className="text-xs text-neutral-400">
-            {sessions.length} active
-          </p>
+        <div className="flex items-center gap-6">
+          {/* Room-total ticker — counts up smoothly between polls. */}
+          <div className="text-right">
+            <p className="text-3xl font-bold tabular-nums leading-none text-white">
+              <CountUp value={roomTotal} />
+              <span className="ml-1.5 text-xs font-medium uppercase tracking-widest text-neutral-400">UN1T</span>
+            </p>
+            <p className="mt-0.5 text-[10px] uppercase tracking-[0.25em] text-neutral-500">room total</p>
+          </div>
+          <div className="text-right">
+            <p className="text-xl font-mono tabular-nums">
+              {now.toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </p>
+            <p className="text-xs text-neutral-400">
+              {sessions.length} live
+            </p>
+          </div>
         </div>
       </header>
 
@@ -143,15 +244,19 @@ export default function LiveTvClient({ locationId, endpoint }) {
         </p>
       )}
 
-      {sessions.length === 0 ? (
+      {tiles.length === 0 ? (
         <EmptyBoard />
       ) : (
         <div
           className="grid gap-3 p-4"
           style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
         >
-          {sessions.map((s, idx) => (
-            <Tile key={s.id} session={s} rank={idx + 1} />
+          {tiles.map((s) => (
+            // key = the STABLE tile key, so React reuses the same DOM node
+            // for a member all class → their tile never teleports; only its
+            // colour/BPM update. When a member leaves, the grid reflows and
+            // CSS transitions the survivors into place (no hard jump).
+            <Tile key={s._key} session={s} rank={s._rank} />
           ))}
         </div>
       )}
@@ -173,7 +278,124 @@ export default function LiveTvClient({ locationId, endpoint }) {
       )}
 
       <ClassStartIntro current={data?.current_class} serverTime={data?.server_time} />
+
+      <ToastLayer queue={toastQueue} onDone={(t) => setToastQueue((q) => q.filter((x) => x !== t))} />
+
+      {outro && <OutroPodium podium={outro.podium} total={outro.total} />}
     </main>
+  )
+}
+
+// Smoothly animates a number toward `value` over ~0.9s (eased), so the
+// room-total ticker counts up between 2s polls rather than snapping.
+function CountUp({ value }) {
+  const [display, setDisplay] = useState(value)
+  const fromRef = useRef(value)
+  const rafRef = useRef(0)
+  useEffect(() => {
+    const from = fromRef.current
+    const to = Number(value) || 0
+    if (from === to) return
+    const start = performance.now()
+    const dur = 900
+    const step = (t) => {
+      const p = Math.min(1, (t - start) / dur)
+      const eased = 1 - Math.pow(1 - p, 3) // easeOutCubic
+      const cur = Math.round(from + (to - from) * eased)
+      setDisplay(cur)
+      if (p < 1) { rafRef.current = requestAnimationFrame(step) } else { fromRef.current = to }
+    }
+    cancelAnimationFrame(rafRef.current)
+    rafRef.current = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [value])
+  return <span className="tabular-nums">{display}</span>
+}
+
+// Shows one toast at a time from the queue, auto-dismissing after TOAST_MS.
+// Broadcast-clean: slides down from the top, holds, fades out.
+function ToastLayer({ queue, onDone }) {
+  const active = queue[0] || null
+  const [shown, setShown] = useState(false)
+  useEffect(() => {
+    if (!active) return
+    setShown(false)
+    const inT = setTimeout(() => setShown(true), 30)
+    const outT = setTimeout(() => setShown(false), TOAST_MS - 500)
+    const doneT = setTimeout(() => onDone(active), TOAST_MS)
+    return () => { clearTimeout(inT); clearTimeout(outT); clearTimeout(doneT) }
+  }, [active, onDone])
+  if (!active) return null
+  const amber = active.event === 'burn'
+  return (
+    <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)', zIndex: 45,
+      display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
+      <div style={{
+        marginTop: shown ? 22 : -80,
+        opacity: shown ? 1 : 0,
+        transition: 'margin-top .5s cubic-bezier(.2,.7,.2,1), opacity .5s ease',
+        background: amber ? '#b45309' : '#b91c1c',
+        color: '#fff', fontWeight: 800, fontSize: 26, letterSpacing: 1,
+        padding: '14px 34px', borderRadius: 999,
+        boxShadow: '0 10px 40px rgba(0,0,0,.5)', whiteSpace: 'nowrap',
+      }}>
+        {active.event === 'burn' ? '🔥 ' : '🔴 '}{active.message}
+      </div>
+    </div>
+  )
+}
+
+// CLASS COMPLETE — TOP MOVERS podium. Shown for OUTRO_MS then the board
+// returns to idle. Top 3 by effort points + room total + app nudge.
+function OutroPodium({ podium, total }) {
+  const [shown, setShown] = useState(false)
+  useEffect(() => { const t = setTimeout(() => setShown(true), 40); return () => clearTimeout(t) }, [])
+  const order = [1, 0, 2] // render 2nd, 1st, 3rd for a real podium shape
+  const heights = { 1: 220, 2: 160, 3: 120 }
+  const medal = { 1: '#F5C542', 2: '#C0C7CE', 3: '#B4783E' }
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 55, background: '#08080A',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      opacity: shown ? 1 : 0, transition: 'opacity .6s ease' }}>
+      <span style={{ position: 'absolute', top: 24, left: 28, fontWeight: 700, letterSpacing: 6, color: '#fff' }}>UN1T</span>
+      <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: 8, color: '#7a7a82' }}>CLASS COMPLETE</span>
+      <span style={{ fontSize: '5.5vw', lineHeight: 1, fontWeight: 800, color: '#fff', letterSpacing: 2, margin: '6px 0 30px' }}>TOP MOVERS</span>
+
+      {podium.length === 0 ? (
+        <span style={{ fontSize: 26, color: '#b8b8be' }}>Great work, everyone.</span>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 28, height: 260 }}>
+          {order.map((slot) => {
+            const p = podium[slot]
+            if (!p) return <div key={slot} style={{ width: 200 }} />
+            return (
+              <div key={p.key} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 200 }}>
+                <span style={{ fontSize: 24, fontWeight: 700, color: '#fff', marginBottom: 6, textAlign: 'center' }}>{p.name}</span>
+                <span style={{ fontSize: 30, fontWeight: 800, color: medal[p.place], marginBottom: 10, fontVariantNumeric: 'tabular-nums' }}>
+                  {p.points}<span style={{ fontSize: 13, fontWeight: 600, color: '#888', marginLeft: 4 }}>UN1T</span>
+                </span>
+                <div style={{
+                  width: '100%', height: shown ? heights[p.place] : 0,
+                  background: `linear-gradient(180deg, ${medal[p.place]}33 0%, #111 100%)`,
+                  borderTop: `4px solid ${medal[p.place]}`, borderRadius: '8px 8px 0 0',
+                  transition: `height .8s cubic-bezier(.2,.7,.2,1) ${0.15 * p.place}s`,
+                  display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 12,
+                }}>
+                  <span style={{ fontSize: 44, fontWeight: 900, color: medal[p.place] }}>{p.place}</span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <div style={{ marginTop: 40, display: 'flex', alignItems: 'center', gap: 40 }}>
+        <span style={{ fontSize: 20, color: '#b8b8be' }}>
+          Room total <strong style={{ color: '#fff', fontVariantNumeric: 'tabular-nums' }}>{total}</strong> UN1T
+        </span>
+        <span style={{ fontSize: 20, color: '#b8b8be' }}>results in your app 📱</span>
+      </div>
+    </div>
   )
 }
 
@@ -310,24 +532,38 @@ function TimerBanner({ timer, serverTime }) {
 function Tile({ session, rank }) {
   const zoneColor = session.currentZone?.color || '#374151'
   const zoneBg = ZONE_BG[session.currentZone?.id] || '#1f2937'
+  // Burn = a session that has spent ≥12 min in Zone 4+ (shared helper).
+  const burn = !session.stale && isBurn(session.zonesSeconds)
 
   return (
     <div
-      className={`relative flex flex-col rounded-2xl p-4 sm:p-5 transition ${
+      className={`relative flex flex-col rounded-2xl p-4 sm:p-5 transition-all duration-500 ${
         session.stale ? 'opacity-40' : ''
       }`}
       style={{
         background: `linear-gradient(135deg, ${zoneBg} 0%, #000 140%)`,
         borderLeft: `8px solid ${zoneColor}`,
+        // Burn flare — a soft amber (Zone 4) glow ringing the tile.
+        boxShadow: burn ? '0 0 0 2px #F59E0B, 0 0 26px 2px rgba(245,158,11,.5)' : undefined,
       }}
     >
-      {/* Rank badge */}
+      {/* Rank badge (points rank — position is fixed, this is the leaderboard) */}
       <span className="absolute right-3 top-3 rounded-full bg-black/40 px-2 py-0.5 text-xs font-bold text-white">
-        #{rank}
+        #{rank ?? '—'}
       </span>
 
+      {/* Burn flare flag — in the Zone-4 amber, top-left. */}
+      {burn && (
+        <span
+          className="absolute left-3 top-3 rounded-md px-2 py-0.5 text-xs font-extrabold tracking-wide"
+          style={{ backgroundColor: '#F59E0B', color: '#000' }}
+        >
+          🔥 BURN
+        </span>
+      )}
+
       {/* Name */}
-      <p className="text-lg font-semibold leading-tight">{session.displayName}</p>
+      <p className={`text-lg font-semibold leading-tight ${burn ? 'mt-6' : ''}`}>{session.displayName}</p>
 
       {/* BPM — the hero number */}
       <div className="mt-2 flex items-baseline gap-2">
@@ -346,7 +582,7 @@ function Tile({ session, rank }) {
           className="rounded-md px-2 py-0.5 font-bold"
           style={{ backgroundColor: zoneColor, color: '#000' }}
         >
-          {session.currentZone?.label || '—'}
+          {zoneWord(session.currentZone?.id) || '—'}
         </span>
         <span className="font-bold tabular-nums">
           {session.effortPoints ?? 0}
@@ -405,6 +641,20 @@ function gridColsFor(n) {
   if (n <= 16) return 4
   if (n <= 25) return 5
   return 6
+}
+
+// Has the live class timer run to completion? Mirrors TimerBanner's
+// server-clock anchoring (offset = serverTime − localNow) so the outro
+// can fire off the timer finishing as well as the class going null.
+// Returns false when there's no timer/structure (class-null is the
+// other trigger).
+function isTimerFinished(timer, serverTime) {
+  if (!timer || !timer.structure_snapshot) return false
+  const timeline = buildTimeline(timer.structure_snapshot)
+  if (!timeline) return false
+  const offset = serverTime ? new Date(serverTime).getTime() - Date.now() : 0
+  const st = resolveTimerState(timeline, computeEffectiveElapsedMs(timer, Date.now() + offset))
+  return !!st.finished
 }
 
 // ms → "m:ss" for the timer banner.
