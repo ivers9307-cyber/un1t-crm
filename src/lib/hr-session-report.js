@@ -10,7 +10,7 @@
 // KEEP IN SYNC across champ-app + un1t-crm (champ-app is canon). Both repos
 // assert against src/lib/__fixtures__/session-report.fixture.json.
 
-import { zoneBreakdown } from './heart-rate.js'
+import { zoneBreakdown, burnSeconds, isBurn } from './heart-rate.js'
 import { buildSessionAnalytics } from './hr-analytics.js'
 
 export const SESSION_REPORT_VERSION = 1
@@ -105,6 +105,11 @@ export function buildSessionReport(ctx, { nowMs = Date.now() } = {}) {
       peak_hr_bpm: Number.isFinite(session.peak_hr_bpm) ? session.peak_hr_bpm : null,
       max_hr_used: Number.isFinite(session.max_hr_used) ? session.max_hr_used : null,
       zones,
+      // The Burn — binary Z4+ win condition (≥12 min in Zone 4/5). Shipped
+      // as a boolean + the Zone 4+ minutes so every surface renders it the
+      // same way without re-doing the maths.
+      burn: isBurn(session.zones_seconds),
+      z4plus_minutes: Math.round(burnSeconds(session.zones_seconds) / 60),
     },
     comparisons: {
       vs_recent: mapTrend(analytics.overall?.pointsTrend, 'effort_points'),

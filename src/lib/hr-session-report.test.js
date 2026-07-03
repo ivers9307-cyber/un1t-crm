@@ -26,6 +26,13 @@ describe('buildSessionReport', () => {
     expect(pctSum).toBeCloseTo(1, 5)
   })
 
+  it('flags the Burn + Zone 4+ minutes from zones_seconds', () => {
+    // Fixture zones_seconds: Z4=600 + Z5=300 = 900s ≥ 720s → Burn earned;
+    // 900/60 = 15 Zone-4+ minutes. Computed from the helper, not the fixture.
+    expect(report.summary.burn).toBe(true)
+    expect(report.summary.z4plus_minutes).toBe(15)
+  })
+
   it('maps the recent + peak trends (both up, enough data)', () => {
     expect(report.comparisons.vs_recent).toMatchObject({ field: 'effort_points', direction: 'up', has_enough_data: true })
     expect(report.comparisons.vs_recent_peak).toMatchObject({ field: 'peak_hr_bpm', has_enough_data: true })
