@@ -19,18 +19,21 @@ import { useRouter } from 'next/navigation'
 import { User } from 'lucide-react'
 import PersonActionBar from './PersonActionBar'
 
-// Keyed on pipeline_stage_slug (PIPELINE5 + CLASSIFY.2).
+// Keyed on pipeline_stage_slug (FUNNEL.1 taxonomy).
 const statusColors = {
-  new_lead:          'border-l-blue-500',
-  active_trial:      'border-l-green-500',
-  hot_conversion:    'border-l-amber-500',
-  active_member:     'border-l-emerald-500',
-  at_risk_member:    'border-l-orange-500',
-  classpass_active:  'border-l-purple-500',
-  lapsed:            'border-l-red-500',
-  dormant:           'border-l-gray-500',
-  dormant_classpass: 'border-l-gray-500',
+  new_lead:     'border-l-blue-500',
+  first_class:  'border-l-green-500',
+  second_class: 'border-l-teal-500',
+  trial_done:   'border-l-amber-500',
+  converted:    'border-l-emerald-500',
+  member:       'border-l-slate-500',
+  classpass:    'border-l-purple-500',
+  dormant:      'border-l-gray-500',
 }
+
+// Funnel columns 1–4 show the next-class badge; Converted and the
+// off-funnel stages don't (it'd be noise there).
+const BADGE_SLUGS = new Set(['new_lead', 'first_class', 'second_class', 'trial_done'])
 
 export default function DealCard({ deal, locationId }) {
   const router = useRouter()
@@ -65,10 +68,21 @@ export default function DealCard({ deal, locationId }) {
             {contact.lead_source}
           </span>
         )}
-        {contact.trial_credits_remaining != null && contact.pipeline_stage_slug === 'active_trial' && (
+        {contact.trial_credits_remaining != null && BADGE_SLUGS.has(contact.pipeline_stage_slug) && (
           <span className="inline-block mt-1.5 ml-1 text-[10px] px-1.5 py-0.5 bg-green-900/40 rounded text-green-400">
             {contact.trial_credits_remaining} credits
           </span>
+        )}
+        {BADGE_SLUGS.has(contact.pipeline_stage_slug) && (
+          contact.next_class_at ? (
+            <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 bg-emerald-500/10 rounded text-emerald-700">
+              Next: {new Date(contact.next_class_at).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/Dublin' })}
+            </span>
+          ) : (
+            <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/10 rounded text-red-700">
+              No class booked
+            </span>
+          )
         )}
       </div>
     </div>

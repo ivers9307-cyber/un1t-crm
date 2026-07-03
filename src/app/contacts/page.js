@@ -79,11 +79,9 @@ export default async function ContactsPage(props) {
     : query.eq('location_id', locationId)
   query = query.order('created_at', { ascending: false }).limit(200)
   if (status) query = query.eq('pipeline_stage_slug', status)
-  // Active-trial chip excludes ClassPass PAYG by default — they
-  // share the active_trial stage slug but aren't real trialists.
-  // Mirror this in ContactsView for the client-side path. Operator
-  // can still see them via the Advanced filter ('Lead Source' = 'classpass').
-  if (status === 'active_trial') query = query.neq('lead_source', 'classpass')
+  // FUNNEL.1 — the old active_trial chip's ClassPass carve-out is
+  // gone: ClassPass PAYG contacts classify into their own 'classpass'
+  // stage now, so no lead_source exclusion is needed.
   if (search) {
     // SEARCH.1: widened to match the API path's coverage (name +
     // email + first_name + last_name + phone, with digit-only phone

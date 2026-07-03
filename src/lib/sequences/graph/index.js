@@ -10,6 +10,7 @@ export {
 } from './edit.js'
 export { graphToTree, treeToGraph, isPureTree, flattenTreeIds } from './tree.js'
 export {
-  NODE_TYPES, TRIGGER_TYPES, CHANNEL_NODE_TYPES, CONFIG_NODE_TYPES,
+  NODE_TYPES, ACTIVE_NODE_TYPES, RETIRED_NODE_TYPES,
+  TRIGGER_TYPES, CHANNEL_NODE_TYPES, CONFIG_NODE_TYPES,
   TRIGGER_SOURCE_ID, isChannelNode, parseGraphShape,
 } from './schema.js'

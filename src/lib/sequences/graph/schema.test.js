@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  NODE_TYPES, TRIGGER_TYPES, CHANNEL_NODE_TYPES, CONFIG_NODE_TYPES,
+  NODE_TYPES, ACTIVE_NODE_TYPES, RETIRED_NODE_TYPES,
+  TRIGGER_TYPES, CHANNEL_NODE_TYPES, CONFIG_NODE_TYPES,
   TRIGGER_SOURCE_ID, isChannelNode, parseGraphShape,
 } from './schema.js'
 
@@ -10,6 +11,23 @@ describe('graph schema constants', () => {
       'email', 'whatsapp', 'sms', 'wait', 'apply_tag', 'update_field',
       'internal_task', 'webhook', 'branch', 'move_pipeline_stage', 'glofox_provision',
     ])
+  })
+  it('move_pipeline_stage is retired: still parseable (legacy drafts) but never offered', () => {
+    // FUNNEL.1 — stage placement is classifier-derived. The type stays
+    // in NODE_TYPES so legacy drafts pass the whole-graph shape check
+    // on save; ACTIVE_NODE_TYPES (palette + AI vocabulary) excludes it.
+    expect(RETIRED_NODE_TYPES).toEqual(['move_pipeline_stage'])
+    expect(NODE_TYPES).toContain('move_pipeline_stage')
+    expect(ACTIVE_NODE_TYPES).not.toContain('move_pipeline_stage')
+    expect(ACTIVE_NODE_TYPES).toEqual(NODE_TYPES.filter((t) => t !== 'move_pipeline_stage'))
+    // A legacy graph containing the retired node must still parse.
+    const legacy = {
+      version: 1,
+      trigger: { type: 'tag_added', config: { tag: 'glofox_trial_engaged' } },
+      nodes: [{ id: 'n1', type: 'move_pipeline_stage', config: { stage_slug: 'conversion_ready' } }],
+      edges: [{ from: 'trigger', to: 'n1' }],
+    }
+    expect(parseGraphShape(legacy).ok).toBe(true)
   })
   it('splits channel vs config nodes', () => {
     expect(CHANNEL_NODE_TYPES).toEqual(['email', 'whatsapp', 'sms', 'wait'])

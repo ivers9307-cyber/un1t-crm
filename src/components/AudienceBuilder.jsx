@@ -4,17 +4,15 @@ import { useEffect, useState } from 'react'
 import { Plus, Trash2, Users } from 'lucide-react'
 
 const FIELD_OPTIONS = [
-  // CLASSIFY.1 — primary funnel-stage filter. Denormalised onto
-  // contacts.pipeline_stage_slug by mig 155 (synced from deals.stage_id
-  // via trigger). These are the canonical PIPELINE5 slugs.
-  // pipeline_stage_slug is what operators reach for intuitively
-  // ("Active Member", "Hot Conversion") — it replaced the legacy
-  // "Lead Status" filter that was effectively dead (>99% defaulted to
-  // 'active_trial' on import and was never reliably updated).
+  // FUNNEL.1 — primary funnel-stage filter (canonical funnel slugs,
+  // mig 350). Denormalised onto contacts.pipeline_stage_slug (originally
+  // mig 155, synced from deals.stage_id via trigger). Stage placement is
+  // classifier-derived (webhook + nightly cron) — operators never write
+  // it. It replaced the legacy "Lead Status" filter that was effectively
+  // dead (>99% defaulted on import and was never reliably updated).
   { value: 'pipeline_stage_slug',   label: 'Stage',                 type: 'select',
-    options: ['new_lead', 'active_trial', 'hot_conversion', 'active_member',
-              'at_risk_member', 'classpass_active', 'lapsed', 'dormant',
-              'dormant_classpass'] },
+    options: ['new_lead', 'first_class', 'second_class', 'trial_done',
+              'converted', 'member', 'classpass', 'dormant'] },
   // GLOFOX2.1.8 — Glofox-side raw membership status. This is what the
   // pipeline classifier reads — most operators should filter on
   // "Stage" above instead. Kept as an advanced filter for power users
@@ -208,12 +206,13 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
   }
 
   function addFilter() {
-    // CLASSIFY.1 — default new rows to Stage = active_member. lead_status
-    // is no longer in FIELD_OPTIONS; the audience-filter allowlist
-    // would reject it.
+    // FUNNEL.1 — default new rows to Stage = member (established
+    // members: the most common broadcast audience). lead_status is no
+    // longer in FIELD_OPTIONS; the audience-filter allowlist would
+    // reject it.
     updateFilter([
       ...filters,
-      { field: 'pipeline_stage_slug', op: 'eq', value: 'active_member' },
+      { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
     ])
   }
 

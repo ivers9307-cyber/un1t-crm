@@ -78,7 +78,7 @@ describe('describeNode — operator-facing one-line summary per type', () => {
     [{ type: 'update_field', config: { field: 'label', value: 'hot' } }, 'Update field', 'Set label = hot'],
     [{ type: 'internal_task', config: { subject: 'Call them' } }, 'Internal task', 'Call them'],
     [{ type: 'webhook', config: { url: 'https://x.io/hook', method: 'POST' } }, 'Webhook', 'POST https://x.io/hook'],
-    [{ type: 'move_pipeline_stage', config: { stage_slug: 'active_member' } }, 'Move pipeline', 'Move to active_member'],
+    [{ type: 'move_pipeline_stage', config: { stage_slug: 'converted' } }, 'Move pipeline', 'Move to converted'],
     [{ type: 'branch', config: { predicate: { type: 'has_tag', tag: 'vip' } } }, 'Branch', 'Has tag “vip”'],
     [{ type: 'branch', config: { predicate: { type: 'field_equals', field: 'label', value: 'hot' } } }, 'Branch', 'label = hot'],
     [{ type: 'glofox_provision', config: {} }, 'Create in Glofox', 'Create Glofox account + trial'],

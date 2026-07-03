@@ -47,14 +47,9 @@ export async function getDeal(id) {
   return error ? { success: false, error: error.message } : { success: true, data }
 }
 
-export async function moveDeal(dealId, newStageId) {
-  const { data, error } = await supabase.from('deals')
-    .update({ stage_id: newStageId, updated_at: new Date().toISOString() })
-    .eq('id', dealId)
-    .select()
-    .single()
-  return error ? { success: false, error: error.message } : { success: true, data }
-}
+// FUNNEL.1 — moveDeal() was removed: stage placement is classifier-
+// derived (webhook + nightly cron), so a manual deals.stage_id write
+// is silently reverted by the next sync.
 
 export async function setDealStatus(dealId, status) {
   // status: 'open' | 'won' | 'lost'

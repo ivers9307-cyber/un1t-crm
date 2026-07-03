@@ -13,17 +13,16 @@ import { initials } from '@/lib/person-view'
 
 // Pipeline-stage pill styles — mirrors the -700 text ramp convention
 // (CLAUDE.md: "text on light cards needs the -700 ramp").
-// Keyed on pipeline_stage_slug (PIPELINE5 taxonomy).
+// Keyed on pipeline_stage_slug (FUNNEL.1 taxonomy).
 const STAGE_PILL = {
-  new_lead:          'bg-blue-500/10 text-blue-700',
-  active_trial:      'bg-emerald-500/10 text-emerald-700',
-  hot_conversion:    'bg-amber-500/10 text-amber-700',
-  active_member:     'bg-emerald-500/10 text-emerald-700',
-  at_risk_member:    'bg-orange-500/10 text-orange-700',
-  classpass_active:  'bg-purple-500/10 text-purple-700',
-  lapsed:            'bg-red-500/10 text-red-700',
-  dormant:           'bg-slate-500/10 text-slate-700',
-  dormant_classpass: 'bg-slate-500/10 text-slate-700',
+  new_lead:     'bg-blue-500/10 text-blue-700',
+  first_class:  'bg-emerald-500/10 text-emerald-700',
+  second_class: 'bg-teal-500/10 text-teal-700',
+  trial_done:   'bg-amber-500/10 text-amber-700',
+  converted:    'bg-emerald-500/10 text-emerald-700',
+  member:       'bg-slate-500/10 text-slate-700',
+  classpass:    'bg-purple-500/10 text-purple-700',
+  dormant:      'bg-slate-500/10 text-slate-700',
 }
 const STAGE_PILL_DEFAULT = 'bg-slate-500/10 text-slate-700'
 

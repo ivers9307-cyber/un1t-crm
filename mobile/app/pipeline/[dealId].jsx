@@ -1,6 +1,8 @@
 // Deal detail screen. iOS-feeling sectioned layout:
 //   1. Contact card (avatar, name, lead status, contact actions)
-//   2. Stage selector — tap to move to a different stage
+//   2. Stage (read-only) — FUNNEL.1: stage is classifier-derived;
+//      manual moves are reverted by the next sync, so the tap-to-move
+//      selector was removed.
 //   3. Won / Lost actions
 //   4. Activity timeline (notes + activities, newest first)
 //   5. Quick add: log call / log note
@@ -35,7 +37,7 @@ function BackHeaderLeft({ router, label = 'Back' }) {
 }
 import { useAuth } from '../../lib/auth-context'
 import {
-  getDeal, listStages, moveDeal, setDealStatus,
+  getDeal, setDealStatus,
   listActivitiesForContact, listNotesForContact,
   logActivity, createNote,
 } from '../../lib/pipeline-api'
@@ -83,7 +85,6 @@ export default function DealDetail() {
   const { activeLocation, profile } = useAuth()
   const router = useRouter()
   const [deal, setDeal] = useState(null)
-  const [stages, setStages] = useState([])
   const [activities, setActivities] = useState([])
   const [notes, setNotes] = useState([])
   const [loading, setLoading] = useState(true)
@@ -92,12 +93,8 @@ export default function DealDetail() {
   const [submittingLog, setSubmittingLog] = useState(false)
 
   const refresh = useCallback(async () => {
-    const [dealRes, stagesRes] = await Promise.all([
-      getDeal(dealId),
-      listStages(activeLocation?.id),
-    ])
+    const dealRes = await getDeal(dealId)
     if (dealRes.success) setDeal(dealRes.data)
-    if (stagesRes.success) setStages(stagesRes.data || [])
 
     if (dealRes.success && dealRes.data?.contact_id) {
       const [actRes, noteRes] = await Promise.all([
@@ -113,12 +110,6 @@ export default function DealDetail() {
     setLoading(true)
     refresh().finally(() => setLoading(false))
   }, [refresh])
-
-  async function moveToStage(stageId) {
-    const res = await moveDeal(dealId, stageId)
-    if (!res.success) Alert.alert('Couldn’t move deal', res.error)
-    else refresh()
-  }
 
   async function markStatus(status) {
     Alert.alert(
@@ -258,28 +249,26 @@ export default function DealDetail() {
           />
         )}
 
-        {/* Stage selector */}
-        <Section title="Stage">
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerClassName="pr-4">
-            {stages.map(s => {
-              const sel = s.id === deal.stage_id
-              return (
-                <Pressable
-                  key={s.id}
-                  onPress={() => moveToStage(s.id)}
-                  className={`mr-2 px-4 py-2 rounded-full flex-row items-center ${
-                    sel ? 'bg-un1t-text' : 'bg-un1t-surface border border-un1t-border'
-                  }`}
-                >
-                  <View className="w-2 h-2 rounded-full mr-2" style={{ backgroundColor: s.color || '#94A3B8' }} />
-                  <Text className={`text-sm ${sel ? 'text-un1t-bg font-semibold' : 'text-un1t-text'}`}>
-                    {s.name}
-                  </Text>
-                </Pressable>
-              )
-            })}
-          </ScrollView>
-        </Section>
+        {/* Stage — read-only. FUNNEL.1: stage is classifier-derived
+            (webhook + nightly cron); a manual move is silently
+            reverted by the next sync, so the tap-to-move selector
+            was removed. */}
+        {deal.pipeline_stages && (
+          <Section title="Stage">
+            <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 flex-row items-center">
+              <View
+                className="w-2 h-2 rounded-full mr-2"
+                style={{ backgroundColor: deal.pipeline_stages.color || '#94A3B8' }}
+              />
+              <Text className="text-sm font-semibold text-un1t-text">
+                {deal.pipeline_stages.name}
+              </Text>
+              <Text className="text-xs text-un1t-subtle ml-auto">
+                Set automatically from activity
+              </Text>
+            </View>
+          </Section>
+        )}
 
         {/* Close actions */}
         <Section title="Close">

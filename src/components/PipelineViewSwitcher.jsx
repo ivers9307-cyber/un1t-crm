@@ -1,21 +1,22 @@
 'use client'
 
-// PIPELINE5.8 — Active vs Dormant tab switcher above the Kanban.
+// FUNNEL.1 — Funnel vs Off funnel tab switcher above the Kanban.
 //
 // Lives outside the KanbanBoard so the page can SSR each view's
 // stages/deals separately. Uses ?view= query param so the operator
-// can deep-link to "show me the dormant pile" and bookmark it.
+// can deep-link to "show me the off-funnel pile" and bookmark it.
+// NOTE: the param value stays `dormant` (bookmarks + the page.js
+// branch depend on it) — only the visible labels changed.
 //
 // Counts come from server-side count(*) heads — they reflect the
-// total in each pile, not just what's rendered (relevant after the
-// 5.7 backfill when the dormant pile may be in the thousands).
+// total in each pile, not just what's rendered.
 
 import { useRouter, useSearchParams, usePathname } from 'next/navigation'
 import { Layers, Archive } from 'lucide-react'
 
 const TABS = [
-  { id: 'active',  label: 'Active',  Icon: Layers },
-  { id: 'dormant', label: 'Dormant', Icon: Archive },
+  { id: 'active',  label: 'Funnel',     Icon: Layers },
+  { id: 'dormant', label: 'Off funnel', Icon: Archive },
 ]
 
 export default function PipelineViewSwitcher({ view, activeCount, dormantCount }) {

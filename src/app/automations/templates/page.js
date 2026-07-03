@@ -13,7 +13,7 @@
 
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { ChevronLeft, Zap, Mail, MessageSquare, Phone, Clock, GitBranch, Tag, ClipboardList, Webhook, ArrowRightCircle } from 'lucide-react'
+import { ChevronLeft, Zap, Mail, MessageSquare, Phone, Clock, GitBranch, Tag, ClipboardList, Webhook } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { SEQUENCE_TEMPLATES, TEMPLATE_CATEGORIES } from '@/lib/sequence-templates'
@@ -58,9 +58,9 @@ const stepMeta = {
   update_field:  { icon: Tag,           label: 'Set field' },
   internal_task: { icon: ClipboardList, label: 'Task' },
   webhook:       { icon: Webhook,       label: 'Webhook' },
-  // GLOFOX4.3 — move the contact's open deal to a target pipeline
-  // stage. Templates use this to "graduate" trial members on signal.
-  move_pipeline_stage: { icon: ArrowRightCircle, label: 'Move pipeline' },
+  // move_pipeline_stage was RETIRED in FUNNEL.1 (stage is classifier-
+  // derived); no template ships it any more. Unknown/legacy types fall
+  // through to the generic chip below.
 }
 
 export default async function FlowTemplatesGallery() {

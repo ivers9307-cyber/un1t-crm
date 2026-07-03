@@ -25,18 +25,17 @@ const SequencePicker = dynamic(() => import('./SequencePicker'), { ssr: false })
 const ContactMergeModal = dynamic(() => import('./ContactMergeModal'), { ssr: false })
 const ContactBulkDeleteModal = dynamic(() => import('./ContactBulkDeleteModal'), { ssr: false })
 
-// Badge palette keyed by pipeline_stage_slug (PIPELINE5 + CLASSIFY.2).
+// Badge palette keyed by pipeline_stage_slug (FUNNEL.1 taxonomy).
 // Unmapped slugs fall back to the neutral grey badge.
 const statusBadge = {
-  new_lead:           'bg-blue-500/20 text-blue-400',
-  active_trial:       'bg-green-500/20 text-green-400',
-  hot_conversion:     'bg-amber-500/20 text-amber-400',
-  active_member:      'bg-emerald-500/20 text-emerald-400',
-  at_risk_member:     'bg-orange-500/20 text-orange-400',
-  classpass_active:   'bg-purple-500/20 text-purple-400',
-  lapsed:             'bg-red-500/20 text-red-400',
-  dormant:            'bg-gray-500/20 text-gray-400',
-  dormant_classpass:  'bg-gray-500/20 text-gray-400',
+  new_lead:     'bg-blue-500/20 text-blue-400',
+  first_class:  'bg-green-500/20 text-green-400',
+  second_class: 'bg-teal-500/20 text-teal-400',
+  trial_done:   'bg-amber-500/20 text-amber-400',
+  converted:    'bg-emerald-500/20 text-emerald-400',
+  member:       'bg-slate-500/20 text-slate-400',
+  classpass:    'bg-purple-500/20 text-purple-400',
+  dormant:      'bg-gray-500/20 text-gray-400',
 }
 
 function formatStage(slug) {

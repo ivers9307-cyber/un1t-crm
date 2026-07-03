@@ -46,7 +46,8 @@ export const CHECKIN_DEFAULTS = {
 // Funnel stages that count as "new" — established members never get a
 // first-class check-in (their first class was long ago; the stage
 // gate is what tells a true first-timer from a returning regular).
-const CHECKIN_STAGES = new Set(['new_lead', 'active_trial', 'hot_conversion'])
+// FUNNEL.1 — the four lead columns of the derived funnel.
+const CHECKIN_STAGES = new Set(['new_lead', 'first_class', 'second_class', 'trial_done'])
 const CHECKIN_MAX_AGE_H = 24
 
 /**
@@ -521,7 +522,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
     const { data: contacts } = await db.from('contacts')
       .select('id, first_name, name, wa_phone, phone, pipeline_stage_slug, last_attended_at, first_class_checkin_at, recent_bookings, opted_out')
       .eq('location_id', location.id)
-      .in('pipeline_stage_slug', ['new_lead', 'active_trial', 'hot_conversion'])
+      .in('pipeline_stage_slug', ['new_lead', 'first_class', 'second_class', 'trial_done'])
       .gte('last_attended_at', sinceIso)
       .is('first_class_checkin_at', null)
       .limit(50)

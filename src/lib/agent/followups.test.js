@@ -95,13 +95,13 @@ describe('template components + recorded body', () => {
 // AGENT-CHECKIN.1 — eligibility for the post-first-class check-in.
 describe('classifyCheckinCandidate', () => {
   const base = {
-    stage: 'active_trial',
+    stage: 'first_class',
     lastAttendedAtMs: now - 3 * H,
     checkinSentAt: null,
     nowMs: now,
     delayHours: 2,
   }
-  it('sends for a trial-stage contact, after the delay, once ever', () => {
+  it('sends for a lead-stage contact, after the delay, once ever', () => {
     expect(classifyCheckinCandidate(base)).toEqual({ action: 'checkin' })
   })
   it('waits for the delay and expires after 24h', () => {
@@ -110,7 +110,7 @@ describe('classifyCheckinCandidate', () => {
   })
   it('never repeats and never targets established members', () => {
     expect(classifyCheckinCandidate({ ...base, checkinSentAt: '2026-06-01T00:00:00Z' }).reason).toBe('already_sent')
-    expect(classifyCheckinCandidate({ ...base, stage: 'active_member' }).reason).toBe('not_new')
+    expect(classifyCheckinCandidate({ ...base, stage: 'member' }).reason).toBe('not_new')
     expect(classifyCheckinCandidate({ ...base, stage: null }).reason).toBe('not_new')
   })
 })

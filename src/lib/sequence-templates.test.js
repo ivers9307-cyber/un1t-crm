@@ -39,48 +39,52 @@ describe('SEQUENCE_TEMPLATES catalog', () => {
 })
 
 // GLOFOX4.4 — the four trial-lifecycle templates. Locking down the
-// trigger tag + the pipeline-move step config so a refactor to
-// either side can't silently break the conversion flow.
+// trigger tag + comms-only step lists so a refactor to either side
+// can't silently break the conversion flow. FUNNEL.1 retired the
+// move_pipeline_stage step type (stage placement is classifier-
+// derived), so NO template may ship one any more.
 describe('GLOFOX4.4 trial-lifecycle templates', () => {
   const engagedTpl = getTemplate('glofox_trial_engaged_to_conversion')
   const creditsTpl = getTemplate('glofox_trial_credits_low_push')
   const endedTpl   = getTemplate('glofox_trial_ended_winback')
   const convertedTpl = getTemplate('glofox_trial_converted_welcome')
 
-  it('engaged template fires on glofox_trial_engaged and moves to conversion_ready', () => {
+  it('no template anywhere ships a move_pipeline_stage step (retired in FUNNEL.1)', () => {
+    for (const tpl of SEQUENCE_TEMPLATES) {
+      expect(
+        tpl.steps.find((s) => s.step_type === 'move_pipeline_stage'),
+        `${tpl.id} still ships a retired move_pipeline_stage step`,
+      ).toBeUndefined()
+    }
+  })
+
+  it('engaged template fires on glofox_trial_engaged and is comms-only (wait → email → sms)', () => {
     expect(engagedTpl).not.toBeNull()
     expect(engagedTpl.trigger_type).toBe('tag_added')
     expect(engagedTpl.trigger_config?.tag).toBe('glofox_trial_engaged')
-    const move = engagedTpl.steps.find((s) => s.step_type === 'move_pipeline_stage')
-    expect(move, 'no move_pipeline_stage step in engaged template').toBeTruthy()
-    expect(move.config?.stage_slug).toBe('conversion_ready')
+    // The leading 2h wait preserves the send timing the template had
+    // before its move step was retired.
+    expect(engagedTpl.steps.map((s) => s.step_type)).toEqual(['wait', 'email', 'sms'])
+    expect(engagedTpl.steps[0].delay_hours).toBe(2)
   })
 
-  it('credits-low template fires on glofox_trial_credits_low and moves to conversion_ready', () => {
+  it('credits-low template fires on glofox_trial_credits_low and is comms-only (sms → email)', () => {
     expect(creditsTpl).not.toBeNull()
     expect(creditsTpl.trigger_type).toBe('tag_added')
     expect(creditsTpl.trigger_config?.tag).toBe('glofox_trial_credits_low')
-    const move = creditsTpl.steps.find((s) => s.step_type === 'move_pipeline_stage')
-    expect(move).toBeTruthy()
-    expect(move.config?.stage_slug).toBe('conversion_ready')
+    expect(creditsTpl.steps.map((s) => s.step_type)).toEqual(['sms', 'email'])
   })
 
-  it('trial-ended template fires on glofox_trial_ended and does NOT move pipeline', () => {
-    // Win-back drip stays in Follow-up Needed where the GLOFOX2.1.4
-    // auto-mover put them. Sequence just sends comms.
+  it('trial-ended template fires on glofox_trial_ended (comms-only)', () => {
     expect(endedTpl).not.toBeNull()
     expect(endedTpl.trigger_type).toBe('tag_added')
     expect(endedTpl.trigger_config?.tag).toBe('glofox_trial_ended')
-    expect(endedTpl.steps.find((s) => s.step_type === 'move_pipeline_stage')).toBeUndefined()
   })
 
-  it('trial-converted template fires on glofox_trial_converted and does NOT move pipeline', () => {
-    // applyMemberSync GLOFOX2.1.4 already moves trial → member's
-    // deal to the Member stage. Welcome sequence is comms-only.
+  it('trial-converted template fires on glofox_trial_converted (comms-only)', () => {
     expect(convertedTpl).not.toBeNull()
     expect(convertedTpl.trigger_type).toBe('tag_added')
     expect(convertedTpl.trigger_config?.tag).toBe('glofox_trial_converted')
-    expect(convertedTpl.steps.find((s) => s.step_type === 'move_pipeline_stage')).toBeUndefined()
   })
 
   it('every trial-lifecycle template uses a long re-enrolment cooldown', () => {

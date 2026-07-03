@@ -356,9 +356,12 @@ export async function runSequences({ now = new Date() } = {}) {
         branchTargetOrder = await processBranchStep(db, { step, contact })
         sendId = null
       } else if (step.step_type === 'move_pipeline_stage') {
-        // GLOFOX4.3 — move the contact's open deal to a target
-        // pipeline stage. Config: { stage_slug }. Writes a
-        // 'pipeline' activity row for the audit trail. Idempotent.
+        // RETIRED (FUNNEL.1) — stage is classifier-derived; the
+        // handler no-ops (logs a timeline entry, writes nothing) and
+        // the enrolment advances normally. The branch stays so a
+        // legacy step row never falls through to the unknown-step
+        // throw below, which would wedge the enrolment on this step
+        // forever (the SEQ-LOOP-FIX failed-advance incident class).
         await movePipelineStageStep(db, { step, contact, sequence })
         sendId = null
       } else if (step.step_type === 'glofox_provision') {

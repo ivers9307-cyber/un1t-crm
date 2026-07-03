@@ -23,7 +23,11 @@ import { Filter, X, Save, Bookmark, Trash2 } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
 import ContactsTable from './ContactsTable'
 
-const STATUSES = ['', 'active_trial', 'member', 'cold', 'lost_member', 'returning']
+// FUNNEL.1 — chip values are the canonical classifier-derived funnel
+// slugs (mig 350): four lead columns, the win column, and the three
+// off-funnel pools.
+const STATUSES = ['', 'new_lead', 'first_class', 'second_class', 'trial_done',
+  'converted', 'member', 'classpass', 'dormant']
 
 export default function ContactsView({
   initialContacts,
@@ -211,22 +215,18 @@ export default function ContactsView({
     fetchContacts()
   }, [apiActive, fetchContacts])
 
-  // Status filter + search + classpass-exclusion applied client-side
-  // over initialContacts when we're not using the API. Mirrors the
-  // server-rendered behaviour (URL ?status=… still drives the chip
-  // selection) but also makes the search box live-filter as you
-  // type without needing the advanced-filter panel open.
+  // Status filter + search applied client-side over initialContacts
+  // when we're not using the API. Mirrors the server-rendered
+  // behaviour (URL ?status=… still drives the chip selection) but
+  // also makes the search box live-filter as you type without
+  // needing the advanced-filter panel open.
   //
-  // Active-trial chip excludes lead_source='classpass' by default —
-  // ClassPass PAYG members share the 'active_trial' pipeline stage
-  // slug but aren't real UN1T trialists; showing them under that
-  // chip clutters the operator's view of who actually needs nurturing.
+  // FUNNEL.1 — the old active_trial chip's ClassPass carve-out is
+  // gone: ClassPass PAYG contacts now classify into their own
+  // 'classpass' stage, so they never share a chip with trialists.
   const visibleContacts = useMemo(() => {
     let rows = clientContacts !== null ? clientContacts : initialContacts
     if (status) rows = rows.filter(c => c.pipeline_stage_slug === status)
-    if (status === 'active_trial') {
-      rows = rows.filter(c => c.lead_source !== 'classpass')
-    }
     // SEARCH.1: when apiActive, the API has already done a wider
     // search (name + email + first_name + last_name + phone, multi-
     // token). Re-applying a name/email-only filter client-side would

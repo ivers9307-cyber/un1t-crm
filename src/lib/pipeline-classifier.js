@@ -1,264 +1,118 @@
-// PIPELINE5.2 — engagement-aware pipeline classifier.
+// FUNNEL.1 — acquisition-funnel classifier (operator-approved 2026-07-02).
 //
-// Single pure function that maps a contact's (Glofox status,
-// engagement signal, recency) to a pipeline_stages.slug. Replaces
-// the simpler GLOFOX_STATUS_TO_STAGE_SLUG map in glofox-sync.js,
-// which was a 1:1 status→stage mapping that didn't account for
-// staleness — operators ended up with 8k pipeline ghosts after
-// the bulk import.
+// The pipeline is now a pure lead→member funnel. Member lifecycle
+// (at-risk / lapsed) is the Churn Radar's job — it keys on Glofox
+// status and never read pipeline slugs, so nothing breaks.
 //
-// Stage definitions (final, signed off by operator on 2026-05-12):
+// Stage definitions:
+//   new_lead     — non-member, 0 classes attended, joined ≤60d ago
+//                  (joined_at ONLY — lead_created_at is import-poisoned)
+//   first_class  — 1 class attended, last attended ≤60d
+//   second_class — 2 classes attended, last attended ≤60d
+//   trial_done   — 3+ attended, not yet a member. THE decision point.
+//   converted    — became member/credit_member ≤60d ago (converted_at,
+//                  stamped by applyMemberSync on the status transition)
+//   member       — converted >60d ago, or pre-existing member (off funnel)
+//   classpass    — classpass_payg, always (off funnel — distinct motion)
+//   dormant      — aged-out leads, ex_members, ghosts (off funnel)
 //
-//   new_lead         — status in {lead, cold, tour}; joined < 90d
-//                      ago; never attended
-//   active_trial     — status='trial'; attended in last 30d OR
-//                      joined < 14d ago (still in trial window)
-//   hot_conversion   — trial / tour / no_sale_trial AND
-//                        (≥2 classes in last 7d
-//                         OR trial_credits_remaining ≤ 1)
-//   active_member    — status in {member, credit_member}; attended
-//                      in last 30d OR paid in last 60d
-//   at_risk_member   — status in {member, credit_member}; no booking
-//                      in 30-90d AND no payment in last 60d
-//   classpass_active — status='classpass_payg'; attended in last 30d
-//   lapsed           — was active in last 6mo, now 60-180d idle
-//   dormant          — 180+ days idle, non-ClassPass; OR no
-//                      engagement signal at all
-//   dormant_classpass— classpass_payg WITHOUT attendance in last 30d
+// Attended counts come from contacts.recent_bookings (last 10 from the
+// Glofox sync). For funnel-age leads that IS their complete history;
+// last_attended_at backstops the count if the list was ever pruned.
 //
-// Pure function — input → output, no side effects. The caller (the
-// nightly cron and applyMemberSync) feeds it a snapshot and writes
-// the result to deals.stage_id. Idempotent — same input always
-// produces same output.
-//
-// Tests in pipeline-classifier.test.js cover every branch with
-// concrete fixtures (Paula, Andrew, Sarah, etc.).
+// Pure function — same input, same output. Callers: applyMemberSync
+// (per-webhook, near-instant) and the nightly pipeline-classify cron.
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-// Tuneable thresholds. Centralised so the operator can tweak by
-// editing one block without grepping the codebase. Times are in
-// days, counts are bookings.
 export const PIPELINE_THRESHOLDS = {
-  // "Hot Conversion" signal — the GLOFOX4.2 trial-transition tags
-  // use the same numbers so the classifier and the sequence
-  // triggers stay aligned.
-  HOT_RECENT_DAYS:           7,
-  HOT_MIN_ATTENDED:          2,
-  HOT_CREDITS_REMAINING_MAX: 1,
-
-  // "Active" engagement window — recent enough to count as
-  // currently using the studio.
-  ACTIVE_RECENT_DAYS:        30,
-
-  // "At Risk" warning window for paying members — booked at some
-  // point but gone quiet. Don't go further than this before
-  // classifying as lapsed.
-  AT_RISK_MAX_DAYS:          90,
-
-  // Payment recency to keep someone in Active Member when they
-  // pay but rarely attend (subscription-style members).
-  ACTIVE_PAID_RECENT_DAYS:   60,
-
-  // "Lapsed" — was a member or trial, gone quiet for a while but
-  // still close enough that re-engagement is realistic. The lower
-  // bound is the boundary AFTER active+at_risk so a paying member
-  // with 91d silence rolls cleanly from at_risk → lapsed at day
-  // 91, and a non-member who attended exactly 60d ago lands in
-  // lapsed straight away.
-  LAPSED_MIN_DAYS:           60,
-  LAPSED_MAX_DAYS:           180,
-
-  // New Lead window — joined recently enough to be considered
-  // top-of-funnel. After this they go to dormant unless they've
-  // shown engagement.
-  NEW_LEAD_RECENT_DAYS:      90,
-
-  // Active Trial — trial members who JUST joined are active even
-  // before their first class.
-  TRIAL_GRACE_DAYS:          14,
+  // Column 1 entry window, keyed on joined_at (Glofox tenure date).
+  NEW_LEAD_WINDOW_DAYS:    60,
+  // Columns 2–4 stay on the board while the lead is still active —
+  // keyed on last attendance so a mid-trial lead doesn't vanish when
+  // their joined_at crosses 60d.
+  FUNNEL_ACTIVITY_DAYS:    60,
+  // Column 5 window, keyed on converted_at; then off-board to member.
+  CONVERTED_WINDOW_DAYS:   60,
+  // 3 classes ≈ a completed trial pack → decision point.
+  TRIAL_DONE_MIN_ATTENDED: 3,
 }
 
-// Helper: number of days between two ISO timestamps. Returns null
-// when either is missing.
+// Helper: days elapsed between an ISO timestamp and `now` (epoch ms).
+// Returns null when the timestamp is missing/unparseable. A FUTURE
+// timestamp clamps to 0 ("0 days ago") — check-in can flag attendance
+// before class start, and that freshly-flagged attendance must count
+// as active, not fall out of every recency window.
 function daysSince(iso, now = Date.now()) {
   if (!iso) return null
   const ms = now - new Date(iso).getTime()
-  if (!Number.isFinite(ms) || ms < 0) return null
+  if (!Number.isFinite(ms)) return null
+  if (ms < 0) return 0
   return ms / DAY_MS
 }
 
+/** Count attended classes in a recent_bookings jsonb array. */
+export function countAttendedBookings(recentBookings) {
+  if (!Array.isArray(recentBookings)) return 0
+  return recentBookings.filter((b) => b && b.attended === true).length
+}
+
 /**
- * Classify a contact into a pipeline stage based on their current
- * (Glofox status × engagement × recency).
- *
- * @param {object} contact
- * @param {string|null} contact.glofox_membership_status
- * @param {string|null} contact.glofox_membership_state   active/paused/locked/future
- * @param {string|null} contact.glofox_membership_expiry  ISO timestamp; future = paid up
- * @param {string|null} contact.last_attended_at      ISO timestamp
- * @param {number|null} contact.total_attended_7d
- * @param {number|null} contact.total_attended_30d
- * @param {string|null} contact.last_payment_at       ISO timestamp
- * @param {string|null} contact.joined_at             ISO timestamp
- * @param {string|null} contact.created_at            ISO timestamp (CRM)
- * @param {number|null} contact.trial_credits_remaining
- * @param {number}      [now=Date.now()]              for tests
- * @returns {string}  pipeline_stages.slug
+ * Soonest FUTURE booked class in a recent_bookings array, as an ISO
+ * string, or null. Drives the board's "next class booked" badge.
+ * time_start is unix SECONDS (Glofox payload convention).
  */
+export function nextBookedClass(recentBookings, now = Date.now()) {
+  if (!Array.isArray(recentBookings)) return null
+  let soonest = null
+  for (const b of recentBookings) {
+    if (!b || String(b.status || '').toUpperCase() !== 'BOOKED') continue
+    const ms = Number(b.time_start) * 1000
+    if (!Number.isFinite(ms) || ms <= now) continue
+    if (soonest === null || ms < soonest) soonest = ms
+  }
+  return soonest === null ? null : new Date(soonest).toISOString()
+}
+
 export function classifyContact(contact, now = Date.now()) {
   if (!contact || typeof contact !== 'object') return 'dormant'
-
   const status = contact.glofox_membership_status || null
-  // GLOFOX-CLASSIFY.1 — live Glofox membership lifecycle state
-  // (active / paused / locked). Authoritative when present;
-  // null for most contacts until the detail-backfill reaches
-  // them, so every use below is null-guarded.
-  const membershipState = contact.glofox_membership_state || null
-  const credits = Number.isFinite(contact.trial_credits_remaining)
-    ? contact.trial_credits_remaining
-    : null
 
-  const daysSinceAttended = daysSince(contact.last_attended_at, now)
-  const daysSincePaid     = daysSince(contact.last_payment_at, now)
-  const daysSinceJoined   = daysSince(contact.joined_at, now)
-
-  // GLOFOX-CLASSIFY.3 — "live membership" signal. A membership expiry
-  // in the FUTURE means the subscription is paid up. This is far
-  // better populated than last_payment_at (synced for <6% of contacts
-  // — only via the invoice backfill, never the recurring sync) and is
-  // authoritative, so it's the floor for the member branch below: a
-  // paid-up member is never silently dropped to lapsed/dormant.
-  const expiryMs = contact.glofox_membership_expiry
-    ? new Date(contact.glofox_membership_expiry).getTime()
-    : null
-  const membershipLive = expiryMs !== null && Number.isFinite(expiryMs) && expiryMs > now
-  const attended7d  = Number.isFinite(contact.total_attended_7d)  ? contact.total_attended_7d  : 0
-  // total_attended_30d is read separately by the active checks below
-  // (via the recentlyAttended derived flag, which uses
-  // last_attended_at). Not surfaced here to avoid an unused warning.
-
-  const recentlyAttended = daysSinceAttended !== null && daysSinceAttended <= PIPELINE_THRESHOLDS.ACTIVE_RECENT_DAYS
-  const recentlyPaid     = daysSincePaid !== null && daysSincePaid <= PIPELINE_THRESHOLDS.ACTIVE_PAID_RECENT_DAYS
-  const lapsedWindow     = daysSinceAttended !== null
-    && daysSinceAttended >= PIPELINE_THRESHOLDS.LAPSED_MIN_DAYS
-    && daysSinceAttended <= PIPELINE_THRESHOLDS.LAPSED_MAX_DAYS
-
-  // ── ClassPass ────────────────────────────────────────────────
-  // ClassPass users always go to one of two ClassPass-specific
-  // buckets — they're a distinct sales motion from UN1T
-  // memberships. Operator's call: only show actively-attending
-  // ClassPass users in the visible pipeline; older ones move to
-  // a dormant ClassPass archive.
-  if (status === 'classpass_payg') {
-    return recentlyAttended ? 'classpass_active' : 'dormant_classpass'
+  // ── Members: recently converted → the funnel's win column ──────
+  if (status === 'member' || status === 'credit_member') {
+    const sinceConverted = daysSince(contact.converted_at, now)
+    if (sinceConverted !== null && sinceConverted <= PIPELINE_THRESHOLDS.CONVERTED_WINDOW_DAYS) {
+      return 'converted'
+    }
+    return 'member'
   }
 
-  // ── Upcoming (membership_state='future') ─────────────────────
-  // GLOFOX-CLASSIFY.2 — Glofox marks a membership/trial 'future' when
-  // it hasn't started yet: a trial "starts" on first booking, and a
-  // paid membership can have a future start date. A RECENT future
-  // signup is a live upcoming relationship worth keeping visible in
-  // the funnel; an OLD one is an account that opened and never booked,
-  // so we let it fall through to the recency rules below (→ dormant).
-  // Null-safe: only fires when state is exactly 'future'.
-  if (membershipState === 'future') {
-    const recentlyJoined = daysSinceJoined !== null
-      && daysSinceJoined <= PIPELINE_THRESHOLDS.NEW_LEAD_RECENT_DAYS
-    if (recentlyJoined) return 'active_trial'
-  }
+  // ── ClassPass: excluded from the funnel entirely ───────────────
+  if (status === 'classpass_payg') return 'classpass'
 
-  // ── Hot Conversion (signal-driven) ──────────────────────────
-  // Fires regardless of trial vs tour vs no_sale_trial as long as
-  // the engagement signal is strong. The credits threshold
-  // catches "used 2 of 3 trial credits, about to convert OR
-  // about to lose them" — the exact GLOFOX4.2 signal the
-  // trial-pipeline templates listen for.
-  const isHotCandidateStatus = (
-    status === 'trial' || status === 'tour' || status === 'no_sale_trial'
+  // ── Ex-members are winback targets, not funnel leads ───────────
+  if (status === 'ex_member') return 'dormant'
+
+  // ── Funnel candidates: lead/cold/tour/no_sale_*/trial/null ─────
+  // last_attended_at backstops the count: it's advance-only on the
+  // persisted row, so a non-empty value means ≥1 attendance even if
+  // recent_bookings was pruned.
+  const attended = Math.max(
+    countAttendedBookings(contact.recent_bookings),
+    contact.last_attended_at ? 1 : 0,
   )
-  if (isHotCandidateStatus) {
-    const meetsAttendBar =
-      attended7d >= PIPELINE_THRESHOLDS.HOT_MIN_ATTENDED
-    const meetsCreditsBar =
-      credits !== null && credits <= PIPELINE_THRESHOLDS.HOT_CREDITS_REMAINING_MAX
-    if (meetsAttendBar || meetsCreditsBar) return 'hot_conversion'
+  const sinceAttended = daysSince(contact.last_attended_at, now)
+  const sinceJoined   = daysSince(contact.joined_at, now)
+
+  if (attended >= 1) {
+    const stillActive = sinceAttended !== null
+      && sinceAttended <= PIPELINE_THRESHOLDS.FUNNEL_ACTIVITY_DAYS
+    if (!stillActive) return 'dormant'
+    if (attended >= PIPELINE_THRESHOLDS.TRIAL_DONE_MIN_ATTENDED) return 'trial_done'
+    return attended === 2 ? 'second_class' : 'first_class'
   }
 
-  // ── Active Trial ─────────────────────────────────────────────
-  // Trial status + still engaged OR within the new-joiner grace
-  // window. Trial members who haven't engaged in 30+ days drop
-  // through to lapsed/dormant below.
-  if (status === 'trial') {
-    const inGracePeriod = daysSinceJoined !== null && daysSinceJoined <= PIPELINE_THRESHOLDS.TRIAL_GRACE_DAYS
-    if (recentlyAttended || inGracePeriod) return 'active_trial'
-  }
-
-  // ── Member states ────────────────────────────────────────────
-  // member + credit_member can be: actively using, at risk, or
-  // dropped through to lapsed/dormant. The at-risk window is
-  // 30-90d since last booking — gives the operator a chance to
-  // save the member proactively before they fully lapse.
-  const isMemberStatus = status === 'member' || status === 'credit_member'
-  if (isMemberStatus) {
-    // GLOFOX-CLASSIFY.1 — authoritative overdue override. Glofox
-    // 'locked' = membership frozen for non-payment: needs attention
-    // NOW, even if they attended yesterday. Beats the recency guess
-    // (which would call a just-attended overdue member active).
-    // Null-safe: absent state falls straight through to recency.
-    if (membershipState === 'locked') return 'at_risk_member'
-
-    // GLOFOX-CLASSIFY.3 — live-membership floor. A future expiry means
-    // the subscription is paid up, so the member can only be active or
-    // at-risk — never lapsed/dormant while still paying. Engagement
-    // decides which: recently attended/paid → active; paid-up but quiet
-    // → at_risk (the highest-value save cohort). This also folds in
-    // 'paused' members (paused but paid): the ones still attending stay
-    // active rather than being demoted, and quiet ones surface as
-    // at_risk instead of vanishing into the hidden dormant bucket.
-    if (membershipLive) {
-      return (recentlyAttended || recentlyPaid) ? 'active_member' : 'at_risk_member'
-    }
-
-    // No live-expiry signal — fall back to recency. (Expiry is only
-    // ~46% populated today; until the detail backfill reaches everyone,
-    // members without it are still classified on attendance/payment.)
-    if (recentlyAttended || recentlyPaid) return 'active_member'
-    if (daysSinceAttended !== null && daysSinceAttended <= PIPELINE_THRESHOLDS.AT_RISK_MAX_DAYS) {
-      return 'at_risk_member'
-    }
-    if (lapsedWindow) return 'lapsed'
-    // Member status but completely silent — old ghost record.
-    return 'dormant'
-  }
-
-  // ── New Lead ─────────────────────────────────────────────────
-  // Recently created/joined, hasn't attended yet, status hasn't
-  // moved past the funnel-top buckets. Anything older than the
-  // new-lead window drops to dormant — they've been sitting
-  // unmoved for ages and aren't actionable.
-  const newLeadStatuses = new Set(['lead', 'cold', 'tour', 'no_sale_tour', null])
-  if (newLeadStatuses.has(status)) {
-    // GLOFOX-CLASSIFY.1 — freshness keys off joined_at ONLY.
-    // created_at is the CRM bulk-import date (recent for the whole
-    // imported base), so it made ~93% of leads look fresh (audit
-    // 2026-05-30). joined_at is Glofox's real tenure date; this
-    // aligns the pipeline with Lead Radar, which already uses it.
-    const recentlyJoined =
-      daysSinceJoined !== null && daysSinceJoined <= PIPELINE_THRESHOLDS.NEW_LEAD_RECENT_DAYS
-    if (recentlyJoined && !recentlyAttended) return 'new_lead'
-  }
-
-  // ── Lapsed ──────────────────────────────────────────────────
-  // Catch-all for "was active in the lapsed window". Anyone who
-  // booked between 60 and 180 days ago and didn't fit a more
-  // specific bucket above lands here — winback candidates.
-  if (lapsedWindow) return 'lapsed'
-
-  // ── Dormant (terminal) ───────────────────────────────────────
-  // Everything else. Old leads with no engagement, ex_members,
-  // ghosts from years past. Hidden from the default Kanban view
-  // via pipeline_stages.is_dormant=true. Operator can still
-  // target them via audience filter.
-  return 'dormant'
+  const recentlyJoined = sinceJoined !== null
+    && sinceJoined <= PIPELINE_THRESHOLDS.NEW_LEAD_WINDOW_DAYS
+  return recentlyJoined ? 'new_lead' : 'dormant'
 }
