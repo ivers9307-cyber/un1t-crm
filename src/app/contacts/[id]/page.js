@@ -10,6 +10,7 @@ import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
+import { loadContactJourney } from '@/lib/onboarding-journey-data'
 import ContactActions from '@/components/ContactActions'
 import ContactComposer from '@/components/ContactComposer'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
@@ -61,6 +62,24 @@ const activityIcons = {
   // No 'sms_received' counterpart yet; alpha sender IDs are
   // send-only in IE/UK/EU.
   sms_sent: { bg: 'bg-cyan-500/20', color: 'text-cyan-700', label: 'SMS Sent' },
+}
+
+// PULSE-90.4 — first-90-days journey status chips. Light-theme contrast
+// recipe (bg-<c>-500/10 text-<c>-700 — never the -300/-400 ramp): on_track +
+// completed emerald, behind amber, at_risk red, expired neutral grey.
+const PULSE_STATUS_CHIP = {
+  on_track:  'bg-emerald-500/10 text-emerald-700',
+  completed: 'bg-emerald-500/10 text-emerald-700',
+  behind:    'bg-amber-500/10 text-amber-700',
+  at_risk:   'bg-red-500/10 text-red-700',
+  expired:   'bg-gray-500/10 text-gray-600',
+}
+const PULSE_STATUS_LABEL = {
+  on_track:  'On track',
+  completed: 'Completed',
+  behind:    'Behind',
+  at_risk:   'At risk',
+  expired:   'Window over',
 }
 
 export default async function ContactDetailPage(props) {
@@ -161,6 +180,16 @@ export default async function ContactDetailPage(props) {
       ? { label: 'At risk · High', cls: 'bg-red-50 text-red-700 border-red-200', title: sigs }
       : { label: churnScored.tier === 'medium' ? 'At risk · Medium' : 'At risk', cls: 'bg-amber-50 text-amber-700 border-amber-200', title: sigs }
   }
+
+  // PULSE-90.4 — first-90-days journey. loadContactJourney returns null for
+  // anyone not currently in their onboarding window (no joined_at, past the
+  // tail, or expired without completing), so the compact block below only
+  // renders for in-window members. Best-effort — a failed read (or a DB
+  // without the journey data) must not blank the profile.
+  let journey = null
+  try {
+    journey = await loadContactJourney(db, id)
+  } catch { journey = null }
 
   const [seqRes, emailRes, smsRes] = await Promise.all([
     db.from('sequence_enrollments')
@@ -393,6 +422,33 @@ export default async function ContactDetailPage(props) {
             <span className="text-un1t-muted"> (across all accounts)</span>
           )}
         </p>
+      )}
+
+      {/* PULSE-90.4 — first-90-days journey. Compact block shown while a
+          member is inside their onboarding window (guarded on inWindow, so a
+          finisher's block clears once the window ends rather than reading
+          "Day 50/42"). Day X / windowDays, attended / target, and a status
+          chip on the light-theme contrast ramp (bg-<c>-500/10 text-<c>-700).
+          The full lane + "Log touch" live on /pulse. */}
+      {journey?.inWindow && (
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">First 90 days</h3>
+            <span className={`inline-block text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${PULSE_STATUS_CHIP[journey.status] || 'bg-gray-500/10 text-gray-600'}`}>
+              {PULSE_STATUS_LABEL[journey.status] || journey.status}
+            </span>
+          </div>
+          <div className="flex items-center gap-6 text-sm">
+            <div>
+              <div className="text-un1t-muted text-[11px] uppercase tracking-wider">Day</div>
+              <div className="text-un1t-text font-medium">{journey.dayIndex}/{journey.windowDays}</div>
+            </div>
+            <div>
+              <div className="text-un1t-muted text-[11px] uppercase tracking-wider">Classes</div>
+              <div className="text-un1t-text font-medium">{journey.attended}/{journey.target}</div>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Info Card. GLOFOX2.9 — Glofox-specific fields (credits,

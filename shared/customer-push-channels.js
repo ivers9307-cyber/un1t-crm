@@ -65,6 +65,8 @@ const CUSTOMER_TYPE_CHANNELS = Object.freeze({
   streak_at_risk: 'progress',
   winback: 'progress',
   challenge: 'progress',
+  // First-90-days pace nudge (un1t-crm notify-onboarding-pace cron, PULSE-90).
+  onboarding_pace: 'progress',
 })
 
 /**

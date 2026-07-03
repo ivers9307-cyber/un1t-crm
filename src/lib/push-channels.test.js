@@ -29,6 +29,7 @@ const CUSTOMER_TYPES = [
   'class_reminder', 'friend_request', 'feed',
   'session_report', 'achievement', 'goal', 'tier_up',
   'monthly_target_hit', 'streak_at_risk', 'winback', 'challenge',
+  'onboarding_pace',
 ]
 
 describe('staff push channels (shared/push-channels)', () => {
