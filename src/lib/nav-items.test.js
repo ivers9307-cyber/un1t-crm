@@ -87,8 +87,8 @@ describe('Work — the action queues, grouped and ordered', () => {
 })
 
 describe('Sales', () => {
-  it('contains pipeline, contacts and tasks (duplicates moved to a tab on /contacts)', () => {
-    expect(hrefsIn('sales')).toEqual(['/pipeline', '/contacts', '/activities'])
+  it('contains pipeline, contacts, tasks and the ads dashboard (duplicates moved to a tab on /contacts)', () => {
+    expect(hrefsIn('sales')).toEqual(['/pipeline', '/contacts', '/activities', '/dashboard/ads'])
   })
 })
 
@@ -150,6 +150,7 @@ describe('Radar relocation', () => {
       'churn_radar',
       'lead_radar',
       'engagement_analytics',
+      'dashboard_ads',
     ])
   })
 })

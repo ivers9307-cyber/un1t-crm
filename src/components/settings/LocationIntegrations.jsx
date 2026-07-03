@@ -19,7 +19,7 @@
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
   Plug, Zap, DoorOpen, Snowflake, FileCheck, MessageSquare, MessageCircle,
-  AlertCircle, CheckCircle2,
+  AlertCircle, CheckCircle2, Megaphone,
 } from 'lucide-react'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 
@@ -31,6 +31,7 @@ import BcaIntegrationTab from './integrations/BcaIntegrationTab'
 import TwilioIntegrationTab from './integrations/TwilioIntegrationTab'
 import WhatsAppIntegrationTab from './integrations/WhatsAppIntegrationTab'
 import GoogleReviewsTab from './integrations/GoogleReviewsTab'
+import AdsIntegrationTab from './integrations/AdsIntegrationTab'
 
 export default function LocationIntegrations({ location, xeroConnection, gbpConnection, user, sampleBcaCar }) {
   const router = useRouter()
@@ -96,6 +97,18 @@ export default function LocationIntegrations({ location, xeroConnection, gbpConn
       key: 'whatsapp',
       label: 'WhatsApp',
       Icon: MessageCircle,
+      status: 'not-configured', // populated lazily by the tab component
+    })
+  }
+  // ADS-REPORT.0 — per-location ad account credentials (Meta + TikTok).
+  // ad_accounts is service-role-only (RLS denies the browser client);
+  // the tab talks to /api/settings/ads instead. Gated owner-or-master
+  // like Xero/Google Reviews above — no feature flag to check yet.
+  if (isOwnerOrMaster) {
+    tabs.push({
+      key: 'ads',
+      label: 'Ads',
+      Icon: Megaphone,
       status: 'not-configured', // populated lazily by the tab component
     })
   }
@@ -184,6 +197,9 @@ export default function LocationIntegrations({ location, xeroConnection, gbpConn
           )}
           {activeKey === 'glofox' && (
             <GlofoxIntegrationTab location={location} canEdit={isOwnerOrMaster} />
+          )}
+          {activeKey === 'ads' && (
+            <AdsIntegrationTab location={location} canEdit={isOwnerOrMaster} />
           )}
           {activeKey === 'unifi' && (
             <UnifiIntegrationTab location={location} canEdit={isMaster} />

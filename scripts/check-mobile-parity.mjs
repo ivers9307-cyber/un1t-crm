@@ -176,6 +176,10 @@ const WEB_ONLY_OK = {
   // dashboards; the member-facing side ships in the champ app, not the
   // staff mobile app, so there is no staff-mobile counterpart by design.
   pulse_admin: 'Pulse operator hub (/pulse) — desktop management surface for the first-90-days journey lane + future Pulse features. The member-facing side is the champ app; no staff-mobile counterpart by design.',
+  // ADS-REPORT.0 — paid-ad performance dashboard (/dashboard/ads).
+  // Desktop ads analytics dashboard — no mobile counterpart, like
+  // the other radar dashboards.
+  dashboard_ads: 'desktop ads analytics dashboard — no mobile counterpart, like the other radar dashboards',
 }
 
 const webDrift = []
