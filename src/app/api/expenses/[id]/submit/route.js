@@ -9,7 +9,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { canTransition, periodLabel } from '@/lib/fte-expenses'
-import { sendPushToRolesAtLocation } from '@/lib/push'
+import { sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
 import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
@@ -57,7 +57,7 @@ export async function POST(request, { params }) {
   // Notify approvers (owners at the location + masters platform-
   // wide). Best-effort.
   try {
-    await sendPushToRolesAtLocation(claim.location_id, ['owner', 'master'], {
+    await sendPushToRolesAtLocationOnce(db, `expense_submitted:${claim.id}:${updated.submitted_at || ''}`, claim.location_id, ['owner', 'master'], {
       title: 'Expense claim awaiting approval',
       body: `${user.full_name || 'A staff member'} submitted €${Number(claim.total_amount).toFixed(2)} for ${periodLabel(claim.period_start)}`,
       category: 'expense_submitted',

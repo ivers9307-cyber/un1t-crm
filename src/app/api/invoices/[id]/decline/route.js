@@ -10,7 +10,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { sendInvoiceDeclinedEmail } from '@/lib/contractor-invoice-email'
-import { notifyUsers } from '@/lib/notify'
+import { notifyUsersOnce } from '@/lib/push-dedup'
 import { periodLabel } from '@/lib/contractor-invoices'
 import { logWarn } from '@/lib/log'
 
@@ -93,7 +93,7 @@ export async function POST(request, props) {
   // was declined.
   try {
     const reasonSnippet = (declined.decline_reason || '').slice(0, 100)
-    await notifyUsers([declined.contractor_id], {
+    await notifyUsersOnce(db, `invoice_declined:${declined.id}:${declined.reviewed_at || ''}`, [declined.contractor_id], {
       title: 'Invoice needs adjustment',
       body: reasonSnippet
         ? `${periodLabel(declined.period_start)} — ${reasonSnippet}${declined.decline_reason.length > 100 ? '…' : ''}`

@@ -18,7 +18,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { MANAGER_ROLES, timeOfDay } from '@/lib/schemas'
-import { notifyUsers } from '@/lib/notify'
+import { notifyUsersOnce } from '@/lib/push-dedup'
 import { logRosterChange } from '@/lib/roster-change-log'
 import { logWarn } from '@/lib/log'
 
@@ -140,7 +140,10 @@ export async function PUT(request, props) {
       // important enough to email-fallback when the coach doesn't
       // have the app (they need to know their hours changed before
       // they show up to the wrong shift).
-      await notifyUsers([data.profile_id], {
+      // PUSH.2 — keyed on the adjustment CONTENT, not just the assignment:
+      // the same shift can legitimately be adjusted twice (each should
+      // notify); only an identical re-submit of the same times dedupes.
+      await notifyUsersOnce(db, `shift_adjusted:${data.id}:${date}:${cleared ? 'cleared' : `${newStart}-${newEnd}`}`, [data.profile_id], {
         title: 'Shift adjusted',
         body,
         category: 'shift_adjusted',

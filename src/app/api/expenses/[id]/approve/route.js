@@ -15,7 +15,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { canTransition, periodLabel } from '@/lib/fte-expenses'
-import { notifyUsers } from '@/lib/notify'
+import { notifyUsersOnce } from '@/lib/push-dedup'
 import { enqueueFromFteExpenseClaim } from '@/lib/invoices-queue/enqueue'
 import { logAuditEvent } from '@/lib/audit'
 import { logWarn } from '@/lib/log'
@@ -91,7 +91,7 @@ export async function POST(request, { params }) {
 
   // Staff notification — push + email fallback via notifyUsers.
   try {
-    await notifyUsers([claim.profile_id], {
+    await notifyUsersOnce(db, `expense_approved:${claim.id}`, [claim.profile_id], {
       title: 'Expense claim approved',
       body: `Your €${Number(claim.total_amount).toFixed(2)} claim for ${periodLabel(claim.period_start)} was approved. Reimbursement goes through with the next payroll run.`,
       emailSubject: `Expense claim approved — ${periodLabel(claim.period_start)}`,

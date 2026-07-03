@@ -4,7 +4,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
-import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
+import { sendPushOnce, sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
 import { swapShiftShape } from '@/lib/roster-read'
 
 const SwapCreateSchema = z.object({
@@ -131,14 +131,14 @@ export async function POST(request) {
   // managers at the location that an open swap is up for grabs. Either
   // way, push delivery is best-effort.
   if (body.target_id) {
-    sendPush([body.target_id], {
+    sendPushOnce(db, `swap_inbound:${data.id}`, [body.target_id], {
       title: 'New shift swap request',
       body: `${user.full_name} wants to swap a shift with you. Tap to review.`,
       category: 'swap',
       data: { type: 'swap_inbound', swap_id: data.id },
     }).catch(err => console.error('[swaps] push to target failed', err))
   } else {
-    sendPushToRolesAtLocation(swapLocationId, MANAGER_ROLES, {
+    sendPushToRolesAtLocationOnce(db, `swap_open:${data.id}`, swapLocationId, MANAGER_ROLES, {
       title: 'Open swap request',
       body: `${user.full_name} posted a shift for swap. Tap to review.`,
       category: 'swap',

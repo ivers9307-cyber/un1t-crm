@@ -11,7 +11,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { canTransition, periodLabel } from '@/lib/fte-expenses'
-import { notifyUsers } from '@/lib/notify'
+import { notifyUsersOnce } from '@/lib/push-dedup'
 import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
@@ -72,7 +72,7 @@ export async function POST(request, { params }) {
 
   const warnings = []
   try {
-    await notifyUsers([claim.profile_id], {
+    await notifyUsersOnce(db, `expense_declined:${claim.id}`, [claim.profile_id], {
       title: 'Expense claim declined',
       body: `Your €${Number(claim.total_amount).toFixed(2)} claim for ${periodLabel(claim.period_start)} was declined. Reason: ${reason.slice(0, 200)}`,
       emailSubject: `Expense claim declined — ${periodLabel(claim.period_start)}`,
