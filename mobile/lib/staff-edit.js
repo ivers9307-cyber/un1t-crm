@@ -1,7 +1,4 @@
-import {
-  DEFAULT_WEB_PERMISSIONS_BY_ROLE,
-  DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
-} from '../../shared/permissions'
+import { hydratePermissions } from '../../shared/permissions'
 
 // Pure helpers for the mobile staff editors — the role editor (Plan
 // C2c-i) and the permissions editor (Plan C2c-ii). Builds the
@@ -83,24 +80,12 @@ export function buildStaffAssignmentsPatch({ isMaster, ownedLocationIds, current
   return out
 }
 
-// Hydrate a per-assignment permissions blob for display in the editor —
-// mirrors src/components/StaffForm.jsx's initialAssignments logic so the
-// mobile toggles render the SAME truth as web. A non-empty stored blob is
-// used as-is, with its `.mobile` sub-object filled from role defaults when
-// absent; an empty {} (the "use role defaults" sentinel) becomes the
-// role's full web+mobile default blob. The result is a FULL blob safe to
-// edit and send back — sparse web keys are intentionally NOT back-filled
-// (web doesn't either), preserving identical behaviour across platforms.
-//
-// @param {object|null|undefined} rawPermissions  the stored permissions blob
-// @param {string} role  the assignment's per-location role
-// @returns {object} a full { ...web, mobile: { ...mobile } } blob
-export function hydratePermissions(rawPermissions, role) {
-  const web = DEFAULT_WEB_PERMISSIONS_BY_ROLE[role] || {}
-  const mob = DEFAULT_MOBILE_PERMISSIONS_BY_ROLE[role] || {}
-  const raw = rawPermissions || {}
-  if (Object.keys(raw).length > 0) {
-    return { ...raw, mobile: { ...(raw.mobile || mob) } }
-  }
-  return { ...web, mobile: { ...mob } }
-}
+// Hydrate a per-assignment permissions blob for display in the editor.
+// The canonical implementation lives in shared/permissions.js (also used
+// by web's StaffForm.jsx, so both editors render the SAME truth): role
+// defaults are merged UNDER the stored blob for BOTH the flat web keys
+// and the `.mobile` sub-object — stored explicit values always win,
+// missing keys show their role-default effective value (PR #754 Q1).
+// Re-exported here so the permissions editor + existing callers keep
+// their import path.
+export { hydratePermissions }
