@@ -5,7 +5,7 @@
 // issues, new leads, inbound WhatsApp/Instagram) had nothing between a
 // replayed Meta webhook / double-invoked route and a double push.
 //
-// Pattern: claim-before-send against push_event_sends (mig 348).
+// Pattern: claim-before-send against push_event_sends (mig 349).
 //   1. Insert one ledger row per (event_key, recipient) with
 //      ON CONFLICT DO NOTHING semantics (upsert + ignoreDuplicates —
 //      Postgres serialises concurrent claimers via the unique index,

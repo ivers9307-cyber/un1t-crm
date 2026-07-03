@@ -1,4 +1,4 @@
--- 348: PUSH.2 — per-recipient dedup ledger for EVENT-triggered staff pushes.
+-- 349: PUSH.2 — per-recipient dedup ledger for EVENT-triggered staff pushes.
 --
 -- Cron-driven reminders already dedup via push_reminder_sends (mig 169),
 -- but event-triggered sends (swap lifecycle, time-off, expenses, invoices,
