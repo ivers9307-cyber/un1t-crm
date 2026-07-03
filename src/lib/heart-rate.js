@@ -154,16 +154,7 @@ export function summariseSession(samples, maxHr, opts = {}) {
   }
 
   const totalSeconds = Object.values(zonesSeconds).reduce((a, b) => a + b, 0)
-  // UN1T Points: per-second weight is points/60 (so a minute in Z3
-  // = 3 points). Floored at the end so partial sub-second contributions
-  // round consistently rather than per-zone. The per-zone points rate
-  // comes from opts.zonePoints (operator-configurable) when supplied,
-  // else the hardcoded ZONE_DEFS points.
-  const rawPoints = ZONE_DEFS.reduce(
-    (acc, z) => acc + (zonesSeconds[z.id] || 0) * ((opts.zonePoints?.[z.id] ?? z.points) / 60),
-    0,
-  )
-  const effortPoints = Math.floor(rawPoints)
+  const effortPoints = effortPointsFromZones(zonesSeconds, opts.zonePoints)
 
   return {
     zonesSeconds,
@@ -172,6 +163,233 @@ export function summariseSession(samples, maxHr, opts = {}) {
     peakHrBpm: peak > 0 ? Math.round(peak) : null,
     totalSeconds: Math.round(totalSeconds),
   }
+}
+
+/**
+ * UN1T Points from a zones_seconds tally. Per-second weight is points/60
+ * (so a minute in Z3 = 3 points). Floored at the END so partial sub-second
+ * contributions round consistently rather than per-zone. The per-zone points
+ * rate comes from `zonePoints` (operator-configurable) when supplied, else the
+ * hardcoded ZONE_DEFS points.
+ *
+ * Extracted so summariseSession (one-shot, session end) and
+ * applyBatchToRunningSummary (incremental, live) compute effort_points from
+ * IDENTICAL math — the whole point of the incremental path is that its output
+ * matches the one-shot recompute exactly.
+ *
+ * @param {{ [zoneId: number]: number }} zonesSeconds
+ * @param {{ [zoneId: number]: number }} [zonePoints]
+ * @returns {number}
+ */
+export function effortPointsFromZones(zonesSeconds, zonePoints) {
+  const raw = ZONE_DEFS.reduce(
+    (acc, z) => {
+      const secs = Number(zonesSeconds?.[z.id] ?? zonesSeconds?.[String(z.id)] ?? 0) || 0
+      return acc + secs * ((zonePoints?.[z.id] ?? z.points) / 60)
+    },
+    0,
+  )
+  return Math.floor(raw)
+}
+
+// ── incremental running summary (live board) ─────────────────────
+//
+// The live TV board (buildLiveBoardPayload) used to page EVERY hr_sample for
+// EVERY open session every 2s poll and re-run summariseSession over the whole
+// class — O(minutes × attendees) rows re-scanned per poll. Instead we maintain
+// the same aggregate INCREMENTALLY on heart_rate_sessions at ingest, and the
+// live route just reads the row.
+//
+// applyBatchToRunningSummary is the pure kernel: given the running state and a
+// freshly-inserted, time-ordered batch of samples, it folds the batch in and
+// returns the new state. It mirrors summariseSession's gap-weighting EXACTLY
+// (same zoneForBpm, same 5s dropout cap, same effortPointsFromZones) so that,
+// after a final flush of the pending last sample, the incremental running
+// zones/points/peak/avg equal summariseSession(fullStream) byte-for-byte —
+// regardless of how the stream was split into batches. See the equivalence
+// tests in heart-rate.test.js.
+//
+// THE ONE DELIBERATE LAG: summariseSession attributes the gap between a sample
+// and the NEXT sample to that sample's zone (capped 5s), and gives the LAST
+// sample a flat 1 second. Incrementally, a sample's gap can only be known once
+// the following sample arrives — so the batch's final sample is held "pending"
+// (its bpm + recorded_at stashed in lastBpm/lastAtMs) and contributes nothing
+// until the next batch lands, at which point its real gap (capped 5s) is
+// attributed. This means the LIVE value under-counts by the pending sample's
+// not-yet-known contribution (≤5s). flushRunningSummary() closes that gap by
+// attributing the summariseSession last-sample rule (a flat 1 second) to the
+// pending sample, producing the exact one-shot result. endSession's
+// authoritative full recompute (summariseSession over all persisted samples)
+// remains the backstop that overwrites any residual live lag at class end.
+
+/**
+ * A zeroed running-summary state. Nullable DB columns (a session that has
+ * never received a batch) normalise to this via normaliseRunningState.
+ */
+export function emptyRunningSummary() {
+  return {
+    zonesSeconds: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+    effortPoints: 0,
+    peakBpm: null,
+    sumBpm: 0,
+    sampleCount: 0,
+    lastBpm: null,
+    lastAtMs: null,
+  }
+}
+
+/**
+ * Coerce a persisted (possibly null / jsonb-string-keyed) running state into
+ * the canonical numeric shape emptyRunningSummary() produces. Tolerates the
+ * DB round-trip: zones_seconds comes back with string keys, last_sample_at as
+ * an ISO string, any counter as null on a fresh session.
+ *
+ * @param {object|null|undefined} prev
+ * @returns {ReturnType<typeof emptyRunningSummary>}
+ */
+export function normaliseRunningState(prev) {
+  const base = emptyRunningSummary()
+  if (!prev || typeof prev !== 'object') return base
+  const z = prev.zonesSeconds || prev.zones_seconds || {}
+  for (const id of [1, 2, 3, 4, 5]) {
+    base.zonesSeconds[id] = Number(z?.[id] ?? z?.[String(id)] ?? 0) || 0
+  }
+  const sumBpm = Number(prev.sumBpm ?? prev.live_sum_bpm)
+  base.sumBpm = Number.isFinite(sumBpm) ? sumBpm : 0
+  const count = Number(prev.sampleCount ?? prev.live_sample_count)
+  base.sampleCount = Number.isFinite(count) ? count : 0
+  const peak = Number(prev.peakBpm ?? prev.peak_hr_bpm)
+  base.peakBpm = Number.isFinite(peak) && peak > 0 ? peak : null
+  const lastBpm = Number(prev.lastBpm ?? prev.live_last_bpm)
+  base.lastBpm = Number.isFinite(lastBpm) && lastBpm > 0 ? lastBpm : null
+  const lastAtRaw = prev.lastAtMs ?? prev.live_last_at
+  if (lastAtRaw != null) {
+    const ms = typeof lastAtRaw === 'number' ? lastAtRaw : new Date(lastAtRaw).getTime()
+    base.lastAtMs = Number.isFinite(ms) ? ms : null
+  }
+  // effortPoints is derived, not authoritative — recompute from zones so it is
+  // always consistent with the zone tally we just loaded.
+  base.effortPoints = effortPointsFromZones(base.zonesSeconds)
+  return base
+}
+
+/**
+ * The per-sample gap cap summariseSession applies (a 30s+ silence is a dropout,
+ * not 30s in-zone). Exported so the incremental path and the one-shot path
+ * share the exact same constant.
+ */
+export const MAX_SAMPLE_GAP_SECONDS = 5
+
+/**
+ * Fold a freshly-inserted, time-ordered batch of samples into the running
+ * summary. PURE — no DB, no clock. Mirrors summariseSession's gap-weighting so
+ * that (after flushRunningSummary) the running totals equal the one-shot
+ * summariseSession(fullStream) for ANY batch split.
+ *
+ * Algorithm:
+ *   1. Finalise the previously-pending last sample: its gap = firstBatchSample
+ *      − prev.lastAtMs, capped [0, 5]s, attributed to the PREVIOUS sample's
+ *      zone (zone from prev.lastBpm). Skipped when there is no prior sample.
+ *   2. For each consecutive pair WITHIN the batch, attribute (gap capped [0,5]s)
+ *      to the earlier sample's zone.
+ *   3. The batch's LAST sample becomes the new pending sample (lastBpm/lastAtMs);
+ *      it earns no gap yet (counted when the next batch arrives).
+ *   4. peak = max, sumBpm += Σbpm, sampleCount += n, effortPoints recomputed
+ *      from the running zones via the shared effortPointsFromZones.
+ *
+ * @param {ReturnType<typeof emptyRunningSummary>|object|null} prevState
+ * @param {Array<{recorded_at: string|Date|number, bpm: number}>} batchSamples
+ * @param {number} maxHr
+ * @param {{ zonePoints?: { [zoneId: number]: number } }} [opts]
+ * @returns {ReturnType<typeof emptyRunningSummary>}  the new state
+ */
+export function applyBatchToRunningSummary(prevState, batchSamples, maxHr, opts = {}) {
+  const state = normaliseRunningState(prevState)
+
+  // Defensive sort — the batch SHOULD already be recorded_at-ascending (the
+  // bridge buffers in order), but a caller must never corrupt the aggregate on
+  // an out-of-order slice. filter+sort mirrors summariseSession exactly.
+  const sorted = (Array.isArray(batchSamples) ? batchSamples : [])
+    .map((s) => ({ ms: toMs(s.recorded_at), bpm: Number(s.bpm) }))
+    .filter((s) => Number.isFinite(s.ms) && Number.isFinite(s.bpm))
+    .sort((a, b) => a.ms - b.ms)
+
+  if (sorted.length === 0) return state
+
+  const addGap = (bpm, gapSec) => {
+    let d = gapSec
+    if (!(d > 0)) d = 0
+    if (d > MAX_SAMPLE_GAP_SECONDS) d = MAX_SAMPLE_GAP_SECONDS
+    const z = zoneForBpm(bpm, maxHr)
+    state.zonesSeconds[z.id] = (state.zonesSeconds[z.id] || 0) + d
+  }
+
+  // (1) Close out the previously-pending sample using this batch's first sample.
+  if (state.lastBpm != null && state.lastAtMs != null) {
+    addGap(state.lastBpm, (sorted[0].ms - state.lastAtMs) / 1000)
+  }
+
+  // (2) Consecutive pairs within the batch — each earlier sample gets its gap.
+  for (let i = 0; i < sorted.length - 1; i++) {
+    addGap(sorted[i].bpm, (sorted[i + 1].ms - sorted[i].ms) / 1000)
+  }
+
+  // (4) bpm-derived running stats over the whole batch.
+  for (const s of sorted) {
+    state.sumBpm += s.bpm
+    state.sampleCount += 1
+    if (state.peakBpm == null || s.bpm > state.peakBpm) state.peakBpm = s.bpm
+  }
+
+  // (3) The batch's last sample is the new pending sample.
+  const last = sorted[sorted.length - 1]
+  state.lastBpm = last.bpm
+  state.lastAtMs = last.ms
+
+  state.effortPoints = effortPointsFromZones(state.zonesSeconds, opts.zonePoints)
+  return state
+}
+
+/**
+ * Attribute the summariseSession last-sample rule (a flat 1 second) to the
+ * pending sample and return the FINAL zones/points/peak/avg. This is what makes
+ * the incremental path equal summariseSession(fullStream) exactly — call it to
+ * "flush" the tail (in tests, and conceptually at end-of-stream). Does NOT
+ * mutate the running state (the live board never flushes — it tolerates the
+ * ≤5s pending-tail lag, and endSession re-derives authoritatively anyway).
+ *
+ * @param {ReturnType<typeof emptyRunningSummary>|object|null} state
+ * @param {{ zonePoints?: { [zoneId: number]: number } }} [opts]
+ * @returns {{ zonesSeconds: object, effortPoints: number, avgHrBpm: number|null, peakHrBpm: number|null, totalSeconds: number }}
+ */
+export function flushRunningSummary(state, opts = {}) {
+  const s = normaliseRunningState(state)
+  const zonesSeconds = { ...s.zonesSeconds }
+  // Pending last sample contributes a flat 1s to its zone (summariseSession's
+  // `durSec = next ? … : 1` last-sample rule).
+  if (s.lastBpm != null) {
+    // maxHr isn't stored in the running state, but the pending sample's zone
+    // was already fixed when it was folded in — we re-resolve it here against
+    // the same maxHr the caller used. Callers that flush must pass maxHr via
+    // opts.maxHr; summariseSession-equivalence tests do.
+    const z = zoneForBpm(s.lastBpm, opts.maxHr)
+    zonesSeconds[z.id] = (zonesSeconds[z.id] || 0) + 1
+  }
+  const totalSeconds = Object.values(zonesSeconds).reduce((a, b) => a + b, 0)
+  return {
+    zonesSeconds,
+    effortPoints: effortPointsFromZones(zonesSeconds, opts.zonePoints),
+    avgHrBpm: s.sampleCount > 0 ? Math.round(s.sumBpm / s.sampleCount) : null,
+    peakHrBpm: s.peakBpm != null && s.peakBpm > 0 ? Math.round(s.peakBpm) : null,
+    totalSeconds: Math.round(totalSeconds),
+  }
+}
+
+/** Coerce a recorded_at (ISO string / Date / epoch-ms) to epoch ms. */
+function toMs(v) {
+  if (typeof v === 'number') return v
+  if (v instanceof Date) return v.getTime()
+  return new Date(v).getTime()
 }
 
 /**

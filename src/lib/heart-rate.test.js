@@ -12,6 +12,12 @@ import {
   BURN_THRESHOLD_SECONDS,
   burnSeconds,
   isBurn,
+  effortPointsFromZones,
+  emptyRunningSummary,
+  normaliseRunningState,
+  applyBatchToRunningSummary,
+  flushRunningSummary,
+  MAX_SAMPLE_GAP_SECONDS,
 } from './heart-rate.js'
 
 // ── ZONE_DEFS shape ──────────────────────────────────────────────
@@ -287,5 +293,264 @@ describe('isBurn', () => {
     expect(isBurn(undefined)).toBe(false)
     expect(isBurn({})).toBe(false)
     expect(isBurn({ 4: 300 })).toBe(false) // 5 min only
+  })
+})
+
+// ── incremental running summary ↔ summariseSession equivalence ────
+//
+// THE GATE (audit W2/#11). The live TV board reads the running aggregate we
+// maintain on heart_rate_sessions at ingest instead of re-scanning every
+// hr_sample every 2s poll. For that to be correct the incremental fold
+// (applyBatchToRunningSummary) — for ANY split of the stream into batches —
+// must, after flushRunningSummary attributes the pending last sample, produce
+// the IDENTICAL zones_seconds / effort_points / peak / avg as the one-shot
+// summariseSession(fullStream). These tests prove that across steady streams,
+// >5s gaps, dropouts, single/empty streams, varied zones, and every batch
+// split, and separately assert the bounded ≤5s live pending-tail.
+
+describe('effortPointsFromZones', () => {
+  it('matches the inline points math summariseSession used to do', () => {
+    // 60s Z3 = 3 points, 120s Z5 = 10 points → 13 total.
+    expect(effortPointsFromZones({ 3: 60, 5: 120 })).toBe(13)
+  })
+  it('floors at the end (partial sub-minute rounds down)', () => {
+    // 59s Z3 = 59*3/60 = 2.95 → floor 2.
+    expect(effortPointsFromZones({ 3: 59 })).toBe(2)
+  })
+  it('tolerates jsonb string keys and honours a zonePoints override', () => {
+    expect(effortPointsFromZones({ '3': 60 }, { 3: 10 })).toBe(10)
+  })
+  it('is 0 for empty/missing/null', () => {
+    expect(effortPointsFromZones({})).toBe(0)
+    expect(effortPointsFromZones(null)).toBe(0)
+  })
+})
+
+describe('applyBatchToRunningSummary ↔ summariseSession equivalence', () => {
+  const max = 200
+
+  // Build a sample stream from [bpm, gapMsToNext] pairs anchored at t0.
+  const t0 = Date.UTC(2026, 6, 3, 9, 0, 0)
+  const streamFrom = (pairs, base = t0) => {
+    const out = []
+    let t = base
+    for (const [bpm, gapMs] of pairs) {
+      out.push({ recorded_at: new Date(t).toISOString(), bpm })
+      t += gapMs
+    }
+    return out
+  }
+
+  // Every way to split an array of length n into contiguous batches (including
+  // empty batches interleaved, to exercise the "empty batch is a no-op" path).
+  const contiguousSplits = (arr) => {
+    const splits = []
+    const n = arr.length
+    // Split at every subset of the n-1 internal boundaries.
+    for (let mask = 0; mask < (1 << Math.max(0, n - 1)); mask++) {
+      const batches = []
+      let start = 0
+      for (let i = 0; i < n - 1; i++) {
+        if (mask & (1 << i)) { batches.push(arr.slice(start, i + 1)); start = i + 1 }
+      }
+      batches.push(arr.slice(start))
+      splits.push(batches)
+    }
+    return splits
+  }
+
+  // Fold a list of batches, then flush → the finalised summary.
+  const foldAndFlush = (batches, maxHr, opts = {}) => {
+    let state = emptyRunningSummary()
+    for (const b of batches) state = applyBatchToRunningSummary(state, b, maxHr, opts)
+    return flushRunningSummary(state, { ...opts, maxHr })
+  }
+
+  const assertEquivalent = (stream, maxHr = max, opts = {}) => {
+    const oneShot = summariseSession(stream, maxHr, opts)
+    for (const batches of contiguousSplits(stream)) {
+      const inc = foldAndFlush(batches, maxHr, opts)
+      expect(inc.zonesSeconds).toEqual(oneShot.zonesSeconds)
+      expect(inc.effortPoints).toBe(oneShot.effortPoints)
+      expect(inc.peakHrBpm).toBe(oneShot.peakHrBpm)
+      expect(inc.avgHrBpm).toBe(oneShot.avgHrBpm)
+      expect(inc.totalSeconds).toBe(oneShot.totalSeconds)
+    }
+  }
+
+  it('steady 1Hz stream, all zones, EVERY batch split', () => {
+    // 10 samples at 1s spacing, climbing through the zones.
+    const stream = streamFrom([
+      [100, 1000], [125, 1000], [145, 1000], [165, 1000], [185, 1000],
+      [170, 1000], [150, 1000], [130, 1000], [110, 1000], [190, 1000],
+    ])
+    assertEquivalent(stream)
+  })
+
+  it('irregular spacing (2s / 3s / 4s gaps, all ≤ cap)', () => {
+    const stream = streamFrom([[120, 2000], [140, 3000], [160, 4000], [180, 2000], [100, 1000]])
+    assertEquivalent(stream)
+  })
+
+  it('>5s gaps (dropouts) are capped at 5s per sample, EVERY split', () => {
+    const stream = streamFrom([[130, 30000], [150, 12000], [170, 6000], [190, 1000]])
+    assertEquivalent(stream)
+  })
+
+  it('a mix of tiny and huge gaps', () => {
+    const stream = streamFrom([[100, 500], [200, 60000], [140, 5000], [160, 5001], [120, 100]])
+    assertEquivalent(stream)
+  })
+
+  it('single-sample stream (last-sample flat-1s rule)', () => {
+    assertEquivalent(streamFrom([[155, 0]]))
+  })
+
+  it('two-sample stream', () => {
+    assertEquivalent(streamFrom([[130, 3000], [175, 0]]))
+  })
+
+  it('empty stream', () => {
+    const oneShot = summariseSession([], max)
+    const inc = foldAndFlush([[]], max)
+    expect(inc.zonesSeconds).toEqual(oneShot.zonesSeconds)
+    expect(inc.effortPoints).toBe(0)
+    expect(inc.peakHrBpm).toBe(null)
+    expect(inc.avgHrBpm).toBe(null)
+    expect(inc.totalSeconds).toBe(0)
+  })
+
+  it('honours an operator zonePoints override identically', () => {
+    const stream = streamFrom([[120, 1000], [145, 1000], [185, 1000], [165, 1000]])
+    assertEquivalent(stream, max, { zonePoints: { 1: 1, 2: 2, 3: 3, 4: 8, 5: 12 } })
+  })
+
+  it('equivalence holds under a different maxHr (zone boundaries shift)', () => {
+    const stream = streamFrom([[100, 1000], [130, 2000], [150, 1000], [175, 1000]])
+    assertEquivalent(stream, 170)
+  })
+
+  it('longer stream (40 samples) across many random-ish splits', () => {
+    const pairs = []
+    for (let i = 0; i < 40; i++) {
+      const bpm = 90 + ((i * 37) % 110)          // 90..199, deterministic wander
+      const gap = 1000 + ((i * 1300) % 9000)     // 1s..~10s, crosses the 5s cap
+      pairs.push([bpm, gap])
+    }
+    const stream = streamFrom(pairs)
+    // 2^39 splits is intractable; sample a spread of representative splits.
+    const oneShot = summariseSession(stream, max)
+    const splitPoints = [[10], [20], [1, 39], [13, 26], [5, 10, 15, 20, 25, 30, 35], []]
+    for (const cuts of splitPoints) {
+      const batches = []
+      let start = 0
+      for (const c of cuts) { batches.push(stream.slice(start, c)); start = c }
+      batches.push(stream.slice(start))
+      const inc = foldAndFlush(batches, max)
+      expect(inc.zonesSeconds).toEqual(oneShot.zonesSeconds)
+      expect(inc.effortPoints).toBe(oneShot.effortPoints)
+      expect(inc.peakHrBpm).toBe(oneShot.peakHrBpm)
+      expect(inc.avgHrBpm).toBe(oneShot.avgHrBpm)
+    }
+    // Per-sample batches (worst case: one sample per batch) must also match.
+    const perSample = stream.map((s) => [s])
+    const inc1 = foldAndFlush(perSample, max)
+    expect(inc1.zonesSeconds).toEqual(oneShot.zonesSeconds)
+    expect(inc1.effortPoints).toBe(oneShot.effortPoints)
+  })
+
+  it('drops non-finite bpm / bad recorded_at the same way summariseSession does', () => {
+    const stream = [
+      { recorded_at: new Date(t0).toISOString(), bpm: 120 },
+      { recorded_at: new Date(t0 + 1000).toISOString(), bpm: NaN },      // dropped
+      { recorded_at: 'not-a-date', bpm: 150 },                            // dropped
+      { recorded_at: new Date(t0 + 2000).toISOString(), bpm: 175 },
+    ]
+    assertEquivalent(stream)
+  })
+})
+
+describe('applyBatchToRunningSummary — live pending-tail bound', () => {
+  const max = 200
+  const t0 = Date.UTC(2026, 6, 3, 9, 0, 0)
+  const s = (offsetMs, bpm) => ({ recorded_at: new Date(t0 + offsetMs).toISOString(), bpm })
+
+  it('the LIVE (un-flushed) value under-counts total time by at most 5s vs the one-shot', () => {
+    // Fold the whole stream as one batch but DO NOT flush: this is exactly what
+    // the live board reads. It must be behind summariseSession by no more than
+    // the pending sample's not-yet-known gap (≤ MAX_SAMPLE_GAP_SECONDS).
+    const stream = [s(0, 120), s(1000, 145), s(2000, 175), s(4000, 190)]
+    const live = applyBatchToRunningSummary(emptyRunningSummary(), stream, max)
+    const liveTotal = Object.values(live.zonesSeconds).reduce((a, b) => a + b, 0)
+    const oneShotTotal = summariseSession(stream, max).totalSeconds
+    const deficit = oneShotTotal - liveTotal
+    expect(deficit).toBeGreaterThanOrEqual(0)
+    expect(deficit).toBeLessThanOrEqual(MAX_SAMPLE_GAP_SECONDS)
+    // And flushing closes it exactly.
+    const flushed = flushRunningSummary(live, { maxHr: max })
+    expect(flushed.totalSeconds).toBe(oneShotTotal)
+  })
+
+  it('effort_points live value is never AHEAD of the finalised value', () => {
+    const stream = [s(0, 185), s(1000, 190), s(2000, 195), s(3000, 188)]
+    const live = applyBatchToRunningSummary(emptyRunningSummary(), stream, max)
+    const finalPts = summariseSession(stream, max).effortPoints
+    expect(live.effortPoints).toBeLessThanOrEqual(finalPts)
+  })
+})
+
+describe('applyBatchToRunningSummary — state round-trip / normalisation', () => {
+  const max = 200
+  const t0 = Date.UTC(2026, 6, 3, 9, 0, 0)
+
+  it('normaliseRunningState reads jsonb string keys + DB column aliases', () => {
+    const persisted = {
+      zones_seconds: { '1': 10, '3': 20 },
+      live_sum_bpm: 300,
+      live_sample_count: 2,
+      peak_hr_bpm: 175,
+      live_last_bpm: 150,
+      live_last_at: new Date(t0).toISOString(),
+    }
+    const st = normaliseRunningState(persisted)
+    expect(st.zonesSeconds).toEqual({ 1: 10, 2: 0, 3: 20, 4: 0, 5: 0 })
+    expect(st.sumBpm).toBe(300)
+    expect(st.sampleCount).toBe(2)
+    expect(st.peakBpm).toBe(175)
+    expect(st.lastBpm).toBe(150)
+    expect(st.lastAtMs).toBe(t0)
+  })
+
+  it('a persisted-then-reloaded state continues the fold identically to a single in-memory fold', () => {
+    // Simulate: batch A folded, state persisted to DB columns + reloaded, batch B folded.
+    const A = [
+      { recorded_at: new Date(t0).toISOString(), bpm: 120 },
+      { recorded_at: new Date(t0 + 1000).toISOString(), bpm: 145 },
+    ]
+    const B = [
+      { recorded_at: new Date(t0 + 2000).toISOString(), bpm: 175 },
+      { recorded_at: new Date(t0 + 3000).toISOString(), bpm: 190 },
+    ]
+    // In-memory continuous fold.
+    let mem = applyBatchToRunningSummary(emptyRunningSummary(), A, max)
+    mem = applyBatchToRunningSummary(mem, B, max)
+
+    // DB round-trip: serialise state A to the column shape, reload, fold B.
+    const st1 = applyBatchToRunningSummary(emptyRunningSummary(), A, max)
+    const columns = {
+      zones_seconds: st1.zonesSeconds,
+      live_sum_bpm: st1.sumBpm,
+      live_sample_count: st1.sampleCount,
+      peak_hr_bpm: st1.peakBpm,
+      live_last_bpm: st1.lastBpm,
+      live_last_at: new Date(st1.lastAtMs).toISOString(),
+    }
+    const reloaded = applyBatchToRunningSummary(columns, B, max)
+
+    expect(reloaded.zonesSeconds).toEqual(mem.zonesSeconds)
+    expect(reloaded.sumBpm).toBe(mem.sumBpm)
+    expect(reloaded.sampleCount).toBe(mem.sampleCount)
+    expect(reloaded.peakBpm).toBe(mem.peakBpm)
+    expect(flushRunningSummary(reloaded, { maxHr: max })).toEqual(flushRunningSummary(mem, { maxHr: max }))
   })
 })
