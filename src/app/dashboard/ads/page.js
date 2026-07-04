@@ -23,6 +23,7 @@ import { EmptyState } from '@/components/ui'
 import AdsKpiStrip from '@/components/dashboard/AdsKpiStrip'
 import AdsPerAdTable from '@/components/dashboard/AdsPerAdTable'
 import AdsTrendChart from '@/components/dashboard/AdsTrendChartLazy'
+import AdsRefreshButton from '@/components/dashboard/AdsRefreshButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -55,6 +56,7 @@ export default async function AdsDashboardPage() {
   const activeAccounts = (accounts || []).filter((a) => a.is_active)
   const providers = [...new Set(activeAccounts.map((a) => a.provider).filter(Boolean))]
   const erroringAccount = activeAccounts.find((a) => a.last_sync_error)
+  const lastSynced = activeAccounts.map((a) => a.last_synced_at).filter(Boolean).sort().slice(-1)[0] || null
 
   return (
     <>
@@ -68,7 +70,10 @@ export default async function AdsDashboardPage() {
           </span>
         )}
       </div>
-      <p className="text-sm text-un1t-subtle mb-5">Last 30 days</p>
+      <div className="flex items-center justify-between gap-3 mb-5">
+        <p className="text-sm text-un1t-subtle">Last 30 days</p>
+        <AdsRefreshButton locationId={locationId} lastSyncedAt={lastSynced} />
+      </div>
 
       {erroringAccount && (
         <div className="rounded-lg bg-amber-500/10 text-amber-700 text-sm px-3 py-2 mb-5">
