@@ -41,13 +41,20 @@ async function KpiBriefingBlock({ user, locationId }) {
     const [revenue, arrears, membershipLive, radar, approvalsCount] = await Promise.all([
       fetchRevenueMTD(db, locationId),
       fetchArrearsSummary(db, locationId),
-      computeMembershipCounts(db, locationId),
+      // Guarded like radar/approvals — any of its internal count
+      // queries throwing must not reject the whole Promise.all and
+      // discard four healthy data points.
+      computeMembershipCounts(db, locationId).catch(() => null),
       loadRadar(db, locationId).catch(() => null),
       getPendingApprovalsCount(db, user).catch(() => 0),
     ])
     if (!revenue.success) throw new Error(revenue.error)
     const arrearsData = arrears.success ? arrears.data : { totalCents: 0, memberCount: 0 }
-    const memberCount = membershipLive?.active_recurring ?? membershipLive?.monthly_recurring ?? 0
+    // null (not 0) when membership failed — the card shows '—', not a
+    // fake zero; the briefing's own `|| 0` handles its degradation.
+    const memberCount = membershipLive
+      ? (membershipLive.active_recurring ?? membershipLive.monthly_recurring ?? 0)
+      : null
     const churnCount = radar?.summary?.highRisk ?? null
 
     // Priority order, non-zero only, max 3. Rail text uses compact euro
@@ -76,7 +83,8 @@ async function KpiBriefingBlock({ user, locationId }) {
       <KpiRow>
         <KpiCard label="Revenue MTD" value={formatCurrency(revenue.totalCents / 100)}
           sublabel={revenue.deltaPct != null ? `${revenue.deltaPct >= 0 ? '+' : ''}${Math.round(revenue.deltaPct)}% vs last month` : `${revenue.paidCount} payments`} />
-        <KpiCard label="Members" value={memberCount} sublabel="active recurring" href="/contacts" />
+        <KpiCard label="Members" value={memberCount ?? '—'}
+          sublabel={memberCount != null ? 'active recurring' : 'membership unavailable'} href="/contacts" />
         <KpiCard label="Churn risk" value={churnCount ?? '—'}
           sublabel={churnCount != null ? 'high-risk members' : 'radar unavailable'}
           accent={churnCount ? 'text-amber-700' : undefined} href="/dashboard/churn-radar" />

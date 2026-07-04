@@ -7,6 +7,11 @@
 // shared/. Every row: { key, chip, tone, text, href }.
 // tone ∈ 'purple' | 'red' | 'amber' | 'teal' — mapped to chip classes
 // in the component, not here.
+//
+// DASH-REBUILD.6c — the five categories run in parallel: each is an
+// async helper that returns a row or null (its own try/catch keeps
+// failure isolation per category), gathered via Promise.allSettled
+// (belt-and-braces) with order fixed structurally by the array literal.
 
 import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { fetchArrearsSummary } from '@shared/dashboard-data'
@@ -14,23 +19,24 @@ import { fetchArrearsSummary } from '@shared/dashboard-data'
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000
 const DAY_MS = 24 * 60 * 60 * 1000
 
-export async function buildNeedsYouRail(db, user, locationId, now = new Date()) {
-  const rows = []
-
-  // 1. Pending approvals — registry total across visible providers.
+// 1. Pending approvals — registry total across visible providers.
+async function approvalsRow(db, user) {
   try {
     const count = await getPendingApprovalsCount(db, user)
     if (count > 0) {
-      rows.push({
+      return {
         key: 'approvals', chip: 'Approval', tone: 'purple',
         text: `${count} pending approval${count === 1 ? '' : 's'}`,
         href: '/approvals',
-      })
+      }
     }
   } catch { /* row omitted on failure */ }
+  return null
+}
 
-  // 2. Failed agent executions, last 7 days. No dismiss in v1 — rows
-  // age out of the window (spec).
+// 2. Failed agent executions, last 7 days. No dismiss in v1 — rows
+// age out of the window (spec).
+async function failedRow(db, locationId, now) {
   try {
     const sinceIso = new Date(now.getTime() - WEEK_MS).toISOString()
     const { data } = await db.from('agent_membership_requests')
@@ -45,28 +51,34 @@ export async function buildNeedsYouRail(db, user, locationId, now = new Date()) 
       const href = first.conversation_id
         ? `/communications/inbox?c=${first.conversation_id}&ch=${first.channel === 'instagram' ? 'ig' : 'wa'}`
         : '/settings/customer-agent/requests'
-      rows.push({
+      return {
         key: 'failed', chip: 'Failed', tone: 'red',
         text: `Glofox action failed for ${who}${more}`,
         href,
-      })
+      }
     }
   } catch { /* omitted */ }
+  return null
+}
 
-  // 3. Arrears — same source as the KPI card (PAST_DUE post-reconcile).
+// 3. Arrears — same source as the KPI card (PAST_DUE post-reconcile).
+async function arrearsRow(db, locationId) {
   try {
     const res = await fetchArrearsSummary(db, locationId)
     if (res.success && res.data.memberCount > 0) {
-      rows.push({
+      return {
         key: 'arrears', chip: 'Arrears', tone: 'amber',
         text: `${res.data.memberCount} member${res.data.memberCount === 1 ? '' : 's'} — €${Math.round(res.data.totalCents / 100).toLocaleString('en-IE')} owed`,
         href: '/dashboard/churn-radar',
-      })
+      }
     }
   } catch { /* omitted */ }
+  return null
+}
 
-  // 4. Churn — latest snapshot count (cheap; the KPI card carries the
-  // live radar number, this row is the pointer).
+// 4. Churn — latest snapshot count (cheap; the KPI card carries the
+// live radar number, this row is the pointer).
+async function churnRow(db, locationId) {
   try {
     const { data } = await db.from('churn_radar_snapshots')
       .select('high_risk, captured_at')
@@ -74,16 +86,19 @@ export async function buildNeedsYouRail(db, user, locationId, now = new Date()) 
       .order('captured_at', { ascending: false }).limit(1)
     const hi = data?.[0]?.high_risk || 0
     if (hi > 0) {
-      rows.push({
+      return {
         key: 'churn', chip: 'Churn', tone: 'amber',
         text: `${hi} member${hi === 1 ? '' : 's'} at high risk`,
         href: '/dashboard/churn-radar',
-      })
+      }
     }
   } catch { /* omitted */ }
+  return null
+}
 
-  // 5. Uncontacted new leads older than 24h: still in new_lead, joined
-  // >24h ago, no contacted/outreach action recorded.
+// 5. Uncontacted new leads older than 24h: still in new_lead, joined
+// >24h ago, no contacted/outreach action recorded.
+async function leadsRow(db, locationId, now) {
   try {
     const cutoffIso = new Date(now.getTime() - DAY_MS).toISOString()
     const { data: leads } = await db.from('contacts')
@@ -104,13 +119,27 @@ export async function buildNeedsYouRail(db, user, locationId, now = new Date()) 
       uncontacted = ids.filter(id => !touched.has(id)).length
     }
     if (uncontacted > 0) {
-      rows.push({
+      return {
         key: 'leads', chip: 'Leads', tone: 'teal',
         text: `${uncontacted} lead${uncontacted === 1 ? '' : 's'} uncontacted > 24h`,
         href: '/dashboard/lead-radar',
-      })
+      }
     }
   } catch { /* omitted */ }
+  return null
+}
 
+export async function buildNeedsYouRail(db, user, locationId, now = new Date()) {
+  const settled = await Promise.allSettled([
+    approvalsRow(db, user),
+    failedRow(db, locationId, now),
+    arrearsRow(db, locationId),
+    churnRow(db, locationId),
+    leadsRow(db, locationId, now),
+  ])
+  const rows = []
+  for (const r of settled) {
+    if (r.status === 'fulfilled' && r.value) rows.push(r.value)
+  }
   return rows
 }
