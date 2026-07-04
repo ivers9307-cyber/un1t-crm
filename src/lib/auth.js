@@ -14,7 +14,7 @@ const cache = typeof React.cache === 'function' ? React.cache : (fn) => fn
 // Per-location role precedence — owner highest, staff lowest. Master
 // is platform-wide and not in this scale; handled separately.
 const ROLE_PRECEDENCE = Object.freeze({
-  owner: 1, manager: 2, head_coach: 3, staff: 4,
+  owner: 1, manager: 2, head_coach: 3, reception: 4, staff: 5,
 })
 
 /**

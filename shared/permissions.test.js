@@ -388,3 +388,41 @@ describe('diffPermissionsBlob — sparse diff vs a base blob', () => {
     expect(diffPermissionsBlob(full, base)).toEqual({ pipeline: false })
   })
 })
+
+// RECEPTION.1 — new front-of-house role (2026-07). Guard that the
+// defaults maps are COMPLETE for it (a missing key would render as a
+// phantom OFF in the editors and resolve false at tier 3), and pin
+// the intent: staff-tier access plus the WhatsApp inbox + bookings desk.
+describe('reception role defaults', () => {
+  it('covers every web + mobile permission key (no gaps, no orphans)', async () => {
+    const { WEB_PERMISSION_KEYS, MOBILE_PERMISSION_KEYS } = await import('./permissions.js')
+    const web = DEFAULT_WEB_PERMISSIONS_BY_ROLE.reception
+    const mob = DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.reception
+    expect(WEB_PERMISSION_KEYS.filter(k => !(k in web))).toEqual([])
+    expect(Object.keys(web).filter(k => !WEB_PERMISSION_KEYS.includes(k))).toEqual([])
+    expect(MOBILE_PERMISSION_KEYS.filter(k => !(k in mob))).toEqual([])
+    expect(Object.keys(mob).filter(k => !MOBILE_PERMISSION_KEYS.includes(k))).toEqual([])
+  })
+
+  it('is staff-tier plus the front-desk surfaces', () => {
+    const web = DEFAULT_WEB_PERMISSIONS_BY_ROLE.reception
+    expect(web.whatsapp).toBe(true)            // the front-desk channel
+    expect(web.bookings).toBe(true)
+    expect(web.settings).toBe(false)           // no admin surfaces
+    expect(web.approvals_inbox).toBe(false)
+    const mob = DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.reception
+    expect(mob.whatsapp).toBe(true)
+    expect(mob.bookings).toBe(true)
+    expect(mob.notify_whatsapp).toBe(true)
+    expect(mob.notify_bookings).toBe(true)
+    expect(mob.approvals).toBe(false)
+  })
+
+  it('resolves through all tiers like any other role', () => {
+    // Tier 3 default, tier 2.5 template flip, tier 2 user override.
+    const args = { role: 'reception', location: { features: {} }, defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE }
+    expect(resolvePermission({ ...args, permissions: null, key: 'email' })).toBe(false)
+    expect(resolvePermission({ ...args, permissions: null, roleTemplate: { email: true }, key: 'email' })).toBe(true)
+    expect(resolvePermission({ ...args, permissions: { email: false }, roleTemplate: { email: true }, key: 'email' })).toBe(false)
+  })
+})
