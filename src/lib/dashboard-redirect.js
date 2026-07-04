@@ -57,6 +57,9 @@ export function resolveDashboardTarget(user) {
   // P2-7 — engagement analytics is a dashboard tab too; a user holding only
   // this permission still gets a landing target instead of the empty state.
   if (hasPermission(user, 'engagement_analytics')) return '/dashboard/engagement'
+  // ADS-REPORT — /dashboard/ads is a dashboard tab; a user holding only this
+  // permission still lands here instead of the "no dashboards" empty state.
+  if (hasPermission(user, 'dashboard_ads')) return '/dashboard/ads'
 
   return null
 }

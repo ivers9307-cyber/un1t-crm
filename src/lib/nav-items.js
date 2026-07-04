@@ -23,7 +23,7 @@ import {
   LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare,
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
   Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
-  Workflow, Timer, Projector, Trophy, Activity, TrendingUp,
+  Workflow, Timer, Projector, Trophy, Activity,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -99,12 +99,10 @@ export const ALL_NAV = [
   // PERSON-LINK.2 — duplicate review is now a tab on /contacts?tab=duplicates,
   // not a standalone sidebar entry. No sidebar item needed.
   { href: '/activities',          label: 'Tasks',     icon: CheckSquare, permission: 'activities',     section: 'sales' },
-  // ADS-REPORT.3 — paid-ad performance dashboard (spend, cost per
-  // booked class, blended CTR, per-ad breakdown). Own permission key
-  // (dashboard_ads) — owner/manager/head_coach by default, not staff.
-  // Also OR'd into DASHBOARD_LINK_PERM_KEYS so the pinned Dashboard
-  // link stays visible for a user holding only this permission.
-  { href: '/dashboard/ads',       label: 'Ads',       icon: TrendingUp,  permission: 'dashboard_ads',   section: 'sales' },
+  // ADS-REPORT — /dashboard/ads lives in the dashboard tab strip
+  // (app/dashboard/layout.js SEGMENTS), not the sidebar. dashboard_ads
+  // stays in DASHBOARD_LINK_PERM_KEYS so the pinned Dashboard link
+  // remains visible for a user holding only that permission.
 
   // ── Gym — what's on at the gym ─────────────────────────────────
   //

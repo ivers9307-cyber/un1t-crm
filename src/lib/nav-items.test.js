@@ -87,8 +87,8 @@ describe('Work — the action queues, grouped and ordered', () => {
 })
 
 describe('Sales', () => {
-  it('contains pipeline, contacts, tasks and the ads dashboard (duplicates moved to a tab on /contacts)', () => {
-    expect(hrefsIn('sales')).toEqual(['/pipeline', '/contacts', '/activities', '/dashboard/ads'])
+  it('contains pipeline, contacts and tasks (ads moved to the dashboard tab strip; other duplicates moved to a tab on /contacts)', () => {
+    expect(hrefsIn('sales')).toEqual(['/pipeline', '/contacts', '/activities'])
   })
 })
 

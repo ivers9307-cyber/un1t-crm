@@ -21,6 +21,8 @@ const SEGMENTS = [
   { id: 'leads',    label: 'Leads',    href: '/dashboard/lead-radar',  perm: 'lead_radar'  },
   // P2-7 — engagement→churn analytics (friend-count vs retention + app adoption).
   { id: 'engagement', label: 'Engagement', href: '/dashboard/engagement', perm: 'engagement_analytics' },
+  // ADS-REPORT — paid-ad performance joins the dashboard tab family (moved out of the sidebar).
+  { id: 'ads',        label: 'Ads',        href: '/dashboard/ads',        perm: 'dashboard_ads' },
 ]
 
 export default async function DashboardLayout({ children }) {
