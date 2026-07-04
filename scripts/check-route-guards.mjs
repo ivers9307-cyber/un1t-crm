@@ -50,6 +50,12 @@ const SESSION_GUARDS = [
   'authenticateApiKey(',
   'requireApiKeyOrManager(',
   'loadInvoiceForUser(',
+  // loadLineForUser authenticates AND authorizes: getCurrentUser →
+  // hasPermission('accounting_hub') → active-location scoping → 404-not-403
+  // line lookup — verified in src/app/api/accounting/coverage/[id]/_line.js.
+  // Used by the four per-line coverage action routes (ignore/unignore/
+  // rehunt/upload).
+  'loadLineForUser(',
   'loadBookkeeper(',
   'verifyBridgeToken(',
   "@/lib/studio-session",
