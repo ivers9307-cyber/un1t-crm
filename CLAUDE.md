@@ -72,7 +72,7 @@ npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-
 ```
 
 - **`next build` is NOT in the CI mirror.** Green vitest + eslint does **not** mean the build passes — tests run on mocked imports, so a missing/renamed export or unresolvable import sails through and only fails in Vercel's Turbopack build. For any change adding an import or a new route/page, run `npm run build` locally before pushing. If a real `next build` isn't possible, the **Vercel check on the PR is the real gate**, not the CI "Test & lint" check.
-- **Lint divergence:** `npm run lint` (`eslint .`) does NOT fire `@next/next/no-html-link-for-pages`, but CI does. Use `<Link>` for internal links and run `npx next lint` before pushing UI link changes.
+- **`npx next lint` no longer exists** (removed in Next 16 — the CLI parses `lint` as a directory arg and errors). `npm run lint` (`eslint .`, flat config spreading `eslint-config-next`) is the ONLY lint entry point. Caveat: `@next/next/no-html-link-for-pages` resolves as `error` in the config but is **inert in this app-router-only repo** — it only checks `<a>` hrefs against a `pages/` directory, which doesn't exist (probe-verified 2026-07-04: a raw `<a href="/dashboard">` in an app route lints clean). Keep using `<Link>` for internal links as a convention; no linter enforces it.
 - **`check:route-guards`** fails if an `/api` route ships with no auth guard (the #408 class). Session routes need `getCurrentUser`/`withAuth`; webhooks need `verify*()`; cron needs `CRON_SECRET`; genuinely-public token routes go in the script's `EXEMPT` map.
 - **If you touched `mobile/package.json`,** re-sync the lock: `cd mobile && npm install --package-lock-only` (EAS `npm ci` refuses a mismatched lock).
 

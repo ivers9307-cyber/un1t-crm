@@ -4,9 +4,9 @@
 # not defined' runtime error that took out /cars/[id]).
 #
 # Mirror of eas-update.yml on the mobile side: same mtime trigger,
-# same fail-fast philosophy. Vercel's build also runs `next lint`
-# transparently, but failing in GitHub Actions surfaces it earlier
-# and means a broken bundle never reaches the queue.
+# same fail-fast philosophy. (Next 16 removed `next lint` — plain
+# `eslint .` here is the only lint gate.) Failing in GitHub Actions
+# surfaces breakage early, before a broken bundle reaches the queue.
 
 name: Web CI
 
