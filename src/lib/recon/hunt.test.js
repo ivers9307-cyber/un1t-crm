@@ -23,8 +23,11 @@
 //   8. NO MATCH: flip the line to not_found + finish the hunt row
 //      'not_found'.
 //   9. Any failure anywhere routes to an error-finish helper that
-//      updates the hunt row (if opened) + dequeues the line WITHOUT
-//      touching its status, and never throws itself.
+//      updates the hunt row — or INSERTS a terminal one when the
+//      failure predates the row (budget exhaustion / no mailboxes are
+//      NORMAL recurring states that must stay visible in the audit
+//      table) — + dequeues the line WITHOUT touching its status, and
+//      never throws itself.
 //
 // Download-batching choice (stated per the task's own "your call"):
 // step 6 is implemented literally as written — each ranked candidate
@@ -323,17 +326,30 @@ describe('huntLine', () => {
     expect(huntPatch.examined_message_ids).toContain('msg-fresh-no-parts')
   })
 
-  it('budget guard: prior 7d spend >= $15 short-circuits before any mailbox is opened, dequeues the line, and leaves status unchanged', async () => {
+  it('budget guard: prior 7d spend >= $15 short-circuits before any mailbox is opened, leaves a terminal audit row, dequeues the line, and leaves status unchanged', async () => {
     const budgetSelect = chainable({ data: [{ llm_spend_usd: 10 }, { llm_spend_usd: 5.01 }], error: null }, 'limit')
+    const huntErrorInsert = chainable({ data: null, error: null }, 'insert')
     const lineUpdate = chainable({ data: null, error: null }, 'eq')
-    const db = mockDbFrom(budgetSelect, lineUpdate)
+    const db = mockDbFrom(budgetSelect, huntErrorInsert, lineUpdate)
 
     const result = await hunt.huntLine(db, LINE)
 
     expect(result).toEqual({ outcome: 'error', reason: 'budget' })
     expect(withMailbox).not.toHaveBeenCalled()
     expect(searchRaw).not.toHaveBeenCalled()
-    // No hunt row was even opened — nothing to finish beyond the line dequeue.
+    // Budget exhaustion is a NORMAL recurring state at $15/wk — it must
+    // be visible in the recon_hunts audit table, not just as a silent
+    // hunt_attempts bump. No hunt row was opened before the guard
+    // tripped, so the error-finish INSERTS a terminal row (started_at
+    // and llm_spend_usd take their column defaults).
+    expect(huntErrorInsert.insert).toHaveBeenCalledTimes(1)
+    const auditRow = huntErrorInsert.insert.mock.calls[0][0]
+    expect(auditRow).toMatchObject({
+      bank_line_id: 'line-1',
+      outcome: 'error',
+      error: 'weekly LLM budget exhausted',
+    })
+    expect(auditRow.finished_at).toBeTruthy()
     expect(lineUpdate.update).toHaveBeenCalledTimes(1)
     const patch = lineUpdate.update.mock.calls[0][0]
     expect(patch).not.toHaveProperty('status')
@@ -341,16 +357,25 @@ describe('huntLine', () => {
     expect(lineUpdate.eq).toHaveBeenCalledWith('id', 'line-1')
   })
 
-  it('no active mailboxes short-circuits with reason no_mailboxes and dequeues the line', async () => {
+  it('no active mailboxes short-circuits with reason no_mailboxes, leaves a terminal audit row, and dequeues the line', async () => {
     const budgetSelect = chainable({ data: [], error: null }, 'limit')
     const mailboxSelect = chainable({ data: [], error: null }, 'eq')
+    const huntErrorInsert = chainable({ data: null, error: null }, 'insert')
     const lineUpdate = chainable({ data: null, error: null }, 'eq')
-    const db = mockDbFrom(budgetSelect, mailboxSelect, lineUpdate)
+    const db = mockDbFrom(budgetSelect, mailboxSelect, huntErrorInsert, lineUpdate)
 
     const result = await hunt.huntLine(db, LINE)
 
     expect(result).toEqual({ outcome: 'error', reason: 'no_mailboxes' })
     expect(withMailbox).not.toHaveBeenCalled()
+    // Same audit contract as the budget guard: pre-hunt-row errors
+    // still leave a terminal recon_hunts row behind.
+    expect(huntErrorInsert.insert).toHaveBeenCalledTimes(1)
+    expect(huntErrorInsert.insert.mock.calls[0][0]).toMatchObject({
+      bank_line_id: 'line-1',
+      outcome: 'error',
+      error: 'no active mailboxes',
+    })
     expect(lineUpdate.update.mock.calls[0][0]).not.toHaveProperty('status')
   })
 
@@ -379,6 +404,55 @@ describe('huntLine', () => {
 
     const linePatch = lineUpdate.update.mock.calls[0][0]
     expect(linePatch).not.toHaveProperty('status')
+  })
+
+  it('partial IMAP failure: first mailbox auth-fails (last_error recorded), second yields a no-match candidate — hunt still finishes not_found with the failure in evidence.mailboxErrors', async () => {
+    const MAILBOX_2 = { id: 'mbx-2', label: 'Ops 2', email: 'ops2@x.com', imap_password: 'app-pw-2', active: true }
+    const budgetSelect = chainable({ data: [], error: null }, 'limit')
+    const mailboxSelect = chainable({ data: [MAILBOX, MAILBOX_2], error: null }, 'eq')
+    const priorHunts = chainable({ data: [], error: null }, 'not')
+    const huntInsert = chainable({ data: { id: 'hunt-6' }, error: null }, 'single')
+    const mailboxUpdate = chainable({ data: null, error: null }, 'eq')
+    const lineUpdate = chainable({ data: null, error: null }, 'eq')
+    const huntFinish = chainable({ data: null, error: null }, 'eq')
+    const db = mockDbFrom(budgetSelect, mailboxSelect, priorHunts, huntInsert, mailboxUpdate, lineUpdate, huntFinish)
+
+    stubWithMailbox()
+    // The once-queue takes precedence over the base stub: the FIRST
+    // withMailbox open (mailbox 1's collection pass) rejects with an
+    // auth-flavoured error; mailbox 2's collection and the later
+    // scoring open fall through to the base stub and proceed.
+    withMailbox.mockRejectedValueOnce(new Error('IMAP LOGIN failed: invalid credentials'))
+
+    searchRaw.mockResolvedValue([601])
+    fetchCandidate.mockResolvedValueOnce({
+      uid: 601, messageId: 'msg-second-box', subject: 'Maybe invoice', from: 'm@supplier.com',
+      date: '2026-06-04', parts: [{ part: '2', contentType: 'application/pdf', filename: 'maybe.pdf' }],
+    })
+    downloadPart.mockResolvedValueOnce({ bytes: Buffer.from('maybe-bytes'), contentType: 'application/pdf', filename: 'maybe.pdf' })
+    scoreHuntCandidate.mockResolvedValueOnce({ ok: true, verdict: { is_match: false, confidence: 0.1 }, spendUsd: 0.004 })
+    isHuntMatch.mockReturnValueOnce(false)
+
+    const result = await hunt.huntLine(db, LINE)
+
+    // One healthy mailbox is enough — the hunt is NOT an error.
+    expect(result).toEqual({ outcome: 'not_found', examined: 1 })
+    // The failed mailbox's auth error was recorded on ITS row.
+    expect(mailboxUpdate.update).toHaveBeenCalledTimes(1)
+    expect(mailboxUpdate.update.mock.calls[0][0]).toMatchObject({ last_error: expect.stringContaining('credentials') })
+    expect(mailboxUpdate.eq).toHaveBeenCalledWith('id', 'mbx-1')
+    // The surviving mailbox's candidate was scored normally.
+    expect(scoreHuntCandidate).toHaveBeenCalledTimes(1)
+    expect(lineUpdate.update.mock.calls[0][0]).toMatchObject({ status: 'not_found' })
+    // The finish row carries the examined id AND the partial-failure
+    // evidence so a flaky inbox is diagnosable from the audit alone.
+    const huntPatch = huntFinish.update.mock.calls[0][0]
+    expect(huntPatch).toMatchObject({ outcome: 'not_found', llm_spend_usd: 0.004 })
+    expect(huntPatch.examined_message_ids).toEqual(['msg-second-box'])
+    expect(huntPatch.evidence).toEqual({
+      mailboxErrors: [{ mailbox: 'ops@x.com', error: expect.stringContaining('credentials') }],
+    })
+    expect(huntFinish.eq).toHaveBeenCalledWith('id', 'hunt-6')
   })
 
   it('no-match: candidates score below threshold — line flips to not_found and the hunt row records examined ids + spend', async () => {

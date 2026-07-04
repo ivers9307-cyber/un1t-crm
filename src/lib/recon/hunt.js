@@ -26,7 +26,9 @@
 //      'not_found'.
 //   9. Any failure anywhere (including inside 7/8's own writes)
 //      routes through errorFinish, which never throws itself — a
-//      bookkeeping failure must never mask the original error.
+//      bookkeeping failure must never mask the original error. When
+//      the failure predates the hunt row (budget / no mailboxes) it
+//      INSERTS a terminal row so the attempt stays auditable.
 //
 // Download-batching choice: step 6 re-opens each ranked candidate's
 // OWN mailbox via withMailbox at score time (one downloadPart call),
@@ -76,9 +78,14 @@ async function dequeueLine(db, line) {
     .eq('id', line.id)
 }
 
-// Finish (or, if no huntId yet, just dequeue) as an error. Wrapped so
-// a bookkeeping failure here never masks the original error — the
-// caller has already decided what to return; this is best-effort audit.
+// Finish as an error. When a hunt row exists it's UPDATEd; when the
+// failure predates the row (budget guard / no active mailboxes —
+// NORMAL recurring states at a $15/wk budget, not exotic crashes) a
+// terminal row is INSERTed instead, so every attempt stays visible in
+// the audit table rather than surviving only as a hunt_attempts bump.
+// Wrapped so a bookkeeping failure here never masks the original
+// error — the caller has already decided what to return; this is
+// best-effort audit.
 async function errorFinish(db, line, { huntId, error, queries, examinedIds, spendTotal }) {
   try {
     if (huntId) {
@@ -88,11 +95,25 @@ async function errorFinish(db, line, { huntId, error, queries, examinedIds, spen
           finished_at: nowIso(),
           outcome: 'error',
           error,
+          // queries/examined are only undefined on the pre-collection
+          // early errors; every path with a hunt row created
+          // post-collection has them assigned.
           ...(queries !== undefined ? { queries } : {}),
           ...(examinedIds !== undefined ? { examined_message_ids: examinedIds } : {}),
           llm_spend_usd: spendTotal || 0,
         })
         .eq('id', huntId)
+    } else {
+      // started_at and llm_spend_usd take their column defaults
+      // (now() / 0) — see mig 370.
+      await db
+        .from('recon_hunts')
+        .insert({
+          bank_line_id: line.id,
+          finished_at: nowIso(),
+          outcome: 'error',
+          error,
+        })
     }
     await dequeueLine(db, line)
   } catch (e) {
@@ -275,6 +296,9 @@ export async function huntLine(db, line) {
 
   try {
     // 1. Budget guard — never touch email if the week's already spent.
+    // TOCTOU accepted: claims serialize per-line not per-budget; worst
+    // overshoot = one overlapping tick (~cents at this scale). Revisit
+    // with pg_advisory_xact_lock if the budget or parallelism grows.
     const spentSoFar = await weeklySpendSoFar(db)
     if (spentSoFar >= HUNT_WEEKLY_BUDGET_USD) {
       await errorFinish(db, line, { huntId: null, error: 'weekly LLM budget exhausted' })
@@ -316,6 +340,9 @@ export async function huntLine(db, line) {
       const filename = safeFilename(part.filename)
       const bucketPath = `${line.location_id}/${line.id}/${Date.now()}-${filename}`
 
+      // NOTE: a deduped find leaves this uploaded object orphaned —
+      // acceptable (private bucket, small files, rare); backlog:
+      // sweeper or lifecycle rule.
       const { error: uploadError } = await db.storage
         .from(HUNTED_INVOICES_BUCKET)
         .upload(bucketPath, bytes, { contentType: part.contentType, upsert: true })
