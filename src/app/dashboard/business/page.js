@@ -38,7 +38,17 @@ async function KpiBriefingBlock({ user, locationId }) {
     // churn). The full rail is built once, in RailBlock — calling
     // buildNeedsYouRail here too would double the 8-provider approvals
     // fan-out + leads/failed queries every page load.
-    const [revenue, arrears, membershipLive, radar, approvalsCount] = await Promise.all([
+    // Comparator snapshot for the churn week-over-week delta: the most
+    // recent snapshot at least ~a week old. Guarded so any failure
+    // yields null (quiet) rather than rejecting the whole fan-out.
+    const sixDaysAgoIso = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString()
+    const churnSnapshot = db.from('churn_radar_snapshots')
+      .select('high_risk, captured_at')
+      .eq('location_id', locationId)
+      .lte('captured_at', sixDaysAgoIso)
+      .order('captured_at', { ascending: false }).limit(1)
+      .then(({ data }) => data?.[0] ?? null, () => null)
+    const [revenue, arrears, membershipLive, radar, approvalsCount, churnPrev] = await Promise.all([
       fetchRevenueMTD(db, locationId),
       fetchArrearsSummary(db, locationId),
       // Guarded like radar/approvals — any of its internal count
@@ -47,22 +57,29 @@ async function KpiBriefingBlock({ user, locationId }) {
       computeMembershipCounts(db, locationId).catch(() => null),
       loadRadar(db, locationId).catch(() => null),
       getPendingApprovalsCount(db, user).catch(() => 0),
+      churnSnapshot,
     ])
     if (!revenue.success) throw new Error(revenue.error)
-    const arrearsData = arrears.success ? arrears.data : { totalCents: 0, memberCount: 0 }
+    // null (not a fake {0,0}) when arrears failed — the card shows '—',
+    // not a dishonest "€0 · 0 members" (DASH-REBUILD.6c pattern).
+    const arrearsData = arrears.success ? arrears.data : null
     // null (not 0) when membership failed — the card shows '—', not a
     // fake zero; the briefing's own `|| 0` handles its degradation.
     const memberCount = membershipLive
       ? (membershipLive.active_recurring ?? membershipLive.monthly_recurring ?? 0)
       : null
     const churnCount = radar?.summary?.highRisk ?? null
+    // Week-over-week churn delta vs the comparator snapshot. Only shown
+    // when both sides are known and the trend is up (quiet otherwise).
+    const snapshotHigh = churnPrev?.high_risk ?? null
+    const churnDelta = (churnCount != null && snapshotHigh != null) ? churnCount - snapshotHigh : null
 
     // Priority order, non-zero only, max 3. Rail text uses compact euro
     // strings; the KPI cards below use formatCurrency — intentionally
     // different registers, not a bug.
     const labels = []
     if (approvalsCount > 0) labels.push(`${approvalsCount} pending approval${approvalsCount === 1 ? '' : 's'}`)
-    if (arrearsData.memberCount > 0) labels.push(`${arrearsData.memberCount} in arrears (€${Math.round(arrearsData.totalCents / 100).toLocaleString('en-IE')})`)
+    if (arrearsData?.memberCount > 0) labels.push(`${arrearsData.memberCount} in arrears (€${Math.round(arrearsData.totalCents / 100).toLocaleString('en-IE')})`)
     if (churnCount > 0) labels.push(`${churnCount} at churn risk`)
 
     const briefing = buildBusinessBriefing({
@@ -70,13 +87,13 @@ async function KpiBriefingBlock({ user, locationId }) {
       members: { count: memberCount, netChange: null },
       attention: labels.slice(0, 3).map(l => ({ label: l })),
     })
-    vm = { revenue: revenue.data, arrearsData, memberCount, churnCount, briefing }
+    vm = { revenue: revenue.data, arrearsData, memberCount, churnCount, churnDelta, briefing }
   } catch {
     vm = null
   }
   if (!vm) return <BlockError label="Headline numbers" />
 
-  const { revenue, arrearsData, memberCount, churnCount, briefing } = vm
+  const { revenue, arrearsData, memberCount, churnCount, churnDelta, briefing } = vm
   return (
     <>
       <BriefingLine text={briefing} />
@@ -86,11 +103,11 @@ async function KpiBriefingBlock({ user, locationId }) {
         <KpiCard label="Members" value={memberCount ?? '—'}
           sublabel={memberCount != null ? 'active recurring' : 'membership unavailable'} href="/contacts" />
         <KpiCard label="Churn risk" value={churnCount ?? '—'}
-          sublabel={churnCount != null ? 'high-risk members' : 'radar unavailable'}
+          sublabel={churnCount == null ? 'radar unavailable' : (churnDelta > 0 ? `+${churnDelta} this week` : 'high-risk members')}
           accent={churnCount ? 'text-amber-700' : undefined} href="/dashboard/churn-radar" />
-        <KpiCard label="In arrears" value={formatCurrency(arrearsData.totalCents / 100)}
-          sublabel={`${arrearsData.memberCount} member${arrearsData.memberCount === 1 ? '' : 's'}`}
-          accent={arrearsData.memberCount > 0 ? 'text-red-700' : undefined} href="/dashboard/churn-radar" />
+        <KpiCard label="In arrears" value={arrearsData ? formatCurrency(arrearsData.totalCents / 100) : '—'}
+          sublabel={arrearsData ? `${arrearsData.memberCount} member${arrearsData.memberCount === 1 ? '' : 's'}` : 'arrears unavailable'}
+          accent={arrearsData?.memberCount > 0 ? 'text-red-700' : undefined} href="/dashboard/churn-radar" />
       </KpiRow>
     </>
   )
@@ -136,11 +153,14 @@ async function MembershipBlock({ locationId }) {
       computeMembershipCounts(db, locationId),
       fetchMembershipTrend(db, locationId, 12),
     ])
-    if (!live) return null
-    data = { live, trend }
+    // Falsy counts are a failure too — fall through to the error cell
+    // rather than rendering nothing (JSX built after the try per the
+    // error-boundaries lint rule; see the file header).
+    if (live) data = { live, trend }
   } catch {
-    return <BlockError label="Membership trend" />
+    data = null
   }
+  if (!data) return <BlockError label="Membership trend" />
   return <MembershipPanel live={data.live} trend={data.trend} />
 }
 

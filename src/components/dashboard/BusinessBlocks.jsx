@@ -34,6 +34,9 @@ export function FunnelMini({ funnel }) {
         {funnel.entered} entered this month → {funnel.converted} converted
         {funnel.conversionPct != null ? ` · ${funnel.conversionPct}%` : ''}
       </p>
+      <Link href="/pipeline" className="text-xs text-un1t-muted underline hover:text-un1t-text mt-2 inline-block">
+        Open pipeline
+      </Link>
     </div>
   )
 }
