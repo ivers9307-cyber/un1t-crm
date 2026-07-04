@@ -126,6 +126,7 @@ describe('runCoveragePull', () => {
       { bankAccountId: 'acct-1', bankAccountName: 'Current', pulled: 2, new: 1, covered: 0 },
     ])
     expect(summary.anomalies).toEqual([])
+    expect(summary.forced).toBe(false) // no acceptMassCover → audited un-forced
 
     expect(finalUpdate.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'ok' }))
     expect(finalUpdate.eq).toHaveBeenCalledWith('id', 'run-1')
@@ -177,11 +178,17 @@ describe('runCoveragePull', () => {
       .mockResolvedValueOnce({ Accounts: [{ AccountID: 'acct-1', Name: 'Current', Status: 'ACTIVE' }] })
       .mockResolvedValueOnce({ Reports: [] })
 
-    const summary = await pull.runCoveragePull(mockDb, 'loc-1', { trigger: 'manual' })
+    // acceptMassCover piggybacked onto this call: the dormant-account
+    // behaviour under test is unaffected (the breaker lives inside the
+    // mocked syncBankLines), and it pins the force pass-through + the
+    // forced:true audit (false-by-default is pinned in the happy path).
+    const summary = await pull.runCoveragePull(mockDb, 'loc-1', { trigger: 'manual', acceptMassCover: true })
 
     expect(syncBankLines).toHaveBeenCalledTimes(1)
     expect(syncBankLines.mock.calls[0][1].lines).toEqual([])
+    expect(syncBankLines.mock.calls[0][1].acceptMassCover).toBe(true)
     expect(summary.anomalies).toEqual([])
+    expect(summary.forced).toBe(true)
     expect(finalUpdate.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'ok' }))
   })
 
@@ -195,8 +202,11 @@ describe('runCoveragePull', () => {
       .mockReturnValueOnce(sweep)
       .mockReturnValueOnce(claim)
 
-    await expect(pull.runCoveragePull(mockDb, 'loc-1', { trigger: 'cron' }))
-      .rejects.toThrow('already running')
+    const attempt = pull.runCoveragePull(mockDb, 'loc-1', { trigger: 'cron' })
+    await expect(attempt).rejects.toThrow('already running')
+    // The machine contract the refresh route's 409 mapping branches on —
+    // pinned on the error OBJECT, not the prose.
+    await expect(attempt).rejects.toMatchObject({ code: 'recon_pull_running' })
 
     expect(withFreshToken).not.toHaveBeenCalled()
     expect(mockDb.from).toHaveBeenCalledTimes(2) // sweep + claim only — no run id to audit

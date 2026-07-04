@@ -39,16 +39,22 @@ export async function GET(request) {
   if (status && STATUSES.includes(status)) query = query.eq('status', status)
   else if (status !== 'all') query = query.in('status', OPEN_STATUSES)
   const { data: lines, error } = await query
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    console.error('[accounting/coverage] lines query failed:', error)
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  }
 
   const counts = {}
-  for (const s of ['uncovered', 'submitted', 'covered', 'ignored']) {
+  for (const s of STATUSES) {
     const { count, error: countErr } = await db
       .from('recon_bank_lines')
       .select('id', { count: 'exact', head: true })
       .eq('location_id', locationId)
       .eq('status', s)
-    if (countErr) return NextResponse.json({ success: false, error: countErr.message }, { status: 500 })
+    if (countErr) {
+      console.error('[accounting/coverage] status count failed:', countErr)
+      return NextResponse.json({ success: false, error: countErr.message }, { status: 500 })
+    }
     counts[s] = count || 0
   }
 

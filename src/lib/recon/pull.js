@@ -44,7 +44,12 @@ async function claimRun(db, locationId, trigger) {
     .single()
   if (error) {
     if (error.code === '23505') {
-      throw new Error('A coverage pull for this location is already running')
+      // .code is the machine contract (cf. XeroError.code in
+      // @/lib/xero/client) — consumers branch on it, never on the prose.
+      throw Object.assign(
+        new Error('A coverage pull for this location is already running'),
+        { code: 'recon_pull_running' }
+      )
     }
     throw new Error(`recon run claim failed: ${error.message}`)
   }
@@ -135,7 +140,9 @@ export async function runCoveragePull(db, locationId, { trigger, acceptMassCover
       perAccount.push({ bankAccountId: acct.AccountID, bankAccountName: acct.Name, ...stats })
     }
 
-    const summary = { runId, locationId, windowFrom, windowTo, accounts: perAccount, anomalies }
+    // forced audits the cover-guard bypass — a mass-cover in the ledger
+    // must be traceable to the operator's force, from recon_runs alone.
+    const summary = { runId, locationId, windowFrom, windowTo, forced: !!acceptMassCover, accounts: perAccount, anomalies }
     const finish = {
       finished_at: new Date().toISOString(),
       status: anomalies.length > 0 ? 'error' : 'ok',
@@ -156,7 +163,7 @@ export async function runCoveragePull(db, locationId, { trigger, acceptMassCover
           error: String(e?.message || e),
           // Keep whatever progress was made before the throw — accounts
           // already synced stay diagnosable from the audit row alone.
-          stats: { runId, locationId, accounts: perAccount, anomalies, failedAfter: perAccount.length },
+          stats: { runId, locationId, forced: !!acceptMassCover, accounts: perAccount, anomalies, failedAfter: perAccount.length },
         })
         .eq('id', runId)
     } catch {

@@ -43,6 +43,8 @@ export async function POST(request) {
     })
     return NextResponse.json({ success: true, data: summary })
   } catch (e) {
+    // Branch on machine-readable .code (recon errors) / .status
+    // (XeroError), never on message prose.
     const msg = String(e?.message || e)
     if (e instanceof XeroError && (e.status === 403 || e.status === 401)) {
       return NextResponse.json(
@@ -50,15 +52,16 @@ export async function POST(request) {
         { status: 409 }
       )
     }
-    if (msg.includes('already running')) {
+    if (e?.code === 'recon_pull_running') {
       return NextResponse.json({ success: false, error: msg }, { status: 409 })
     }
-    if (msg.includes('cover-guard tripped')) {
+    if (e?.code === 'recon_cover_guard') {
       return NextResponse.json(
         { success: false, error: `${msg} — if this follows a deliberate bulk reconcile in Xero, retry with { "force": true }.` },
         { status: 409 }
       )
     }
+    console.error('[accounting/coverage] refresh pull failed:', e)
     return NextResponse.json({ success: false, error: msg }, { status: 502 })
   }
 }

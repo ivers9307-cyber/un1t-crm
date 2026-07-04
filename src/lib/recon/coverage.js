@@ -116,7 +116,12 @@ export async function syncBankLines(db, {
   // (the manual refresh route's `force` flag) — see COMPLETENESS
   // CONTRACT above.
   if (!acceptMassCover && existing.length >= 10 && vanished.length > existing.length * 0.5) {
-    throw new Error(`recon cover-guard tripped: ${vanished.length} of ${existing.length} tracked lines vanished in one pull — possible partial report; cover skipped`)
+    // .code is the machine contract (cf. XeroError.code in
+    // @/lib/xero/client) — consumers branch on it, never on the prose.
+    throw Object.assign(
+      new Error(`recon cover-guard tripped: ${vanished.length} of ${existing.length} tracked lines vanished in one pull — possible partial report; cover skipped`),
+      { code: 'recon_cover_guard' }
+    )
   }
   for (let i = 0; i < vanished.length; i += CHUNK) {
     const { error } = await db

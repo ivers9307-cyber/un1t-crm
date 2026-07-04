@@ -203,10 +203,14 @@ describe('syncBankLines', () => {
     const lines = rows.slice(0, 3).map((r) => (
       { key: r.xero_line_key, date: '2026-06-01', amount: -1, description: 'X', reference: '' }
     ))
-    await expect(coverage.syncBankLines(mockDb, {
+    const attempt = coverage.syncBankLines(mockDb, {
       locationId: 'loc-1', bankAccountId: 'acct-1', bankAccountName: 'Current',
       windowFrom: '2026-04-01', windowTo: '2026-07-04', lines,
-    })).rejects.toThrow(/cover-guard tripped/)
+    })
+    await expect(attempt).rejects.toThrow(/cover-guard tripped/)
+    // The machine contract the refresh route's 409 mapping branches on —
+    // pinned on the error OBJECT, not the prose.
+    await expect(attempt).rejects.toMatchObject({ code: 'recon_cover_guard' })
 
     expect(covered.update).not.toHaveBeenCalled()
   })
