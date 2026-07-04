@@ -91,6 +91,11 @@ export async function GET() {
         // role default applies. Master users have empty here too
         // and short-circuit to true after the location gate.
         permissions: assignmentsByLocation[l.id]?.permissions || {},
+        // PERM-AUDIT.2 (mig 364) — operator-edited role template for
+        // the role THIS user holds at this location. Sparse; missing
+        // key = code role default. canMobile/canDashboard read it at
+        // tier 2.5. Empty for master (resolver short-circuits anyway).
+        roleTemplate: user.roleTemplatesByLocation?.[l.id] || {},
         // Phase 2: personal bottom-bar arrangement (mobile_bar_prefs).
         // null = no saved pref, app uses its built-in default ordering.
         staffBar: staffBarByLocation[l.id] || null,
@@ -103,6 +108,7 @@ export async function GET() {
             country: user.activeLocation.country || null,
             features: user.activeLocation.features || {},
             permissions: user.activeAssignment?.permissions || {},
+            roleTemplate: user.activeRoleTemplate || {},
             // Phase 2: personal bottom-bar arrangement for the active location.
             staffBar: staffBarByLocation[user.activeLocation.id] || null,
           }

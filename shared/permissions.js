@@ -710,16 +710,38 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
 // (missing keys stay missing → toggles show OFF, matching
 // resolvePermission's false for an unknown role).
 //
+// PERM-AUDIT.2: the optional third param is the operator-edited
+// role template for this (location, role) — merged BETWEEN the code
+// defaults and the stored per-user values, mirroring the resolver's
+// tier order (code default < template < user override).
+//
 // @param {object|null|undefined} rawPermissions  stored profile_locations.permissions blob
 // @param {string} role  the assignment's CURRENT per-location role
+// @param {object|null|undefined} roleTemplate  location_role_permissions blob for (location, role)
 // @returns {object} a full { ...web, mobile: { ...mobile } } blob
 // ============================================================
 
-export function hydratePermissions(rawPermissions, role) {
+export function hydratePermissions(rawPermissions, role, roleTemplate = null) {
   const web = DEFAULT_WEB_PERMISSIONS_BY_ROLE[role] || {}
   const mob = DEFAULT_MOBILE_PERMISSIONS_BY_ROLE[role] || {}
   const raw = rawPermissions || {}
-  return { ...web, ...raw, mobile: { ...mob, ...(raw.mobile || {}) } }
+  const tpl = roleTemplate || {}
+  return {
+    ...web,
+    ...stripMobile(tpl),
+    ...stripMobile(raw),
+    mobile: { ...mob, ...(tpl.mobile || {}), ...(raw.mobile || {}) },
+  }
+}
+
+// Spread helper — the template/raw blobs carry a `mobile` sub-object
+// that must not leak into the top-level web spread (a plain spread
+// would overwrite the carefully-merged mobile object with whichever
+// blob spread last).
+function stripMobile(blob) {
+  if (!blob || typeof blob !== 'object') return {}
+  const { mobile: _mobile, ...rest } = blob
+  return rest
 }
 
 // Cross-platform dashboard keys — top-level on profiles.permissions,
@@ -789,25 +811,30 @@ export function isFeatureEnabledAtLocation(location, key) {
 }
 
 // ============================================================
-// Three-tier resolver
+// Canonical resolver
 //
-// Single canonical implementation of the 3-tier permission check.
+// Single canonical implementation of the tiered permission check.
 // Both web (src/lib/permissions.js → hasPermission) and mobile
 // (mobile/lib/permissions.js → canMobile + canDashboard) call this
 // via thin platform-specific adapters so the tier ordering /
 // semantics live in exactly one place.
 //
 // Tiers:
-//   1. LOCATION gate (mig 032). Notification keys are exempt
-//      because per-user comms toggles are personal, not org-wide.
-//   2. PER-LOCATION USER override (mig 058). Caller passes the
-//      already-namespaced permission bag (e.g. mobile callers
-//      pass `permissions.mobile`, web passes `permissions`).
-//   3. ROLE default. Caller passes the appropriate defaults map
-//      (DEFAULT_WEB_PERMISSIONS_BY_ROLE or
-//      DEFAULT_MOBILE_PERMISSIONS_BY_ROLE).
+//   1.   LOCATION gate (mig 032). Notification keys are exempt
+//        because per-user comms toggles are personal, not org-wide.
+//   2.   PER-LOCATION USER override (mig 058). Caller passes the
+//        already-namespaced permission bag (e.g. mobile callers
+//        pass `permissions.mobile`, web passes `permissions`).
+//   2.5  ROLE TEMPLATE (mig 364, PERM-AUDIT.2) — the operator-
+//        edited per-(location, role) template. Sparse: only keys
+//        the operator changed away from the code default exist.
+//        Caller passes the already-namespaced bag, same convention
+//        as tier 2 (mobile callers pass `roleTemplate.mobile`).
+//   3.   ROLE code default. Caller passes the appropriate defaults
+//        map (DEFAULT_WEB_PERMISSIONS_BY_ROLE or
+//        DEFAULT_MOBILE_PERMISSIONS_BY_ROLE).
 //
-// Master bypasses tiers 2+3 once tier 1 passes — once the
+// Master bypasses tiers 2, 2.5 and 3 once tier 1 passes — once the
 // location says yes, master sees it without a per-user entry.
 //
 // The web `hasPermission` adds one extra rule on top: master gets
@@ -818,29 +845,35 @@ export function isFeatureEnabledAtLocation(location, key) {
 // ============================================================
 
 /**
- * Pure 3-tier resolver. Returns boolean.
+ * Pure tiered resolver. Returns boolean.
  *
  * @param {object} args
  * @param {string} args.role                               'master' | 'owner' | 'manager' | 'head_coach' | 'staff' | …
  * @param {{features?: object} | null | undefined} args.location  Used for tier 1.
  * @param {object | null | undefined} args.permissions    Per-user overrides (already namespaced — mobile callers pass `permissions.mobile`, web passes top-level).
+ * @param {object | null | undefined} args.roleTemplate   Operator-edited role template for THIS user's role at THIS location (mig 364). Already namespaced, same convention as `permissions`. Sparse — missing key falls through to the code default.
  * @param {object} args.defaults                          Role → key → boolean map. Pass DEFAULT_WEB_… or DEFAULT_MOBILE_… as appropriate.
  * @param {string} args.key
  * @returns {boolean}
  */
-export function resolvePermission({ role, location, permissions, defaults, key }) {
+export function resolvePermission({ role, location, permissions, roleTemplate, defaults, key }) {
   // Tier 1: location gate. Applies to all roles including master.
   if (!isFeatureEnabledAtLocation(location, key)) return false
-  // Master bypasses per-user permission tiers — once the location
-  // says yes, master sees it without needing role-default or
-  // per-user permission entries.
+  // Master bypasses the per-user + role tiers — once the location
+  // says yes, master sees it without needing role-default, template
+  // or per-user permission entries.
   if (role === 'master') return true
   // Tier 2: per-location user override (mig 058). Explicit
-  // true/false in the bag wins over the role default.
+  // true/false in the bag wins over the role layers below.
   if (permissions && typeof permissions === 'object' && key in permissions) {
     return permissions[key] === true
   }
-  // Tier 3: role default at the active-location role.
+  // Tier 2.5: operator-edited role template (mig 364). Explicit
+  // true/false wins over the code default; missing key falls through.
+  if (roleTemplate && typeof roleTemplate === 'object' && key in roleTemplate) {
+    return roleTemplate[key] === true
+  }
+  // Tier 3: code role default at the active-location role.
   return defaults?.[role]?.[key] === true
 }
 
@@ -874,6 +907,37 @@ export const MOBILE_BLOB_EXTRA_KEYS = Object.freeze([
   'layout',
   'lead_time_overrides',
 ])
+
+// Sparse-diff helper (PERM-AUDIT.2) — reduce a FULL desired blob to
+// only the keys that differ from a base blob (a hydrated role blob).
+// This is what keeps the role-template layer (and, in PERM-AUDIT.3,
+// the per-user layer) sparse: store the decision, inherit the rest.
+//
+// `includeExtras` controls whether the named non-boolean mobile
+// extras (layout, lead_time_overrides) are carried across — true for
+// per-user blobs (they live there by design), false for role
+// templates (extras are personal, never role-level).
+export function diffPermissionsBlob(fullBlob, baseBlob, { includeExtras = true } = {}) {
+  const full = fullBlob || {}
+  const base = baseBlob || {}
+  const out = {}
+  for (const key of WEB_PERMISSION_KEYS) {
+    if (typeof full[key] === 'boolean' && full[key] !== (base[key] === true)) out[key] = full[key]
+  }
+  const fullMob = full.mobile || {}
+  const baseMob = base.mobile || {}
+  const mob = {}
+  for (const key of MOBILE_PERMISSION_KEYS) {
+    if (typeof fullMob[key] === 'boolean' && fullMob[key] !== (baseMob[key] === true)) mob[key] = fullMob[key]
+  }
+  if (includeExtras) {
+    for (const extra of MOBILE_BLOB_EXTRA_KEYS) {
+      if (extra in fullMob) mob[extra] = fullMob[extra]
+    }
+  }
+  if (Object.keys(mob).length > 0) out.mobile = mob
+  return out
+}
 
 export function sanitizePermissionsBlob(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
