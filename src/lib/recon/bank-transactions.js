@@ -59,9 +59,16 @@ export function mapBankTransactions(payload) {
 
 // Sync-input shape for coverage.syncBankLines. Keys are stable Xero
 // ids — no per-pull recomputation, immune to description/order drift.
+//
+// MONEY-OUT ONLY (Richard, 2026-07-04): coverage is a receipts-for-
+// spend ledger — inbound money (member payments, merchant settlements)
+// is out of scope and was drowning the board (75 of the probe's 83
+// lines were Revolut Merchant settlements). Inbound rows are still
+// MAPPED (the zero-rows tripwire counts the raw fetch) — just never
+// become tracked lines.
 export function bankTransactionLines(rows) {
   return rows
-    .filter((r) => !r.reconciled)
+    .filter((r) => !r.reconciled && r.amount < 0)
     .map((r) => ({
       key: `bt:${r.id}`,
       date: r.date,
