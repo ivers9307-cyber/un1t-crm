@@ -124,6 +124,18 @@ export const WEB_PERMISSIONS = Object.freeze([
   // under Studio Management because it's about supplier bills not
   // on-site operations.
   { key: 'invoices_inbox', label: 'Invoices',                   hint: 'Operator inbox for supplier invoices emailed in to <slug>-invoices@un1tdublin.com. Quality + data approval before forwarding to Xero. Master + owner only by default.' },
+  // RCOV.P0 — receipt-coverage board. Cross-references Xero bank
+  // lines against collected receipts (contractor invoices, FTE
+  // expenses, card receipts) to find bank activity with no matching
+  // receipt on file. Weekly Friday pull + report email; desktop-only
+  // bookkeeping surface (see WEB_ONLY_OK in
+  // scripts/check-mobile-parity.mjs). Master + owner only by default —
+  // same tier as invoices_inbox.
+  {
+    key: 'accounting_hub',
+    label: 'Accounting hub',
+    hint: 'Receipt-coverage board at /accounting — unreconciled Xero bank lines vs collected receipts, weekly Friday pull + report email. Master + owner only by default.'
+  },
   // APPROVALS.1 — central approvals dashboard. Aggregates everything
   // awaiting the operator's review: contractor invoices, FTE
   // expense claims, time-off, swap requests, and any future
@@ -198,6 +210,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     orders: true, car_processing: true,
     card_receipts: true,
     invoices_inbox: true,
+    accounting_hub: true,
     approvals_inbox: true,
     automations: true,
     challenges: true,
@@ -224,6 +237,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     orders: false, car_processing: false,         // financial views off by default
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,                         // supplier-invoice approval is finance, not staff
+    accounting_hub: false,                         // bookkeeping oversight — master + owner only
     approvals_inbox: false,                        // staff don't approve anything
     automations: false,                             // operator surface — not a staff concern
     challenges: false,                              // operator challenge admin — not a staff concern
@@ -251,6 +265,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     orders: false, car_processing: false,         // head coach doesn't need orders by default
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,
+    accounting_hub: false,                         // bookkeeping oversight — master + owner only
     approvals_inbox: false,                        // head coach isn't an approver by default
     automations: false,                             // operator surface — head coach doesn't manage automations
     challenges: false,                              // operator challenge admin — head coach doesn't create challenges
@@ -279,6 +294,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     orders: true, car_processing: false,          // managers run revenue ops; CCF Autos is per-user opt-in
     card_receipts: true,                           // managers commonly hold a company card
     invoices_inbox: false,                         // manager isn't an approver — owner/master only
+    accounting_hub: false,                         // bookkeeping oversight — master + owner only
     approvals_inbox: true,                         // managers approve schedule items (time-off, swaps)
     automations: true,                              // managers can toggle per-location automations
     challenges: true,                               // managers can create/edit challenges
@@ -307,6 +323,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     orders: true, car_processing: false,          // OFF for owner too — explicit opt-in per profile
     card_receipts: true,                           // owners hold a company card
     invoices_inbox: true,                          // owner approves their location's supplier invoices
+    accounting_hub: true,                          // owner reviews receipt coverage, same tier as invoices_inbox
     approvals_inbox: true,                         // owner approves invoices, expenses, schedule items
     automations: true,                              // owner manages per-location automations
     challenges: true,                               // owner manages member challenges
