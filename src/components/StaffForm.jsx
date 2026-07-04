@@ -16,6 +16,7 @@ import {
   isFeatureGatedByLocation,
   MOBILE_PERMISSIONS as allMobilePermissions,
   hydratePermissions,
+  mergeTemplates,
 } from '@shared/permissions'
 
 const ROLE_LABELS = {
@@ -67,20 +68,36 @@ export default function StaffForm({
     [callerOwnerLocationIds]
   )
 
-  // Role template for (location, role) — null when the operator has
-  // never customised that role at that location (code defaults apply).
-  function templateFor(locationId, role) {
-    return roleTemplates?.[locationId]?.[role] || null
+  // Role template for (location, role, employmentType) — null when
+  // the operator has never customised that role at that location
+  // (code defaults apply). RECEPTION.2 (mig 367): roleTemplates is
+  // keyed { locId: { role: { all, fte, contractor, casual } } } —
+  // the employment-type variant layers over the 'all' base, matching
+  // the server-side resolution exactly.
+  function templateFor(locationId, role, employmentType) {
+    const variants = roleTemplates?.[locationId]?.[role]
+    if (!variants) return null
+    return mergeTemplates(
+      variants.all || null,
+      employmentType ? variants[employmentType] || null : null
+    )
   }
 
   // Build a populated permissions blob for an assignment of `role` at
   // `locationId`. Each new assignment starts at the role's EFFECTIVE
-  // defaults (code defaults + the location's role template); admin can
-  // flip individual toggles afterwards. The full blob is sent on save;
-  // the SERVER reduces it to the sparse diff vs this same baseline
-  // (PERM-AUDIT.3), so untouched toggles keep inheriting.
-  function defaultPermsForRole(role, locationId = null) {
-    return hydratePermissions(null, role, templateFor(locationId, role))
+  // defaults (code defaults + the location's role template for the
+  // form's employment type); admin can flip individual toggles
+  // afterwards. The full blob is sent on save; the SERVER reduces it
+  // to the sparse diff vs this same baseline (PERM-AUDIT.3), so
+  // untouched toggles keep inheriting.
+  // NOTE: reads the form's current employment_type, so it must only
+  // be called after the form state below is initialised (all current
+  // call sites are render-time or event handlers, which qualify).
+  // Initial hydration (initialAssignments) deliberately uses
+  // templateFor directly with the target's stored employment type.
+  function defaultPermsForRole(role, locationId = null, employmentType = null) {
+    const emp = employmentType ?? form.employment_type ?? staff?.employment_type ?? 'fte'
+    return hydratePermissions(null, role, templateFor(locationId, role, emp))
   }
 
   // Hydrate per-assignment permissions from the staff payload via the
@@ -89,9 +106,10 @@ export default function StaffForm({
   // stored blob — web keys AND the mobile sub-object — so toggles
   // render the effective state even for keys the sparse blob doesn't
   // pin (PR #754 Q1, PERM-AUDIT.3). Stored explicit values always win.
+  const targetEmploymentType = staff?.employment_type || 'fte'
   const initialAssignments = (staff?.assignments || []).map(a => ({
     ...a,
-    permissions: hydratePermissions(a.permissions, a.role, templateFor(a.location_id, a.role)),
+    permissions: hydratePermissions(a.permissions, a.role, templateFor(a.location_id, a.role, targetEmploymentType)),
   }))
 
   const [form, setForm] = useState({
@@ -269,6 +287,30 @@ export default function StaffForm({
         }))
       })
     }
+  }
+
+  // RECEPTION.2 — same treatment when the employment TYPE changes:
+  // the role-template variant shifts (contractor staff can inherit
+  // different defaults than FTE staff), so re-baseline the affected
+  // assignments to the new effective defaults. Only assignments whose
+  // baseline ACTUALLY differs between the two employment types are
+  // reset — in the common no-variant case manual tweaks survive.
+  const [lastEmploymentType, setLastEmploymentType] = useState(staff?.employment_type || 'fte')
+  if (form.employment_type && form.employment_type !== lastEmploymentType) {
+    const prevEmp = lastEmploymentType
+    const nextEmp = form.employment_type
+    Promise.resolve().then(() => {
+      setLastEmploymentType(nextEmp)
+      setForm(prev => ({
+        ...prev,
+        assignments: prev.assignments.map(x => {
+          const before = templateFor(x.location_id, x.role, prevEmp)
+          const after = templateFor(x.location_id, x.role, nextEmp)
+          if (JSON.stringify(before) === JSON.stringify(after)) return x
+          return { ...x, permissions: defaultPermsForRole(x.role, x.location_id, nextEmp) }
+        }),
+      }))
+    })
   }
 
   function addAssignment(locationId) {

@@ -824,6 +824,23 @@ function stripMobile(blob) {
   return rest
 }
 
+// RECEPTION.2 — merge an employment-type variant template over the
+// role's base ('all') template. Both are sparse blobs in the standard
+// { ...webKeys, mobile: {...} } shape; the variant's keys win, and
+// the mobile sub-objects merge rather than clobber. Null/undefined
+// inputs are fine — merging two nulls yields null (no template),
+// so callers can pass the result straight to resolvePermission /
+// hydratePermissions without special-casing.
+export function mergeTemplates(base, variant) {
+  if (!base && !variant) return null
+  const b = base || {}
+  const v = variant || {}
+  const merged = { ...stripMobile(b), ...stripMobile(v) }
+  const mobile = { ...(b.mobile || {}), ...(v.mobile || {}) }
+  if (Object.keys(mobile).length > 0) merged.mobile = mobile
+  return merged
+}
+
 // Cross-platform dashboard keys — top-level on profiles.permissions,
 // not nested under mobile.* . Listed here so the parity linter knows
 // they're shared by design (no webEquivalent needed since they ARE

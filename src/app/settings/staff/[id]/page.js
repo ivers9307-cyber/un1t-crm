@@ -32,7 +32,7 @@ export default async function EditStaffPage(props) {
     db.from('locations').select('*').eq('active', true).order('name'),
     // PERM-AUDIT.3 — role templates (mig 364) so the form hydrates
     // toggles against the role's EFFECTIVE defaults at each location.
-    db.from('location_role_permissions').select('location_id, role, permissions'),
+    db.from('location_role_permissions').select('location_id, role, employment_type, permissions'),
   ])
 
   if (!profileRes.data) notFound()
@@ -67,11 +67,15 @@ export default async function EditStaffPage(props) {
     assignments,
   }
 
-  // { [location_id]: { [role]: sparse template blob } }
+  // { [location_id]: { [role]: { [employment_type]: sparse blob } } }
+  // (RECEPTION.2, mig 367 — StaffForm merges 'all' + the form's
+  // current employment type live, so flipping FTE↔Contractor
+  // re-baselines the permission toggles.)
   const roleTemplates = {}
   for (const row of (templatesRes.data || [])) {
     roleTemplates[row.location_id] = roleTemplates[row.location_id] || {}
-    roleTemplates[row.location_id][row.role] = row.permissions || {}
+    roleTemplates[row.location_id][row.role] = roleTemplates[row.location_id][row.role] || {}
+    roleTemplates[row.location_id][row.role][row.employment_type || 'all'] = row.permissions || {}
   }
 
   return (

@@ -6,7 +6,7 @@
 // pin it.
 
 import { OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES } from '@/lib/schemas'
-import { diffPermissionsBlob, hydratePermissions } from '@shared/permissions'
+import { diffPermissionsBlob, hydratePermissions, mergeTemplates } from '@shared/permissions'
 import { splitCompFromProfilePatch, upsertCompensationForProfile } from '@/lib/profile-compensation'
 import {
   getLocationUnifiConfig, findOrCreateUnifiUser,
@@ -135,7 +135,7 @@ export function computeDesiredAssignments({ isMaster, callerOwnerLocationIds, as
  * preserved. The template fetch failing degrades to diffing against
  * code defaults only — worst case a few extra keys are stored, never
  * a lost override. */
-export async function sparsifyAssignmentPermissions({ db, assignments }) {
+export async function sparsifyAssignmentPermissions({ db, assignments, employmentType = null }) {
   const list = assignments || []
   const locIds = [...new Set(list.map(a => a.location_id).filter(Boolean))]
   let templates = []
@@ -143,15 +143,23 @@ export async function sparsifyAssignmentPermissions({ db, assignments }) {
     try {
       const { data } = await db
         .from('location_role_permissions')
-        .select('location_id, role, permissions')
+        .select('location_id, role, employment_type, permissions')
         .in('location_id', locIds)
       templates = data || []
     } catch {
       templates = []
     }
   }
+  // RECEPTION.2 (mig 367) — the diff base includes the target's
+  // employment-type variant layered over the role's 'all' template,
+  // matching exactly what the resolver will use for this user.
+  const rowFor = (locId, role, emp) =>
+    templates.find(t => t.location_id === locId && t.role === role && t.employment_type === emp)?.permissions || null
   const templateFor = (locId, role) =>
-    templates.find(t => t.location_id === locId && t.role === role)?.permissions || null
+    mergeTemplates(
+      rowFor(locId, role, 'all'),
+      employmentType ? rowFor(locId, role, employmentType) : null
+    )
   return list.map(a => ({
     ...a,
     permissions: diffPermissionsBlob(

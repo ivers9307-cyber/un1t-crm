@@ -29,12 +29,14 @@ import {
   hydratePermissions,
   sanitizePermissionsBlob,
   diffPermissionsBlob,
+  mergeTemplates,
 } from '@shared/permissions'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const TEMPLATABLE_ROLES = ['owner', 'manager', 'head_coach', 'staff', 'reception']
+const EMPLOYMENT_VARIANTS = ['fte', 'contractor', 'casual']
 
 function canEditRoleTemplates(user, locationId) {
   if (user.role === 'master' || user.profileRole === 'master') return true
@@ -52,18 +54,35 @@ export async function GET(request, props) {
   const db = createServerClient()
   const { data: rows, error } = await db
     .from('location_role_permissions')
-    .select('role, permissions, updated_at')
+    .select('role, employment_type, permissions, updated_at')
     .eq('location_id', params.id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
+  // RECEPTION.2 (mig 367) — each role carries an 'all' template
+  // (backward-compatible top-level shape) plus employment-type
+  // variants that layer on top of it. A variant's `effective` blob
+  // is code defaults + 'all' + variant — exactly what the resolver
+  // uses for a user of that employment type.
   const byRole = {}
   for (const role of TEMPLATABLE_ROLES) {
-    const row = (rows || []).find((r) => r.role === role)
-    const template = row?.permissions || {}
+    const rowFor = (emp) => (rows || []).find((r) => r.role === role && r.employment_type === emp)
+    const allRow = rowFor('all')
+    const allTemplate = allRow?.permissions || {}
+    const variants = {}
+    for (const emp of EMPLOYMENT_VARIANTS) {
+      const row = rowFor(emp)
+      const template = row?.permissions || {}
+      variants[emp] = {
+        template,
+        effective: hydratePermissions(null, role, mergeTemplates(allTemplate, template)),
+        updated_at: row?.updated_at || null,
+      }
+    }
     byRole[role] = {
-      template,
-      effective: hydratePermissions(null, role, template),
-      updated_at: row?.updated_at || null,
+      template: allTemplate,
+      effective: hydratePermissions(null, role, allTemplate),
+      updated_at: allRow?.updated_at || null,
+      variants,
     }
   }
   return NextResponse.json({ success: true, data: byRole })
@@ -71,6 +90,9 @@ export async function GET(request, props) {
 
 const Body = z.object({
   role: z.enum(TEMPLATABLE_ROLES),
+  // 'all' edits the role's base template; an employment type edits
+  // the variant that layers on top of it (RECEPTION.2, mig 367).
+  employment_type: z.enum(['all', ...EMPLOYMENT_VARIANTS]).default('all'),
   permissions: z.record(z.string(), z.unknown()),
 })
 
@@ -87,30 +109,64 @@ export async function PUT(request, props) {
 
   const validation = await validateBody(request, Body)
   if (!validation.ok) return validation.response
-  const { role, permissions } = validation.data
+  const { role, employment_type: employmentType, permissions } = validation.data
+
+  const db = createServerClient()
+
+  // The diff base depends on what's being edited (RECEPTION.2):
+  //   'all'    → code defaults (the base template stores its diff
+  //              against them, as before);
+  //   variant  → code defaults + the CURRENT 'all' template, so a
+  //              variant row stores only what differs from what a
+  //              user of that role already inherits.
+  let baseTemplate = null
+  if (employmentType !== 'all') {
+    try {
+      const { data: allRow } = await db
+        .from('location_role_permissions')
+        .select('permissions')
+        .eq('location_id', params.id)
+        .eq('role', role)
+        .eq('employment_type', 'all')
+        .maybeSingle()
+      baseTemplate = allRow?.permissions || null
+    } catch {
+      baseTemplate = null
+    }
+  }
 
   // Sanitise (whitelist keys / boolean values) then reduce the full
-  // desired blob to a sparse diff vs the code defaults. Extras
-  // (layout, lead_time_overrides) are per-user, never role-level.
+  // desired blob to a sparse diff vs the base. Extras (layout,
+  // lead_time_overrides) are per-user, never role-level.
   const desired = sanitizePermissionsBlob(permissions)
   const sparse = diffPermissionsBlob(
     desired,
-    hydratePermissions(null, role),
+    hydratePermissions(null, role, baseTemplate),
     { includeExtras: false }
   )
 
-  const db = createServerClient()
+  const respond = (template) => NextResponse.json({
+    success: true,
+    data: {
+      role,
+      employment_type: employmentType,
+      template,
+      effective: hydratePermissions(null, role, mergeTemplates(baseTemplate, template)),
+    },
+  })
+
   const isEmpty = Object.keys(sparse).length === 0
   if (isEmpty) {
-    // All values match the code defaults → no row needed. Delete so
-    // the role goes back to pure code-default inheritance.
+    // All values match the base → no row needed. Delete so this
+    // slice goes back to pure inheritance.
     const { error } = await db
       .from('location_role_permissions')
       .delete()
       .eq('location_id', params.id)
       .eq('role', role)
+      .eq('employment_type', employmentType)
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
-    return NextResponse.json({ success: true, data: { role, template: {}, effective: hydratePermissions(null, role) } })
+    return respond({})
   }
 
   const { data, error } = await db
@@ -118,20 +174,14 @@ export async function PUT(request, props) {
     .upsert({
       location_id: params.id,
       role,
+      employment_type: employmentType,
       permissions: sparse,
       updated_by: user.id,
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'location_id,role' })
+    }, { onConflict: 'location_id,role,employment_type' })
     .select('role, permissions')
     .single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 
-  return NextResponse.json({
-    success: true,
-    data: {
-      role: data.role,
-      template: data.permissions,
-      effective: hydratePermissions(null, role, data.permissions),
-    },
-  })
+  return respond(data.permissions)
 }

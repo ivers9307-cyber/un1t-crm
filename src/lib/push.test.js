@@ -177,7 +177,7 @@ describe('sendPush — permission filtering (reads profile_locations, mig 058)',
     fakeProfiles = [{ id: 'a', active: true }, { id: 'b', active: true }]
     // Both staff at loc1 (notify_lead default OFF). Template turns it ON.
     // User b additionally carries an explicit per-user opt-OUT.
-    fakeTemplates = [{ location_id: 'loc1', role: 'staff', permissions: { mobile: { notify_lead: true } } }]
+    fakeTemplates = [{ location_id: 'loc1', role: 'staff', employment_type: 'all', permissions: { mobile: { notify_lead: true } } }]
     fakeLinks = [
       { profile_id: 'a', location_id: 'loc1', role: 'staff', permissions: {} },
       { profile_id: 'b', location_id: 'loc1', role: 'staff', permissions: { mobile: { notify_lead: false } } },
@@ -190,6 +190,30 @@ describe('sendPush — permission filtering (reads profile_locations, mig 058)',
     const result = await sendPush(['a', 'b'], { title: 't', body: 'b', category: 'lead' })
     expect(result.sent).toBe(1)    // a — template on
     expect(result.skipped).toBe(1) // b — explicit user opt-out beats template
+  })
+
+  it('employment-type variant (mig 367) only applies to matching users', async () => {
+    // Contractor variant turns notify_lead ON for staff at loc1. The
+    // contractor gets it; the FTE stays at the staff default (off).
+    fakeProfiles = [
+      { id: 'a', active: true, employment_type: 'contractor' },
+      { id: 'b', active: true, employment_type: 'fte' },
+    ]
+    fakeTemplates = [
+      { location_id: 'loc1', role: 'staff', employment_type: 'contractor', permissions: { mobile: { notify_lead: true } } },
+    ]
+    fakeLinks = [
+      { profile_id: 'a', location_id: 'loc1', role: 'staff', permissions: {} },
+      { profile_id: 'b', location_id: 'loc1', role: 'staff', permissions: {} },
+    ]
+    fakeTokens = [
+      { id: 't1', user_id: 'a', expo_push_token: 'ExponentPushToken[x]' },
+      { id: 't2', user_id: 'b', expo_push_token: 'ExponentPushToken[y]' },
+    ]
+
+    const result = await sendPush(['a', 'b'], { title: 't', body: 'b', category: 'lead' })
+    expect(result.sent).toBe(1)    // a — contractor variant on
+    expect(result.skipped).toBe(1) // b — fte, staff default off
   })
 
   it('honours an opt-out set on ANY assignment (conservative, multi-location)', async () => {

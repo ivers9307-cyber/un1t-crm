@@ -171,8 +171,12 @@ export async function PUT(request, props) {
     // PERM-AUDIT.3 — store only the sparse diff vs each assignment's
     // role base (code defaults + role template, mig 364). Editors
     // send full hydrated blobs; the server owns the reduction.
+    // RECEPTION.2: the base includes the target's employment-type
+    // variant — use the employment type this request SETS if present,
+    // else the target's stored one.
     const desired = await sparsifyAssignmentPermissions({
       db,
+      employmentType: body.employment_type ?? targetBefore.employment_type ?? null,
       assignments: computeDesiredAssignments({
         isMaster: user.isMaster,
         callerOwnerLocationIds,

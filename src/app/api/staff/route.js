@@ -207,7 +207,9 @@ export async function POST(request) {
   if (assignments.length > 0) {
     // PERM-AUDIT.3 — store only the sparse diff vs each assignment's
     // role base (code defaults + role template, mig 364).
-    const sparseAssignments = await sparsifyAssignmentPermissions({ db, assignments })
+    const sparseAssignments = await sparsifyAssignmentPermissions({
+      db, assignments, employmentType: body.employment_type || null,
+    })
     const hasExplicitDefault = sparseAssignments.some(a => a.is_default)
     const links = sparseAssignments.map((a, i) => ({
       profile_id: newUserId,
