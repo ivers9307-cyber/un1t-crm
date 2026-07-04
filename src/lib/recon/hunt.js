@@ -50,6 +50,7 @@ export const HUNT_WEEKLY_BUDGET_USD = 15
 
 const HUNTED_INVOICES_BUCKET = 'hunted-invoices'
 const AUTH_ERROR_RE = /auth|login|credentials/i
+const PAGE = 1000 // supabase-js hard select cap — paginate everything (house rule)
 
 function nowIso() {
   return new Date().toISOString()
@@ -123,16 +124,24 @@ async function errorFinish(db, line, { huntId, error, queries, examinedIds, spen
 
 async function weeklySpendSoFar(db) {
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-  // Capped at 1000 rows — hunts/week is nowhere near that volume, so a
-  // single uncapped-by-range select is safe (no .range() pagination
-  // needed here, unlike coverage.js's line sync).
-  const { data, error } = await db
-    .from('recon_hunts')
-    .select('llm_spend_usd')
-    .gte('started_at', since)
-    .limit(1000)
-  if (error) throw new Error(`weekly spend lookup failed: ${error.message}`)
-  return (data || []).reduce((sum, r) => sum + (Number(r.llm_spend_usd) || 0), 0)
+  // .range()-paginated per the house 1k-cap rule (same loop as
+  // selectExistingInWindow in ./coverage.js). Weekly hunt volume is
+  // far below one page, so this loop virtually always makes exactly
+  // ONE round trip — the pagination exists so a pathological backlog
+  // can never silently under-count spend and blow past the budget.
+  let sum = 0
+  for (let start = 0; ; start += PAGE) {
+    const { data, error } = await db
+      .from('recon_hunts')
+      .select('llm_spend_usd')
+      .gte('started_at', since)
+      .order('id')
+      .range(start, start + PAGE - 1)
+    if (error) throw new Error(`weekly spend lookup failed: ${error.message}`)
+    for (const r of data || []) sum += Number(r.llm_spend_usd) || 0
+    if (!data || data.length < PAGE) break
+  }
+  return sum
 }
 
 async function activeMailboxes(db) {
