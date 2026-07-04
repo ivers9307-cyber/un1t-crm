@@ -565,7 +565,11 @@ export async function fetchBusinessDashboardData(supabase, locationId) {
 // callable so the page can stream blocks and mobile can adopt them later.
 // Sums paginate (1k-row select cap); counts use head:true single aggregates.
 
-async function paginatedSumCents(supabase, filters) {
+// Tradeoff: a concurrent insert mid-pagination (e.g. an INVOICE_UPDATED
+// webhook landing between pages) can be missed by this scan — acceptable for
+// a presentational metric that self-heals on the next load; the mig 324 daily
+// reconcile stays ground truth. Exported for tests.
+export async function paginatedSumCents(supabase, filters) {
   // filters: fn(query) → query. Sums amount_cents over all matching rows.
   let from = 0
   const page = 1000
@@ -643,32 +647,47 @@ export async function fetchArrearsSummary(supabase, locationId) {
 // conversions use converted_at (mig 350).
 export async function fetchFunnelCounts(supabase, locationId, now = new Date()) {
   const monthStartIso = startOfMonth(now).toISOString()
-  const stageCounts = {}
-  for (const slug of FUNNEL_SLUGS) {
-    const { count, error } = await supabase.from('contacts')
+
+  // All 7 head-counts are independent — run them in one Promise.all.
+  const results = await Promise.all([
+    ...FUNNEL_SLUGS.map(slug => supabase.from('contacts')
       .select('id', { count: 'exact', head: true })
-      .eq('location_id', locationId).eq('pipeline_stage_slug', slug)
+      .eq('location_id', locationId).eq('pipeline_stage_slug', slug)),
+    supabase.from('contacts')
+      .select('id', { count: 'exact', head: true })
+      .eq('location_id', locationId).gte('joined_at', monthStartIso),
+    supabase.from('contacts')
+      .select('id', { count: 'exact', head: true })
+      .eq('location_id', locationId).gte('converted_at', monthStartIso),
+  ])
+
+  const stageCounts = {}
+  for (let i = 0; i < FUNNEL_SLUGS.length; i++) {
+    const { count, error } = results[i]
     if (error) return { success: false, error: error.message }
-    stageCounts[slug] = count || 0
+    stageCounts[FUNNEL_SLUGS[i]] = count || 0
   }
-  const { count: entered, error: e1 } = await supabase.from('contacts')
-    .select('id', { count: 'exact', head: true })
-    .eq('location_id', locationId).gte('joined_at', monthStartIso)
+  const { count: entered, error: e1 } = results[FUNNEL_SLUGS.length]
   if (e1) return { success: false, error: e1.message }
-  const { count: converted, error: e2 } = await supabase.from('contacts')
-    .select('id', { count: 'exact', head: true })
-    .eq('location_id', locationId).gte('converted_at', monthStartIso)
+  const { count: converted, error: e2 } = results[FUNNEL_SLUGS.length + 1]
   if (e2) return { success: false, error: e2.message }
   return { success: true, data: shapeFunnel(stageCounts, { entered: entered || 0, converted: converted || 0 }) }
 }
 
-// Last-7-days ad performance. level='campaign' only (see dashboard-metrics).
+// Last-7-days ad performance. level='campaign' filtered IN THE QUERY —
+// ad_insights_daily also stores adset+ad rows for the same days, and
+// fetching all levels then filtering client-side can blow the 1000-row cap
+// and silently truncate spend. sumCampaignRows keeps the level guard as
+// defence-in-depth; .order() makes any residual cap deterministic.
 export async function fetchAdsSummary(supabase, locationId, now = new Date()) {
   const since = new Date(now); since.setDate(since.getDate() - 7)
   const sinceIso = isoDate(since)
   const { data, error } = await supabase.from('ad_insights_daily')
     .select('level, spend, results')
-    .eq('location_id', locationId).gte('date', sinceIso)
+    .eq('location_id', locationId)
+    .eq('level', 'campaign')
+    .gte('date', sinceIso)
+    .order('date', { ascending: true })
     .limit(1000)
   if (error) return { success: false, error: error.message }
   const { spend, results } = sumCampaignRows(data || [])
@@ -691,11 +710,6 @@ export async function fetchAdsSummary(supabase, locationId, now = new Date()) {
 // Today's operations strip. Labour reuses the existing week window.
 export async function fetchTodayOps(supabase, locationId, now = new Date()) {
   const todayIso = isoDate(now)
-  const { count: bookedToday, error: e1 } = await supabase.from('bookings')
-    .select('id', { count: 'exact', head: true })
-    .eq('location_id', locationId).eq('booking_date', todayIso)
-    .neq('status', 'cancelled')
-  if (e1) return { success: false, error: e1.message }
 
   // class_occurrences (mig 284) has no date column — it stores starts_at
   // (timestamptz). Count today's classes via a Dublin wall-clock day window
@@ -703,28 +717,41 @@ export async function fetchTodayOps(supabase, locationId, now = new Date()) {
   // always filter .is('cancelled_at', null)).
   const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0)
   const dayEnd = new Date(now); dayEnd.setHours(23, 59, 59, 999)
-  const { count: classesToday, error: e2 } = await supabase.from('class_occurrences')
-    .select('id', { count: 'exact', head: true })
-    .eq('location_id', locationId)
-    .gte('starts_at', dayStart.toISOString())
-    .lte('starts_at', dayEnd.toISOString())
-    .is('cancelled_at', null)
-  if (e2) return { success: false, error: e2.message }
-
-  const { data: blocks, error: e3 } = await supabase.from('shift_blocks')
-    .select('id, shift_assignments(profile_id)')
-    .eq('location_id', locationId).eq('block_date', todayIso)
-    .limit(200)
-  if (e3) return { success: false, error: e3.message }
-  const staffToday = new Set()
-  for (const b of blocks || []) for (const a of b.shift_assignments || []) if (a.profile_id) staffToday.add(a.profile_id)
-
   const weekStart = startOfWeek(now)
   const weekEnd = endOfWeek(now)
-  const { data: weekShifts, error: e4 } = await fetchDashboardShifts(supabase, {
-    locationId, startDate: isoDate(weekStart), endDate: isoDate(weekEnd), withProfiles: true,
-  })
+
+  // All four queries are independent — run them in one Promise.all.
+  const [
+    { count: bookedToday, error: e1 },
+    { count: classesToday, error: e2 },
+    { data: blocks, error: e3 },
+    { data: weekShifts, error: e4 },
+  ] = await Promise.all([
+    supabase.from('bookings')
+      .select('id', { count: 'exact', head: true })
+      .eq('location_id', locationId).eq('booking_date', todayIso)
+      .neq('status', 'cancelled'),
+    supabase.from('class_occurrences')
+      .select('id', { count: 'exact', head: true })
+      .eq('location_id', locationId)
+      .gte('starts_at', dayStart.toISOString())
+      .lte('starts_at', dayEnd.toISOString())
+      .is('cancelled_at', null),
+    supabase.from('shift_blocks')
+      .select('id, shift_assignments(profile_id)')
+      .eq('location_id', locationId).eq('block_date', todayIso)
+      .limit(200),
+    fetchDashboardShifts(supabase, {
+      locationId, startDate: isoDate(weekStart), endDate: isoDate(weekEnd), withProfiles: true,
+    }),
+  ])
+  if (e1) return { success: false, error: e1.message }
+  if (e2) return { success: false, error: e2.message }
+  if (e3) return { success: false, error: e3.message }
   if (e4) return { success: false, error: e4.message }
+
+  const staffToday = new Set()
+  for (const b of blocks || []) for (const a of b.shift_assignments || []) if (a.profile_id) staffToday.add(a.profile_id)
   let labourCents = 0
   let hours = 0
   for (const s of weekShifts || []) {
