@@ -9,6 +9,7 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import CoverageBoard from '@/components/accounting/CoverageBoard'
+import HuntInboxesCard from '@/components/accounting/HuntInboxesCard'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,6 +24,9 @@ export default async function AccountingPage() {
       <p className="text-sm text-un1t-subtle mb-6">
         Receipt coverage — every unreconciled bank transaction, and whether a receipt has been collected for it.
       </p>
+      <div className="mb-6">
+        <HuntInboxesCard />
+      </div>
       <CoverageBoard locationName={user.activeLocation?.name || ''} />
     </div>
   )

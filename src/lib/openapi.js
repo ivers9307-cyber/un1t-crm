@@ -2237,6 +2237,71 @@ registry.registerPath({
   },
 })
 
+// RCOV.P1 — hunt-inbox management. recon_mailboxes is a GLOBAL
+// resource (no location_id) — the hunt engine searches every inbox
+// on behalf of every location — so these routes gate on
+// accounting_hub only, no per-location scoping.
+const MailboxCreateBody = z.object({
+  label: z.string().min(1).max(100),
+  email: z.string().email().max(320),
+  password: z.string().min(8).max(128),
+}).openapi('MailboxCreateBody')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/accounting/mailboxes',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List hunt inboxes',
+  description: 'Operator-facing metadata for every configured hunt inbox (the imap_password column is never selected). Global list — not scoped to the active location. Requires the accounting_hub permission.',
+  responses: {
+    200: { description: 'Mailbox rows', content: { 'application/json': { schema: SuccessResponse(z.array(z.object({}).passthrough())) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/accounting/mailboxes',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Add a hunt inbox',
+  description: 'Verifies the Gmail app password with a live IMAP login before persisting the credential. Requires the accounting_hub permission.',
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: MailboxCreateBody },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Created mailbox id', content: { 'application/json': { schema: SuccessResponse(z.object({ id: uuidLike })) } } },
+    400: { description: 'Invalid request body, or the IMAP login check failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'This inbox (email) is already added', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/accounting/mailboxes/{id}',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Remove a hunt inbox',
+  description: 'Requires the accounting_hub permission.',
+  request: {
+    params: z.object({ id: uuidLike }),
+  },
+  responses: {
+    200: { description: 'Removed', content: { 'application/json': { schema: SuccessResponse(z.object({})) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No mailbox with that id', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Customer (champ-app member) self-service
 // ============================================================================
