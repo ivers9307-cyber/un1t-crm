@@ -1,113 +1,196 @@
-// /dashboard/business — Business dashboard. Owner-level. Same data
-// as the mobile BusinessDashboard.
-
+// /dashboard/business — DASH-REBUILD command centre. Each block is an
+// async server component in its own Suspense boundary: the shell paints
+// immediately, blocks stream as their live queries settle, and one
+// failing block renders a compact error cell instead of blanking the
+// page (the old all-or-nothing fetch is gone). All-live by design
+// (Richard, 2026-07-04) — streaming is the perf counterweight.
+import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import { fetchBusinessDashboardData } from '@shared/dashboard-data'
 import {
-  KpiCard, KpiRow, SectionHeader, formatCurrency, formatPercent,
-} from '@/components/dashboard/Cards'
-import { MembershipPanel } from '@/components/dashboard/MembershipPanel'
+  fetchRevenueMTD, fetchArrearsSummary, fetchFunnelCounts, fetchAdsSummary, fetchTodayOps,
+} from '@shared/dashboard-data'
+import { buildBusinessBriefing } from '@shared/business-briefing'
+import { buildNeedsYouRail } from '@/lib/dashboard/business-rail'
+import { getPendingApprovalsCount } from '@/lib/approvals/registry'
 import { computeMembershipCounts, fetchMembershipTrend } from '@/lib/membership-snapshot'
+import { loadRadar } from '@/lib/churn-radar-data'
+import { KpiCard, KpiRow, formatCurrency } from '@/components/dashboard/Cards'
+import { MembershipPanel } from '@/components/dashboard/MembershipPanel'
+import {
+  BriefingLine, FunnelMini, AdsSummaryPanel, TodayStrip, NeedsYouRail, BlockSkeleton, BlockError,
+} from '@/components/dashboard/BusinessBlocks'
 
 export const dynamic = 'force-dynamic'
+
+// eslint react-hooks/error-boundaries forbids constructing JSX inside a
+// try/catch (rendering errors escape the try). So every block does its
+// awaits + shaping inside try/catch and returns a plain data object (or
+// null on failure); the JSX is built after the try, outside its scope.
+async function KpiBriefingBlock({ user, locationId }) {
+  const db = createServerClient()
+  let vm = null
+  try {
+    // DASH-REBUILD.6b — derive the briefing's attention labels locally
+    // from data this block already holds (approvals count + arrears +
+    // churn). The full rail is built once, in RailBlock — calling
+    // buildNeedsYouRail here too would double the 8-provider approvals
+    // fan-out + leads/failed queries every page load.
+    const [revenue, arrears, membershipLive, radar, approvalsCount] = await Promise.all([
+      fetchRevenueMTD(db, locationId),
+      fetchArrearsSummary(db, locationId),
+      computeMembershipCounts(db, locationId),
+      loadRadar(db, locationId).catch(() => null),
+      getPendingApprovalsCount(db, user).catch(() => 0),
+    ])
+    if (!revenue.success) throw new Error(revenue.error)
+    const arrearsData = arrears.success ? arrears.data : { totalCents: 0, memberCount: 0 }
+    const memberCount = membershipLive?.active_recurring ?? membershipLive?.monthly_recurring ?? 0
+    const churnCount = radar?.summary?.highRisk ?? null
+
+    // Priority order, non-zero only, max 3. Rail text uses compact euro
+    // strings; the KPI cards below use formatCurrency — intentionally
+    // different registers, not a bug.
+    const labels = []
+    if (approvalsCount > 0) labels.push(`${approvalsCount} pending approval${approvalsCount === 1 ? '' : 's'}`)
+    if (arrearsData.memberCount > 0) labels.push(`${arrearsData.memberCount} in arrears (€${Math.round(arrearsData.totalCents / 100).toLocaleString('en-IE')})`)
+    if (churnCount > 0) labels.push(`${churnCount} at churn risk`)
+
+    const briefing = buildBusinessBriefing({
+      revenue: { totalCents: revenue.data.totalCents, deltaPct: revenue.data.deltaPct },
+      members: { count: memberCount, netChange: null },
+      attention: labels.slice(0, 3).map(l => ({ label: l })),
+    })
+    vm = { revenue: revenue.data, arrearsData, memberCount, churnCount, briefing }
+  } catch {
+    vm = null
+  }
+  if (!vm) return <BlockError label="Headline numbers" />
+
+  const { revenue, arrearsData, memberCount, churnCount, briefing } = vm
+  return (
+    <>
+      <BriefingLine text={briefing} />
+      <KpiRow>
+        <KpiCard label="Revenue MTD" value={formatCurrency(revenue.totalCents / 100)}
+          sublabel={revenue.deltaPct != null ? `${revenue.deltaPct >= 0 ? '+' : ''}${Math.round(revenue.deltaPct)}% vs last month` : `${revenue.paidCount} payments`} />
+        <KpiCard label="Members" value={memberCount} sublabel="active recurring" href="/contacts" />
+        <KpiCard label="Churn risk" value={churnCount ?? '—'}
+          sublabel={churnCount != null ? 'high-risk members' : 'radar unavailable'}
+          accent={churnCount ? 'text-amber-700' : undefined} href="/dashboard/churn-radar" />
+        <KpiCard label="In arrears" value={formatCurrency(arrearsData.totalCents / 100)}
+          sublabel={`${arrearsData.memberCount} member${arrearsData.memberCount === 1 ? '' : 's'}`}
+          accent={arrearsData.memberCount > 0 ? 'text-red-700' : undefined} href="/dashboard/churn-radar" />
+      </KpiRow>
+    </>
+  )
+}
+
+async function FunnelAdsBlock({ locationId }) {
+  const db = createServerClient()
+  let data = null
+  try {
+    const [funnel, ads] = await Promise.all([
+      fetchFunnelCounts(db, locationId),
+      fetchAdsSummary(db, locationId),
+    ])
+    data = { funnel, ads }
+  } catch {
+    data = null
+  }
+  if (!data) return <BlockError label="Funnel and ads" />
+
+  const { funnel, ads } = data
+  // AdsSummaryPanel / TodayStrip figures render full-digit (list
+  // register); the KPI cards above abbreviate via formatCurrency
+  // (headline register). Deliberate divergence — do not unify.
+  return (
+    <div className="grid sm:grid-cols-2 gap-3">
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg px-4 py-3">
+        <p className="text-xs text-un1t-muted mb-2">Acquisition funnel · this month</p>
+        {funnel.success ? <FunnelMini funnel={funnel.data} /> : <BlockError label="Funnel" />}
+      </div>
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg px-4 py-3">
+        <p className="text-xs text-un1t-muted mb-2">Ads · last 7 days</p>
+        {ads.success ? <AdsSummaryPanel ads={ads.data} /> : <BlockError label="Ads" />}
+      </div>
+    </div>
+  )
+}
+
+async function MembershipBlock({ locationId }) {
+  const db = createServerClient()
+  let data = null
+  try {
+    const [live, trend] = await Promise.all([
+      computeMembershipCounts(db, locationId),
+      fetchMembershipTrend(db, locationId, 12),
+    ])
+    if (!live) return null
+    data = { live, trend }
+  } catch {
+    return <BlockError label="Membership trend" />
+  }
+  return <MembershipPanel live={data.live} trend={data.trend} />
+}
+
+async function TodayBlock({ locationId, locationName }) {
+  const db = createServerClient()
+  let ops = null
+  try {
+    const res = await fetchTodayOps(db, locationId)
+    if (!res.success) throw new Error(res.error)
+    ops = res.data
+  } catch {
+    ops = null
+  }
+  if (!ops) return <BlockError label="Today's operations" />
+  return <TodayStrip ops={ops} locationName={locationName} />
+}
+
+async function RailBlock({ user, locationId }) {
+  const db = createServerClient()
+  let rows = null
+  try {
+    rows = await buildNeedsYouRail(db, user, locationId)
+  } catch {
+    return <BlockError label="Needs you" />
+  }
+  return <NeedsYouRail rows={rows} />
+}
 
 export default async function BusinessDashboardPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!hasPermission(user, 'dashboard_business')) redirect('/dashboard')
-
-  const db = createServerClient()
-  const res = await fetchBusinessDashboardData(db, user.activeLocation?.id)
-  if (!res.success) {
-    return <p className="text-sm text-red-500">Failed to load dashboard: {res.error}</p>
-  }
-  const {
-    openPipelineValue, openDealCount,
-    wonValueMTD, wonCountMTD, lostCountMTD, winRatePercent,
-    scheduledHoursThisWeek, scheduledLabourThisWeek,
-  } = res.data
-
-  // DASH-MEMBERSHIP.2 — membership breakdown (live from contacts) +
-  // 12-month trend (from membership_snapshots). Best-effort: a failure
-  // here must not blank the whole board, so default to empties.
-  const locId = user.activeLocation?.id
-  let membershipLive = null
-  let membershipTrend = []
-  if (locId) {
-    try {
-      ;[membershipLive, membershipTrend] = await Promise.all([
-        computeMembershipCounts(db, locId),
-        fetchMembershipTrend(db, locId, 12),
-      ])
-    } catch {
-      membershipLive = null
-      membershipTrend = []
-    }
-  }
+  const locationId = user.activeLocation?.id
+  const locationName = user.activeLocation?.name
 
   return (
     <>
-      <SectionHeader title="Pipeline" />
-      <KpiRow>
-        <KpiCard
-          label="Open value"
-          value={formatCurrency(openPipelineValue)}
-          sublabel={`${openDealCount} open deal${openDealCount === 1 ? '' : 's'}`}
-          href="/pipeline"
-        />
-        <KpiCard
-          label="Won this month"
-          value={formatCurrency(wonValueMTD)}
-          sublabel={`${wonCountMTD} deal${wonCountMTD === 1 ? '' : 's'}`}
-          accent="text-green-500"
-          href="/pipeline"
-        />
-      </KpiRow>
-      <KpiRow>
-        <KpiCard
-          label="Lost this month"
-          value={lostCountMTD}
-          sublabel={lostCountMTD === 1 ? 'deal' : 'deals'}
-          accent={lostCountMTD > 0 ? 'text-red-500' : 'text-un1t-muted'}
-          href="/pipeline"
-        />
-        <KpiCard
-          label="Win rate"
-          value={formatPercent(winRatePercent)}
-          sublabel={
-            winRatePercent == null
-              ? 'no decided deals yet'
-              : `${wonCountMTD} won / ${lostCountMTD} lost`
-          }
-          href="/pipeline"
-        />
-      </KpiRow>
-
-      {membershipLive && <MembershipPanel live={membershipLive} trend={membershipTrend} />}
-
-      <SectionHeader title="Scheduled labour" />
-      <KpiRow>
-        <KpiCard
-          label="Hours this week"
-          value={`${scheduledHoursThisWeek}h`}
-          sublabel={`at ${user.activeLocation?.name || 'this location'}`}
-          href="/schedule"
-        />
-        <KpiCard
-          label="Labour cost (est.)"
-          value={formatCurrency(scheduledLabourThisWeek)}
-          sublabel="excludes overtime premium"
-          href="/schedule"
-        />
-      </KpiRow>
-      <p className="text-xs text-un1t-muted mt-1 px-1">
-        Labour cost is a base estimate from each staffer&apos;s contract / hourly rate.
-        The full payroll report (including overtime, NI, etc.) lives under{' '}
-        <a href="/schedule" className="underline">Schedule</a>.
-      </p>
+      <Suspense fallback={<BlockSkeleton lines={4} />}>
+        <KpiBriefingBlock user={user} locationId={locationId} />
+      </Suspense>
+      <div className="grid xl:grid-cols-3 gap-4 mt-4">
+        <div className="xl:col-span-2 space-y-4">
+          <Suspense fallback={<BlockSkeleton lines={4} />}>
+            <FunnelAdsBlock locationId={locationId} />
+          </Suspense>
+          <Suspense fallback={<BlockSkeleton lines={5} />}>
+            <MembershipBlock locationId={locationId} />
+          </Suspense>
+          <Suspense fallback={<BlockSkeleton lines={2} />}>
+            <TodayBlock locationId={locationId} locationName={locationName} />
+          </Suspense>
+        </div>
+        <div className="xl:order-none order-first">
+          <Suspense fallback={<BlockSkeleton lines={6} />}>
+            <RailBlock user={user} locationId={locationId} />
+          </Suspense>
+        </div>
+      </div>
     </>
   )
 }
