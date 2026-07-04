@@ -19,7 +19,12 @@ const API_BASE =
  */
 export async function listConversationApprovals(conversationId) {
   const headers = await authHeaders()
-  const res = await fetch(`${API_BASE}/api/agent/membership-requests?conversation_id=${conversationId}`, { headers })
+  let res
+  try {
+    res = await fetch(`${API_BASE}/api/agent/membership-requests?conversation_id=${encodeURIComponent(conversationId)}`, { headers })
+  } catch {
+    return { success: false, error: 'Network error' }
+  }
   return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
 }
 
@@ -30,10 +35,15 @@ export async function listConversationApprovals(conversationId) {
  */
 export async function decideApproval(requestId, status, decisionNote = null) {
   const headers = await authHeaders({ json: true })
-  const res = await fetch(`${API_BASE}/api/agent/membership-requests/${requestId}`, {
-    method: 'PATCH',
-    headers,
-    body: JSON.stringify({ status, decision_note: decisionNote }),
-  })
+  let res
+  try {
+    res = await fetch(`${API_BASE}/api/agent/membership-requests/${requestId}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ status, decision_note: decisionNote }),
+    })
+  } catch {
+    return { success: false, error: 'Network error' }
+  }
   return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
 }

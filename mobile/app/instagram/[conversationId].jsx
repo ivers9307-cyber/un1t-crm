@@ -25,7 +25,7 @@ import { listConversationApprovals } from '../../lib/inbox-approvals-api'
 import { needsReply, isAgentHandoff } from '../../lib/inbox'
 import { mergeTimeline } from '../../../shared/approval-cards'
 import MessageBubble from '../../components/MessageBubble'
-import ApprovalCard from '../../components/ApprovalCard'
+import ThreadApprovalCard from '../../components/ThreadApprovalCard'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 
 export default function InstagramConversation() {
@@ -188,7 +188,7 @@ export default function InstagramConversation() {
           >
             {mergeTimeline(messages, approvals).map(item => (
               item.kind === 'approval' ? (
-                <ApprovalCard
+                <ThreadApprovalCard
                   key={item.key}
                   request={item.request}
                   contactFirstName={contactFirstName}

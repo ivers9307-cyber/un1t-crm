@@ -1,4 +1,6 @@
-// mobile/components/ApprovalCard.jsx — INBOX-APPROVALS Wave 2.
+// mobile/components/ThreadApprovalCard.jsx — INBOX-APPROVALS Wave 2.
+// (Named ThreadApprovalCard to avoid colliding with the pre-existing
+// mobile/components/approvals/ApprovalCard.jsx hub card.)
 //
 // An agent approval request rendered inline in a WA/IG thread (RN
 // mirror of src/components/ApprovalActionCard.jsx). Pending: summary +
@@ -17,13 +19,15 @@ import { getNextSteps, buildDeclineDraft, DECLINE_REASONS, BOOKING_KINDS } from 
 import { approvalCardSummary, APPROVAL_KIND_LABELS } from '../../shared/approval-cards'
 import { decideApproval } from '../lib/inbox-approvals-api'
 
-const STATUS_CHIP = {
-  pending:  'bg-amber-500/10 text-amber-700',
-  approved: 'bg-green-500/10 text-green-700',
-  actioned: 'bg-green-500/10 text-green-700',
-  saved:    'bg-blue-500/10 text-blue-700',
-  declined: 'bg-red-500/10 text-red-700',
-  failed:   'bg-red-500/10 text-red-700',
+// House tone-object idiom (see ISSUE_STATUS_TONE in mobile/lib/issues-api.js):
+// bg on the chip View, fg on the Text.
+const STATUS_TONE = {
+  pending:  { bg: 'bg-amber-500/10', fg: 'text-amber-700' },
+  approved: { bg: 'bg-green-500/10', fg: 'text-green-700' },
+  actioned: { bg: 'bg-green-500/10', fg: 'text-green-700' },
+  saved:    { bg: 'bg-blue-500/10',  fg: 'text-blue-700' },
+  declined: { bg: 'bg-red-500/10',   fg: 'text-red-700' },
+  failed:   { bg: 'bg-red-500/10',   fg: 'text-red-700' },
 }
 const STATUS_LABELS = {
   pending: 'Needs approval', approved: 'Approved', actioned: 'Done',
@@ -37,7 +41,7 @@ const STATUS_LABELS = {
  * @param {(merged: object) => void} [props.onDecided]
  * @param {(draft: string) => void} [props.onPrefillComposer]
  */
-export default function ApprovalCard({ request, contactFirstName, onDecided, onPrefillComposer }) {
+export default function ThreadApprovalCard({ request, contactFirstName, onDecided, onPrefillComposer }) {
   const [busy, setBusy] = useState(null)          // 'approved' | 'declined' | 'saved' | null
   const [declineOpen, setDeclineOpen] = useState(false)
   const [reason, setReason] = useState(BOOKING_KINDS.has(request.kind) ? 'class_full' : 'other')
@@ -83,15 +87,15 @@ export default function ApprovalCard({ request, contactFirstName, onDecided, onP
   const reasonOptions = BOOKING_KINDS.has(request.kind)
     ? DECLINE_REASONS
     : DECLINE_REASONS.filter(([k]) => k === 'not_eligible' || k === 'other')
-  const chip = STATUS_CHIP[status] || STATUS_CHIP.pending
+  const tone = STATUS_TONE[status] || STATUS_TONE.pending
 
   return (
     <View className="items-center my-2">
       <View className="w-full max-w-md bg-un1t-surface border border-un1t-border rounded-2xl px-3 py-2.5">
         <View className="flex-row items-center justify-between gap-2">
           <Text className="text-sm font-medium text-un1t-text">{kindLabel}</Text>
-          <View className={`${chip.split(' ')[0]} rounded-full px-1.5 py-0.5`}>
-            <Text className={`${chip.split(' ')[1]} text-[10px] font-semibold`}>
+          <View className={`${tone.bg} rounded-full px-1.5 py-0.5`}>
+            <Text className={`${tone.fg} text-[10px] font-semibold`}>
               {STATUS_LABELS[status] || status}
             </Text>
           </View>
