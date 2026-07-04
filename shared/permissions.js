@@ -853,6 +853,49 @@ export const MOBILE_PERMISSION_KEYS = Object.freeze(
 )
 
 // ============================================================
+// Blob sanitiser (PERM-AUDIT.1)
+//
+// The staff-save routes used to accept any JSONB shape
+// (z.record(z.string(), z.unknown())), so junk/stale keys could
+// land in profile_locations.permissions (a pre-mig-092 `dashboard`
+// key was found in prod). This is the single whitelist both save
+// routes run the incoming blob through: known web keys with
+// boolean values at top level, known mobile keys with boolean
+// values under `.mobile`, plus the named non-boolean extras that
+// legitimately ride on the mobile sub-object. Everything else is
+// silently dropped — so a save also self-heals historical junk.
+// ============================================================
+
+// Non-permission extras stored on permissions.mobile by design:
+// `layout` (per-user tab-bar arrangement) and `lead_time_overrides`
+// (per-user reminder lead times). Add here if a new extra is ever
+// introduced — anything unlisted is stripped on save.
+export const MOBILE_BLOB_EXTRA_KEYS = Object.freeze([
+  'layout',
+  'lead_time_overrides',
+])
+
+export function sanitizePermissionsBlob(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out = {}
+  for (const key of WEB_PERMISSION_KEYS) {
+    if (typeof raw[key] === 'boolean') out[key] = raw[key]
+  }
+  const rawMobile = raw.mobile
+  if (rawMobile && typeof rawMobile === 'object' && !Array.isArray(rawMobile)) {
+    const mob = {}
+    for (const key of MOBILE_PERMISSION_KEYS) {
+      if (typeof rawMobile[key] === 'boolean') mob[key] = rawMobile[key]
+    }
+    for (const extra of MOBILE_BLOB_EXTRA_KEYS) {
+      if (extra in rawMobile) mob[extra] = rawMobile[extra]
+    }
+    out.mobile = mob
+  }
+  return out
+}
+
+// ============================================================
 // Default landing-page preference
 //
 // Stored under profiles.permissions.landing_preference. Honoured by

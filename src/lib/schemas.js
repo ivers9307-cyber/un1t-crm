@@ -5,6 +5,7 @@
 // date field expects YYYY-MM-DD. When a constraint changes, it changes here.
 
 import { z } from 'zod'
+import { sanitizePermissionsBlob } from '@shared/permissions'
 
 // UUID-shaped string matching what Postgres's uuid type accepts. See
 // src/lib/validate.js for the rationale (Zod 4's .uuid() is RFC-strict
@@ -168,8 +169,13 @@ export const reportTypeSchema = z.enum([
   'staff_hours', 'staff_cost', 'time_off_summary', 'roster_coverage', 'utilisation',
 ])
 
-// Permissions — JSONB, opaque values. Don't gate on shape.
+// Permissions — whitelisted to the known keys from shared/permissions.js
+// (PERM-AUDIT.1). Unknown keys and non-boolean values are silently
+// stripped rather than rejected, so a stored blob carrying a stale
+// pre-rename key still round-trips through the editors (and gets
+// cleaned in the process).
 export const permissionsSchema = z.record(z.string(), z.unknown())
+  .transform(sanitizePermissionsBlob)
 
 // ---------------------------------------------------------------------------
 // PASSWORDS

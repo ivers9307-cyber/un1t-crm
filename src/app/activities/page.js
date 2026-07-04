@@ -17,6 +17,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import TasksPage from '@/components/TasksPage'
 
@@ -25,6 +26,7 @@ export const dynamic = 'force-dynamic'
 export default async function ActivitiesPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
+  if (!hasPermission(user, 'activities')) redirect('/')
 
   const locationId = user.activeLocation?.id
   if (!locationId) redirect('/')

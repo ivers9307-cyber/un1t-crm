@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest'
 import {
   resolvePermission,
   hydratePermissions,
+  sanitizePermissionsBlob,
   DEFAULT_WEB_PERMISSIONS_BY_ROLE,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
 } from './permissions.js'
@@ -238,5 +239,49 @@ describe('hydratePermissions — role defaults merged under the stored blob', ()
     out.pipeline = true
     out.mobile.schedule = true
     expect(raw).toEqual({ pipeline: false, mobile: { schedule: false } })
+  })
+})
+
+// PERM-AUDIT.1 — the save-path whitelist. Both staff-save routes run
+// incoming blobs through this (via permissionsSchema.transform), so
+// junk keys can no longer land in profile_locations.permissions and
+// stale keys self-heal on the next save.
+describe('sanitizePermissionsBlob — save-path whitelist', () => {
+  it('keeps known web + mobile boolean keys and drops unknown keys', () => {
+    const out = sanitizePermissionsBlob({
+      pipeline: true,
+      dashboard: true,            // stale pre-split key seen in prod
+      typo_feature: false,
+      mobile: { schedule: false, bad_key: true },
+    })
+    expect(out).toEqual({ pipeline: true, mobile: { schedule: false } })
+  })
+
+  it('drops non-boolean values for permission keys', () => {
+    const out = sanitizePermissionsBlob({ pipeline: 'yes', mobile: { schedule: 1 } })
+    expect(out).toEqual({ mobile: {} })
+  })
+
+  it('preserves the named non-boolean mobile extras (layout, lead_time_overrides)', () => {
+    const layout = { bar: ['schedule'], allowed: ['schedule', 'studio'] }
+    const overrides = { tasks: 120 }
+    const out = sanitizePermissionsBlob({
+      mobile: { schedule: true, layout, lead_time_overrides: overrides, rogue_extra: {} },
+    })
+    expect(out.mobile.layout).toEqual(layout)
+    expect(out.mobile.lead_time_overrides).toEqual(overrides)
+    expect(out.mobile.rogue_extra).toBeUndefined()
+  })
+
+  it('non-object / null / array input → empty blob', () => {
+    expect(sanitizePermissionsBlob(null)).toEqual({})
+    expect(sanitizePermissionsBlob(undefined)).toEqual({})
+    expect(sanitizePermissionsBlob('junk')).toEqual({})
+    expect(sanitizePermissionsBlob([1, 2])).toEqual({})
+  })
+
+  it('round-trips a full hydrated blob unchanged (editor save path)', () => {
+    const full = hydratePermissions(null, 'manager')
+    expect(sanitizePermissionsBlob(full)).toEqual(full)
   })
 })

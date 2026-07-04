@@ -7,6 +7,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
 
 export const ROW_SELECT = `
   id, location_id, sender_email, subject, email_message_id,
@@ -52,10 +53,18 @@ export async function loadInvoiceForUser(id) {
     return { response: NextResponse.json({ success: false, error: 'Not found' }, { status: 404 }) }
   }
 
+  // Two gates layered here:
+  //  • invoices_inbox permission at the row's location — makes the
+  //    StaffForm toggle real (an opted-out owner is fully locked
+  //    out, API included).
+  //  • master-or-owner-at-location — approval AUTHORITY for the
+  //    quality/data transitions stays a role decision (a manager
+  //    granted invoices_inbox gets the view, not the sign-off).
   const isMaster = user.role === 'master' || user.profileRole === 'master'
   const ownsLocation = Object.entries(user.rolesByLocation || {})
     .some(([loc, r]) => r === 'owner' && loc === row.location_id)
-  if (!isMaster && !ownsLocation) {
+  const hasInboxPermission = hasPermissionForLocation(user, row.location_id, 'invoices_inbox')
+  if (!hasInboxPermission || (!isMaster && !ownsLocation)) {
     // 404 (not 403) so a cross-org caller can't distinguish "exists elsewhere"
     // from "doesn't exist" — matches the not-found branch above. Covers every
     // invoices-inbox/[id]/* route via this shared loader.

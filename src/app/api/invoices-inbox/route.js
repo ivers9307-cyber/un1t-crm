@@ -15,6 +15,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { uuidLike } from '@/lib/schemas'
 import {
   INBOUND_INVOICE_SUPPORTED_MIME,
@@ -35,19 +36,25 @@ const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // 25 MB — bigger than a typical PDF
 // longer bypasses — they switch active location to see another
 // studio's queue. Caller MAY still pass `?location_id=<id>` to
 // query a specific location, but the API enforces that the user
-// has access to it (master can address any; owner only their
-// owned ones).
+// has access to it.
+//
+// Access resolves through the `invoices_inbox` permission (owner +
+// master by default), so the StaffForm toggle actually works: an
+// owner can be opted out per-user, and a senior manager can be
+// granted the inbox without a role change. Approve/decline
+// transitions stay master-or-owner-at-location on top of this —
+// see _helpers.js.
 function inboxScope(user) {
   if (!user) return { allowed: false }
   const isMaster = user.role === 'master' || user.profileRole === 'master'
-  const ownerLocations = Object.entries(user.rolesByLocation || {})
-    .filter(([, r]) => r === 'owner')
-    .map(([loc]) => loc)
-  if (!isMaster && ownerLocations.length === 0) return { allowed: false }
+  const permittedLocations = (user.locations || [])
+    .map((l) => l.id)
+    .filter((id) => hasPermissionForLocation(user, id, 'invoices_inbox'))
+  if (!isMaster && permittedLocations.length === 0) return { allowed: false }
   return {
     allowed: true,
     isMaster,
-    ownerLocations,
+    permittedLocations,
     activeLocationId: user.activeLocation?.id || null,
   }
 }
@@ -101,7 +108,7 @@ export async function GET(request) {
   // address a specific location via API URL), but only if they
   // have access to it.
   let effectiveLocationId = locationFilter || scope.activeLocationId
-  if (locationFilter && !scope.isMaster && !scope.ownerLocations.includes(locationFilter)) {
+  if (locationFilter && !scope.isMaster && !scope.permittedLocations.includes(locationFilter)) {
     return NextResponse.json({ success: false, error: 'Forbidden — not your location' }, { status: 403 })
   }
   if (!effectiveLocationId) {
@@ -171,8 +178,9 @@ export async function POST(request) {
   }
   const { location_id, sender_email, subject } = parsed.data
 
-  // Owner can only post for their own locations.
-  if (scope.ownerLocations && !scope.ownerLocations.includes(location_id)) {
+  // Non-master can only post for locations where they hold the
+  // invoices_inbox permission.
+  if (!scope.isMaster && !scope.permittedLocations.includes(location_id)) {
     return NextResponse.json({ success: false, error: 'Forbidden for this location.' }, { status: 403 })
   }
 
