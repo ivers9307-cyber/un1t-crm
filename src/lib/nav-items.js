@@ -59,10 +59,11 @@ export const ALL_NAV = [
   // layout). Badge wiring stays in Sidebar.jsx.
   //
   // Single Communications entry replacing the old Email + WhatsApp.
-  // Visible if the user has EITHER permission — sub-tabs inside the
-  // hub gate themselves further.
+  // Visible if the user has ANY channel permission (sms included —
+  // an SMS-only user still needs the hub link; PERM-AUDIT.1) —
+  // sub-tabs inside the hub gate themselves further.
   { href: '/communications', label: 'Communications', icon: MessagesSquare,
-    anyPermission: ['email', 'whatsapp'], section: 'work' },
+    anyPermission: ['email', 'whatsapp', 'sms'], section: 'work' },
   // Single entry replacing the old Events + Bookings ("Calendly").
   // The hub lands on /bookings (the high-frequency operational view —
   // "what's booked today / coming up") with a tab strip at the top of
