@@ -7,20 +7,21 @@
 //       ?BankAccountID=&FromDate=&ToDate=&SummaryOnly=false
 //   scope: finance.bankstatementsplus.read
 //
-// Endpoint, scope string and field names were verified against Xero's
-// own OpenAPI spec (XeroAPI/Xero-OpenAPI, xero-finance.yaml) BEFORE
-// requesting the scope — an unverified scope string bricks the whole
-// authorize step (the accounting.reports.read incident).
+// ⛔ INACTIVE — ENTITLEMENT-GATED (2026-07-04, same day it shipped).
+// The scope string is real (verified in xero-finance.yaml), but the
+// Finance API is restricted to Xero-approved apps (lending use-cases):
+// our app's authorize failed live with "invalid_scope / Error code:
+// 500" and the scope was reverted (see scopes.test.js, which now pins
+// finance.* as forbidden). Lesson upgraded: verify ENTITLEMENT, not
+// just spec-existence.
 //
-// Why this source: it serves TRUE bank statement lines — including
+// Why this file stays: it serves TRUE bank statement lines — including
 // imported feed lines nobody has actioned yet, which are invisible to
-// GET /BankTransactions (Richard hit this: Revolut EUR Main showed 2
-// lines on the board vs more in Xero's reconcile screen). Each line
-// carries a stable statementLineId and an isReconciled boolean, so
-// this is exactly the reconcile screen's work-list.
-//
-// The previous /BankTransactions source (bank-transactions.js) is kept
-// but inactive until this source is probe-proven on the real org.
+// GET /BankTransactions (the active source, bank-transactions.js).
+// Each line carries a stable statementLineId and an isReconciled
+// boolean — exactly the reconcile screen's work-list. If Xero ever
+// grants this app Finance API access, re-adding the scope and swapping
+// pull.js back to this mapper is the whole job (PR #802 has the diff).
 
 export function mapStatementLines(payload) {
   const statements = payload?.statements
