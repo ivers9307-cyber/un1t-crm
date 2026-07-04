@@ -2232,6 +2232,31 @@ registry.registerPath({
   },
 })
 
+for (const [action, summary, extra] of [
+  ['ignore', 'Ignore a bank line (expected no-doc)', {
+    body: { content: { 'application/json': { schema: z.object({ reason: z.string().min(2).max(200) }).openapi('CoverageIgnoreBody') } } },
+  }],
+  ['unignore', 'Reverse an ignore — the line returns to uncovered', {}],
+  ['rehunt', 'Queue a single line for an immediate re-hunt', {}],
+  ['upload', 'Attach a manually-obtained receipt (multipart file) — content-hash deduped, enters the invoices queue', {}],
+]) {
+  registry.registerPath({
+    method: 'post',
+    path: `/api/accounting/coverage/{id}/${action}`,
+    tags: ['Accounting'],
+    security: [{ CookieAuth: [] }],
+    summary,
+    request: { params: z.object({ id: uuidLike }), ...(extra.body ? { body: extra.body } : {}) },
+    responses: {
+      200: { description: 'OK', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+      403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+      404: { description: 'Line not found for the active location', content: { 'application/json': { schema: ErrorResponse } } },
+      409: { description: 'Line state does not allow this action', content: { 'application/json': { schema: ErrorResponse } } },
+    },
+  })
+}
+
 registry.registerPath({
   method: 'get',
   path: '/api/accounting/health',
