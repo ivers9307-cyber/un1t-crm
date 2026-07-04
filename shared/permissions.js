@@ -248,6 +248,36 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     settings: false,
     landing_page: false,                          // marketing copy isn't a staff concern
   },
+  // Reception (2026-07) — front-of-house desk role. Staff-level
+  // access plus the WhatsApp inbox (answering member messages is a
+  // front-desk duty). Deliberately NO oversight/finance/marketing
+  // surfaces; operators tune per location via the Roles tab
+  // (Settings → location → Roles), so these code defaults stay lean.
+  reception: {
+    dashboard_personal: true, dashboard_studio: false, dashboard_business: false, dashboard_ads: false,
+    pipeline: true, contacts: true, activities: true,
+    churn_radar: false,
+    lead_radar: false,
+    engagement_analytics: false,
+    pulse_admin: false,
+    events: true, bookings: true, races: true,       // front desk runs the booking desk
+    email: false, whatsapp: true, sms: false,        // WhatsApp inbox is the front-desk channel
+    schedule: true, attendance_reports: false, assistant: false, studio_management: false,
+    contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
+    presentations: false,
+    orders: false, car_processing: false,
+    card_receipts: false,
+    invoices_inbox: false,
+    approvals_inbox: false,
+    automations: false,
+    challenges: false,
+    issues_inbox: false,
+    bookkeeper: false,
+    contact_linking: false,
+    consultations: false,
+    settings: false,
+    landing_page: false,
+  },
   head_coach: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: false, dashboard_ads: false,
     pipeline: true, contacts: true, activities: true,
@@ -588,6 +618,38 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_checklist_overdue: true, notify_checklist_compliance: false,
     // Staff don't handle issue reports — only get resolved on their
     // own reports.
+    notify_issue_submitted: false, notify_issue_resolved: true,
+  },
+  // Reception — staff-level mobile access + the WhatsApp inbox and
+  // the operator bookings view (today/tomorrow is the desk's core
+  // screen). Notification defaults follow: WhatsApp + booking
+  // reminders on; everything oversight/approval stays off.
+  reception: {
+    schedule: true, pipeline: false, whatsapp: true, assistant: false,
+    sms: false, email: false,
+    tv_displays: false,
+    contacts: true,
+    tasks: true, bookings: true,
+    time_off: true,
+    approvals: false,
+    staff_management: false,
+    issue_triage: false,
+    invoices_inbox: false,
+    card_receipts: false,
+    orders: false,
+    car_processing: false,
+    races: false,
+    invoices: true, expenses: true, issues: true, contracts: true, policies: true,
+    churn_radar: false, lead_radar: false,
+    push_notifications: true,
+    notify_time_off: true, notify_schedule: true, notify_swap: true,
+    notify_lead: false, notify_whatsapp: true, notify_instagram: false,
+    notify_invoice_approved: true, notify_invoice_declined: true,
+    notify_expense_submitted: false, notify_expense_approved: true, notify_expense_declined: true,
+    notify_shift_adjusted: true,
+    notify_contract_issued: true,
+    notify_tasks: true, notify_bookings: true,
+    notify_checklist_overdue: true, notify_checklist_compliance: false,
     notify_issue_submitted: false, notify_issue_resolved: true,
   },
   head_coach: {

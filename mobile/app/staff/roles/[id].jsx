@@ -15,12 +15,13 @@ import { buildStaffAssignmentsPatch } from '../../../lib/staff-edit'
 import { Button } from '../../../components/ui'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
 
-const ROLES = ['owner', 'manager', 'head_coach', 'staff']
+const ROLES = ['owner', 'manager', 'head_coach', 'staff', 'reception']
 const ROLE_LABELS = {
   owner: 'Owner',
   manager: 'Manager',
   head_coach: 'Head Coach',
   staff: 'Staff',
+  reception: 'Reception',
 }
 
 function RolePills({ value, onChange }) {

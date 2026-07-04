@@ -23,6 +23,7 @@ const ROLE_LABELS = {
   manager: 'Manager',
   head_coach: 'Head Coach',
   staff: 'Staff',
+  reception: 'Reception',
 }
 
 /**

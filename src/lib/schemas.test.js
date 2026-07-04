@@ -210,7 +210,7 @@ describe('OWNER_ASSIGNABLE_ROLES + MASTER_ASSIGNABLE_ROLES (mig 051 semantics)',
     // roles changed the calculus: granting "owner at this studio"
     // is no longer a platform-level promotion, so an owner can grant it.
     expect(OWNER_ASSIGNABLE_ROLES).toContain('owner')
-    expect(OWNER_ASSIGNABLE_ROLES).toEqual(['owner', 'manager', 'head_coach', 'staff'])
+    expect(OWNER_ASSIGNABLE_ROLES).toEqual(['owner', 'manager', 'head_coach', 'staff', 'reception'])
     expect(Object.isFrozen(OWNER_ASSIGNABLE_ROLES)).toBe(true)
   })
 
@@ -218,7 +218,7 @@ describe('OWNER_ASSIGNABLE_ROLES + MASTER_ASSIGNABLE_ROLES (mig 051 semantics)',
     // The is_master boolean on the staff API body is the only way
     // to mint a master, and only an existing master can set it.
     expect(MASTER_ASSIGNABLE_ROLES).not.toContain('master')
-    expect(MASTER_ASSIGNABLE_ROLES).toEqual(['owner', 'manager', 'head_coach', 'staff'])
+    expect(MASTER_ASSIGNABLE_ROLES).toEqual(['owner', 'manager', 'head_coach', 'staff', 'reception'])
     expect(Object.isFrozen(MASTER_ASSIGNABLE_ROLES)).toBe(true)
   })
 })

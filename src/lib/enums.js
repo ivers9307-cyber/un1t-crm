@@ -157,6 +157,7 @@ export const LOCATION_ROLE = Object.freeze({
   MANAGER: 'manager',
   HEAD_COACH: 'head_coach',
   STAFF: 'staff',
+  RECEPTION: 'reception',
 })
 export const LOCATION_ROLE_VALUES = Object.values(LOCATION_ROLE)
 

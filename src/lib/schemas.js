@@ -61,14 +61,16 @@ export const days = z.number().finite().min(0).max(366)
 //                owner/master accounts.
 //   manager      Day-to-day ops admin (schedule, pipeline, settings).
 //   head_coach   Senior trainer.
-//   staff        Trainer / front-desk.
-export const roleSchema = z.enum(['master', 'owner', 'manager', 'head_coach', 'staff'])
+//   staff        Trainer.
+//   reception    Front-of-house desk (2026-07) — staff-tier authz;
+//                defaults add the WhatsApp inbox + booking desk.
+export const roleSchema = z.enum(['master', 'owner', 'manager', 'head_coach', 'staff', 'reception'])
 export const employmentTypeSchema = z.enum(['fte', 'contractor', 'casual'])
 
 // Per-location role schema (mig 051). master never appears at the
 // per-location level — it's a platform-wide flag on profiles.role.
 // The CHECK constraint on profile_locations.role enforces this.
-export const locationRoleSchema = z.enum(['owner', 'manager', 'head_coach', 'staff'])
+export const locationRoleSchema = z.enum(['owner', 'manager', 'head_coach', 'staff', 'reception'])
 
 // Per-location assignment shape used by the staff API. One row per
 // location the user belongs to, each carrying its own role, flags,
@@ -119,12 +121,12 @@ export const MANAGER_ROLES = Object.freeze(['master', 'owner', 'manager', 'head_
 
 // Per-location roles a master can grant at any location. Master itself
 // is set via the separate `is_master` flag, not as a per-location role.
-export const MASTER_ASSIGNABLE_ROLES = Object.freeze(['owner', 'manager', 'head_coach', 'staff'])
+export const MASTER_ASSIGNABLE_ROLES = Object.freeze(['owner', 'manager', 'head_coach', 'staff', 'reception'])
 // Per-location roles an owner-at-X can grant at X. Mig 051 expanded
 // this to include 'owner' — owner-at-Hatch can now mint another
 // owner-at-Hatch (no longer a platform-level promotion since per-
 // location roles are independent).
-export const OWNER_ASSIGNABLE_ROLES = Object.freeze(['owner', 'manager', 'head_coach', 'staff'])
+export const OWNER_ASSIGNABLE_ROLES = Object.freeze(['owner', 'manager', 'head_coach', 'staff', 'reception'])
 
 // Default colour used when a user-created entity (event, shift template)
 // doesn't specify one. Branding-aware components should reference this

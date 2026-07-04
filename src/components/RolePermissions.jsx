@@ -28,6 +28,7 @@ const ROLE_TABS = [
   { key: 'manager', label: 'Manager' },
   { key: 'head_coach', label: 'Head coach' },
   { key: 'staff', label: 'Staff' },
+  { key: 'reception', label: 'Reception' },
 ]
 
 function Toggle({ on, changed, onToggle, busy, label, hint }) {
