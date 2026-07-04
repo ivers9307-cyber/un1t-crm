@@ -1,4 +1,4 @@
--- 366_receipt_coverage.sql
+-- 367_receipt_coverage.sql
 -- RECEIPT-COVERAGE.P0 — coverage ledger for unreconciled Xero bank lines.
 -- Spec: un1t-finance-agent/docs/superpowers/specs/2026-07-04-receipt-coverage-design.md
 -- Both tables are service-role-only: all access goes through /api routes

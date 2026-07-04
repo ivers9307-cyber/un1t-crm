@@ -268,6 +268,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     orders: false, car_processing: false,
     card_receipts: false,
     invoices_inbox: false,
+    accounting_hub: false,                         // bookkeeping oversight — master + owner only
     approvals_inbox: false,
     automations: false,
     challenges: false,
