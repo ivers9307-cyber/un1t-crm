@@ -59,7 +59,14 @@ export const XERO_SCOPES = [
   'accounting.invoices',
   'accounting.attachments',  // upload source doc onto the bill
   'accounting.settings',     // GET /BrandingThemes for the "Car" theme; GET /Accounts
-  'accounting.reports.read', // RCOV.P0 — GET /Reports/BankStatement (unreconciled lines)
+  // RCOV hotfix 2026-07-04: 'accounting.reports.read' is a RETIRED
+  // broad scope under Xero's 2026 granular migration — requesting it
+  // breaks the AUTHORIZE step ("Sorry, something went wrong", no
+  // (re)connect possible). Coverage pulls now read /BankTransactions
+  // under the granular scope below. Any scope added to this list MUST
+  // be verified against Xero's CURRENT granular catalog first —
+  // scopes.test.js pins the two known-retired strings.
+  'accounting.banktransactions.read', // RCOV — GET /BankTransactions (coverage pull)
   'offline_access',
 ]
 

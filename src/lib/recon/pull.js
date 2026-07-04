@@ -2,27 +2,36 @@
 //
 // RCOV.P0 — one coverage pull for one location: claim the run
 // (atomic — see recon_runs_one_running_per_location_idx), list active
-// BANK accounts, fetch each account's Bank Statement report for the
-// window, sync the unreconciled lines into recon_bank_lines, audit in
+// BANK accounts, fetch each account's transactions for the window,
+// sync the unreconciled ones into recon_bank_lines, audit in
 // recon_runs. Window = oldest non-terminal tracked line, else 90 days.
+//
+// DATA SOURCE (hotfix 2026-07-04): GET /BankTransactions (paginated,
+// status-filtered server-side, IsReconciled filtered CLIENT-side) —
+// see bank-transactions.js for why the Bank Statement report had to
+// go (retired scope broke the authorize step) and what this source
+// cannot see (unactioned statement lines).
 //
 // GUARDS (both review-mandated):
 // - Zero-rows anomaly: an account with tracked non-terminal lines can
-//   never legitimately parse to zero report rows (the report includes
-//   reconciled lines too) — that means shape drift, and syncing would
+//   never legitimately fetch zero transactions for a window that
+//   encloses those lines (reconciled ones are still returned — the
+//   IsReconciled filter is client-side precisely to preserve this
+//   tripwire). Zero rows = fetch/shape drift; syncing would
 //   mass-cover. Skip the account, record the anomaly, run → 'error'.
 // - Atomic claim: sweep stale 'running' rows (crashed runs), then
 //   insert-first; a 23505 unique violation means another run holds
 //   the claim. A wedged claim (insert applied but the call failed
 //   before returning the id) self-heals via the same 15-min sweep.
 import { withFreshToken } from '@/lib/xero/client'
-import { parseBankStatementReport, assignOrdinals, computeLineKey } from './bank-statement'
+import { mapBankTransactions, bankTransactionLines } from './bank-transactions'
 import { syncBankLines } from './coverage'
 import { dublinTodayStr, addDaysISO } from '@/lib/dublin-time'
 
 const DEFAULT_WINDOW_DAYS = 90
 const STALE_RUN_MS = 15 * 60 * 1000
 const NON_TERMINAL = ['uncovered', 'submitted', 'not_found', 'needs_attention']
+const MAX_TXN_PAGES = 20 // × 100/page — far beyond expected weekly volume
 
 async function claimRun(db, locationId, trigger) {
   const { error: sweepErr } = await db
@@ -100,18 +109,33 @@ export async function runCoveragePull(db, locationId, { trigger, acceptMassCover
     const accounts = (accountsRes?.Accounts || []).filter((a) => a.Status === 'ACTIVE')
 
     for (const acct of accounts) {
-      const report = await xfetch(
-        `/Reports/BankStatement?bankAccountID=${encodeURIComponent(acct.AccountID)}&fromDate=${encodeURIComponent(windowFrom)}&toDate=${encodeURIComponent(windowTo)}`
+      // Paginated /BankTransactions fetch: Xero pages at 100. Filters
+      // pushed server-side: account, window, AUTHORISED. IsReconciled
+      // is deliberately filtered CLIENT-side (header: the zero-rows
+      // tripwire needs reconciled rows in the fetch).
+      const [fy, fm, fd] = windowFrom.split('-').map(Number)
+      const [ty, tm, td] = windowTo.split('-').map(Number)
+      const where = encodeURIComponent(
+        `BankAccount.AccountID==Guid("${acct.AccountID}") AND Status=="AUTHORISED" AND Date>=DateTime(${fy},${fm},${fd}) AND Date<=DateTime(${ty},${tm},${td})`
       )
-      // C2 contract: ordinals are assigned over the FULL parsed report
-      // (reconciled lines included — they stay in the report), THEN we
-      // filter. Filtering first would renumber a surviving duplicate
-      // when its identical sibling reconciles, changing its key.
-      const rows = assignOrdinals(parseBankStatementReport(report))
+      const rows = []
+      for (let page = 1; page <= MAX_TXN_PAGES; page += 1) {
+        const res = await xfetch(`/BankTransactions?where=${where}&order=Date&page=${page}`)
+        rows.push(...mapBankTransactions(res))
+        // Break on a short RAW page (the mapper drops rows, so its
+        // output length can't be the pagination signal).
+        const rawCount = Array.isArray(res?.BankTransactions) ? res.BankTransactions.length : 0
+        if (rawCount < 100) break
+        if (page === MAX_TXN_PAGES) {
+          // Loud, not silent: a 2,000-txn window is beyond any expected
+          // volume — if this fires, widen MAX_TXN_PAGES deliberately.
+          console.error(`[recon pull] ${acct.AccountID}: hit MAX_TXN_PAGES — window truncated`)
+        }
+      }
       // Zero-rows anomaly guard. The && ordering is load-bearing: the
       // cheap rows-length check short-circuits BEFORE hasTrackedLines,
       // so the extra DB read (and its positional test mock) only
-      // happens for a zero-rows report.
+      // happens for a zero-rows fetch.
       if (rows.length === 0 && (await hasTrackedLines(db, locationId, acct.AccountID))) {
         anomalies.push({
           bankAccountId: acct.AccountID,
@@ -120,14 +144,7 @@ export async function runCoveragePull(db, locationId, { trigger, acceptMassCover
         })
         continue
       }
-      const unreconciled = rows.filter((r) => !r.reconciled)
-      const lines = unreconciled.map((l) => ({
-        key: computeLineKey(acct.AccountID, l),
-        date: l.date,
-        amount: l.amount,
-        description: l.description,
-        reference: l.reference,
-      }))
+      const lines = bankTransactionLines(rows)
       const stats = await syncBankLines(db, {
         locationId,
         bankAccountId: acct.AccountID,
