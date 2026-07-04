@@ -2234,6 +2234,20 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/api/accounting/health',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Runs & health for the receipt-coverage feature',
+  description: 'Recent recon runs (pulls + weekly reports), hunt-inbox health, the two cron heartbeats with staleness, and 7-day LLM spend vs the hunt budget. Requires the accounting_hub permission.',
+  responses: {
+    200: { description: 'Runs, mailboxes, heartbeats, spend', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/accounting/exceptions',
   tags: ['Accounting'],
   security: [{ CookieAuth: [] }],
