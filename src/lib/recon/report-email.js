@@ -27,8 +27,66 @@ export function shouldRunFridayCron({ dublinMinutes, alreadyRanToday }) {
   return hour === 8 && !alreadyRanToday
 }
 
+function foundSectionHtml(found) {
+  if (found.length === 0) return ''
+  return `
+    <h4 style="margin:16px 0 4px;color:#2e7d32">Found &amp; submitted this week</h4>
+    <table cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:13px;width:100%">
+      <tr style="text-align:left;border-bottom:1px solid #ddd">
+        <th>Date</th><th>Description</th><th>Supplier</th><th style="text-align:right">Amount</th>
+      </tr>
+      ${found.map((l) => `
+      <tr style="border-bottom:1px solid #eee">
+        <td>${esc(l.line_date)}</td>
+        <td>${esc(l.description)}</td>
+        <td>${esc(l.supplier_name)}${l.deduped ? ' (already in queue)' : ''}</td>
+        <td style="text-align:right;white-space:nowrap">${eur(l.amount)}</td>
+      </tr>`).join('')}
+    </table>`
+}
+
+function inReviewSectionHtml(inReview) {
+  if (inReview.length === 0) return ''
+  return `
+    <h4 style="margin:16px 0 4px">In review — working through the invoice queue</h4>
+    <table cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:13px;width:100%">
+      <tr style="text-align:left;border-bottom:1px solid #ddd">
+        <th>Date</th><th>Description</th><th style="text-align:right">Amount</th><th>Stage</th>
+      </tr>
+      ${inReview.map((l) => `
+      <tr style="border-bottom:1px solid #eee">
+        <td>${esc(l.line_date)}</td>
+        <td>${esc(l.description)}</td>
+        <td style="text-align:right;white-space:nowrap">${eur(l.amount)}</td>
+        <td>${esc(l.queue_status)}</td>
+      </tr>`).join('')}
+    </table>`
+}
+
+function needsAttentionSectionHtml(needsAttention) {
+  if (needsAttention.length === 0) return ''
+  return `
+    <h4 style="margin:16px 0 4px;color:#c62828">Needs your attention — submitted document was rejected</h4>
+    <table cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:13px;width:100%">
+      <tr style="text-align:left;border-bottom:1px solid #ddd">
+        <th>Date</th><th>Description</th><th style="text-align:right">Amount</th><th>Reason</th>
+      </tr>
+      ${needsAttention.map((l) => `
+      <tr style="border-bottom:1px solid #eee">
+        <td>${esc(l.line_date)}</td>
+        <td>${esc(l.description)}</td>
+        <td style="text-align:right;white-space:nowrap">${eur(l.amount)}</td>
+        <td>${esc(l.reject_reason)}</td>
+      </tr>`).join('')}
+    </table>`
+}
+
 export function renderCoverageReportHtml({ appUrl, dateStr, sections, errors }) {
-  const sectionHtml = sections.map((s) => `
+  const sectionHtml = sections.map((s) => {
+    const found = s.found || []
+    const inReview = s.inReview || []
+    const needsAttention = s.needsAttention || []
+    return `
     <h3 style="margin:24px 0 4px">${esc(s.locationName)}</h3>
     <p style="margin:0 0 8px;color:#555;font-size:13px">
       ${s.stats.pulled} unreconciled line${s.stats.pulled === 1 ? '' : 's'} ·
@@ -39,9 +97,13 @@ export function renderCoverageReportHtml({ appUrl, dateStr, sections, errors }) 
         ⚠ Anomaly: sync skipped for ${s.anomalies.map((a) => esc(a.bankAccountName || a.bankAccountId)).join(', ')} —
         report parsed to zero rows (possible report-shape drift). Coverage for ${s.anomalies.length === 1 ? 'this account' : 'these accounts'} was NOT updated.
       </p>`}
+    ${foundSectionHtml(found)}
+    ${inReviewSectionHtml(inReview)}
+    ${needsAttentionSectionHtml(needsAttention)}
     ${s.uncovered.length === 0
       ? '<p style="font-size:13px;color:#2e7d32">Every tracked transaction is covered or in review. 🎉</p>'
-      : `<table cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:13px;width:100%">
+      : `<h4 style="margin:16px 0 4px">Still no invoice found — chase list</h4>
+        <table cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:13px;width:100%">
           <tr style="text-align:left;border-bottom:1px solid #ddd">
             <th>Date</th><th>Description</th><th>Ref</th><th style="text-align:right">Amount</th>
           </tr>
@@ -53,7 +115,8 @@ export function renderCoverageReportHtml({ appUrl, dateStr, sections, errors }) 
             <td style="text-align:right;white-space:nowrap">${eur(l.amount)}</td>
           </tr>`).join('')}
         </table>`}
-  `).join('')
+  `
+  }).join('')
 
   const errorHtml = errors.length === 0 ? '' : `
     <h3 style="margin:24px 0 4px;color:#c62828">Problems this run</h3>
