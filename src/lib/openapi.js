@@ -2233,6 +2233,20 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'get',
+  path: '/api/accounting/exceptions',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Exceptions for the active location (audit F2/F3/F4/F5 + stuck rows)',
+  description: 'VAT mismatches (Xero-booked vs OCR), aging DRAFT bills, bills missing their attachment, receiptless-expected expenses, and queue rows stuck >7 days. Requires the accounting_hub permission.',
+  responses: {
+    200: { description: 'Five exception sections', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'post',
   path: '/api/accounting/coverage/refresh',
   tags: ['Accounting'],
