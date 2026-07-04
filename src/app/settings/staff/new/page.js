@@ -13,7 +13,19 @@ export default async function NewStaffPage() {
   if (!user || (!user.isMaster && user.role !== 'owner')) redirect('/')
 
   const db = createServerClient()
-  const { data: locations } = await db.from('locations').select('*').eq('active', true).order('name')
+  const [{ data: locations }, { data: templateRows }] = await Promise.all([
+    db.from('locations').select('*').eq('active', true).order('name'),
+    // PERM-AUDIT.3 — role templates (mig 364) so new assignments
+    // start at the role's EFFECTIVE defaults for the chosen location.
+    db.from('location_role_permissions').select('location_id, role, permissions'),
+  ])
+
+  // { [location_id]: { [role]: sparse template blob } }
+  const roleTemplates = {}
+  for (const row of (templateRows || [])) {
+    roleTemplates[row.location_id] = roleTemplates[row.location_id] || {}
+    roleTemplates[row.location_id][row.role] = row.permissions || {}
+  }
 
   // Per mig 051 — locations the caller is owner at, derived from the
   // resolved rolesByLocation map. Master gets every location.
@@ -31,6 +43,7 @@ export default async function NewStaffPage() {
         locations={locations || []}
         callerIsMaster={!!user.isMaster}
         callerOwnerLocationIds={callerOwnerLocationIds}
+        roleTemplates={roleTemplates}
       />
     </div>
   )

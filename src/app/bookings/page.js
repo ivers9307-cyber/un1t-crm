@@ -1,5 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
@@ -45,6 +46,7 @@ export default async function BookingsPage(props) {
   const searchParams = await props.searchParams;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
+  if (!hasPermission(user, 'bookings')) redirect('/')
 
   const filter = searchParams.filter || 'upcoming'
   const bookings = await getBookings(filter, user.activeLocation?.id)

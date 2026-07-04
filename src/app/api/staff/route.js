@@ -10,6 +10,7 @@ import {
   assignmentSchema,
   OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES,
 } from '@/lib/schemas'
+import { sparsifyAssignmentPermissions } from '@/lib/staff-write'
 
 export const runtime = 'nodejs'
 
@@ -204,8 +205,11 @@ export async function POST(request) {
   await db.from('profile_locations').delete().eq('profile_id', newUserId)
 
   if (assignments.length > 0) {
-    const hasExplicitDefault = assignments.some(a => a.is_default)
-    const links = assignments.map((a, i) => ({
+    // PERM-AUDIT.3 — store only the sparse diff vs each assignment's
+    // role base (code defaults + role template, mig 364).
+    const sparseAssignments = await sparsifyAssignmentPermissions({ db, assignments })
+    const hasExplicitDefault = sparseAssignments.some(a => a.is_default)
+    const links = sparseAssignments.map((a, i) => ({
       profile_id: newUserId,
       location_id: a.location_id,
       role: a.role,
@@ -215,8 +219,8 @@ export async function POST(request) {
       // On create we just persist the requested state and let the next
       // PUT do the door provisioning.
       unifi_door_access: !!a.unifi_door_access,
-      // Per-location user overrides (mig 058). Empty {} → role
-      // defaults apply at this assignment's role.
+      // Per-location user overrides (mig 058). SPARSE — only keys
+      // changed away from the role base; empty {} → pure inheritance.
       permissions: a.permissions || {},
     }))
     const { error: insertError } = await db.from('profile_locations').insert(links)

@@ -19,6 +19,7 @@ export default async function ContactsPage(props) {
   const searchParams = await props.searchParams;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
+  if (!hasPermission(user, 'contacts')) redirect('/')
 
   const db = createServerClient()
   const status = searchParams?.status || ''

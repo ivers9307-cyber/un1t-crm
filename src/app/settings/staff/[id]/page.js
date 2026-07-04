@@ -12,7 +12,7 @@ export default async function EditStaffPage(props) {
   if (!user || (!user.isMaster && user.role !== 'owner')) redirect('/')
 
   const db = createServerClient()
-  const [profileRes, locationsRes] = await Promise.all([
+  const [profileRes, locationsRes, templatesRes] = await Promise.all([
     // CRITICAL: select profile_locations(*) — EVERY column — so
     // mapProfileLocationToAssignment() always receives the full row.
     // History: a narrowed explicit column list silently dropped a
@@ -30,6 +30,9 @@ export default async function EditStaffPage(props) {
       .eq('id', params.id)
       .single(),
     db.from('locations').select('*').eq('active', true).order('name'),
+    // PERM-AUDIT.3 — role templates (mig 364) so the form hydrates
+    // toggles against the role's EFFECTIVE defaults at each location.
+    db.from('location_role_permissions').select('location_id, role, permissions'),
   ])
 
   if (!profileRes.data) notFound()
@@ -64,6 +67,13 @@ export default async function EditStaffPage(props) {
     assignments,
   }
 
+  // { [location_id]: { [role]: sparse template blob } }
+  const roleTemplates = {}
+  for (const row of (templatesRes.data || [])) {
+    roleTemplates[row.location_id] = roleTemplates[row.location_id] || {}
+    roleTemplates[row.location_id][row.role] = row.permissions || {}
+  }
+
   return (
     <div className="p-8 max-w-2xl">
       <h2 className="text-2xl font-bold mb-1">Edit Team Member</h2>
@@ -73,6 +83,7 @@ export default async function EditStaffPage(props) {
         locations={locationsRes.data || []}
         callerIsMaster={!!user.isMaster}
         callerOwnerLocationIds={callerOwnerLocationIds}
+        roleTemplates={roleTemplates}
       />
     </div>
   )

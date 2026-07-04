@@ -1698,6 +1698,38 @@ registry.registerPath({
   },
 })
 
+// Role permission templates (PERM-AUDIT.2, mig 364)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/role-permissions',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Role permission templates for a location (owner or master)',
+  description: 'Returns { role: { template, effective } } for owner/manager/head_coach/staff. `template` is the stored sparse diff vs code defaults; `effective` is the fully hydrated blob the editor renders.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Templates by role' },
+    403: { description: 'Forbidden — owner at this location or master', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/role-permissions',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save a role permission template (owner or master)',
+  description: 'Body: { role, permissions } where permissions is the FULL desired effective blob. The server whitelists keys, diffs against code defaults and stores only the sparse difference; an all-defaults save deletes the row.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ role: z.enum(['owner', 'manager', 'head_coach', 'staff']), permissions: z.record(z.string(), z.unknown()) }).openapi('RoleTemplateSave') } } },
+  },
+  responses: {
+    200: { description: 'Template saved (or cleared when it matches code defaults)' },
+    403: { description: 'Forbidden — owner at this location or master', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Schedule
 registry.registerPath({
   method: 'get',

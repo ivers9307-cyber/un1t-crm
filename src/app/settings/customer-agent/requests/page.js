@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import Link from 'next/link'
 
 // RADAR-AGENT Phase 2 — operator approval queue. Manager+ reviews the
 // pause / cancellation requests the customer agent captured, and decides:
@@ -103,7 +104,17 @@ export default function AgentRequestsPage() {
                 <span className="text-un1t-text">
                   {KIND_LABEL[r.kind] || r.kind} · {r.contacts?.name || r.contacts?.first_name || 'Unknown'}
                 </span>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_STYLE[r.status] || ''}`}>{r.status}</span>
+                <div className="flex items-center gap-3">
+                  {r.conversation_id && (
+                    <Link
+                      href={`/communications/inbox?c=${r.conversation_id}&ch=${r.channel === 'instagram' ? 'ig' : 'wa'}`}
+                      className="text-xs text-un1t-muted underline hover:text-un1t-text"
+                    >
+                      Open conversation
+                    </Link>
+                  )}
+                  <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_STYLE[r.status] || ''}`}>{r.status}</span>
+                </div>
               </div>
             ))}
           </div>
@@ -160,6 +171,14 @@ function RequestCard({ r, busy, onDecide, focused = false }) {
           className="text-sm border border-un1t-border text-un1t-muted px-3 py-1.5 rounded-md disabled:opacity-50">
           Decline
         </button>
+        {r.conversation_id && (
+          <Link
+            href={`/communications/inbox?c=${r.conversation_id}&ch=${r.channel === 'instagram' ? 'ig' : 'wa'}`}
+            className="text-xs text-un1t-muted underline hover:text-un1t-text ml-1"
+          >
+            Open conversation
+          </Link>
+        )}
       </div>
     </div>
   )

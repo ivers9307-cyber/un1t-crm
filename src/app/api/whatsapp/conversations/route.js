@@ -29,5 +29,17 @@ export async function GET(request) {
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  return NextResponse.json({ success: true, conversations: data })
+  // INBOX-APPROVALS — flag threads with a pending agent request so the
+  // queue can badge them. One batched query over this page's ids (≤50).
+  const conversations = data || []
+  if (conversations.length) {
+    const { data: pend } = await db.from('agent_membership_requests')
+      .select('conversation_id')
+      .eq('status', 'pending')
+      .in('conversation_id', conversations.map(c => c.id))
+    const pendingSet = new Set((pend || []).map(r => r.conversation_id))
+    for (const c of conversations) c.pending_approval = pendingSet.has(c.id)
+  }
+
+  return NextResponse.json({ success: true, conversations })
 }

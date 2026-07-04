@@ -22,7 +22,7 @@ export const NAV_COMMANDS = [
   { id: 'churn-radar', label: 'Churn Radar', href: '/dashboard/churn-radar', permission: 'churn_radar' },
   { id: 'lead-radar', label: 'Lead Radar', href: '/dashboard/lead-radar', permission: 'lead_radar' },
   { id: 'bookings', label: 'Bookings', href: '/bookings', anyPermission: ['events', 'bookings'] },
-  { id: 'communications', label: 'Communications', href: '/communications', anyPermission: ['email', 'whatsapp'] },
+  { id: 'communications', label: 'Communications', href: '/communications', anyPermission: ['email', 'whatsapp', 'sms'] },
   { id: 'schedule', label: 'Schedule', href: '/schedule', permission: 'schedule' },
   { id: 'events', label: 'Events', href: '/events', permission: 'races' },
   { id: 'cars', label: 'Car Processing', href: '/cars', permission: 'car_processing' },

@@ -3,11 +3,12 @@ import { z } from 'zod'
 import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES } from '@/lib/schemas'
 
-// PATCH /api/agent/membership-requests/[id] — manager decides a queued
-// agent request. 'approved' + 'declined' apply to every kind; 'saved'
-// is the retention outcome on a cancellation (member kept).
+// PATCH /api/agent/membership-requests/[id] — staff decides a queued
+// agent request. Decision rights follow the comms surface (any staff
+// at the request's location — INBOX-APPROVALS, Richard 2026-07-03).
+// 'approved' + 'declined' apply to every kind; 'saved' is the
+// retention outcome on a cancellation (member kept).
 //
 // Pause/cancel: the actual Glofox change is made by staff manually
 // after approving (the Glofox API can't fully automate those yet).
@@ -19,8 +20,12 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 // the confirmation into the originating WhatsApp/Instagram thread —
 // staff touch exactly one button.
 
+// Client-settable outcomes only — 'actioned'/'failed' are written by the
+// server's own execution branches, never accepted as caller input (a raw
+// PATCH {status:'actioned'} would phantom-complete a pending request
+// without the Glofox action ever running).
 const DecisionSchema = z.object({
-  status: z.enum(['approved', 'declined', 'saved', 'actioned']),
+  status: z.enum(['approved', 'declined', 'saved']),
   decision_note: z.string().max(2000).nullable().optional(),
 })
 
@@ -28,23 +33,46 @@ export async function PATCH(request, { params }) {
   const { id } = await params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
   const db = createServerClient()
 
-  // Confirm the request belongs to a location this manager can act on.
+  // Confirm the request belongs to a location this user can act on.
   const { data: row } = await db.from('agent_membership_requests')
     .select('id, location_id, kind, status, details, contact_id, channel, conversation_id')
     .eq('id', id).maybeSingle()
   if (!row) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  const allowed = getUserLocationIds(user) // null = master
+  const allowed = getUserLocationIds(user) // masters carry every active location in user.locations
   if (allowed !== null && !allowed.includes(row.location_id)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+    // 404 not 403 — detail routes never confirm a foreign id exists.
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
 
   const v = await validateBody(request, DecisionSchema)
   if (!v.ok) return v.response
+
+  if (row.status !== 'pending') {
+    return NextResponse.json({ success: false, error: 'Already decided' }, { status: 409 })
+  }
+
+  // Atomic claim — flip pending → the caller's decision. A concurrent
+  // decision loses the .eq('status','pending') predicate and 409s, so
+  // outcomes can't clobber each other and executions can't double-run
+  // (claim-before-execute, same pattern as claim-before-send in comms).
+  const nowIso = new Date().toISOString()
+  const { data: claimed } = await db.from('agent_membership_requests')
+    .update({
+      status: v.data.status,
+      decision_note: v.data.decision_note?.trim() || null,
+      decided_by: user.id,
+      decided_at: nowIso,
+      updated_at: nowIso,
+    })
+    .eq('id', id)
+    .eq('status', 'pending')
+    .select('id')
+    .maybeSingle()
+  if (!claimed) {
+    return NextResponse.json({ success: false, error: 'Already decided' }, { status: 409 })
+  }
 
   let finalStatus = v.data.status
   let details = row.details || {}
@@ -222,12 +250,12 @@ export async function PATCH(request, { params }) {
     }
   }
 
+  // The claim above owns decided_by/decided_at/decision_note; this only
+  // persists the execution outcome (finalStatus === v.data.status when
+  // nothing executed — harmless rewrite of the claimed value).
   const { data, error } = await db.from('agent_membership_requests').update({
     status: finalStatus,
     details,
-    decision_note: v.data.decision_note?.trim() || null,
-    decided_by: user.id,
-    decided_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }).eq('id', id).select('id, status, decided_at, decision_note, details').single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })

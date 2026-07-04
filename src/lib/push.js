@@ -40,6 +40,7 @@
 
 import { createServerClient } from './supabase'
 import { androidChannelId } from '@shared/push-channels'
+import { resolvePermission, DEFAULT_MOBILE_PERMISSIONS_BY_ROLE } from '@shared/permissions'
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 const BATCH_SIZE = 100 // Expo accepts up to 100 messages per request
@@ -111,12 +112,27 @@ async function postExpoBatch(chunk) {
  *
  * IMPORTANT: `profiles.permissions` is stale post-058 and is intentionally NOT
  * read here — reading it was the regression that silently ignored every
- * admin-set per-category opt-out. A user is suppressed if inactive, or if ANY
- * of their location assignments has the master switch (`push_notifications`)
- * or the per-category toggle (`notify_<category>`) explicitly `false` —
- * conservative, so an opt-out set at any location is honoured. (When staff
- * span multiple locations and per-location granularity is wanted, thread the
- * notification's locationId into this check.)
+ * admin-set per-category opt-out.
+ *
+ * PERM-AUDIT.3 — resolution runs through the shared resolver per
+ * assignment (user override → role template (mig 364) → role code
+ * default) instead of reading raw explicit-false keys off the blob.
+ * REQUIRED for sparse per-user blobs: a sparse blob no longer
+ * materialises `notify_x: false` when that IS the role default, so the
+ * old raw-key read would have silently started sending role-default-off
+ * categories. Semantics:
+ *   - suppressed if inactive;
+ *   - suppressed if ANY assignment RESOLVES push_notifications or
+ *     notify_<category> to false — conservative, an opt-out (explicit,
+ *     template, or role default) at any location is honoured. (When staff
+ *     span multiple locations and per-location granularity is wanted,
+ *     thread the notification's locationId into this check.)
+ *   - the LOCATION features gate (tier 1) is deliberately NOT applied
+ *     (location: null): notify_* keys are tier-1-exempt by design, and
+ *     push_notifications-in-features was never enforced on the send
+ *     path — skipping it preserves behaviour for users assigned to
+ *     feature-stripped locations (e.g. CCF Autos).
+ *   - users with NO assignments (e.g. master) are allowed, as before.
  *
  * @param {object} db        service-role supabase client
  * @param {string[]} ids     profile ids to consider
@@ -128,19 +144,47 @@ export async function resolvePushAllowedIds(db, ids, category) {
   if (!ids?.length) return allowed
   const { data: profiles } = await db.from('profiles').select('id, active').in('id', ids)
   const { data: links } = await db
-    .from('profile_locations').select('profile_id, permissions').in('profile_id', ids)
-  const activeById = new Map((profiles || []).map(p => [p.id, p.active === true]))
-  const mobilesByUser = new Map()
-  for (const l of links || []) {
-    const arr = mobilesByUser.get(l.profile_id) || []
-    arr.push(l.permissions?.mobile || {})
-    mobilesByUser.set(l.profile_id, arr)
+    .from('profile_locations').select('profile_id, location_id, role, permissions').in('profile_id', ids)
+
+  // Role templates (mig 364) for every (location, role) pair in play.
+  const locationIds = [...new Set((links || []).map(l => l.location_id).filter(Boolean))]
+  let templates = []
+  if (locationIds.length > 0) {
+    try {
+      const { data } = await db
+        .from('location_role_permissions')
+        .select('location_id, role, permissions')
+        .in('location_id', locationIds)
+      templates = data || []
+    } catch {
+      templates = [] // degrade to code defaults
+    }
   }
+  const templateFor = (locId, role) =>
+    templates.find(t => t.location_id === locId && t.role === role)?.permissions?.mobile || null
+
+  const activeById = new Map((profiles || []).map(p => [p.id, p.active === true]))
+  const linksByUser = new Map()
+  for (const l of links || []) {
+    const arr = linksByUser.get(l.profile_id) || []
+    arr.push(l)
+    linksByUser.set(l.profile_id, arr)
+  }
+
+  const resolves = (link, key) => resolvePermission({
+    role: link.role,
+    location: null, // tier 1 deliberately skipped — see doc comment
+    permissions: link.permissions?.mobile || null,
+    roleTemplate: templateFor(link.location_id, link.role),
+    defaults: DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
+    key,
+  })
+
   for (const id of ids) {
     if (!activeById.get(id)) continue
-    const mobiles = mobilesByUser.get(id) || []
-    if (mobiles.some(m => m.push_notifications === false)) continue
-    if (category && mobiles.some(m => m[`notify_${category}`] === false)) continue
+    const userLinks = linksByUser.get(id) || []
+    if (userLinks.some(l => !resolves(l, 'push_notifications'))) continue
+    if (category && userLinks.some(l => !resolves(l, `notify_${category}`))) continue
     allowed.add(id)
   }
   return allowed
