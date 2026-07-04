@@ -8,13 +8,14 @@
 //      never touch recon_runs after (there's no run id to update).
 //   2. compute the pull window — oldest non-terminal tracked line, else
 //      90 days back from Dublin-today.
-//   3. list ACTIVE bank accounts, fetch each one's /BankTransactions
-//      (paginated; hotfix 2026-07-04 — the Bank Statement report's
-//      scope was retired by Xero's granular migration and broke the
-//      authorize step).
+//   3. list ACTIVE bank accounts, fetch each one's statement lines
+//      via the Finance API BankStatementsPlus endpoint (upgrade
+//      2026-07-04 — true statement lines, incl. unactioned feed lines
+//      that /BankTransactions can't see; one call per account, no
+//      pagination on this endpoint).
 //   4. GUARD — an account with tracked non-terminal lines can never
-//      legitimately fetch zero transactions for a window enclosing
-//      those lines (reconciled ones are still returned; IsReconciled
+//      legitimately fetch zero statement lines for a window enclosing
+//      those lines (reconciled ones are still returned; isReconciled
 //      filters client-side to preserve exactly this tripwire). Zero
 //      rows there means fetch/shape drift, not a quiet bank account.
 //      Skip the sync for that account, record the anomaly, and the run
@@ -25,22 +26,26 @@
 //      far + failedAfter) so a partial pull is diagnosable (best-effort
 //      — never let a bookkeeping failure mask the original error).
 //
-// Line identity is delegated to bank-transactions.js (stable
-// BankTransactionID keys — see bank-transactions.test.js); this file
+// Line identity is delegated to statement-lines.js (stable
+// statementLineId keys — see statement-lines.test.js); this file
 // locks the fetch/guard/sync orchestration only.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Same shape the old report fixture had: 3 transactions, 1 reconciled,
-// 2 unreconciled — so every count assertion below carries over.
+// Same counts every prior fixture had: 3 lines, 1 reconciled, 2
+// unreconciled money-out — so every count assertion below carries over.
 const btPage = {
-  BankTransactions: [
-    { BankTransactionID: 'bt-a', Type: 'SPEND', Status: 'AUTHORISED', IsReconciled: false, DateString: '2026-06-03T00:00:00', Total: 84.5, Contact: { Name: 'MUSCLEFOOD LTD' }, Reference: 'CARD 1234' },
-    { BankTransactionID: 'bt-b', Type: 'SPEND', Status: 'AUTHORISED', IsReconciled: true, DateString: '2026-06-05T00:00:00', Total: 230, Contact: { Name: 'ELECTRIC IRELAND' }, Reference: 'DD 8871' },
-    { BankTransactionID: 'bt-c', Type: 'SPEND', Status: 'AUTHORISED', IsReconciled: false, DateString: '2026-06-10T00:00:00', Total: 12, Contact: { Name: 'COFFEE SUPPLIES' } },
+  statements: [
+    {
+      statementLines: [
+        { statementLineId: 'bt-a', type: 'DEBIT', isReconciled: false, isDeleted: false, postedDate: '2026-06-03', amount: 84.5, payee: 'MUSCLEFOOD LTD', reference: 'CARD 1234' },
+        { statementLineId: 'bt-b', type: 'DEBIT', isReconciled: true, isDeleted: false, postedDate: '2026-06-05', amount: 230, payee: 'ELECTRIC IRELAND', reference: 'DD 8871' },
+        { statementLineId: 'bt-c', type: 'DEBIT', isReconciled: false, isDeleted: false, postedDate: '2026-06-10', amount: 12, payee: 'COFFEE SUPPLIES' },
+      ],
+    },
   ],
 }
-const btEmpty = { BankTransactions: [] }
+const btEmpty = { statements: [] }
 
 // No @/lib/supabase mock needed: pull takes `db` as a parameter, and the
 // only transitive supabase importer in its graph (@/lib/xero/client) is
@@ -118,20 +123,20 @@ describe('runCoveragePull', () => {
     const summary = await pull.runCoveragePull(mockDb, 'loc-1', { trigger: 'manual' })
 
     expect(xfetch).toHaveBeenCalledTimes(2)
-    const [txnUrl] = xfetch.mock.calls[1]
-    expect(txnUrl).toContain('/BankTransactions?where=')
-    expect(txnUrl).toContain('page=1')
-    const decoded = decodeURIComponent(txnUrl)
-    expect(decoded).toContain('BankAccount.AccountID==Guid("acct-1")')
-    expect(decoded).toContain('Status=="AUTHORISED"')
-    expect(decoded).toContain('Date>=DateTime(2026,4,5)')
-    expect(decoded).toContain('Date<=DateTime(2026,7,4)')
+    const [stmtUrl] = xfetch.mock.calls[1]
+    // Absolute Finance API URL (own base path — not api.xro/2.0);
+    // SummaryOnly=false is required or statementLines is omitted.
+    expect(stmtUrl).toContain('https://api.xero.com/finance.xro/1.0/BankStatementsPlus/statements?')
+    expect(stmtUrl).toContain('BankAccountID=acct-1')
+    expect(stmtUrl).toContain('FromDate=2026-04-05')
+    expect(stmtUrl).toContain('ToDate=2026-07-04')
+    expect(stmtUrl).toContain('SummaryOnly=false')
 
     expect(syncBankLines).toHaveBeenCalledTimes(1)
     const syncArg = syncBankLines.mock.calls[0][1]
     expect(syncArg.lines).toHaveLength(FIXTURE_UNRECONCILED_COUNT)
     // Stable Xero identity — no hash/ordinal machinery on this source.
-    expect(syncArg.lines.map((l) => l.key)).toEqual(['bt:bt-a', 'bt:bt-c'])
+    expect(syncArg.lines.map((l) => l.key)).toEqual(['sl:bt-a', 'sl:bt-c'])
     expect(syncArg.bankAccountId).toBe('acct-1')
     expect(syncArg.windowFrom).toBe('2026-04-05')
     expect(syncArg.windowTo).toBe('2026-07-04')

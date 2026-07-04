@@ -66,7 +66,13 @@ export const XERO_SCOPES = [
   // under the granular scope below. Any scope added to this list MUST
   // be verified against Xero's CURRENT granular catalog first —
   // scopes.test.js pins the two known-retired strings.
-  'accounting.banktransactions.read', // RCOV — GET /BankTransactions (coverage pull)
+  'accounting.banktransactions.read', // RCOV — GET /BankTransactions (kept for the fallback source)
+  // RCOV upgrade 2026-07-04: coverage pull reads TRUE statement lines
+  // via the Finance API (GET finance.xro/1.0/BankStatementsPlus/
+  // statements) — /BankTransactions can't see unactioned feed lines.
+  // Scope string verified against Xero's own OpenAPI spec
+  // (XeroAPI/Xero-OpenAPI, xero-finance.yaml) before being added.
+  'finance.bankstatementsplus.read',
   'offline_access',
 ]
 
