@@ -44,6 +44,13 @@ async function selectExistingInWindow(db, { locationId, bankAccountId, windowFro
       .eq('location_id', locationId)
       .eq('xero_bank_account_id', bankAccountId)
       .in('status', NON_TERMINAL)
+      // NAMESPACE GUARD — csv: lines come from the operator's statement
+      // CSV upload (import-statement.js) and are NEVER in an API pull's
+      // key set. Without this filter, step 4 would mass-cover every
+      // CSV-imported line on the next refresh. The API pull owns only
+      // its own (bt:) namespace; csv: rows are covered by re-upload or
+      // row actions.
+      .not('xero_line_key', 'like', 'csv:%')
       .gte('line_date', windowFrom)
       .lte('line_date', windowTo)
       .order('id')
