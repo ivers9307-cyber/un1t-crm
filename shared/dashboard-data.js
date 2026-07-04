@@ -13,6 +13,7 @@
 // React components.
 
 import { upcomingWeeksBounds, summariseShifts } from './roster-month.js'
+import { pctDelta, sumCampaignRows, shapeFunnel, FUNNEL_SLUGS } from './dashboard-metrics.js'
 
 // ============================================================
 // Date helpers (shared across all three fetchers)
@@ -555,6 +556,191 @@ export async function fetchBusinessDashboardData(supabase, locationId) {
       winRatePercent: winRate,
       scheduledHoursThisWeek: Math.round(scheduledHours * 10) / 10,
       scheduledLabourThisWeek: Math.round(scheduledLabour),
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DASH-REBUILD — Business dashboard block fetchers. Each is independently
+// callable so the page can stream blocks and mobile can adopt them later.
+// Sums paginate (1k-row select cap); counts use head:true single aggregates.
+
+async function paginatedSumCents(supabase, filters) {
+  // filters: fn(query) → query. Sums amount_cents over all matching rows.
+  let from = 0
+  const page = 1000
+  let total = 0
+  let count = 0
+  for (;;) {
+    let q = supabase.from('glofox_invoices').select('amount_cents').order('id', { ascending: true }).range(from, from + page - 1)
+    q = filters(q)
+    const { data, error } = await q
+    if (error) return { error }
+    for (const r of data || []) total += r.amount_cents || 0
+    count += (data || []).length
+    if (!data || data.length < page) break
+    from += page
+  }
+  return { totalCents: total, rows: count }
+}
+
+// Revenue MTD from PAID invoices only (glofox_invoices is stale for
+// anything else — mig 324's daily reconcile keeps statuses honest).
+// Delta compares against the same day-window of last month.
+export async function fetchRevenueMTD(supabase, locationId, now = new Date()) {
+  const monthStart = startOfMonth(now)
+  const lastMonthStart = startOfMonth(new Date(now.getFullYear(), now.getMonth() - 1, 1))
+  const lastMonthSameDay = new Date(lastMonthStart)
+  lastMonthSameDay.setDate(lastMonthSameDay.getDate() + (now.getDate() - 1))
+  lastMonthSameDay.setHours(23, 59, 59, 999)
+
+  const cur = await paginatedSumCents(supabase, q => q
+    .eq('location_id', locationId).eq('status', 'PAID')
+    .gte('invoice_date', monthStart.toISOString()))
+  if (cur.error) return { success: false, error: cur.error.message }
+
+  const prev = await paginatedSumCents(supabase, q => q
+    .eq('location_id', locationId).eq('status', 'PAID')
+    .gte('invoice_date', lastMonthStart.toISOString())
+    .lte('invoice_date', lastMonthSameDay.toISOString()))
+  if (prev.error) return { success: false, error: prev.error.message }
+
+  return {
+    success: true,
+    data: {
+      totalCents: cur.totalCents,
+      paidCount: cur.rows,
+      deltaPct: pctDelta(cur.totalCents, prev.totalCents),
+    },
+  }
+}
+
+// Arrears = PAST_DUE rows as of the last daily reconcile (mig 324) —
+// never derived from raw invoice math.
+export async function fetchArrearsSummary(supabase, locationId) {
+  let from = 0
+  const page = 1000
+  let totalCents = 0
+  const contacts = new Set()
+  for (;;) {
+    const { data, error } = await supabase.from('glofox_invoices')
+      .select('amount_cents, contact_id')
+      .eq('location_id', locationId).eq('status', 'PAST_DUE')
+      .order('id', { ascending: true }).range(from, from + page - 1)
+    if (error) return { success: false, error: error.message }
+    for (const r of data || []) {
+      totalCents += r.amount_cents || 0
+      if (r.contact_id) contacts.add(r.contact_id)
+    }
+    if (!data || data.length < page) break
+    from += page
+  }
+  return { success: true, data: { totalCents, memberCount: contacts.size } }
+}
+
+// Current funnel stage counts + this-month entered/converted.
+// entered uses joined_at (lead_created_at is import-poisoned);
+// conversions use converted_at (mig 350).
+export async function fetchFunnelCounts(supabase, locationId, now = new Date()) {
+  const monthStartIso = startOfMonth(now).toISOString()
+  const stageCounts = {}
+  for (const slug of FUNNEL_SLUGS) {
+    const { count, error } = await supabase.from('contacts')
+      .select('id', { count: 'exact', head: true })
+      .eq('location_id', locationId).eq('pipeline_stage_slug', slug)
+    if (error) return { success: false, error: error.message }
+    stageCounts[slug] = count || 0
+  }
+  const { count: entered, error: e1 } = await supabase.from('contacts')
+    .select('id', { count: 'exact', head: true })
+    .eq('location_id', locationId).gte('joined_at', monthStartIso)
+  if (e1) return { success: false, error: e1.message }
+  const { count: converted, error: e2 } = await supabase.from('contacts')
+    .select('id', { count: 'exact', head: true })
+    .eq('location_id', locationId).gte('converted_at', monthStartIso)
+  if (e2) return { success: false, error: e2.message }
+  return { success: true, data: shapeFunnel(stageCounts, { entered: entered || 0, converted: converted || 0 }) }
+}
+
+// Last-7-days ad performance. level='campaign' only (see dashboard-metrics).
+export async function fetchAdsSummary(supabase, locationId, now = new Date()) {
+  const since = new Date(now); since.setDate(since.getDate() - 7)
+  const sinceIso = isoDate(since)
+  const { data, error } = await supabase.from('ad_insights_daily')
+    .select('level, spend, results')
+    .eq('location_id', locationId).gte('date', sinceIso)
+    .limit(1000)
+  if (error) return { success: false, error: error.message }
+  const { spend, results } = sumCampaignRows(data || [])
+  const { count: attributed, error: e2 } = await supabase.from('contacts')
+    .select('id', { count: 'exact', head: true })
+    .eq('location_id', locationId)
+    .not('ad_provider', 'is', null)
+    .gte('attributed_at', since.toISOString())
+  if (e2) return { success: false, error: e2.message }
+  return {
+    success: true,
+    data: {
+      spend, results,
+      costPerResult: results > 0 ? spend / results : null,
+      attributedContacts: attributed || 0,
+    },
+  }
+}
+
+// Today's operations strip. Labour reuses the existing week window.
+export async function fetchTodayOps(supabase, locationId, now = new Date()) {
+  const todayIso = isoDate(now)
+  const { count: bookedToday, error: e1 } = await supabase.from('bookings')
+    .select('id', { count: 'exact', head: true })
+    .eq('location_id', locationId).eq('booking_date', todayIso)
+    .neq('status', 'cancelled')
+  if (e1) return { success: false, error: e1.message }
+
+  // class_occurrences (mig 284) has no date column — it stores starts_at
+  // (timestamptz). Count today's classes via a Dublin wall-clock day window
+  // and exclude cancelled occurrences (cancelled_at, mig 344 — live reads
+  // always filter .is('cancelled_at', null)).
+  const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0)
+  const dayEnd = new Date(now); dayEnd.setHours(23, 59, 59, 999)
+  const { count: classesToday, error: e2 } = await supabase.from('class_occurrences')
+    .select('id', { count: 'exact', head: true })
+    .eq('location_id', locationId)
+    .gte('starts_at', dayStart.toISOString())
+    .lte('starts_at', dayEnd.toISOString())
+    .is('cancelled_at', null)
+  if (e2) return { success: false, error: e2.message }
+
+  const { data: blocks, error: e3 } = await supabase.from('shift_blocks')
+    .select('id, shift_assignments(profile_id)')
+    .eq('location_id', locationId).eq('block_date', todayIso)
+    .limit(200)
+  if (e3) return { success: false, error: e3.message }
+  const staffToday = new Set()
+  for (const b of blocks || []) for (const a of b.shift_assignments || []) if (a.profile_id) staffToday.add(a.profile_id)
+
+  const weekStart = startOfWeek(now)
+  const weekEnd = endOfWeek(now)
+  const { data: weekShifts, error: e4 } = await fetchDashboardShifts(supabase, {
+    locationId, startDate: isoDate(weekStart), endDate: isoDate(weekEnd), withProfiles: true,
+  })
+  if (e4) return { success: false, error: e4.message }
+  let labourCents = 0
+  let hours = 0
+  for (const s of weekShifts || []) {
+    const h = shiftDurationHours(s)
+    hours += h
+    labourCents += Math.round(h * (hourlyRateFor(s.profiles) || 0) * 100)
+  }
+
+  return {
+    success: true,
+    data: {
+      bookedToday: bookedToday || 0,
+      classesToday: classesToday || 0,
+      staffToday: staffToday.size,
+      labourWeekCents: labourCents,
+      hoursWeek: Math.round(hours),
     },
   }
 }
