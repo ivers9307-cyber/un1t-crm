@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { createServerClient as createSSRClient } from '@supabase/ssr'
 import { cookies, headers } from 'next/headers'
 import { NextResponse } from 'next/server'
+import { mergeTemplates } from '@shared/permissions'
 
 // React 18's `cache()` is only exported from the server build of react.
 // In the Vitest (Node) environment we get the client build which omits
@@ -429,6 +430,11 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // irrelevant to this user). Master skips the fetch entirely —
   // the resolver short-circuits master past tiers 2/2.5/3, so a
   // template can never change what a master sees.
+  // RECEPTION.2 (mig 367): templates can carry employment-type
+  // variants — an 'all' row applies to every user of the role, and
+  // an 'fte' / 'contractor' / 'casual' row layers on top for users
+  // whose profiles.employment_type matches. We merge here so every
+  // consumer downstream still sees ONE template blob per location.
   const roleTemplatesByLocation = {}
   if (!isMaster) {
     const templateLocationIds = Object.keys(rolesByLocation)
@@ -436,12 +442,17 @@ export const getCurrentUser = cache(async function getCurrentUser() {
       try {
         const { data: templateRows } = await db
           .from('location_role_permissions')
-          .select('location_id, role, permissions')
+          .select('location_id, role, employment_type, permissions')
           .in('location_id', templateLocationIds)
-        for (const row of (templateRows || [])) {
-          if (rolesByLocation[row.location_id] === row.role) {
-            roleTemplatesByLocation[row.location_id] = row.permissions || {}
-          }
+        const rowFor = (locId, emp) => (templateRows || []).find(r =>
+          r.location_id === locId && r.role === rolesByLocation[locId] && r.employment_type === emp
+        )?.permissions || null
+        for (const locId of templateLocationIds) {
+          const merged = mergeTemplates(
+            rowFor(locId, 'all'),
+            profile.employment_type ? rowFor(locId, profile.employment_type) : null
+          )
+          if (merged) roleTemplatesByLocation[locId] = merged
         }
       } catch {
         // Defensive: a failed template fetch degrades to code

@@ -9,6 +9,7 @@ import {
   hydratePermissions,
   sanitizePermissionsBlob,
   diffPermissionsBlob,
+  mergeTemplates,
   DEFAULT_WEB_PERMISSIONS_BY_ROLE,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
 } from './permissions.js'
@@ -424,5 +425,37 @@ describe('reception role defaults', () => {
     expect(resolvePermission({ ...args, permissions: null, key: 'email' })).toBe(false)
     expect(resolvePermission({ ...args, permissions: null, roleTemplate: { email: true }, key: 'email' })).toBe(true)
     expect(resolvePermission({ ...args, permissions: { email: false }, roleTemplate: { email: true }, key: 'email' })).toBe(false)
+  })
+})
+
+// RECEPTION.2 (mig 367) — employment-type variant merging.
+describe('mergeTemplates — variant over base', () => {
+  it('merging two nulls yields null (no template)', () => {
+    expect(mergeTemplates(null, null)).toBe(null)
+    expect(mergeTemplates(undefined, undefined)).toBe(null)
+  })
+
+  it('variant keys win over base; mobile sub-objects merge not clobber', () => {
+    const out = mergeTemplates(
+      { email: true, pipeline: false, mobile: { whatsapp: true, schedule: false } },
+      { pipeline: true, mobile: { schedule: true } }
+    )
+    expect(out).toEqual({
+      email: true, pipeline: true,
+      mobile: { whatsapp: true, schedule: true },
+    })
+  })
+
+  it('base-only or variant-only passes through', () => {
+    expect(mergeTemplates({ email: true }, null)).toEqual({ email: true })
+    expect(mergeTemplates(null, { email: false })).toEqual({ email: false })
+  })
+
+  it('result feeds hydratePermissions like any single template', () => {
+    const merged = mergeTemplates({ email: true }, { mobile: { tv_displays: true } })
+    const out = hydratePermissions(null, 'staff', merged)
+    expect(out.email).toBe(true)
+    expect(out.mobile.tv_displays).toBe(true)
+    expect(out.pipeline).toBe(DEFAULT_WEB_PERMISSIONS_BY_ROLE.staff.pipeline)
   })
 })

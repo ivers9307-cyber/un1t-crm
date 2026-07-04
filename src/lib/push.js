@@ -40,7 +40,7 @@
 
 import { createServerClient } from './supabase'
 import { androidChannelId } from '@shared/push-channels'
-import { resolvePermission, DEFAULT_MOBILE_PERMISSIONS_BY_ROLE } from '@shared/permissions'
+import { resolvePermission, mergeTemplates, DEFAULT_MOBILE_PERMISSIONS_BY_ROLE } from '@shared/permissions'
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 const BATCH_SIZE = 100 // Expo accepts up to 100 messages per request
@@ -142,28 +142,36 @@ async function postExpoBatch(chunk) {
 export async function resolvePushAllowedIds(db, ids, category) {
   const allowed = new Set()
   if (!ids?.length) return allowed
-  const { data: profiles } = await db.from('profiles').select('id, active').in('id', ids)
+  const { data: profiles } = await db.from('profiles').select('id, active, employment_type').in('id', ids)
   const { data: links } = await db
     .from('profile_locations').select('profile_id, location_id, role, permissions').in('profile_id', ids)
 
   // Role templates (mig 364) for every (location, role) pair in play.
+  // RECEPTION.2 (mig 367): 'all' rows apply to everyone of the role;
+  // employment-type rows layer on top for matching users.
   const locationIds = [...new Set((links || []).map(l => l.location_id).filter(Boolean))]
   let templates = []
   if (locationIds.length > 0) {
     try {
       const { data } = await db
         .from('location_role_permissions')
-        .select('location_id, role, permissions')
+        .select('location_id, role, employment_type, permissions')
         .in('location_id', locationIds)
       templates = data || []
     } catch {
       templates = [] // degrade to code defaults
     }
   }
-  const templateFor = (locId, role) =>
-    templates.find(t => t.location_id === locId && t.role === role)?.permissions?.mobile || null
+  const rowFor = (locId, role, emp) =>
+    templates.find(t => t.location_id === locId && t.role === role && t.employment_type === emp)?.permissions || null
+  const templateFor = (locId, role, userEmploymentType) =>
+    mergeTemplates(
+      rowFor(locId, role, 'all'),
+      userEmploymentType ? rowFor(locId, role, userEmploymentType) : null
+    )?.mobile || null
 
   const activeById = new Map((profiles || []).map(p => [p.id, p.active === true]))
+  const employmentById = new Map((profiles || []).map(p => [p.id, p.employment_type || null]))
   const linksByUser = new Map()
   for (const l of links || []) {
     const arr = linksByUser.get(l.profile_id) || []
@@ -175,7 +183,7 @@ export async function resolvePushAllowedIds(db, ids, category) {
     role: link.role,
     location: null, // tier 1 deliberately skipped — see doc comment
     permissions: link.permissions?.mobile || null,
-    roleTemplate: templateFor(link.location_id, link.role),
+    roleTemplate: templateFor(link.location_id, link.role, employmentById.get(link.profile_id)),
     defaults: DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
     key,
   })

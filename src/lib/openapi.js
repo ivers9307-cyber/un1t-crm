@@ -1719,10 +1719,10 @@ registry.registerPath({
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
   summary: 'Save a role permission template (owner or master)',
-  description: 'Body: { role, permissions } where permissions is the FULL desired effective blob. The server whitelists keys, diffs against code defaults and stores only the sparse difference; an all-defaults save deletes the row.',
+  description: "Body: { role, employment_type?, permissions } where permissions is the FULL desired effective blob. employment_type defaults to 'all' (the role base); 'fte'/'contractor'/'casual' edit the variant that layers on top of the base for users whose profiles.employment_type matches (RECEPTION.2, mig 367). The server whitelists keys, diffs against what the slice inherits and stores only the sparse difference; an all-inherited save deletes the row.",
   request: {
     params: z.object({ id: uuidLike }),
-    body: { content: { 'application/json': { schema: z.object({ role: z.enum(['owner', 'manager', 'head_coach', 'staff', 'reception']), permissions: z.record(z.string(), z.unknown()) }).openapi('RoleTemplateSave') } } },
+    body: { content: { 'application/json': { schema: z.object({ role: z.enum(['owner', 'manager', 'head_coach', 'staff', 'reception']), employment_type: z.enum(['all', 'fte', 'contractor', 'casual']).optional(), permissions: z.record(z.string(), z.unknown()) }).openapi('RoleTemplateSave') } } },
   },
   responses: {
     200: { description: 'Template saved (or cleared when it matches code defaults)' },

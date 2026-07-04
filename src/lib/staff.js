@@ -6,6 +6,7 @@
 // The create/update logic (the PUT monolith) is NOT here — that's C2.
 import { getUserLocationIds } from '@/lib/auth'
 import { ADMIN_ROLES } from '@/lib/schemas'
+import { mergeTemplates } from '@shared/permissions'
 
 export const STAFF_PUBLIC_FIELDS =
   'id, full_name, email, role, avatar_url, active, employment_type, contracted_hours_per_week'
@@ -76,11 +77,23 @@ export async function getStaffForUser({ db, user, id }) {
       try {
         const { data: tplRows } = await db
           .from('location_role_permissions')
-          .select('location_id, role, permissions')
+          .select('location_id, role, employment_type, permissions')
           .in('location_id', locIds)
+        // RECEPTION.2 (mig 367) — merge the TARGET's employment-type
+        // variant over the role's 'all' row, so consumers (the mobile
+        // permissions editor) keep seeing one template per (loc, role)
+        // that matches what the resolver uses for this user.
+        const emp = data?.employment_type || null
+        const rowFor = (locId, role, e) => (tplRows || []).find(r =>
+          r.location_id === locId && r.role === role && r.employment_type === e
+        )?.permissions || null
         for (const row of (tplRows || [])) {
           roleTemplates[row.location_id] = roleTemplates[row.location_id] || {}
-          roleTemplates[row.location_id][row.role] = row.permissions || {}
+          if (roleTemplates[row.location_id][row.role]) continue
+          roleTemplates[row.location_id][row.role] = mergeTemplates(
+            rowFor(row.location_id, row.role, 'all'),
+            emp ? rowFor(row.location_id, row.role, emp) : null
+          ) || {}
         }
       } catch {
         // degrade to code defaults

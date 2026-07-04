@@ -480,10 +480,43 @@ describe('sparsifyAssignmentPermissions', () => {
     const template = { email: true }
     const base = hydratePermissions(null, 'staff', template)
     const out = await sparsifyAssignmentPermissions({
-      db: fakeDb([{ location_id: 'loc1', role: 'staff', permissions: template }]),
+      db: fakeDb([{ location_id: 'loc1', role: 'staff', employment_type: 'all', permissions: template }]),
       assignments: [{ location_id: 'loc1', role: 'staff', permissions: base }],
     })
     expect(out[0].permissions).toEqual({})
+  })
+
+  // RECEPTION.2 (mig 367) — employment-type variants in the diff base.
+  it('layers the employment-type variant over the all row when employmentType is passed', async () => {
+    const rows = [
+      { location_id: 'loc1', role: 'staff', employment_type: 'all', permissions: { email: true } },
+      { location_id: 'loc1', role: 'staff', employment_type: 'contractor', permissions: { mobile: { tv_displays: true } } },
+    ]
+    // A contractor whose blob matches defaults + all + contractor
+    // variant exactly → stores nothing.
+    const base = hydratePermissions(null, 'staff', { email: true, mobile: { tv_displays: true } })
+    const out = await sparsifyAssignmentPermissions({
+      db: fakeDb(rows),
+      assignments: [{ location_id: 'loc1', role: 'staff', permissions: base }],
+      employmentType: 'contractor',
+    })
+    expect(out[0].permissions).toEqual({})
+  })
+
+  it('ignores variant rows for a non-matching employment type', async () => {
+    const rows = [
+      { location_id: 'loc1', role: 'staff', employment_type: 'contractor', permissions: { mobile: { tv_displays: true } } },
+    ]
+    // An FTE with tv_displays on differs from THEIR base (no variant
+    // applies) → the key is stored as a per-user override.
+    const full = hydratePermissions(null, 'staff')
+    const edited = { ...full, mobile: { ...full.mobile, tv_displays: true } }
+    const out = await sparsifyAssignmentPermissions({
+      db: fakeDb(rows),
+      assignments: [{ location_id: 'loc1', role: 'staff', permissions: edited }],
+      employmentType: 'fte',
+    })
+    expect(out[0].permissions).toEqual({ mobile: { tv_displays: true } })
   })
 
   it('preserves the non-boolean mobile extras', async () => {

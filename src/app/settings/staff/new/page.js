@@ -17,14 +17,17 @@ export default async function NewStaffPage() {
     db.from('locations').select('*').eq('active', true).order('name'),
     // PERM-AUDIT.3 — role templates (mig 364) so new assignments
     // start at the role's EFFECTIVE defaults for the chosen location.
-    db.from('location_role_permissions').select('location_id, role, permissions'),
+    db.from('location_role_permissions').select('location_id, role, employment_type, permissions'),
   ])
 
-  // { [location_id]: { [role]: sparse template blob } }
+  // { [location_id]: { [role]: { [employment_type]: sparse blob } } }
+  // (RECEPTION.2 — StaffForm merges 'all' + the form's current
+  // employment type live.)
   const roleTemplates = {}
   for (const row of (templateRows || [])) {
     roleTemplates[row.location_id] = roleTemplates[row.location_id] || {}
-    roleTemplates[row.location_id][row.role] = row.permissions || {}
+    roleTemplates[row.location_id][row.role] = roleTemplates[row.location_id][row.role] || {}
+    roleTemplates[row.location_id][row.role][row.employment_type || 'all'] = row.permissions || {}
   }
 
   // Per mig 051 — locations the caller is owner at, derived from the
