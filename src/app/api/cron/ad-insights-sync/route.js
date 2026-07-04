@@ -23,7 +23,10 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
   const db = createServerClient()
-  const since = dublinDateStr(-3), until = dublinDateStr(0)
+  // yesterday+today: this cron runs every 4h so today stays live, and yesterday
+  // gets its final full total after the day rolls over (a today-only window would
+  // permanently miss each day's last few hours). Upsert makes the re-pull idempotent.
+  const since = dublinDateStr(-1), until = dublinDateStr(0)
   const { data: accounts } = await db.from('ad_accounts').select('*').eq('is_active', true)
   const results = []
   for (const account of accounts || []) {
