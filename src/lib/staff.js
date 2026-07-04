@@ -62,5 +62,31 @@ export async function getStaffForUser({ db, user, id }) {
   // (a real DB error) — surface 500 rather than masking it as 404 and
   // sending the caller into a silent retry loop.
   if (error) return { ok: false, status: 500, error: error.message }
+
+  // PERM-AUDIT.3 — role templates (mig 364) for the target's
+  // locations, keyed { [location_id]: { [role]: sparse blob } }.
+  // The permission editors (web StaffForm + mobile staff/permissions)
+  // hydrate stored SPARSE per-user blobs against the role's effective
+  // defaults, which include the template. Admin payloads only — the
+  // slim roster shape doesn't carry permissions at all.
+  if (isAdmin) {
+    const locIds = (data?.profile_locations || []).map(l => l.location_id).filter(Boolean)
+    const roleTemplates = {}
+    if (locIds.length > 0) {
+      try {
+        const { data: tplRows } = await db
+          .from('location_role_permissions')
+          .select('location_id, role, permissions')
+          .in('location_id', locIds)
+        for (const row of (tplRows || [])) {
+          roleTemplates[row.location_id] = roleTemplates[row.location_id] || {}
+          roleTemplates[row.location_id][row.role] = row.permissions || {}
+        }
+      } catch {
+        // degrade to code defaults
+      }
+    }
+    return { ok: true, data: { ...data, role_templates: roleTemplates } }
+  }
   return { ok: true, data }
 }
