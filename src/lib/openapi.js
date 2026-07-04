@@ -2309,6 +2309,48 @@ registry.registerPath({
   },
 })
 
+registry.registerPath({
+  method: 'get',
+  path: '/api/accounting/coverage/accounts',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Active Xero bank accounts for the statement-import picker',
+  responses: {
+    200: { description: 'Bank accounts', content: { 'application/json': { schema: SuccessResponse(z.object({ accounts: z.array(z.object({ id: z.string(), name: z.string() })) })) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Xero not connected for this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/accounting/coverage/import-statement',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Import a bank-statement CSV export into the coverage board',
+  description: 'CSV bridge for unactioned imported statement lines (invisible to the API pull — the Bank Statement report scope is retired and the Finance API is entitlement-gated). Money-out, unreconciled lines are tracked under the csv: key namespace; re-uploading with lines now Reconciled covers them. Requires the accounting_hub permission.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            bankAccountId: z.string().min(8).max(64),
+            bankAccountName: z.string().min(1).max(120),
+            csvText: z.string().min(1).max(2_000_000),
+          }).openapi('CoverageImportStatementBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Import stats', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    422: { description: 'CSV shape not recognised (error names the headers found)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // RCOV.P1 — hunt-inbox management. recon_mailboxes is a GLOBAL
 // resource (no location_id) — the hunt engine searches every inbox
 // on behalf of every location — so these routes gate on

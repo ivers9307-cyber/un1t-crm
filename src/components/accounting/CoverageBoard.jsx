@@ -122,11 +122,107 @@ function RowActions({ line, onError, onDone }) {
   )
 }
 
+// RCOV CSV bridge — Xero's API can't serve unactioned imported
+// statement lines to this app (retired report scope + gated Finance
+// API), so the operator exports them from Xero's UI and uploads here.
+function ImportStatementPanel({ onDone, onClose }) {
+  const [accounts, setAccounts] = useState(null)
+  const [accountId, setAccountId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+  const [result, setResult] = useState(null)
+  const fileRef = useRef(null)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const res = await fetch('/api/accounting/coverage/accounts')
+      const json = await res.json().catch(() => ({}))
+      if (cancelled) return
+      if (!json.success) setError(json.error || 'Could not load bank accounts')
+      else setAccounts(json.data.accounts)
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  const filePicked = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    const account = (accounts || []).find((a) => a.id === accountId)
+    if (!account) { setError('Pick the bank account this export belongs to first.'); return }
+    setBusy(true)
+    setError(null)
+    setResult(null)
+    try {
+      const csvText = await file.text()
+      const res = await fetch('/api/accounting/coverage/import-statement', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bankAccountId: account.id, bankAccountName: account.name, csvText }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!json.success) setError(json.error || 'Import failed')
+      else {
+        setResult(json.data)
+        await onDone()
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card>
+      <div className="space-y-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium text-un1t-text">Import statement CSV</div>
+            <div className="text-xs text-un1t-subtle">
+              For feed lines Xero hasn&apos;t actioned yet (invisible to the API pull). In Xero: Accounting → Bank accounts →
+              open the account → Bank Statements → export the statement lines as CSV, then upload it here.
+            </div>
+          </div>
+          <button type="button" className={actionBtn} onClick={onClose}>Close</button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={accountId}
+            onChange={(e) => setAccountId(e.target.value)}
+            className="text-sm border border-un1t-border rounded px-2 py-1.5 bg-un1t-bg text-un1t-text"
+          >
+            <option value="">{accounts ? 'Select bank account…' : 'Loading accounts…'}</option>
+            {(accounts || []).map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+          <Button onClick={() => fileRef.current?.click()} loading={busy} disabled={!accountId || busy}>
+            {busy ? 'Importing…' : 'Choose CSV file'}
+          </Button>
+          <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={filePicked} />
+        </div>
+        {error ? <div className="text-sm px-3 py-2 rounded bg-red-500/10 text-red-700">{error}</div> : null}
+        {result ? (
+          <div className="text-sm px-3 py-2 rounded bg-green-500/10 text-green-700">
+            {result.tracked} new line{result.tracked === 1 ? '' : 's'} tracked
+            {result.covered > 0 ? `, ${result.covered} covered (now reconciled)` : ''}
+            {result.alreadyTracked > 0 ? `, ${result.alreadyTracked} already tracked` : ''}
+            {result.duplicates > 0 ? `, ${result.duplicates} skipped (already tracked from the Xero pull)` : ''}
+            {` — ${result.parsedRows} rows parsed.`}
+            {(result.warnings || []).length > 0 ? ` ${result.warnings.length} row(s) skipped with warnings.` : ''}
+          </div>
+        ) : null}
+      </div>
+    </Card>
+  )
+}
+
 export default function CoverageBoard({ locationName }) {
   const [data, setData] = useState(null)
   const [statusFilter, setStatusFilter] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+  const [showImport, setShowImport] = useState(false)
 
   const load = useCallback(async (filter) => {
     setError(null)
@@ -197,10 +293,17 @@ export default function CoverageBoard({ locationName }) {
             </button>
           ))}
         </div>
-        <Button onClick={refresh} loading={busy}>
-          {busy ? 'Pulling from Xero…' : 'Refresh from Xero'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <button type="button" className={actionBtn} onClick={() => setShowImport((v) => !v)}>
+            Import statement CSV
+          </button>
+          <Button onClick={refresh} loading={busy}>
+            {busy ? 'Pulling from Xero…' : 'Refresh from Xero'}
+          </Button>
+        </div>
       </div>
+
+      {showImport ? <ImportStatementPanel onDone={reload} onClose={() => setShowImport(false)} /> : null}
 
       {error ? <div className="text-sm px-3 py-2 rounded bg-red-500/10 text-red-700">{error}</div> : null}
 
