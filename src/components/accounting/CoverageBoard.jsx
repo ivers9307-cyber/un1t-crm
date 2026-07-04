@@ -1,13 +1,14 @@
-// RCOV.P0 — CoverageBoard: the /accounting page body. Client component
-// so it can poll the coverage endpoint on filter change and drive the
-// manual "Refresh from Xero" pull. Consumes only the two existing
-// routes (GET /api/accounting/coverage, POST .../refresh) — no new API
-// surface, no force flag (that's the documented escape hatch for a
-// deliberate bulk-reconcile, not a P0 UI control), no row actions
-// (deferred to Phase 2).
+// RCOV.P0/P2 — CoverageBoard: the /accounting Coverage tab. Client
+// component so it can poll the coverage endpoint on filter change and
+// drive the manual "Refresh from Xero" pull. P2 added the per-row
+// operator actions (ignore / un-ignore / re-hunt / upload / copy a
+// supplier-request message) — ignore and upload clear the line's hunt
+// flags server-side so a queued line can never wedge the weekly
+// finalizer. The force flag stays API-only (documented escape hatch,
+// not a UI control).
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Card, Table, EmptyState, Loading } from '@/components/ui'
 
 // Chip recipes are ALWAYS `bg-<c>-500/10 text-<c>-700` — anything else
@@ -22,15 +23,104 @@ const STATUS_CHIP = {
 }
 
 const FILTERS = [
-  { value: '',          label: 'Open items' },
-  { value: 'uncovered', label: 'Needs receipt' },
-  { value: 'submitted', label: 'In review' },
-  { value: 'covered',   label: 'Covered' },
-  { value: 'all',       label: 'All' },
+  { value: '',                label: 'Open items' },
+  { value: 'uncovered',       label: 'Needs receipt' },
+  { value: 'submitted',       label: 'In review' },
+  { value: 'needs_attention', label: 'Needs attention' },
+  { value: 'covered',         label: 'Covered' },
+  { value: 'ignored',         label: 'Ignored' },
+  { value: 'all',             label: 'All' },
 ]
+
+// RCOV.P2 — statuses that accept the operator actions.
+const ACTIONABLE = new Set(['uncovered', 'not_found', 'needs_attention'])
 
 const eur = (n) =>
   new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' }).format(Number(n) || 0)
+
+const actionBtn = 'text-xs px-2 py-1 rounded bg-gray-500/10 text-gray-700 hover:bg-gray-500/20'
+
+function requestTemplate(line) {
+  return (
+    `Hi — could you send me the invoice/receipt for the payment of ` +
+    `${eur(Math.abs(Number(line.amount)))} on ${line.line_date}` +
+    `${line.description ? ` (bank reference: ${line.description})` : ''}? ` +
+    `It's needed for our VAT records. Thanks!`
+  )
+}
+
+function RowActions({ line, onError, onDone }) {
+  const [busy, setBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const fileRef = useRef(null)
+
+  const post = async (path, opts = {}) => {
+    setBusy(true)
+    try {
+      const res = await fetch(`/api/accounting/coverage/${line.id}/${path}`, { method: 'POST', ...opts })
+      const json = await res.json().catch(() => ({}))
+      if (!json.success) onError(json.error || `${path} failed`)
+      else await onDone()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const ignore = () => {
+    const reason = window.prompt('Why should this line be ignored? (e.g. bank fee, internal transfer)')
+    if (!reason || reason.trim().length < 2) return
+    post('ignore', {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: reason.trim().slice(0, 200) }),
+    })
+  }
+
+  const uploadPicked = (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    const form = new FormData()
+    form.append('file', file)
+    post('upload', { body: form })
+  }
+
+  const copyRequest = async () => {
+    try {
+      await navigator.clipboard.writeText(requestTemplate(line))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      onError('Could not access the clipboard — copy manually from the supplier-request text.')
+    }
+  }
+
+  if (line.status === 'ignored') {
+    return (
+      <button type="button" disabled={busy} className={actionBtn} onClick={() => post('unignore')}>
+        Un-ignore
+      </button>
+    )
+  }
+  if (!ACTIONABLE.has(line.status)) return null
+
+  return (
+    <div className="flex flex-wrap gap-1">
+      <button type="button" disabled={busy} className={actionBtn} onClick={() => fileRef.current?.click()}>
+        Upload
+      </button>
+      <input ref={fileRef} type="file" accept=".pdf,image/*" className="hidden" onChange={uploadPicked} />
+      <button type="button" disabled={busy} className={actionBtn} onClick={() => post('rehunt')}>
+        Re-hunt
+      </button>
+      <button type="button" disabled={busy} className={actionBtn} onClick={copyRequest}>
+        {copied ? 'Copied ✓' : 'Copy request'}
+      </button>
+      <button type="button" disabled={busy} className={actionBtn} onClick={ignore}>
+        Ignore
+      </button>
+    </div>
+  )
+}
 
 export default function CoverageBoard({ locationName }) {
   const [data, setData] = useState(null)
@@ -48,6 +138,8 @@ export default function CoverageBoard({ locationName }) {
   }, [])
 
   useEffect(() => { load(statusFilter) }, [load, statusFilter])
+
+  const reload = useCallback(() => load(statusFilter), [load, statusFilter])
 
   const refresh = async () => {
     setBusy(true)
@@ -93,7 +185,7 @@ export default function CoverageBoard({ locationName }) {
       </div>
 
       <div className="flex items-center justify-between gap-3">
-        <div className="flex gap-1">
+        <div className="flex flex-wrap gap-1">
           {FILTERS.map((f) => (
             <button
               key={f.value}
@@ -154,6 +246,11 @@ export default function CoverageBoard({ locationName }) {
                 const chip = STATUS_CHIP[r.status] || STATUS_CHIP.uncovered
                 return <span className={`text-xs px-2 py-1 rounded ${chip.cls}`}>{chip.label}</span>
               },
+            },
+            {
+              key: 'actions',
+              header: '',
+              render: (r) => <RowActions line={r} onError={setError} onDone={reload} />,
             },
           ]}
         />

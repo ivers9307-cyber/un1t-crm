@@ -1,14 +1,15 @@
 // src/app/accounting/page.js
 //
-// RCOV.P0 — /accounting: the receipt-coverage board. Master + owner
+// RCOV.P0/P2 — /accounting: the receipt-coverage hub. Master + owner
 // only by default (accounting_hub permission, same tier as
 // invoices_inbox). Server component does the auth gate + hands the
-// active location's display name down; CoverageBoard owns all data
-// fetching against the two /api/accounting/coverage routes.
+// active location's display name down; AccountingTabs hosts the
+// Coverage / Exceptions / Runs & health panels, each owning its own
+// data fetching.
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import CoverageBoard from '@/components/accounting/CoverageBoard'
+import AccountingTabs from '@/components/accounting/AccountingTabs'
 import HuntInboxesCard from '@/components/accounting/HuntInboxesCard'
 
 export const dynamic = 'force-dynamic'
@@ -27,7 +28,7 @@ export default async function AccountingPage() {
       <div className="mb-6">
         <HuntInboxesCard />
       </div>
-      <CoverageBoard locationName={user.activeLocation?.name || ''} />
+      <AccountingTabs locationName={user.activeLocation?.name || ''} />
     </div>
   )
 }

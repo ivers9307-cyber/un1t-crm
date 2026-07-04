@@ -283,6 +283,19 @@ export async function pushQueueRowToXero(queueId) {
     billNumber = inv.InvoiceNumber || fields.invoice_number || null
     deepLinkUrl = deepLink(billId)
 
+    // audit F2 (RCOV.P2) — record what Xero booked as tax vs what the
+    // OCR read off the receipt. LineAmountTypes is Exclusive and we
+    // pass no TaxType, so Xero derives tax from account defaults —
+    // this is the only place the two numbers meet. >2c difference =
+    // mismatch (Irish multi-rate 23/13.5/9/0 makes silent drift easy);
+    // null when either side is missing (pre-P2 rows stay null = not
+    // evaluated). Surfaced in the inbox badge + /accounting Exceptions.
+    const xeroTotalTax = typeof inv.TotalTax === 'number' ? inv.TotalTax : null
+    const ocrTax = typeof fields.tax_amount === 'number' ? fields.tax_amount : null
+    const taxMismatch = xeroTotalTax == null || ocrTax == null
+      ? null
+      : Math.abs(xeroTotalTax - ocrTax) > 0.02
+
     // Persist the bill id IMMEDIATELY, before attaching. If the
     // attachment then fails, a retry reuses this id (skips create
     // above) and re-attaches instead of creating a duplicate bill.
@@ -290,6 +303,8 @@ export async function pushQueueRowToXero(queueId) {
       xero_bill_id: billId,
       xero_bill_number: billNumber,
       xero_deep_link_url: deepLinkUrl,
+      xero_total_tax: xeroTotalTax,
+      xero_tax_mismatch: taxMismatch,
     }).eq('id', queueId)
   }
   // else: idempotent retry — the bill already exists from a previous

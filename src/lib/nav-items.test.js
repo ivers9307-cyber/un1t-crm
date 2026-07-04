@@ -27,6 +27,7 @@ describe('NAV_SECTIONS', () => {
   it('renders the regrouped sections in order', () => {
     expect(NAV_SECTIONS).toEqual([
       { id: 'work',         label: 'Work' },
+      { id: 'accounting',   label: 'Accounting' }, // RCOV.P2 — bookkeeping consolidated
       { id: 'sales',        label: 'Sales' },
       { id: 'gym',          label: 'Gym' },
       { id: 'automations',  label: 'Automations' },
@@ -74,14 +75,21 @@ describe('ALL_NAV structure', () => {
 })
 
 describe('Work — the action queues, grouped and ordered', () => {
-  it('contains exactly the queue surfaces, with card-receipts after invoices', () => {
+  it('contains exactly the queue surfaces (finance moved to Accounting in RCOV.P2)', () => {
     expect(hrefsIn('work')).toEqual([
       '/communications',
       '/bookings',
       '/approvals',
       '/issues',
+    ])
+  })
+})
+
+describe('Accounting — bookkeeping consolidated (RCOV.P2)', () => {
+  it('leads with the hub, then the invoices queue and card receipts it feeds', () => {
+    expect(hrefsIn('accounting')).toEqual([
+      '/accounting',
       '/invoices',
-      '/accounting', // RCOV.P0 — receipt-coverage board, beside the invoices queue it feeds
       '/card-receipts',
     ])
   })
