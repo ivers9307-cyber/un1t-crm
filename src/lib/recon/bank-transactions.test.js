@@ -15,6 +15,15 @@ const payload = {
       LineItems: [{ Description: 'Protein order' }],
     },
     {
+      BankTransactionID: 'bt-005',
+      Type: 'RECEIVE',
+      Status: 'AUTHORISED',
+      IsReconciled: false, // unreconciled INBOUND — mapped, but excluded from lines
+      DateString: '2026-06-07T00:00:00',
+      Total: 99,
+      Contact: { Name: 'A CUSTOMER' },
+    },
+    {
       BankTransactionID: 'bt-002',
       Type: 'RECEIVE',
       Status: 'AUTHORISED',
@@ -48,7 +57,7 @@ const payload = {
 describe('mapBankTransactions', () => {
   it('maps authorised transactions with signed amounts and stable ids', () => {
     const rows = mapBankTransactions(payload)
-    expect(rows).toHaveLength(3) // DELETED skipped
+    expect(rows).toHaveLength(4) // DELETED skipped; inbound still mapped (zero-rows tripwire counts it)
     expect(rows[0]).toEqual({
       id: 'bt-001',
       date: '2026-06-03',
@@ -78,9 +87,12 @@ describe('mapBankTransactions', () => {
 })
 
 describe('bankTransactionLines', () => {
-  it('keeps only unreconciled rows, keyed bt:<id>', () => {
+  it('keeps only unreconciled MONEY-OUT rows, keyed bt:<id>', () => {
     const lines = bankTransactionLines(mapBankTransactions(payload))
+    // bt-005 is unreconciled but INBOUND (amount > 0) — excluded: coverage
+    // is a receipts-for-spend ledger (Richard, 2026-07-04).
     expect(lines).toHaveLength(2)
+    expect(lines.every((l) => l.amount < 0)).toBe(true)
     expect(lines[0]).toEqual({
       key: 'bt:bt-001',
       date: '2026-06-03',
