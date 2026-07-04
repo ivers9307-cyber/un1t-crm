@@ -11,7 +11,7 @@ import {
   getLocationUnifiConfig, revokeUnifiUserPolicies, UnifiError,
 } from '@/lib/unifi-access'
 import { canEditStaffMember } from '@/lib/staff-access'
-import { applyStaffProfileWrite, assertOwnerAssignmentScope, computeDesiredAssignments, computeProfileRole, syncStaffAssignments } from '@/lib/staff-write'
+import { applyStaffProfileWrite, assertOwnerAssignmentScope, computeDesiredAssignments, computeProfileRole, sparsifyAssignmentPermissions, syncStaffAssignments } from '@/lib/staff-write'
 import { getStaffForUser } from '@/lib/staff'
 import { logAuditEvent } from '@/lib/audit'
 
@@ -168,11 +168,17 @@ export async function PUT(request, props) {
     const existingByLocation = Object.fromEntries(
       (targetBefore.profile_locations || []).map(l => [l.location_id, l])
     )
-    const desired = computeDesiredAssignments({
-      isMaster: user.isMaster,
-      callerOwnerLocationIds,
-      assignments: body.assignments,
-      existingLinks: targetBefore.profile_locations || [],
+    // PERM-AUDIT.3 — store only the sparse diff vs each assignment's
+    // role base (code defaults + role template, mig 364). Editors
+    // send full hydrated blobs; the server owns the reduction.
+    const desired = await sparsifyAssignmentPermissions({
+      db,
+      assignments: computeDesiredAssignments({
+        isMaster: user.isMaster,
+        callerOwnerLocationIds,
+        assignments: body.assignments,
+        existingLinks: targetBefore.profile_locations || [],
+      }),
     })
     const desiredIds = new Set(desired.map(a => a.location_id))
 

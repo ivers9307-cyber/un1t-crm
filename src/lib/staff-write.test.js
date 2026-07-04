@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { buildStaffProfilePatch, computeProfileRole, assertOwnerAssignmentScope, computeDesiredAssignments } from './staff-write.js'
+import { buildStaffProfilePatch, computeProfileRole, assertOwnerAssignmentScope, computeDesiredAssignments, sparsifyAssignmentPermissions } from './staff-write.js'
+import { hydratePermissions } from '@shared/permissions'
 
 describe('buildStaffProfilePatch', () => {
   it('includes only the profile keys present in the body', () => {
@@ -438,5 +439,70 @@ describe('syncStaffAssignments — door-access safety paths (C2b.2b-ii review)',
     await syncStaffAssignments({ db, id: 'p1', targetBefore, desired: [], desiredIds: new Set(), existingByLocation: {} })
     expect(unifi.revokeUnifiUserPolicies).not.toHaveBeenCalled()
     expect(db.calls.deletes).toEqual([['p1', 'gone']])
+  })
+})
+
+// PERM-AUDIT.3 — server-side sparsification of assignment blobs.
+describe('sparsifyAssignmentPermissions', () => {
+  function fakeDb(templateRows = []) {
+    return {
+      from: () => ({
+        select: () => ({
+          in: () => Promise.resolve({ data: templateRows, error: null }),
+        }),
+      }),
+    }
+  }
+
+  it('reduces a full role-default blob to {} (pure inheritance)', async () => {
+    const full = hydratePermissions(null, 'staff')
+    const out = await sparsifyAssignmentPermissions({
+      db: fakeDb(),
+      assignments: [{ location_id: 'loc1', role: 'staff', is_default: true, permissions: full }],
+    })
+    expect(out[0].permissions).toEqual({})
+    expect(out[0].is_default).toBe(true) // other fields untouched
+  })
+
+  it('keeps only the keys that differ from the role base', async () => {
+    const full = hydratePermissions(null, 'staff')
+    const edited = { ...full, email: true, mobile: { ...full.mobile, whatsapp: true } }
+    const out = await sparsifyAssignmentPermissions({
+      db: fakeDb(),
+      assignments: [{ location_id: 'loc1', role: 'staff', permissions: edited }],
+    })
+    expect(out[0].permissions).toEqual({ email: true, mobile: { whatsapp: true } })
+  })
+
+  it('diffs against the role TEMPLATE when one exists (mig 364)', async () => {
+    // Template already grants email to staff at loc1 — an edited blob
+    // with email:true therefore matches the base and stores nothing.
+    const template = { email: true }
+    const base = hydratePermissions(null, 'staff', template)
+    const out = await sparsifyAssignmentPermissions({
+      db: fakeDb([{ location_id: 'loc1', role: 'staff', permissions: template }]),
+      assignments: [{ location_id: 'loc1', role: 'staff', permissions: base }],
+    })
+    expect(out[0].permissions).toEqual({})
+  })
+
+  it('preserves the non-boolean mobile extras', async () => {
+    const full = hydratePermissions(null, 'staff')
+    const layout = { bar: ['studio'], allowed: ['studio', 'invoices'] }
+    const edited = { ...full, mobile: { ...full.mobile, layout, lead_time_overrides: { tasks: 60 } } }
+    const out = await sparsifyAssignmentPermissions({
+      db: fakeDb(),
+      assignments: [{ location_id: 'loc1', role: 'staff', permissions: edited }],
+    })
+    expect(out[0].permissions.mobile.layout).toEqual(layout)
+    expect(out[0].permissions.mobile.lead_time_overrides).toEqual({ tasks: 60 })
+  })
+
+  it('an already-sparse blob passes through unchanged (idempotent)', async () => {
+    const out = await sparsifyAssignmentPermissions({
+      db: fakeDb(),
+      assignments: [{ location_id: 'loc1', role: 'staff', permissions: { email: true } }],
+    })
+    expect(out[0].permissions).toEqual({ email: true })
   })
 })

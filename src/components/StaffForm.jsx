@@ -49,6 +49,11 @@ export default function StaffForm({
   locations,
   callerIsMaster = false,
   callerOwnerLocationIds = [],
+  // PERM-AUDIT.3 — operator-edited role templates (mig 364), keyed
+  // { [location_id]: { [role]: sparseTemplateBlob } }. Hydration and
+  // the role-default baseline both honour the template so toggles
+  // show the TRUE effective state at each location.
+  roleTemplates = {},
 }) {
   const isEdit = !!staff
   const router = useRouter()
@@ -61,25 +66,31 @@ export default function StaffForm({
     [callerOwnerLocationIds]
   )
 
-  // Build a populated permissions blob for an assignment of `role`.
-  // Each new assignment starts at the role default; admin can flip
-  // individual toggles afterwards. The full blob is sent on save so
-  // the per-location override is explicit (even if it matches the
-  // default at write time — keeps StaffForm's UX simple).
-  function defaultPermsForRole(role) {
-    return hydratePermissions(null, role)
+  // Role template for (location, role) — null when the operator has
+  // never customised that role at that location (code defaults apply).
+  function templateFor(locationId, role) {
+    return roleTemplates?.[locationId]?.[role] || null
+  }
+
+  // Build a populated permissions blob for an assignment of `role` at
+  // `locationId`. Each new assignment starts at the role's EFFECTIVE
+  // defaults (code defaults + the location's role template); admin can
+  // flip individual toggles afterwards. The full blob is sent on save;
+  // the SERVER reduces it to the sparse diff vs this same baseline
+  // (PERM-AUDIT.3), so untouched toggles keep inheriting.
+  function defaultPermsForRole(role, locationId = null) {
+    return hydratePermissions(null, role, templateFor(locationId, role))
   }
 
   // Hydrate per-assignment permissions from the staff payload via the
-  // shared canonical helper (also used by the mobile editor): role
-  // defaults for the assignment's CURRENT role are merged UNDER the
+  // shared canonical helper (also used by the mobile editor): the
+  // role's effective defaults (code + template) are merged UNDER the
   // stored blob — web keys AND the mobile sub-object — so toggles
-  // render the effective state even for keys added after the blob was
-  // saved (PR #754 Q1). Stored explicit values always win; the save
-  // then writes the full explicit blob.
+  // render the effective state even for keys the sparse blob doesn't
+  // pin (PR #754 Q1, PERM-AUDIT.3). Stored explicit values always win.
   const initialAssignments = (staff?.assignments || []).map(a => ({
     ...a,
-    permissions: hydratePermissions(a.permissions, a.role),
+    permissions: hydratePermissions(a.permissions, a.role, templateFor(a.location_id, a.role)),
   }))
 
   const [form, setForm] = useState({
@@ -114,6 +125,34 @@ export default function StaffForm({
   const selectedLocationName = locations.find(l => l.id === selectedPermLocationId)?.name || ''
   const selectedPerms = selectedAssignment?.permissions || defaultPermsForRole('staff')
   const selectedMobilePerms = selectedPerms.mobile || {}
+  // PERM-AUDIT.3 — the role's effective baseline (code defaults +
+  // this location's role template) for the selected assignment.
+  // Drives the "override" dots and the reset affordance: a toggle
+  // matching this baseline is inherited (not stored on save); a
+  // toggle differing from it is a per-user override (stored).
+  const selectedRoleBase = selectedAssignment
+    ? defaultPermsForRole(selectedAssignment.role, selectedAssignment.location_id)
+    : defaultPermsForRole('staff')
+  const selectedRoleBaseMobile = selectedRoleBase.mobile || {}
+
+  // Reset the selected assignment back to pure role inheritance.
+  function resetSelectedToRoleDefaults() {
+    if (!selectedAssignment) return
+    updateAssignment(selectedAssignment.location_id, {
+      permissions: {
+        ...selectedRoleBase,
+        // Keep the non-permission extras (lead-time overrides ride on
+        // .mobile) — resetting toggles shouldn't wipe reminder tuning.
+        mobile: {
+          ...selectedRoleBase.mobile,
+          ...(selectedMobilePerms.lead_time_overrides !== undefined
+            ? { lead_time_overrides: selectedMobilePerms.lead_time_overrides } : {}),
+          ...(selectedMobilePerms.layout !== undefined
+            ? { layout: selectedMobilePerms.layout } : {}),
+        },
+      },
+    })
+  }
 
   // Computed view of the assignments — split into editable (caller can
   // touch) and read-only (caller is not owner at that location, so the
@@ -223,7 +262,7 @@ export default function StaffForm({
           ...prev,
           assignments: prev.assignments.map(x =>
             x.location_id === a.location_id
-              ? { ...x, permissions: defaultPermsForRole(a.role) }
+              ? { ...x, permissions: defaultPermsForRole(a.role, a.location_id) }
               : x
           ),
         }))
@@ -239,10 +278,11 @@ export default function StaffForm({
         role,
         is_default: prev.assignments.length === 0,
         unifi_door_access: false,
-        // Per-location permissions (mig 058) — start at the role
-        // default for the chosen role; admin can flip individual
-        // toggles afterwards via the permissions tab strip.
-        permissions: defaultPermsForRole(role),
+        // Per-location permissions (mig 058) — start at the role's
+        // effective defaults (code + template) for this location;
+        // admin can flip individual toggles afterwards via the
+        // permissions tab strip.
+        permissions: defaultPermsForRole(role, locationId),
       }]
       return { ...prev, assignments: next }
     })
@@ -838,8 +878,13 @@ export default function StaffForm({
                 <button type="button" onClick={() => setAllPermissions(true)} className="text-xs text-blue-400 hover:text-blue-300">All on</button>
                 <span className="text-un1t-muted">·</span>
                 <button type="button" onClick={() => setAllPermissions(false)} className="text-xs text-blue-400 hover:text-blue-300">All off</button>
+                <span className="text-un1t-muted">·</span>
+                <button type="button" onClick={resetSelectedToRoleDefaults} className="text-xs text-blue-400 hover:text-blue-300" title="Clear every per-user override at this location — the person inherits their role's permissions (including future changes to them).">Reset to role defaults</button>
               </div>
             </div>
+            <p className="text-[11px] text-un1t-subtle mb-2">
+              An <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 align-middle" /> dot marks a per-user override — everything else follows the role&apos;s permissions automatically.
+            </p>
             <div className="space-y-2">
               {allPermissions.map(perm => {
                 // Only flag the LOCATION gate at the currently
@@ -848,10 +893,14 @@ export default function StaffForm({
                 // disabled the feature.
                 const selectedLoc = locations.find(l => l.id === selectedPermLocationId)
                 const offHere = isFeatureGatedByLocation(perm.key) && selectedLoc?.features?.[perm.key] === false
+                const overridden = (selectedPerms[perm.key] === true) !== (selectedRoleBase[perm.key] === true)
                 return (
                   <label key={perm.key} className={`flex items-center justify-between py-1.5 cursor-pointer ${offHere ? 'opacity-60' : ''}`}>
                     <span className="text-sm">
                       {perm.label}
+                      {overridden && (
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 ml-1.5 align-middle" title="Per-user override — differs from this person's role permissions at this location" />
+                      )}
                       {offHere && (
                         <span className="block text-[11px] text-amber-500 mt-0.5">
                           Off at this location — toggle has no effect until enabled in Location Features
@@ -930,10 +979,14 @@ export default function StaffForm({
             const dim = isNotifyRow && !selectedMobilePerms.push_notifications
             const selectedLoc = locations.find(l => l.id === selectedPermLocationId)
             const offHere = isFeatureGatedByLocation(perm.key) && selectedLoc?.features?.[perm.key] === false
+            const overridden = (selectedMobilePerms[perm.key] === true) !== (selectedRoleBaseMobile[perm.key] === true)
             return (
               <label key={perm.key} className={`flex items-center justify-between py-1.5 cursor-pointer ${dim || offHere ? 'opacity-60' : ''}`}>
                 <span className="text-sm">
                   {perm.label}
+                  {overridden && (
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 ml-1.5 align-middle" title="Per-user override — differs from this person's role permissions at this location" />
+                  )}
                   {perm.hint && (
                     <span className="block text-xs text-un1t-subtle">{perm.hint}</span>
                   )}
