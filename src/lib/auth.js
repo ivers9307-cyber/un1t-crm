@@ -421,6 +421,38 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     ? assignmentsByLocation[activeLocation.id] || null
     : null
 
+  // PERM-AUDIT.2 (mig 364) — operator-edited role permission
+  // templates, resolved by the shared resolver between the per-user
+  // override and the code role default. One small query for the
+  // user's locations; keyed per location by the role THE USER holds
+  // there (a template row for a different role at that location is
+  // irrelevant to this user). Master skips the fetch entirely —
+  // the resolver short-circuits master past tiers 2/2.5/3, so a
+  // template can never change what a master sees.
+  const roleTemplatesByLocation = {}
+  if (!isMaster) {
+    const templateLocationIds = Object.keys(rolesByLocation)
+    if (templateLocationIds.length > 0) {
+      try {
+        const { data: templateRows } = await db
+          .from('location_role_permissions')
+          .select('location_id, role, permissions')
+          .in('location_id', templateLocationIds)
+        for (const row of (templateRows || [])) {
+          if (rolesByLocation[row.location_id] === row.role) {
+            roleTemplatesByLocation[row.location_id] = row.permissions || {}
+          }
+        }
+      } catch {
+        // Defensive: a failed template fetch degrades to code
+        // defaults (empty map) rather than failing the request.
+      }
+    }
+  }
+  const activeRoleTemplate = activeLocation?.id
+    ? roleTemplatesByLocation[activeLocation.id] || null
+    : null
+
   // Active organization mirrors active location — useful for any UI
   // that wants to badge "you're operating inside CCF Autos right now".
   const activeOrganization = activeLocation?.organization_id
@@ -446,6 +478,11 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     // `assignmentsByLocation[X]`.
     assignmentsByLocation,
     activeAssignment,
+    // PERM-AUDIT.2 — { [location_id]: sparse template blob } for the
+    // role the user holds at each location (mig 364). hasPermission
+    // reads activeRoleTemplate; hasPermissionForLocation reads the map.
+    roleTemplatesByLocation,
+    activeRoleTemplate,
     // Active-location role — flips when the user switches location.
     role: activeLocationRole,
     // Original global value, for callers that need canonical/highest role.

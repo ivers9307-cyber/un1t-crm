@@ -21,6 +21,7 @@ import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { canEditLocationFeatures } from '@/lib/staff-access'
 import LocationForm from '@/components/LocationForm'
 import LocationFeatures from '@/components/LocationFeatures'
+import RolePermissions from '@/components/RolePermissions'
 import CarDepositSettings from '@/components/CarDepositSettings'
 import BrandingSettings from '@/components/BrandingSettings'
 import OrgBrandingSettings from '@/components/OrgBrandingSettings'
@@ -93,10 +94,15 @@ export default async function EditLocationPage(props) {
   // audit it's a master knob); Deposits only shows when car_processing is
   // on at this location. Same gates the old stacked layout used.
   const showFeatures = canEditLocationFeatures(user)
+  // PERM-AUDIT.2 — role permission templates. Owner-at-this-location
+  // or master (mirrors the PUT /role-permissions gate).
+  const showRoles = user.role === 'master' || user.profileRole === 'master'
+    || user.rolesByLocation?.[location.id] === 'owner'
   const showDeposits = isFeatureEnabledAtLocation(location, 'car_processing')
   const tabs = [
     { key: 'details', label: 'Details' },
     ...(showFeatures ? [{ key: 'features', label: 'Features' }] : []),
+    ...(showRoles ? [{ key: 'roles', label: 'Roles' }] : []),
     { key: 'branding', label: 'Branding' },
     ...(showDeposits ? [{ key: 'deposits', label: 'Deposits' }] : []),
     { key: 'schedule', label: 'Schedule' },
@@ -149,6 +155,18 @@ export default async function EditLocationPage(props) {
             <h3 className="text-lg font-semibold">Features</h3>
           </div>
           <LocationFeatures location={location} />
+        </section>
+      )}
+
+      {/* Role permission templates (PERM-AUDIT.2) — what each role
+          grants at this location. Owner + master. */}
+      {active === 'roles' && showRoles && (
+        <section>
+          <div className="flex items-center gap-2 mb-3">
+            <ToggleRight size={16} className="text-un1t-subtle" />
+            <h3 className="text-lg font-semibold">Role permissions</h3>
+          </div>
+          <RolePermissions locationId={location.id} />
         </section>
       )}
 
