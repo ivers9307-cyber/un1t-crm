@@ -1615,6 +1615,25 @@ registry.registerPath({
   },
 })
 
+// WhatsApp inbox booking-Flow send (cookie auth)
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/conversations/{id}/send-flow',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Send the location's booking Flow into an open conversation",
+  description: "Sends the configured 'Book your first visit' WhatsApp Flow (locations.settings.whatsapp_flow) as an in-session interactive flow message — no template needed inside the 24h window; a Meta rejection surfaces as 502. Requires the conversation to be linked to a contact (the flow_token books against it). Logs a thread row on success. Takes no body.",
+  request: {
+    params: z.object({ id: uuidLike }),
+  },
+  responses: {
+    200: { description: 'Flow sent' },
+    400: { description: 'No contact linked, or no Flow configured for the location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Meta flow send failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // WhatsApp inbox block action (cookie auth)
 registry.registerPath({
   method: 'post',
