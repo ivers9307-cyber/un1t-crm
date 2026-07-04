@@ -44,8 +44,12 @@ const TABS = [
 // `channel` + `conversationId` identify the thread this pane sits
 // beside, so a booking confirmation can be dropped straight into the
 // conversation (best-effort — a closed WA window just skips it).
-export default function CommandCentre({ contactId, locationId, canEditConsent, channel, conversationId }) {
-  const [tab, setTab] = useState('profile')
+export default function CommandCentre({ contactId, locationId, canEditConsent, channel, conversationId, tab: tabProp, onTabChange }) {
+  // Optionally controlled: UnifiedInbox drives the tab so inline
+  // approval next-steps can open Book. Uncontrolled elsewhere.
+  const [tabState, setTabState] = useState('profile')
+  const tab = tabProp ?? tabState
+  const setTab = onTabChange ?? setTabState
   const [contact, setContact] = useState(null)
   const [activities, setActivities] = useState([])
   const [consentLog, setConsentLog] = useState([])

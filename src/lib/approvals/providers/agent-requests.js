@@ -8,11 +8,13 @@
 // Auto-mode bookings and consultations are written as already
 // actioned/failed (audit trail) and never appear here.
 //
-// Visibility matches the role set the PATCH /api/agent/membership-requests/[id]
-// route accepts to ACT on these requests (MANAGER_ROLES) — otherwise managers /
-// head_coaches who are authorised to approve get no badge/count/Today-feed for
-// time-sensitive class-booking reviews and have to know to visit the buried
-// /settings/customer-agent/requests page.
+// Visibility here is INTENTIONALLY narrower than who can act: the PATCH
+// /api/agent/membership-requests/[id] route accepts any staff at the
+// request's location (comms-surface rights — INBOX-APPROVALS, Richard
+// 2026-07-03), but the /approvals badge/count/Today-feed stays manager+
+// so the review queue remains a manager surface. Non-manager staff
+// decide from the inline card in /communications/inbox instead
+// (GET ?conversation_id= form).
 
 import {
   canApproveAtActiveLocation,
