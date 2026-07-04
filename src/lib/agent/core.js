@@ -122,16 +122,22 @@ export function resolveRearmPatch({ resolved, agent_handed_off_at } = {}) {
  * Conversation-patch when an operator sends a MANUAL message: that's an
  * intentional human take-over, so the auto-responder must stop replying in
  * this thread (shouldAgentReply skips when agent_active === false). Stamps a
- * handoff timestamp so it AUTO-RE-ARMS after handoff_cooldown_hours of quiet
- * (and resolving the thread re-arms instantly) — preserving an existing stamp
- * so a back-and-forth manual exchange doesn't keep pushing the re-arm out.
- * Pure — used by the WhatsApp + Instagram operator send routes. (A null stamp
- * would mean a PERMANENT off, which we deliberately avoid here.)
+ * handoff timestamp so it can AUTO-RE-ARM after handoff_cooldown_hours of
+ * quiet (and resolving the thread re-arms instantly).
+ *
+ * AGENT-REARM.2 — the stamp REFRESHES on every manual send, so the cooldown
+ * measures from the human's LAST message, not their first. The original
+ * preserve-the-stamp behaviour meant a multi-day human-led exchange kept a
+ * stale stamp, the 12h cooldown expired mid-conversation, and Mia answered a
+ * customer who was replying to Richard (Kevin, 2026-07-03). Belt-and-braces
+ * with the human-owned gate in shouldAgentReply. Pure — used by the WhatsApp
+ * + Instagram operator send routes. (A null stamp would mean a PERMANENT
+ * off, which we deliberately avoid here.)
  */
-export function manualTakeoverPatch(existingHandoffAt, now = new Date()) {
+export function manualTakeoverPatch(_existingHandoffAt, now = new Date()) {
   return {
     agent_active: false,
-    agent_handed_off_at: existingHandoffAt || now.toISOString(),
+    agent_handed_off_at: now.toISOString(),
   }
 }
 
@@ -167,7 +173,7 @@ export function isLikelyBusinessAutoReply(body) {
   return false
 }
 
-export function shouldAgentReply({ settings, conversation, message, senderPhone, now = new Date() }) {
+export function shouldAgentReply({ settings, conversation, message, senderPhone, lastOutboundHuman = false, now = new Date() }) {
   const s = settings || {}
   const enabled = !!s.enabled
   const testMode = !!s.test_mode
@@ -178,11 +184,20 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
   // cooldown so one escalation doesn't silence the agent forever; the
   // rearm flag tells the caller to clear the handoff stamp in the DB.
   // A manual agent-off (no handoff timestamp) never auto-releases.
+  // AGENT-REARM.2 — but a thread whose LAST outbound message was sent by
+  // a HUMAN is that human's conversation, cooldown or not: the customer
+  // is replying to THEM. Never re-arm into it (Mia hijacked Kevin's
+  // reply to Richard this way, 2026-07-03) — the inbound push + inbox
+  // queue alert the team; only a resolve (or Mia's own holding message
+  // being the last word) hands the thread back.
   let rearm = false
   if (conversation && conversation.agent_active === false) {
     const cooldown = s.handoff_cooldown_hours ?? DEFAULT_HANDOFF_COOLDOWN_HOURS
     if (!isHandoffExpired(conversation.agent_handed_off_at, cooldown, now)) {
       return { reply: false, reason: 'handed_off' }
+    }
+    if (lastOutboundHuman) {
+      return { reply: false, reason: 'human_owned' }
     }
     rearm = true
   }

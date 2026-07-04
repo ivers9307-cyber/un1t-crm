@@ -212,11 +212,28 @@ async function runChannelAgentInner(db, adapter, ctx) {
     .eq('id', conversationId)
     .single()
 
+  // AGENT-REARM.2 — a potential re-arm (agent off) must know who sent the
+  // thread's last outbound message: if it was a HUMAN, the customer is
+  // replying to them and the agent must stay out regardless of cooldown.
+  // Only queried when the agent is actually off, so the hot path pays nothing.
+  let lastOutboundHuman = false
+  if (conv?.agent_active === false) {
+    const { data: lastOut } = await db.from(adapter.messagesTable)
+      .select(adapter.humanOutboundColumns || 'source')
+      .eq('conversation_id', conversationId)
+      .eq('direction', 'outbound')
+      .order('created_at', { ascending: false })
+      .limit(1)
+    const row = Array.isArray(lastOut) ? lastOut[0] : null
+    lastOutboundHuman = !!(row && adapter.isHumanOutbound?.(row))
+  }
+
   const decision = shouldAgentReply({
     settings,
     conversation: conv,
     message: { type: messageType, body },
     senderPhone: recipient,
+    lastOutboundHuman,
     now: new Date(),
   })
   // AGENT-REARM.1 — the cooldown released a handed-off thread: clear the
@@ -623,6 +640,10 @@ export const whatsappAdapter = {
   handoffType: 'whatsapp_agent_handoff',
   // Meta authenticates the sender's phone number — safe to use as identity.
   trustsSenderIdentity: true,
+  // AGENT-REARM.2 — operator send routes stamp sent_by; agent + sequence /
+  // automation sends leave it null, so sent_by IS the human signal.
+  humanOutboundColumns: 'source, sent_by',
+  isHumanOutbound: (m) => m.source !== 'agent' && m.sent_by != null,
   // Fires once the agent has committed to replying (gating + claim passed):
   // marks the inbound read and shows "typing…" while Claude composes.
   onEngage: async ({ waMessageId, locationId }) => {

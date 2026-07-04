@@ -367,3 +367,51 @@ describe('resolvePushAllowedIds', () => {
     expect(allowed.size).toBe(0)
   })
 })
+
+// PUSH-LOC.1 — the notification's location decides the per-category gate.
+describe('resolvePushAllowedIds — per-location gating', () => {
+  // Richard's live case: owner at Stillorgan (role default notify_whatsapp
+  // ON) + staff at SourceIt (role default OFF). The staff row must not eat
+  // Stillorgan's WhatsApp pushes.
+  const richardLinks = () => {
+    fakeProfiles = [{ id: 'r', active: true }]
+    fakeLinks = [
+      { profile_id: 'r', location_id: 'stillorgan', role: 'owner', permissions: null },
+      { profile_id: 'r', location_id: 'sourceit', role: 'staff', permissions: null },
+    ]
+  }
+
+  it('allows a Stillorgan WhatsApp push despite a staff role elsewhere', async () => {
+    richardLinks()
+    const allowed = await resolvePushAllowedIds(makeFakeDb(), ['r'], 'whatsapp', { locationId: 'stillorgan' })
+    expect(allowed.has('r')).toBe(true)
+  })
+
+  it('still suppresses a push AT the location whose role default is off', async () => {
+    richardLinks()
+    const allowed = await resolvePushAllowedIds(makeFakeDb(), ['r'], 'whatsapp', { locationId: 'sourceit' })
+    expect(allowed.has('r')).toBe(false)
+  })
+
+  it('without a locationId the conservative any-assignment rule still applies', async () => {
+    richardLinks()
+    const allowed = await resolvePushAllowedIds(makeFakeDb(), ['r'], 'whatsapp')
+    expect(allowed.has('r')).toBe(false)
+  })
+
+  it('a user with NO assignment at the given location falls back to all assignments', async () => {
+    fakeProfiles = [{ id: 'r', active: true }]
+    fakeLinks = [{ profile_id: 'r', location_id: 'sourceit', role: 'staff', permissions: null }]
+    const allowed = await resolvePushAllowedIds(makeFakeDb(), ['r'], 'whatsapp', { locationId: 'stillorgan' })
+    expect(allowed.has('r')).toBe(false)
+  })
+
+  it('an explicit per-user override at the location wins over its role default', async () => {
+    fakeProfiles = [{ id: 'r', active: true }]
+    fakeLinks = [
+      { profile_id: 'r', location_id: 'sourceit', role: 'staff', permissions: { mobile: { notify_whatsapp: true } } },
+    ]
+    const allowed = await resolvePushAllowedIds(makeFakeDb(), ['r'], 'whatsapp', { locationId: 'sourceit' })
+    expect(allowed.has('r')).toBe(true)
+  })
+})

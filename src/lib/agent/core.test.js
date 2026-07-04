@@ -307,11 +307,11 @@ describe('manualTakeoverPatch', () => {
       agent_handed_off_at: '2026-06-30T10:00:00.000Z',
     })
   })
-  it('preserves an existing handoff timestamp (so re-arm is not pushed out per message)', () => {
+  it('REFRESHES an existing handoff timestamp — the cooldown measures from the human\'s LAST message (AGENT-REARM.2)', () => {
     const now = new Date('2026-06-30T10:00:00Z')
     expect(manualTakeoverPatch('2026-06-30T08:00:00Z', now)).toEqual({
       agent_active: false,
-      agent_handed_off_at: '2026-06-30T08:00:00Z',
+      agent_handed_off_at: '2026-06-30T10:00:00.000Z',
     })
   })
   it('always pauses (agent_active=false) and never stamps null — so it auto-re-arms, not permanent-off', () => {
@@ -567,5 +567,45 @@ describe('shouldAgentReply — auto-reply gate', () => {
       senderPhone: '+353870000000',
     })
     expect(d.reply).toBe(true)
+  })
+})
+
+describe('shouldAgentReply — human-owned thread gate (AGENT-REARM.2)', () => {
+  const base = {
+    settings: { enabled: true, handoff_cooldown_hours: 12 },
+    message: { type: 'text', body: 'Sorry, is this confirmed?' },
+    senderPhone: '353870000000',
+    now: new Date('2026-07-03T14:05:00Z'),
+  }
+  // The Kevin case: stamp 4 days old (cooldown long expired), but the last
+  // outbound was Richard's manual message — the customer is replying to HIM.
+  it('never re-arms when the last outbound was human-sent, even past the cooldown', () => {
+    const r = shouldAgentReply({
+      ...base,
+      conversation: { agent_active: false, agent_handed_off_at: '2026-06-29T09:47:00Z' },
+      lastOutboundHuman: true,
+    })
+    expect(r).toEqual({ reply: false, reason: 'human_owned' })
+  })
+  it("still re-arms past the cooldown when the last outbound was NOT human (e.g. Mia's own holding message)", () => {
+    const r = shouldAgentReply({
+      ...base,
+      conversation: { agent_active: false, agent_handed_off_at: '2026-06-29T09:47:00Z' },
+      lastOutboundHuman: false,
+    })
+    expect(r.reply).toBe(true)
+    expect(r.rearm).toBe(true)
+  })
+  it('inside the cooldown the reason stays handed_off (human_owned only matters at re-arm time)', () => {
+    const r = shouldAgentReply({
+      ...base,
+      conversation: { agent_active: false, agent_handed_off_at: '2026-07-03T10:00:00Z' },
+      lastOutboundHuman: true,
+    })
+    expect(r).toEqual({ reply: false, reason: 'handed_off' })
+  })
+  it('does not affect an active conversation', () => {
+    const r = shouldAgentReply({ ...base, conversation: { agent_active: true }, lastOutboundHuman: true })
+    expect(r.reply).toBe(true)
   })
 })
