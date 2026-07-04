@@ -36,6 +36,7 @@ const STORAGE_BUCKETS = Object.freeze({
   fte_expense_item: 'fte-expense-receipts',
   car_document: 'car-documents',
   card_receipt: 'company-card-receipts',
+  email_hunt: 'hunted-invoices',
 })
 
 /**
@@ -332,4 +333,51 @@ export async function enqueueFromCardReceipt(receiptId) {
     .single()
   if (insErr) return { ok: false, error: `Queue insert failed: ${insErr.message}` }
   return { ok: true, queueIds: [inserted.id] }
+}
+
+// RCOV.P1 — enqueue a hunted email attachment. content_hash dedupe:
+// if ANY queue row (any source) already carries this hash, DO NOT
+// insert — return that row's id with deduped:true so the caller links
+// the bank line to the existing document instead. This is the
+// cross-source duplicate guard (same invoice arriving via email hunt
+// AND card photo/supplier email must not become two Xero bills).
+export async function enqueueFromHuntFind({
+  locationId, huntId, bucketPath, filename, sizeBytes, mimeType,
+  senderEmail, subject, contentHash,
+}) {
+  const db = createServerClient()
+
+  if (!contentHash) return { ok: false, error: 'contentHash is required.' }
+  if (!huntId) return { ok: false, error: 'huntId is required.' }
+  if (!bucketPath) return { ok: false, error: 'bucketPath is required.' }
+
+  const { data: existing, error: dupErr } = await db
+    .from('invoices_queue')
+    .select('id, status')
+    .eq('content_hash', contentHash)
+    .limit(1)
+    .maybeSingle()
+  if (dupErr) return { ok: false, error: `Hash lookup failed: ${dupErr.message}` }
+  if (existing) return { ok: true, queueIds: [existing.id], deduped: true }
+
+  const { data: inserted, error: insErr } = await db
+    .from('invoices_queue')
+    .insert({
+      location_id: locationId,
+      source_type: 'email_hunt',
+      source_hunt_id: huntId,
+      attachment_bucket: STORAGE_BUCKETS.email_hunt,
+      attachment_path: bucketPath,
+      attachment_filename: filename || null,
+      attachment_size_bytes: sizeBytes || null,
+      attachment_mime_type: mimeType || null,
+      sender_email: senderEmail || null,
+      subject: subject || 'Hunted invoice',
+      status: 'received',
+      content_hash: contentHash,
+    })
+    .select('id')
+    .single()
+  if (insErr) return { ok: false, error: `Queue insert failed: ${insErr.message}` }
+  return { ok: true, queueIds: [inserted.id], deduped: false }
 }

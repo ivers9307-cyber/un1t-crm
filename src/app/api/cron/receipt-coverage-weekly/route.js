@@ -1,17 +1,36 @@
 // src/app/api/cron/receipt-coverage-weekly/route.js
 //
-// RCOV.P0 — Friday 08:00 Europe/Dublin. vercel.json fires this at
+// RCOV.P0/P1 — Friday 08:00 Europe/Dublin. vercel.json fires this at
 // 07:00 AND 08:00 UTC on Fridays (DST straddle); the Dublin-hour gate
 // makes exactly one firing run, and the alreadyRanToday check absorbs
 // retries/manual re-fires. Env RECEIPT_COVERAGE_REPORT_TO is REQUIRED
-// — checked up-front so a misconfig fails loudly, before any pulls.
+// — checked up-front so a misconfig fails loudly, before any pulls
+// (the finalizer below needs it too, once the hunt queue drains).
+//
+// RE-SEQUENCED for P1's hunt engine: this cron now only pulls, sweeps,
+// and seeds — per location, runCoveragePull() → sweepSubmittedLines()
+// (flip rejected-backed submitted lines to needs_attention) →
+// seedHunts() (queue uncovered/not_found lines for the drain cron).
+// The weekly report + heartbeat stamp used to happen here, right
+// after the pull; they now happen in process-receipt-hunts' finalizer
+// once the seeded hunt queue actually drains, so the report reflects
+// post-hunt coverage instead of the pre-hunt snapshot this cron used
+// to email. See that cron for the report/heartbeat logic.
+//
+// NOTE on heartbeats: this file intentionally does NOT call
+// stampHeartbeat — its heartbeat is stamped by process-receipt-hunts'
+// finalizer when the weekly cycle actually completes, not by this
+// cron. (The CLAUDE.md invariant "every cron with a cron_heartbeats
+// row calls stampHeartbeat" — checked via `grep -L stampHeartbeat
+// src/app/api/cron/*/route.js` listing only health-check — now also
+// expects this file to appear in that grep; the expectation moves
+// with the heartbeat to process-receipt-hunts.)
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { dublinNowMinutes, dublinDayStr, dublinTodayStr } from '@/lib/dublin-time'
 import { runCoveragePull } from '@/lib/recon/pull'
-import { renderCoverageReportHtml, sendCoverageReport, shouldRunFridayCron, reportRecipients } from '@/lib/recon/report-email'
-import { getAppUrl } from '@/lib/app-url'
+import { sweepSubmittedLines, seedHunts } from '@/lib/recon/statuses'
+import { shouldRunFridayCron, reportRecipients } from '@/lib/recon/report-email'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -47,47 +66,23 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: connErr.message }, { status: 500 })
   }
 
-  const sections = []
+  const perLocation = []
   const errors = []
   for (const conn of conns || []) {
     const locationName = conn.location?.name || conn.location_id
     try {
       const summary = await runCoveragePull(db, conn.location_id, { trigger: 'cron' })
-      const { data: uncovered } = await db
-        .from('recon_bank_lines')
-        .select('line_date, description, reference, amount')
-        .eq('location_id', conn.location_id)
-        .eq('status', 'uncovered')
-        .order('line_date', { ascending: true })
-        .limit(200)
-      const agg = summary.accounts.reduce(
-        (a, s) => ({ pulled: a.pulled + s.pulled, new: a.new + s.new, covered: a.covered + s.covered }),
-        { pulled: 0, new: 0, covered: 0 }
-      )
-      sections.push({ locationName, stats: agg, anomalies: summary.anomalies, uncovered: uncovered || [] })
+      const { flagged } = await sweepSubmittedLines(db, conn.location_id)
+      const { seeded } = await seedHunts(db, conn.location_id)
+      perLocation.push({ locationName, seeded, flagged, anomalies: summary.anomalies.length })
     } catch (e) {
       console.error('[receipt-coverage-weekly] pull failed', locationName, e)
       errors.push({ locationName, error: String(e?.message || e) })
     }
   }
 
-  const dateStr = dublinTodayStr()
-  const html = renderCoverageReportHtml({ appUrl: getAppUrl(), dateStr, sections, errors })
-  let emailError = null
-  try {
-    await sendCoverageReport({ html, dateStr })
-  } catch (e) {
-    console.error('[receipt-coverage-weekly] report send failed', e)
-    emailError = String(e?.message || e)
-  }
-
-  const anomalyCount = sections.reduce((n, s) => n + (s.anomalies?.length || 0), 0)
-  if (errors.length === 0 && !emailError && anomalyCount === 0) {
-    await stampHeartbeat('receipt-coverage-weekly').catch(() => {})
-  }
-
   return NextResponse.json({
-    success: errors.length === 0 && !emailError,
-    data: { locations: sections.length, anomalies: anomalyCount, errors, emailError },
+    success: errors.length === 0,
+    data: { locations: perLocation.length, perLocation, errors },
   })
 }
