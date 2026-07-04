@@ -250,7 +250,7 @@ export default function Conversation() {
                   key={item.key}
                   request={item.request}
                   contactFirstName={contactFirstName}
-                  onDecided={() => refresh()}
+                  onDecided={merged => { setApprovals(p => p.map(r => (r.id === merged.id ? merged : r))); refresh() }}
                   onPrefillComposer={t => setText(t)}
                 />
               ) : (
