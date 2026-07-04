@@ -21,7 +21,7 @@ export const LEAD_TIME_MAX_MINUTES = 7 * 24 * 60
 // MANAGER_ROLES list in shared/permissions.js plus 'staff' for
 // locations that want everyone on duty to see booking reminders.
 export const VALID_NOTIFY_ROLES = Object.freeze([
-  'owner', 'manager', 'head_coach', 'staff',
+  'owner', 'manager', 'head_coach', 'staff', 'reception',
 ])
 
 /**

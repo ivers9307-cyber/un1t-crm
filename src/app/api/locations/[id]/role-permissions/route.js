@@ -34,7 +34,7 @@ import {
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const TEMPLATABLE_ROLES = ['owner', 'manager', 'head_coach', 'staff']
+const TEMPLATABLE_ROLES = ['owner', 'manager', 'head_coach', 'staff', 'reception']
 
 function canEditRoleTemplates(user, locationId) {
   if (user.role === 'master' || user.profileRole === 'master') return true

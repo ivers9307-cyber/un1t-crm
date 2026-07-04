@@ -29,7 +29,7 @@ export function buildStaffProfilePatch(body) {
   return patch
 }
 
-const ROLE_PRECEDENCE = { owner: 1, manager: 2, head_coach: 3, staff: 4 }
+const ROLE_PRECEDENCE = { owner: 1, manager: 2, head_coach: 3, reception: 4, staff: 5 }
 
 /** Recompute profiles.role: master flag wins, else the highest-
  * precedence role across the current assignments, else the fallback. */
