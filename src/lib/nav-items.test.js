@@ -81,6 +81,7 @@ describe('Work — the action queues, grouped and ordered', () => {
       '/approvals',
       '/issues',
       '/invoices',
+      '/accounting', // RCOV.P0 — receipt-coverage board, beside the invoices queue it feeds
       '/card-receipts',
     ])
   })

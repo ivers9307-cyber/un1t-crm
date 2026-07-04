@@ -23,7 +23,7 @@ import {
   LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare,
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
   Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
-  Workflow, Timer, Projector, Trophy, Activity, TrendingUp,
+  Workflow, Timer, Projector, Trophy, Activity, TrendingUp, Landmark,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -85,6 +85,11 @@ export const ALL_NAV = [
   // default. Per-location forwarding addresses are shown at the top
   // of the page; quality + data approvals run before forward-to-Xero.
   { href: '/invoices',   label: 'Invoices',     icon: Inbox,           permission: 'invoices_inbox', section: 'work' },
+  // RCOV.P0 — receipt-coverage board. Cross-references Xero bank lines
+  // against collected receipts to find bank activity with no matching
+  // receipt on file. Master + owner only by default, same tier as
+  // Invoices above.
+  { href: '/accounting', label: 'Accounting',   icon: Landmark,        permission: 'accounting_hub', section: 'work' },
   // SPEND.P3 — company-card receipts. A card holder photographs/uploads
   // a receipt; owner/master approves it, then it rides the bookkeeper →
   // Xero queue (the /approvals dashboard also surfaces the pending ones).
