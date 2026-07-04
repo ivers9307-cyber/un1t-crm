@@ -22,6 +22,7 @@ export const ROW_SELECT = `
   xero_email_message_id, xero_bill_id, xero_bill_number, xero_deep_link_url,
   xero_synced_at, xero_error,
   xero_bill_status, xero_bill_paid_at, xero_bill_amount_paid, xero_bill_amount_due, xero_bill_status_synced_at,
+  xero_total_tax, xero_tax_mismatch,
   created_at, updated_at,
   location:location_id ( id, name ),
   quality_reviewer:quality_reviewed_by ( id, full_name ),
