@@ -66,13 +66,14 @@ export const XERO_SCOPES = [
   // under the granular scope below. Any scope added to this list MUST
   // be verified against Xero's CURRENT granular catalog first —
   // scopes.test.js pins the two known-retired strings.
-  'accounting.banktransactions.read', // RCOV — GET /BankTransactions (kept for the fallback source)
-  // RCOV upgrade 2026-07-04: coverage pull reads TRUE statement lines
-  // via the Finance API (GET finance.xro/1.0/BankStatementsPlus/
-  // statements) — /BankTransactions can't see unactioned feed lines.
-  // Scope string verified against Xero's own OpenAPI spec
-  // (XeroAPI/Xero-OpenAPI, xero-finance.yaml) before being added.
-  'finance.bankstatementsplus.read',
+  'accounting.banktransactions.read', // RCOV — GET /BankTransactions (coverage pull)
+  // DO NOT add 'finance.*' scopes: the Finance API is ENTITLEMENT-GATED
+  // per app (built for lenders) — a standard app requesting one fails
+  // AUTHORIZE with "invalid_scope / Error code: 500" (hit live
+  // 2026-07-04 with finance.bankstatementsplus.read; reverted same
+  // day). A scope existing in Xero's OpenAPI spec does NOT mean this
+  // app may request it — verify ENTITLEMENT, not just the string.
+  // scopes.test.js pins the gated string alongside the retired ones.
   'offline_access',
 ]
 

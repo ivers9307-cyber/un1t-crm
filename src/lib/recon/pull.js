@@ -6,13 +6,11 @@
 // sync the unreconciled ones into recon_bank_lines, audit in
 // recon_runs. Window = oldest non-terminal tracked line, else 90 days.
 //
-// DATA SOURCE (upgrade 2026-07-04, same-day as the /BankTransactions
-// hotfix): Finance API BankStatementsPlus — true statement lines,
-// including imported feed lines nobody has actioned yet, which
-// /BankTransactions cannot see (Richard: Revolut EUR Main showed 2
-// lines vs more in Xero's reconcile screen). isReconciled is filtered
-// CLIENT-side in statementLineRows to preserve the zero-rows tripwire.
-// See statement-lines.js for the spec-verification provenance.
+// DATA SOURCE (hotfix 2026-07-04): GET /BankTransactions (paginated,
+// status-filtered server-side, IsReconciled filtered CLIENT-side) —
+// see bank-transactions.js for why the Bank Statement report had to
+// go (retired scope broke the authorize step) and what this source
+// cannot see (unactioned statement lines).
 //
 // GUARDS (both review-mandated):
 // - Zero-rows anomaly: an account with tracked non-terminal lines can
@@ -26,16 +24,14 @@
 //   the claim. A wedged claim (insert applied but the call failed
 //   before returning the id) self-heals via the same 15-min sweep.
 import { withFreshToken } from '@/lib/xero/client'
-import { mapStatementLines, statementLineRows } from './statement-lines'
+import { mapBankTransactions, bankTransactionLines } from './bank-transactions'
 import { syncBankLines } from './coverage'
 import { dublinTodayStr, addDaysISO } from '@/lib/dublin-time'
 
 const DEFAULT_WINDOW_DAYS = 90
 const STALE_RUN_MS = 15 * 60 * 1000
 const NON_TERMINAL = ['uncovered', 'submitted', 'not_found', 'needs_attention']
-// Finance API lives on its own base path (not api.xro/2.0) — xfetch
-// passes absolute URLs through untouched.
-const FINANCE_STATEMENTS_URL = 'https://api.xero.com/finance.xro/1.0/BankStatementsPlus/statements'
+const MAX_TXN_PAGES = 20 // × 100/page — far beyond expected weekly volume
 
 async function claimRun(db, locationId, trigger) {
   const { error: sweepErr } = await db
@@ -113,16 +109,29 @@ export async function runCoveragePull(db, locationId, { trigger, acceptMassCover
     const accounts = (accountsRes?.Accounts || []).filter((a) => a.Status === 'ACTIVE')
 
     for (const acct of accounts) {
-      // One statement-lines fetch per account. SummaryOnly=false is
-      // required — the summary shape omits statementLines entirely.
-      // No page param exists on this endpoint; the response covers the
-      // whole FromDate..ToDate window (bounded at 90 days above).
-      // isReconciled rows are deliberately kept in the fetch (header:
-      // the zero-rows tripwire needs reconciled rows present).
-      const res = await xfetch(
-        `${FINANCE_STATEMENTS_URL}?BankAccountID=${acct.AccountID}&FromDate=${windowFrom}&ToDate=${windowTo}&SummaryOnly=false`
+      // Paginated /BankTransactions fetch: Xero pages at 100. Filters
+      // pushed server-side: account, window, AUTHORISED. IsReconciled
+      // is deliberately filtered CLIENT-side (header: the zero-rows
+      // tripwire needs reconciled rows in the fetch).
+      const [fy, fm, fd] = windowFrom.split('-').map(Number)
+      const [ty, tm, td] = windowTo.split('-').map(Number)
+      const where = encodeURIComponent(
+        `BankAccount.AccountID==Guid("${acct.AccountID}") AND Status=="AUTHORISED" AND Date>=DateTime(${fy},${fm},${fd}) AND Date<=DateTime(${ty},${tm},${td})`
       )
-      const rows = mapStatementLines(res)
+      const rows = []
+      for (let page = 1; page <= MAX_TXN_PAGES; page += 1) {
+        const res = await xfetch(`/BankTransactions?where=${where}&order=Date&page=${page}`)
+        rows.push(...mapBankTransactions(res))
+        // Break on a short RAW page (the mapper drops rows, so its
+        // output length can't be the pagination signal).
+        const rawCount = Array.isArray(res?.BankTransactions) ? res.BankTransactions.length : 0
+        if (rawCount < 100) break
+        if (page === MAX_TXN_PAGES) {
+          // Loud, not silent: a 2,000-txn window is beyond any expected
+          // volume — if this fires, widen MAX_TXN_PAGES deliberately.
+          console.error(`[recon pull] ${acct.AccountID}: hit MAX_TXN_PAGES — window truncated`)
+        }
+      }
       // Zero-rows anomaly guard. The && ordering is load-bearing: the
       // cheap rows-length check short-circuits BEFORE hasTrackedLines,
       // so the extra DB read (and its positional test mock) only
@@ -135,7 +144,7 @@ export async function runCoveragePull(db, locationId, { trigger, acceptMassCover
         })
         continue
       }
-      const lines = statementLineRows(rows)
+      const lines = bankTransactionLines(rows)
       const stats = await syncBankLines(db, {
         locationId,
         bankAccountId: acct.AccountID,
