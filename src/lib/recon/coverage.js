@@ -15,7 +15,10 @@
 // anomaly guard (first — a fully-empty parse never reaches this
 // function), and the covered-ratio circuit-breaker before step 4
 // (second — a PARTIAL parse that slips past the zero-rows guard
-// throws here instead of mass-covering).
+// throws here instead of mass-covering). The breaker has one documented
+// bypass: `acceptMassCover` — the manual refresh route's `force` flag,
+// for a legitimate bulk reconcile in Xero that would otherwise re-trip
+// the breaker on every retry until the tracked ratio dilutes below 50%.
 //
 // CONCURRENCY — the four calls are non-transactional and step 4 is a
 // one-way ratchet: a transiently-wrong cover from a stale concurrent
@@ -54,6 +57,7 @@ async function selectExistingInWindow(db, { locationId, bankAccountId, windowFro
 
 export async function syncBankLines(db, {
   locationId, bankAccountId, bankAccountName, windowFrom, windowTo, lines,
+  acceptMassCover,
 }) {
   // 1. what we already track (non-terminal) in this window
   const existing = await selectExistingInWindow(db, { locationId, bankAccountId, windowFrom, windowTo })
@@ -107,7 +111,11 @@ export async function syncBankLines(db, {
   // ratchet; steps 1–3 having already run is fine (idempotent — the
   // next good pull heals). The ≥10 floor keeps small accounts, where a
   // full batch-reconcile is plausible, from tripping it.
-  if (existing.length >= 10 && vanished.length > existing.length * 0.5) {
+  //
+  // acceptMassCover bypasses the breaker for a deliberate bulk reconcile
+  // (the manual refresh route's `force` flag) — see COMPLETENESS
+  // CONTRACT above.
+  if (!acceptMassCover && existing.length >= 10 && vanished.length > existing.length * 0.5) {
     throw new Error(`recon cover-guard tripped: ${vanished.length} of ${existing.length} tracked lines vanished in one pull — possible partial report; cover skipped`)
   }
   for (let i = 0; i < vanished.length; i += CHUNK) {

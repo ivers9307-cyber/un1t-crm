@@ -211,6 +211,39 @@ describe('syncBankLines', () => {
     expect(covered.update).not.toHaveBeenCalled()
   })
 
+  it('bypasses the covered-ratio circuit-breaker when acceptMassCover is set (the force escape hatch)', async () => {
+    // Same shape as the trip test above (20 tracked, only 3 re-seen —
+    // 17 would vanish, well past the >50%-of-≥10 threshold), but this
+    // time acceptMassCover:true is set — the documented escape hatch
+    // for a legitimate bulk reconcile in Xero. The breaker must not
+    // throw, and the cover chain (step 4) must actually run and cover
+    // every vanished line.
+    const rows = Array.from({ length: 20 }, (_, i) => (
+      { id: `row-${i}`, xero_line_key: `key-${i}`, status: 'uncovered' }
+    ))
+    const existing = chainable({ data: rows, error: null }, 'range')
+    const refreshed = chainable({ data: null, error: null }, 'in')
+    const covered = chainable({ data: null, error: null }, 'in')
+    mockDb.from
+      .mockReturnValueOnce(existing)  // 1. select existing in window
+      .mockReturnValueOnce(refreshed) // 3. refresh for the 3 re-seen keys (no new keys → no insert call)
+      .mockReturnValue(covered)       // 4. the cover update — must actually run this time
+
+    // Only 3 of the 20 tracked keys came back — 17 vanish and get covered.
+    const lines = rows.slice(0, 3).map((r) => (
+      { key: r.xero_line_key, date: '2026-06-01', amount: -1, description: 'X', reference: '' }
+    ))
+    const stats = await coverage.syncBankLines(mockDb, {
+      locationId: 'loc-1', bankAccountId: 'acct-1', bankAccountName: 'Current',
+      windowFrom: '2026-04-01', windowTo: '2026-07-04', lines,
+      acceptMassCover: true,
+    })
+
+    expect(stats).toEqual({ pulled: 3, new: 0, covered: 17 })
+    expect(covered.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'covered' }))
+    expect(covered.in).toHaveBeenCalledWith('id', rows.slice(3).map((r) => r.id))
+  })
+
   it('does not trip the breaker below the 10-line floor — small accounts cover normally', async () => {
     // 9 tracked lines all vanishing at once is plausible on a quiet
     // account (a batch reconciled in one sitting); the ≥10 floor keeps

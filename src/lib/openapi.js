@@ -2158,6 +2158,54 @@ registry.registerPath({
 })
 
 // ============================================================================
+// Accounting — receipt coverage board (RCOV.P0)
+// ============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/accounting/coverage',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Coverage board data for the active location',
+  description: 'Filterable list of tracked Xero bank lines plus headline status counts and the most recent pull\'s audit row. Requires the accounting_hub permission.',
+  request: {
+    query: z.object({
+      status: z.string().optional(),
+      limit: z.coerce.number().int().min(1).max(500).optional(),
+    }),
+  },
+  responses: {
+    200: { description: 'Lines + counts + lastRun', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/accounting/coverage/refresh',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Trigger a coverage pull for the active location',
+  description: 'Operator-triggered pull; doubles as the live validation probe for the BankStatement report shape. `force: true` bypasses the covered-ratio circuit-breaker — the documented escape hatch after a legitimate bulk reconcile in Xero. Requires the accounting_hub permission.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ force: z.boolean().optional() }).openapi('CoverageRefreshBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Pull summary', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A pull is already running, Xero reconnect required, or the cover-guard tripped (retry with force)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
 // Customer (champ-app member) self-service
 // ============================================================================
 

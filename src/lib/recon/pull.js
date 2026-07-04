@@ -77,7 +77,7 @@ async function hasTrackedLines(db, locationId, bankAccountId) {
   return !!data
 }
 
-export async function runCoveragePull(db, locationId, { trigger }) {
+export async function runCoveragePull(db, locationId, { trigger, acceptMassCover }) {
   const runId = await claimRun(db, locationId, trigger)
   // Hoisted above the try so the catch's audit can persist whatever
   // per-account progress was made before a mid-pull throw.
@@ -130,6 +130,7 @@ export async function runCoveragePull(db, locationId, { trigger }) {
         windowFrom,
         windowTo,
         lines,
+        acceptMassCover,
       })
       perAccount.push({ bankAccountId: acct.AccountID, bankAccountName: acct.Name, ...stats })
     }
