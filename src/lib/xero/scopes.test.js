@@ -21,4 +21,8 @@ describe('XERO_SCOPES', () => {
   it('requests the granular bank-transactions read scope for the coverage pull', () => {
     expect(XERO_SCOPES).toContain('accounting.banktransactions.read')
   })
+
+  it('requests the Finance API statement-lines scope (verified in xero-finance.yaml)', () => {
+    expect(XERO_SCOPES).toContain('finance.bankstatementsplus.read')
+  })
 })
