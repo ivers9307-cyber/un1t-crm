@@ -69,11 +69,12 @@ describe('resolveDashboardTarget', () => {
   it('returns null when the user has no dashboard or radar permissions', () => {
     const u = user({
       role: 'owner',  // even owners can be stripped of every dashboard.
-      // Radar + engagement keys must be explicitly revoked here — they
-      // default ON for owners, and are landing fallbacks (SIDEBAR-IA.1 / P2-7).
+      // Radar + engagement + ads keys must be explicitly revoked here — they
+      // default ON for owners, and are landing fallbacks (SIDEBAR-IA.1 / P2-7 / ADS-REPORT).
       perms: {
         dashboard_personal: false, dashboard_studio: false, dashboard_business: false,
         churn_radar: false, lead_radar: false, engagement_analytics: false,
+        dashboard_ads: false,
       },
     })
     expect(resolveDashboardTarget(u)).toBe(null)
