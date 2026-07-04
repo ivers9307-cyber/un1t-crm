@@ -1,0 +1,101 @@
+// RCOV.P0 — coverage ledger sync test coverage.
+//
+// The sync makes up to FOUR separate PostgREST calls — never mix row
+// shapes in one bulk call (PostgREST rejects heterogeneous keys with
+// PGRST102: All object keys must match):
+//   1. paginated select of existing non-terminal lines in the window;
+//   2. insert-only upsert of NEW keys (ignoreDuplicates:true — a
+//      terminal covered/ignored row with the same key is never
+//      resurrected);
+//   3. last_seen_at refresh for keys seen again this pull;
+//   4. covered update for tracked keys that vanished from the
+//      unreconciled set.
+// Lock those four call shapes here — a regression (e.g. mixing insert
+// rows with update rows, or forgetting ignoreDuplicates) is a silent
+// PGRST102 or a resurrected terminal row in prod.
+
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+const mockDb = { from: vi.fn() }
+vi.mock('@/lib/supabase', () => ({ createServerClient: () => mockDb }))
+
+let coverage
+
+// Chain whose FINAL method resolves; intermediate steps return this.
+function chainable(finalValue, terminal) {
+  const chain = {}
+  for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'order', 'update', 'upsert', 'range']) {
+    chain[m] = vi.fn().mockReturnThis()
+  }
+  chain[terminal] = vi.fn().mockResolvedValue(finalValue)
+  return chain
+}
+
+beforeEach(async () => {
+  vi.resetModules()
+  mockDb.from.mockReset()
+  coverage = await import('./coverage')
+})
+
+describe('syncBankLines', () => {
+  it('inserts new keys, refreshes seen keys, covers vanished keys', async () => {
+    // existing rows in window: key-a (still unreconciled) + key-gone (reconciled since last week)
+    const existing = chainable({
+      data: [
+        { id: 'row-a', xero_line_key: 'key-a', status: 'uncovered' },
+        { id: 'row-gone', xero_line_key: 'key-gone', status: 'uncovered' },
+      ],
+      error: null,
+    }, 'range')
+    const inserted = chainable({ data: null, error: null }, 'upsert')
+    const refreshed = chainable({ data: null, error: null }, 'in')
+    const covered = chainable({ data: null, error: null }, 'in')
+    mockDb.from
+      .mockReturnValueOnce(existing)   // 1. select existing in window
+      .mockReturnValueOnce(inserted)   // 2. insert-only upsert of new keys
+      .mockReturnValueOnce(refreshed)  // 3. last_seen refresh for seen keys
+      .mockReturnValueOnce(covered)    // 4. vanished → covered
+
+    const stats = await coverage.syncBankLines(mockDb, {
+      locationId: 'loc-1',
+      bankAccountId: 'acct-1',
+      bankAccountName: 'Current',
+      windowFrom: '2026-04-01',
+      windowTo: '2026-07-04',
+      lines: [
+        { key: 'key-a', date: '2026-06-03', amount: -84.5, description: 'MUSCLEFOOD LTD', reference: 'CARD 1234' },
+        { key: 'key-new', date: '2026-07-01', amount: -12, description: 'COFFEE', reference: '' },
+      ],
+    })
+
+    expect(stats).toEqual({ pulled: 2, new: 1, covered: 1 })
+    // 2. only the NEW key is inserted, with status, insert-only semantics
+    expect(inserted.upsert).toHaveBeenCalledTimes(1)
+    const [insertRows, insertOpts] = inserted.upsert.mock.calls[0]
+    expect(insertRows).toHaveLength(1)
+    expect(insertRows[0]).toMatchObject({ xero_line_key: 'key-new', status: 'uncovered' })
+    expect(insertOpts).toEqual({ onConflict: 'location_id,xero_line_key', ignoreDuplicates: true })
+    // 3. seen key gets last_seen refresh, no status in the patch
+    expect(refreshed.update).toHaveBeenCalledTimes(1)
+    expect(refreshed.update.mock.calls[0][0]).not.toHaveProperty('status')
+    expect(refreshed.in).toHaveBeenCalledWith('xero_line_key', ['key-a'])
+    // 4. vanished key covered
+    expect(covered.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'covered' }))
+    expect(covered.in).toHaveBeenCalledWith('id', ['row-gone'])
+  })
+
+  it('excludes terminal statuses from the vanish check at query level', async () => {
+    const existing = chainable({ data: [], error: null }, 'range')
+    mockDb.from.mockReturnValueOnce(existing)
+
+    const stats = await coverage.syncBankLines(mockDb, {
+      locationId: 'loc-1', bankAccountId: 'acct-1', bankAccountName: 'Current',
+      windowFrom: '2026-04-01', windowTo: '2026-07-04', lines: [],
+    })
+    expect(stats).toEqual({ pulled: 0, new: 0, covered: 0 })
+    // covered/ignored must be excluded WHERE it matters — in the select itself
+    expect(existing.in).toHaveBeenCalledWith('status',
+      ['uncovered', 'submitted', 'not_found', 'needs_attention'])
+    expect(mockDb.from).toHaveBeenCalledTimes(1) // nothing to insert/refresh/cover
+  })
+})
