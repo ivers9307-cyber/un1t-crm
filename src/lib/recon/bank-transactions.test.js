@@ -66,8 +66,10 @@ describe('mapBankTransactions', () => {
       reference: 'CARD 1234',
       reconciled: false,
     })
-    expect(rows[1].amount).toBe(250) // RECEIVE → positive
-    expect(rows[1].reconciled).toBe(true)
+    const recv = rows.find((r) => r.id === 'bt-002')
+    expect(recv.amount).toBe(250) // RECEIVE → positive
+    expect(recv.reconciled).toBe(true)
+    expect(rows.find((r) => r.id === 'bt-005').amount).toBe(99) // inbound mapped, excluded later
   })
 
   it('parses the legacy /Date(ms)/ form and falls back to line-item description', () => {
