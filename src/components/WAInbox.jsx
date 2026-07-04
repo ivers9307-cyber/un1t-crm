@@ -10,7 +10,7 @@ import ApprovalActionCard from '@/components/ApprovalActionCard'
 import {
   ArrowLeft, Send, MessageCircle, Clock, CheckCheck,
   Check, Image as ImageIcon, FileText, Mic, AlertCircle, RefreshCw,
-  UserPlus, X, UserCheck, LayoutTemplate
+  UserPlus, X, UserCheck, LayoutTemplate, CalendarPlus
 } from 'lucide-react'
 
 function formatTime(dateStr) {
@@ -119,6 +119,10 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   const [cardSets, setCardSets] = useState(null)
   const [selectedCardSetId, setSelectedCardSetId] = useState('')
   const [sendingCardSet, setSendingCardSet] = useState(false)
+  // FLOW-SEND — drop the location's booking Flow into an open conversation
+  // (availability comes back on the conversation GET).
+  const [flowAvailable, setFlowAvailable] = useState(false)
+  const [sendingFlow, setSendingFlow] = useState(false)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState(null)
   const [templateVars, setTemplateVars] = useState({})
@@ -301,6 +305,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       if (data.success) {
         setConversation(data.conversation)
         setMessages(data.messages)
+        setFlowAvailable(Boolean(data.flow_available))
 
         // Pre-fill add contact form with WA profile name
         if (!data.conversation.contact_id && data.conversation.wa_profile_name) {
@@ -475,6 +480,28 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       alert('Failed to send card set')
     } finally {
       setSendingCardSet(false)
+    }
+  }
+
+  // FLOW-SEND — send the location's booking Flow as an in-session flow
+  // message; the route logs the thread row, so on success just refresh.
+  async function handleSendFlow() {
+    if (!selectedId || sendingFlow) return
+    setSendingFlow(true)
+    try {
+      const res = await fetch(`/api/whatsapp/conversations/${selectedId}/send-flow`, { method: 'POST' })
+      const data = await res.json()
+      if (data.success) {
+        await fetchMessages(selectedId)
+        await fetchApprovals(selectedId)
+        await fetchConversations()
+      } else {
+        alert(data.error || 'Failed to send booking Flow')
+      }
+    } catch {
+      alert('Failed to send booking Flow')
+    } finally {
+      setSendingFlow(false)
     }
   }
 
@@ -894,6 +921,23 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                       >
                         {sendingCardSet ? 'Sending…' : 'Send cards'}
                       </button>
+                    </div>
+                  )}
+                  {/* FLOW-SEND — drop the booking Flow into the chat (hidden when
+                      the location has no Flow configured, or the sender isn't a
+                      contact yet — the Flow books against the linked contact) */}
+                  {flowAvailable && conversation?.contact_id && (
+                    <div className="flex items-center gap-2 mt-2">
+                      <CalendarPlus size={12} className="text-un1t-muted shrink-0" />
+                      <button
+                        type="button"
+                        onClick={handleSendFlow}
+                        disabled={sendingFlow}
+                        className="text-xs bg-green-600 text-white px-3 py-1 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50"
+                      >
+                        {sendingFlow ? 'Sending…' : 'Send booking Flow'}
+                      </button>
+                      <span className="text-[11px] text-un1t-muted">In-chat &ldquo;Book your first visit&rdquo;</span>
                     </div>
                   )}
                 </div>

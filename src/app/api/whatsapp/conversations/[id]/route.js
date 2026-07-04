@@ -49,10 +49,16 @@ export async function GET(request, props) {
     .update({ unread_count: 0 })
     .eq('id', params.id)
 
+  // FLOW-SEND — whether this location has the booking Flow configured, so
+  // the composer can offer "Send booking Flow" (single PK lookup).
+  const { data: loc } = await db.from('locations').select('settings').eq('id', conversation.location_id).single()
+  const flowAvailable = Boolean(loc?.settings?.whatsapp_flow?.flow_id)
+
   return NextResponse.json({
     success: true,
     conversation,
     messages: messages || [],
+    flow_available: flowAvailable,
   })
 }
 
