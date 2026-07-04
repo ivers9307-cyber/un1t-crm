@@ -12,7 +12,11 @@
 //      unreconciled set.
 // Lock those four call shapes here — a regression (e.g. mixing insert
 // rows with update rows, or forgetting ignoreDuplicates) is a silent
-// PGRST102 or a resurrected terminal row in prod.
+// PGRST102 or a resurrected terminal row in prod. Also locked: the
+// window filters on the existing-select (a dropped filter is the
+// mass-cover mechanism), .range() pagination past the 1000-row cap,
+// and .in()/bulk-payload chunking at 300 (house cap, cf.
+// fetchContactsByIds in src/lib/churn-radar-data.js).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -97,5 +101,75 @@ describe('syncBankLines', () => {
     expect(existing.in).toHaveBeenCalledWith('status',
       ['uncovered', 'submitted', 'not_found', 'needs_attention'])
     expect(mockDb.from).toHaveBeenCalledTimes(1) // nothing to insert/refresh/cover
+  })
+
+  it('passes the window to the existing-select date filters', async () => {
+    // A dropped window filter widens the "tracked" set beyond the pull
+    // window → step 4 mass-covers everything outside it. Lock the
+    // filters to the exact passed bounds.
+    const existing = chainable({ data: [], error: null }, 'range')
+    mockDb.from.mockReturnValueOnce(existing)
+
+    await coverage.syncBankLines(mockDb, {
+      locationId: 'loc-1', bankAccountId: 'acct-1', bankAccountName: 'Current',
+      windowFrom: '2026-04-01', windowTo: '2026-07-04', lines: [],
+    })
+    expect(existing.gte).toHaveBeenCalledWith('line_date', '2026-04-01')
+    expect(existing.lte).toHaveBeenCalledWith('line_date', '2026-07-04')
+  })
+
+  it('paginates the existing-select past the 1000-row cap and accumulates all pages', async () => {
+    const page1 = Array.from({ length: 1000 }, (_, i) => (
+      { id: `row-${i}`, xero_line_key: `key-${i}`, status: 'uncovered' }
+    ))
+    const page2 = [{ id: 'row-1000', xero_line_key: 'key-1000', status: 'uncovered' }]
+    // Default resolution = the short second page; the Once below makes
+    // the FIRST .range call return the full page, forcing a second loop.
+    const existing = chainable({ data: page2, error: null }, 'range')
+    existing.range.mockResolvedValueOnce({ data: page1, error: null })
+    const covered = chainable({ data: null, error: null }, 'in')
+    mockDb.from
+      .mockReturnValueOnce(existing) // select page 1
+      .mockReturnValueOnce(existing) // select page 2 (loop re-enters from())
+      .mockReturnValue(covered)      // cover call(s) reuse one chain
+
+    const stats = await coverage.syncBankLines(mockDb, {
+      locationId: 'loc-1', bankAccountId: 'acct-1', bankAccountName: 'Current',
+      windowFrom: '2026-04-01', windowTo: '2026-07-04', lines: [],
+    })
+
+    expect(existing.range).toHaveBeenNthCalledWith(1, 0, 999)
+    expect(existing.range).toHaveBeenNthCalledWith(2, 1000, 1999)
+    // Empty pull → every tracked row vanishes; count proves BOTH pages
+    // were accumulated (1000 + 1), and the cover .in() ids agree.
+    expect(stats).toEqual({ pulled: 0, new: 0, covered: 1001 })
+    const coveredIds = covered.in.mock.calls.flatMap(([, ids]) => ids)
+    expect(coveredIds).toHaveLength(1001)
+  })
+
+  it('chunks the last_seen refresh .in() at 300 keys', async () => {
+    const rows = Array.from({ length: 301 }, (_, i) => (
+      { id: `row-${i}`, xero_line_key: `key-${i}`, status: 'uncovered' }
+    ))
+    const existing = chainable({ data: rows, error: null }, 'range')
+    const refreshed = chainable({ data: null, error: null }, 'in')
+    mockDb.from
+      .mockReturnValueOnce(existing)
+      .mockReturnValue(refreshed) // every refresh chunk reuses this chain
+
+    // All 301 pulled keys are already tracked → nothing new, nothing
+    // vanished; 301 re-seen keys → two refresh chunks (300 + 1).
+    const lines = rows.map((r) => (
+      { key: r.xero_line_key, date: '2026-06-01', amount: -1, description: 'X', reference: '' }
+    ))
+    const stats = await coverage.syncBankLines(mockDb, {
+      locationId: 'loc-1', bankAccountId: 'acct-1', bankAccountName: 'Current',
+      windowFrom: '2026-04-01', windowTo: '2026-07-04', lines,
+    })
+
+    expect(stats).toEqual({ pulled: 301, new: 0, covered: 0 })
+    expect(refreshed.in).toHaveBeenCalledTimes(2)
+    expect(refreshed.in.mock.calls[0][1]).toHaveLength(300)
+    expect(refreshed.in.mock.calls[1][1]).toEqual(['key-300'])
   })
 })
