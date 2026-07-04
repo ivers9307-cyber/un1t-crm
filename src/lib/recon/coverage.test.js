@@ -127,24 +127,32 @@ describe('syncBankLines', () => {
     // the FIRST .range call return the full page, forcing a second loop.
     const existing = chainable({ data: page2, error: null }, 'range')
     existing.range.mockResolvedValueOnce({ data: page1, error: null })
+    const refreshed = chainable({ data: null, error: null }, 'in')
     const covered = chainable({ data: null, error: null }, 'in')
     mockDb.from
-      .mockReturnValueOnce(existing) // select page 1
-      .mockReturnValueOnce(existing) // select page 2 (loop re-enters from())
-      .mockReturnValue(covered)      // cover call(s) reuse one chain
+      .mockReturnValueOnce(existing)  // select page 1
+      .mockReturnValueOnce(existing)  // select page 2 (loop re-enters from())
+      .mockReturnValueOnce(refreshed) // refresh chunk 1 (300 keys)
+      .mockReturnValueOnce(refreshed) // refresh chunk 2 (201 keys)
+      .mockReturnValue(covered)       // cover chunks reuse one chain
 
+    // 501 of the 1001 tracked keys come back (<50% vanish — stays under
+    // the covered-ratio circuit-breaker); the other 500 reconciled away.
+    const lines = Array.from({ length: 501 }, (_, i) => (
+      { key: `key-${i}`, date: '2026-06-01', amount: -1, description: 'X', reference: '' }
+    ))
     const stats = await coverage.syncBankLines(mockDb, {
       locationId: 'loc-1', bankAccountId: 'acct-1', bankAccountName: 'Current',
-      windowFrom: '2026-04-01', windowTo: '2026-07-04', lines: [],
+      windowFrom: '2026-04-01', windowTo: '2026-07-04', lines,
     })
 
     expect(existing.range).toHaveBeenNthCalledWith(1, 0, 999)
     expect(existing.range).toHaveBeenNthCalledWith(2, 1000, 1999)
-    // Empty pull → every tracked row vanishes; count proves BOTH pages
-    // were accumulated (1000 + 1), and the cover .in() ids agree.
-    expect(stats).toEqual({ pulled: 0, new: 0, covered: 1001 })
+    // covered = 500 only if BOTH pages were accumulated: key-1000 lives
+    // on page 2, and a dropped page shrinks the vanish set to 499.
+    expect(stats).toEqual({ pulled: 501, new: 0, covered: 500 })
     const coveredIds = covered.in.mock.calls.flatMap(([, ids]) => ids)
-    expect(coveredIds).toHaveLength(1001)
+    expect(coveredIds).toHaveLength(500)
   })
 
   it('chunks the last_seen refresh .in() at 300 keys', async () => {
@@ -171,5 +179,57 @@ describe('syncBankLines', () => {
     expect(refreshed.in).toHaveBeenCalledTimes(2)
     expect(refreshed.in.mock.calls[0][1]).toHaveLength(300)
     expect(refreshed.in.mock.calls[1][1]).toEqual(['key-300'])
+  })
+
+  it('trips the covered-ratio circuit-breaker instead of mass-covering on a partial pull', async () => {
+    // The orchestrator's zero-rows guard can't catch a PARTIAL parse
+    // (header intact, some sections dropped): rows.length > 0, the
+    // guard passes, and most tracked lines "vanish". Mass-cover is
+    // never a normal weekly delta — the breaker must throw BEFORE the
+    // one-way cover update. Steps 1–3 having already run is fine
+    // (idempotent; the next good pull heals).
+    const rows = Array.from({ length: 20 }, (_, i) => (
+      { id: `row-${i}`, xero_line_key: `key-${i}`, status: 'uncovered' }
+    ))
+    const existing = chainable({ data: rows, error: null }, 'range')
+    const refreshed = chainable({ data: null, error: null }, 'in')
+    const covered = chainable({ data: null, error: null }, 'in')
+    mockDb.from
+      .mockReturnValueOnce(existing)  // 1. select existing in window
+      .mockReturnValueOnce(refreshed) // 3. refresh for the 3 re-seen keys (no new keys → no insert call)
+      .mockReturnValue(covered)       // 4. would be the cover update — must never run
+
+    // Only 3 of the 20 tracked keys came back — 17 (>50%) would vanish.
+    const lines = rows.slice(0, 3).map((r) => (
+      { key: r.xero_line_key, date: '2026-06-01', amount: -1, description: 'X', reference: '' }
+    ))
+    await expect(coverage.syncBankLines(mockDb, {
+      locationId: 'loc-1', bankAccountId: 'acct-1', bankAccountName: 'Current',
+      windowFrom: '2026-04-01', windowTo: '2026-07-04', lines,
+    })).rejects.toThrow(/cover-guard tripped/)
+
+    expect(covered.update).not.toHaveBeenCalled()
+  })
+
+  it('does not trip the breaker below the 10-line floor — small accounts cover normally', async () => {
+    // 9 tracked lines all vanishing at once is plausible on a quiet
+    // account (a batch reconciled in one sitting); the ≥10 floor keeps
+    // the breaker from wedging small accounts.
+    const rows = Array.from({ length: 9 }, (_, i) => (
+      { id: `row-${i}`, xero_line_key: `key-${i}`, status: 'uncovered' }
+    ))
+    const existing = chainable({ data: rows, error: null }, 'range')
+    const covered = chainable({ data: null, error: null }, 'in')
+    mockDb.from
+      .mockReturnValueOnce(existing)
+      .mockReturnValue(covered) // empty pull → straight to the cover update
+
+    const stats = await coverage.syncBankLines(mockDb, {
+      locationId: 'loc-1', bankAccountId: 'acct-1', bankAccountName: 'Current',
+      windowFrom: '2026-04-01', windowTo: '2026-07-04', lines: [],
+    })
+
+    expect(stats).toEqual({ pulled: 0, new: 0, covered: 9 })
+    expect(covered.in).toHaveBeenCalledWith('id', rows.map((r) => r.id))
   })
 })

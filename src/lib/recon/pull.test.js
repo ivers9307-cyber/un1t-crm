@@ -17,8 +17,10 @@
 //      anomaly, and the run finishes 'error' (not thrown — other
 //      accounts still get synced).
 //   5. audit the run: finished_at/status/stats always get written, even
-//      on a thrown failure mid-pull (best-effort — never let a
-//      bookkeeping failure mask the original error).
+//      on a thrown failure mid-pull — and the error audit keeps the
+//      per-account progress made before the throw (accounts synced so
+//      far + failedAfter) so a partial pull is diagnosable (best-effort
+//      — never let a bookkeeping failure mask the original error).
 //
 // Locked here: the ordinal contract is delegated to bank-statement.js
 // (assignOrdinals over the FULL parsed report, filtered after) — this
@@ -28,8 +30,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import fixture from './__fixtures__/bank-statement-report.json'
 
+// No @/lib/supabase mock needed: pull takes `db` as a parameter, and the
+// only transitive supabase importer in its graph (@/lib/xero/client) is
+// fully mocked below — the real supabase module never loads.
 const mockDb = { from: vi.fn() }
-vi.mock('@/lib/supabase', () => ({ createServerClient: () => mockDb }))
 
 const xfetch = vi.fn()
 const withFreshToken = vi.fn(async () => ({ conn: { tenant_id: 't-1' }, xfetch }))
@@ -198,7 +202,7 @@ describe('runCoveragePull', () => {
     expect(mockDb.from).toHaveBeenCalledTimes(2) // sweep + claim only — no run id to audit
   })
 
-  it('audits a mid-pull failure to recon_runs as error, then rethrows the original error', async () => {
+  it('audits an early failure (nothing pulled yet) as error with empty progress, then rethrows', async () => {
     const sweep = chainable({ data: null, error: null }, 'lt')
     const claim = chainable({ data: { id: 'run-1' }, error: null }, 'single')
     const failUpdate = chainable({ data: null, error: null }, 'eq')
@@ -215,7 +219,94 @@ describe('runCoveragePull', () => {
     expect(failUpdate.update).toHaveBeenCalledWith(expect.objectContaining({
       status: 'error',
       error: expect.stringContaining('Xero token expired'),
+      stats: expect.objectContaining({ accounts: [], anomalies: [], failedAfter: 0 }),
     }))
     expect(failUpdate.eq).toHaveBeenCalledWith('id', 'run-1')
+  })
+
+  it('preserves per-account progress in the error audit when the failure throws mid-loop', async () => {
+    // Two ACTIVE accounts; the first syncs fine, the second's sync
+    // throws. The catch-block audit must carry the first account's
+    // stats + failedAfter so the partial pull is diagnosable from
+    // recon_runs alone.
+    const sweep = chainable({ data: null, error: null }, 'lt')
+    const claim = chainable({ data: { id: 'run-1' }, error: null }, 'single')
+    const oldestLine = chainable({ data: null, error: null }, 'maybeSingle')
+    const failUpdate = chainable({ data: null, error: null }, 'eq')
+    mockDb.from
+      .mockReturnValueOnce(sweep)
+      .mockReturnValueOnce(claim)
+      .mockReturnValueOnce(oldestLine)
+      .mockReturnValueOnce(failUpdate) // the catch-block error audit
+
+    xfetch
+      .mockResolvedValueOnce({
+        Accounts: [
+          { AccountID: 'acct-1', Name: 'Current', Status: 'ACTIVE' },
+          { AccountID: 'acct-2', Name: 'Reserve', Status: 'ACTIVE' },
+        ],
+      })
+      .mockResolvedValueOnce(fixture) // acct-1 report — syncs fine
+      .mockResolvedValueOnce(fixture) // acct-2 report — its sync throws below
+    syncBankLines
+      .mockResolvedValueOnce({ pulled: 2, new: 1, covered: 0 })
+      .mockRejectedValueOnce(new Error('recon insert failed: boom'))
+
+    await expect(pull.runCoveragePull(mockDb, 'loc-1', { trigger: 'manual' }))
+      .rejects.toThrow('recon insert failed: boom')
+
+    expect(failUpdate.update).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'error',
+      error: expect.stringContaining('recon insert failed: boom'),
+      stats: expect.objectContaining({
+        failedAfter: 1,
+        accounts: [
+          { bankAccountId: 'acct-1', bankAccountName: 'Current', pulled: 2, new: 1, covered: 0 },
+        ],
+        anomalies: [],
+      }),
+    }))
+    expect(failUpdate.eq).toHaveBeenCalledWith('id', 'run-1')
+  })
+
+  it('syncs the healthy account and flags the anomalous one in the same run (mixed accounts)', async () => {
+    const sweep = chainable({ data: null, error: null }, 'lt')
+    const claim = chainable({ data: { id: 'run-1' }, error: null }, 'single')
+    const oldestLine = chainable({ data: null, error: null }, 'maybeSingle')
+    const hasTracked = chainable({ data: { id: 'x' }, error: null }, 'maybeSingle')
+    const finalUpdate = chainable({ data: null, error: null }, 'eq')
+    mockDb.from
+      .mockReturnValueOnce(sweep)
+      .mockReturnValueOnce(claim)
+      .mockReturnValueOnce(oldestLine)
+      .mockReturnValueOnce(hasTracked)  // only the zero-rows account reaches hasTrackedLines
+      .mockReturnValueOnce(finalUpdate)
+
+    xfetch
+      .mockResolvedValueOnce({
+        Accounts: [
+          { AccountID: 'acct-1', Name: 'Current', Status: 'ACTIVE' },
+          { AccountID: 'acct-2', Name: 'Reserve', Status: 'ACTIVE' },
+        ],
+      })
+      .mockResolvedValueOnce(fixture)         // acct-1 — healthy, syncs normally
+      .mockResolvedValueOnce({ Reports: [] }) // acct-2 — zero rows + tracked lines = anomaly
+
+    const summary = await pull.runCoveragePull(mockDb, 'loc-1', { trigger: 'cron' })
+
+    expect(syncBankLines).toHaveBeenCalledTimes(1)
+    expect(syncBankLines.mock.calls[0][1].bankAccountId).toBe('acct-1')
+    expect(summary.accounts).toEqual([
+      { bankAccountId: 'acct-1', bankAccountName: 'Current', pulled: 2, new: 1, covered: 0 },
+    ])
+    expect(summary.anomalies).toEqual([
+      { bankAccountId: 'acct-2', bankAccountName: 'Reserve', skipped: 'zero_rows_anomaly' },
+    ])
+    // The good account's stats must persist in the audit row even though
+    // the run finishes 'error' for the anomalous one.
+    const updatePayload = finalUpdate.update.mock.calls[0][0]
+    expect(updatePayload.status).toBe('error')
+    expect(updatePayload.error).toMatch(/zero-rows anomaly/)
+    expect(updatePayload.stats.accounts).toEqual(summary.accounts)
   })
 })

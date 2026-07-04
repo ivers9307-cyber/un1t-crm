@@ -11,8 +11,11 @@
 // COMPLETENESS CONTRACT — `lines` MUST be the complete unreconciled
 // set for [windowFrom..windowTo]: step 4 derives `covered` from
 // absence and covered is terminal, so a partial set silently
-// mass-covers. The orchestrator enforces an anomaly guard; this
-// function trusts its input.
+// mass-covers. Two lines of defense: the orchestrator's zero-rows
+// anomaly guard (first — a fully-empty parse never reaches this
+// function), and the covered-ratio circuit-breaker before step 4
+// (second — a PARTIAL parse that slips past the zero-rows guard
+// throws here instead of mass-covering).
 //
 // CONCURRENCY — the four calls are non-transactional and step 4 is a
 // one-way ratchet: a transiently-wrong cover from a stale concurrent
@@ -96,6 +99,17 @@ export async function syncBankLines(db, {
 
   // 4. tracked keys that vanished from the unreconciled set → covered
   const vanished = existing.filter((r) => !pulledKeys.has(r.xero_line_key)).map((r) => r.id)
+  // Covered-ratio circuit-breaker (see COMPLETENESS CONTRACT above):
+  // a PARTIAL report parse (header intact, some sections dropped) gets
+  // past the orchestrator's zero-rows guard — rows.length > 0 — and
+  // would mass-cover here. >50% of ≥10 tracked lines vanishing in one
+  // pull is never a normal weekly delta. Throw before the one-way cover
+  // ratchet; steps 1–3 having already run is fine (idempotent — the
+  // next good pull heals). The ≥10 floor keeps small accounts, where a
+  // full batch-reconcile is plausible, from tripping it.
+  if (existing.length >= 10 && vanished.length > existing.length * 0.5) {
+    throw new Error(`recon cover-guard tripped: ${vanished.length} of ${existing.length} tracked lines vanished in one pull — possible partial report; cover skipped`)
+  }
   for (let i = 0; i < vanished.length; i += CHUNK) {
     const { error } = await db
       .from('recon_bank_lines')

@@ -13,7 +13,8 @@
 //   mass-cover. Skip the account, record the anomaly, run → 'error'.
 // - Atomic claim: sweep stale 'running' rows (crashed runs), then
 //   insert-first; a 23505 unique violation means another run holds
-//   the claim.
+//   the claim. A wedged claim (insert applied but the call failed
+//   before returning the id) self-heals via the same 15-min sweep.
 import { withFreshToken } from '@/lib/xero/client'
 import { parseBankStatementReport, assignOrdinals, computeLineKey } from './bank-statement'
 import { syncBankLines } from './coverage'
@@ -78,25 +79,34 @@ async function hasTrackedLines(db, locationId, bankAccountId) {
 
 export async function runCoveragePull(db, locationId, { trigger }) {
   const runId = await claimRun(db, locationId, trigger)
+  // Hoisted above the try so the catch's audit can persist whatever
+  // per-account progress was made before a mid-pull throw.
+  const perAccount = []
+  const anomalies = []
   try {
     const { xfetch } = await withFreshToken(locationId)
     const windowFrom = await windowFromFor(db, locationId)
+    // NOTE: correctness assumes Xero's toDate is INCLUSIVE and the org
+    // timezone is Dublin (dublinTodayStr) — if a non-Dublin org ever
+    // connects, its same-day lines could fall outside "today" and drop.
     const windowTo = dublinTodayStr()
 
     const accountsRes = await xfetch('/Accounts?where=' + encodeURIComponent('Type=="BANK"'))
     const accounts = (accountsRes?.Accounts || []).filter((a) => a.Status === 'ACTIVE')
 
-    const perAccount = []
-    const anomalies = []
     for (const acct of accounts) {
       const report = await xfetch(
-        `/Reports/BankStatement?bankAccountID=${acct.AccountID}&fromDate=${windowFrom}&toDate=${windowTo}`
+        `/Reports/BankStatement?bankAccountID=${encodeURIComponent(acct.AccountID)}&fromDate=${encodeURIComponent(windowFrom)}&toDate=${encodeURIComponent(windowTo)}`
       )
       // C2 contract: ordinals are assigned over the FULL parsed report
       // (reconciled lines included — they stay in the report), THEN we
       // filter. Filtering first would renumber a surviving duplicate
       // when its identical sibling reconciles, changing its key.
       const rows = assignOrdinals(parseBankStatementReport(report))
+      // Zero-rows anomaly guard. The && ordering is load-bearing: the
+      // cheap rows-length check short-circuits BEFORE hasTrackedLines,
+      // so the extra DB read (and its positional test mock) only
+      // happens for a zero-rows report.
       if (rows.length === 0 && (await hasTrackedLines(db, locationId, acct.AccountID))) {
         anomalies.push({
           bankAccountId: acct.AccountID,
@@ -139,7 +149,14 @@ export async function runCoveragePull(db, locationId, { trigger }) {
     try {
       await db
         .from('recon_runs')
-        .update({ finished_at: new Date().toISOString(), status: 'error', error: String(e?.message || e) })
+        .update({
+          finished_at: new Date().toISOString(),
+          status: 'error',
+          error: String(e?.message || e),
+          // Keep whatever progress was made before the throw — accounts
+          // already synced stay diagnosable from the audit row alone.
+          stats: { runId, locationId, accounts: perAccount, anomalies, failedAfter: perAccount.length },
+        })
         .eq('id', runId)
     } catch {
       // never mask the original failure with a bookkeeping failure
