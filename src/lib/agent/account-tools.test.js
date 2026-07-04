@@ -149,11 +149,11 @@ describe('formatRecentAttendance (rollup columns)', () => {
 })
 
 describe('tool registry', () => {
-  it('exposes all six tools (4 read + 2 request)', () => {
+  it('exposes all seven tools (4 read + 3 request)', () => {
     expect([...ACCOUNT_TOOL_NAMES].sort()).toEqual(
       [
         'get_my_membership', 'get_my_next_class', 'get_my_recent_attendance',
-        'request_cancellation', 'request_pause', 'verify_identity',
+        'request_cancellation', 'request_membership_purchase', 'request_pause', 'verify_identity',
       ].sort()
     )
   })
@@ -192,5 +192,21 @@ describe('Phase 2 tool registry', () => {
   it('exposes request_pause + request_cancellation', () => {
     expect(ACCOUNT_TOOL_NAMES.has('request_pause')).toBe(true)
     expect(ACCOUNT_TOOL_NAMES.has('request_cancellation')).toBe(true)
+  })
+})
+
+// request_membership_purchase — the "yes to the offer" capture path.
+import { buildMembershipPurchaseDetails } from './account-tools'
+
+describe('buildMembershipPurchaseDetails', () => {
+  it('keeps the offer and note, trimmed', () => {
+    expect(buildMembershipPurchaseDetails({ offer: '  Kickstarter — first month €99 ', note: 'wants to start Monday' }))
+      .toEqual({ offer: 'Kickstarter — first month €99', note: 'wants to start Monday' })
+  })
+  it('nulls empties and caps length', () => {
+    const d = buildMembershipPurchaseDetails({ offer: 'x'.repeat(500), note: '' })
+    expect(d.offer.length).toBe(300)
+    expect(d.note).toBeNull()
+    expect(buildMembershipPurchaseDetails({})).toEqual({ offer: null, note: null })
   })
 })

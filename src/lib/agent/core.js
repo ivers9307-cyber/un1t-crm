@@ -135,6 +135,38 @@ export function manualTakeoverPatch(existingHandoffAt, now = new Date()) {
   }
 }
 
+// AGENT-BOTLOOP.1 — recognise a business auto-responder so Mia doesn't
+// introduce herself to an answering machine (live cases 2026-06-29: Zen
+// Movement's "we may be teaching…" and PD Aesthetic's "Welcome to…" both
+// replied within seconds of our template and got a warm Mia intro back).
+// Deliberately conservative: needs TWO independent signals (or one
+// explicit "automated message/reply" marker) plus some length, so a real
+// person writing "thanks for your message!" is never silenced.
+const AUTO_REPLY_EXPLICIT = /\bauto[- ]?(?:reply|response|responder)\b|\bautomated (?:message|response|reply)\b/i
+const AUTO_REPLY_SIGNALS = [
+  /\bthank(?:s| you) for (?:contacting|your message|reaching out|getting in touch)\b/i,
+  /\bwe(?:'|’)?(?:ll| will) (?:get back to you|be in touch|respond|reply)\b/i,
+  /\bI(?:'|’)?ll get back to you\b/i,
+  /\bas soon as (?:we|I) can\b|\bas soon as possible\b/i,
+  /\bwelcome to\b[^.\n]{0,60}(?:clinic|studio|salon|gym|spa|centre|center)\b/i,
+  /\bunable to (?:answer|respond|take your)\b|\bmay be (?:teaching|with a client|closed)\b/i,
+  /\bbook(?:ings?)? (?:can be made|directly|online)\b[^.\n]{0,60}\blinks?\b/i,
+  /\bout of (?:the )?office\b|\bcurrently closed\b|\bopening hours\b/i,
+]
+
+/** Does this inbound text read like a business auto-responder? Pure. */
+export function isLikelyBusinessAutoReply(body) {
+  const text = String(body || '').trim()
+  if (text.length < 60) return false
+  if (AUTO_REPLY_EXPLICIT.test(text)) return true
+  let hits = 0
+  for (const re of AUTO_REPLY_SIGNALS) {
+    if (re.test(text)) hits++
+    if (hits >= 2) return true
+  }
+  return false
+}
+
 export function shouldAgentReply({ settings, conversation, message, senderPhone, now = new Date() }) {
   const s = settings || {}
   const enabled = !!s.enabled
@@ -180,6 +212,14 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
     return { reply: false, reason: 'unsupported_type', onDuty: true }
   }
   if (!String(message?.body || '').trim()) return { reply: false, reason: 'empty', onDuty: true }
+
+  // AGENT-BOTLOOP.1 — a business auto-responder answered our outreach.
+  // Stay silent (no reply, no soft handoff): replying re-triggers THEIR
+  // bot, and there is no human on the other end to hand off to yet. A
+  // real human's follow-up text won't match and re-engages normally.
+  if (type === 'text' && isLikelyBusinessAutoReply(message?.body)) {
+    return { reply: false, reason: 'auto_reply' }
+  }
 
   const ok = { reply: true, reason: 'ok' }
   if (rearm) ok.rearm = true

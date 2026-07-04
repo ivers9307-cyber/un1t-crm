@@ -104,6 +104,24 @@ export const ACCOUNT_TOOLS = [
       },
     },
   },
+  {
+    name: 'request_membership_purchase',
+    description:
+      'Log that this customer wants to BUY or START a membership / accept a membership offer ' +
+      '(e.g. they replied "yes" to a studio offer message, or asked to join). No verification ' +
+      'needed — this queues the request for the team, who set up the membership and billing ' +
+      'and confirm with the customer. Capture which offer or plan they mean (quote the studio ' +
+      "message they're replying to if that's what named it). Tell the customer the team will " +
+      'set it up and confirm shortly — never say it is done, and never quote a price that ' +
+      "isn't in KNOWLEDGE or the offer message.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        offer: { type: 'string', description: 'The offer or plan they accepted, as named in the studio message or by the customer (e.g. "Kickstarter — first month €99").' },
+        note: { type: 'string', description: 'Anything else useful for the team, in the customer\'s words.' },
+      },
+    },
+  },
 ]
 
 export const ACCOUNT_TOOL_NAMES = new Set(ACCOUNT_TOOLS.map(t => t.name))
@@ -271,6 +289,14 @@ export function buildCancellationDetails(input = {}) {
   }
 }
 
+/** Build the details jsonb for a membership-purchase request. Pure. */
+export function buildMembershipPurchaseDetails(input = {}) {
+  return {
+    offer: cleanText(input.offer, 300),
+    note: cleanText(input.note),
+  }
+}
+
 // ── executor (IO) ───────────────────────────────────────────────────
 // ctx: { db, conversationId, conversationsTable, contactId, verifiedContactId, locationId }
 export async function executeAccountTool(toolName, input, ctx) {
@@ -312,6 +338,33 @@ export async function executeAccountTool(toolName, input, ctx) {
       agent_verified_at: new Date().toISOString(),
     }).eq('id', conversationId)
     return { verified: true }
+  }
+
+  // Deliberately unverified — a lead accepting a sales offer has no account
+  // to protect yet, and demanding the email+surname quiz mid-"yes" kills the
+  // sale. The team verifies who they are when they action the request.
+  if (toolName === 'request_membership_purchase') {
+    const targetContactId = verifiedContactId || contactId || null
+    if (!targetContactId) {
+      return { error: 'no_contact', message: 'No contact linked to this conversation — hand off to the team instead.' }
+    }
+    const details = buildMembershipPurchaseDetails(input)
+    const { error } = await db.from('agent_membership_requests').insert({
+      location_id: locationId,
+      contact_id: targetContactId,
+      kind: 'membership_purchase',
+      channel: ctx.channel || null,
+      conversation_id: conversationId || null,
+      details,
+      customer_note: details.note || details.offer || null,
+      status: 'pending',
+    })
+    if (error) return { error: 'queue_failed', message: error.message }
+    return {
+      requested: true,
+      kind: 'membership_purchase',
+      message: 'Queued for the team — tell the customer they will set it up and confirm shortly. Never say it is done.',
+    }
   }
 
   const verifiedId = verifiedContactId

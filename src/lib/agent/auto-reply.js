@@ -65,7 +65,16 @@ const CACHED_ACCOUNT_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
 // per minute is enough.
 const SOFT_NOTIFY_GAP_MS = 60_000
 const MAX_HISTORY = 20
-export const MAX_TOOL_ITERATIONS = 4
+// 6, not 4: a real booking turn can legitimately chain verify → list →
+// book → re-list (slot taken) and still owe the customer a text reply;
+// at 4 the turn ran dry mid-flow and fell through to a handoff.
+export const MAX_TOOL_ITERATIONS = 6
+// After a reply, one bounded re-run picks up inbound messages that arrived
+// while the turn was in flight (the concurrency claim makes the second
+// webhook bail with in_flight — without this, that message is never
+// answered; a live customer tapped "Different time" 4s after "Yes — book
+// me in" and got silence, 2026-06-14).
+const MAX_MISSED_INBOUND_RERUNS = 2
 
 // A claim older than this is treated as stale (e.g. a crashed turn) and
 // reclaimable, so a single failed run can't wedge a thread forever.
@@ -141,7 +150,25 @@ async function countAgentReplies(db, adapter, { field, value, sinceIso }) {
  * @param {object} ctx
  */
 export async function runChannelAgent(db, adapter, ctx) {
-  const result = await runChannelAgentInner(db, adapter, ctx)
+  let result = await runChannelAgentInner(db, adapter, ctx)
+
+  // Missed-inbound sweep: if the customer sent more while we were composing
+  // (their webhook lost the concurrency claim and bailed), run another turn
+  // so that message gets answered. Bounded; each re-run reads fresh history.
+  let reruns = 0
+  while (
+    reruns < MAX_MISSED_INBOUND_RERUNS &&
+    result?.handled === true && result.action === 'reply' && result.lastInboundSeenIso
+  ) {
+    const missed = await hasInboundAfter(db, adapter, ctx?.conversationId, result.lastInboundSeenIso)
+    if (!missed) break
+    reruns++
+    console.warn('[radar-agent] missed-inbound rerun', JSON.stringify({
+      channel: adapter.name, conversationId: ctx?.conversationId || null, rerun: reruns,
+    }))
+    result = await runChannelAgentInner(db, adapter, ctx)
+  }
+
   if (result?.handled === false) {
     console.warn('[radar-agent] no-reply', JSON.stringify({
       channel: adapter.name,
@@ -150,6 +177,18 @@ export async function runChannelAgent(db, adapter, ctx) {
     }))
   }
   return result
+}
+
+// Any inbound row newer than the last one the just-finished turn saw?
+async function hasInboundAfter(db, adapter, conversationId, sinceIso) {
+  if (!conversationId || !sinceIso) return false
+  const { data } = await db.from(adapter.messagesTable)
+    .select('id')
+    .eq('conversation_id', conversationId)
+    .eq('direction', 'inbound')
+    .gt('created_at', sinceIso)
+    .limit(1)
+  return Array.isArray(data) && data.length > 0
 }
 
 async function runChannelAgentInner(db, adapter, ctx) {
@@ -290,6 +329,9 @@ async function runChannelAgentInner(db, adapter, ctx) {
       .order('created_at', { ascending: false })
       .limit(MAX_HISTORY * 2)
     const history = (historyDesc || []).slice().reverse()
+    // Newest inbound this turn will have seen — the wrapper's missed-inbound
+    // sweep compares against it after the reply goes out.
+    const lastInboundSeenIso = (historyDesc || []).find((m) => m.direction === 'inbound')?.created_at || null
 
     // CACHE.2 — content blocks with a cache breakpoint on the location-stable
     // prefix (base prompt + knowledge). Caches cumulatively after the tool
@@ -434,7 +476,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
 
     const sent = await sendAndLog(db, adapter, { ...common, text: parsed.text, options: parsed.options, settings })
     if (!sent) return { handled: false, reason: 'send_failed' }
-    return { handled: true, action: 'reply' }
+    return { handled: true, action: 'reply', lastInboundSeenIso }
   } finally {
     await releaseAgentTurn(db, adapter, conversationId)
   }
