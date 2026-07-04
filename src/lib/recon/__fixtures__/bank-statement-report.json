@@ -1,0 +1,39 @@
+{
+  "Reports": [
+    {
+      "ReportID": "BankStatement",
+      "ReportName": "Bank Statement",
+      "ReportDate": "27 June 2026",
+      "Rows": [
+        {
+          "RowType": "Header",
+          "Cells": [
+            { "Value": "Date" }, { "Value": "Description" }, { "Value": "Reference" },
+            { "Value": "Reconciled" }, { "Value": "Source" }, { "Value": "Amount" }, { "Value": "Balance" }
+          ]
+        },
+        {
+          "RowType": "Section",
+          "Title": "",
+          "Rows": [
+            { "RowType": "Row", "Cells": [
+              { "Value": "2026-06-02T00:00:00" }, { "Value": "Opening Balance" }, { "Value": "" },
+              { "Value": "" }, { "Value": "" }, { "Value": "" }, { "Value": "1250.00" } ] },
+            { "RowType": "Row", "Cells": [
+              { "Value": "2026-06-03T00:00:00" }, { "Value": "MUSCLEFOOD LTD" }, { "Value": "CARD 1234" },
+              { "Value": "No" }, { "Value": "Import" }, { "Value": "-84.50" }, { "Value": "1165.50" } ] },
+            { "RowType": "Row", "Cells": [
+              { "Value": "2026-06-05T00:00:00" }, { "Value": "ELECTRIC IRELAND" }, { "Value": "DD 8871" },
+              { "Value": "Yes" }, { "Value": "Import" }, { "Value": "-230.00" }, { "Value": "935.50" } ] },
+            { "RowType": "Row", "Cells": [
+              { "Value": "2026-06-03T00:00:00" }, { "Value": "MUSCLEFOOD LTD" }, { "Value": "CARD 1234" },
+              { "Value": "No" }, { "Value": "Import" }, { "Value": "-84.50" }, { "Value": "851.00" } ] },
+            { "RowType": "Row", "Cells": [
+              { "Value": "2026-06-27T00:00:00" }, { "Value": "Closing Balance" }, { "Value": "" },
+              { "Value": "" }, { "Value": "" }, { "Value": "" }, { "Value": "851.00" } ] }
+          ]
+        }
+      ]
+    }
+  ]
+}
