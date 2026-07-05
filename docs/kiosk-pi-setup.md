@@ -84,6 +84,7 @@ sleep 8   # let the compositor + network come up
 while true; do
   "$CHROMIUM" \\
     --kiosk --noerrdialogs --disable-infobars --incognito \\
+    --password-store=basic \\
     --disable-session-crashed-bubble --disable-features=Translate \\
     --check-for-update-interval=31536000 \\
     --autoplay-policy=no-user-gesture-required \\
@@ -130,6 +131,11 @@ keyboard: SSH in and `pgrep -a chromium` should show the kiosk URL.
   page's Wake Lock also keeps it awake once loaded.
 - **"Restore pages" bar after a power cut** → shouldn't happen (incognito), but
   confirm the launcher has `--incognito --disable-session-crashed-bubble`.
+- **"Unlock keyring" prompt on every boot** → gnome-keyring's login keyring
+  can't auto-unlock under desktop autologin (no login password is entered).
+  `--password-store=basic` (in the launcher) makes Chromium skip the keyring —
+  fine here, the kiosk stores no secrets. If a prompt still appears, clear the
+  keyring once: `rm -f ~/.local/share/keyrings/login.keyring` then reboot.
 - **Change the URL later** → edit `~/.local/bin/un1t-kiosk.sh` and reboot.
 
 ## Notes
