@@ -2476,6 +2476,22 @@ registry.registerPath({
   },
 })
 
+// XERO-BILL-VAT.2 — active expense-applicable Xero tax rates for the
+// /invoices VAT-rate picker (from the xero_tax_rates cache).
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/xero/tax-rates',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: "A location's active, expense-applicable Xero tax rates for the VAT-rate picker",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Tax rates', content: { 'application/json': { schema: SuccessResponse(z.object({ taxRates: z.array(z.object({ tax_type: z.string(), name: z.string(), effective_rate: z.number().nullable(), can_apply_to_expenses: z.boolean().nullable() })), lastSyncedAt: z.string().nullable(), stale: z.boolean() })) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — not a member of that location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/accounting/coverage/clear',
