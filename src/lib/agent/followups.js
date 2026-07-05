@@ -393,8 +393,14 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
     if (!settings?.enabled && !settings?.test_mode) continue
 
     const sinceIso = new Date(nowMs - (TEMPLATE_MAX_H + 2) * H_MS).toISOString()
-    const { data: convs } = await db.from('whatsapp_conversations')
-      .select('id, contact_id, location_id, agent_active, agent_handed_off_at, resolved_at, agent_followup_stage, last_message_at, contacts!contact_id(first_name, name, wa_phone, phone, opted_out)')
+    // wa_status is the hard opt-out signal (whatsapp-consent.js) — there is
+    // NO contacts.opted_out column. Selecting one here silently killed every
+    // tick for 3 weeks: PostgREST 400s the embed, supabase-js returns
+    // { data: null, error } without throwing, and the loop saw zero
+    // candidates. Hence the loud error log below — a candidate-query failure
+    // must never read as "nothing to do" again.
+    const { data: convs, error: convsError } = await db.from('whatsapp_conversations')
+      .select('id, contact_id, location_id, agent_active, agent_handed_off_at, resolved_at, agent_followup_stage, last_message_at, contacts!contact_id(first_name, name, wa_phone, phone, wa_status)')
       .eq('location_id', location.id)
       .eq('agent_active', true)
       .is('agent_handed_off_at', null)
@@ -402,12 +408,16 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
       .gte('last_message_at', sinceIso)
       .order('last_message_at', { ascending: false })
       .limit(100)
+    if (convsError) {
+      console.error('[radar-agent] followup candidate query failed:', convsError.message)
+      continue
+    }
 
     for (const c of convs || []) {
       try {
         const contact = c.contacts || {}
         const to = contact.wa_phone || contact.phone
-        if (!to || contact.opted_out === true) { results.skipped++; continue }
+        if (!to || contact.wa_status === 'opted_out') { results.skipped++; continue }
         // Agent in test mode (not globally enabled): allowlist only.
         if (!settings?.enabled && settings?.test_mode &&
             !phoneMatchesAllowlist(to, settings?.test_phones)) {
@@ -519,13 +529,20 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
     if (!settings?.enabled && !settings?.test_mode) continue
 
     const sinceIso = new Date(nowMs - CHECKIN_MAX_AGE_H * H_MS).toISOString()
-    const { data: contacts } = await db.from('contacts')
-      .select('id, first_name, name, wa_phone, phone, pipeline_stage_slug, last_attended_at, first_class_checkin_at, recent_bookings, opted_out')
+    // wa_status, NOT opted_out — same phantom-column trap as the followups
+    // query above; a select error here must be loud, not an empty tick.
+    const { data: contacts, error: contactsError } = await db.from('contacts')
+      .select('id, first_name, name, wa_phone, phone, pipeline_stage_slug, last_attended_at, first_class_checkin_at, recent_bookings, wa_status')
       .eq('location_id', location.id)
       .in('pipeline_stage_slug', ['new_lead', 'first_class', 'second_class', 'trial_done'])
       .gte('last_attended_at', sinceIso)
       .is('first_class_checkin_at', null)
       .limit(50)
+    if (contactsError) {
+      console.error('[radar-agent] checkin candidate query failed:', contactsError.message)
+      bump('candidate_query_failed')
+      continue
+    }
 
     const branding = await getLocationBranding(db, location.id)
 
@@ -541,7 +558,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         if (decision.action !== 'checkin') { bump(decision.reason || 'not_eligible'); results.skipped++; continue }
 
         const to = contact.wa_phone || contact.phone
-        if (!to || contact.opted_out === true) { bump('no_phone_or_opted_out'); results.skipped++; continue }
+        if (!to || contact.wa_status === 'opted_out') { bump('no_phone_or_opted_out'); results.skipped++; continue }
         if (!settings?.enabled && settings?.test_mode &&
             !phoneMatchesAllowlist(to, settings?.test_phones)) {
           bump('test_allowlist'); results.skipped++; continue

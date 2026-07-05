@@ -193,6 +193,8 @@ describe('scenario fixtures stay valid', () => {
   })
 
   it('the production iteration cap is what the runner loops on', () => {
-    expect(MAX_TOOL_ITERATIONS).toBe(4)
+    // 6 since the Mia conversation-review fixes — a booking turn can chain
+    // verify → list → book → re-list and still owe a final text reply.
+    expect(MAX_TOOL_ITERATIONS).toBe(6)
   })
 })

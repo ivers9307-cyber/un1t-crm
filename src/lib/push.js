@@ -134,12 +134,23 @@ async function postExpoBatch(chunk) {
  *     feature-stripped locations (e.g. CCF Autos).
  *   - users with NO assignments (e.g. master) are allowed, as before.
  *
+ * PUSH-LOC.1 — when `opts.locationId` is passed, a user's opt-out is
+ * judged ONLY by their assignment(s) AT THAT LOCATION. The old
+ * any-assignment-false rule silently killed every WhatsApp push to
+ * Richard — owner at three locations (default on) — because he also
+ * holds a `staff` row at SourceIt whose ROLE DEFAULT is
+ * notify_whatsapp:false (live miss: Kevin's reply + the handoff alert,
+ * 2026-07-03). Users with no assignment at the given location (master;
+ * cross-location assignees) keep the conservative all-assignments rule.
+ *
  * @param {object} db        service-role supabase client
  * @param {string[]} ids     profile ids to consider
  * @param {string} [category]  notify_<category> to gate on (omit = master only)
+ * @param {object} [opts]
+ * @param {string} [opts.locationId]  the location this notification belongs to
  * @returns {Promise<Set<string>>} the allowed profile ids
  */
-export async function resolvePushAllowedIds(db, ids, category) {
+export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
   const allowed = new Set()
   if (!ids?.length) return allowed
   const { data: profiles } = await db.from('profiles').select('id, active, employment_type').in('id', ids)
@@ -191,8 +202,15 @@ export async function resolvePushAllowedIds(db, ids, category) {
   for (const id of ids) {
     if (!activeById.get(id)) continue
     const userLinks = linksByUser.get(id) || []
-    if (userLinks.some(l => !resolves(l, 'push_notifications'))) continue
-    if (category && userLinks.some(l => !resolves(l, `notify_${category}`))) continue
+    // PUSH-LOC.1 — the notification's own location decides, when we know it
+    // and the user is assigned there; otherwise every assignment gates.
+    let gateLinks = userLinks
+    if (opts.locationId) {
+      const atLocation = userLinks.filter(l => l.location_id === opts.locationId)
+      if (atLocation.length) gateLinks = atLocation
+    }
+    if (gateLinks.some(l => !resolves(l, 'push_notifications'))) continue
+    if (category && gateLinks.some(l => !resolves(l, `notify_${category}`))) continue
     allowed.add(id)
   }
   return allowed
@@ -215,9 +233,14 @@ export async function resolvePushAllowedIds(db, ids, category) {
  * @param {string} [payload.sound]  'default' (iOS chime) | null. Default 'default'.
  * @param {number} [payload.badge]  Override the iOS app icon badge count.
  *
+ * @param {object} [opts]
+ * @param {string} [opts.locationId]  The location this notification belongs
+ *                                    to — makes the per-category opt-out
+ *                                    per-location (PUSH-LOC.1).
+ *
  * @returns {Promise<{sent:number, skipped:number, invalidated:number, failed:number}>}
  */
-export async function sendPush(userIds, payload) {
+export async function sendPush(userIds, payload, opts = {}) {
   const ids = Array.isArray(userIds) ? userIds : [userIds]
   if (!ids.length) return { sent: 0, skipped: 0, invalidated: 0, failed: 0 }
 
@@ -229,7 +252,7 @@ export async function sendPush(userIds, payload) {
   // immediately be filtered out anyway.
   // Per-category opt-out lives on profile_locations.permissions (mig 058);
   // profiles.permissions is stale and must NOT be read here.
-  const allowedSet = await resolvePushAllowedIds(db, ids, payload.category)
+  const allowedSet = await resolvePushAllowedIds(db, ids, payload.category, { locationId: opts.locationId })
   const allowedIds = ids.filter(id => allowedSet.has(id))
   let skipped = ids.length - allowedIds.length
 
@@ -350,5 +373,8 @@ export async function sendPushToRolesAtLocation(locationId, roles, payload) {
   const db = createServerClient()
   const ids = await resolveRoleRecipientIds(db, locationId, roles)
   if (!ids.length) return { sent: 0, skipped: 0, invalidated: 0, failed: 0 }
-  return sendPush(ids, payload)
+  // PUSH-LOC.1 — this fan-out is location-scoped by definition, so the
+  // per-category opt-out is judged at THIS location, not any other
+  // assignment the recipient happens to hold.
+  return sendPush(ids, payload, { locationId })
 }
