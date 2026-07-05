@@ -96,6 +96,14 @@ export const WEB_PERMISSIONS = Object.freeze([
   // future studio-ops actions (alarm arm/disarm, camera live view,
   // etc.) will land under the same gate.
   { key: 'studio_management', label: 'Studio Management',       hint: 'Remote door unlock + future on-site operations. Requires UniFi Access configured for the location.' },
+  // TAPO-T1.4 — Tapo plug/switch control. Registry, per-device
+  // schedules (fixed windows + class-linked power), and manual
+  // overrides live at /automations/devices. Web-only until the
+  // mobile toggle ships in Tapo Wave T3 (see WEB_ONLY_OK in
+  // scripts/check-mobile-parity.mjs). Owner + manager by default;
+  // head_coach + staff off (on-site operations oversight).
+  { key: 'device_control', label: 'Device control',
+    hint: 'Tapo plugs/switches: schedules, class-linked power, manual toggles.' },
   // STUDIO-GROUP.1 — sidebar regroup (May 2026): the four items
   // below used to be top-level sidebar entries gated to master/
   // owner via role-only checks (no per-user permission). They now
@@ -204,6 +212,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,
+    device_control: true,
     // Studio Management children (STUDIO-GROUP.1) — master has all.
     contracts: true, tv_displays: true, glofox_import: true, preferences_import: true,
     presentations: true,
@@ -231,6 +240,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     events: true, bookings: true, races: true,    // race-day starts/finishes are a front-of-house duty
     email: false, whatsapp: false, sms: false,
     schedule: true, attendance_reports: false, assistant: false, studio_management: false,
+    device_control: false,                         // on-site device control — not a staff surface
     // Studio Management children — all off for staff.
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: false,
@@ -263,6 +273,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     events: true, bookings: true, races: true,       // front desk runs the booking desk
     email: false, whatsapp: true, sms: false,        // WhatsApp inbox is the front-desk channel
     schedule: true, attendance_reports: false, assistant: false, studio_management: false,
+    device_control: false,
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: false,
     orders: false, car_processing: false,
@@ -290,6 +301,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: false,    // head coaches don't see attendance — owner/manager only
     assistant: true, studio_management: false,    // explicit opt-in
+    device_control: false,                         // owner + manager by default; grant per-user
     // Studio Management children — all off for head_coach (explicit opt-in by admin).
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: true,
@@ -317,6 +329,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,
+    device_control: true,                          // managers run on-site device control
     // Studio Management children — manager gets TV displays (marketing
     // surface they handle day-to-day). Contracts + imports stay
     // off — those are owner/master decisions.
@@ -346,6 +359,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true,
+    device_control: true,
     // Studio Management children — owner gets contracts + TV displays
     // by default (mirroring the old role-only gates). Imports stay
     // master-only on first install; owners can opt-in per user.
