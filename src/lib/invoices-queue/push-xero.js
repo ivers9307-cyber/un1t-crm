@@ -153,10 +153,16 @@ async function resolveContactId({ xfetch, db, locationId, contactRef }) {
 /**
  * Decide the Xero TaxType for a single bill line.
  *
- * XERO-BILL-VAT.1 — this used to be omitted entirely, so with
- * LineAmountTypes:'Exclusive' Xero fell back to the *account's*
- * default rate and silently added 23% to a 0%-VAT supplier bill
- * (ROWfit 23967: €156.84 booked as €192.91). We now stamp it:
+ * XERO-BILL-VAT.2 — a bookkeeper-confirmed `fields.tax_type` (derived
+ * from the location's synced Xero rates and confirmed in review) wins
+ * for every line, over both the zero-VAT default and the account
+ * cache. It's a guaranteed-valid code for that location's tenant.
+ *
+ * XERO-BILL-VAT.1 fallback for legacy rows with no confirmed type:
+ * this used to be omitted entirely, so with LineAmountTypes:'Exclusive'
+ * Xero fell back to the *account's* default rate and silently added
+ * 23% to a 0%-VAT supplier bill (ROWfit 23967: €156.84 booked as
+ * €192.91). We now stamp it:
  *   - Source doc has 0% / no VAT (tax_amount === 0) → 'NONE'
  *     (No VAT). A universal, always-valid Xero tax type that books
  *     zero tax regardless of what the account defaults to.
@@ -169,6 +175,11 @@ async function resolveContactId({ xfetch, db, locationId, contactRef }) {
  *     exactly as before. Safe no-op fallback, never an invalid code.
  */
 export function resolveLineTaxType(fields, accountTaxTypes, code) {
+  // XERO-BILL-VAT.2 — a bookkeeper-confirmed tax_type (derived from
+  // the location's synced Xero rates + confirmed in review) wins for
+  // every line.
+  if (typeof fields?.tax_type === 'string' && fields.tax_type) return fields.tax_type
+  // XERO-BILL-VAT.1 fallback for legacy rows with no confirmed type.
   const taxAmount = Number(fields?.tax_amount)
   if (Number.isFinite(taxAmount) && taxAmount === 0) return 'NONE'
   return (code != null ? accountTaxTypes?.[String(code)] : undefined) || undefined

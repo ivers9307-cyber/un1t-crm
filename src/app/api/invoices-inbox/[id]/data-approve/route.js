@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server'
 import { loadInvoiceForUser } from '../../_helpers'
 import { canTransitionInboundInvoice } from '@/lib/inbound-invoices'
 import { pushQueueRowToXero } from '@/lib/invoices-queue/push-xero'
+import { hasResolvedVatRate } from '@/lib/invoices-queue/vat'
 import { recordSupplierDefault } from '@/lib/invoices-queue/supplier-defaults'
 import { XeroError } from '@/lib/xero/client'
 
@@ -43,6 +44,16 @@ export async function POST(_request, { params }) {
     return NextResponse.json({
       success: false,
       error: 'No extracted fields to approve. Run extraction first.',
+    }, { status: 400 })
+  }
+
+  // XERO-BILL-VAT.2 — never send a bill whose VAT rate is undetermined.
+  // A confirmed tax_type is required, EXCEPT a genuine 0%-VAT bill, which
+  // push resolves to 'NONE' deterministically. Same gate as bulk-send.
+  if (!hasResolvedVatRate(row.extracted_fields)) {
+    return NextResponse.json({
+      success: false,
+      error: 'Pick a VAT rate before sending — the bill’s rate couldn’t be auto-determined. Open the bill and choose a VAT rate.',
     }, { status: 400 })
   }
 

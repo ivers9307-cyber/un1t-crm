@@ -153,6 +153,13 @@ describe('resolveLineTaxType', () => {
   it('does not force NONE when tax_amount is absent (unknown ≠ zero)', () => {
     expect(resolveLineTaxType({}, { 400: 'INPUT' }, '400')).toBe('INPUT')
   })
+
+  it('prefers a confirmed fields.tax_type over everything else', () => {
+    // confirmed rate wins even when tax_amount is 0 (would else be NONE)
+    // and even when the account cache would resolve something different
+    expect(resolveLineTaxType({ tax_amount: 0, tax_type: 'ZEROEXP' }, { 400: 'INPUT' }, '400')).toBe('ZEROEXP')
+    expect(resolveLineTaxType({ tax_amount: 23, tax_type: 'RED' }, { 400: 'INPUT' }, '400')).toBe('RED')
+  })
 })
 
 describe('buildBillPayload — TaxType stamping', () => {
