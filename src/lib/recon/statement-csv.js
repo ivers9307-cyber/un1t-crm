@@ -115,13 +115,33 @@ const BALANCE_DESC = /^(opening|closing)\s+balance$/i
 
 // text → { rows, warnings } where rows = FULL normalized set
 // (money-in AND money-out, reconciled AND not), ordinal-assigned.
-// Throws with a header inventory when required columns are missing.
+//
+// Two input shapes are accepted, tried in order:
+//   1. A column-headed export (Xero statement-lines export, or a
+//      bank's own CSV) — mapped by header keyword.
+//   2. Xero's Bank Reconciliation report — no headers, sectioned; we
+//      read its "Unreconciled Statement Lines" section positionally.
+// Throws (naming what it saw) only when NEITHER shape is recognised.
 export function parseStatementCsv(text) {
   const raw = parseCsv(text)
   if (raw.length === 0) throw new Error('The file is empty — export the statement lines from Xero as CSV and try again.')
 
-  // The header row is the first row that maps a date column AND an
-  // amount-ish column — Xero exports sometimes lead with title rows.
+  const byHeader = parseWithHeaders(raw)
+  if (byHeader) return byHeader
+
+  const byReport = parseReconciliationReport(raw)
+  if (byReport) return byReport
+
+  const seen = raw[0].map((h) => String(h).trim()).filter(Boolean).join(', ')
+  throw new Error(
+    `Couldn't find the statement columns — need a Date column plus Amount (or Spent/Received), ` +
+    `or a Xero "Unreconciled Statement Lines" section. Headers found: ${seen || '(none)'}`
+  )
+}
+
+// Shape 1 — column-headed export. Returns { rows, warnings } or null
+// when no header row (date + amount-ish) appears in the first 10 rows.
+function parseWithHeaders(raw) {
   let headerIdx = -1
   let col = null
   for (let i = 0; i < Math.min(raw.length, 10); i += 1) {
@@ -132,12 +152,7 @@ export function parseStatementCsv(text) {
       break
     }
   }
-  if (headerIdx === -1) {
-    const seen = raw[0].map((h) => String(h).trim()).filter(Boolean).join(', ')
-    throw new Error(
-      `Couldn't find the statement columns — need a Date column plus Amount (or Spent/Received). Headers found: ${seen || '(none)'}`
-    )
-  }
+  if (headerIdx === -1) return null
   if (col.description === undefined && col.payee !== undefined) col.description = col.payee
 
   const rows = []
@@ -178,6 +193,56 @@ export function parseStatementCsv(text) {
       reconciled: status === 'reconciled',
     })
   }
+  return { rows: assignOrdinals(rows), warnings }
+}
+
+const UNREC_MARKER = /unreconciled statement lines/i
+
+// Shape 2 — Xero's Bank Reconciliation report. No column headers; a
+// sectioned layout. We parse ONLY the "Unreconciled Statement Lines"
+// section — those are bank-feed lines Xero hasn't reconciled yet (the
+// receipt backlog). Other sections (un-presented payments/receipts)
+// are Xero-side transactions the API pull already sees, so we skip
+// them. Columns are positional: Date, Payee, Description, Amount;
+// money-out is parenthesised (→ negative). Returns { rows, warnings }
+// or null when the report has no such section.
+function parseReconciliationReport(raw) {
+  if (!raw.some((r) => UNREC_MARKER.test(String(r[0] ?? '')))) return null
+
+  const rows = []
+  const warnings = []
+  let inSection = false
+  for (const cells of raw) {
+    const first = String(cells[0] ?? '').replace(/\s+/g, ' ').trim()
+    const firstLc = first.toLowerCase()
+    if (UNREC_MARKER.test(firstLc)) {
+      // "Plus Unreconciled Statement Lines" opens the section;
+      // "Total Unreconciled Statement Lines" closes it.
+      inSection = !firstLc.startsWith('total')
+      continue
+    }
+    // Any other subtotal / the Statement Balances block ends the section.
+    if (firstLc.startsWith('total') || firstLc.startsWith('statement balance')) {
+      inSection = false
+      continue
+    }
+    if (!inSection) continue
+
+    const date = parseDateCell(first)
+    if (!date) {
+      if (cells.some((f) => String(f).trim() !== '')) warnings.push(`Skipped a row with an unparseable date: "${first}"`)
+      continue
+    }
+    // Amount = the rightmost non-empty cell (the report's last column).
+    const amtCell = [...cells].reverse().find((c) => String(c).trim() !== '')
+    const amount = parseAmountCell(amtCell)
+    if (amount === null || amount === 0) continue
+
+    const payee = String(cells[1] ?? '').replace(/\s+/g, ' ').trim()
+    const desc = String(cells[2] ?? '').replace(/\s+/g, ' ').trim()
+    rows.push({ date, amount, description: desc || payee, reference: '', reconciled: false })
+  }
+  if (rows.length === 0) return null
   return { rows: assignOrdinals(rows), warnings }
 }
 

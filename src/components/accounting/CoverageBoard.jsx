@@ -179,8 +179,9 @@ function ImportStatementPanel({ onDone, onClose }) {
           <div>
             <div className="text-sm font-medium text-un1t-text">Import statement CSV</div>
             <div className="text-xs text-un1t-subtle">
-              For feed lines Xero hasn&apos;t actioned yet (invisible to the API pull). In Xero: Accounting → Bank accounts →
-              open the account → Bank Statements → export the statement lines as CSV, then upload it here.
+              For feed lines Xero hasn&apos;t reconciled yet (invisible to the API pull). In Xero: Accounting → Reports →
+              Bank Reconciliation → pick this account → Export → CSV, then upload it here. (A plain Bank Statement CSV
+              export works too.) Only money-out lines are tracked; income and transfers are ignored.
             </div>
           </div>
           <button type="button" className={actionBtn} onClick={onClose}>Close</button>
