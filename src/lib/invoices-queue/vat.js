@@ -17,7 +17,7 @@ function billNet(fields) {
   if (Number.isFinite(subtotal) && subtotal > 0) return subtotal
   if (Array.isArray(fields?.line_items) && fields.line_items.length) {
     const sum = fields.line_items.reduce(
-      (s, li) => s + (Number(li?.unit_amount) || 0) * (Number(li?.quantity) ?? 1), 0)
+      (s, li) => s + (Number(li?.unit_amount) || 0) * Number(li?.quantity ?? 1), 0)
     if (sum > 0) return sum
   }
   const total = Number(fields?.total)
@@ -27,6 +27,11 @@ function billNet(fields) {
 }
 
 const activeExpense = (r) => r?.status === 'ACTIVE' && r?.can_apply_to_expenses === true
+// Xero's effective rate for a cached row, as a number (NaN if absent) — a
+// rate with no numeric effective_rate can't be matched or treated as 0%.
+// NB: Number(null) is 0, so null/undefined must map to NaN explicitly, or a
+// rate Xero never gave a value would be wrongly treated as a 0% rate.
+const rateOf = (r) => (r?.effective_rate == null ? NaN : Number(r.effective_rate))
 
 /**
  * @param {object} fields  extracted_fields (subtotal, tax_amount, total, line_items)
@@ -40,7 +45,7 @@ export function resolveBillTaxType(fields, taxRates) {
   // Zero VAT → NONE default; offer the location's 0%-effective expense
   // rates (No VAT / Zero Rated / Exempt) as override candidates.
   if (Number.isFinite(taxAmount) && Math.abs(taxAmount) < ZERO_EPS) {
-    const zeroCandidates = rates.filter((r) => activeExpense(r) && Math.abs(Number(r.effective_rate) || 0) < ZERO_EPS)
+    const zeroCandidates = rates.filter((r) => activeExpense(r) && Number.isFinite(rateOf(r)) && Math.abs(rateOf(r)) < ZERO_EPS)
     return { taxType: 'NONE', derivedRate: 0, status: 'zero', candidates: zeroCandidates }
   }
 
@@ -52,9 +57,22 @@ export function resolveBillTaxType(fields, taxRates) {
 
   const matches = rates
     .filter(activeExpense)
-    .filter((r) => Math.abs((Number(r.effective_rate) || 0) - derivedRate) <= TOLERANCE_PP)
+    .filter((r) => Number.isFinite(rateOf(r)) && Math.abs(rateOf(r) - derivedRate) <= TOLERANCE_PP)
 
   if (matches.length === 1) return { taxType: matches[0].tax_type, derivedRate, status: 'matched', candidates: matches }
   if (matches.length > 1) return { taxType: null, derivedRate, status: 'ambiguous', candidates: matches }
   return { taxType: null, derivedRate, status: 'unmatched', candidates: rates.filter(activeExpense) }
+}
+
+/**
+ * A bill is safe to send only when its VAT rate is resolved: a confirmed
+ * `tax_type` is set, OR it's a genuine 0%-VAT bill (tax_amount === 0),
+ * which the push resolves to 'NONE' deterministically. Shared by the
+ * approval gate (data-approve + bulk-send) and the inbox's sendable count
+ * so all three surfaces agree on what "sendable" means.
+ */
+export function hasResolvedVatRate(fields) {
+  const ef = fields || {}
+  if (typeof ef.tax_type === 'string' && ef.tax_type.length > 0) return true
+  return Number(ef.tax_amount) === 0
 }

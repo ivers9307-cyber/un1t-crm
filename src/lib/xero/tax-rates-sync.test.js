@@ -52,4 +52,16 @@ describe('pullTaxRates', () => {
     const up = captured.upserts.find((u) => u.table === 'xero_tax_rates')
     expect(up.rows[0].effective_rate).toBe(23)
   })
+
+  it('does NOT wipe the cache on an empty /TaxRates response (review #5)', async () => {
+    // A transient 200-empty must not delete every cached rate (which
+    // would blank the picker + block sends behind a green "just synced").
+    xfetchMock.mockResolvedValueOnce({ TaxRates: [] })
+    const r = await pullTaxRates('loc1')
+    expect(r.syncedCount).toBe(0)
+    expect(captured.upserts).toHaveLength(0)      // nothing upserted
+    expect(captured.deletes).toHaveLength(0)      // and crucially, no stale-sweep
+    // the connection is still stamped as synced (it was reached)
+    expect(captured.connUpdates.some((u) => 'tax_rates_last_synced_at' in u.patch)).toBe(true)
+  })
 })

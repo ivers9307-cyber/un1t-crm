@@ -25,6 +25,7 @@ import Link from 'next/link'
 // /approvals lands on the right row + correct tab.
 import { useSearchParams } from 'next/navigation'
 import { INVOICE_CATEGORIES } from '@/lib/invoice-categories'
+import { hasResolvedVatRate } from '@/lib/invoices-queue/vat'
 import XeroAccountPicker from '@/components/invoices/XeroAccountPicker'
 import XeroTaxRatePicker from '@/components/invoices/XeroTaxRatePicker'
 import XeroContactPicker from '@/components/invoices/XeroContactPicker'
@@ -527,8 +528,11 @@ function BulkActionBar({
   // allowed — the cron cleared its queue flags on failure.
   const queueableCount = selectedRows.filter((r) =>
     ['received', 'quality_approved'].includes(r.status) && !r.analysis_claimed_at).length
+  // XERO-BILL-VAT.2 — a row is only sendable once its VAT rate is resolved
+  // (confirmed tax_type or a genuine 0%-VAT bill); rate-undetermined rows
+  // are skipped server-side, so don't count them toward the Send button.
   const sendableCount = selectedRows.filter((r) =>
-    ['extracted', 'data_approved'].includes(r.status) && r.extracted_fields).length
+    ['extracted', 'data_approved'].includes(r.status) && r.extracted_fields && hasResolvedVatRate(r.extracted_fields)).length
   const rejectableCount = selectedRows.filter((r) =>
     ['received', 'quality_approved', 'extracted', 'data_approved'].includes(r.status)).length
   // INV-RECONCILE.1 — ONLY rows the send path flagged as already in

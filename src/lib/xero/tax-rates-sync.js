@@ -51,6 +51,7 @@ export async function pullTaxRates(locationId) {
 
   const rates = Array.isArray(res?.TaxRates) ? res.TaxRates : []
 
+  let deletedCount = 0
   if (rates.length > 0) {
     const rows = rates.map((tr) => ({
       location_id: locationId,
@@ -73,23 +74,28 @@ export async function pullTaxRates(locationId) {
         .eq('location_id', locationId)
       throw new XeroError(`Failed to upsert xero_tax_rates: ${upErr.message}`)
     }
-  }
 
-  const { error: delErr, count: deletedCount } = await db
-    .from('xero_tax_rates')
-    .delete({ count: 'exact' })
-    .eq('location_id', locationId)
-    .lt('last_synced_at', syncStartedAt)
-  if (delErr) {
-    await db.from('xero_connections')
-      .update({ tax_rates_sync_error: delErr.message })
+    // Stale-row sweep runs ONLY when Xero actually returned rates. An
+    // empty /TaxRates response (transient glitch / scope issue returning
+    // 200-empty) must NOT wipe the cache — that would blank the picker
+    // and block every send behind a green "just synced" indicator.
+    const { error: delErr, count } = await db
+      .from('xero_tax_rates')
+      .delete({ count: 'exact' })
       .eq('location_id', locationId)
-    throw new XeroError(`Failed to clean stale xero_tax_rates: ${delErr.message}`)
+      .lt('last_synced_at', syncStartedAt)
+    if (delErr) {
+      await db.from('xero_connections')
+        .update({ tax_rates_sync_error: delErr.message })
+        .eq('location_id', locationId)
+      throw new XeroError(`Failed to clean stale xero_tax_rates: ${delErr.message}`)
+    }
+    deletedCount = count || 0
   }
 
   await db.from('xero_connections')
     .update({ tax_rates_last_synced_at: new Date().toISOString(), tax_rates_sync_error: null })
     .eq('location_id', locationId)
 
-  return { syncedCount: rates.length, deletedCount: deletedCount || 0, syncedAt: syncStartedAt }
+  return { syncedCount: rates.length, deletedCount, syncedAt: syncStartedAt }
 }

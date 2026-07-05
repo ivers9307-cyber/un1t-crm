@@ -25,6 +25,7 @@ import { NextResponse } from 'next/server'
 // → Hubdoc OCR) to pushQueueRowToXero (direct /Invoices API push).
 // See src/lib/invoices-queue/push-xero.js header for why.
 import { pushQueueRowToXero } from '@/lib/invoices-queue/push-xero'
+import { hasResolvedVatRate } from '@/lib/invoices-queue/vat'
 import { XeroError } from '@/lib/xero/client'
 import {
   BulkIdsSchema,
@@ -72,6 +73,15 @@ export async function POST(request) {
     }
     if (!row.extracted_fields) {
       results.push({ id, outcome: 'skipped', reason: 'no_extracted_fields' })
+      continue
+    }
+    // XERO-BILL-VAT.2 — never send a bill whose VAT rate is undetermined.
+    // Skip it while still 'extracted' (don't flip to data_approved) so the
+    // bookkeeper can pick a rate and retry. A genuine 0%-VAT bill resolves
+    // to 'NONE' and passes. Mirrors the single-row data-approve gate — the
+    // bulk path is the one bookkeepers actually use, so it must gate too.
+    if (!hasResolvedVatRate(row.extracted_fields)) {
+      results.push({ id, outcome: 'skipped', reason: 'no_vat_rate' })
       continue
     }
 
