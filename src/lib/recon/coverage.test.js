@@ -28,7 +28,7 @@ let coverage
 // Chain whose FINAL method resolves; intermediate steps return this.
 function chainable(finalValue, terminal) {
   const chain = {}
-  for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'order', 'update', 'upsert', 'range']) {
+  for (const m of ['select', 'eq', 'in', 'not', 'gte', 'lte', 'order', 'update', 'upsert', 'range']) {
     chain[m] = vi.fn().mockReturnThis()
   }
   chain[terminal] = vi.fn().mockResolvedValue(finalValue)
@@ -73,6 +73,10 @@ describe('syncBankLines', () => {
     })
 
     expect(stats).toEqual({ pulled: 2, new: 1, covered: 1 })
+    // 1. NAMESPACE GUARD — the vanish-cover select must exclude csv:
+    // lines (operator statement uploads); without this, every API
+    // refresh would mass-cover the CSV bridge's rows.
+    expect(existing.not).toHaveBeenCalledWith('xero_line_key', 'like', 'csv:%')
     // 2. only the NEW key is inserted, with status, insert-only semantics
     expect(inserted.upsert).toHaveBeenCalledTimes(1)
     const [insertRows, insertOpts] = inserted.upsert.mock.calls[0]

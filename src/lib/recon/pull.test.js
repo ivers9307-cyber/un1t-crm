@@ -8,27 +8,39 @@
 //      never touch recon_runs after (there's no run id to update).
 //   2. compute the pull window — oldest non-terminal tracked line, else
 //      90 days back from Dublin-today.
-//   3. list ACTIVE bank accounts, fetch each one's Bank Statement report
-//      for the window.
+//   3. list ACTIVE bank accounts, fetch each one's /BankTransactions
+//      (paginated; hotfix 2026-07-04 — the Bank Statement report's
+//      scope was retired by Xero's granular migration and broke the
+//      authorize step).
 //   4. GUARD — an account with tracked non-terminal lines can never
-//      legitimately parse to zero report rows (the report includes
-//      reconciled lines too); zero rows there means shape drift, not a
-//      quiet bank account. Skip the sync for that account, record the
-//      anomaly, and the run finishes 'error' (not thrown — other
-//      accounts still get synced).
+//      legitimately fetch zero transactions for a window enclosing
+//      those lines (reconciled ones are still returned; IsReconciled
+//      filters client-side to preserve exactly this tripwire). Zero
+//      rows there means fetch/shape drift, not a quiet bank account.
+//      Skip the sync for that account, record the anomaly, and the run
+//      finishes 'error' (not thrown — other accounts still get synced).
 //   5. audit the run: finished_at/status/stats always get written, even
 //      on a thrown failure mid-pull — and the error audit keeps the
 //      per-account progress made before the throw (accounts synced so
 //      far + failedAfter) so a partial pull is diagnosable (best-effort
 //      — never let a bookkeeping failure mask the original error).
 //
-// Locked here: the ordinal contract is delegated to bank-statement.js
-// (assignOrdinals over the FULL parsed report, filtered after) — this
-// file locks that pull.js calls them in that order, not the ordinal math
-// itself (see bank-statement.test.js for that).
+// Line identity is delegated to bank-transactions.js (stable
+// BankTransactionID keys — see bank-transactions.test.js); this file
+// locks the fetch/guard/sync orchestration only.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import fixture from './__fixtures__/bank-statement-report.json'
+
+// Same shape the old report fixture had: 3 transactions, 1 reconciled,
+// 2 unreconciled — so every count assertion below carries over.
+const btPage = {
+  BankTransactions: [
+    { BankTransactionID: 'bt-a', Type: 'SPEND', Status: 'AUTHORISED', IsReconciled: false, DateString: '2026-06-03T00:00:00', Total: 84.5, Contact: { Name: 'MUSCLEFOOD LTD' }, Reference: 'CARD 1234' },
+    { BankTransactionID: 'bt-b', Type: 'SPEND', Status: 'AUTHORISED', IsReconciled: true, DateString: '2026-06-05T00:00:00', Total: 230, Contact: { Name: 'ELECTRIC IRELAND' }, Reference: 'DD 8871' },
+    { BankTransactionID: 'bt-c', Type: 'SPEND', Status: 'AUTHORISED', IsReconciled: false, DateString: '2026-06-10T00:00:00', Total: 12, Contact: { Name: 'COFFEE SUPPLIES' } },
+  ],
+}
+const btEmpty = { BankTransactions: [] }
 
 // No @/lib/supabase mock needed: pull takes `db` as a parameter, and the
 // only transitive supabase importer in its graph (@/lib/xero/client) is
@@ -78,11 +90,8 @@ beforeEach(async () => {
   pull = await import('./pull')
 })
 
-// The fixture parses to 3 transaction rows (Opening/Closing Balance
-// skipped): two unreconciled MUSCLEFOOD LTD lines (ordinals 0, 1) and
-// one reconciled ELECTRIC IRELAND line. So assignOrdinals+filter yields
-// 2 unreconciled rows — verified against bank-statement.test.js, which
-// asserts fixture parses to length 3 with rows[1].reconciled === true.
+// btPage maps to 3 rows, of which 2 are unreconciled (bt-a, bt-c) —
+// mirrors bank-transactions.test.js's mapper contract.
 const FIXTURE_UNRECONCILED_COUNT = 2
 
 describe('runCoveragePull', () => {
@@ -104,20 +113,25 @@ describe('runCoveragePull', () => {
           { AccountID: 'acct-2', Name: 'Old Savings', Status: 'ARCHIVED' },
         ],
       })
-      .mockResolvedValueOnce(fixture)
+      .mockResolvedValueOnce(btPage)
 
     const summary = await pull.runCoveragePull(mockDb, 'loc-1', { trigger: 'manual' })
 
     expect(xfetch).toHaveBeenCalledTimes(2)
-    const [reportUrl] = xfetch.mock.calls[1]
-    expect(reportUrl).toContain('/Reports/BankStatement?bankAccountID=acct-1&fromDate=2026-04-05&toDate=2026-07-04')
+    const [txnUrl] = xfetch.mock.calls[1]
+    expect(txnUrl).toContain('/BankTransactions?where=')
+    expect(txnUrl).toContain('page=1')
+    const decoded = decodeURIComponent(txnUrl)
+    expect(decoded).toContain('BankAccount.AccountID==Guid("acct-1")')
+    expect(decoded).toContain('Status=="AUTHORISED"')
+    expect(decoded).toContain('Date>=DateTime(2026,4,5)')
+    expect(decoded).toContain('Date<=DateTime(2026,7,4)')
 
     expect(syncBankLines).toHaveBeenCalledTimes(1)
     const syncArg = syncBankLines.mock.calls[0][1]
     expect(syncArg.lines).toHaveLength(FIXTURE_UNRECONCILED_COUNT)
-    for (const line of syncArg.lines) {
-      expect(line.key).toMatch(/^[a-f0-9]{64}$/)
-    }
+    // Stable Xero identity — no hash/ordinal machinery on this source.
+    expect(syncArg.lines.map((l) => l.key)).toEqual(['bt:bt-a', 'bt:bt-c'])
     expect(syncArg.bankAccountId).toBe('acct-1')
     expect(syncArg.windowFrom).toBe('2026-04-05')
     expect(syncArg.windowTo).toBe('2026-07-04')
@@ -147,7 +161,7 @@ describe('runCoveragePull', () => {
 
     xfetch
       .mockResolvedValueOnce({ Accounts: [{ AccountID: 'acct-1', Name: 'Current', Status: 'ACTIVE' }] })
-      .mockResolvedValueOnce({ Reports: [] }) // parses to zero rows
+      .mockResolvedValueOnce(btEmpty) // zero transactions fetched
 
     const summary = await pull.runCoveragePull(mockDb, 'loc-1', { trigger: 'manual' })
 
@@ -176,7 +190,7 @@ describe('runCoveragePull', () => {
 
     xfetch
       .mockResolvedValueOnce({ Accounts: [{ AccountID: 'acct-1', Name: 'Current', Status: 'ACTIVE' }] })
-      .mockResolvedValueOnce({ Reports: [] })
+      .mockResolvedValueOnce(btEmpty)
 
     // acceptMassCover piggybacked onto this call: the dormant-account
     // behaviour under test is unaffected (the breaker lives inside the
@@ -256,8 +270,8 @@ describe('runCoveragePull', () => {
           { AccountID: 'acct-2', Name: 'Reserve', Status: 'ACTIVE' },
         ],
       })
-      .mockResolvedValueOnce(fixture) // acct-1 report — syncs fine
-      .mockResolvedValueOnce(fixture) // acct-2 report — its sync throws below
+      .mockResolvedValueOnce(btPage) // acct-1 transactions — sync fine
+      .mockResolvedValueOnce(btPage) // acct-2 transactions — its sync throws below
     syncBankLines
       .mockResolvedValueOnce({ pulled: 2, new: 1, covered: 0 })
       .mockRejectedValueOnce(new Error('recon insert failed: boom'))
@@ -299,8 +313,8 @@ describe('runCoveragePull', () => {
           { AccountID: 'acct-2', Name: 'Reserve', Status: 'ACTIVE' },
         ],
       })
-      .mockResolvedValueOnce(fixture)         // acct-1 — healthy, syncs normally
-      .mockResolvedValueOnce({ Reports: [] }) // acct-2 — zero rows + tracked lines = anomaly
+      .mockResolvedValueOnce(btPage)  // acct-1 — healthy, syncs normally
+      .mockResolvedValueOnce(btEmpty) // acct-2 — zero rows + tracked lines = anomaly
 
     const summary = await pull.runCoveragePull(mockDb, 'loc-1', { trigger: 'cron' })
 

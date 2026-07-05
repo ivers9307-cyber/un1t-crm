@@ -48,7 +48,7 @@ export async function POST(request) {
     const msg = String(e?.message || e)
     if (e instanceof XeroError && (e.status === 403 || e.status === 401)) {
       return NextResponse.json(
-        { success: false, error: 'Xero connection is missing the reports scope — reconnect Xero in Settings.' },
+        { success: false, error: 'Xero connection is missing the bank-statement scope — reconnect Xero in Settings to grant it.' },
         { status: 409 }
       )
     }

@@ -247,6 +247,91 @@ describe('pushQueueRowToXero — new contact branch', () => {
   })
 })
 
+// ----- audit F2 (RCOV.P2): VAT cross-check at push ----------
+//
+// The immediate-persist update (bill id + deep link) also records
+// what Xero booked as tax (TotalTax on the create response) and
+// whether it corroborates the OCR-extracted tax_amount within 2c.
+// null = not evaluated (either side missing). The retry path (bill
+// already created) must never touch these fields.
+
+const f2Row = (taxAmount) => ({
+  id: 'q1', location_id: 'loc1', status: 'data_approved',
+  source_type: 'supplier_email',
+  extracted_fields: {
+    supplier_name: 'Acme', invoice_number: 'A001', invoice_date: '2026-05-01',
+    currency: 'EUR', total: 123,
+    ...(taxAmount !== undefined ? { tax_amount: taxAmount } : {}),
+    xero_account_id: 'A1', account_code: '400',
+    xero_contact_ref: { kind: 'existing', xero_contact_id: 'C1', name: 'Acme' },
+    line_items: [{ description: 'thing', quantity: 1, unit_amount: 100 }],
+  },
+})
+
+const billPersistPatch = () =>
+  dbCaptured.updates.find((u) => u.table === 'invoices_queue' && 'xero_bill_id' in u.patch)?.patch
+
+describe('pushQueueRowToXero — VAT cross-check (audit F2)', () => {
+  it('flags a mismatch when Xero books different tax than the OCR read', async () => {
+    nextRow = f2Row(23.0)
+    xfetchMock
+      .mockResolvedValueOnce({ Invoices: [] })
+      .mockResolvedValueOnce({ Invoices: [{ InvoiceID: 'I1', InvoiceNumber: 'B1', TotalTax: 19.99 }] })
+    await pushQueueRowToXero('q1')
+    const patch = billPersistPatch()
+    expect(patch.xero_total_tax).toBe(19.99)
+    expect(patch.xero_tax_mismatch).toBe(true)
+  })
+
+  it('corroborates within the 2c tolerance', async () => {
+    nextRow = f2Row(23.005)
+    xfetchMock
+      .mockResolvedValueOnce({ Invoices: [] })
+      .mockResolvedValueOnce({ Invoices: [{ InvoiceID: 'I1', InvoiceNumber: 'B1', TotalTax: 23.0 }] })
+    await pushQueueRowToXero('q1')
+    const patch = billPersistPatch()
+    expect(patch.xero_total_tax).toBe(23.0)
+    expect(patch.xero_tax_mismatch).toBe(false)
+  })
+
+  it('stores nulls (not evaluated) when the create response has no TotalTax', async () => {
+    nextRow = f2Row(23.0)
+    xfetchMock
+      .mockResolvedValueOnce({ Invoices: [] })
+      .mockResolvedValueOnce({ Invoices: [{ InvoiceID: 'I1', InvoiceNumber: 'B1' }] })
+    await pushQueueRowToXero('q1')
+    const patch = billPersistPatch()
+    expect(patch).toHaveProperty('xero_total_tax', null)
+    expect(patch).toHaveProperty('xero_tax_mismatch', null)
+  })
+
+  it('keeps mismatch null when the OCR tax is missing, but still stores TotalTax', async () => {
+    nextRow = f2Row(undefined)
+    xfetchMock
+      .mockResolvedValueOnce({ Invoices: [] })
+      .mockResolvedValueOnce({ Invoices: [{ InvoiceID: 'I1', InvoiceNumber: 'B1', TotalTax: 12.5 }] })
+    await pushQueueRowToXero('q1')
+    const patch = billPersistPatch()
+    expect(patch.xero_total_tax).toBe(12.5)
+    expect(patch.xero_tax_mismatch).toBeNull()
+  })
+
+  it('retry path (bill already created) never writes tax fields', async () => {
+    nextRow = {
+      ...f2Row(23.0),
+      xero_bill_id: 'INV-OLD',
+      xero_bill_number: 'B-OLD',
+      xero_deep_link_url: 'https://go.xero.com/x?InvoiceID=INV-OLD',
+    }
+    const r = await pushQueueRowToXero('q1')
+    expect(r.billId).toBe('INV-OLD')
+    // Create block skipped entirely: no Xero calls, no bill-persist
+    // update, therefore no tax fields written on retry.
+    expect(xfetchMock).not.toHaveBeenCalled()
+    expect(dbCaptured.updates.find((u) => 'xero_total_tax' in (u.patch || {}))).toBeUndefined()
+  })
+})
+
 describe('pushQueueRowToXero — duplicate guard', () => {
   it('skips + flags when a bill with the same invoice number already exists in Xero', async () => {
     nextRow = {

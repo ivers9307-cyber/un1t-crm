@@ -30,6 +30,7 @@ function buildChainable(finalValue) {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     in: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockReturnThis(),
     maybeSingle: vi.fn().mockResolvedValue(finalValue),
     single: vi.fn().mockResolvedValue(finalValue),
     insert: vi.fn().mockReturnThis(),
@@ -172,6 +173,93 @@ describe('enqueueFromContractorInvoice', () => {
     const r = await enqueueModule.enqueueFromContractorInvoice('missing')
     expect(r.ok).toBe(false)
     expect(r.error).toMatch(/not found/i)
+  })
+})
+
+describe('enqueueFromHuntFind', () => {
+  const validArgs = {
+    locationId: 'loc1',
+    huntId: 'hunt1',
+    bucketPath: 'hunt1/receipt.pdf',
+    filename: 'receipt.pdf',
+    sizeBytes: 4321,
+    mimeType: 'application/pdf',
+    senderEmail: 'billing@supplier.com',
+    subject: 'Invoice #445',
+    contentHash: 'sha256:abc123',
+  }
+
+  it('returns deduped:true and does NOT insert when content_hash already exists', async () => {
+    const dedupeChain = buildChainable({ data: { id: 'existing-q1', status: 'sent' }, error: null })
+    mockDb.from.mockImplementation((t) => {
+      if (t === 'invoices_queue') return dedupeChain
+      throw new Error(`unexpected table ${t}`)
+    })
+
+    const r = await enqueueModule.enqueueFromHuntFind(validArgs)
+    expect(r).toEqual({ ok: true, queueIds: ['existing-q1'], deduped: true })
+    // Only the dedupe lookup should hit `from` — no separate insert call.
+    expect(mockDb.from).toHaveBeenCalledTimes(1)
+    expect(dedupeChain.insert).not.toHaveBeenCalled()
+  })
+
+  it('inserts a fresh row when content_hash is not already queued', async () => {
+    const insertedRows = []
+    const queueChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+      insert: vi.fn((row) => {
+        insertedRows.push(row)
+        return queueChain
+      }),
+      single: vi.fn().mockResolvedValue({ data: { id: 'q-new' }, error: null }),
+    }
+    mockDb.from.mockImplementation((t) => {
+      if (t === 'invoices_queue') return queueChain
+      throw new Error(`unexpected table ${t}`)
+    })
+
+    const r = await enqueueModule.enqueueFromHuntFind(validArgs)
+    expect(r).toEqual({ ok: true, queueIds: ['q-new'], deduped: false })
+    expect(insertedRows).toHaveLength(1)
+    const row = insertedRows[0]
+    expect(row.source_type).toBe('email_hunt')
+    expect(row.source_hunt_id).toBe('hunt1')
+    expect(row.attachment_bucket).toBe('hunted-invoices')
+    expect(row.status).toBe('received')
+    expect(row.content_hash).toBe('sha256:abc123')
+  })
+
+  it('refuses without a db call when contentHash is missing', async () => {
+    const r = await enqueueModule.enqueueFromHuntFind({ ...validArgs, contentHash: undefined })
+    expect(r.ok).toBe(false)
+    expect(mockDb.from).not.toHaveBeenCalled()
+  })
+
+  it('refuses without a db call when huntId is missing', async () => {
+    const r = await enqueueModule.enqueueFromHuntFind({ ...validArgs, huntId: undefined })
+    expect(r.ok).toBe(false)
+    expect(mockDb.from).not.toHaveBeenCalled()
+  })
+
+  it('refuses without a db call when bucketPath is missing', async () => {
+    const r = await enqueueModule.enqueueFromHuntFind({ ...validArgs, bucketPath: undefined })
+    expect(r.ok).toBe(false)
+    expect(mockDb.from).not.toHaveBeenCalled()
+  })
+
+  it('returns error envelope (not throw) when the hash lookup errors', async () => {
+    const dedupeChain = buildChainable({ data: null, error: { message: 'connection reset' } })
+    mockDb.from.mockImplementation((t) => {
+      if (t === 'invoices_queue') return dedupeChain
+      throw new Error(`unexpected table ${t}`)
+    })
+
+    const r = await enqueueModule.enqueueFromHuntFind(validArgs)
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/Hash lookup failed/)
   })
 })
 

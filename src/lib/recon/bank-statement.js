@@ -1,5 +1,11 @@
 // src/lib/recon/bank-statement.js
 //
+// ⚠ NOT the pull's data source since the 2026-07-04 hotfix: the Bank
+// Statement report's scope (accounting.reports.read) was RETIRED by
+// Xero's granular migration. The pull now reads /BankTransactions via
+// bank-transactions.js. Kept for reference / a future Finance-API
+// statement-lines source that would need tuple identity again.
+//
 // RCOV.P0 — parse Xero's GET /Reports/BankStatement payload into
 // normalized statement-line rows, and mint stable identity keys so a
 // line can be tracked across weekly pulls. Statement lines have no ID

@@ -82,22 +82,24 @@ export const ALL_NAV = [
   // history surface (REPORT-ISSUE.1) is open to all staff via the
   // mobile More tab and doesn't appear on the web sidebar.
   { href: '/issues',     label: 'Issues',       icon: AlertCircle,     permission: 'issues_inbox', section: 'work' },
+  // ── Accounting — the bookkeeping surfaces, consolidated (RCOV.P2,
+  // Richard's "prevent sprawl" call). The hub leads; the invoices
+  // queue and card receipts it feeds sit beside it.
+  //
+  // RCOV.P0/P2 — receipt-coverage hub: coverage board, exceptions
+  // (audit F2–F5), runs & health. Master + owner only by default.
+  { href: '/accounting', label: 'Accounting',   icon: Landmark,        permission: 'accounting_hub', section: 'accounting' },
   // INVOICES.1 — Dext-style email-in inbox. Master + owner only by
   // default. Per-location forwarding addresses are shown at the top
   // of the page; quality + data approvals run before forward-to-Xero.
-  { href: '/invoices',   label: 'Invoices',     icon: Inbox,           permission: 'invoices_inbox', section: 'work' },
-  // RCOV.P0 — receipt-coverage board. Cross-references Xero bank lines
-  // against collected receipts to find bank activity with no matching
-  // receipt on file. Master + owner only by default, same tier as
-  // Invoices above.
-  { href: '/accounting', label: 'Accounting',   icon: Landmark,        permission: 'accounting_hub', section: 'work' },
+  { href: '/invoices',   label: 'Invoices',     icon: Inbox,           permission: 'invoices_inbox', section: 'accounting' },
   // SPEND.P3 — company-card receipts. A card holder photographs/uploads
   // a receipt; owner/master approves it, then it rides the bookkeeper →
   // Xero queue (the /approvals dashboard also surfaces the pending ones).
   // Gated by the `card_receipts` permission — default master + owner +
   // manager; card-holding staff get it granted per-user. No sidebar
   // badge: approvable receipts already count on the Approvals entry.
-  { href: '/card-receipts', label: 'Company-card receipts', icon: CreditCard, permission: 'card_receipts', section: 'work' },
+  { href: '/card-receipts', label: 'Company-card receipts', icon: CreditCard, permission: 'card_receipts', section: 'accounting' },
 
   // ── Sales ──────────────────────────────────────────────────────
   { href: '/pipeline',            label: 'Pipeline',  icon: Columns3,   permission: 'pipeline',        section: 'sales' },
@@ -228,7 +230,8 @@ export const ALL_NAV = [
 // visible items for the current user renders nothing — no empty header.
 // Dashboard is pinned above all sections (it has no `section`).
 export const NAV_SECTIONS = [
-  { id: 'work',    label: 'Work' },
+  { id: 'work',       label: 'Work' },
+  { id: 'accounting', label: 'Accounting' },
   { id: 'sales',   label: 'Sales' },
   { id: 'gym',          label: 'Gym' },
   { id: 'automations',  label: 'Automations' },
