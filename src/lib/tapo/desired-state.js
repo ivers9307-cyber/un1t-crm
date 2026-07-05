@@ -96,6 +96,28 @@ export function resolveDayWindows(device, dateStr, occurrences = []) {
   return []
 }
 
+// Serve set for a Dublin date: today's windows PLUS any still-live overnight
+// tail from YESTERDAY's fixed windows. A Sat 22:00–02:00 window (days:[6]) is
+// day-attributed to Saturday by resolveDayWindows; after midnight the serving
+// date is Sunday, whose own windows are empty — without the tail the device
+// gets cut off at 00:00. Both desiredState and the bridge's resolved_windows
+// go through this so live and offline behaviour heal together.
+//
+// Class mode deliberately has NO yesterday spill: there are no overnight gym
+// classes, and yesterday's occurrences aren't fetched by the directives route
+// anyway. (A class STARTING today but ending after midnight still spills
+// forward correctly — off_at = ends+lag regardless of date.)
+export function resolveServeWindows(device, dateStr, occurrences = []) {
+  if (!device || !device.enabled) return []
+  const today = resolveDayWindows(device, dateStr, occurrences)
+  if (device.schedule_mode !== 'fixed') return today
+  const dayStartMs = dublinWallMs(dateStr, '00:00') // Dublin midnight of dateStr
+  const tails = resolveDayWindows(device, addDaysISO(dateStr, -1), [])
+    .filter(w => w.off_at > dayStartMs)
+  if (!tails.length) return today
+  return [...tails, ...today].sort((a, b) => a.on_at - b.on_at)
+}
+
 // → 'on' | 'off' | null (null = unmanaged; bridge must not touch it)
 // Override is checked BEFORE the mode-none short-circuit so a manual
 // toggle works on an adopted device that has no schedule yet.
@@ -109,7 +131,7 @@ export function desiredState(device, nowMs, dateStr, occurrences = []) {
 
   if (device.schedule_mode === 'none') return null
 
-  const windows = resolveDayWindows(device, dateStr, occurrences)
+  const windows = resolveServeWindows(device, dateStr, occurrences)
   for (const w of windows) {
     if (nowMs >= w.on_at && nowMs < w.off_at) return 'on'
   }

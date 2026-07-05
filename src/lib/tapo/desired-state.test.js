@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveDayWindows, desiredState } from './desired-state.js'
+import { resolveDayWindows, resolveServeWindows, desiredState } from './desired-state.js'
 
 // All instants are UTC ISO; Dublin is UTC+1 on these July dates (IST).
 const DAY = '2026-07-06' // a Monday
@@ -109,6 +109,34 @@ describe('resolveDayWindows — DST transitions', () => {
     expect(w[0].off_at).toBe(Date.parse('2026-10-25T05:00:00+00:00'))
     // Our implementation lands on the SECOND 01:30 (the +00:00 occurrence).
     expect(w[0].on_at).toBe(Date.parse('2026-10-25T01:30:00+00:00'))
+  })
+})
+
+describe('overnight fixed windows survive midnight (serve set)', () => {
+  // Operator window Sat 22:00–02:00 (days:[6]) is day-attributed to Saturday.
+  // After midnight the serving date is Sunday, whose own windows are empty —
+  // the engine must still honour Saturday's live tail or the device is cut
+  // off at 00:00 (both live via desiredState and offline via the bridge's
+  // resolved_windows). 2026-07-11 is a Saturday, 2026-07-12 a Sunday (IST).
+  const SUN = '2026-07-12'
+  const night = {
+    enabled: true, schedule_mode: 'fixed',
+    fixed_windows: [{ days: [6], on: '22:00', off: '02:00' }],
+    class_rule: {}, override: null,
+  }
+  it("desiredState honours yesterday's overnight tail after midnight", () => {
+    const at0030 = Date.parse('2026-07-12T00:30:00+01:00')
+    expect(desiredState(night, at0030, SUN, [])).toBe('on')  // inside the Sat tail
+    const at0230 = Date.parse('2026-07-12T02:30:00+01:00')
+    expect(desiredState(night, at0230, SUN, [])).toBe('off') // tail ended 02:00
+  })
+  it("resolveServeWindows includes Saturday's tail when serving Sunday", () => {
+    const w = resolveServeWindows(night, SUN, [])
+    expect(w).toHaveLength(1)
+    expect(w[0].on_at).toBe(Date.parse('2026-07-11T22:00:00+01:00'))
+    expect(w[0].off_at).toBe(Date.parse('2026-07-12T02:00:00+01:00'))
+    // Day-attributed semantics of resolveDayWindows are unchanged:
+    expect(resolveDayWindows(night, SUN, [])).toEqual([])
   })
 })
 
