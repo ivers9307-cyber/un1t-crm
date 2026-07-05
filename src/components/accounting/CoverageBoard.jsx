@@ -109,8 +109,14 @@ function RowActions({ line, onError, onDone }) {
         Upload
       </button>
       <input ref={fileRef} type="file" accept=".pdf,image/*" className="hidden" onChange={uploadPicked} />
-      <button type="button" disabled={busy} className={actionBtn} onClick={() => post('rehunt')}>
-        Re-hunt
+      <button
+        type="button"
+        disabled={busy || !!line.hunt_queued_at}
+        className={actionBtn}
+        title="Searches your connected inboxes for a matching receipt. Runs in the background — usually within 5 minutes."
+        onClick={() => post('rehunt')}
+      >
+        {line.hunt_queued_at ? 'Searching…' : 'Re-hunt'}
       </button>
       <button type="button" disabled={busy} className={actionBtn} onClick={copyRequest}>
         {copied ? 'Copied ✓' : 'Copy request'}
@@ -238,6 +244,17 @@ export default function CoverageBoard({ locationName }) {
 
   const reload = useCallback(() => load(statusFilter), [load, statusFilter])
 
+  // The inbox hunt runs on a background cron (every ~5 min), so a
+  // re-hunt doesn't resolve in the request. While any line is queued
+  // for a hunt, poll the board so the outcome (In review / Not found)
+  // appears on its own — the "nothing's happening" fix.
+  const searchingCount = (data?.lines || []).filter((l) => l.hunt_queued_at).length
+  useEffect(() => {
+    if (searchingCount === 0) return undefined
+    const t = setInterval(() => load(statusFilter), 60_000)
+    return () => clearInterval(t)
+  }, [searchingCount, load, statusFilter])
+
   const refresh = async () => {
     setBusy(true)
     setError(null)
@@ -334,6 +351,13 @@ export default function CoverageBoard({ locationName }) {
 
       {showImport ? <ImportStatementPanel onDone={reload} onClose={() => setShowImport(false)} /> : null}
 
+      {searchingCount > 0 ? (
+        <div className="text-sm px-3 py-2 rounded bg-indigo-500/10 text-indigo-700">
+          Searching your connected inbox{searchingCount === 1 ? '' : 'es'} for {searchingCount} receipt{searchingCount === 1 ? '' : 's'} — this runs in the
+          background (usually within 5 minutes). Lines update to <span className="font-medium">In review</span> or <span className="font-medium">Not found</span> automatically.
+        </div>
+      ) : null}
+
       {error ? <div className="text-sm px-3 py-2 rounded bg-red-500/10 text-red-700">{error}</div> : null}
 
       {(data?.lines || []).length === 0 ? (
@@ -375,8 +399,22 @@ export default function CoverageBoard({ locationName }) {
               key: 'status',
               header: 'Status',
               render: (r) => {
+                // A queued line is mid-hunt (the cron hasn't resolved it
+                // yet) — show that instead of the stale base status.
+                if (r.hunt_queued_at) {
+                  return <span className="text-xs px-2 py-1 rounded bg-indigo-500/10 text-indigo-700">Searching inbox…</span>
+                }
                 const chip = STATUS_CHIP[r.status] || STATUS_CHIP.uncovered
-                return <span className={`text-xs px-2 py-1 rounded ${chip.cls}`}>{chip.label}</span>
+                return (
+                  <div className="space-y-0.5">
+                    <span className={`text-xs px-2 py-1 rounded ${chip.cls}`}>{chip.label}</span>
+                    {r.status === 'not_found' && r.hunt_attempts > 0 ? (
+                      <div className="text-[10px] text-un1t-subtle">
+                        searched {r.hunt_attempts}× — no receipt found
+                      </div>
+                    ) : null}
+                  </div>
+                )
               },
             },
             {
