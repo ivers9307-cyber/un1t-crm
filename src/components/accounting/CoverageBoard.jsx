@@ -251,6 +251,26 @@ export default function CoverageBoard({ locationName }) {
     }
   }
 
+  const clearBoard = async (openCount) => {
+    const ok = window.confirm(
+      `Remove all ${openCount} open line${openCount === 1 ? '' : 's'} from the board?\n\n` +
+      `Use this to undo a mistaken import. Covered and ignored history is kept, and any receipts already ` +
+      `sent to Xero are untouched. You can rebuild the board any time with "Refresh from Xero" and by ` +
+      `re-uploading a statement CSV.`
+    )
+    if (!ok) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/accounting/coverage/clear', { method: 'POST' })
+      const json = await res.json()
+      if (!json.success) setError(json.error)
+      await load(statusFilter)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (!data && !error) return <Loading />
 
   const counts = data?.counts || {}
@@ -295,6 +315,14 @@ export default function CoverageBoard({ locationName }) {
           ))}
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="text-xs px-2 py-1 rounded bg-red-500/10 text-red-700 hover:bg-red-500/20 disabled:opacity-40"
+            onClick={() => clearBoard(openCount)}
+            disabled={busy || openCount === 0}
+          >
+            Clear board
+          </button>
           <button type="button" className={actionBtn} onClick={() => setShowImport((v) => !v)}>
             Import statement CSV
           </button>

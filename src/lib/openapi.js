@@ -2478,6 +2478,20 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/accounting/coverage/clear',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Clear all open (non-terminal) bank lines for the active location',
+  description: 'Recovery hatch for a mistaken statement import — deletes every uncovered/submitted/not_found/needs_attention line (and its hunt rows) for the active location. Covered/ignored history and any receipts already pushed to Xero are kept. Recoverable via Refresh from Xero + re-upload. Requires the accounting_hub permission.',
+  responses: {
+    200: { description: 'Cleared count', content: { 'application/json': { schema: SuccessResponse(z.object({ cleared: z.number() })) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/accounting/coverage/import-statement',
   tags: ['Accounting'],
   security: [{ CookieAuth: [] }],
