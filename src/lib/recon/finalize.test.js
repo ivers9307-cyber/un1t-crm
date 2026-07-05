@@ -72,7 +72,10 @@ beforeEach(async () => {
   finalize = await import('./finalize')
 })
 
-const CRON_STARTED_AT = '2026-07-03T08:00:00.000Z' // within the last 48h of "now"
+// Relative to the real clock, NOT hardcoded: maybeFinalizeWeekly gates on
+// Date.now() − 48h, so a fixed date here starts failing the whole file two
+// days after it's written (broke every non-Friday CI run, 2026-07-05).
+const CRON_STARTED_AT = new Date(Date.now() - 3600 * 1000).toISOString() // 1h ago — always inside the 48h window
 
 describe('maybeFinalizeWeekly — gates', () => {
   it('bails hunts_pending when any line still has hunt_queued_at set, before any other query', async () => {
