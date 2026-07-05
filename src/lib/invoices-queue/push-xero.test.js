@@ -71,15 +71,21 @@ beforeEach(async () => {
 
 // ----- buildBillPayload (pure) -----------------------------
 
+// XERO-BILL-SUMMARY.1 — the bill is ALWAYS one summary line carrying the
+// GROSS invoice total, pushed tax-inclusive (LineAmountTypes:'Inclusive'),
+// coded to the row account. Itemised line_items are ignored (the PDF is
+// attached to the Xero bill), and Xero's booked total always equals the
+// captured total.
 describe('buildBillPayload', () => {
-  it('stamps AccountCode on every line from the row-level account_code', () => {
+  it('builds ONE tax-inclusive summary line at the gross total, coded to the row account', () => {
     const payload = buildBillPayload({
       supplier_name: 'Acme',
       invoice_number: 'A001',
       invoice_date: '2026-05-01',
       currency: 'EUR',
-      total: 123.45,
+      subtotal: 100, tax_amount: 23, total: 123,
       account_code: '400',
+      // itemised lines are ignored entirely
       line_items: [
         { description: 'Widget A', quantity: 2, unit_amount: 50 },
         { description: 'Widget B', quantity: 1, unit_amount: 23.45 },
@@ -89,39 +95,36 @@ describe('buildBillPayload', () => {
     expect(payload.Type).toBe('ACCPAY')
     expect(payload.Status).toBe('DRAFT')
     expect(payload.Contact.ContactID).toBe('C1')
-    expect(payload.LineItems).toHaveLength(2)
+    expect(payload.LineAmountTypes).toBe('Inclusive')
+    expect(payload.LineItems).toHaveLength(1)
+    expect(payload.LineItems[0].Quantity).toBe(1)
+    expect(payload.LineItems[0].UnitAmount).toBe(123) // gross total (tax-inclusive)
     expect(payload.LineItems[0].AccountCode).toBe('400')
-    expect(payload.LineItems[1].AccountCode).toBe('400')
+    expect(payload.LineItems[0].Description).toContain('A001')
+    expect(payload.LineItems[0].Description).toContain('Acme')
   })
 
-  it('honours per-line account_code overrides over the row default', () => {
+  it('books the gross total so shipping/fees outside subtotal stay on the bill (ROWfit)', () => {
+    // subtotal 149.59 excludes €7.20 shipping; total 156.79 includes it.
+    // The line carries the total (156.79), never the subtotal.
     const payload = buildBillPayload({
-      supplier_name: 'Acme',
-      invoice_number: 'A001',
-      invoice_date: '2026-05-01',
-      currency: 'EUR',
-      account_code: '400',
-      line_items: [
-        { description: 'Default', quantity: 1, unit_amount: 10 },
-        { description: 'Override', quantity: 1, unit_amount: 5, account_code: '410' },
-      ],
-    }, { supplierContactId: 'C1' })
-    expect(payload.LineItems[0].AccountCode).toBe('400')
-    expect(payload.LineItems[1].AccountCode).toBe('410')
-  })
-
-  it('synthesises a single line when line_items is empty', () => {
-    const payload = buildBillPayload({
-      supplier_name: 'Acme',
-      invoice_number: 'A001',
-      invoice_date: '2026-05-01',
-      total: 99,
-      account_code: '400',
-      line_items: [],
+      supplier_name: 'ROWfit', invoice_number: '23967', invoice_date: '2026-06-09',
+      currency: 'EUR', subtotal: 149.59, tax_amount: 0, total: 156.79,
+      account_code: '473', line_items: [],
     }, { supplierContactId: 'C1' })
     expect(payload.LineItems).toHaveLength(1)
-    expect(payload.LineItems[0].UnitAmount).toBe(99)
-    expect(payload.LineItems[0].AccountCode).toBe('400')
+    expect(payload.LineItems[0].UnitAmount).toBe(156.79)
+  })
+
+  it('reconstructs gross from subtotal + tax, then subtotal, when total is absent', () => {
+    const fromParts = buildBillPayload(
+      { supplier_name: 'S', invoice_number: 'A', subtotal: 100, tax_amount: 23, account_code: '400', line_items: [] },
+      { supplierContactId: 'C1' })
+    expect(fromParts.LineItems[0].UnitAmount).toBe(123)
+    const subOnly = buildBillPayload(
+      { supplier_name: 'S', invoice_number: 'A', subtotal: 42, account_code: '400', line_items: [] },
+      { supplierContactId: 'C1' })
+    expect(subOnly.LineItems[0].UnitAmount).toBe(42)
   })
 })
 
@@ -163,49 +166,51 @@ describe('resolveLineTaxType', () => {
 })
 
 describe('buildBillPayload — TaxType stamping', () => {
-  it("stamps 'NONE' on every line for a 0%-VAT bill", () => {
+  it("stamps 'NONE' on the summary line for a 0%-VAT bill", () => {
     const payload = buildBillPayload({
       supplier_name: 'ROWfit', invoice_number: '23967', invoice_date: '2026-06-09',
-      currency: 'EUR', subtotal: 149.59, tax_amount: 0, total: 156.84,
-      account_code: '473',
-      line_items: [
-        { description: 'Shock Cord', quantity: 8, unit_amount: 3.25 },
-        { description: 'Shipping Cost', quantity: 1, unit_amount: 7.2 },
-      ],
+      currency: 'EUR', subtotal: 149.59, tax_amount: 0, total: 156.79,
+      account_code: '473', line_items: [],
     }, { supplierContactId: 'C1', accountTaxTypes: { 473: 'INPUT' } })
-    expect(payload.LineItems.every((li) => li.TaxType === 'NONE')).toBe(true)
+    expect(payload.LineItems).toHaveLength(1)
+    expect(payload.LineItems[0].TaxType).toBe('NONE')
   })
 
   it("stamps the account's tax type on a standard-rated bill", () => {
     const payload = buildBillPayload({
       supplier_name: 'Acme', invoice_number: 'A1', invoice_date: '2026-05-01',
       currency: 'EUR', subtotal: 100, tax_amount: 23, total: 123,
-      account_code: '400',
-      line_items: [{ description: 'thing', quantity: 1, unit_amount: 100 }],
+      account_code: '400', line_items: [],
     }, { supplierContactId: 'C1', accountTaxTypes: { 400: 'INPUT' } })
     expect(payload.LineItems[0].TaxType).toBe('INPUT')
-  })
-
-  it('resolves per-line account overrides to their own tax type', () => {
-    const payload = buildBillPayload({
-      supplier_name: 'Acme', invoice_number: 'A1', invoice_date: '2026-05-01',
-      currency: 'EUR', tax_amount: 23, account_code: '400',
-      line_items: [
-        { description: 'default acct', quantity: 1, unit_amount: 10 },
-        { description: 'override acct', quantity: 1, unit_amount: 5, account_code: '410' },
-      ],
-    }, { supplierContactId: 'C1', accountTaxTypes: { 400: 'INPUT', 410: 'TAX001' } })
-    expect(payload.LineItems[0].TaxType).toBe('INPUT')
-    expect(payload.LineItems[1].TaxType).toBe('TAX001')
+    expect(payload.LineItems[0].UnitAmount).toBe(123) // gross total (tax-inclusive)
   })
 
   it('omits TaxType entirely when the account is not in the cache', () => {
     const payload = buildBillPayload({
       supplier_name: 'Acme', invoice_number: 'A1', invoice_date: '2026-05-01',
-      currency: 'EUR', tax_amount: 23, account_code: '400',
-      line_items: [{ description: 'thing', quantity: 1, unit_amount: 100 }],
+      currency: 'EUR', subtotal: 100, tax_amount: 23, total: 123, account_code: '400',
+      line_items: [],
     }, { supplierContactId: 'C1', accountTaxTypes: {} })
     expect('TaxType' in payload.LineItems[0]).toBe(false)
+  })
+
+  it('ignores itemised line_items — books at the captured total, not the mis-scaled line sum (Supabase GVVGEG-00005)', () => {
+    // The real incident: OCR line_items multiplied out to ~$8,077 for a
+    // $35.04 bill ("Realtime Messages - $2.50 per 1,000,000" × 3209). One
+    // summary line at net = total − tax = 35.04 is what Xero must receive.
+    const payload = buildBillPayload({
+      supplier_name: 'Supabase Pte. Ltd.', invoice_number: 'GVVGEG-00005', invoice_date: '2026-07-02',
+      currency: 'USD', subtotal: 35.04, tax_amount: 0, total: 35.04,
+      tax_type: 'NONE', account_code: '485',
+      line_items: [
+        { description: 'Realtime Messages - $2.50 per 1,000,000', quantity: 3209, unit_amount: 2.5 },
+        { description: 'Pro Plan', quantity: 1, unit_amount: 25 },
+      ],
+    }, { supplierContactId: 'C1', accountTaxTypes: { 485: 'INPUT' } })
+    expect(payload.LineItems).toHaveLength(1)
+    expect(payload.LineItems[0].UnitAmount).toBe(35.04)
+    expect(payload.LineItems[0].TaxType).toBe('NONE')
   })
 })
 
@@ -300,8 +305,9 @@ describe('pushQueueRowToXero — 0%-VAT bill books as No VAT (XERO-BILL-VAT.1)',
     await pushQueueRowToXero('q1')
     const postCall = xfetchMock.mock.calls.find((c) => c[0] === '/Invoices')
     const lines = postCall[1].body.Invoices[0].LineItems
-    expect(lines).toHaveLength(2)
-    expect(lines.every((li) => li.TaxType === 'NONE')).toBe(true)
+    expect(lines).toHaveLength(1) // XERO-BILL-SUMMARY.1 — one summary line
+    expect(lines[0].TaxType).toBe('NONE')
+    expect(lines[0].UnitAmount).toBe(156.84) // gross total (tax-inclusive)
     // And the VAT cross-check now corroborates instead of flagging.
     const patch = dbCaptured.updates.find((u) => 'xero_bill_id' in u.patch)?.patch
     expect(patch.xero_total_tax).toBe(0)
