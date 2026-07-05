@@ -62,10 +62,11 @@ KIOSK_URL="https://crm.un1tdublin.com/tv/${LOCATION_ID}?kiosk=1"
 BIN="$HOME/.local/bin"
 echo ">> Kiosk URL: $KIOSK_URL"
 
-# 1. Chromium — on 64-bit Bookworm the package/binary is `chromium`; older
-#    32-bit builds use `chromium-browser`. Install whichever exists.
+# 1. Chromium (+ wlr-randr for the resolution set) — on 64-bit Bookworm the
+#    package/binary is `chromium`; older 32-bit builds use `chromium-browser`.
 sudo apt-get update
 sudo apt-get install -y chromium || sudo apt-get install -y chromium-browser
+sudo apt-get install -y wlr-randr
 CHROMIUM="$(command -v chromium || command -v chromium-browser || true)"
 [ -n "$CHROMIUM" ] || { echo "!! chromium not found"; exit 1; }
 
@@ -81,12 +82,16 @@ cat > "$BIN/un1t-kiosk.sh" <<EOF
 #!/usr/bin/env bash
 URL="$KIOSK_URL"
 sleep 8   # let the compositor + network come up
+# Force 1080p — 4K TVs report a 4096x2160 / 3840x2160 mode that renders the board
+# tiny; 1080p is large + crisp (and lighter on the Pi). Find the output name with
+# \`wlr-randr\` (Stillorgan's is HDMI-A-1).
+wlr-randr --output HDMI-A-1 --mode 1920x1080 2>/dev/null || true
 while true; do
   "$CHROMIUM" \\
-    --kiosk --noerrdialogs --disable-infobars --incognito \\
+    --kiosk --force-device-scale-factor=2 --incognito \\
     --password-store=basic \\
-    --disable-session-crashed-bubble --disable-features=Translate \\
-    --check-for-update-interval=31536000 \\
+    --noerrdialogs --disable-infobars --disable-session-crashed-bubble \\
+    --disable-features=Translate --check-for-update-interval=31536000 \\
     --autoplay-policy=no-user-gesture-required \\
     --ozone-platform=wayland \\
     "\$URL"
@@ -136,7 +141,12 @@ keyboard: SSH in and `pgrep -a chromium` should show the kiosk URL.
   `--password-store=basic` (in the launcher) makes Chromium skip the keyring —
   fine here, the kiosk stores no secrets. If a prompt still appears, clear the
   keyring once: `rm -f ~/.local/share/keyrings/login.keyring` then reboot.
-- **Change the URL later** → edit `~/.local/bin/un1t-kiosk.sh` and reboot.
+- **Board looks tiny** → the TV is running 4K. The launcher forces `1920x1080`
+  (via `wlr-randr`) + `--force-device-scale-factor=2`, which is right for the
+  Stillorgan 4K panels. Different TV? check the output name with `wlr-randr` and
+  tune the mode / scale factor in `~/.local/bin/un1t-kiosk.sh`, then reboot.
+- **Change the URL / resolution / zoom later** → edit `~/.local/bin/un1t-kiosk.sh`
+  and reboot (disable the Overlay File System first, or the edit won't persist).
 
 ## Surviving power cuts (SD-card corruption)
 
