@@ -26,6 +26,7 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { INVOICE_CATEGORIES } from '@/lib/invoice-categories'
 import XeroAccountPicker from '@/components/invoices/XeroAccountPicker'
+import XeroTaxRatePicker from '@/components/invoices/XeroTaxRatePicker'
 import XeroContactPicker from '@/components/invoices/XeroContactPicker'
 import BulkUploadPanel from '@/components/invoices/BulkUploadPanel'
 
@@ -1027,6 +1028,19 @@ function StageTwoBlock({ row, busy, onSaveFields, onApprove, onReject }) {
           onChange={(xid, full) => {
             setField('xero_account_id', xid || null)
             setField('account_code', full?.code || null)
+          }}
+        />
+        {/* XERO-BILL-VAT.2 — VAT-rate picker. Defaults to the rate
+            derived from the bill, matched against the location's real
+            Xero tax rates; the bookkeeper confirms or overrides. The
+            chosen TaxType is sent on every LineItem at push. */}
+        <XeroTaxRatePicker
+          locationId={row.location_id}
+          fields={fields}
+          value={strField('tax_type') || null}
+          onChange={(taxType, source) => {
+            setField('tax_type', taxType)
+            setField('tax_type_source', taxType ? source : null)
           }}
         />
         {/* XERO-API.2 — Xero supplier picker. Stores a structured
