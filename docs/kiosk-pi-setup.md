@@ -138,6 +138,36 @@ keyboard: SSH in and `pgrep -a chromium` should show the kiosk URL.
   keyring once: `rm -f ~/.local/share/keyrings/login.keyring` then reboot.
 - **Change the URL later** → edit `~/.local/bin/un1t-kiosk.sh` and reboot.
 
+## Surviving power cuts (SD-card corruption)
+
+Yanking mains power mid-write corrupts the ext4 filesystem on the SD card — the
+#1 killer of always-on Pis. A display-only kiosk needs **nothing** persisted, so
+the definitive fix is to make the card **read-only**.
+
+**1. Read-only root (Overlay File System) — do this LAST, once the kiosk works.**
+`sudo raspi-config` → **Performance Options → Overlay File System** → enable it,
+and say **yes** to making `/boot` read-only too → reboot. Now the SD card is
+never written during operation, so a power cut physically cannot corrupt it.
+Chromium's cache lives in a RAM overlay (fine — incognito, non-persistent), and
+the 4am reboot is still a clean reboot.
+- **To change anything later** (URL, `apt` updates): raspi-config → Overlay File
+  System → **disable** → reboot → make the change → **re-enable** → reboot.
+
+**2. If you skip the overlay, at least cut the writes:**
+- Disable swap: `sudo dphys-swapfile swapoff && sudo systemctl disable dphys-swapfile`
+- Logs to RAM: set `Storage=volatile` in `/etc/systemd/journald.conf`
+- `/tmp` on tmpfs; mount root `noatime`.
+
+**3. Hardware (biggest reliability wins):**
+- Use a **High Endurance** microSD (CCTV/dashcam-grade), never a bargain card.
+- Better: **boot the Pi 4 from a USB SSD** — SSDs tolerate power loss far better
+  than SD cards, and there's no SD to corrupt.
+- Optional: a **UPS HAT** (or a power-loss board) that lets the Pi shut down
+  cleanly on mains loss.
+
+Overlay FS alone (#1) is enough for a display-only unit; #3 is worth it if these
+TVs lose power often.
+
 ## Notes
 
 - Both Stillorgan units get the **identical** setup (same `LOCATION_ID`).
