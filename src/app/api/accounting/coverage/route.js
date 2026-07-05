@@ -32,7 +32,7 @@ export async function GET(request) {
 
   let query = db
     .from('recon_bank_lines')
-    .select('id, xero_bank_account_id, bank_account_name, line_date, amount, description, reference, status, first_seen_at, invoices_queue_id')
+    .select('id, xero_bank_account_id, bank_account_name, line_date, amount, description, reference, status, first_seen_at, invoices_queue_id, hunt_queued_at, hunt_claimed_at, last_hunted_at, hunt_attempts')
     .eq('location_id', locationId)
     .order('line_date', { ascending: false })
     .limit(limit)
