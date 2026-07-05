@@ -36,9 +36,33 @@ export default function ApprovalActionCard({
   const [note, setNote] = useState('')
   const [error, setError] = useState(null)
   const [showSequencePicker, setShowSequencePicker] = useState(false)
+  const [suggestion, setSuggestion] = useState(null)
+  const [suggestLoading, setSuggestLoading] = useState(false)
 
   // reason reflects local state; after a remount the decline reason resets to the default — accepted tradeoff (see plan Known non-goals), don't re-parse decision_note.
   const ctx = { firstName: contactFirstName, details: request.details, reason }
+
+  // Wave 3: fire-and-forget after a successful decide — its own try/catch so
+  // any failure (no key, timeout, HTTP error, empty text) leaves `suggestion`
+  // null and never surfaces an error. Decide-time only, never on mount.
+  async function fetchSuggestion() {
+    try {
+      setSuggestLoading(true)
+      const res = await fetch(`/api/agent/membership-requests/${request.id}/suggest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const data = await res.json()
+      if (data.success && data.suggestion) {
+        setSuggestion(data.suggestion)
+      }
+    } catch {
+      // silent — playbook steps already rendered; the AI suggestion is a bonus.
+    } finally {
+      setSuggestLoading(false)
+    }
+  }
 
   async function decide(status) {
     if (busy) return
@@ -60,6 +84,7 @@ export default function ApprovalActionCard({
         return
       }
       onDecided?.({ ...request, ...data.request })
+      fetchSuggestion() // fire-and-forget — never blocks the decision UX
       if (status === 'declined') {
         onPrefillComposer?.(buildDeclineDraft(request.kind, reason, ctx))
       }
@@ -148,7 +173,7 @@ export default function ApprovalActionCard({
           </div>
         )}
 
-        {steps.length > 0 && (
+        {(steps.length > 0 || suggestion || suggestLoading) && (
           <div className="flex flex-wrap items-center gap-1.5 mt-2 pt-2 border-t border-un1t-border/50">
             <span className="text-[10px] uppercase tracking-wide text-un1t-subtle w-full">Next steps</span>
             {steps.map(step => (
@@ -157,7 +182,16 @@ export default function ApprovalActionCard({
                 {step.label}
               </button>
             ))}
+            {suggestion && (
+              <button type="button" title={suggestion} onClick={() => onPrefillComposer?.(suggestion)}
+                className="px-2.5 py-1 rounded-full text-xs font-medium bg-un1t-bg border border-purple-500/40 text-un1t-text hover:bg-un1t-border/30">
+                Mia suggests
+              </button>
+            )}
           </div>
+        )}
+        {suggestLoading && (
+          <p className="text-[10px] text-un1t-subtle mt-1.5">Mia is thinking…</p>
         )}
 
         {error && <p className="text-xs text-red-700 mt-1.5">{error}</p>}

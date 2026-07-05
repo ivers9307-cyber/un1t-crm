@@ -38,6 +38,10 @@ const DEFAULTS = {
   membership_cta_label: null,
   followups: { enabled: false, nudge_after_hours: 3, template_name: null, daily_cap: 50 },
   first_class_checkin: { enabled: false, delay_hours: 2, template_name: null, daily_cap: 20 },
+  // INBOX-APPROVALS-AI.4 — Wave 3 inline suggestion after approvals.
+  // Absent/enabled-undefined means ON (the suggest route only treats an
+  // explicit `enabled === false` as off); default true here matches that.
+  inline_suggestion: { enabled: true },
   handoff_cooldown_hours: 12,
   consultation_event_type_id: null,
 }
@@ -77,6 +81,9 @@ const SettingsSchema = z.object({
     delay_hours: z.number().min(1).max(24).optional().default(2),
     template_name: z.string().max(512).nullable().optional(),
     daily_cap: z.number().min(1).max(200).optional().default(20),
+  }).nullable().optional(),
+  inline_suggestion: z.object({
+    enabled: z.boolean().optional().default(true),
   }).nullable().optional(),
   handoff_cooldown_hours: z.number().min(0).max(168).nullable().optional(),
   consultation_event_type_id: z.string().max(64).nullable().optional(),
@@ -175,6 +182,7 @@ export async function PUT(request) {
     handoff_cooldown_hours: v.data.handoff_cooldown_hours ?? DEFAULTS.handoff_cooldown_hours,
     followups: { ...DEFAULTS.followups, ...(v.data.followups || {}) },
     first_class_checkin: { ...DEFAULTS.first_class_checkin, ...(v.data.first_class_checkin || {}) },
+    inline_suggestion: { ...DEFAULTS.inline_suggestion, ...(v.data.inline_suggestion || {}) },
     consultation_event_type_id: v.data.consultation_event_type_id || null,
     monthly_points_target: v.data.monthly_points_target ?? null,
   }
