@@ -4,6 +4,8 @@
 // Returns every enabled+managed device with its desired state NOW
 // plus the whole day's resolved windows so the bridge can keep
 // executing fixed AND class schedules through a CRM/internet outage.
+// `desired` is a convenience for the current tick; `resolved_windows`
+// is the source of truth for offline continuity.
 import { NextResponse } from 'next/server'
 import { verifyBridgeToken } from '@/lib/bridge-auth'
 import { createServerClient } from '@/lib/supabase'
