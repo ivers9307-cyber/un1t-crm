@@ -38,6 +38,7 @@ export default function StartFunnel() {
   // landing URL on mount, client-side only (never during SSR). Held in a ref
   // (not state) so it doesn't trigger a re-render; read once at submit time.
   const attributionRef = useRef(null)
+  const sessionRef = useRef(null)
   useEffect(() => {
     const p = new URLSearchParams(window.location.search)
     attributionRef.current = {
@@ -46,9 +47,16 @@ export default function StartFunnel() {
       utm_term: p.get('utm_term') || undefined,
       meta_ad_id: p.get('meta_ad_id') || undefined,
     }
-    // Funnel telemetry (FUNNEL-TRACK): landed on the /start funnel. The
-    // step_* events that follow reveal exactly where visitors drop off.
-    trackFunnelStep('view')
+    // Stable per-visit id so a visitor's steps group into one funnel journey.
+    let sid = null
+    try { sid = window.sessionStorage.getItem('start_sid') } catch { /* private mode */ }
+    if (!sid) {
+      sid = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+      try { window.sessionStorage.setItem('start_sid', sid) } catch { /* private mode */ }
+    }
+    sessionRef.current = sid
+    // Landed on the funnel — the step events that follow reveal the drop-off.
+    fireStep('view')
   }, [])
 
   function buildAttribution() {
@@ -58,6 +66,29 @@ export default function StartFunnel() {
       utm_campaign: p.utm_campaign, utm_content: p.utm_content, utm_term: p.utm_term,
       ad_provider: 'meta', ad_external_id: p.meta_ad_id,
     } : undefined
+  }
+
+  // Fire one funnel step to the Pixel + Vercel (diagnostics) AND to the CRM's
+  // own capture endpoint (funnel_events) so the Ads dashboard can show the
+  // drop-off, per-ad. Best-effort — telemetry never blocks the funnel.
+  function fireStep(step, params = {}) {
+    trackFunnelStep(step, params)
+    try {
+      const a = attributionRef.current || {}
+      fetch('/api/public/funnel-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        keepalive: true,
+        body: JSON.stringify({
+          location_path: 'stillorgan', funnel: 'start', step,
+          session_id: sessionRef.current,
+          ad_provider: a.meta_ad_id ? 'meta' : undefined,
+          ad_external_id: a.meta_ad_id,
+          utm_campaign: a.utm_campaign, utm_content: a.utm_content, utm_term: a.utm_term,
+          meta: params,
+        }),
+      }).catch(() => {})
+    } catch { /* never block the funnel */ }
   }
 
   // Consultation: load the event once chosen.
@@ -80,7 +111,7 @@ export default function StartFunnel() {
         setClasses(list)
         if (list.length) setSelectedClassDay(list[0].day)
         // count=0 flags an empty picker (a dead end that would explain a drop)
-        trackFunnelStep('slots_view', { kind: 'class', count: list.length })
+        fireStep('slots_view', { kind: 'class', count: list.length })
       })
       .catch(() => setClasses([]))
       .finally(() => setClassesLoading(false))
@@ -97,7 +128,7 @@ export default function StartFunnel() {
         const list = (j.success && j.data?.days) ? j.data.days : []
         setDays(list)
         if (list.length) loadSlots(list[0].date)
-        trackFunnelStep('slots_view', { kind: 'consult', count: list.length })
+        fireStep('slots_view', { kind: 'consult', count: list.length })
       })
       .catch(() => setDays([]))
       .finally(() => setDaysLoading(false))
@@ -112,8 +143,8 @@ export default function StartFunnel() {
     } catch { setSlots([]) } finally { setSlotsLoading(false) }
   }
 
-  function chooseConsult() { trackFunnelStep('path_consult'); setPath('consultation'); setError(null); setStep('details') }
-  function chooseClass() { trackFunnelStep('path_class'); setPath('class'); setError(null); setStep('details') }
+  function chooseConsult() { fireStep('path_consult'); setPath('consultation'); setError(null); setStep('details') }
+  function chooseClass() { fireStep('path_class'); setPath('class'); setError(null); setStep('details') }
 
   function detailsNext(e) {
     e.preventDefault()
@@ -124,7 +155,7 @@ export default function StartFunnel() {
     if (!isValidMobileNumber(form.phone)) {
       setError('Please enter a valid mobile number (e.g. 087 123 4567).'); return
     }
-    trackFunnelStep('details', { path })
+    fireStep('details', { path })
     setStep(path === 'class' ? 'classpick' : 'calendar')
   }
 
@@ -145,7 +176,7 @@ export default function StartFunnel() {
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) { setError(j.error || 'That slot was just taken — pick another.'); return }
-      trackFunnelStep('booked_consult')
+      fireStep('booked_consult')
       setStep('done')
     } catch { setError('Something went wrong. Please try again.') } finally { setSubmitting(false) }
   }
@@ -165,7 +196,7 @@ export default function StartFunnel() {
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) { setError(j.error || 'Something went wrong — please try again.'); return }
-      trackFunnelStep('booked_class')
+      fireStep('booked_class')
       setStep('classdone')
     } catch { setError('Something went wrong. Please try again.') } finally { setSubmitting(false) }
   }
