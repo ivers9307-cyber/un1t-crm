@@ -62,10 +62,11 @@ KIOSK_URL="https://crm.un1tdublin.com/tv/${LOCATION_ID}?kiosk=1"
 BIN="$HOME/.local/bin"
 echo ">> Kiosk URL: $KIOSK_URL"
 
-# 1. Chromium
+# 1. Chromium — on 64-bit Bookworm the package/binary is `chromium`; older
+#    32-bit builds use `chromium-browser`. Install whichever exists.
 sudo apt-get update
-sudo apt-get install -y chromium-browser
-CHROMIUM="$(command -v chromium-browser || command -v chromium || true)"
+sudo apt-get install -y chromium || sudo apt-get install -y chromium-browser
+CHROMIUM="$(command -v chromium || command -v chromium-browser || true)"
 [ -n "$CHROMIUM" ] || { echo "!! chromium not found"; exit 1; }
 
 # 2. Boot to desktop autologin + never blank the screen (do_blanking 1 = disable;
