@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { runAgentFollowups, runFirstClassCheckins } from '@/lib/agent/followups'
+import { runHandoffSlaSweep } from '@/lib/agent/handoff-sla'
 
 // AGENT-FOLLOWUP.1 — every 15 min (vercel.json): run Mia's proactive
 // follow-up ladder for every location that enabled it. Stage 1 =
@@ -32,10 +33,18 @@ export async function GET(request) {
   } catch (e) {
     console.error('[radar-agent] checkins tick failed:', e?.message || e)
   }
+  // AGENT-HANDOFF-SLA.1 — same tick, independent failure domain: re-alert
+  // managers about handed-off threads no human has picked up.
+  let handoffSla = null
+  try {
+    handoffSla = await runHandoffSlaSweep(db)
+  } catch (e) {
+    console.error('[radar-agent] handoff-sla tick failed:', e?.message || e)
+  }
 
   // Persist the tick summary on the heartbeat (last_outcome jsonb) — the
   // customer-agent settings card reads it to show WHY check-ins were
   // skipped, so a silent tick is diagnosable without server logs.
-  await stampHeartbeat('agent-followups', { followups: results, checkins })
-  return NextResponse.json({ success: true, results, checkins })
+  await stampHeartbeat('agent-followups', { followups: results, checkins, handoffSla })
+  return NextResponse.json({ success: true, results, checkins, handoffSla })
 }

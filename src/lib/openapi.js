@@ -1615,6 +1615,25 @@ registry.registerPath({
   },
 })
 
+// WhatsApp inbox booking-Flow send (cookie auth)
+registry.registerPath({
+  method: 'post',
+  path: '/api/whatsapp/conversations/{id}/send-flow',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: "Send the location's booking Flow into an open conversation",
+  description: "Sends the configured 'Book your first visit' WhatsApp Flow (locations.settings.whatsapp_flow) as an in-session interactive flow message — no template needed inside the 24h window; a Meta rejection surfaces as 502. Requires the conversation to be linked to a contact (the flow_token books against it). Logs a thread row on success. Takes no body.",
+  request: {
+    params: z.object({ id: uuidLike }),
+  },
+  responses: {
+    200: { description: 'Flow sent' },
+    400: { description: 'No contact linked, or no Flow configured for the location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Meta flow send failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // WhatsApp inbox block action (cookie auth)
 registry.registerPath({
   method: 'post',
@@ -1695,6 +1714,38 @@ registry.registerPath({
   responses: {
     200: { description: 'Staff updated' },
     403: { description: 'Forbidden — owner or master', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// Role permission templates (PERM-AUDIT.2, mig 364)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/role-permissions',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Role permission templates for a location (owner or master)',
+  description: 'Returns { role: { template, effective } } for owner/manager/head_coach/staff. `template` is the stored sparse diff vs code defaults; `effective` is the fully hydrated blob the editor renders.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Templates by role' },
+    403: { description: 'Forbidden — owner at this location or master', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/role-permissions',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save a role permission template (owner or master)',
+  description: "Body: { role, employment_type?, permissions } where permissions is the FULL desired effective blob. employment_type defaults to 'all' (the role base); 'fte'/'contractor'/'casual' edit the variant that layers on top of the base for users whose profiles.employment_type matches (RECEPTION.2, mig 367). The server whitelists keys, diffs against what the slice inherits and stores only the sparse difference; an all-inherited save deletes the row.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ role: z.enum(['owner', 'manager', 'head_coach', 'staff', 'reception']), employment_type: z.enum(['all', 'fte', 'contractor', 'casual']).optional(), permissions: z.record(z.string(), z.unknown()) }).openapi('RoleTemplateSave') } } },
+  },
+  responses: {
+    200: { description: 'Template saved (or cleared when it matches code defaults)' },
+    403: { description: 'Forbidden — owner at this location or master', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -2154,6 +2205,214 @@ registry.registerPath({
     401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'pulse_admin permission required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Contact not in the caller\'s active location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// Accounting — receipt coverage board (RCOV.P0)
+// ============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/accounting/coverage',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Coverage board data for the active location',
+  description: 'Filterable list of tracked Xero bank lines plus headline status counts and the most recent pull\'s audit row. Requires the accounting_hub permission.',
+  request: {
+    query: z.object({
+      status: z.string().optional(),
+      limit: z.coerce.number().int().min(1).max(500).optional(),
+    }),
+  },
+  responses: {
+    200: { description: 'Lines + counts + lastRun', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+for (const [action, summary, extra] of [
+  ['ignore', 'Ignore a bank line (expected no-doc)', {
+    body: { content: { 'application/json': { schema: z.object({ reason: z.string().min(2).max(200) }).openapi('CoverageIgnoreBody') } } },
+  }],
+  ['unignore', 'Reverse an ignore — the line returns to uncovered', {}],
+  ['rehunt', 'Queue a single line for an immediate re-hunt', {}],
+  ['upload', 'Attach a manually-obtained receipt (multipart file) — content-hash deduped, enters the invoices queue', {}],
+]) {
+  registry.registerPath({
+    method: 'post',
+    path: `/api/accounting/coverage/{id}/${action}`,
+    tags: ['Accounting'],
+    security: [{ CookieAuth: [] }],
+    summary,
+    request: { params: z.object({ id: uuidLike }), ...(extra.body ? { body: extra.body } : {}) },
+    responses: {
+      200: { description: 'OK', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+      403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+      404: { description: 'Line not found for the active location', content: { 'application/json': { schema: ErrorResponse } } },
+      409: { description: 'Line state does not allow this action', content: { 'application/json': { schema: ErrorResponse } } },
+    },
+  })
+}
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/accounting/health',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Runs & health for the receipt-coverage feature',
+  description: 'Recent recon runs (pulls + weekly reports), hunt-inbox health, the two cron heartbeats with staleness, and 7-day LLM spend vs the hunt budget. Requires the accounting_hub permission.',
+  responses: {
+    200: { description: 'Runs, mailboxes, heartbeats, spend', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/accounting/exceptions',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Exceptions for the active location (audit F2/F3/F4/F5 + stuck rows)',
+  description: 'VAT mismatches (Xero-booked vs OCR), aging DRAFT bills, bills missing their attachment, receiptless-expected expenses, and queue rows stuck >7 days. Requires the accounting_hub permission.',
+  responses: {
+    200: { description: 'Five exception sections', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/accounting/coverage/refresh',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Trigger a coverage pull for the active location',
+  description: 'Operator-triggered pull; doubles as the live validation probe for the BankStatement report shape. `force: true` bypasses the covered-ratio circuit-breaker — the documented escape hatch after a legitimate bulk reconcile in Xero. Requires the accounting_hub permission.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({ force: z.boolean().optional() }).openapi('CoverageRefreshBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Pull summary', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'A pull is already running, Xero reconnect required, or the cover-guard tripped (retry with force)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/accounting/coverage/accounts',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Active Xero bank accounts for the statement-import picker',
+  responses: {
+    200: { description: 'Bank accounts', content: { 'application/json': { schema: SuccessResponse(z.object({ accounts: z.array(z.object({ id: z.string(), name: z.string() })) })) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Xero not connected for this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/accounting/coverage/import-statement',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Import a bank-statement CSV export into the coverage board',
+  description: 'CSV bridge for unactioned imported statement lines (invisible to the API pull — the Bank Statement report scope is retired and the Finance API is entitlement-gated). Money-out, unreconciled lines are tracked under the csv: key namespace; re-uploading with lines now Reconciled covers them. Requires the accounting_hub permission.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            bankAccountId: z.string().min(8).max(64),
+            bankAccountName: z.string().min(1).max(120),
+            csvText: z.string().min(1).max(2_000_000),
+          }).openapi('CoverageImportStatementBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Import stats', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    422: { description: 'CSV shape not recognised (error names the headers found)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// RCOV.P1 — hunt-inbox management. recon_mailboxes is a GLOBAL
+// resource (no location_id) — the hunt engine searches every inbox
+// on behalf of every location — so these routes gate on
+// accounting_hub only, no per-location scoping.
+const MailboxCreateBody = z.object({
+  label: z.string().min(1).max(100),
+  email: z.string().email().max(320),
+  password: z.string().min(8).max(128),
+}).openapi('MailboxCreateBody')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/accounting/mailboxes',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List hunt inboxes',
+  description: 'Operator-facing metadata for every configured hunt inbox (the imap_password column is never selected). Global list — not scoped to the active location. Requires the accounting_hub permission.',
+  responses: {
+    200: { description: 'Mailbox rows', content: { 'application/json': { schema: SuccessResponse(z.array(z.object({}).passthrough())) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/accounting/mailboxes',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Add a hunt inbox',
+  description: 'Verifies the Gmail app password with a live IMAP login before persisting the credential. Requires the accounting_hub permission.',
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: MailboxCreateBody },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Created mailbox id', content: { 'application/json': { schema: SuccessResponse(z.object({ id: uuidLike })) } } },
+    400: { description: 'Invalid request body, or the IMAP login check failed', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'This inbox (email) is already added', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/accounting/mailboxes/{id}',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Remove a hunt inbox',
+  description: 'Requires the accounting_hub permission.',
+  request: {
+    params: z.object({ id: uuidLike }),
+  },
+  responses: {
+    200: { description: 'Removed', content: { 'application/json': { schema: SuccessResponse(z.object({})) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No mailbox with that id', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

@@ -50,6 +50,11 @@ export default function StaffPermissions() {
   const canEdit = isMaster || ownedLocationIds.length > 0
 
   const [editable, setEditable] = useState([])      // assignments the caller may edit
+  // PERM-AUDIT.3 — role templates (mig 364) from the staff GET payload,
+  // { [location_id]: { [role]: sparse blob } }. Hydration merges them
+  // under stored values so sparse per-user blobs render the TRUE
+  // effective state (code defaults + template + overrides).
+  const [roleTemplates, setRoleTemplates] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
@@ -65,6 +70,7 @@ export default function StaffPermissions() {
     const owned = new Set(ownedLocationIds)
     const edits = isMaster ? all : all.filter(pl => owned.has(pl.location_id))
     setEditable(edits)
+    setRoleTemplates(res.data?.role_templates || {})
     setPermEdits({})
     setSelectedLocationId(prev =>
       edits.some(e => e.location_id === prev) ? prev : (edits[0]?.location_id || null)
@@ -82,11 +88,20 @@ export default function StaffPermissions() {
 
   // The working blob for the selected location — the edited one if touched,
   // else the hydrated current state so toggles render the truthful value.
+  const templateFor = useCallback(
+    (locId, role) => roleTemplates?.[locId]?.[role] || null,
+    [roleTemplates]
+  )
+
   const workingPerms = useMemo(() => {
     if (!selectedAssignment) return null
     return permEdits[selectedLocationId]
-      || hydratePermissions(selectedAssignment.permissions, selectedAssignment.role)
-  }, [selectedAssignment, selectedLocationId, permEdits])
+      || hydratePermissions(
+        selectedAssignment.permissions,
+        selectedAssignment.role,
+        templateFor(selectedAssignment.location_id, selectedAssignment.role)
+      )
+  }, [selectedAssignment, selectedLocationId, permEdits, templateFor])
 
   function valueOf(scope, key) {
     if (!workingPerms) return false
@@ -99,7 +114,11 @@ export default function StaffPermissions() {
     if (!selectedAssignment) return
     setPermEdits(prev => {
       const base = prev[selectedLocationId]
-        || hydratePermissions(selectedAssignment.permissions, selectedAssignment.role)
+        || hydratePermissions(
+          selectedAssignment.permissions,
+          selectedAssignment.role,
+          templateFor(selectedAssignment.location_id, selectedAssignment.role)
+        )
       if (scope === 'web') {
         return { ...prev, [selectedLocationId]: { ...base, [key]: !base[key] } }
       }
@@ -113,7 +132,11 @@ export default function StaffPermissions() {
     if (!selectedAssignment) return
     setPermEdits(prev => {
       const base = prev[selectedLocationId]
-        || hydratePermissions(selectedAssignment.permissions, selectedAssignment.role)
+        || hydratePermissions(
+          selectedAssignment.permissions,
+          selectedAssignment.role,
+          templateFor(selectedAssignment.location_id, selectedAssignment.role)
+        )
       if (category.scope === 'web') {
         const patch = {}
         category.items.forEach(it => { patch[it.key] = value })

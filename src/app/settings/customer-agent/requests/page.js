@@ -8,7 +8,7 @@ import Link from 'next/link'
 // Approve, Decline, or (for cancellations) Save (retention kept them).
 // The actual Glofox change is made by staff after approving.
 
-const KIND_LABEL = { pause: 'Pause', cancellation: 'Cancellation', class_booking: 'Class booking', consultation: 'Consultation' }
+const KIND_LABEL = { pause: 'Pause', cancellation: 'Cancellation', class_booking: 'Class booking', consultation: 'Consultation', membership_purchase: 'Membership purchase' }
 const STATUS_STYLE = {
   pending: 'bg-amber-100 text-amber-800',
   approved: 'bg-green-100 text-green-700',

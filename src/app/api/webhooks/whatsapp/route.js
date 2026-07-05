@@ -433,7 +433,7 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
       },
     }
     if (conv?.assigned_to) {
-      await sendPush([conv.assigned_to], payload)
+      await sendPush([conv.assigned_to], payload, { locationId: conv.location_id })
     } else if (conv?.location_id) {
       await sendPushToRolesAtLocation(
         conv.location_id,

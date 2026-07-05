@@ -138,12 +138,12 @@ export async function sendInteractiveOptions(to, text, options, opts = {}) {
  * flow_token round-trips to our data-exchange endpoint so it can resolve the
  * contact + location (minted as `<contactId>.<locationId>`).
  */
-export function buildFlowPayload(to, { flowId, flowToken, flowCta, screen, data = {} }) {
+export function buildFlowPayload(to, { flowId, flowToken, flowCta, screen, data = {}, bodyText }) {
   return {
     messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive',
     interactive: {
       type: 'flow',
-      body: { text: 'Tap below to book your first visit.' },
+      body: { text: bodyText || 'Tap below to book your first visit.' },
       action: {
         name: 'flow',
         parameters: {

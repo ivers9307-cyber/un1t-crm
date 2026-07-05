@@ -28,6 +28,7 @@ const ROLE_OPTIONS = [
   { value: 'manager', label: 'Manager' },
   { value: 'head_coach', label: 'Head Coach' },
   { value: 'staff', label: 'Staff' },
+  { value: 'reception', label: 'Reception' },
 ]
 
 export default function UserAssignmentsPanel({

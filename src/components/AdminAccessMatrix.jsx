@@ -26,6 +26,7 @@ const ROLE_LABELS = {
   manager: 'Manager',
   head_coach: 'Head Coach',
   staff: 'Staff',
+  reception: 'Reception',
 }
 
 const ROLE_PILLS = {
@@ -33,6 +34,7 @@ const ROLE_PILLS = {
   manager: 'bg-blue-500/15 text-blue-700',
   head_coach: 'bg-emerald-500/15 text-emerald-700',
   staff: 'bg-gray-500/15 text-gray-700',
+  reception: 'bg-amber-500/15 text-amber-700',
 }
 
 const PERMISSION_ROLE_OPTIONS = [
@@ -40,6 +42,7 @@ const PERMISSION_ROLE_OPTIONS = [
   { value: 'manager', label: 'Manager' },
   { value: 'head_coach', label: 'Head Coach' },
   { value: 'staff', label: 'Staff' },
+  { value: 'reception', label: 'Reception' },
 ]
 
 // Heuristic: a permissions blob is "non-default" if it has any keys at

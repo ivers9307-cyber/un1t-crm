@@ -6,6 +6,7 @@
 // The create/update logic (the PUT monolith) is NOT here — that's C2.
 import { getUserLocationIds } from '@/lib/auth'
 import { ADMIN_ROLES } from '@/lib/schemas'
+import { mergeTemplates } from '@shared/permissions'
 
 export const STAFF_PUBLIC_FIELDS =
   'id, full_name, email, role, avatar_url, active, employment_type, contracted_hours_per_week'
@@ -62,5 +63,43 @@ export async function getStaffForUser({ db, user, id }) {
   // (a real DB error) — surface 500 rather than masking it as 404 and
   // sending the caller into a silent retry loop.
   if (error) return { ok: false, status: 500, error: error.message }
+
+  // PERM-AUDIT.3 — role templates (mig 364) for the target's
+  // locations, keyed { [location_id]: { [role]: sparse blob } }.
+  // The permission editors (web StaffForm + mobile staff/permissions)
+  // hydrate stored SPARSE per-user blobs against the role's effective
+  // defaults, which include the template. Admin payloads only — the
+  // slim roster shape doesn't carry permissions at all.
+  if (isAdmin) {
+    const locIds = (data?.profile_locations || []).map(l => l.location_id).filter(Boolean)
+    const roleTemplates = {}
+    if (locIds.length > 0) {
+      try {
+        const { data: tplRows } = await db
+          .from('location_role_permissions')
+          .select('location_id, role, employment_type, permissions')
+          .in('location_id', locIds)
+        // RECEPTION.2 (mig 367) — merge the TARGET's employment-type
+        // variant over the role's 'all' row, so consumers (the mobile
+        // permissions editor) keep seeing one template per (loc, role)
+        // that matches what the resolver uses for this user.
+        const emp = data?.employment_type || null
+        const rowFor = (locId, role, e) => (tplRows || []).find(r =>
+          r.location_id === locId && r.role === role && r.employment_type === e
+        )?.permissions || null
+        for (const row of (tplRows || [])) {
+          roleTemplates[row.location_id] = roleTemplates[row.location_id] || {}
+          if (roleTemplates[row.location_id][row.role]) continue
+          roleTemplates[row.location_id][row.role] = mergeTemplates(
+            rowFor(row.location_id, row.role, 'all'),
+            emp ? rowFor(row.location_id, row.role, emp) : null
+          ) || {}
+        }
+      } catch {
+        // degrade to code defaults
+      }
+    }
+    return { ok: true, data: { ...data, role_templates: roleTemplates } }
+  }
   return { ok: true, data }
 }

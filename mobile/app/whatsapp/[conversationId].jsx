@@ -38,8 +38,11 @@ import {
   isWindowOpen, sendText, sendTemplate, listTemplates,
   resolveConversation, rateAgentMessage,
 } from '../../lib/whatsapp-api'
+import { listConversationApprovals } from '../../lib/inbox-approvals-api'
 import { needsReply, isAgentHandoff } from '../../lib/inbox'
+import { mergeTimeline } from '../../../shared/approval-cards'
 import MessageBubble from '../../components/MessageBubble'
+import ThreadApprovalCard from '../../components/ThreadApprovalCard'
 
 export default function Conversation() {
   const { conversationId } = useLocalSearchParams()
@@ -49,6 +52,7 @@ export default function Conversation() {
   const insets = useSafeAreaInsets()
   const [conv, setConv] = useState(null)
   const [messages, setMessages] = useState([])
+  const [approvals, setApprovals] = useState([])
   const [loading, setLoading] = useState(true)
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
@@ -59,16 +63,19 @@ export default function Conversation() {
   const scrollRef = useRef(null)
 
   const refresh = useCallback(async () => {
-    const [convRes, msgRes] = await Promise.all([
+    const [convRes, msgRes, approvalsRes] = await Promise.all([
       getConversation(conversationId),
       listMessages(conversationId),
+      listConversationApprovals(conversationId),
     ])
     if (convRes.success) setConv(convRes.data)
     if (msgRes.success) setMessages(msgRes.data || [])
+    if (approvalsRes.success) setApprovals(approvalsRes.requests || [])
   }, [conversationId])
 
   useEffect(() => {
     setLoading(true)
+    setApprovals([])
     refresh().then(() => markConversationRead(conversationId)).finally(() => setLoading(false))
   }, [conversationId, refresh])
 
@@ -168,6 +175,7 @@ export default function Conversation() {
     || conv?.wa_profile_name
     || conv?.wa_phone
     || 'Conversation'
+  const contactFirstName = conv?.contacts?.first_name || conv?.wa_profile_name?.split(' ')[0] || null
 
   return (
     <KeyboardAvoidingView
@@ -236,8 +244,18 @@ export default function Conversation() {
             contentContainerClassName="p-4"
             onContentSizeChange={() => scrollRef.current?.scrollToEnd?.({ animated: false })}
           >
-            {messages.map(m => (
-              <MessageBubble key={m.id} msg={m} myRating={feedback[m.id] || null} onRate={rate} channel="whatsapp" />
+            {mergeTimeline(messages, approvals).map(item => (
+              item.kind === 'approval' ? (
+                <ThreadApprovalCard
+                  key={item.key}
+                  request={item.request}
+                  contactFirstName={contactFirstName}
+                  onDecided={merged => { setApprovals(p => p.map(r => (r.id === merged.id ? merged : r))); refresh() }}
+                  onPrefillComposer={t => setText(t)}
+                />
+              ) : (
+                <MessageBubble key={item.key} msg={item.message} myRating={feedback[item.message.id] || null} onRate={rate} channel="whatsapp" />
+              )
             ))}
           </ScrollView>
 

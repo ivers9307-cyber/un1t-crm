@@ -30,7 +30,7 @@ import { createServerClient } from '@/lib/supabase'
 
 // db mock dispatching by table. Captures the unread-reset update so
 // tests can assert the side-effect is gated too.
-function mockDb({ conversation, messages = [] } = {}) {
+function mockDb({ conversation, messages = [], locationSettings = {} } = {}) {
   const updateEq = vi.fn(() => Promise.resolve({ data: null, error: null }))
   return {
     updateEq,
@@ -58,6 +58,16 @@ function mockDb({ conversation, messages = [] } = {}) {
               order: vi.fn(() => ({
                 limit: vi.fn(() => Promise.resolve({ data: messages, error: null })),
               })),
+            })),
+          })),
+        }
+      }
+      if (table === 'locations') {
+        // FLOW-SEND — the flow_available lookup
+        return {
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              single: vi.fn(() => Promise.resolve({ data: { settings: locationSettings }, error: null })),
             })),
           })),
         }
@@ -108,7 +118,20 @@ describe('GET /api/whatsapp/conversations/[id] — authz gate', () => {
     expect(body.success).toBe(true)
     expect(body.conversation.id).toBe('c1')
     expect(body.messages).toHaveLength(1)
+    expect(body.flow_available).toBe(false)
     expect(db.updateEq).toHaveBeenCalled()
+  })
+
+  it('flags flow_available when the location has a booking Flow configured (FLOW-SEND)', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'staff', locations: [{ id: 'loc-1' }] })
+    const db = mockDb({
+      conversation: { id: 'c1', location_id: 'loc-1' },
+      locationSettings: { whatsapp_flow: { flow_id: '1343015528022374' } },
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await GET(req(), props)
+    const body = await res.json()
+    expect(body.flow_available).toBe(true)
   })
 
   it('master can read any conversation', async () => {

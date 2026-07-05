@@ -75,9 +75,9 @@ describe('shapeClassListForAgent', () => {
       ev({ private: true }), ev({ active: false }), null,
     ], NOW)).toEqual([])
   })
-  it('caps the list', () => {
-    const many = Array.from({ length: 40 }, (_, i) => ev({ _id: String(i).padStart(24, '0'), time_start: Math.floor(NOW / 1000) + 3600 + i * 60 }))
-    expect(shapeClassListForAgent(many, NOW).length).toBeLessThanOrEqual(20)
+  it('caps the list at 60 — high enough that 7 days of a full timetable survive time-sorted truncation', () => {
+    const many = Array.from({ length: 80 }, (_, i) => ev({ _id: String(i).padStart(24, '0'), time_start: Math.floor(NOW / 1000) + 3600 + i * 60 }))
+    expect(shapeClassListForAgent(many, NOW).length).toBe(60)
   })
 
   // Times must be Dublin wall-clock, not UTC. Glofox time_start is an

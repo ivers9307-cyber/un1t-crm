@@ -149,8 +149,8 @@ describe('shape invariants', () => {
     expect(DEFAULT_NOTIFICATION_CONFIG.categories.bookings).toBeDefined()
   })
 
-  it('VALID_NOTIFY_ROLES contains the four canonical roles', () => {
-    expect(VALID_NOTIFY_ROLES).toEqual(['owner', 'manager', 'head_coach', 'staff'])
+  it('VALID_NOTIFY_ROLES contains the five per-location roles', () => {
+    expect(VALID_NOTIFY_ROLES).toEqual(['owner', 'manager', 'head_coach', 'staff', 'reception'])
   })
 
   it('getLeadTimes + getBookingNotifyRoles match getEffectiveConfig', () => {

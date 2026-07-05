@@ -15,6 +15,7 @@ vi.mock('./supabase.js', () => {
 
 let fakeProfiles = []
 let fakeLinks = []
+let fakeTemplates = []
 let fakeTokens = []
 let deletedTokenIds = []
 let lastDbPath = []
@@ -36,6 +37,17 @@ function makeFakeDb() {
         select: () => ({
           in: (_col, ids) => Promise.resolve({
             data: fakeLinks.filter(l => ids.includes(l.profile_id)),
+            error: null,
+          }),
+        }),
+      }
+    }
+    // PERM-AUDIT.3 — role templates (mig 364) consulted at tier 2.5.
+    if (table === 'location_role_permissions') {
+      return {
+        select: () => ({
+          in: (_col, ids) => Promise.resolve({
+            data: fakeTemplates.filter(t => ids.includes(t.location_id)),
             error: null,
           }),
         }),
@@ -66,6 +78,7 @@ function makeFakeDb() {
 beforeEach(() => {
   fakeProfiles = []
   fakeLinks = []
+  fakeTemplates = []
   fakeTokens = []
   deletedTokenIds = []
   lastDbPath = []
@@ -127,20 +140,32 @@ describe('sendPush — permission filtering (reads profile_locations, mig 058)',
     expect(global.fetch).toHaveBeenCalledOnce()
   })
 
-  it('treats a missing permissions.mobile object as send (not explicitly off)', async () => {
+  it('missing keys resolve to the ROLE default (owner: notify_lead defaults on → send)', async () => {
+    // PERM-AUDIT.3 — a SPARSE blob (no explicit keys) falls through
+    // to the role code default instead of the old "missing = send".
     fakeProfiles = [{ id: 'a', active: true }]
-    fakeLinks = [{ profile_id: 'a', permissions: {} }]
+    fakeLinks = [{ profile_id: 'a', location_id: 'loc1', role: 'owner', permissions: {} }]
     fakeTokens = [{ id: 't1', user_id: 'a', expo_push_token: 'ExponentPushToken[x]' }]
 
     const result = await sendPush(['a'], { title: 't', body: 'b', category: 'lead' })
     expect(result.sent).toBe(1)
   })
 
+  it('missing keys resolve to the ROLE default (staff: notify_lead defaults off → suppressed)', async () => {
+    fakeProfiles = [{ id: 'a', active: true }]
+    fakeLinks = [{ profile_id: 'a', location_id: 'loc1', role: 'staff', permissions: {} }]
+    fakeTokens = [{ id: 't1', user_id: 'a', expo_push_token: 'ExponentPushToken[x]' }]
+
+    const result = await sendPush(['a'], { title: 't', body: 'b', category: 'lead' })
+    expect(result.sent).toBe(0)
+    expect(result.skipped).toBe(1)
+  })
+
   it('IGNORES stale profiles.permissions — only profile_locations gates (the mig-058 regression)', async () => {
     // The opt-out lives ONLY on the stale profiles.permissions; the live
     // profile_locations row is clean. Pre-fix this user was wrongly skipped.
     fakeProfiles = [{ id: 'a', active: true, permissions: { mobile: { notify_lead: false } } }]
-    fakeLinks = [{ profile_id: 'a', permissions: { mobile: { push_notifications: true } } }]
+    fakeLinks = [{ profile_id: 'a', location_id: 'loc1', role: 'manager', permissions: { mobile: { push_notifications: true } } }]
     fakeTokens = [{ id: 't1', user_id: 'a', expo_push_token: 'ExponentPushToken[x]' }]
 
     const result = await sendPush(['a'], { title: 't', body: 'b', category: 'lead' })
@@ -148,11 +173,54 @@ describe('sendPush — permission filtering (reads profile_locations, mig 058)',
     expect(result.skipped).toBe(0)
   })
 
+  it('role template (mig 364) flips a role default; per-user override still wins', async () => {
+    fakeProfiles = [{ id: 'a', active: true }, { id: 'b', active: true }]
+    // Both staff at loc1 (notify_lead default OFF). Template turns it ON.
+    // User b additionally carries an explicit per-user opt-OUT.
+    fakeTemplates = [{ location_id: 'loc1', role: 'staff', employment_type: 'all', permissions: { mobile: { notify_lead: true } } }]
+    fakeLinks = [
+      { profile_id: 'a', location_id: 'loc1', role: 'staff', permissions: {} },
+      { profile_id: 'b', location_id: 'loc1', role: 'staff', permissions: { mobile: { notify_lead: false } } },
+    ]
+    fakeTokens = [
+      { id: 't1', user_id: 'a', expo_push_token: 'ExponentPushToken[x]' },
+      { id: 't2', user_id: 'b', expo_push_token: 'ExponentPushToken[y]' },
+    ]
+
+    const result = await sendPush(['a', 'b'], { title: 't', body: 'b', category: 'lead' })
+    expect(result.sent).toBe(1)    // a — template on
+    expect(result.skipped).toBe(1) // b — explicit user opt-out beats template
+  })
+
+  it('employment-type variant (mig 367) only applies to matching users', async () => {
+    // Contractor variant turns notify_lead ON for staff at loc1. The
+    // contractor gets it; the FTE stays at the staff default (off).
+    fakeProfiles = [
+      { id: 'a', active: true, employment_type: 'contractor' },
+      { id: 'b', active: true, employment_type: 'fte' },
+    ]
+    fakeTemplates = [
+      { location_id: 'loc1', role: 'staff', employment_type: 'contractor', permissions: { mobile: { notify_lead: true } } },
+    ]
+    fakeLinks = [
+      { profile_id: 'a', location_id: 'loc1', role: 'staff', permissions: {} },
+      { profile_id: 'b', location_id: 'loc1', role: 'staff', permissions: {} },
+    ]
+    fakeTokens = [
+      { id: 't1', user_id: 'a', expo_push_token: 'ExponentPushToken[x]' },
+      { id: 't2', user_id: 'b', expo_push_token: 'ExponentPushToken[y]' },
+    ]
+
+    const result = await sendPush(['a', 'b'], { title: 't', body: 'b', category: 'lead' })
+    expect(result.sent).toBe(1)    // a — contractor variant on
+    expect(result.skipped).toBe(1) // b — fte, staff default off
+  })
+
   it('honours an opt-out set on ANY assignment (conservative, multi-location)', async () => {
     fakeProfiles = [{ id: 'a', active: true }]
     fakeLinks = [
-      { profile_id: 'a', permissions: { mobile: { notify_lead: false } } },
-      { profile_id: 'a', permissions: { mobile: {} } },
+      { profile_id: 'a', location_id: 'loc1', role: 'owner', permissions: { mobile: { notify_lead: false } } },
+      { profile_id: 'a', location_id: 'loc2', role: 'owner', permissions: { mobile: {} } },
     ]
     fakeTokens = [{ id: 't1', user_id: 'a', expo_push_token: 'ExponentPushToken[x]' }]
 
@@ -275,20 +343,75 @@ describe('sendPush — Expo failure handling (retry + failed count)', () => {
 describe('resolvePushAllowedIds', () => {
   it('reads profile_locations and ignores stale profiles.permissions', async () => {
     fakeProfiles = [{ id: 'a', active: true, permissions: { mobile: { notify_lead: false } } }]
-    fakeLinks = [{ profile_id: 'a', permissions: { mobile: {} } }]
+    fakeLinks = [{ profile_id: 'a', location_id: 'loc1', role: 'owner', permissions: { mobile: {} } }]
     const allowed = await resolvePushAllowedIds(makeFakeDb(), ['a'], 'lead')
     expect(allowed.has('a')).toBe(true)
   })
 
   it('suppresses an inactive user regardless of permissions', async () => {
     fakeProfiles = [{ id: 'a', active: false }]
-    fakeLinks = [{ profile_id: 'a', permissions: { mobile: {} } }]
+    fakeLinks = [{ profile_id: 'a', location_id: 'loc1', role: 'owner', permissions: { mobile: {} } }]
     const allowed = await resolvePushAllowedIds(makeFakeDb(), ['a'], 'lead')
     expect(allowed.has('a')).toBe(false)
+  })
+
+  it('allows a user with NO assignments (master has no profile_locations rows)', async () => {
+    fakeProfiles = [{ id: 'a', active: true }]
+    fakeLinks = []
+    const allowed = await resolvePushAllowedIds(makeFakeDb(), ['a'], 'lead')
+    expect(allowed.has('a')).toBe(true)
   })
 
   it('returns an empty set for no ids', async () => {
     const allowed = await resolvePushAllowedIds(makeFakeDb(), [], 'lead')
     expect(allowed.size).toBe(0)
+  })
+})
+
+// PUSH-LOC.1 — the notification's location decides the per-category gate.
+describe('resolvePushAllowedIds — per-location gating', () => {
+  // Richard's live case: owner at Stillorgan (role default notify_whatsapp
+  // ON) + staff at SourceIt (role default OFF). The staff row must not eat
+  // Stillorgan's WhatsApp pushes.
+  const richardLinks = () => {
+    fakeProfiles = [{ id: 'r', active: true }]
+    fakeLinks = [
+      { profile_id: 'r', location_id: 'stillorgan', role: 'owner', permissions: null },
+      { profile_id: 'r', location_id: 'sourceit', role: 'staff', permissions: null },
+    ]
+  }
+
+  it('allows a Stillorgan WhatsApp push despite a staff role elsewhere', async () => {
+    richardLinks()
+    const allowed = await resolvePushAllowedIds(makeFakeDb(), ['r'], 'whatsapp', { locationId: 'stillorgan' })
+    expect(allowed.has('r')).toBe(true)
+  })
+
+  it('still suppresses a push AT the location whose role default is off', async () => {
+    richardLinks()
+    const allowed = await resolvePushAllowedIds(makeFakeDb(), ['r'], 'whatsapp', { locationId: 'sourceit' })
+    expect(allowed.has('r')).toBe(false)
+  })
+
+  it('without a locationId the conservative any-assignment rule still applies', async () => {
+    richardLinks()
+    const allowed = await resolvePushAllowedIds(makeFakeDb(), ['r'], 'whatsapp')
+    expect(allowed.has('r')).toBe(false)
+  })
+
+  it('a user with NO assignment at the given location falls back to all assignments', async () => {
+    fakeProfiles = [{ id: 'r', active: true }]
+    fakeLinks = [{ profile_id: 'r', location_id: 'sourceit', role: 'staff', permissions: null }]
+    const allowed = await resolvePushAllowedIds(makeFakeDb(), ['r'], 'whatsapp', { locationId: 'stillorgan' })
+    expect(allowed.has('r')).toBe(false)
+  })
+
+  it('an explicit per-user override at the location wins over its role default', async () => {
+    fakeProfiles = [{ id: 'r', active: true }]
+    fakeLinks = [
+      { profile_id: 'r', location_id: 'sourceit', role: 'staff', permissions: { mobile: { notify_whatsapp: true } } },
+    ]
+    const allowed = await resolvePushAllowedIds(makeFakeDb(), ['r'], 'whatsapp', { locationId: 'sourceit' })
+    expect(allowed.has('r')).toBe(true)
   })
 })

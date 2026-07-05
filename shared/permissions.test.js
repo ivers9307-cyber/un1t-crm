@@ -7,6 +7,9 @@ import { describe, it, expect } from 'vitest'
 import {
   resolvePermission,
   hydratePermissions,
+  sanitizePermissionsBlob,
+  diffPermissionsBlob,
+  mergeTemplates,
   DEFAULT_WEB_PERMISSIONS_BY_ROLE,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
 } from './permissions.js'
@@ -238,5 +241,221 @@ describe('hydratePermissions — role defaults merged under the stored blob', ()
     out.pipeline = true
     out.mobile.schedule = true
     expect(raw).toEqual({ pipeline: false, mobile: { schedule: false } })
+  })
+})
+
+// PERM-AUDIT.1 — the save-path whitelist. Both staff-save routes run
+// incoming blobs through this (via permissionsSchema.transform), so
+// junk keys can no longer land in profile_locations.permissions and
+// stale keys self-heal on the next save.
+describe('sanitizePermissionsBlob — save-path whitelist', () => {
+  it('keeps known web + mobile boolean keys and drops unknown keys', () => {
+    const out = sanitizePermissionsBlob({
+      pipeline: true,
+      dashboard: true,            // stale pre-split key seen in prod
+      typo_feature: false,
+      mobile: { schedule: false, bad_key: true },
+    })
+    expect(out).toEqual({ pipeline: true, mobile: { schedule: false } })
+  })
+
+  it('drops non-boolean values for permission keys', () => {
+    const out = sanitizePermissionsBlob({ pipeline: 'yes', mobile: { schedule: 1 } })
+    expect(out).toEqual({ mobile: {} })
+  })
+
+  it('preserves the named non-boolean mobile extras (layout, lead_time_overrides)', () => {
+    const layout = { bar: ['schedule'], allowed: ['schedule', 'studio'] }
+    const overrides = { tasks: 120 }
+    const out = sanitizePermissionsBlob({
+      mobile: { schedule: true, layout, lead_time_overrides: overrides, rogue_extra: {} },
+    })
+    expect(out.mobile.layout).toEqual(layout)
+    expect(out.mobile.lead_time_overrides).toEqual(overrides)
+    expect(out.mobile.rogue_extra).toBeUndefined()
+  })
+
+  it('non-object / null / array input → empty blob', () => {
+    expect(sanitizePermissionsBlob(null)).toEqual({})
+    expect(sanitizePermissionsBlob(undefined)).toEqual({})
+    expect(sanitizePermissionsBlob('junk')).toEqual({})
+    expect(sanitizePermissionsBlob([1, 2])).toEqual({})
+  })
+
+  it('round-trips a full hydrated blob unchanged (editor save path)', () => {
+    const full = hydratePermissions(null, 'manager')
+    expect(sanitizePermissionsBlob(full)).toEqual(full)
+  })
+})
+
+// PERM-AUDIT.2 — tier 2.5: operator-edited role templates (mig 364).
+describe('resolvePermission — tier 2.5 (role template)', () => {
+  const base = {
+    role: 'staff',
+    location: { features: {} },
+    defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
+  }
+
+  it('template explicit true beats a code default of false', () => {
+    expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE.staff.email).toBe(false) // guard the premise
+    expect(resolvePermission({
+      ...base, permissions: null, roleTemplate: { email: true }, key: 'email',
+    })).toBe(true)
+  })
+
+  it('template explicit false beats a code default of true', () => {
+    expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE.staff.pipeline).toBe(true)
+    expect(resolvePermission({
+      ...base, permissions: null, roleTemplate: { pipeline: false }, key: 'pipeline',
+    })).toBe(false)
+  })
+
+  it('per-user override (tier 2) still beats the template', () => {
+    expect(resolvePermission({
+      ...base, permissions: { email: false }, roleTemplate: { email: true }, key: 'email',
+    })).toBe(false)
+    expect(resolvePermission({
+      ...base, permissions: { pipeline: true }, roleTemplate: { pipeline: false }, key: 'pipeline',
+    })).toBe(true)
+  })
+
+  it('missing key in the template falls through to the code default', () => {
+    expect(resolvePermission({
+      ...base, permissions: null, roleTemplate: { email: true }, key: 'pipeline',
+    })).toBe(true) // staff code default
+  })
+
+  it('location gate (tier 1) still beats the template', () => {
+    expect(resolvePermission({
+      ...base,
+      location: { features: { email: false } },
+      permissions: null, roleTemplate: { email: true }, key: 'email',
+    })).toBe(false)
+  })
+
+  it('master ignores the template entirely', () => {
+    expect(resolvePermission({
+      role: 'master', location: { features: {} },
+      permissions: null, roleTemplate: { pipeline: false },
+      defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE, key: 'pipeline',
+    })).toBe(true)
+  })
+})
+
+describe('hydratePermissions — with a role template', () => {
+  it('merges template between code defaults and stored values', () => {
+    const out = hydratePermissions(
+      { pipeline: false },                                   // user override
+      'staff',
+      { pipeline: true, email: true, mobile: { whatsapp: true } }  // template
+    )
+    expect(out.pipeline).toBe(false)   // user override wins over template
+    expect(out.email).toBe(true)       // template wins over code default (false)
+    expect(out.mobile.whatsapp).toBe(true) // template mobile wins over code default (false)
+    expect(out.contacts).toBe(DEFAULT_WEB_PERMISSIONS_BY_ROLE.staff.contacts) // untouched keys = code default
+  })
+
+  it('a template mobile section does not clobber the top-level web merge', () => {
+    const out = hydratePermissions(null, 'staff', { mobile: { whatsapp: true } })
+    expect(out.mobile.whatsapp).toBe(true)
+    expect(out.mobile.schedule).toBe(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.staff.schedule)
+    expect(out.pipeline).toBe(DEFAULT_WEB_PERMISSIONS_BY_ROLE.staff.pipeline)
+  })
+})
+
+describe('diffPermissionsBlob — sparse diff vs a base blob', () => {
+  it('stores only keys that differ from the base', () => {
+    const base = hydratePermissions(null, 'staff')
+    const full = { ...base, email: true, mobile: { ...base.mobile, whatsapp: true } }
+    expect(diffPermissionsBlob(full, base)).toEqual({ email: true, mobile: { whatsapp: true } })
+  })
+
+  it('identical blobs diff to an empty object', () => {
+    const base = hydratePermissions(null, 'manager')
+    expect(diffPermissionsBlob({ ...base, mobile: { ...base.mobile } }, base)).toEqual({})
+  })
+
+  it('carries mobile extras when includeExtras is true, strips when false', () => {
+    const base = hydratePermissions(null, 'staff')
+    const layout = { bar: ['studio'] }
+    const full = { ...base, mobile: { ...base.mobile, layout } }
+    expect(diffPermissionsBlob(full, base).mobile.layout).toEqual(layout)
+    expect(diffPermissionsBlob(full, base, { includeExtras: false })).toEqual({})
+  })
+
+  it('an explicit false differing from a base true is stored', () => {
+    const base = hydratePermissions(null, 'owner')
+    const full = { ...base, pipeline: false, mobile: { ...base.mobile } }
+    expect(diffPermissionsBlob(full, base)).toEqual({ pipeline: false })
+  })
+})
+
+// RECEPTION.1 — new front-of-house role (2026-07). Guard that the
+// defaults maps are COMPLETE for it (a missing key would render as a
+// phantom OFF in the editors and resolve false at tier 3), and pin
+// the intent: staff-tier access plus the WhatsApp inbox + bookings desk.
+describe('reception role defaults', () => {
+  it('covers every web + mobile permission key (no gaps, no orphans)', async () => {
+    const { WEB_PERMISSION_KEYS, MOBILE_PERMISSION_KEYS } = await import('./permissions.js')
+    const web = DEFAULT_WEB_PERMISSIONS_BY_ROLE.reception
+    const mob = DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.reception
+    expect(WEB_PERMISSION_KEYS.filter(k => !(k in web))).toEqual([])
+    expect(Object.keys(web).filter(k => !WEB_PERMISSION_KEYS.includes(k))).toEqual([])
+    expect(MOBILE_PERMISSION_KEYS.filter(k => !(k in mob))).toEqual([])
+    expect(Object.keys(mob).filter(k => !MOBILE_PERMISSION_KEYS.includes(k))).toEqual([])
+  })
+
+  it('is staff-tier plus the front-desk surfaces', () => {
+    const web = DEFAULT_WEB_PERMISSIONS_BY_ROLE.reception
+    expect(web.whatsapp).toBe(true)            // the front-desk channel
+    expect(web.bookings).toBe(true)
+    expect(web.settings).toBe(false)           // no admin surfaces
+    expect(web.approvals_inbox).toBe(false)
+    const mob = DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.reception
+    expect(mob.whatsapp).toBe(true)
+    expect(mob.bookings).toBe(true)
+    expect(mob.notify_whatsapp).toBe(true)
+    expect(mob.notify_bookings).toBe(true)
+    expect(mob.approvals).toBe(false)
+  })
+
+  it('resolves through all tiers like any other role', () => {
+    // Tier 3 default, tier 2.5 template flip, tier 2 user override.
+    const args = { role: 'reception', location: { features: {} }, defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE }
+    expect(resolvePermission({ ...args, permissions: null, key: 'email' })).toBe(false)
+    expect(resolvePermission({ ...args, permissions: null, roleTemplate: { email: true }, key: 'email' })).toBe(true)
+    expect(resolvePermission({ ...args, permissions: { email: false }, roleTemplate: { email: true }, key: 'email' })).toBe(false)
+  })
+})
+
+// RECEPTION.2 (mig 367) — employment-type variant merging.
+describe('mergeTemplates — variant over base', () => {
+  it('merging two nulls yields null (no template)', () => {
+    expect(mergeTemplates(null, null)).toBe(null)
+    expect(mergeTemplates(undefined, undefined)).toBe(null)
+  })
+
+  it('variant keys win over base; mobile sub-objects merge not clobber', () => {
+    const out = mergeTemplates(
+      { email: true, pipeline: false, mobile: { whatsapp: true, schedule: false } },
+      { pipeline: true, mobile: { schedule: true } }
+    )
+    expect(out).toEqual({
+      email: true, pipeline: true,
+      mobile: { whatsapp: true, schedule: true },
+    })
+  })
+
+  it('base-only or variant-only passes through', () => {
+    expect(mergeTemplates({ email: true }, null)).toEqual({ email: true })
+    expect(mergeTemplates(null, { email: false })).toEqual({ email: false })
+  })
+
+  it('result feeds hydratePermissions like any single template', () => {
+    const merged = mergeTemplates({ email: true }, { mobile: { tv_displays: true } })
+    const out = hydratePermissions(null, 'staff', merged)
+    expect(out.email).toBe(true)
+    expect(out.mobile.tv_displays).toBe(true)
+    expect(out.pipeline).toBe(DEFAULT_WEB_PERMISSIONS_BY_ROLE.staff.pipeline)
   })
 })
