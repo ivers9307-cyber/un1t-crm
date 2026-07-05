@@ -95,8 +95,9 @@ export default function HuntInboxesCard() {
         <div>
           <div className="text-sm font-semibold text-un1t-text">Hunt inboxes</div>
           <p className="text-xs text-un1t-subtle mt-1">
-            The email accounts searched for invoices matching unreconciled bank lines. Gmail app
-            password required (2-Step Verification must be on).
+            The email accounts searched for invoices matching this location&apos;s unreconciled bank
+            lines — inboxes are per location and never shared across locations. Gmail app password
+            required (2-Step Verification must be on).
           </p>
         </div>
         {!adding && (

@@ -70,6 +70,7 @@ export async function GET() {
     const { data: mailboxes, error: mbErr } = await db
       .from('recon_mailboxes')
       .select('id, label, email, active, last_ok_at, last_error')
+      .eq('location_id', locationId)
       .order('created_at')
     if (mbErr) throw new Error(`health mailboxes failed: ${mbErr.message}`)
 
