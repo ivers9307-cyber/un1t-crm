@@ -46,6 +46,21 @@ export async function POST(_request, { params }) {
     }, { status: 400 })
   }
 
+  // XERO-BILL-VAT.2 — never send a bill whose VAT rate is undetermined.
+  // A confirmed tax_type is required, EXCEPT a genuine 0%-VAT bill
+  // (tax_amount === 0), which push resolves to 'NONE' deterministically.
+  {
+    const ef = row.extracted_fields || {}
+    const hasTaxType = typeof ef.tax_type === 'string' && ef.tax_type.length > 0
+    const zeroVat = Number(ef.tax_amount) === 0
+    if (!hasTaxType && !zeroVat) {
+      return NextResponse.json({
+        success: false,
+        error: 'Pick a VAT rate before sending — the bill’s rate couldn’t be auto-determined. Open the bill and choose a VAT rate.',
+      }, { status: 400 })
+    }
+  }
+
   // First hop: extracted → data_approved (so we have an audit
   // record of the approval even if the forward fails).
   if (row.status === 'extracted') {
