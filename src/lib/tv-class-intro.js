@@ -57,3 +57,31 @@ export function planIntroTimers({ eventId, startsAt, lastPlayedKey, nowMs, windo
     timers: { showMs: INTRO_SHOW_DELAY_MS, fadeMs: INTRO_FADE_DELAY_MS, hideMs: INTRO_HIDE_DELAY_MS },
   }
 }
+
+// Gap after the card dissolves before the preview loop replays it, so the
+// full cycle is DURATION + this. Preview only — the real intro never loops.
+export const INTRO_PREVIEW_GAP_MS = 6_000
+
+/** Is the TV in intro-preview mode? Parses `?introPreview=1` from a search string. */
+export function isIntroPreview(search) {
+  try { return new URLSearchParams(search || '').get('introPreview') === '1' } catch { return false }
+}
+
+/**
+ * A stand-in current_class for preview mode when no real class is scheduled —
+ * so the card renders on demand for QA on any TV. Same shape the live feed
+ * emits (glofox_event_id / starts_at / class_name / starts_at_label / program).
+ */
+export function demoIntroClass(nowMs = Date.now()) {
+  let label = ''
+  try {
+    label = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Dublin', hour: '2-digit', minute: '2-digit' }).format(nowMs)
+  } catch { label = '' }
+  return {
+    glofox_event_id: 'preview',
+    starts_at: new Date(nowMs).toISOString(),
+    class_name: 'STRENGTH',
+    starts_at_label: label,
+    program: 'Preview',
+  }
+}

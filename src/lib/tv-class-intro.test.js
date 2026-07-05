@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   shouldPlayIntro,
   planIntroTimers,
+  isIntroPreview,
+  demoIntroClass,
   INTRO_WINDOW_MS,
   INTRO_DURATION_MS,
   INTRO_SHOW_DELAY_MS,
@@ -87,5 +89,29 @@ describe('planIntroTimers (the effect-wiring controller)', () => {
     const plan = planIntroTimers({ eventId: 'e2', startsAt: start, lastPlayedKey: 'e1', nowMs: startMs + 1000 })
     expect(plan.play).toBe(true)
     expect(plan.key).toBe('e2')
+  })
+})
+
+describe('isIntroPreview', () => {
+  it('is true only for introPreview=1', () => {
+    expect(isIntroPreview('?introPreview=1')).toBe(true)
+    expect(isIntroPreview('?kiosk=1&introPreview=1')).toBe(true)
+    expect(isIntroPreview('?introPreview=0')).toBe(false)
+    expect(isIntroPreview('?kiosk=1')).toBe(false)
+    expect(isIntroPreview('')).toBe(false)
+    expect(isIntroPreview(undefined)).toBe(false)
+  })
+})
+
+describe('demoIntroClass', () => {
+  it('emits the live-feed current_class shape for the preview card', () => {
+    const c = demoIntroClass(Date.parse('2026-07-03T17:00:00Z'))
+    expect(c.glofox_event_id).toBe('preview')
+    expect(typeof c.class_name).toBe('string')
+    expect(c.class_name.length).toBeGreaterThan(0)
+    expect(typeof c.starts_at_label).toBe('string')
+    expect(c.starts_at).toBe('2026-07-03T17:00:00.000Z')
+    // Dublin (IST, UTC+1) label for 17:00 UTC = 18:00.
+    expect(c.starts_at_label).toBe('18:00')
   })
 })
