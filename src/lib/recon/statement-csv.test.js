@@ -85,6 +85,46 @@ describe('parseStatementCsv', () => {
   })
 })
 
+// Xero's Bank Reconciliation report export — no column headers, a
+// sectioned layout. Positional cols: Date, Payee, Description, Amount;
+// money-out parenthesised. This is the shape Richard actually exported.
+const XERO_RECON_REPORT = [
+  'Revolut EUR Main Reconciliation Summary,,,',
+  'Champ Fitness Ltd,,,',
+  'As at 30 June 2026,,,',
+  'Plus Unreconciled Statement Lines,,,',
+  '07 May 2026,,Payment from Stripe GLOFOX PAYOUT ,"6,537.58"',
+  '15 May 2026,Green Routed Freight,Green Routed Freight - Garrett Ivers  ,"(1,153.13)"',
+  '03 Jun 2026,Supabase,Supabase - 25.00 USD - SUBSCRIPTIONS CARD  ,(21.51)',
+  '02 Jun 2026,EUR Main,To EUR Main - 2958.58 EUR - Garrett Ivers  ,"2,958.58"',
+  'Total Unreconciled Statement Lines,,,"25,912.88"',
+  'Statement Balances,,,',
+  '30 Jun 2026,Statement balance (calculated),,"3,558.91"',
+  '30 Jun 2026,Calculated balance out by,,"(2,931.23)"',
+].join('\n')
+
+describe('parseStatementCsv — Xero Bank Reconciliation report', () => {
+  it('reads only the Unreconciled Statement Lines section, positional cols, parens = money out', () => {
+    const { rows, warnings } = parseStatementCsv(XERO_RECON_REPORT)
+    expect(warnings).toEqual([])
+    // 4 data rows in-section; the two Statement Balances rows are
+    // excluded even though they lead with a parseable date.
+    expect(rows).toHaveLength(4)
+    expect(rows.map((r) => r.amount)).toEqual([6537.58, -1153.13, -21.51, 2958.58])
+    expect(rows.every((r) => r.reconciled === false)).toBe(true)
+    // description prefers the detail column, falls back to payee
+    expect(rows[0].description).toBe('Payment from Stripe GLOFOX PAYOUT')
+    expect(rows[1].description).toBe('Green Routed Freight - Garrett Ivers')
+  })
+
+  it('tracks only money-out lines from the report (income + internal transfers excluded)', () => {
+    const out = csvLineRows('acct-main', parseStatementCsv(XERO_RECON_REPORT).rows)
+    // Stripe payout (in) and the +2958.58 transfer (in) drop out
+    expect(out.map((l) => l.description)).toEqual(['Green Routed Freight - Garrett Ivers', 'Supabase - 25.00 USD - SUBSCRIPTIONS CARD'])
+    expect(out.every((l) => l.amount < 0 && l.key.startsWith('csv:'))).toBe(true)
+  })
+})
+
 describe('csvLineRows / csvReconciledKeys', () => {
   it('tracks unreconciled money-out only, with stable csv: keys over the full set', () => {
     const { rows } = parseStatementCsv(XERO_CSV)
