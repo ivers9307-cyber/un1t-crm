@@ -88,6 +88,9 @@ export default function CustomerAgentSettingsPage() {
           template_name: settings.first_class_checkin?.template_name || null,
           daily_cap: Number(settings.first_class_checkin?.daily_cap) || 20,
         },
+        inline_suggestion: {
+          enabled: settings.inline_suggestion?.enabled !== false,
+        },
       }
       const res = await fetch('/api/settings/customer-agent', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
@@ -115,6 +118,8 @@ export default function CustomerAgentSettingsPage() {
     setSettings(s => ({ ...s, followups: { ...(s.followups || {}), [key]: value } }))
   const setCheckin = (key, value) =>
     setSettings(s => ({ ...s, first_class_checkin: { ...(s.first_class_checkin || {}), [key]: value } }))
+  const setInlineSuggestion = (key, value) =>
+    setSettings(s => ({ ...s, inline_suggestion: { ...(s.inline_suggestion || {}), [key]: value } }))
 
   const [importing, setImporting] = useState(false)
   const [importNote, setImportNote] = useState(null)
@@ -472,6 +477,19 @@ export default function CustomerAgentSettingsPage() {
             <p className="text-xs text-un1t-subtle mt-1">Each contact only ever gets one check-in.</p>
           </div>
         </div>
+      </section>
+
+      {/* ── Inline suggestion after approvals (INBOX-APPROVALS-AI.4) ── */}
+      <section className="border border-un1t-border rounded-lg p-5 mt-6">
+        <h2 className="text-base font-semibold text-un1t-text mb-1">Inline suggestion after approvals</h2>
+        <p className="text-sm text-un1t-muted mb-4">
+          After staff decide a request in the inbox, Mia drafts a suggested follow-up they can send.
+        </p>
+        <label className="flex items-center gap-2 text-sm text-un1t-text">
+          <input type="checkbox" checked={settings.inline_suggestion?.enabled !== false}
+            onChange={e => setInlineSuggestion('enabled', e.target.checked)} />
+          Enable inline suggestions
+        </label>
       </section>
 
       {/* ── Knowledge ─────────────────────────────────────── */}

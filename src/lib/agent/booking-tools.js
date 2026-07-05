@@ -37,7 +37,13 @@ export const BOOKING_TOOLS = [
     input_schema: {
       type: 'object',
       properties: {
-        days: { type: 'number', description: 'How many days ahead to look (1-7). Default 4.' },
+        days: {
+          type: 'number',
+          description:
+            'How many days ahead to look (1-7). Default 7 — the full visible week. NEVER ask ' +
+            'the customer how far ahead to look; infer it from their request (a named day like ' +
+            '"Friday" is always within 7).',
+        },
       },
     },
   },
@@ -165,7 +171,11 @@ export function classBookingGuard({ verifiedContactId, glofoxMemberId, eventId }
   return { ok: true }
 }
 
-const MAX_CLASS_LIST = 20
+// 60, not 20: the list is time-sorted, so a low cap silently truncates the
+// FAR days — at ~8 classes/day a 20-row cap ends ~2.5 days out, which is how
+// Mia told a customer "the schedule only goes up to Thursday" on a Monday
+// (Dean, 2026-06-30). 60 rows covers 7 days of a full timetable.
+const MAX_CLASS_LIST = 60
 
 const DUBLIN_TIME_FMT = new Intl.DateTimeFormat('en-IE', {
   timeZone: 'Europe/Dublin',
@@ -373,7 +383,7 @@ export async function executeBookingTool(toolName, input, ctx) {
     if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
       return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
     }
-    const days = Math.min(7, Math.max(1, Number(input?.days) || 4))
+    const days = Math.min(7, Math.max(1, Number(input?.days) || 7))
     const start = Math.floor(Date.now() / 1000)
     const { ok, events } = await fetchUpcomingEvents(creds, { start, end: start + days * 86400, limit: 100 })
     if (!ok) return { error: 'list_failed', message: 'Could not load the timetable just now — offer to hand off.' }

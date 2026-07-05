@@ -21,8 +21,11 @@ import { useAuth } from '../../lib/auth-context'
 import {
   getThread, sendText, resolveConversation, rateAgentMessage, igDisplayName,
 } from '../../lib/instagram-api'
+import { listConversationApprovals } from '../../lib/inbox-approvals-api'
 import { needsReply, isAgentHandoff } from '../../lib/inbox'
+import { mergeTimeline } from '../../../shared/approval-cards'
 import MessageBubble from '../../components/MessageBubble'
+import ThreadApprovalCard from '../../components/ThreadApprovalCard'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 
 export default function InstagramConversation() {
@@ -32,6 +35,7 @@ export default function InstagramConversation() {
   const insets = useSafeAreaInsets()
   const [conv, setConv] = useState(null)
   const [messages, setMessages] = useState([])
+  const [approvals, setApprovals] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [text, setText] = useState('')
@@ -41,7 +45,10 @@ export default function InstagramConversation() {
   const scrollRef = useRef(null)
 
   const refresh = useCallback(async () => {
-    const res = await getThread(conversationId, activeLocation?.id)
+    const [res, approvalsRes] = await Promise.all([
+      getThread(conversationId, activeLocation?.id),
+      listConversationApprovals(conversationId),
+    ])
     if (!res.success) {
       setError(res.error || 'Failed to load conversation')
       return
@@ -49,10 +56,12 @@ export default function InstagramConversation() {
     setError(null)
     setConv(res.conversation)
     setMessages(res.messages || [])
+    if (approvalsRes.success) setApprovals(approvalsRes.requests || [])
   }, [conversationId, activeLocation])
 
   useEffect(() => {
     setLoading(true)
+    setApprovals([])
     refresh().finally(() => setLoading(false))
   }, [refresh])
 
@@ -118,6 +127,7 @@ export default function InstagramConversation() {
   }
 
   const name = igDisplayName(conv)
+  const contactFirstName = conv?.contacts?.first_name || conv?.ig_username || null
 
   return (
     <KeyboardAvoidingView
@@ -176,8 +186,18 @@ export default function InstagramConversation() {
             contentContainerClassName="p-4"
             onContentSizeChange={() => scrollRef.current?.scrollToEnd?.({ animated: false })}
           >
-            {messages.map(m => (
-              <MessageBubble key={m.id} msg={m} myRating={feedback[m.id] || null} onRate={rate} />
+            {mergeTimeline(messages, approvals).map(item => (
+              item.kind === 'approval' ? (
+                <ThreadApprovalCard
+                  key={item.key}
+                  request={item.request}
+                  contactFirstName={contactFirstName}
+                  onDecided={merged => { setApprovals(p => p.map(r => (r.id === merged.id ? merged : r))); refresh() }}
+                  onPrefillComposer={t => setText(t)}
+                />
+              ) : (
+                <MessageBubble key={item.key} msg={item.message} myRating={feedback[item.message.id] || null} onRate={rate} />
+              )
             ))}
           </ScrollView>
 
