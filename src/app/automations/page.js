@@ -1,5 +1,7 @@
 // src/app/automations/page.js — Automations home (curated toggles + custom flows).
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
+import { Plug } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
@@ -18,7 +20,8 @@ export default async function AutomationsPage() {
 
   const canCurated = hasPermission(user, 'automations')
   const canFlows = hasPermission(user, 'email') || hasPermission(user, 'whatsapp')
-  if (!canCurated && !canFlows) redirect('/dashboard')
+  const canDevices = hasPermission(user, 'device_control')
+  if (!canCurated && !canFlows && !canDevices) redirect('/dashboard')
 
   const location = user.activeLocation
   const db = createServerClient()
@@ -83,6 +86,16 @@ export default async function AutomationsPage() {
             initialConfig={climate?.config}
           />
         </div>
+      )}
+      {canDevices && (
+        <Link href="/automations/devices"
+          className="block bg-un1t-dark border border-un1t-gray rounded-lg p-4 hover:border-un1t-mid transition">
+          <div className="flex items-center gap-2">
+            <Plug size={16} className="text-un1t-light" />
+            <h2 className="font-semibold text-un1t-white">Devices</h2>
+          </div>
+          <p className="text-sm text-un1t-light mt-1">Schedules &amp; class-linked power for smart plugs and switches.</p>
+        </Link>
       )}
       {canFlows && <AutomationsFlowList sequences={sequences} />}
     </div>
