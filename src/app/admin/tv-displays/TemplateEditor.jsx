@@ -17,6 +17,8 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { X, Plus, Trash2, Upload, AlertCircle, Image as ImageIcon, Type } from 'lucide-react'
+import { useFitText } from '@/components/TemplateCanvas'
+import { tvFontFamily } from '@/components/tv-font'
 
 const SUPA_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
 
@@ -317,6 +319,7 @@ function Canvas({ baseImageUrl, zones, selectedId, onSelect, onZoneChange }) {
 function ZoneBox({ zone, canvasSize, selected, onSelect, onChange }) {
   const boxRef = useRef(null)
   const dragRef = useRef(null)
+  const textRef = useRef(null)
 
   const begin = useCallback((e, mode) => {
     e.stopPropagation()
@@ -354,8 +357,17 @@ function ZoneBox({ zone, canvasSize, selected, onSelect, onChange }) {
     boxRef.current?.releasePointerCapture?.(e.pointerId)
   }
 
-  const fontPx = ((zone.fontSize || 6) / 100) * (canvasSize.h || 0)
+  // Same max-size semantics as the shared renderer (TV-TEMPLATE.6):
+  // fontSize is a ceiling, and useFitText shrinks the editor's own
+  // preview text to match so this preview agrees with the push
+  // preview and the TV instead of just showing the raw % size.
+  const maxFontPx = ((zone.fontSize || 6) / 100) * (canvasSize.h || 0)
   const text = zone.defaultText || zone.label || ''
+  const boxW = ((zone.width || 0) / 100) * (canvasSize.w || 0)
+  const boxH = ((zone.height || 0) / 100) * (canvasSize.h || 0)
+  const fontPx = useFitText(textRef, maxFontPx, boxW, boxH, [
+    text, maxFontPx, boxW, boxH, zone.fontWeight, zone.uppercase,
+  ])
 
   return (
     <div
@@ -394,11 +406,13 @@ function ZoneBox({ zone, canvasSize, selected, onSelect, onChange }) {
       </span>
       {/* preview text */}
       <span
+        ref={textRef}
         style={{
           width: '100%',
           textAlign: zone.align || 'center',
           color: zone.color || '#fff',
           fontWeight: zone.fontWeight || 700,
+          fontFamily: tvFontFamily,
           fontSize: fontPx ? `${fontPx}px` : '14px',
           lineHeight: 1.12,
           textTransform: zone.uppercase ? 'uppercase' : 'none',

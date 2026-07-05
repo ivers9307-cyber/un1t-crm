@@ -21,6 +21,7 @@ import * as ImagePicker from 'expo-image-picker'
 import {
   listTvTemplates, seedTemplateValues, tvImageUrl, uploadTvImage, pushTvContent,
 } from '../lib/tv-api'
+import TvTemplateCanvas from './TvTemplateCanvas'
 
 const TABS = [
   { key: 'template', icon: 'albums-outline', label: 'Template' },
@@ -47,14 +48,37 @@ export default function TvPushModal({ visible, tv, locationId, userId, onClose, 
     setMode('template'); setLabel(''); setError(null)
     setTemplateId(''); setZoneText({}); setPhoto(null); setUrl('')
     setTemplates(null)
-    listTvTemplates(locationId).then((r) => setTemplates(r.success ? r.data : []))
-  }, [visible, locationId])
+    listTvTemplates(locationId).then((r) => {
+      const list = r.success ? r.data : []
+      setTemplates(list)
+      // TV-REMEMBER.1 — if the TV is currently showing a template
+      // push, pre-select that template and seed from its prior
+      // values instead of blank defaults, so staff restyling the
+      // same recurring board don't redo the same work every time.
+      const content = tv?.content
+      if (content?.source_type === 'template') {
+        const tpl = list.find((t) => t.id === content.source_ref)
+        if (tpl) {
+          setTemplateId(tpl.id)
+          setZoneText(seedTemplateValues(tpl, content.template_values))
+        }
+      }
+    })
+  }, [visible, locationId, tv])
 
   const selectedTemplate = templates?.find((t) => t.id === templateId) || null
 
   function pickTemplate(id) {
     setTemplateId(id)
-    setZoneText(seedTemplateValues(templates?.find((t) => t.id === id)))
+    const tpl = templates?.find((t) => t.id === id)
+    // Only overlay the TV's prior values when picking the SAME
+    // template already on the TV — a different template starts from
+    // its own defaults.
+    const content = tv?.content
+    const priorValues = (content?.source_type === 'template' && content.source_ref === id)
+      ? content.template_values
+      : null
+    setZoneText(seedTemplateValues(tpl, priorValues))
   }
 
   function setZone(zoneId, text) {
@@ -231,6 +255,21 @@ function TemplateBody({ templates, templateId, selectedTemplate, zoneText, onPic
           </Pressable>
         ))}
       </ScrollView>
+
+      {/* TV-MOBILE.F — live read-only preview so staff aren't typing
+          blind. Mirrors what the TV will actually show: same canvas,
+          same zone resolution, updates on every keystroke via
+          `values`. No drag/resize here — editable stays false. */}
+      {selectedTemplate && (
+        <View className="mb-3">
+          <TvTemplateCanvas
+            imageUri={tvImageUrl(selectedTemplate.base_image_path)}
+            zones={selectedTemplate.zones}
+            values={zoneText}
+            editable={false}
+          />
+        </View>
+      )}
 
       {selectedTemplate && (
         (selectedTemplate.zones || []).length === 0 ? (

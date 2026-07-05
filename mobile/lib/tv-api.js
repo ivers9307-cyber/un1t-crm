@@ -62,7 +62,7 @@ export async function listTvDisplays(locationId) {
   const ids = rows.map((d) => d.id)
   const { data: contents } = await supabase
     .from('tv_content')
-    .select('tv_display_id, source_type, source_ref, label, pushed_at')
+    .select('tv_display_id, source_type, source_ref, label, template_values, pushed_at')
     .in('tv_display_id', ids)
   const byDisplay = new Map((contents || []).map((c) => [c.tv_display_id, c]))
 
@@ -140,21 +140,33 @@ export function tvImageUrl(path) {
  * geometry + styling and the default text, so a mobile push (text-only
  * edit) renders identically to a web push with default styling.
  * Mirrors the web PushModal's pickTemplate seed.
+ *
+ * TV-REMEMBER.1 — `priorValues` (typically the TV's current
+ * tv_content.template_values) is optionally overlaid on top of each
+ * zone's defaults, so reopening the push modal for a TV already
+ * showing this template starts from what's live rather than a blank
+ * slate. Legacy prior values may be a plain string (text-only) rather
+ * than an object — normalised the same way resolveZone() does. Zones
+ * no longer on the template are dropped; zones added since the prior
+ * push fall back to their template defaults. Pure function — no
+ * change needed for either the mount-time or dropdown seeding path.
  */
-export function seedTemplateValues(template) {
+export function seedTemplateValues(template, priorValues) {
   const seed = {}
   for (const z of template?.zones || []) {
+    const prior = priorValues?.[z.id]
+    const p = prior && typeof prior === 'object' ? prior : (prior != null ? { text: prior } : null)
     seed[z.id] = {
-      text: z.defaultText || '',
-      fontSize: z.fontSize ?? 6,
-      fontWeight: z.fontWeight ?? 700,
-      color: z.color || '#FFFFFF',
-      align: z.align || 'center',
-      vAlign: z.vAlign || 'middle',
-      uppercase: !!z.uppercase,
-      lineHeight: z.lineHeight ?? 1.15,
-      x: z.x ?? 0, y: z.y ?? 0, width: z.width ?? 100, height: z.height ?? 100,
-      colorRuns: Array.isArray(z.colorRuns) ? z.colorRuns : [],
+      text: p?.text ?? z.defaultText ?? '',
+      fontSize: p?.fontSize ?? z.fontSize ?? 6,
+      fontWeight: p?.fontWeight ?? z.fontWeight ?? 700,
+      color: p?.color || z.color || '#FFFFFF',
+      align: p?.align || z.align || 'center',
+      vAlign: p?.vAlign || z.vAlign || 'middle',
+      uppercase: p?.uppercase ?? !!z.uppercase,
+      lineHeight: p?.lineHeight ?? z.lineHeight ?? 1.15,
+      x: p?.x ?? z.x ?? 0, y: p?.y ?? z.y ?? 0, width: p?.width ?? z.width ?? 100, height: p?.height ?? z.height ?? 100,
+      colorRuns: Array.isArray(p?.colorRuns) ? p.colorRuns : (Array.isArray(z.colorRuns) ? z.colorRuns : []),
     }
   }
   return seed

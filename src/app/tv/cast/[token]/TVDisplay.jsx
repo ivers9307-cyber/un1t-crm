@@ -16,6 +16,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import TemplateCanvas from '@/components/TemplateCanvas'
+import { tvFontFamily } from '@/components/tv-font'
 
 const POLL_MS = 3000
 
@@ -152,12 +153,15 @@ function IdleView({ now }) {
       {/* cqh = 1% of the stage box height. The stage is already
           oriented to the panel, so these track the panel whichever
           way the TV is rotated (matches the old vh values 1:1 in
-          the landscape case). */}
-      <div style={{ fontSize: '12cqh', fontWeight: 900, letterSpacing: '0.2em' }}>UN1T</div>
-      <div style={{ fontSize: '18cqh', fontWeight: 700, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
+          the landscape case).
+          TV-TEMPLATE.7 — brand font on the idle view too, so it
+          matches the template zones instead of just falling back to
+          the outer wrapper's system-ui stack. */}
+      <div style={{ fontSize: '12cqh', fontWeight: 900, letterSpacing: '0.2em', fontFamily: tvFontFamily }}>UN1T</div>
+      <div style={{ fontSize: '18cqh', fontWeight: 700, fontVariantNumeric: 'tabular-nums', lineHeight: 1, fontFamily: tvFontFamily }}>
         {hh}:{mm}
       </div>
-      <div style={{ fontSize: '3.5cqh', color: '#888', letterSpacing: '0.1em' }}>
+      <div style={{ fontSize: '3.5cqh', color: '#888', letterSpacing: '0.1em', fontFamily: tvFontFamily }}>
         {day}
       </div>
     </div>

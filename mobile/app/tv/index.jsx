@@ -25,6 +25,7 @@ import {
   listTvTemplates, tvImageUrl, deleteTvTemplate,
 } from '../../lib/tv-api'
 import TvPushModal from '../../components/TvPushModal'
+import TvTemplateCanvas from '../../components/TvTemplateCanvas'
 
 export default function TvScreen() {
   const { profile, activeLocation } = useAuth()
@@ -165,6 +166,7 @@ export default function TvScreen() {
             <TvCard
               key={tv.id}
               tv={tv}
+              templates={templates}
               onPush={() => setPushTv(tv)}
               onClear={() => confirmClear(tv)}
               onDelete={() => confirmDelete(tv)}
@@ -205,7 +207,53 @@ export default function TvScreen() {
   )
 }
 
-function TvCard({ tv, onPush, onClear, onDelete, onOrientation }) {
+// TV-REMEMBER.2 — compact preview of the live content: an <Image> for
+// storage/url pushes, or the read-only TvTemplateCanvas for a
+// template push so the text/styling renders as it does on the TV.
+// Renders nothing (falls back to the text row alone) when there's no
+// content, or the template behind a template push has been deleted.
+function NowShowingThumb({ content, templates }) {
+  if (!content) return null
+
+  if (content.source_type === 'storage') {
+    return (
+      <Image
+        source={{ uri: tvImageUrl(content.source_ref) }}
+        resizeMode="cover"
+        className="w-full h-28 rounded-xl bg-black mt-3"
+      />
+    )
+  }
+
+  if (content.source_type === 'url') {
+    return (
+      <Image
+        source={{ uri: content.source_ref }}
+        resizeMode="cover"
+        className="w-full h-28 rounded-xl bg-black mt-3"
+      />
+    )
+  }
+
+  if (content.source_type === 'template') {
+    const tpl = templates?.find((t) => t.id === content.source_ref)
+    if (!tpl) return null
+    return (
+      <View className="mt-3">
+        <TvTemplateCanvas
+          imageUri={tvImageUrl(tpl.base_image_path)}
+          zones={tpl.zones}
+          values={content.template_values || {}}
+          editable={false}
+        />
+      </View>
+    )
+  }
+
+  return null
+}
+
+function TvCard({ tv, templates, onPush, onClear, onDelete, onOrientation }) {
   const content = tv.content
   const showing = !!content
   const castUrl = castUrlForToken(tv.token)
@@ -223,6 +271,10 @@ function TvCard({ tv, onPush, onClear, onDelete, onOrientation }) {
           <Ionicons name="trash-outline" size={17} color="#EF4444" />
         </Pressable>
       </View>
+
+      {/* TV-REMEMBER.2 — a small visual preview of what's actually on
+          the TV right now, alongside the text summary below. */}
+      <NowShowingThumb content={content} templates={templates} />
 
       <View className="flex-row items-center mt-3">
         <View className={`w-2 h-2 rounded-full mr-2 ${showing ? 'bg-emerald-500' : 'bg-un1t-border'}`} />
