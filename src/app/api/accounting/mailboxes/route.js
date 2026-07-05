@@ -1,11 +1,11 @@
 // src/app/api/accounting/mailboxes/route.js
 //
-// RCOV.P1 — hunt-inbox management: list + add. Mailboxes are GLOBAL
-// (recon_mailboxes has no location_id column — the hunt engine
-// searches every inbox for every location's uncovered lines), so
-// unlike the coverage routes this only gates on accounting_hub, no
-// activeLocation check. The imap_password column is NEVER selected
-// here — GET returns only the operator-facing metadata columns.
+// RCOV.P1 — hunt-inbox management: list + add. Mailboxes are scoped
+// PER LOCATION (mig 374 — the hunt only searches a line against its
+// own location's inboxes; each location is independent, no overlap),
+// so these routes gate on accounting_hub AND the active location. The
+// imap_password column is NEVER selected here — GET returns only the
+// operator-facing metadata columns.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
@@ -29,11 +29,16 @@ export async function GET() {
   if (!hasPermission(user, 'accounting_hub')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
+  const locationId = user.activeLocation?.id
+  if (!locationId) {
+    return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
+  }
 
   const db = createServerClient()
   const { data, error } = await db
     .from('recon_mailboxes')
     .select('id, label, email, active, last_ok_at, last_error, created_at')
+    .eq('location_id', locationId)
     .order('created_at', { ascending: true })
   if (error) {
     console.error('[accounting/mailboxes] list query failed:', error)
@@ -48,6 +53,10 @@ export async function POST(request) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!hasPermission(user, 'accounting_hub')) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
+  const locationId = user.activeLocation?.id
+  if (!locationId) {
+    return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
   }
 
   const result = await validateBody(request, MailboxCreateSchema)
@@ -69,6 +78,7 @@ export async function POST(request) {
   const { data: created, error: insErr } = await db
     .from('recon_mailboxes')
     .insert({
+      location_id: locationId,
       label,
       email,
       imap_password: password,
@@ -81,7 +91,7 @@ export async function POST(request) {
   if (insErr) {
     if (insErr.code === '23505') {
       return NextResponse.json(
-        { success: false, error: 'This inbox is already added.' },
+        { success: false, error: 'This inbox is already added to this location.' },
         { status: 409 }
       )
     }

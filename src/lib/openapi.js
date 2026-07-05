@@ -2518,10 +2518,10 @@ registry.registerPath({
   },
 })
 
-// RCOV.P1 — hunt-inbox management. recon_mailboxes is a GLOBAL
-// resource (no location_id) — the hunt engine searches every inbox
-// on behalf of every location — so these routes gate on
-// accounting_hub only, no per-location scoping.
+// RCOV.P1 — hunt-inbox management. recon_mailboxes is scoped PER
+// LOCATION (mig 374) — the hunt only searches a line against its own
+// location's inboxes — so these routes gate on accounting_hub AND the
+// active location.
 const MailboxCreateBody = z.object({
   label: z.string().min(1).max(100),
   email: z.string().email().max(320),

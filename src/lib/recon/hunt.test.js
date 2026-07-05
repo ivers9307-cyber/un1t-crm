@@ -90,7 +90,7 @@ let hunt
 function chainable(finalValue, terminal) {
   const chain = {}
   for (const m of [
-    'select', 'eq', 'in', 'not', 'gte', 'lte', 'order', 'update', 'insert',
+    'select', 'eq', 'match', 'in', 'not', 'gte', 'lte', 'order', 'update', 'insert',
     'upsert', 'range', 'limit', 'maybeSingle', 'single',
   ]) {
     chain[m] = vi.fn().mockReturnThis()
@@ -149,7 +149,7 @@ function stubWithMailbox() {
 describe('huntLine', () => {
   it('found-path: scores 2 candidates (no-match then match), uploads, enqueues, marks the line submitted, and sums spend across both scoring calls', async () => {
     const budgetSelect = chainable({ data: [{ llm_spend_usd: 2 }, { llm_spend_usd: 1 }], error: null }, 'range')
-    const mailboxSelect = chainable({ data: [MAILBOX], error: null }, 'eq')
+    const mailboxSelect = chainable({ data: [MAILBOX], error: null }, 'match')
     const priorHunts = chainable({ data: [], error: null }, 'not')
     const huntInsert = chainable({ data: { id: 'hunt-1' }, error: null }, 'single')
     const lineUpdate = chainable({ data: null, error: null }, 'eq')
@@ -254,7 +254,7 @@ describe('huntLine', () => {
 
   it('dedupe variant: enqueue returns an existing queue id — line links to it and evidence.deduped is true', async () => {
     const budgetSelect = chainable({ data: [], error: null }, 'range')
-    const mailboxSelect = chainable({ data: [MAILBOX], error: null }, 'eq')
+    const mailboxSelect = chainable({ data: [MAILBOX], error: null }, 'match')
     const priorHunts = chainable({ data: [], error: null }, 'not')
     const huntInsert = chainable({ data: { id: 'hunt-1' }, error: null }, 'single')
     const lineUpdate = chainable({ data: null, error: null }, 'eq')
@@ -288,7 +288,7 @@ describe('huntLine', () => {
 
   it('exclusion: a message from a prior rejected find is never re-scored and never reappears in examined_message_ids', async () => {
     const budgetSelect = chainable({ data: [], error: null }, 'range')
-    const mailboxSelect = chainable({ data: [MAILBOX], error: null }, 'eq')
+    const mailboxSelect = chainable({ data: [MAILBOX], error: null }, 'match')
     // Prior hunts for this line with a found_message_id + submitted queue id.
     const priorHunts = chainable(
       { data: [{ found_message_id: 'msg-rejected', submitted_queue_id: 'queue-old' }], error: null },
@@ -386,7 +386,7 @@ describe('huntLine', () => {
 
   it('no active mailboxes short-circuits with reason no_mailboxes, leaves a terminal audit row, and dequeues the line', async () => {
     const budgetSelect = chainable({ data: [], error: null }, 'range')
-    const mailboxSelect = chainable({ data: [], error: null }, 'eq')
+    const mailboxSelect = chainable({ data: [], error: null }, 'match')
     const huntErrorInsert = chainable({ data: null, error: null }, 'insert')
     const lineUpdate = chainable({ data: null, error: null }, 'eq')
     const db = mockDbFrom(budgetSelect, mailboxSelect, huntErrorInsert, lineUpdate)
@@ -408,7 +408,7 @@ describe('huntLine', () => {
 
   it('all mailboxes IMAP-fail (auth error) — error-finish, last_error updated on the mailbox row, reason imap', async () => {
     const budgetSelect = chainable({ data: [], error: null }, 'range')
-    const mailboxSelect = chainable({ data: [MAILBOX], error: null }, 'eq')
+    const mailboxSelect = chainable({ data: [MAILBOX], error: null }, 'match')
     const priorHunts = chainable({ data: [], error: null }, 'not')
     const huntInsert = chainable({ data: { id: 'hunt-3' }, error: null }, 'single')
     const mailboxUpdate = chainable({ data: null, error: null }, 'eq')
@@ -436,7 +436,7 @@ describe('huntLine', () => {
   it('partial IMAP failure: first mailbox auth-fails (last_error recorded), second yields a no-match candidate — hunt still finishes not_found with the failure in evidence.mailboxErrors', async () => {
     const MAILBOX_2 = { id: 'mbx-2', label: 'Ops 2', email: 'ops2@x.com', imap_password: 'app-pw-2', active: true }
     const budgetSelect = chainable({ data: [], error: null }, 'range')
-    const mailboxSelect = chainable({ data: [MAILBOX, MAILBOX_2], error: null }, 'eq')
+    const mailboxSelect = chainable({ data: [MAILBOX, MAILBOX_2], error: null }, 'match')
     const priorHunts = chainable({ data: [], error: null }, 'not')
     const huntInsert = chainable({ data: { id: 'hunt-6' }, error: null }, 'single')
     const mailboxUpdate = chainable({ data: null, error: null }, 'eq')
@@ -484,7 +484,7 @@ describe('huntLine', () => {
 
   it('no-match: candidates score below threshold — line flips to not_found and the hunt row records examined ids + spend', async () => {
     const budgetSelect = chainable({ data: [], error: null }, 'range')
-    const mailboxSelect = chainable({ data: [MAILBOX], error: null }, 'eq')
+    const mailboxSelect = chainable({ data: [MAILBOX], error: null }, 'match')
     const priorHunts = chainable({ data: [], error: null }, 'not')
     const huntInsert = chainable({ data: { id: 'hunt-4' }, error: null }, 'single')
     const lineUpdate = chainable({ data: null, error: null }, 'eq')
@@ -512,7 +512,7 @@ describe('huntLine', () => {
 
   it('cap: 6 candidates all carrying document parts are scored at most MAX_CANDIDATES_SCORED (4) times', async () => {
     const budgetSelect = chainable({ data: [], error: null }, 'range')
-    const mailboxSelect = chainable({ data: [MAILBOX], error: null }, 'eq')
+    const mailboxSelect = chainable({ data: [MAILBOX], error: null }, 'match')
     const priorHunts = chainable({ data: [], error: null }, 'not')
     const huntInsert = chainable({ data: { id: 'hunt-5' }, error: null }, 'single')
     const lineUpdate = chainable({ data: null, error: null }, 'eq')

@@ -144,11 +144,15 @@ async function weeklySpendSoFar(db) {
   return sum
 }
 
-async function activeMailboxes(db) {
+// Mailboxes are scoped PER LOCATION (mig 374) — a line is only ever
+// searched against its own location's inboxes. Passing the line's
+// location_id here is load-bearing for cross-entity isolation, not
+// just tidiness.
+async function activeMailboxes(db, locationId) {
   const { data, error } = await db
     .from('recon_mailboxes')
     .select('id, label, email, imap_password')
-    .eq('active', true)
+    .match({ active: true, location_id: locationId })
   if (error) throw new Error(`mailbox lookup failed: ${error.message}`)
   return data || []
 }
@@ -314,8 +318,8 @@ export async function huntLine(db, line) {
       return { outcome: 'error', reason: 'budget' }
     }
 
-    // 2. Mailboxes.
-    const mailboxes = await activeMailboxes(db)
+    // 2. Mailboxes — this location's inboxes only (per-location scope).
+    const mailboxes = await activeMailboxes(db, line.location_id)
     if (mailboxes.length === 0) {
       await errorFinish(db, line, { huntId: null, error: 'no active mailboxes' })
       return { outcome: 'error', reason: 'no_mailboxes' }
