@@ -16,7 +16,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { buildTimeline, computeEffectiveElapsedMs, resolveTimerState, SEG_COLOR } from '@/lib/class-timer'
-import { planIntroTimers } from '@/lib/tv-class-intro'
+import { planIntroTimers, isIntroPreview, demoIntroClass, INTRO_SHOW_DELAY_MS, INTRO_FADE_DELAY_MS, INTRO_HIDE_DELAY_MS, INTRO_DURATION_MS, INTRO_PREVIEW_GAP_MS } from '@/lib/tv-class-intro'
 import { isKioskParam, showReconnecting } from '@/lib/tv-kiosk'
 import { isBurn } from '@/lib/heart-rate'
 import {
@@ -402,7 +402,11 @@ function OutroPodium({ podium, total }) {
 function ClassStartIntro({ current, serverTime }) {
   const [visible, setVisible] = useState(false)
   const [shown, setShown] = useState(false) // drives the fade/scale-in transition
-  const cls = current
+  // Preview mode (?introPreview=1): force the card to loop for on-demand QA on
+  // any TV. Read once. Falls back to a demo class when nothing is scheduled.
+  const preview = useState(() => typeof window !== 'undefined' && isIntroPreview(window.location.search))[0]
+  const demo = useMemo(() => (preview ? demoIntroClass() : null), [preview])
+  const cls = current || demo
 
   // The 2s poll changes `serverTime` (and can re-supply `starts_at`) on every
   // tick. If the play-sequence effect depended on those, each poll would tear
@@ -420,7 +424,7 @@ function ClassStartIntro({ current, serverTime }) {
 
   const eventId = cls?.glofox_event_id
   useEffect(() => {
-    if (!eventId) return
+    if (preview || !eventId) return
     const nowMs = serverTimeRef.current ? Date.parse(serverTimeRef.current) : Date.now()
     let lastPlayedKey = null
     try { lastPlayedKey = sessionStorage.getItem('tvIntroLastKey') } catch {}
@@ -437,7 +441,25 @@ function ClassStartIntro({ current, serverTime }) {
     // never clears the fade/hide timers mid-play. Cleanup fires only on unmount
     // or a genuine occurrence change. (Deps are exhaustive: the clock/start are
     // read via refs and setVisible/setShown are stable — no disable needed.)
-  }, [eventId])
+  }, [eventId, preview])
+
+  // Preview loop — only when ?introPreview=1. Replays the show→fade→hide
+  // sequence every DURATION+GAP so the card can be watched on any TV without
+  // waiting for a scheduled class. Entirely inert in normal operation.
+  useEffect(() => {
+    if (!preview) return
+    let inT, outT, hideT
+    const run = () => {
+      setVisible(true)
+      setShown(false)
+      inT = setTimeout(() => setShown(true), INTRO_SHOW_DELAY_MS)
+      outT = setTimeout(() => setShown(false), INTRO_FADE_DELAY_MS)
+      hideT = setTimeout(() => setVisible(false), INTRO_HIDE_DELAY_MS)
+    }
+    run()
+    const loop = setInterval(run, INTRO_DURATION_MS + INTRO_PREVIEW_GAP_MS)
+    return () => { clearInterval(loop); clearTimeout(inT); clearTimeout(outT); clearTimeout(hideT) }
+  }, [preview])
 
   if (!visible || !cls) return null
   const meta = [cls.starts_at_label, cls.program].filter(Boolean).join('  ·  ')
