@@ -13,6 +13,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { pullAccounts } from '@/lib/xero/accounts-sync'
+import { pullTaxRates } from '@/lib/xero/tax-rates-sync'
 import { XeroError } from '@/lib/xero/client'
 
 export const runtime = 'nodejs'
@@ -37,11 +38,20 @@ export async function POST(_request, props) {
 
   try {
     const result = await pullAccounts(locationId)
+    // Tax rates refresh alongside accounts — same tenant, same cadence.
+    // A tax-rate failure is reported but does not undo the accounts sync.
+    let taxRates = null
+    try {
+      taxRates = await pullTaxRates(locationId)
+    } catch (e) {
+      taxRates = { error: e.message || 'Tax-rate sync failed' }
+    }
     return NextResponse.json({
       success: true,
       syncedCount: result.syncedCount,
       deletedCount: result.deletedCount,
       syncedAt: result.syncedAt,
+      taxRates,
     })
   } catch (e) {
     const status = e instanceof XeroError && e.status
