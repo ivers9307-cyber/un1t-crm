@@ -171,7 +171,11 @@ const invoiceFields = z.object({
   tax_type: z.string().max(50).nullable().optional(),
   // 'derived' (auto-matched) | 'manual' (operator overrode). Audit only.
   tax_type_source: z.enum(['derived', 'manual']).nullable().optional(),
-  line_items: z.array(lineItem).min(0).max(200),
+  // XERO-BILL-SUMMARY.1 — the bill posts to Xero as one summary line, so
+  // itemised lines are no longer extracted (the prompt tells the model to
+  // omit them). Kept optional + accepted if a legacy row / other caller
+  // still supplies them, but nothing downstream reads them.
+  line_items: z.array(lineItem).min(0).max(200).optional().default([]),
 })
 
 export { invoiceFields as invoiceFieldsSchema }
@@ -188,9 +192,8 @@ Required fields:
 - subtotal (number) — pre-tax total
 - tax_amount (number) — VAT / GST / sales tax total
 - total (number) — invoice total including tax. Must equal subtotal + tax_amount within 0.01.
-- category (string | null) — one of: utilities, cleaning, equipment, marketing, insurance, rent, maintenance, professional_services, staff_training, office_supplies, software, bank_fees, other. Pick the SINGLE best match for the whole invoice based on the supplier name and line items. Use null only if genuinely unclear.
+- category (string | null) — one of: utilities, cleaning, equipment, marketing, insurance, rent, maintenance, professional_services, staff_training, office_supplies, software, bank_fees, other. Pick the SINGLE best match for the whole invoice based on the supplier name and what the invoice is for. Use null only if genuinely unclear.
 - account_code (string | null) — only suggest a value if the supplier matches an obvious accounting category (e.g. an electric utility → "Utilities" account code if visible on the invoice). Otherwise null and let the operator decide.
-- line_items (array) — each line as { description, quantity, unit_amount, account_code (optional, null if none) }
 
 Category guidance:
 - utilities: electricity, gas, water, internet, phone, broadband
@@ -208,6 +211,7 @@ Category guidance:
 - other: anything that doesn't fit cleanly into one of the above
 
 Rules:
+- Do NOT itemise the invoice. We only need the header figures above (subtotal, tax_amount, total) plus the supplier and invoice number — the bill is posted to the accounts system as a single summary line and the full invoice is filed as an attachment, so per-line detail is unnecessary and error-prone (metered / "per 1,000,000" usage lines especially). Omit line_items entirely.
 - Numbers must be JSON numbers, not strings. Strip currency symbols, commas, and any other formatting.
 - Dates must be ISO format. If the invoice shows "12/03/2026" or "12 March 2026", convert to "2026-03-12".
 - If a field is genuinely absent, use null (for optional fields) or your best inference from context (for required fields). Never invent supplier names or invoice numbers.

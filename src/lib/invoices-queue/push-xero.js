@@ -186,42 +186,45 @@ export function resolveLineTaxType(fields, accountTaxTypes, code) {
 }
 
 /**
- * Build LineItems from the extracted fields. If the row has
- * structured line_items[] use them; otherwise synthesise a single
- * line carrying the invoice total — Xero rejects zero-line bills.
+ * Build the Xero LineItems.
  *
- * The picker-confirmed `account_code` is stamped on every line so
- * the draft bill arrives in Xero already coded to the right
- * account. (Per-line account_code overrides on individual
- * line_items[] entries are honoured if present.) `accountTaxTypes`
- * maps account code → Xero tax type (from the xero_accounts cache)
- * so each line also carries the right TaxType.
+ * XERO-BILL-SUMMARY.1 — we push ONE summary line, never the itemised
+ * OCR line_items. The full invoice PDF is attached to the Xero bill, so
+ * re-deriving line amounts from OCR adds no value and carries real risk:
+ * a metered SaaS invoice (Supabase GVVGEG-00005) mis-scaled its lines to
+ * €8,077 for a $35.04 bill because "Realtime Messages — $2.50 per
+ * 1,000,000" was read as qty 3209 × $2.50. One net line + the resolved
+ * VAT type always reconciles to the captured total, and the per-line
+ * detail lives in the attachment.
+ *
+ * UnitAmount is the GROSS invoice total and the bill is pushed
+ * tax-INCLUSIVE (see buildBillPayload), so Xero's booked total ALWAYS
+ * equals the captured total and Xero backs the VAT out of it at the
+ * resolved TaxType's rate. This is deliberately robust: the total can't
+ * drift no matter what the itemisation — or a stale/missing tax_amount —
+ * says (the resolved TaxType still governs the VAT split; for 0% it's
+ * NONE so the tax is zero). It also keeps shipping/fees that sit outside
+ * subtotal on the bill (ROWfit's €7.20), since we book the total, not the
+ * subtotal. Fallback to subtotal+tax, then subtotal, then 0 when the
+ * total is absent. The picker-confirmed account_code + its resolved
+ * TaxType (see resolveLineTaxType) code the line.
  */
 function buildLineItems(fields, accountTaxTypes = {}) {
-  const defaultCode = fields.account_code || null
-  if (!Array.isArray(fields.line_items) || fields.line_items.length === 0) {
-    const taxType = resolveLineTaxType(fields, accountTaxTypes, defaultCode)
-    return [{
-      Description: `Invoice ${fields.invoice_number || ''} from ${fields.supplier_name || ''}`.trim() || '(invoice)',
-      Quantity: 1,
-      UnitAmount: Number(fields.subtotal ?? fields.total ?? 0),
-      ...(defaultCode ? { AccountCode: String(defaultCode) } : {}),
-      ...(taxType ? { TaxType: taxType } : {}),
-    }]
-  }
-  return fields.line_items.map((li) => {
-    // Per-line override beats the row default (both for the account
-    // code and, through it, the tax type).
-    const code = li.account_code || defaultCode
-    const taxType = resolveLineTaxType(fields, accountTaxTypes, code)
-    return {
-      Description: String(li.description || '').slice(0, 4000) || '(no description)',
-      Quantity: Number(li.quantity ?? 1),
-      UnitAmount: Number(li.unit_amount ?? 0),
-      ...(code ? { AccountCode: String(code) } : {}),
-      ...(taxType ? { TaxType: taxType } : {}),
-    }
-  })
+  const code = fields.account_code || null
+  const taxType = resolveLineTaxType(fields, accountTaxTypes, code)
+  const tot = Number(fields.total)
+  const sub = Number(fields.subtotal)
+  const tax = Number(fields.tax_amount)
+  const gross = Number.isFinite(tot) ? tot
+    : Number.isFinite(sub) && Number.isFinite(tax) ? sub + tax
+      : Number.isFinite(sub) ? sub : 0
+  return [{
+    Description: `Invoice ${fields.invoice_number || ''} from ${fields.supplier_name || ''}`.trim() || '(invoice)',
+    Quantity: 1,
+    UnitAmount: gross,
+    ...(code ? { AccountCode: String(code) } : {}),
+    ...(taxType ? { TaxType: taxType } : {}),
+  }]
 }
 
 /**
@@ -239,31 +242,27 @@ export function buildBillPayload(fields, { supplierContactId, accountTaxTypes = 
     InvoiceNumber: fields.invoice_number,
     Reference: fields.invoice_number,
     CurrencyCode: fields.currency || 'EUR',
-    // Xero defaults to Exclusive when omitted, but being explicit
-    // means we don't get caught out by org-level default changes.
-    // Each LineItem now carries its own TaxType (see
-    // resolveLineTaxType) so Xero books the tax we mean, not the
-    // account default.
-    LineAmountTypes: 'Exclusive',
+    // Tax-INCLUSIVE: the single summary line's UnitAmount IS the gross
+    // invoice total, so Xero's booked total always equals the captured
+    // total and backs the VAT out of it at the line's TaxType rate (see
+    // resolveLineTaxType; 0% → NONE → zero tax). A stale/missing
+    // tax_amount can never inflate the booked total this way.
+    LineAmountTypes: 'Inclusive',
     LineItems: buildLineItems(fields, accountTaxTypes),
   }
 }
 
 /**
- * Resolve every account code referenced by a bill (the row default
- * plus any per-line overrides) to its Xero tax type, from the local
- * xero_accounts cache (mig 186). Returns a plain map code→tax_type;
- * missing/unknown codes are simply absent (caller treats as
- * "omit TaxType, let Xero default"). Never throws — a cache miss
- * degrades to prior behaviour rather than blocking the send.
+ * Resolve the bill's account code to its Xero tax type, from the local
+ * xero_accounts cache (mig 186). Returns a plain map code→tax_type (one
+ * entry, or empty on a cache miss — the caller then omits TaxType and
+ * lets Xero default). Never throws. One summary line ⇒ one account code
+ * (XERO-BILL-SUMMARY.1).
  */
 async function fetchAccountTaxTypes(db, locationId, fields) {
-  const codes = [
-    fields.account_code,
-    ...(Array.isArray(fields.line_items) ? fields.line_items.map((li) => li?.account_code) : []),
-  ].filter(Boolean).map(String)
-  const unique = [...new Set(codes)]
-  if (!unique.length) return {}
+  const code = fields.account_code ? String(fields.account_code) : null
+  if (!code) return {}
+  const unique = [code]
   const { data } = await db
     .from('xero_accounts')
     .select('code, tax_type')
