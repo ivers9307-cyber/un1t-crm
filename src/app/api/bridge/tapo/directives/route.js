@@ -37,6 +37,10 @@ export async function GET(request) {
     .map(d => ({
       sidecar_device_id: d.sidecar_device_id,
       desired: desiredState(d, now, today, occurrences || []),
+      // resolved_windows is a MEMBERSHIP SET — the bridge decides on/off by asking
+      // "is now inside ANY of these windows?", never by replaying them as a queue of
+      // discrete on/off events. Overlapping windows are returned unmerged; treating
+      // them as an event stream would double-toggle across an overlap.
       resolved_windows: resolveDayWindows(d, today, occurrences || [])
         .map(w => ({ on_at: new Date(w.on_at).toISOString(), off_at: new Date(w.off_at).toISOString() })),
       override_until: d.override?.until || null,

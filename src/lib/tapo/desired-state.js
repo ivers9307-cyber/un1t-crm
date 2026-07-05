@@ -8,16 +8,47 @@
 // timetable (class_occurrences has no zone column — mirrors
 // class-climate exactly).
 
-import { dublinDayStartMs } from '@/lib/dublin-time'
+import { addDaysISO } from '@/lib/dublin-time'
 
-const DAY_MS = 24 * 3600 * 1000
 const DEFAULT_LEAD_MIN = 15
 const DEFAULT_LAG_MIN = 10
 
-function hhmmToMs(dayStartMs, hhmm) {
+const DUBLIN_TZ = 'Europe/Dublin'
+const _partsFmt = new Intl.DateTimeFormat('en-GB', {
+  timeZone: DUBLIN_TZ,
+  hour: '2-digit', minute: '2-digit', hour12: false,
+})
+
+// UTC-ms instant of a Dublin wall-clock HH:MM on a given calendar date.
+//
+// Resolves each boundary against ITS OWN Dublin day via the same
+// guess-and-correct technique dublinDayStartMs uses for midnight — a flat
+// offset from the midnight anchor is one hour wrong for any boundary after
+// 01:00 on the spring-forward day (Dublin skips 01:00→02:00), because those
+// wall-clock minutes sit on the far side of the +1h jump.
+//
+// One correction pass is exact for Dublin's ±1h DST. Edge cases:
+//  - Nonexistent times (e.g. 01:30 on the spring-forward day) resolve to a
+//    deterministic nearby instant (00:30 Dublin) — accepted, never fires a
+//    duplicate/late window.
+//  - Ambiguous times on the fall-back day (e.g. 01:30 on 2026-10-25, which
+//    occurs twice) resolve deterministically to the SECOND occurrence
+//    (the +00:00 / post-fall-back instant) — also accepted.
+function dublinWallMs(dateStr, hhmm) {
   const m = /^(\d{2}):(\d{2})$/.exec(hhmm || '')
   if (!m) return null
-  return dayStartMs + (Number(m[1]) * 60 + Number(m[2])) * 60 * 1000
+  const [y, mo, d] = dateStr.split('-').map(Number)
+  const hh = Number(m[1])
+  const mm = Number(m[2])
+  // Naive guess: treat the wanted wall-clock as if it were UTC.
+  const guess = Date.UTC(y, mo - 1, d, hh, mm, 0)
+  // Read back what Dublin wall-clock that instant actually is, correct once.
+  const parts = {}
+  for (const { type, value } of _partsFmt.formatToParts(new Date(guess))) parts[type] = value
+  const gotH = parts.hour === '24' ? 0 : Number(parts.hour)
+  const gotMin = gotH * 60 + Number(parts.minute)
+  const wantMin = hh * 60 + mm
+  return guess - (gotMin - wantMin) * 60 * 1000
 }
 
 // ISO day-of-week (1=Mon..7=Sun) for a Dublin calendar date string.
@@ -30,17 +61,20 @@ function isoDow(dateStr) {
 // → [{ on_at, off_at }] (UTC ms), for the given Dublin date.
 export function resolveDayWindows(device, dateStr, occurrences = []) {
   if (!device || !device.enabled) return []
-  const dayStart = dublinDayStartMs(dateStr)
 
   if (device.schedule_mode === 'fixed') {
     const dow = isoDow(dateStr)
     const out = []
     for (const w of Array.isArray(device.fixed_windows) ? device.fixed_windows : []) {
       if (!Array.isArray(w?.days) || !w.days.includes(dow)) continue
-      const onAt = hhmmToMs(dayStart, w.on)
-      let offAt = hhmmToMs(dayStart, w.off)
+      const onAt = dublinWallMs(dateStr, w.on)
+      let offAt = dublinWallMs(dateStr, w.off)
       if (onAt == null || offAt == null) continue
-      if (offAt <= onAt) offAt += DAY_MS // overnight span
+      // Overnight span: re-resolve the off boundary on the NEXT calendar day
+      // against its own Dublin wall-clock. A flat +24h is wrong across a DST
+      // transition — Sat 22:00 → Sun 02:00 over spring-forward is 23 real
+      // hours for the day, only 4 wall-clock hours but 3 real hours here.
+      if (offAt <= onAt) offAt = dublinWallMs(addDaysISO(dateStr, 1), w.off)
       out.push({ on_at: onAt, off_at: offAt })
     }
     return out.sort((a, b) => a.on_at - b.on_at)

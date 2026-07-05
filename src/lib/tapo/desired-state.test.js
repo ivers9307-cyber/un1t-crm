@@ -61,6 +61,57 @@ describe('resolveDayWindows — class', () => {
   })
 })
 
+describe('resolveDayWindows — DST transitions', () => {
+  // Spring-forward: Dublin skips 01:00→02:00 on 2026-03-29 (Sunday). A window
+  // boundary after 01:00 must NOT be a flat offset from midnight (that resolves
+  // one hour late). Each HH:MM is resolved against its own Dublin wall-clock.
+  it('spring-forward: fixed window boundaries hold Dublin wall-clock', () => {
+    const dev = {
+      enabled: true, schedule_mode: 'fixed',
+      fixed_windows: [{ days: [7], on: '07:00', off: '21:30' }],
+      class_rule: {}, override: null,
+    }
+    const w = resolveDayWindows(dev, '2026-03-29', [])
+    expect(w).toHaveLength(1)
+    // Dublin is IST (UTC+1) after the 01:00→02:00 jump, so 07:00 local = 06:00Z.
+    expect(w[0].on_at).toBe(Date.parse('2026-03-29T07:00:00+01:00'))
+    expect(w[0].off_at).toBe(Date.parse('2026-03-29T21:30:00+01:00'))
+  })
+
+  // Overnight window that straddles the spring-forward jump: Sat 22:00 → Sun 02:00.
+  // Saturday 22:00 is still GMT (UTC+0); Sunday 02:00 is IST (UTC+1). That's only
+  // 3 real hours, NOT 4 — a flat +24h/+DAY_MS offset would be wrong.
+  it('overnight across spring-forward is 3 real hours, not 4', () => {
+    const dev = {
+      enabled: true, schedule_mode: 'fixed',
+      fixed_windows: [{ days: [6], on: '22:00', off: '02:00' }],
+      class_rule: {}, override: null,
+    }
+    const w = resolveDayWindows(dev, '2026-03-28', []) // Saturday
+    expect(w).toHaveLength(1)
+    expect(w[0].on_at).toBe(Date.parse('2026-03-28T22:00:00+00:00'))
+    expect(w[0].off_at).toBe(Date.parse('2026-03-29T02:00:00+01:00'))
+    expect(w[0].off_at - w[0].on_at).toBe(3 * 3600 * 1000)
+  })
+
+  // Fall-back: Dublin repeats 01:00→02:00 on 2026-10-25. 01:30 is ambiguous.
+  // The single guess-and-correct pass resolves it deterministically to the
+  // SECOND occurrence (01:30 GMT / UTC+0), which is fine — a deterministic
+  // nearby instant is all we require. 05:00 is unambiguous (GMT after fall-back).
+  it('fall-back: ambiguous boundary resolves deterministically', () => {
+    const dev = {
+      enabled: true, schedule_mode: 'fixed',
+      fixed_windows: [{ days: [7], on: '01:30', off: '05:00' }],
+      class_rule: {}, override: null,
+    }
+    const w = resolveDayWindows(dev, '2026-10-25', []) // Sunday
+    expect(w).toHaveLength(1)
+    expect(w[0].off_at).toBe(Date.parse('2026-10-25T05:00:00+00:00'))
+    // Our implementation lands on the SECOND 01:30 (the +00:00 occurrence).
+    expect(w[0].on_at).toBe(Date.parse('2026-10-25T01:30:00+00:00'))
+  })
+})
+
 describe('desiredState', () => {
   it('inside a window → on; outside → off', () => {
     expect(desiredState(fixedDevice, T('12:00'), DAY, [])).toBe('on')
