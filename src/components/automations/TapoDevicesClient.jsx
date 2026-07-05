@@ -12,7 +12,7 @@
 // as `bg-<c>-500/10 text-<c>-700`.
 
 import { useState, useEffect, useCallback } from 'react'
-import { Loader2, Plug, AlertCircle, Plus, X } from 'lucide-react'
+import { Loader2, Plug, Plus, X } from 'lucide-react'
 
 // Staleness thresholds — a device that hasn't checked in recently
 // can't be trusted to reflect its real state, so the dot warns.
@@ -39,21 +39,32 @@ function fmtDublin(iso) {
   } catch { return iso }
 }
 
-// Just the HH:MM (Dublin) — for the "Manual until HH:MM" chip.
-function fmtDublinTime(iso) {
+// For the "Manual until …" chip (Dublin wall-clock). The toggle
+// route's DEFAULT expiry is the upcoming Dublin midnight, which a
+// bare "00:00" renders ambiguously ("tonight or tomorrow night?") —
+// so an exactly-midnight until reads "midnight"; anything else keeps
+// its HH:MM.
+function fmtOverrideUntil(iso) {
   if (!iso) return ''
   try {
-    return new Date(iso).toLocaleString('en-IE', {
+    const hhmm = new Date(iso).toLocaleString('en-IE', {
       timeZone: 'Europe/Dublin', hour: '2-digit', minute: '2-digit', hour12: false,
     })
+    return hhmm === '00:00' ? 'midnight' : hhmm
   } catch { return iso }
 }
 
 // green (on) / gray (off), overridden by amber (>5min) / red (>30min)
-// staleness. Staleness takes precedence. Recomputed on every render.
+// staleness. Staleness takes precedence. Recomputed on every render
+// (the parent's 60s tick keeps that honest over time). A device the
+// bridge has NEVER reported gets the red dot too, but says so — "no
+// contact for 30 min" would imply it was seen and went quiet.
 function stateDot(device) {
   const last = device.last_seen_at ? Date.parse(device.last_seen_at) : null
-  const age = last != null && Number.isFinite(last) ? Date.now() - last : Infinity
+  if (last == null || !Number.isFinite(last)) {
+    return { cls: 'bg-red-500', title: 'Never reported' }
+  }
+  const age = Date.now() - last
   if (age > STALE_RED_MS) {
     return { cls: 'bg-red-500', title: 'No contact for over 30 min' }
   }
@@ -90,6 +101,16 @@ export default function TapoDevicesClient({ locationName }) {
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
+
+  // stateDot/overrideActive read Date.now() at render — without a
+  // periodic re-render a device going stale (or an override expiring)
+  // would keep its old dot/chip until some unrelated mutation. A 60s
+  // tick keeps the status honest; cheap (pure re-render, no fetch).
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 60_000)
+    return () => clearInterval(t)
+  }, [])
 
   const newDevices = devices.filter((d) => d.enabled === false)
   const managed = devices.filter((d) => d.enabled === true)
@@ -324,7 +345,7 @@ function ManagedCard({ device, onDone }) {
           {hasOverride && (
             <div className="flex items-center gap-1.5">
               <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-700">
-                Manual until {fmtDublinTime(device.override.until)}
+                Manual until {fmtOverrideUntil(device.override.until)}
               </span>
               <button type="button" onClick={clearOverride} disabled={toggling}
                 className="text-[11px] underline text-un1t-light disabled:opacity-40">
