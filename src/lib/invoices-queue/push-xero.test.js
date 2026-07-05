@@ -32,6 +32,7 @@ vi.mock('@/lib/xero/client', async () => {
 // reassigning `nextRow` before invoking pushQueueRowToXero.
 let nextRow = null
 let nextRowError = null
+let nextAccounts = [] // rows the xero_accounts tax-type lookup returns
 const dbCaptured = { upserts: [], updates: [] }
 
 const mockDb = {
@@ -39,6 +40,8 @@ const mockDb = {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     single: vi.fn(() => Promise.resolve({ data: nextRow, error: nextRowError })),
+    // terminal for the account tax-type lookup (.select().eq().in())
+    in: vi.fn(() => Promise.resolve({ data: nextAccounts, error: null })),
     upsert: vi.fn((row, opts) => {
       dbCaptured.upserts.push({ table, row, opts })
       return Promise.resolve({ error: null })
@@ -53,16 +56,17 @@ const mockDb = {
 }
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => mockDb }))
 
-let pushQueueRowToXero, buildBillPayload, findXeroBillByNumber
+let pushQueueRowToXero, buildBillPayload, findXeroBillByNumber, resolveLineTaxType
 beforeEach(async () => {
   vi.resetModules()
   xfetchMock.mockReset()
   withFreshTokenMock.mockClear()
   nextRow = null
   nextRowError = null
+  nextAccounts = []
   dbCaptured.upserts = []
   dbCaptured.updates = []
-  ;({ pushQueueRowToXero, buildBillPayload, findXeroBillByNumber } = await import('./push-xero'))
+  ;({ pushQueueRowToXero, buildBillPayload, findXeroBillByNumber, resolveLineTaxType } = await import('./push-xero'))
 })
 
 // ----- buildBillPayload (pure) -----------------------------
@@ -118,6 +122,83 @@ describe('buildBillPayload', () => {
     expect(payload.LineItems).toHaveLength(1)
     expect(payload.LineItems[0].UnitAmount).toBe(99)
     expect(payload.LineItems[0].AccountCode).toBe('400')
+  })
+})
+
+// ----- resolveLineTaxType (pure) + TaxType stamping ---------
+//
+// XERO-BILL-VAT.1 — the €156.84→€192.91 bug. A 0%-VAT bill sent
+// with no TaxType let Xero apply the account's 23% default. We now
+// stamp the tax type per line: 'NONE' for zero VAT, the account's
+// own cached tax type otherwise.
+
+describe('resolveLineTaxType', () => {
+  it("returns 'NONE' whenever the source doc has zero VAT (guards the bug)", () => {
+    expect(resolveLineTaxType({ tax_amount: 0 }, { 473: 'INPUT' }, '473')).toBe('NONE')
+    // even numeric-string 0 from JSONB, and even when the account
+    // would otherwise resolve to a 23% type
+    expect(resolveLineTaxType({ tax_amount: '0' }, { 400: 'TAX001' }, '400')).toBe('NONE')
+  })
+
+  it("uses the account's own cached tax type when VAT is present", () => {
+    expect(resolveLineTaxType({ tax_amount: 23 }, { 400: 'INPUT' }, '400')).toBe('INPUT')
+    expect(resolveLineTaxType({ tax_amount: 12.34 }, { 400: 'TAX001' }, '400')).toBe('TAX001')
+  })
+
+  it('returns undefined on a cache miss / unknown code (omit → Xero default, no regression)', () => {
+    expect(resolveLineTaxType({ tax_amount: 23 }, {}, '999')).toBeUndefined()
+    expect(resolveLineTaxType({ tax_amount: 23 }, { 400: 'INPUT' }, null)).toBeUndefined()
+  })
+
+  it('does not force NONE when tax_amount is absent (unknown ≠ zero)', () => {
+    expect(resolveLineTaxType({}, { 400: 'INPUT' }, '400')).toBe('INPUT')
+  })
+})
+
+describe('buildBillPayload — TaxType stamping', () => {
+  it("stamps 'NONE' on every line for a 0%-VAT bill", () => {
+    const payload = buildBillPayload({
+      supplier_name: 'ROWfit', invoice_number: '23967', invoice_date: '2026-06-09',
+      currency: 'EUR', subtotal: 149.59, tax_amount: 0, total: 156.84,
+      account_code: '473',
+      line_items: [
+        { description: 'Shock Cord', quantity: 8, unit_amount: 3.25 },
+        { description: 'Shipping Cost', quantity: 1, unit_amount: 7.2 },
+      ],
+    }, { supplierContactId: 'C1', accountTaxTypes: { 473: 'INPUT' } })
+    expect(payload.LineItems.every((li) => li.TaxType === 'NONE')).toBe(true)
+  })
+
+  it("stamps the account's tax type on a standard-rated bill", () => {
+    const payload = buildBillPayload({
+      supplier_name: 'Acme', invoice_number: 'A1', invoice_date: '2026-05-01',
+      currency: 'EUR', subtotal: 100, tax_amount: 23, total: 123,
+      account_code: '400',
+      line_items: [{ description: 'thing', quantity: 1, unit_amount: 100 }],
+    }, { supplierContactId: 'C1', accountTaxTypes: { 400: 'INPUT' } })
+    expect(payload.LineItems[0].TaxType).toBe('INPUT')
+  })
+
+  it('resolves per-line account overrides to their own tax type', () => {
+    const payload = buildBillPayload({
+      supplier_name: 'Acme', invoice_number: 'A1', invoice_date: '2026-05-01',
+      currency: 'EUR', tax_amount: 23, account_code: '400',
+      line_items: [
+        { description: 'default acct', quantity: 1, unit_amount: 10 },
+        { description: 'override acct', quantity: 1, unit_amount: 5, account_code: '410' },
+      ],
+    }, { supplierContactId: 'C1', accountTaxTypes: { 400: 'INPUT', 410: 'TAX001' } })
+    expect(payload.LineItems[0].TaxType).toBe('INPUT')
+    expect(payload.LineItems[1].TaxType).toBe('TAX001')
+  })
+
+  it('omits TaxType entirely when the account is not in the cache', () => {
+    const payload = buildBillPayload({
+      supplier_name: 'Acme', invoice_number: 'A1', invoice_date: '2026-05-01',
+      currency: 'EUR', tax_amount: 23, account_code: '400',
+      line_items: [{ description: 'thing', quantity: 1, unit_amount: 100 }],
+    }, { supplierContactId: 'C1', accountTaxTypes: {} })
+    expect('TaxType' in payload.LineItems[0]).toBe(false)
   })
 })
 
@@ -183,6 +264,41 @@ describe('pushQueueRowToXero — happy path (existing contact)', () => {
     expect(xfetchMock.mock.calls[0][0]).toContain('/Invoices?where=')
     const postCall = xfetchMock.mock.calls.find((c) => c[0] === '/Invoices')
     expect(postCall[1].body.Invoices[0].Contact.ContactID).toBe('C-EXISTING')
+  })
+})
+
+describe('pushQueueRowToXero — 0%-VAT bill books as No VAT (XERO-BILL-VAT.1)', () => {
+  it("POSTs TaxType 'NONE' on every line so Xero can't add the account's 23%", async () => {
+    nextRow = {
+      id: 'q1', location_id: 'loc1', status: 'data_approved',
+      source_type: 'supplier_email',
+      extracted_fields: {
+        supplier_name: 'ROWfit', invoice_number: '23967', invoice_date: '2026-06-09',
+        currency: 'EUR', subtotal: 149.59, tax_amount: 0, total: 156.84,
+        xero_account_id: 'A473', account_code: '473',
+        xero_contact_ref: { kind: 'existing', xero_contact_id: 'C-ROW', name: 'ROWfit' },
+        line_items: [
+          { description: 'Shock Cord—SkiErg', quantity: 8, unit_amount: 3.25 },
+          { description: 'Shipping Cost', quantity: 1, unit_amount: 7.2 },
+        ],
+      },
+    }
+    // The account's own default is a 23% purchases type — the fix must
+    // NOT let that leak onto a 0%-VAT bill.
+    nextAccounts = [{ code: '473', tax_type: 'INPUT' }]
+    xfetchMock
+      .mockResolvedValueOnce({ Invoices: [] }) // duplicate-check: none
+      .mockResolvedValueOnce({ Invoices: [{ InvoiceID: 'INV-ROW', InvoiceNumber: '23967', TotalTax: 0 }] })
+
+    await pushQueueRowToXero('q1')
+    const postCall = xfetchMock.mock.calls.find((c) => c[0] === '/Invoices')
+    const lines = postCall[1].body.Invoices[0].LineItems
+    expect(lines).toHaveLength(2)
+    expect(lines.every((li) => li.TaxType === 'NONE')).toBe(true)
+    // And the VAT cross-check now corroborates instead of flagging.
+    const patch = dbCaptured.updates.find((u) => 'xero_bill_id' in u.patch)?.patch
+    expect(patch.xero_total_tax).toBe(0)
+    expect(patch.xero_tax_mismatch).toBe(false)
   })
 })
 

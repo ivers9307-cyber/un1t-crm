@@ -151,6 +151,30 @@ async function resolveContactId({ xfetch, db, locationId, contactRef }) {
 // ---------------------------------------------------------------
 
 /**
+ * Decide the Xero TaxType for a single bill line.
+ *
+ * XERO-BILL-VAT.1 — this used to be omitted entirely, so with
+ * LineAmountTypes:'Exclusive' Xero fell back to the *account's*
+ * default rate and silently added 23% to a 0%-VAT supplier bill
+ * (ROWfit 23967: €156.84 booked as €192.91). We now stamp it:
+ *   - Source doc has 0% / no VAT (tax_amount === 0) → 'NONE'
+ *     (No VAT). A universal, always-valid Xero tax type that books
+ *     zero tax regardless of what the account defaults to.
+ *   - Otherwise use the line account's OWN tax type, resolved from
+ *     the xero_accounts cache (mig 186) — a guaranteed-valid code
+ *     for that org, so the draft books under the same rate the
+ *     account already uses in Xero (mirrors xero/invoices.js).
+ *   - Unknown account (cache miss / no code) → return undefined so
+ *     the caller omits TaxType and Xero applies the account default,
+ *     exactly as before. Safe no-op fallback, never an invalid code.
+ */
+export function resolveLineTaxType(fields, accountTaxTypes, code) {
+  const taxAmount = Number(fields?.tax_amount)
+  if (Number.isFinite(taxAmount) && taxAmount === 0) return 'NONE'
+  return (code != null ? accountTaxTypes?.[String(code)] : undefined) || undefined
+}
+
+/**
  * Build LineItems from the extracted fields. If the row has
  * structured line_items[] use them; otherwise synthesise a single
  * line carrying the invoice total — Xero rejects zero-line bills.
@@ -158,32 +182,43 @@ async function resolveContactId({ xfetch, db, locationId, contactRef }) {
  * The picker-confirmed `account_code` is stamped on every line so
  * the draft bill arrives in Xero already coded to the right
  * account. (Per-line account_code overrides on individual
- * line_items[] entries are honoured if present.)
+ * line_items[] entries are honoured if present.) `accountTaxTypes`
+ * maps account code → Xero tax type (from the xero_accounts cache)
+ * so each line also carries the right TaxType.
  */
-function buildLineItems(fields) {
+function buildLineItems(fields, accountTaxTypes = {}) {
   const defaultCode = fields.account_code || null
   if (!Array.isArray(fields.line_items) || fields.line_items.length === 0) {
+    const taxType = resolveLineTaxType(fields, accountTaxTypes, defaultCode)
     return [{
       Description: `Invoice ${fields.invoice_number || ''} from ${fields.supplier_name || ''}`.trim() || '(invoice)',
       Quantity: 1,
       UnitAmount: Number(fields.subtotal ?? fields.total ?? 0),
       ...(defaultCode ? { AccountCode: String(defaultCode) } : {}),
+      ...(taxType ? { TaxType: taxType } : {}),
     }]
   }
-  return fields.line_items.map((li) => ({
-    Description: String(li.description || '').slice(0, 4000) || '(no description)',
-    Quantity: Number(li.quantity ?? 1),
-    UnitAmount: Number(li.unit_amount ?? 0),
-    // Per-line override beats the row default.
-    ...(li.account_code || defaultCode ? { AccountCode: String(li.account_code || defaultCode) } : {}),
-  }))
+  return fields.line_items.map((li) => {
+    // Per-line override beats the row default (both for the account
+    // code and, through it, the tax type).
+    const code = li.account_code || defaultCode
+    const taxType = resolveLineTaxType(fields, accountTaxTypes, code)
+    return {
+      Description: String(li.description || '').slice(0, 4000) || '(no description)',
+      Quantity: Number(li.quantity ?? 1),
+      UnitAmount: Number(li.unit_amount ?? 0),
+      ...(code ? { AccountCode: String(code) } : {}),
+      ...(taxType ? { TaxType: taxType } : {}),
+    }
+  })
 }
 
 /**
  * Compose the /Invoices POST body. Pure — exported for unit
- * testing.
+ * testing. `accountTaxTypes` (account code → Xero tax type) is
+ * resolved by the caller from the xero_accounts cache.
  */
-export function buildBillPayload(fields, { supplierContactId }) {
+export function buildBillPayload(fields, { supplierContactId, accountTaxTypes = {} }) {
   return {
     Type: 'ACCPAY',
     Status: 'DRAFT',
@@ -195,9 +230,39 @@ export function buildBillPayload(fields, { supplierContactId }) {
     CurrencyCode: fields.currency || 'EUR',
     // Xero defaults to Exclusive when omitted, but being explicit
     // means we don't get caught out by org-level default changes.
+    // Each LineItem now carries its own TaxType (see
+    // resolveLineTaxType) so Xero books the tax we mean, not the
+    // account default.
     LineAmountTypes: 'Exclusive',
-    LineItems: buildLineItems(fields),
+    LineItems: buildLineItems(fields, accountTaxTypes),
   }
+}
+
+/**
+ * Resolve every account code referenced by a bill (the row default
+ * plus any per-line overrides) to its Xero tax type, from the local
+ * xero_accounts cache (mig 186). Returns a plain map code→tax_type;
+ * missing/unknown codes are simply absent (caller treats as
+ * "omit TaxType, let Xero default"). Never throws — a cache miss
+ * degrades to prior behaviour rather than blocking the send.
+ */
+async function fetchAccountTaxTypes(db, locationId, fields) {
+  const codes = [
+    fields.account_code,
+    ...(Array.isArray(fields.line_items) ? fields.line_items.map((li) => li?.account_code) : []),
+  ].filter(Boolean).map(String)
+  const unique = [...new Set(codes)]
+  if (!unique.length) return {}
+  const { data } = await db
+    .from('xero_accounts')
+    .select('code, tax_type')
+    .eq('location_id', locationId)
+    .in('code', unique)
+  const map = {}
+  for (const r of (data || [])) {
+    if (r?.code != null && r?.tax_type) map[String(r.code)] = r.tax_type
+  }
+  return map
 }
 
 // ---------------------------------------------------------------
@@ -273,7 +338,11 @@ export async function pushQueueRowToXero(queueId) {
       xfetch, db, locationId: row.location_id, contactRef: fields.xero_contact_ref,
     })
 
-    const payload = buildBillPayload(fields, { supplierContactId })
+    // Resolve each line's Xero tax type from the account cache so the
+    // draft books under the right rate (0%-VAT → 'NONE'), instead of
+    // letting Xero apply the account default. See resolveLineTaxType.
+    const accountTaxTypes = await fetchAccountTaxTypes(db, row.location_id, fields)
+    const payload = buildBillPayload(fields, { supplierContactId, accountTaxTypes })
     const created = await xfetch('/Invoices', { method: 'POST', body: { Invoices: [payload] } })
     const inv = created?.Invoices?.[0]
     if (!inv?.InvoiceID) {
@@ -284,10 +353,13 @@ export async function pushQueueRowToXero(queueId) {
     deepLinkUrl = deepLink(billId)
 
     // audit F2 (RCOV.P2) — record what Xero booked as tax vs what the
-    // OCR read off the receipt. LineAmountTypes is Exclusive and we
-    // pass no TaxType, so Xero derives tax from account defaults —
-    // this is the only place the two numbers meet. >2c difference =
-    // mismatch (Irish multi-rate 23/13.5/9/0 makes silent drift easy);
+    // OCR read off the receipt. We now stamp each line's TaxType
+    // (XERO-BILL-VAT.1) so Xero books the rate we mean, but this
+    // cross-check stays as the backstop that catches any remaining
+    // drift — this is the only place the two numbers meet. >2c
+    // difference = mismatch (Irish multi-rate 23/13.5/9/0 makes silent
+    // drift easy, esp. reduced rates we can't yet infer from a bare
+    // tax amount);
     // null when either side is missing (pre-P2 rows stay null = not
     // evaluated). Surfaced in the inbox badge + /accounting Exceptions.
     const xeroTotalTax = typeof inv.TotalTax === 'number' ? inv.TotalTax : null
