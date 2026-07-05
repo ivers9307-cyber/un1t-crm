@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { isValidMobileNumber } from '@/lib/phone-validate'
+import { trackFunnelStep } from '@/lib/funnel-track'
 
 const CONSULT_SLUG = 'free-un1t-consultation'
 
@@ -45,6 +46,9 @@ export default function StartFunnel() {
       utm_term: p.get('utm_term') || undefined,
       meta_ad_id: p.get('meta_ad_id') || undefined,
     }
+    // Funnel telemetry (FUNNEL-TRACK): landed on the /start funnel. The
+    // step_* events that follow reveal exactly where visitors drop off.
+    trackFunnelStep('view')
   }, [])
 
   function buildAttribution() {
@@ -75,6 +79,8 @@ export default function StartFunnel() {
         const list = (j.success && j.data?.classes) ? j.data.classes : []
         setClasses(list)
         if (list.length) setSelectedClassDay(list[0].day)
+        // count=0 flags an empty picker (a dead end that would explain a drop)
+        trackFunnelStep('slots_view', { kind: 'class', count: list.length })
       })
       .catch(() => setClasses([]))
       .finally(() => setClassesLoading(false))
@@ -91,6 +97,7 @@ export default function StartFunnel() {
         const list = (j.success && j.data?.days) ? j.data.days : []
         setDays(list)
         if (list.length) loadSlots(list[0].date)
+        trackFunnelStep('slots_view', { kind: 'consult', count: list.length })
       })
       .catch(() => setDays([]))
       .finally(() => setDaysLoading(false))
@@ -105,8 +112,8 @@ export default function StartFunnel() {
     } catch { setSlots([]) } finally { setSlotsLoading(false) }
   }
 
-  function chooseConsult() { setPath('consultation'); setError(null); setStep('details') }
-  function chooseClass() { setPath('class'); setError(null); setStep('details') }
+  function chooseConsult() { trackFunnelStep('path_consult'); setPath('consultation'); setError(null); setStep('details') }
+  function chooseClass() { trackFunnelStep('path_class'); setPath('class'); setError(null); setStep('details') }
 
   function detailsNext(e) {
     e.preventDefault()
@@ -117,6 +124,7 @@ export default function StartFunnel() {
     if (!isValidMobileNumber(form.phone)) {
       setError('Please enter a valid mobile number (e.g. 087 123 4567).'); return
     }
+    trackFunnelStep('details', { path })
     setStep(path === 'class' ? 'classpick' : 'calendar')
   }
 
@@ -137,6 +145,7 @@ export default function StartFunnel() {
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) { setError(j.error || 'That slot was just taken — pick another.'); return }
+      trackFunnelStep('booked_consult')
       setStep('done')
     } catch { setError('Something went wrong. Please try again.') } finally { setSubmitting(false) }
   }
@@ -156,6 +165,7 @@ export default function StartFunnel() {
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) { setError(j.error || 'Something went wrong — please try again.'); return }
+      trackFunnelStep('booked_class')
       setStep('classdone')
     } catch { setError('Something went wrong. Please try again.') } finally { setSubmitting(false) }
   }
