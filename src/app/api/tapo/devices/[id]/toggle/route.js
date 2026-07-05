@@ -31,7 +31,7 @@ import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { uuidLike } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
-import { dublinDayStartMs, dublinTodayStr, DUBLIN_DAY_MS } from '@/lib/dublin-time'
+import { dublinDayStartMs, dublinTodayStr, addDaysISO } from '@/lib/dublin-time'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -95,7 +95,9 @@ export async function POST(request, props) {
       // Default expiry = end of the Dublin day (start of tomorrow,
       // Dublin wall-clock). Keeps a "turn it on now" override from
       // sticking indefinitely if staff forget to clear it.
-      const untilIso = until || new Date(dublinDayStartMs(dublinTodayStr()) + DUBLIN_DAY_MS).toISOString()
+      // dublinDayStartMs(tomorrow) is DST-exact — a flat +24h lands
+      // at 23:00/01:00 on the two transition days.
+      const untilIso = until || new Date(dublinDayStartMs(addDaysISO(dublinTodayStr(), 1))).toISOString()
       override = { state, until: untilIso, set_by: user.id }
     }
 
