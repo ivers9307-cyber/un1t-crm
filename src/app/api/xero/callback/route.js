@@ -12,6 +12,8 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { exchangeAuthorizationCode, listConnectedTenants, XeroError } from '@/lib/xero/client'
+import { pullAccounts } from '@/lib/xero/accounts-sync'
+import { pullTaxRates } from '@/lib/xero/tax-rates-sync'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -86,6 +88,12 @@ export async function GET(req) {
     if (upErr) {
       return clearCookie(NextResponse.redirect(settingsUrl(req, { error: `DB error: ${upErr.message}` })))
     }
+
+    // Prime the caches so a freshly-connected location has accounts +
+    // tax rates immediately. Best-effort — failures are recorded on the
+    // connection row by the helpers; never block the connect redirect.
+    try { await pullAccounts(locationId) } catch (e) { console.warn(`[xero connect] accounts sync: ${e?.message || e}`) }
+    try { await pullTaxRates(locationId) } catch (e) { console.warn(`[xero connect] tax-rate sync: ${e?.message || e}`) }
 
     return clearCookie(NextResponse.redirect(settingsUrl(req, { connected: tenant.tenantName || 'Xero' })))
   } catch (e) {
