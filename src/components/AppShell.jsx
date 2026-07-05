@@ -1,7 +1,7 @@
 'use client'
 
 import { usePathname, useRouter } from 'next/navigation'
-import { useState, useEffect } from 'react'
+import { Fragment, useState, useEffect } from 'react'
 import Sidebar from './Sidebar'
 import ImpersonationBanner from './ImpersonationBanner'
 import CommandPalette from './CommandPalette'
@@ -95,8 +95,19 @@ export default function AppShell({ user, children }) {
             cross-user impersonation backed by an open audit row. Rendering
             unconditionally showed every user a "Viewing as <yourself>" bar. */}
         {user?.impersonatingFrom && <ImpersonationBanner user={user} />}
+        {/* Keying the page subtree on the active location remounts it
+            when the location switches. The Sidebar already updates from
+            the refreshed `user` prop, but client components inside a
+            page fetch their data once on mount and won't re-run on a
+            plain router.refresh() — so the main view stayed on the old
+            location until a manual reload. The key changes only on a
+            location switch (not on normal navigation), so it forces the
+            re-fetch exactly when it's needed. Fragment = no extra DOM,
+            zero layout impact. */}
         <main className="flex-1 overflow-y-auto pt-14 md:pt-0">
-          {children}
+          <Fragment key={user?.activeLocation?.id ?? 'no-location'}>
+            {children}
+          </Fragment>
         </main>
       </div>
 
