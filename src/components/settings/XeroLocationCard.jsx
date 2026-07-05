@@ -172,9 +172,9 @@ export default function XeroLocationCard({ location, connection }) {
             <Database size={11} className="inline-block mr-1 mb-0.5" /> Xero data cache
           </label>
           <p className="text-[11px] text-un1t-subtle mb-2">
-            The chart of accounts and contacts list are cached locally so the /invoices accountant
-            review can suggest exact Xero accounts + suppliers without hammering the Xero API.
-            Press refresh after adding a new contact or account in Xero.
+            The chart of accounts, tax rates and contacts list are cached locally so the /invoices
+            accountant review can suggest exact Xero accounts, VAT rates + suppliers without hammering
+            the Xero API. Press refresh after adding a new contact, account or tax rate in Xero.
           </p>
 
           {/* Two side-by-side panels — accounts on the left, contacts on the right. */}
@@ -183,7 +183,7 @@ export default function XeroLocationCard({ location, connection }) {
             <div className="bg-un1t-bg/30 border border-un1t-border/50 rounded-md p-2.5">
               <div className="flex items-center justify-between gap-2 mb-1">
                 <div className="text-[11px] font-semibold text-un1t-text inline-flex items-center gap-1">
-                  <Database size={11} /> Chart of accounts
+                  <Database size={11} /> Chart of accounts &amp; tax rates
                 </div>
                 <button
                   onClick={onSyncAccounts}
@@ -195,8 +195,17 @@ export default function XeroLocationCard({ location, connection }) {
                 </button>
               </div>
               <div className="text-[10px] text-un1t-subtle">
-                Last synced: <span className="text-un1t-text">{fmtRelative(connection.accounts_last_synced_at)}</span>
+                Accounts last synced: <span className="text-un1t-text">{fmtRelative(connection.accounts_last_synced_at)}</span>
               </div>
+              {/* XERO-BILL-VAT.2 — the Refresh above now also syncs the
+                  location's Xero tax rates (same tenant, same cadence),
+                  so surface their freshness beside the accounts line. */}
+              <div className="text-[10px] text-un1t-subtle">
+                Tax rates last synced: <span className="text-un1t-text">{fmtRelative(connection.tax_rates_last_synced_at)}</span>
+              </div>
+              {!accountsResult && connection.tax_rates_sync_error && (
+                <div className="mt-1 text-[10px] text-red-400">Tax rates: {connection.tax_rates_sync_error}</div>
+              )}
               {accountsResult?.count !== undefined && (
                 <div className="mt-1 text-[10px] text-emerald-400">
                   Synced {accountsResult.count} account{accountsResult.count === 1 ? '' : 's'}
