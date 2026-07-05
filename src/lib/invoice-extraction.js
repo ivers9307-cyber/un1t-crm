@@ -164,6 +164,13 @@ const invoiceFields = z.object({
       name: z.string().min(1).max(500),
     }),
   ]).nullable().optional(),
+  // XERO-BILL-VAT.2 — the confirmed Xero TaxType for this bill,
+  // derived from the location's synced rates and confirmed by the
+  // bookkeeper in review. Sent as LineItem.TaxType on push. Optional
+  // so legacy rows + the car-invoice flow validate unchanged.
+  tax_type: z.string().max(50).nullable().optional(),
+  // 'derived' (auto-matched) | 'manual' (operator overrode). Audit only.
+  tax_type_source: z.enum(['derived', 'manual']).nullable().optional(),
   line_items: z.array(lineItem).min(0).max(200),
 })
 
