@@ -81,6 +81,22 @@ function overrideActive(override) {
   return Number.isFinite(ms) && ms > Date.now()
 }
 
+// A Zod-rejected mutation comes back as { error: 'Invalid request
+// body', issues: [{ path, message }] } (src/lib/validate.js) — the
+// bare error tells an operator nothing about WHICH field. Surface the
+// first issue's message, naming the window ("Window 1: …") when the
+// path points into fixed_windows.N. Falls back to j.error, then the
+// caller's default.
+function apiErrorMessage(j, fallback) {
+  if (Array.isArray(j?.issues) && j.issues.length > 0) {
+    const { path, message } = j.issues[0]
+    const win = String(path || '').match(/^fixed_windows\.(\d+)/)
+    if (win && message) return `Window ${Number(win[1]) + 1}: ${message}`
+    if (message) return message
+  }
+  return j?.error || fallback
+}
+
 export default function TapoDevicesClient({ locationName }) {
   const [devices, setDevices] = useState([])
   const [loading, setLoading] = useState(true)
@@ -183,7 +199,7 @@ function AdoptCard({ device, onDone }) {
         body: JSON.stringify({ name: trimmed, enabled: true }),
       })
       const j = await res.json()
-      if (!res.ok || j.success === false) throw new Error(j.error || 'Adopt failed')
+      if (!res.ok || j.success === false) throw new Error(apiErrorMessage(j, 'Adopt failed'))
       await onDone()
     } catch (e) { setError(e.message); setBusy(false) }
   }
@@ -288,7 +304,7 @@ function ManagedCard({ device, onDone }) {
         body: JSON.stringify(body),
       })
       const j = await res.json()
-      if (!res.ok || j.success === false) throw new Error(j.error || 'Save failed')
+      if (!res.ok || j.success === false) throw new Error(apiErrorMessage(j, 'Save failed'))
       setSaved(true)
       await onDone()
     } catch (e) { setError(e.message) } finally { setBusy(false) }
@@ -303,7 +319,7 @@ function ManagedCard({ device, onDone }) {
         body: JSON.stringify({ state: device.last_state === 'on' ? 'off' : 'on' }),
       })
       const j = await res.json()
-      if (!res.ok || j.success === false) throw new Error(j.error || 'Toggle failed')
+      if (!res.ok || j.success === false) throw new Error(apiErrorMessage(j, 'Toggle failed'))
       await onDone()
     } catch (e) { setToggleError(e.message) } finally { setToggling(false) }
   }
@@ -317,7 +333,7 @@ function ManagedCard({ device, onDone }) {
         body: JSON.stringify({ clear: true }),
       })
       const j = await res.json()
-      if (!res.ok || j.success === false) throw new Error(j.error || 'Clear failed')
+      if (!res.ok || j.success === false) throw new Error(apiErrorMessage(j, 'Clear failed'))
       await onDone()
     } catch (e) { setToggleError(e.message) } finally { setToggling(false) }
   }
