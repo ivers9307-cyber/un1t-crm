@@ -33,6 +33,7 @@
     "@vercel/speed-insights": "^2.0.0",
     "clsx": "^2.1.0",
     "heic-convert": "^2.1.0",
+    "imapflow": "^1.4.3",
     "lucide-react": "^0.400.0",
     "next": "^16.2.6",
     "pdf-lib": "^1.17.1",

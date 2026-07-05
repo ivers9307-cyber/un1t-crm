@@ -23,6 +23,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { nextBookedClass } from '@/lib/pipeline-classifier'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import KanbanBoard from '@/components/KanbanBoard'
 import PipelineViewSwitcher from '@/components/PipelineViewSwitcher'
@@ -35,6 +36,7 @@ export default async function PipelinePage(props) {
   const searchParams = await props.searchParams;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
+  if (!hasPermission(user, 'pipeline')) redirect('/')
   const locationId = user.activeLocation?.id
 
   // searchParams is async in Next 15; stays a sync object on 14. Defend

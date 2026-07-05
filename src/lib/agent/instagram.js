@@ -110,6 +110,10 @@ export const instagramAdapter = {
   nameColumn: 'customer_name',
   pushCategory: 'instagram',
   handoffType: 'instagram_agent_handoff',
+  // AGENT-REARM.2 — IG has no sequence/automation traffic, so any non-agent
+  // outbound is an operator send.
+  humanOutboundColumns: 'source',
+  isHumanOutbound: (m) => m.source !== 'agent',
   send: (recipient, text, { connection }) => sendInstagramMessage(recipient, text, { connection }),
   outboundRow: ({ conversationId, locationId, contactId, messageId, text, now }) => ({
     conversation_id: conversationId,
@@ -218,7 +222,7 @@ export async function handleInstagramInbound(db, event) {
       },
     }
     if (convMeta?.assigned_to) {
-      await sendPush([convMeta.assigned_to], payload)
+      await sendPush([convMeta.assigned_to], payload, { locationId })
     } else {
       await sendPushToRolesAtLocation(locationId, MANAGER_ROLES, payload)
     }

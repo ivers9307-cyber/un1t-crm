@@ -20,6 +20,7 @@ const EMPLOYMENT = [{ key: 'fte', label: 'Full-time' }, { key: 'contractor', lab
 // against the caller's allowed roles + owned locations.
 const ROLES = [
   { key: 'staff', label: 'Staff' },
+  { key: 'reception', label: 'Reception' },
   { key: 'head_coach', label: 'Head Coach' },
   { key: 'manager', label: 'Manager' },
   { key: 'owner', label: 'Owner' },

@@ -78,11 +78,14 @@ export function canMobile(profile, key, activeLocation = null) {
     return canDashboard(profile, key, activeLocation)
   }
   // Mobile-only keys live under .mobile in the assignment's permissions
-  // blob. Hand the canonical resolver the namespaced bag.
+  // blob. Hand the canonical resolver the namespaced bag. roleTemplate
+  // (PERM-AUDIT.2) is the operator-edited role template shipped on the
+  // location payload by /api/mobile/me — sparse, tier 2.5.
   return resolvePermission({
     role: profile.role,
     location: activeLocation,
     permissions: activeLocation?.permissions?.mobile || null,
+    roleTemplate: activeLocation?.roleTemplate?.mobile || null,
     defaults: DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
     key,
   })
@@ -147,6 +150,7 @@ export function canDashboard(profile, key, activeLocation = null) {
     role: profile.role,
     location: activeLocation,
     permissions: activeLocation?.permissions || null,
+    roleTemplate: activeLocation?.roleTemplate || null,
     defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
     key,
   })

@@ -6,6 +6,7 @@
 // pin it.
 
 import { OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES } from '@/lib/schemas'
+import { diffPermissionsBlob, hydratePermissions, mergeTemplates } from '@shared/permissions'
 import { splitCompFromProfilePatch, upsertCompensationForProfile } from '@/lib/profile-compensation'
 import {
   getLocationUnifiConfig, findOrCreateUnifiUser,
@@ -28,7 +29,7 @@ export function buildStaffProfilePatch(body) {
   return patch
 }
 
-const ROLE_PRECEDENCE = { owner: 1, manager: 2, head_coach: 3, staff: 4 }
+const ROLE_PRECEDENCE = { owner: 1, manager: 2, head_coach: 3, reception: 4, staff: 5 }
 
 /** Recompute profiles.role: master flag wins, else the highest-
  * precedence role across the current assignments, else the fallback. */
@@ -117,6 +118,55 @@ export function computeDesiredAssignments({ isMaster, callerOwnerLocationIds, as
     }
   }
   return desired
+}
+
+/** PERM-AUDIT.3 — reduce each assignment's permissions blob to the
+ * SPARSE diff vs its effective role base (code defaults + the
+ * location's role template, mig 364) before it hits the DB.
+ *
+ * This is what makes per-user permissions inherit again: a stored
+ * blob only pins the keys an admin deliberately changed, so role
+ * changes, role-template edits and future code-default changes all
+ * flow through automatically. The editors keep sending FULL hydrated
+ * blobs (their save shape is unchanged); the server owns the diff.
+ *
+ * Idempotent: an already-sparse blob diffs to itself. Non-boolean
+ * extras riding on .mobile (layout, lead_time_overrides) are
+ * preserved. The template fetch failing degrades to diffing against
+ * code defaults only — worst case a few extra keys are stored, never
+ * a lost override. */
+export async function sparsifyAssignmentPermissions({ db, assignments, employmentType = null }) {
+  const list = assignments || []
+  const locIds = [...new Set(list.map(a => a.location_id).filter(Boolean))]
+  let templates = []
+  if (locIds.length > 0) {
+    try {
+      const { data } = await db
+        .from('location_role_permissions')
+        .select('location_id, role, employment_type, permissions')
+        .in('location_id', locIds)
+      templates = data || []
+    } catch {
+      templates = []
+    }
+  }
+  // RECEPTION.2 (mig 367) — the diff base includes the target's
+  // employment-type variant layered over the role's 'all' template,
+  // matching exactly what the resolver will use for this user.
+  const rowFor = (locId, role, emp) =>
+    templates.find(t => t.location_id === locId && t.role === role && t.employment_type === emp)?.permissions || null
+  const templateFor = (locId, role) =>
+    mergeTemplates(
+      rowFor(locId, role, 'all'),
+      employmentType ? rowFor(locId, role, employmentType) : null
+    )
+  return list.map(a => ({
+    ...a,
+    permissions: diffPermissionsBlob(
+      a.permissions || {},
+      hydratePermissions(null, a.role, templateFor(a.location_id, a.role))
+    ),
+  }))
 }
 
 /** Build the profile_locations row for one desired assignment. PURE —

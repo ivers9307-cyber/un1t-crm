@@ -53,6 +53,9 @@ export function hasPermission(user, key) {
     role: user.role,
     location: user.activeLocation,
     permissions: user.activeAssignment?.permissions || {},
+    // PERM-AUDIT.2 — operator-edited role template for the user's
+    // role at the active location (mig 364), loaded by getCurrentUser.
+    roleTemplate: user.activeRoleTemplate || null,
     defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
     key,
   })
@@ -84,6 +87,8 @@ export function hasMobilePermission(user, key) {
     role: user.role,
     location: user.activeLocation,
     permissions: user.activeAssignment?.permissions?.mobile || {},
+    // Same template as hasPermission, mobile-namespaced (PERM-AUDIT.2).
+    roleTemplate: user.activeRoleTemplate?.mobile || null,
     defaults: DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
     key,
   })
@@ -123,6 +128,9 @@ export function hasPermissionForLocation(user, locationId, key) {
     role: roleHere,
     location, // location.features carries the tier-1 gate
     permissions: assignment?.permissions || {},
+    // Role template for the user's role AT THE TARGET location
+    // (PERM-AUDIT.2) — keyed per location by getCurrentUser.
+    roleTemplate: user.roleTemplatesByLocation?.[locationId] || null,
     defaults: DEFAULT_WEB_PERMISSIONS_BY_ROLE,
     key,
   })

@@ -9,6 +9,7 @@ const ROLE_LABELS = Object.freeze({
   manager: 'Manager',
   head_coach: 'Head Coach',
   staff: 'Staff',
+  reception: 'Reception',
 })
 
 export function formatRole(role) {

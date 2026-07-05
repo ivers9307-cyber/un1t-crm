@@ -307,11 +307,11 @@ describe('manualTakeoverPatch', () => {
       agent_handed_off_at: '2026-06-30T10:00:00.000Z',
     })
   })
-  it('preserves an existing handoff timestamp (so re-arm is not pushed out per message)', () => {
+  it('REFRESHES an existing handoff timestamp — the cooldown measures from the human\'s LAST message (AGENT-REARM.2)', () => {
     const now = new Date('2026-06-30T10:00:00Z')
     expect(manualTakeoverPatch('2026-06-30T08:00:00Z', now)).toEqual({
       agent_active: false,
-      agent_handed_off_at: '2026-06-30T08:00:00Z',
+      agent_handed_off_at: '2026-06-30T10:00:00.000Z',
     })
   })
   it('always pauses (agent_active=false) and never stamps null — so it auto-re-arms, not permanent-off', () => {
@@ -503,5 +503,109 @@ describe('resolveActingContactId', () => {
   })
   it('passes through a null/blank contact', () => {
     expect(resolveActingContactId({ contactId: null, groupOf: () => null, primaryOf: () => null })).toBeNull()
+  })
+})
+
+// AGENT-BOTLOOP.1 — business auto-responder detection.
+import { isLikelyBusinessAutoReply } from './core'
+
+describe('isLikelyBusinessAutoReply', () => {
+  // The two real inbound auto-replies that triggered Mia intros (2026-06-29).
+  const ZEN =
+    "Thank you for contacting Zen Movement.\n\nWe may be teaching at the moment and unable to answer. \n\nOur team is small, we do our own admin and reception between classes, so we'll do our best to get back to you as soon as we can. \n\nAll bookings can be made directly through the links in the catalog."
+  const PD =
+    'Welcome to PD Aesthetic Clinic ✨  \n\nThank you for your message.  \nI’m Priscila, and I look forward to helping you feel your absolute best.  \n\nFor quick and easy booking, please use the link below:  \nhttps://bit.ly/4tGUqTY\n\nI’ll get back to you as soon as possible 🤍'
+
+  it('flags the real Zen Movement auto-reply', () => {
+    expect(isLikelyBusinessAutoReply(ZEN)).toBe(true)
+  })
+  it('flags the real PD Aesthetic auto-reply', () => {
+    expect(isLikelyBusinessAutoReply(PD)).toBe(true)
+  })
+  it('flags an explicit automated-message marker on its own', () => {
+    expect(isLikelyBusinessAutoReply('This is an automated response — our office is closed until Monday and nobody reads this inbox.')).toBe(true)
+    expect(isLikelyBusinessAutoReply('Auto-reply: I am away from my desk right now, leave a message after the tone please.')).toBe(true)
+  })
+  it('never flags short real messages, even polite ones', () => {
+    expect(isLikelyBusinessAutoReply('Thanks!')).toBe(false)
+    expect(isLikelyBusinessAutoReply('Thank you for your message')).toBe(false)
+    expect(isLikelyBusinessAutoReply('Yes, im interested!')).toBe(false)
+    expect(isLikelyBusinessAutoReply('I want to book my 1st class')).toBe(false)
+  })
+  it('never flags a long real message with only ONE weak signal', () => {
+    expect(isLikelyBusinessAutoReply(
+      "Thanks for reaching out about the trial — I was actually about to message you myself. Can I bring my girlfriend along on Friday evening after work?"
+    )).toBe(false)
+    expect(isLikelyBusinessAutoReply(
+      "Hi Garrett, all is well I hope. I contacted you one month before my plan expired to cancel. You might remember we spoke at the gym a few days later as I hadn't heard back and you said you'd look for me."
+    )).toBe(false)
+  })
+  it('handles empty / non-string input', () => {
+    expect(isLikelyBusinessAutoReply('')).toBe(false)
+    expect(isLikelyBusinessAutoReply(null)).toBe(false)
+  })
+})
+
+describe('shouldAgentReply — auto-reply gate', () => {
+  const settings = { enabled: true }
+  it('stays silent (no soft handoff) on a business auto-reply', () => {
+    const d = shouldAgentReply({
+      settings,
+      conversation: { agent_active: true },
+      message: { type: 'text', body: 'Thank you for contacting Acme Physio. We\'ll get back to you as soon as we can — bookings can be made directly through the links online.' },
+      senderPhone: '+353870000000',
+    })
+    expect(d.reply).toBe(false)
+    expect(d.reason).toBe('auto_reply')
+    expect(d.onDuty).toBeUndefined()
+  })
+  it('still replies to a normal text', () => {
+    const d = shouldAgentReply({
+      settings,
+      conversation: { agent_active: true },
+      message: { type: 'text', body: 'Can I book a class tomorrow?' },
+      senderPhone: '+353870000000',
+    })
+    expect(d.reply).toBe(true)
+  })
+})
+
+describe('shouldAgentReply — human-owned thread gate (AGENT-REARM.2)', () => {
+  const base = {
+    settings: { enabled: true, handoff_cooldown_hours: 12 },
+    message: { type: 'text', body: 'Sorry, is this confirmed?' },
+    senderPhone: '353870000000',
+    now: new Date('2026-07-03T14:05:00Z'),
+  }
+  // The Kevin case: stamp 4 days old (cooldown long expired), but the last
+  // outbound was Richard's manual message — the customer is replying to HIM.
+  it('never re-arms when the last outbound was human-sent, even past the cooldown', () => {
+    const r = shouldAgentReply({
+      ...base,
+      conversation: { agent_active: false, agent_handed_off_at: '2026-06-29T09:47:00Z' },
+      lastOutboundHuman: true,
+    })
+    expect(r).toEqual({ reply: false, reason: 'human_owned' })
+  })
+  it("still re-arms past the cooldown when the last outbound was NOT human (e.g. Mia's own holding message)", () => {
+    const r = shouldAgentReply({
+      ...base,
+      conversation: { agent_active: false, agent_handed_off_at: '2026-06-29T09:47:00Z' },
+      lastOutboundHuman: false,
+    })
+    expect(r.reply).toBe(true)
+    expect(r.rearm).toBe(true)
+  })
+  it('inside the cooldown the reason stays handed_off (human_owned only matters at re-arm time)', () => {
+    const r = shouldAgentReply({
+      ...base,
+      conversation: { agent_active: false, agent_handed_off_at: '2026-07-03T10:00:00Z' },
+      lastOutboundHuman: true,
+    })
+    expect(r).toEqual({ reply: false, reason: 'handed_off' })
+  })
+  it('does not affect an active conversation', () => {
+    const r = shouldAgentReply({ ...base, conversation: { agent_active: true }, lastOutboundHuman: true })
+    expect(r.reply).toBe(true)
   })
 })

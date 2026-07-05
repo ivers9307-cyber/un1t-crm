@@ -797,7 +797,20 @@ function DetailHeader({ row }) {
         <h2 className="text-lg font-semibold text-un1t-text">
           {row.extracted_fields?.supplier_name || row.sender_email || '(no sender)'}
         </h2>
-        <StatusPill status={row.status} stage={row.rejected_stage} queuedAt={row.analysis_queued_at} claimedAt={row.analysis_claimed_at} />
+        <div className="flex items-center gap-2">
+          {row.xero_tax_mismatch === true ? (
+            // audit F2 (RCOV.P2) — Xero booked a different tax figure
+            // than the OCR read off the receipt (account default VAT
+            // rate likely wrong for this supplier).
+            <span
+              className="text-xs px-2 py-1 rounded bg-red-500/10 text-red-700"
+              title={`Xero booked €${row.xero_total_tax} tax; the receipt shows €${row.extracted_fields?.tax_amount}. Check the account's default VAT rate in Xero.`}
+            >
+              VAT mismatch
+            </span>
+          ) : null}
+          <StatusPill status={row.status} stage={row.rejected_stage} queuedAt={row.analysis_queued_at} claimedAt={row.analysis_claimed_at} />
+        </div>
       </div>
       <p className="text-sm text-un1t-subtle">{row.subject || '(no subject)'}</p>
       <p className="text-xs text-un1t-subtle">

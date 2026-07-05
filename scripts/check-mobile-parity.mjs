@@ -180,6 +180,10 @@ const WEB_ONLY_OK = {
   // Desktop ads analytics dashboard — no mobile counterpart, like
   // the other radar dashboards.
   dashboard_ads: 'desktop ads analytics dashboard — no mobile counterpart, like the other radar dashboards',
+  // RCOV.P0 — receipt-coverage board (/accounting). Desktop
+  // bookkeeping surface, like bookkeeper/invoices analyse-and-send
+  // flows; mobile counterpart deferred to RCOV.P2.
+  accounting_hub: 'Desktop bookkeeping surface (coverage board); mobile counterpart deferred to RCOV.P2',
 }
 
 const webDrift = []

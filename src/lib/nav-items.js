@@ -23,7 +23,7 @@ import {
   LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare,
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
   Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
-  Workflow, Timer, Projector, Trophy, Activity,
+  Workflow, Timer, Projector, Trophy, Activity, Landmark,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -59,10 +59,11 @@ export const ALL_NAV = [
   // layout). Badge wiring stays in Sidebar.jsx.
   //
   // Single Communications entry replacing the old Email + WhatsApp.
-  // Visible if the user has EITHER permission — sub-tabs inside the
-  // hub gate themselves further.
+  // Visible if the user has ANY channel permission (sms included —
+  // an SMS-only user still needs the hub link; PERM-AUDIT.1) —
+  // sub-tabs inside the hub gate themselves further.
   { href: '/communications', label: 'Communications', icon: MessagesSquare,
-    anyPermission: ['email', 'whatsapp'], section: 'work' },
+    anyPermission: ['email', 'whatsapp', 'sms'], section: 'work' },
   // Single entry replacing the old Events + Bookings ("Calendly").
   // The hub lands on /bookings (the high-frequency operational view —
   // "what's booked today / coming up") with a tab strip at the top of
@@ -81,17 +82,24 @@ export const ALL_NAV = [
   // history surface (REPORT-ISSUE.1) is open to all staff via the
   // mobile More tab and doesn't appear on the web sidebar.
   { href: '/issues',     label: 'Issues',       icon: AlertCircle,     permission: 'issues_inbox', section: 'work' },
+  // ── Accounting — the bookkeeping surfaces, consolidated (RCOV.P2,
+  // Richard's "prevent sprawl" call). The hub leads; the invoices
+  // queue and card receipts it feeds sit beside it.
+  //
+  // RCOV.P0/P2 — receipt-coverage hub: coverage board, exceptions
+  // (audit F2–F5), runs & health. Master + owner only by default.
+  { href: '/accounting', label: 'Accounting',   icon: Landmark,        permission: 'accounting_hub', section: 'accounting' },
   // INVOICES.1 — Dext-style email-in inbox. Master + owner only by
   // default. Per-location forwarding addresses are shown at the top
   // of the page; quality + data approvals run before forward-to-Xero.
-  { href: '/invoices',   label: 'Invoices',     icon: Inbox,           permission: 'invoices_inbox', section: 'work' },
+  { href: '/invoices',   label: 'Invoices',     icon: Inbox,           permission: 'invoices_inbox', section: 'accounting' },
   // SPEND.P3 — company-card receipts. A card holder photographs/uploads
   // a receipt; owner/master approves it, then it rides the bookkeeper →
   // Xero queue (the /approvals dashboard also surfaces the pending ones).
   // Gated by the `card_receipts` permission — default master + owner +
   // manager; card-holding staff get it granted per-user. No sidebar
   // badge: approvable receipts already count on the Approvals entry.
-  { href: '/card-receipts', label: 'Company-card receipts', icon: CreditCard, permission: 'card_receipts', section: 'work' },
+  { href: '/card-receipts', label: 'Company-card receipts', icon: CreditCard, permission: 'card_receipts', section: 'accounting' },
 
   // ── Sales ──────────────────────────────────────────────────────
   { href: '/pipeline',            label: 'Pipeline',  icon: Columns3,   permission: 'pipeline',        section: 'sales' },
@@ -222,7 +230,8 @@ export const ALL_NAV = [
 // visible items for the current user renders nothing — no empty header.
 // Dashboard is pinned above all sections (it has no `section`).
 export const NAV_SECTIONS = [
-  { id: 'work',    label: 'Work' },
+  { id: 'work',       label: 'Work' },
+  { id: 'accounting', label: 'Accounting' },
   { id: 'sales',   label: 'Sales' },
   { id: 'gym',          label: 'Gym' },
   { id: 'automations',  label: 'Automations' },

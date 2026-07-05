@@ -19,4 +19,17 @@ describe('buildFlowPayload', () => {
     const p = buildFlowPayload('353871234567', { flowId: 'F1', flowToken: 'ct1.loc1', screen: 'PATH' })
     expect(p.interactive.action.parameters.flow_cta).toBe('Book now')
   })
+
+  it('defaults the body text when none is given', () => {
+    const p = buildFlowPayload('353871234567', { flowId: 'F1', flowToken: 'ct1.loc1', screen: 'PATH' })
+    expect(p.interactive.body.text).toBe('Tap below to book your first visit.')
+  })
+
+  it('uses operator-supplied body text when given (FLOW-SEND invite_text)', () => {
+    const p = buildFlowPayload('353871234567', {
+      flowId: 'F1', flowToken: 'ct1.loc1', screen: 'PATH',
+      bodyText: 'Grab a slot for your first session 💪',
+    })
+    expect(p.interactive.body.text).toBe('Grab a slot for your first session 💪')
+  })
 })

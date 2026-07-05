@@ -40,6 +40,7 @@
 
 import { createServerClient } from './supabase'
 import { androidChannelId } from '@shared/push-channels'
+import { resolvePermission, mergeTemplates, DEFAULT_MOBILE_PERMISSIONS_BY_ROLE } from '@shared/permissions'
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 const BATCH_SIZE = 100 // Expo accepts up to 100 messages per request
@@ -111,36 +112,105 @@ async function postExpoBatch(chunk) {
  *
  * IMPORTANT: `profiles.permissions` is stale post-058 and is intentionally NOT
  * read here — reading it was the regression that silently ignored every
- * admin-set per-category opt-out. A user is suppressed if inactive, or if ANY
- * of their location assignments has the master switch (`push_notifications`)
- * or the per-category toggle (`notify_<category>`) explicitly `false` —
- * conservative, so an opt-out set at any location is honoured. (When staff
- * span multiple locations and per-location granularity is wanted, thread the
- * notification's locationId into this check.)
+ * admin-set per-category opt-out.
+ *
+ * PERM-AUDIT.3 — resolution runs through the shared resolver per
+ * assignment (user override → role template (mig 364) → role code
+ * default) instead of reading raw explicit-false keys off the blob.
+ * REQUIRED for sparse per-user blobs: a sparse blob no longer
+ * materialises `notify_x: false` when that IS the role default, so the
+ * old raw-key read would have silently started sending role-default-off
+ * categories. Semantics:
+ *   - suppressed if inactive;
+ *   - suppressed if ANY assignment RESOLVES push_notifications or
+ *     notify_<category> to false — conservative, an opt-out (explicit,
+ *     template, or role default) at any location is honoured. (When staff
+ *     span multiple locations and per-location granularity is wanted,
+ *     thread the notification's locationId into this check.)
+ *   - the LOCATION features gate (tier 1) is deliberately NOT applied
+ *     (location: null): notify_* keys are tier-1-exempt by design, and
+ *     push_notifications-in-features was never enforced on the send
+ *     path — skipping it preserves behaviour for users assigned to
+ *     feature-stripped locations (e.g. CCF Autos).
+ *   - users with NO assignments (e.g. master) are allowed, as before.
+ *
+ * PUSH-LOC.1 — when `opts.locationId` is passed, a user's opt-out is
+ * judged ONLY by their assignment(s) AT THAT LOCATION. The old
+ * any-assignment-false rule silently killed every WhatsApp push to
+ * Richard — owner at three locations (default on) — because he also
+ * holds a `staff` row at SourceIt whose ROLE DEFAULT is
+ * notify_whatsapp:false (live miss: Kevin's reply + the handoff alert,
+ * 2026-07-03). Users with no assignment at the given location (master;
+ * cross-location assignees) keep the conservative all-assignments rule.
  *
  * @param {object} db        service-role supabase client
  * @param {string[]} ids     profile ids to consider
  * @param {string} [category]  notify_<category> to gate on (omit = master only)
+ * @param {object} [opts]
+ * @param {string} [opts.locationId]  the location this notification belongs to
  * @returns {Promise<Set<string>>} the allowed profile ids
  */
-export async function resolvePushAllowedIds(db, ids, category) {
+export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
   const allowed = new Set()
   if (!ids?.length) return allowed
-  const { data: profiles } = await db.from('profiles').select('id, active').in('id', ids)
+  const { data: profiles } = await db.from('profiles').select('id, active, employment_type').in('id', ids)
   const { data: links } = await db
-    .from('profile_locations').select('profile_id, permissions').in('profile_id', ids)
-  const activeById = new Map((profiles || []).map(p => [p.id, p.active === true]))
-  const mobilesByUser = new Map()
-  for (const l of links || []) {
-    const arr = mobilesByUser.get(l.profile_id) || []
-    arr.push(l.permissions?.mobile || {})
-    mobilesByUser.set(l.profile_id, arr)
+    .from('profile_locations').select('profile_id, location_id, role, permissions').in('profile_id', ids)
+
+  // Role templates (mig 364) for every (location, role) pair in play.
+  // RECEPTION.2 (mig 367): 'all' rows apply to everyone of the role;
+  // employment-type rows layer on top for matching users.
+  const locationIds = [...new Set((links || []).map(l => l.location_id).filter(Boolean))]
+  let templates = []
+  if (locationIds.length > 0) {
+    try {
+      const { data } = await db
+        .from('location_role_permissions')
+        .select('location_id, role, employment_type, permissions')
+        .in('location_id', locationIds)
+      templates = data || []
+    } catch {
+      templates = [] // degrade to code defaults
+    }
   }
+  const rowFor = (locId, role, emp) =>
+    templates.find(t => t.location_id === locId && t.role === role && t.employment_type === emp)?.permissions || null
+  const templateFor = (locId, role, userEmploymentType) =>
+    mergeTemplates(
+      rowFor(locId, role, 'all'),
+      userEmploymentType ? rowFor(locId, role, userEmploymentType) : null
+    )?.mobile || null
+
+  const activeById = new Map((profiles || []).map(p => [p.id, p.active === true]))
+  const employmentById = new Map((profiles || []).map(p => [p.id, p.employment_type || null]))
+  const linksByUser = new Map()
+  for (const l of links || []) {
+    const arr = linksByUser.get(l.profile_id) || []
+    arr.push(l)
+    linksByUser.set(l.profile_id, arr)
+  }
+
+  const resolves = (link, key) => resolvePermission({
+    role: link.role,
+    location: null, // tier 1 deliberately skipped — see doc comment
+    permissions: link.permissions?.mobile || null,
+    roleTemplate: templateFor(link.location_id, link.role, employmentById.get(link.profile_id)),
+    defaults: DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
+    key,
+  })
+
   for (const id of ids) {
     if (!activeById.get(id)) continue
-    const mobiles = mobilesByUser.get(id) || []
-    if (mobiles.some(m => m.push_notifications === false)) continue
-    if (category && mobiles.some(m => m[`notify_${category}`] === false)) continue
+    const userLinks = linksByUser.get(id) || []
+    // PUSH-LOC.1 — the notification's own location decides, when we know it
+    // and the user is assigned there; otherwise every assignment gates.
+    let gateLinks = userLinks
+    if (opts.locationId) {
+      const atLocation = userLinks.filter(l => l.location_id === opts.locationId)
+      if (atLocation.length) gateLinks = atLocation
+    }
+    if (gateLinks.some(l => !resolves(l, 'push_notifications'))) continue
+    if (category && gateLinks.some(l => !resolves(l, `notify_${category}`))) continue
     allowed.add(id)
   }
   return allowed
@@ -163,9 +233,14 @@ export async function resolvePushAllowedIds(db, ids, category) {
  * @param {string} [payload.sound]  'default' (iOS chime) | null. Default 'default'.
  * @param {number} [payload.badge]  Override the iOS app icon badge count.
  *
+ * @param {object} [opts]
+ * @param {string} [opts.locationId]  The location this notification belongs
+ *                                    to — makes the per-category opt-out
+ *                                    per-location (PUSH-LOC.1).
+ *
  * @returns {Promise<{sent:number, skipped:number, invalidated:number, failed:number}>}
  */
-export async function sendPush(userIds, payload) {
+export async function sendPush(userIds, payload, opts = {}) {
   const ids = Array.isArray(userIds) ? userIds : [userIds]
   if (!ids.length) return { sent: 0, skipped: 0, invalidated: 0, failed: 0 }
 
@@ -177,7 +252,7 @@ export async function sendPush(userIds, payload) {
   // immediately be filtered out anyway.
   // Per-category opt-out lives on profile_locations.permissions (mig 058);
   // profiles.permissions is stale and must NOT be read here.
-  const allowedSet = await resolvePushAllowedIds(db, ids, payload.category)
+  const allowedSet = await resolvePushAllowedIds(db, ids, payload.category, { locationId: opts.locationId })
   const allowedIds = ids.filter(id => allowedSet.has(id))
   let skipped = ids.length - allowedIds.length
 
@@ -298,5 +373,8 @@ export async function sendPushToRolesAtLocation(locationId, roles, payload) {
   const db = createServerClient()
   const ids = await resolveRoleRecipientIds(db, locationId, roles)
   if (!ids.length) return { sent: 0, skipped: 0, invalidated: 0, failed: 0 }
-  return sendPush(ids, payload)
+  // PUSH-LOC.1 — this fan-out is location-scoped by definition, so the
+  // per-category opt-out is judged at THIS location, not any other
+  // assignment the recipient happens to hold.
+  return sendPush(ids, payload, { locationId })
 }
