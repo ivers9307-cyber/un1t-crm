@@ -14,6 +14,11 @@
 // Exactly one of `state` / `clear` is required. The bridge picks the
 // change up on its next reconcile tick.
 //
+// NOT implemented in T1: the spec's "toggling to the scheduled state
+// clears the override" behaviour — that needs the live desiredState
+// (occurrences included) computed here, deferred to T2/T3. Toggle
+// always writes an override; only an explicit `clear` removes it.
+//
 // Service-role route: authorize in app code — getCurrentUser (401) →
 // hasPermission (403) → uuidLike guard (404) → load + cross-location
 // 404 (no ID enumeration). Audit is fire-and-forget: a logging

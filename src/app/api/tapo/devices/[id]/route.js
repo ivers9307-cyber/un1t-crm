@@ -30,6 +30,10 @@ const FixedWindow = z.object({
   on: z.string().regex(HHMM, 'Use HH:MM (24h)'),
   off: z.string().regex(HHMM, 'Use HH:MM (24h)'),
 })
+  // The engine treats off <= on as an overnight span, so on === off
+  // would silently become a 24-hour always-on window on a physical
+  // device — reject the copy-paste typo here.
+  .refine(w => w.on !== w.off, { message: 'on and off must differ', path: ['off'] })
 
 const ClassRule = z.object({
   lead_min: z.number().int().min(0).max(120),
@@ -37,6 +41,9 @@ const ClassRule = z.object({
 })
 
 // All fields optional — a config PATCH sends only what changed.
+// `name` is deliberately min(1) and non-nullable: once adopted a
+// device can be renamed but not blanked back to anonymous. `zone`
+// is nullable by design — it's just a label, clearing it is fine.
 const Body = z.object({
   name: z.string().min(1).max(120).optional(),
   zone: z.string().max(60).nullable().optional(),
@@ -87,6 +94,9 @@ export async function PATCH(request, props) {
     if (!validation.ok) return validation.response
     const body = validation.data
 
+    // Note: flipping enabled:false intentionally does NOT clear
+    // `override` — the engine ignores overrides on disabled devices,
+    // and any override will have expired by realistic re-enable time.
     const patch = {}
     for (const key of EDITABLE) {
       if (key in body) patch[key] = body[key]
