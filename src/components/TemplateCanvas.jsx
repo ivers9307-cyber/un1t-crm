@@ -14,15 +14,105 @@
 // modal's preview, so what an operator previews is pixel-identical
 // to what the TV shows.
 //
-// TV-TEMPLATE.4 — text renders at the operator's exact size (no
-// auto-fit); it's clipped if it overflows. With `editable`, zones
-// can be dragged + corner-resized straight on the preview and the
-// new geometry is reported through `onZoneChange`.
+// TV-TEMPLATE.4 — with `editable`, zones can be dragged +
+// corner-resized straight on the preview and the new geometry is
+// reported through `onZoneChange`.
+//
+// TV-TEMPLATE.6 — the operator's fontSize is a MAXIMUM, not an
+// exact size. Staff pasting a paragraph into a zone sized for a
+// short heading used to render at the full % size and get clipped
+// by the zone's overflow:hidden. useFitText (below) shrinks the
+// rendered size until the text block fits, so overflow:hidden stays
+// only as the final safety net for pathological cases.
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useLayoutEffect } from 'react'
 import { resolveZone, textSegments, FLEX_V, FLEX_H } from '@/lib/tv-template'
+import { tvFontFamily } from '@/components/tv-font'
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n))
+
+// Floor so a giant paste still reads as "small text" rather than
+// disappearing entirely.
+const MIN_FIT_PX = 9
+// Re-measuring changes wrapping, which changes scrollHeight/Width,
+// which can call for another shrink — iterate rather than trusting
+// one shot, but cap it so a pathological layout can't spin forever.
+const MAX_FIT_ITERATIONS = 6
+
+// Pure step of the fit loop: given the current font size and how
+// much the text block overflows its box on each axis, return the
+// next (smaller-or-equal) font size to try. Kept pure + exported so
+// the convergence logic itself is unit-testable without a DOM.
+export function nextFitPx(currentPx, scaleH, scaleW, minPx = MIN_FIT_PX) {
+  const scale = Math.min(1, scaleH, scaleW)
+  if (!Number.isFinite(scale) || scale <= 0) return minPx
+  return Math.max(minPx, currentPx * scale)
+}
+
+// Shrink `el`'s font size (starting at maxPx) until its content
+// fits within `w`×`h` px, or the min/iteration cap is hit. Returns
+// the fitted px — caller stores it in state and applies it as the
+// rendered fontSize.
+function measureFit(el, maxPx, w, h, minPx = MIN_FIT_PX) {
+  if (!el || !(w > 0) || !(h > 0)) return maxPx
+  // In a tiny container (the now-showing thumbnail) the operator's
+  // max can already sit below the legibility floor — the floor must
+  // never push text ABOVE its max.
+  minPx = Math.min(minPx, maxPx)
+  let px = maxPx
+  for (let i = 0; i < MAX_FIT_ITERATIONS; i++) {
+    el.style.fontSize = `${px}px`
+    const overflowH = el.scrollHeight > h
+    // scrollWidth matters for unbreakable words/URLs that don't wrap.
+    const overflowW = el.scrollWidth > w
+    if (!overflowH && !overflowW) break
+    const scaleH = h / el.scrollHeight
+    const scaleW = w / el.scrollWidth
+    const next = nextFitPx(px, overflowH ? scaleH : 1, overflowW ? scaleW : 1, minPx)
+    if (Math.abs(next - px) < 0.5) { px = next; break }
+    px = next
+    if (px <= minPx) break
+  }
+  return px
+}
+
+// Shared by TemplateCanvas's Zone and TemplateEditor's ZoneBox so
+// the TV, the push preview and the template editor all agree on
+// the fitted size for the same text/box/maxPx.
+//
+// `deps` should include everything that can change wrapping or
+// measured size: text, maxPx, box w/h, lineHeight, fontWeight,
+// uppercase. Re-runs on those plus a one-time recheck once web
+// fonts finish loading (metrics shift slightly between the
+// fallback and the loaded face).
+export function useFitText(elRef, maxPx, w, h, deps) {
+  const [fitPx, setFitPx] = useState(maxPx)
+
+  useLayoutEffect(() => {
+    const el = elRef.current
+    if (!el) return
+    const fitted = measureFit(el, maxPx, w, h)
+    setFitPx(prev => (Math.abs(prev - fitted) > 0.5 ? fitted : prev))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+
+  useEffect(() => {
+    let cancelled = false
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      document.fonts.ready.then(() => {
+        if (cancelled) return
+        const el = elRef.current
+        if (!el) return
+        const fitted = measureFit(el, maxPx, w, h)
+        setFitPx(prev => (Math.abs(prev - fitted) > 0.5 ? fitted : prev))
+      })
+    }
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+
+  return fitPx
+}
 
 export default function TemplateCanvas({ content, editable = false, onZoneChange }) {
   const boxRef = useRef(null)
@@ -100,13 +190,19 @@ export default function TemplateCanvas({ content, editable = false, onZoneChange
 function Zone({ s, frame, editable, onChange }) {
   const boxRef = useRef(null)
   const dragRef = useRef(null)
+  const textRef = useRef(null)
 
   // Geometry + font size resolved against the contained-image rect.
   const left = frame.left + (s.x / 100) * frame.w
   const top = frame.top + (s.y / 100) * frame.h
   const w = (s.width / 100) * frame.w
   const h = (s.height / 100) * frame.h
-  const fontPx = (s.fontSize / 100) * frame.h
+  // s.fontSize is a MAXIMUM (TV-TEMPLATE.6) — useFitText shrinks the
+  // rendered size to whatever actually fits the zone box.
+  const maxFontPx = (s.fontSize / 100) * frame.h
+  const fontPx = useFitText(textRef, maxFontPx, w, h, [
+    s.text, maxFontPx, w, h, s.lineHeight, s.fontWeight, s.uppercase,
+  ])
 
   function begin(e, mode) {
     if (!onChange) return
@@ -167,9 +263,11 @@ function Zone({ s, frame, editable, onChange }) {
       }}
     >
       <div
+        ref={textRef}
         style={{
           width: '100%',
           fontSize: `${fontPx}px`,
+          fontFamily: tvFontFamily,
           color: s.color,
           fontWeight: s.fontWeight,
           textAlign: s.align,

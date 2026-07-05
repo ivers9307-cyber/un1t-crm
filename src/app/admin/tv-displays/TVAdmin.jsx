@@ -315,20 +315,26 @@ function TVCard({ display, templates, currentUserId, onError, onChange, db }) {
         </div>
       </div>
 
-      <div className="px-4 py-3 text-xs text-un1t-subtle flex items-center gap-3 flex-wrap">
-        <span className="text-un1t-muted uppercase tracking-wide">Now showing</span>
-        {content ? (
-          <>
-            <span className="text-un1t-text">{content.label || content.source_ref}</span>
-            <span className="text-un1t-muted">·</span>
-            <span className="text-un1t-muted">{content.source_type}</span>
-            <span className="text-un1t-muted">·</span>
-            <span className="text-un1t-muted">pushed {new Date(content.pushed_at).toLocaleString('en-IE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}</span>
-          </>
-        ) : (
-          <span className="text-un1t-muted">Idle — UN1T mark + clock</span>
-        )}
-        <OrientationControl display={display} db={db} onError={onError} onChange={onChange} />
+      <div className="px-4 py-3">
+        {/* TV-REMEMBER.2 — a small visual preview of what's actually on
+            the TV right now, so staff don't have to guess from text
+            alone before deciding whether to push something new. */}
+        <NowShowingThumb content={content} templates={templates} />
+        <div className="text-xs text-un1t-subtle flex items-center gap-3 flex-wrap mt-2">
+          <span className="text-un1t-muted uppercase tracking-wide">Now showing</span>
+          {content ? (
+            <>
+              <span className="text-un1t-text">{content.label || content.source_ref}</span>
+              <span className="text-un1t-muted">·</span>
+              <span className="text-un1t-muted">{content.source_type}</span>
+              <span className="text-un1t-muted">·</span>
+              <span className="text-un1t-muted">pushed {new Date(content.pushed_at).toLocaleString('en-IE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })}</span>
+            </>
+          ) : (
+            <span className="text-un1t-muted">Idle — UN1T mark + clock</span>
+          )}
+          <OrientationControl display={display} db={db} onError={onError} onChange={onChange} />
+        </div>
       </div>
 
       {pushOpen && (
@@ -354,10 +360,58 @@ function TVCard({ display, templates, currentUserId, onError, onChange, db }) {
           }}
           locationId={display.location_id}
           templates={templates}
+          content={content}
         />
       )}
     </div>
   )
+}
+
+// ── Now-showing thumbnail ────────────────────────────────────────
+//
+// TV-REMEMBER.2 — a compact preview of the live content: an <img>
+// for storage/url pushes, or the shared TemplateCanvas (read-only)
+// for a template push so the text/styling renders exactly as it
+// does on the TV. No thumbnail (falls back to the text row alone)
+// when there's nothing pushed, or the template behind a template
+// push has since been deleted.
+
+function NowShowingThumb({ content, templates }) {
+  if (!content) return null
+
+  if (content.source_type === 'storage') {
+    return (
+      <div className="w-40 aspect-video rounded-md overflow-hidden bg-black border border-un1t-border">
+        <img src={bucketPublicUrl(content.source_ref)} alt="" className="w-full h-full object-cover" />
+      </div>
+    )
+  }
+
+  if (content.source_type === 'url') {
+    return (
+      <div className="w-40 aspect-video rounded-md overflow-hidden bg-black border border-un1t-border">
+        <img src={content.source_ref} alt="" className="w-full h-full object-cover" />
+      </div>
+    )
+  }
+
+  if (content.source_type === 'template') {
+    const tpl = templates?.find(t => t.id === content.source_ref)
+    if (!tpl) return null
+    return (
+      <div className="w-40 aspect-video relative rounded-md overflow-hidden bg-black border border-un1t-border">
+        <TemplateCanvas
+          content={{
+            resolved_url: bucketPublicUrl(tpl.base_image_path),
+            template: { zones: tpl.zones || [], values: content.template_values || {} },
+          }}
+          editable={false}
+        />
+      </div>
+    )
+  }
+
+  return null
 }
 
 // ── Orientation control ─────────────────────────────────────────
@@ -447,15 +501,62 @@ function RegisterTVModal({ onClose, onCreate }) {
 }
 
 // ── Push modal — upload / URL / template ────────────────────────
+//
+// TV-REMEMBER.1 — seed each zone with its template defaults, then
+// overlay any prior push values (the TV's current template_values)
+// on top so an operator reopening the push screen for a recurring
+// board starts from what's already live, not a blank slate. Legacy
+// prior values may be a plain string (text-only) rather than an
+// object — normalise the same way resolveZone() does. Zones no
+// longer present in the template are dropped; zones added since the
+// prior push fall back to their template defaults.
+function seedZoneValues(tpl, priorValues) {
+  const seed = {}
+  for (const z of tpl?.zones || []) {
+    const prior = priorValues?.[z.id]
+    const p = prior && typeof prior === 'object' ? prior : (prior != null ? { text: prior } : null)
+    seed[z.id] = {
+      text: p?.text ?? z.defaultText ?? '',
+      fontSize: p?.fontSize ?? z.fontSize ?? 6,
+      fontWeight: p?.fontWeight ?? z.fontWeight ?? 700,
+      color: p?.color || z.color || '#FFFFFF',
+      align: p?.align || z.align || 'center',
+      vAlign: p?.vAlign || z.vAlign || 'middle',
+      uppercase: p?.uppercase ?? !!z.uppercase,
+      lineHeight: p?.lineHeight ?? z.lineHeight ?? 1.15,
+      // Geometry — seeded from prior push if present, else the
+      // template; the operator can drag/resize on the preview.
+      x: p?.x ?? z.x ?? 0,
+      y: p?.y ?? z.y ?? 0,
+      width: p?.width ?? z.width ?? 100,
+      height: p?.height ?? z.height ?? 100,
+      // Per-selection colour overrides.
+      colorRuns: Array.isArray(p?.colorRuns) ? p.colorRuns : (Array.isArray(z.colorRuns) ? z.colorRuns : []),
+    }
+  }
+  return seed
+}
 
-function PushModal({ onClose, onPush, locationId, templates }) {
-  const [mode, setMode] = useState('upload')   // 'upload' | 'url' | 'template'
+function PushModal({ onClose, onPush, locationId, templates, content }) {
+  // TV-REMEMBER.1 — if the TV is currently showing a template push,
+  // reopen the modal pre-seeded from that push instead of blank
+  // template defaults, so staff restyling the same recurring board
+  // don't redo the same work every time.
+  const initialTemplateId = (content?.source_type === 'template' && templates?.some(t => t.id === content.source_ref))
+    ? content.source_ref
+    : ''
+
+  const [mode, setMode] = useState(initialTemplateId ? 'template' : 'upload')   // 'upload' | 'url' | 'template'
   const [file, setFile] = useState(null)
   const [externalUrl, setExternalUrl] = useState('')
   const [label, setLabel] = useState('')
-  const [templateId, setTemplateId] = useState('')
+  const [templateId, setTemplateId] = useState(initialTemplateId)
   // { zoneId: { text, fontSize, fontWeight, color, align, vAlign, uppercase } }
-  const [zoneText, setZoneText] = useState({})
+  const [zoneText, setZoneText] = useState(() => (
+    initialTemplateId
+      ? seedZoneValues(templates?.find(t => t.id === initialTemplateId), content.template_values)
+      : {}
+  ))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
@@ -464,30 +565,13 @@ function PushModal({ onClose, onPush, locationId, templates }) {
   function pickTemplate(id) {
     setTemplateId(id)
     const tpl = templates?.find(t => t.id === id)
-    // Seed each zone with its template defaults — the operator then
-    // tweaks the text + styling per zone before pushing (TV-TEMPLATE.2).
-    const seed = {}
-    for (const z of tpl?.zones || []) {
-      seed[z.id] = {
-        text: z.defaultText || '',
-        fontSize: z.fontSize ?? 6,
-        fontWeight: z.fontWeight ?? 700,
-        color: z.color || '#FFFFFF',
-        align: z.align || 'center',
-        vAlign: z.vAlign || 'middle',
-        uppercase: !!z.uppercase,
-        lineHeight: z.lineHeight ?? 1.15,
-        // Geometry — seeded from the template; the operator can
-        // drag/resize the zone on the preview to override it.
-        x: z.x ?? 0,
-        y: z.y ?? 0,
-        width: z.width ?? 100,
-        height: z.height ?? 100,
-        // Per-selection colour overrides start empty.
-        colorRuns: Array.isArray(z.colorRuns) ? z.colorRuns : [],
-      }
-    }
-    setZoneText(seed)
+    // Only overlay the current TV's prior values when the picked
+    // template is the SAME one already on the TV — switching to a
+    // different template starts fresh from its own defaults.
+    const priorValues = (content?.source_type === 'template' && content.source_ref === id)
+      ? content.template_values
+      : null
+    setZoneText(seedZoneValues(tpl, priorValues))
   }
 
   async function submit() {
