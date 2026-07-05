@@ -62,10 +62,6 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Device not found' }, { status: 404 })
   }
 
-  const validation = await validateBody(request, Body)
-  if (!validation.ok) return validation.response
-  const { state, clear, until } = validation.data
-
   const locationId = user.activeLocation?.id
   if (!locationId) {
     return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
@@ -84,6 +80,10 @@ export async function POST(request, props) {
     if (!row || row.location_id !== locationId) {
       return NextResponse.json({ success: false, error: 'Device not found' }, { status: 404 })
     }
+
+    const validation = await validateBody(request, Body)
+    if (!validation.ok) return validation.response
+    const { state, clear, until } = validation.data
 
     let override = null
     if (!clear) {

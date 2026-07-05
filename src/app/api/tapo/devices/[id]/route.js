@@ -62,10 +62,6 @@ export async function PATCH(request, props) {
     return NextResponse.json({ success: false, error: 'Device not found' }, { status: 404 })
   }
 
-  const validation = await validateBody(request, Body)
-  if (!validation.ok) return validation.response
-  const body = validation.data
-
   const locationId = user.activeLocation?.id
   if (!locationId) {
     return NextResponse.json({ success: false, error: 'No active location' }, { status: 400 })
@@ -86,6 +82,10 @@ export async function PATCH(request, props) {
     if (!row || row.location_id !== locationId) {
       return NextResponse.json({ success: false, error: 'Device not found' }, { status: 404 })
     }
+
+    const validation = await validateBody(request, Body)
+    if (!validation.ok) return validation.response
+    const body = validation.data
 
     const patch = {}
     for (const key of EDITABLE) {
