@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
+import { hasPermissionForLocation } from '@/lib/permissions'
+import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 
 // PATCH /api/agent/membership-requests/[id] — staff decides a queued
 // agent request. Decision rights follow the comms surface (any staff
@@ -40,9 +42,10 @@ export async function PATCH(request, { params }) {
     .select('id, location_id, kind, status, details, contact_id, channel, conversation_id')
     .eq('id', id).maybeSingle()
   if (!row) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  const allowed = getUserLocationIds(user) // masters carry every active location in user.locations
-  if (allowed !== null && !allowed.includes(row.location_id)) {
-    // 404 not 403 — detail routes never confirm a foreign id exists.
+  // APPROVALS-PERCAT.1 — agent requests are now fully gated on the
+  // per-category permission (default manager+). 404 preserves the
+  // detail-route IDOR posture (never confirm a foreign id exists).
+  if (!hasPermissionForLocation(user, row.location_id, APPROVAL_CATEGORY_PERMISSION.agent_requests)) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
 
