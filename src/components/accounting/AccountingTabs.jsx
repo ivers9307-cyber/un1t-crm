@@ -4,11 +4,13 @@
 
 import { useState } from 'react'
 import CoverageBoard from '@/components/accounting/CoverageBoard'
+import PayablesPanel from '@/components/accounting/PayablesPanel'
 import ExceptionsPanel from '@/components/accounting/ExceptionsPanel'
 import RunsHealthPanel from '@/components/accounting/RunsHealthPanel'
 
 const TABS = [
   { id: 'coverage', label: 'Coverage' },
+  { id: 'payables', label: 'Payables' },
   { id: 'exceptions', label: 'Exceptions' },
   { id: 'health', label: 'Runs & health' },
 ]
@@ -39,6 +41,9 @@ export default function AccountingTabs({ locationName }) {
 
       <div className={active === 'coverage' ? '' : 'hidden'}>
         {visited.coverage ? <CoverageBoard locationName={locationName} /> : null}
+      </div>
+      <div className={active === 'payables' ? '' : 'hidden'}>
+        {visited.payables ? <PayablesPanel /> : null}
       </div>
       <div className={active === 'exceptions' ? '' : 'hidden'}>
         {visited.exceptions ? <ExceptionsPanel /> : null}

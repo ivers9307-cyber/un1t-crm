@@ -2464,6 +2464,21 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/api/accounting/payables',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Aged payables (who we owe + how overdue) for the active location',
+  description: 'Live pull of unpaid AUTHORISED ACCPAY bills from the active location\'s Xero connection, aggregated per supplier with a standard aging ladder (not due / 1-30 / 31-60 / 61-90 / 90+). Scope accounting.invoices. Requires the accounting_hub permission.',
+  responses: {
+    200: { description: 'Aged payables', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Xero not connected for this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/accounting/coverage/accounts',
   tags: ['Accounting'],
   security: [{ CookieAuth: [] }],

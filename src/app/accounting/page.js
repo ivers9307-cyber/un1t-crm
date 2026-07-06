@@ -23,7 +23,7 @@ export default async function AccountingPage() {
     <div className="p-6 max-w-7xl mx-auto">
       <h1 className="text-xl font-semibold text-un1t-text mb-1">Accounting</h1>
       <p className="text-sm text-un1t-subtle mb-6">
-        Receipt coverage — every unreconciled bank transaction, and whether a receipt has been collected for it.
+        Receipt coverage, aged payables, and bookkeeping health for this location.
       </p>
       <div className="mb-6">
         <HuntInboxesCard />
