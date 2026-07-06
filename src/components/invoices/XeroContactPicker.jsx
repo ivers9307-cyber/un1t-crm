@@ -140,10 +140,18 @@ export default function XeroContactPicker({ locationId, value, onChange, label =
   }
 
   // Determine which UX state we're in for the input affordance.
+  //  - existing match → GREEN (good to send).
+  //  - to-be-created supplier → RED. It doesn't block the API (the push
+  //    creates it on send), but it's NOT a matched Xero contact, so the
+  //    bookkeeper should eyeball it — auto-creating suppliers is a common
+  //    source of Xero duplicates. Richard wants anything that isn't a
+  //    clean existing match to stand out red.
+  //  - nothing picked → RED empty state (see below) — that one genuinely
+  //    blocks the Xero send ("No Xero supplier picked").
   const summary = (() => {
     if (!value) return null
     if (value.kind === 'existing') return { tone: 'success', text: value.name, sub: value.email || 'Existing Xero contact' }
-    if (value.kind === 'new') return { tone: 'warning', text: value.name, sub: 'Will be created in Xero at send time' }
+    if (value.kind === 'new') return { tone: 'danger', text: value.name, sub: 'Not in Xero — a new supplier will be created on send. Check it first.' }
     return null
   })()
 
@@ -155,12 +163,12 @@ export default function XeroContactPicker({ locationId, value, onChange, label =
           // Chip-shaped read-only view of the current pick. Click X
           // to clear back to the search input.
           <div className={`flex items-center justify-between gap-2 border rounded-md px-2 py-1.5 ${
-            summary.tone === 'success' ? 'bg-un1t-bg border-emerald-500/40' : 'bg-un1t-bg border-amber-500/40'
+            summary.tone === 'success' ? 'bg-un1t-bg border-emerald-500/40' : 'bg-red-500/5 border-red-500/60'
           }`}>
             <div className="min-w-0">
               <div className="text-sm text-un1t-text truncate">{summary.text}</div>
-              <div className={`text-[10px] truncate ${summary.tone === 'success' ? 'text-emerald-400' : 'text-amber-400'}`}>
-                {summary.tone === 'warning' && <UserPlus size={9} className="inline-block mr-1" />}
+              <div className={`text-[10px] truncate ${summary.tone === 'success' ? 'text-emerald-400' : 'text-red-700'}`}>
+                {summary.tone === 'danger' && <AlertTriangle size={9} className="inline-block mr-1 -mt-0.5" />}
                 {summary.sub}
               </div>
             </div>
@@ -174,8 +182,10 @@ export default function XeroContactPicker({ locationId, value, onChange, label =
             </button>
           </div>
         ) : (
-          <div className="flex items-center gap-1 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5">
-            <Search size={12} className="text-un1t-subtle shrink-0" />
+          // No supplier picked yet — RED, because this required field
+          // blocks the Xero send until it's resolved.
+          <div className="flex items-center gap-1 bg-red-500/5 border border-red-500/60 rounded-md px-2 py-1.5">
+            <Search size={12} className="text-red-700/70 shrink-0" />
             <input
               ref={inputRef}
               value={query}
@@ -231,6 +241,11 @@ export default function XeroContactPicker({ locationId, value, onChange, label =
           </div>
         )}
       </div>
+      {!value && !open && (
+        <p className="mt-1 text-[10px] text-red-700 inline-flex items-center gap-1">
+          <AlertTriangle size={9} className="shrink-0" /> Pick or create a Xero supplier — required to send to Xero.
+        </p>
+      )}
     </div>
   )
 }
