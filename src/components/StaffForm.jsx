@@ -154,6 +154,11 @@ export default function StaffForm({
     : defaultPermsForRole('staff')
   const selectedRoleBaseMobile = selectedRoleBase.mobile || {}
 
+  // APPROVALS-PERCAT.1 — hide the location-gate-only approvals_inbox from
+  // the per-user grant picker; render the six per-category grants grouped.
+  const webGrantItems = allPermissions.filter((p) => !p.locationGateOnly && p.group !== 'approvals')
+  const approvalGrantItems = allPermissions.filter((p) => p.group === 'approvals')
+
   // Reset the selected assignment back to pure role inheritance.
   function resetSelectedToRoleDefaults() {
     if (!selectedAssignment) return
@@ -929,11 +934,43 @@ export default function StaffForm({
               An <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 align-middle" /> dot marks a per-user override — everything else follows the role&apos;s permissions automatically.
             </p>
             <div className="space-y-2">
-              {allPermissions.map(perm => {
+              {webGrantItems.map(perm => {
                 // Only flag the LOCATION gate at the currently
                 // selected location — toggling a per-location
                 // override has no effect if the location itself
                 // disabled the feature.
+                const selectedLoc = locations.find(l => l.id === selectedPermLocationId)
+                const offHere = isFeatureGatedByLocation(perm.key) && selectedLoc?.features?.[perm.key] === false
+                const overridden = (selectedPerms[perm.key] === true) !== (selectedRoleBase[perm.key] === true)
+                return (
+                  <label key={perm.key} className={`flex items-center justify-between py-1.5 cursor-pointer ${offHere ? 'opacity-60' : ''}`}>
+                    <span className="text-sm">
+                      {perm.label}
+                      {overridden && (
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 ml-1.5 align-middle" title="Per-user override — differs from this person's role permissions at this location" />
+                      )}
+                      {offHere && (
+                        <span className="block text-[11px] text-amber-500 mt-0.5">
+                          Off at this location — toggle has no effect until enabled in Location Features
+                        </span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => togglePermission(perm.key)}
+                      disabled={!selectedPermLocationId}
+                      className={`w-10 h-5 rounded-full transition-colors shrink-0 ${selectedPerms[perm.key] ? 'bg-green-500' : 'bg-un1t-border'} ${!selectedPermLocationId ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      title={offHere ? `Disabled at this location. Edit Location Features to enable.` : ''}
+                    >
+                      <div className={`w-4 h-4 rounded-full bg-white transition-transform ${selectedPerms[perm.key] ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                    </button>
+                  </label>
+                )
+              })}
+            </div>
+            <div className="mt-3 mb-1 text-xs font-semibold uppercase tracking-wide text-un1t-subtle">Approvals</div>
+            <div className="space-y-2">
+              {approvalGrantItems.map(perm => {
                 const selectedLoc = locations.find(l => l.id === selectedPermLocationId)
                 const offHere = isFeatureGatedByLocation(perm.key) && selectedLoc?.features?.[perm.key] === false
                 const overridden = (selectedPerms[perm.key] === true) !== (selectedRoleBase[perm.key] === true)
