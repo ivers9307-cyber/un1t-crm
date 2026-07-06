@@ -19,11 +19,13 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadAdsDashboard } from '@/lib/ads/read'
+import { loadFunnel } from '@/lib/ads/funnel'
 import { EmptyState } from '@/components/ui'
 import AdsKpiStrip from '@/components/dashboard/AdsKpiStrip'
 import AdsPerAdTable from '@/components/dashboard/AdsPerAdTable'
 import AdsTrendChart from '@/components/dashboard/AdsTrendChartLazy'
 import AdsRefreshButton from '@/components/dashboard/AdsRefreshButton'
+import AdsFunnelPanel from '@/components/dashboard/AdsFunnelPanel'
 
 export const dynamic = 'force-dynamic'
 
@@ -47,6 +49,7 @@ export default async function AdsDashboardPage() {
   const db = createServerClient()
   const locationId = user.activeLocation.id
   const dash = await loadAdsDashboard(db, locationId, 30)
+  const funnel = await loadFunnel(db, locationId, 30)
 
   const { data: accounts } = await db
     .from('ad_accounts')
@@ -97,6 +100,12 @@ export default async function AdsDashboardPage() {
           </div>
         </>
       )}
+
+      {/* Funnel drop-off (from funnel_events) — independent of ad-spend data,
+          so it renders even before the first insight rows land. */}
+      <div className="mt-6">
+        <AdsFunnelPanel funnel={funnel} />
+      </div>
     </>
   )
 }
