@@ -28,16 +28,23 @@ function deny(status, error) {
  * @param {string[]} args.userLocationIds  the caller's location ids
  * @param {string|null} [args.reviewNote]
  * @param {string} [args.nowIso]   injectable timestamp (defaults to new Date().toISOString())
+ * @param {boolean} [args.canApprove]  gates the "approved" transition (passed in by the route).
+ *   Defaults to the manager check when omitted — see APPROVALS-PERCAT.1 below.
  * @returns {{ ok:boolean, status?:number, error?:string,
  *   swapUpdates:object|null, assignmentOps:Array<{id:string,set:object}>,
  *   notify:Array<{kind:string,to?:string[]}>, effect:string }}
  */
-export function resolveSwapTransition({ swap, requestedStatus, user, userLocationIds, reviewNote = null, nowIso }) {
+export function resolveSwapTransition({ swap, requestedStatus, user, userLocationIds, reviewNote = null, nowIso, canApprove }) {
   if (!swap) return deny(404, 'Swap request not found')
   if (!user) return deny(401, 'Unauthorized')
   if (!REQUESTABLE.includes(requestedStatus)) return deny(400, 'Invalid status')
 
   const isManager = MANAGER_ROLES.includes(user.role)
+  // APPROVALS-PERCAT.1 — the "approve" transition is gated by the
+  // approvals_shift_swaps permission (passed in by the route). Claim /
+  // accept / reject-by-target keep using isManager. Default preserves the
+  // old behaviour for any caller that doesn't pass canApprove.
+  const mayApprove = typeof canApprove === 'boolean' ? canApprove : isManager
   const isRequester = swap.requester_id === user.id
   const isTarget = !!swap.target_id && swap.target_id === user.id
   const atLocation = Array.isArray(userLocationIds) && userLocationIds.includes(swap.location_id)
@@ -109,7 +116,7 @@ export function resolveSwapTransition({ swap, requestedStatus, user, userLocatio
 
   // ── Manager approve: finalise on the assignments ──
   if (requestedStatus === 'approved') {
-    if (!isManager) return deny(403, 'Only a manager can approve')
+    if (!mayApprove) return deny(403, 'You do not have permission to approve swaps')
     const ts = nowIso || new Date().toISOString()
     const swapUpdates = { status: 'approved', reviewed_by: user.id, reviewed_at: ts, review_note: reviewNote || null }
     if (swap.target_shift_id) {

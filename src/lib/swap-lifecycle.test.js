@@ -281,6 +281,47 @@ describe('resolveSwapTransition — terminal-state + bad-input guards', () => {
   })
 })
 
+// APPROVALS-PERCAT.1 — the "approve" transition is gated by the
+// approvals_shift_swaps permission, passed in as `canApprove` by the route.
+// canApprove defaults to the old isManager check when omitted, so every
+// existing caller/test above (which never passes it) keeps working.
+describe('resolveSwapTransition canApprove override', () => {
+  it('denies a manager approval when canApprove is explicitly false', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
+      requestedStatus: 'approved',
+      user: manager,
+      userLocationIds: ['loc-1'],
+      canApprove: false,
+    })
+    expect(r.ok).toBe(false)
+    expect(r.status).toBe(403)
+  })
+
+  it('allows a non-manager to approve when canApprove is explicitly true', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
+      requestedStatus: 'approved',
+      user: coach('coach-9'),
+      userLocationIds: ['loc-1'],
+      canApprove: true,
+    })
+    expect(r.ok).toBe(true)
+    expect(r.effect).toBe('approved_reassign')
+  })
+
+  it('falls back to the manager check when canApprove is omitted (back-compat)', () => {
+    const r = resolveSwapTransition({
+      swap: makeSwap({ status: 'awaiting_approval', target_id: 'coach-2' }),
+      requestedStatus: 'approved',
+      user: manager,
+      userLocationIds: ['loc-1'],
+    })
+    expect(r.ok).toBe(true)
+    expect(r.effect).toBe('approved_reassign')
+  })
+})
+
 // GUARD: every status the resolver writes onto shift_assignments must be a
 // value the DB CHECK constraint permits (mig 067 + mig 337). A pure test can't
 // touch the constraint, so this asserts against a hard-coded copy of the

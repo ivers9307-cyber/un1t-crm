@@ -8,6 +8,8 @@ import { swapStatusSchema } from '@/lib/schemas'
 import { resolveSwapTransition } from '@/lib/swap-lifecycle'
 import { sendPushOnce, sendPushToRolesAtLocationOnce } from '@/lib/push-dedup'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { hasPermissionForLocation } from '@/lib/permissions'
+import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 
 const SwapReviewSchema = z.object({
   status: swapStatusSchema,
@@ -42,6 +44,9 @@ export async function PUT(request, props) {
     user,
     userLocationIds: getUserLocationIds(user),
     reviewNote: body.review_note ?? null,
+    // APPROVALS-PERCAT.1 — the "approve" transition is gated by the
+    // approvals_shift_swaps permission rather than a bare manager-role check.
+    canApprove: swap ? hasPermissionForLocation(user, swap.location_id, APPROVAL_CATEGORY_PERMISSION.shift_swaps) : false,
   })
 
   if (!decision.ok) {
