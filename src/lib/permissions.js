@@ -29,6 +29,8 @@ import {
   DEFAULT_WEB_PERMISSIONS_BY_ROLE,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
   resolvePermission,
+  isFeatureEnabledAtLocation,
+  APPROVAL_SUBPERMISSION_KEYS,
 } from '@shared/permissions'
 
 /**
@@ -42,6 +44,16 @@ import {
  */
 export function hasPermission(user, key) {
   if (!user) return false
+
+  // APPROVALS-PERCAT.1 — approvals_inbox is now DERIVED: the aggregator
+  // is visible iff the Approvals feature is enabled at the active location
+  // AND the user holds at least one per-category approval grant. Every
+  // consumer (nav, page guard, command palette, today-feed badge) routes
+  // through hasPermission, so this one definition covers them all.
+  if (key === 'approvals_inbox') {
+    if (!isFeatureEnabledAtLocation(user.activeLocation, 'approvals_inbox')) return false
+    return APPROVAL_SUBPERMISSION_KEYS.some((k) => hasPermission(user, k))
+  }
 
   // Master escape hatch — Settings sidebar entry stays visible
   // unconditionally so a master can always navigate to the
