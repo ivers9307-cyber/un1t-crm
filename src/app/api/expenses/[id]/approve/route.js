@@ -14,6 +14,8 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
+import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { canTransition, periodLabel } from '@/lib/fte-expenses'
 import { notifyUsersOnce } from '@/lib/push-dedup'
 import { enqueueFromFteExpenseClaim } from '@/lib/invoices-queue/enqueue'
@@ -22,12 +24,6 @@ import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-
-function canApprove(user, claim) {
-  if (user.profileRole === 'master' || user.role === 'master') return true
-  return Object.entries(user.rolesByLocation || {})
-    .some(([loc, r]) => r === 'owner' && loc === claim.location_id)
-}
 
 export async function POST(request, { params }) {
   const user = await getCurrentUser()
@@ -45,8 +41,9 @@ export async function POST(request, { params }) {
     .eq('id', id)
     .maybeSingle()
   if (!claim) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  if (!canApprove(user, claim)) {
-    return NextResponse.json({ success: false, error: 'Master or owner-at-location only.' }, { status: 403 })
+  // APPROVALS-PERCAT.1 — permission is the only gate.
+  if (!hasPermissionForLocation(user, claim.location_id, APPROVAL_CATEGORY_PERMISSION.fte_expenses)) {
+    return NextResponse.json({ success: false, error: 'You do not have permission to approve expenses.' }, { status: 403 })
   }
   if (!canTransition(claim.status, 'approved')) {
     return NextResponse.json({ success: false, error: `Cannot approve a claim in '${claim.status}' state.` }, { status: 409 })
