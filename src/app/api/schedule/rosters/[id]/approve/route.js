@@ -7,22 +7,17 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
 import { notifyStaffOfPublish, publishNotifyRowsForBlocks } from '@/lib/roster-notify'
 import { logWarn } from '@/lib/log'
+import { hasPermissionForLocation } from '@/lib/permissions'
+import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 
 export async function POST(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const isMaster = user.role === 'master'
-  const isOwnerSomewhere = (user.assignmentsByLocation || user.profileLocations || [])
-    .some?.(l => (l.role || '') === 'owner')
-  if (!isMaster && !isOwnerSomewhere && user.role !== 'owner') {
-    return NextResponse.json({ success: false, error: 'Only owners can approve rosters.' }, { status: 403 })
   }
 
   const db = createServerClient()
@@ -43,18 +38,10 @@ export async function POST(_request, props) {
     }, { status: 409 })
   }
 
-  // Per-location ownership check for non-master.
-  if (!isMaster) {
-    const userLocationIds = getUserLocationIds(user)
-    if (!userLocationIds.includes(roster.location_id)) {
-      return NextResponse.json({ success: false, error: 'Forbidden — not an owner at this location.' }, { status: 403 })
-    }
-    // Make sure the user is specifically OWNER at this location
-    // (not just in_location). Phase 5 spec gates this on owner role.
-    const role = user.rolesByLocation?.[roster.location_id]
-    if (role !== 'owner') {
-      return NextResponse.json({ success: false, error: 'Approval requires the owner role at this location.' }, { status: 403 })
-    }
+  // APPROVALS-PERCAT.1 — permission is the only gate (roster.location_id
+  // resolved after the roster row loaded above).
+  if (!hasPermissionForLocation(user, roster.location_id, APPROVAL_CATEGORY_PERMISSION.rosters)) {
+    return NextResponse.json({ success: false, error: 'You do not have permission to approve rosters.' }, { status: 403 })
   }
 
   const nowIso = new Date().toISOString()
