@@ -53,6 +53,7 @@ import { rostersProvider } from './providers/rosters'
 import { invoicesQueueProvider } from './providers/invoices-queue'
 import { issuesProvider } from './providers/issues'
 import { agentRequestsProvider } from './providers/agent-requests'
+import { hasPermission } from '@/lib/permissions'
 
 export const APPROVALS_PROVIDERS = Object.freeze([
   // BOOKKEEPER-APPROVALS.1 — invoices_queue tab first so bookkeepers
@@ -86,9 +87,12 @@ export const APPROVALS_PROVIDERS = Object.freeze([
 export async function getPendingApprovals(db, user) {
   // BOOKKEEPER-APPROVALS.1 — apply isVisible() filter first so
   // hidden providers don't even fire their query.
-  const visible = APPROVALS_PROVIDERS.filter(
-    (p) => typeof p.isVisible !== 'function' || p.isVisible(user)
-  )
+  const visible = APPROVALS_PROVIDERS.filter((p) => {
+    // APPROVALS-PERCAT.1 — category providers gate on their permissionKey;
+    // providers without one keep their isVisible() gate (invoices_queue, issues).
+    if (p.permissionKey) return hasPermission(user, p.permissionKey)
+    return typeof p.isVisible !== 'function' || p.isVisible(user)
+  })
 
   const settled = await Promise.allSettled(
     visible.map(async (p) => {
@@ -125,9 +129,12 @@ export async function getPendingApprovals(db, user) {
 export async function getPendingApprovalsCount(db, user) {
   // Mirror the isVisible() filter from getPendingApprovals so the
   // sidebar badge matches what the inbox renders.
-  const visible = APPROVALS_PROVIDERS.filter(
-    (p) => typeof p.isVisible !== 'function' || p.isVisible(user)
-  )
+  const visible = APPROVALS_PROVIDERS.filter((p) => {
+    // APPROVALS-PERCAT.1 — category providers gate on their permissionKey;
+    // providers without one keep their isVisible() gate (invoices_queue, issues).
+    if (p.permissionKey) return hasPermission(user, p.permissionKey)
+    return typeof p.isVisible !== 'function' || p.isVisible(user)
+  })
   const settled = await Promise.allSettled(
     visible.map(async (p) => {
       if (typeof p.countPending === 'function') {

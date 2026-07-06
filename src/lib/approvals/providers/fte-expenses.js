@@ -5,21 +5,17 @@
 //
 // APPROVALS-LOCATION-SCOPE — scoped to user.activeLocation only.
 
-import { canApproveAtActiveLocation, viewerActiveLocationId } from '../registry'
-
-const FINANCE_APPROVER_ROLES = ['owner']
+import { viewerActiveLocationId } from '../registry'
 
 export const fteExpensesProvider = {
   key: 'fte_expenses',
+  permissionKey: 'approvals_fte_expenses',
   label: 'Employee expenses',
   reviewBase: '/schedule/expenses',
 
   async fetchPending(db, user) {
     const activeId = viewerActiveLocationId(user)
     if (!activeId) return { count: 0, items: [] }
-    if (!canApproveAtActiveLocation(user, FINANCE_APPROVER_ROLES)) {
-      return { count: 0, items: [] }
-    }
 
     const q = db
       .from('fte_expense_claims')
@@ -57,7 +53,6 @@ export const fteExpensesProvider = {
   async countPending(db, user) {
     const activeId = viewerActiveLocationId(user)
     if (!activeId) return 0
-    if (!canApproveAtActiveLocation(user, FINANCE_APPROVER_ROLES)) return 0
     const q = db
       .from('fte_expense_claims')
       .select('*', { count: 'exact', head: true })

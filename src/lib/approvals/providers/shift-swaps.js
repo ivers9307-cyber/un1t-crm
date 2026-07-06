@@ -6,21 +6,17 @@
 //
 // APPROVALS-LOCATION-SCOPE — scoped to user.activeLocation only.
 
-import { canApproveAtActiveLocation, viewerActiveLocationId } from '../registry'
-
-const SCHEDULE_APPROVER_ROLES = ['manager', 'head_coach', 'owner']
+import { viewerActiveLocationId } from '../registry'
 
 export const shiftSwapsProvider = {
   key: 'shift_swaps',
+  permissionKey: 'approvals_shift_swaps',
   label: 'Shift swaps',
   reviewBase: '/schedule/swaps',
 
   async fetchPending(db, user) {
     const activeId = viewerActiveLocationId(user)
     if (!activeId) return { count: 0, items: [] }
-    if (!canApproveAtActiveLocation(user, SCHEDULE_APPROVER_ROLES)) {
-      return { count: 0, items: [] }
-    }
 
     const q = db
       .from('shift_swap_requests')
@@ -71,7 +67,6 @@ export const shiftSwapsProvider = {
   async countPending(db, user) {
     const activeId = viewerActiveLocationId(user)
     if (!activeId) return 0
-    if (!canApproveAtActiveLocation(user, SCHEDULE_APPROVER_ROLES)) return 0
     const q = db
       .from('shift_swap_requests')
       .select('*', { count: 'exact', head: true })

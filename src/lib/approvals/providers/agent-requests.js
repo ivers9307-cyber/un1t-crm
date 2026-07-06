@@ -16,13 +16,7 @@
 // decide from the inline card in /communications/inbox instead
 // (GET ?conversation_id= form).
 
-import {
-  canApproveAtActiveLocation,
-  viewerActiveLocationId,
-} from '../registry'
-import { MANAGER_ROLES } from '@/lib/schemas'
-
-const HANDLER_ROLES = MANAGER_ROLES
+import { viewerActiveLocationId } from '../registry'
 
 const KIND_LABELS = {
   pause: 'Pause membership',
@@ -49,19 +43,13 @@ export function agentRequestSubtitle(row) {
 
 export const agentRequestsProvider = {
   key: 'agent_requests',
+  permissionKey: 'approvals_agent_requests',
   label: 'Agent requests',
   reviewBase: '/settings/customer-agent/requests',
-
-  isVisible(user) {
-    return canApproveAtActiveLocation(user, HANDLER_ROLES)
-  },
 
   async fetchPending(db, user) {
     const activeId = viewerActiveLocationId(user)
     if (!activeId) return { count: 0, items: [] }
-    if (!canApproveAtActiveLocation(user, HANDLER_ROLES)) {
-      return { count: 0, items: [] }
-    }
 
     const { data, error } = await db
       .from('agent_membership_requests')
@@ -92,7 +80,6 @@ export const agentRequestsProvider = {
   async countPending(db, user) {
     const activeId = viewerActiveLocationId(user)
     if (!activeId) return 0
-    if (!canApproveAtActiveLocation(user, HANDLER_ROLES)) return 0
     const { count, error } = await db
       .from('agent_membership_requests')
       .select('*', { count: 'exact', head: true })

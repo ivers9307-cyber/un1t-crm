@@ -7,12 +7,7 @@
 // APPROVALS-LOCATION-SCOPE — scoped to user.activeLocation only.
 // Switching studio = switching what /approvals shows.
 
-import {
-  canApproveAtActiveLocation,
-  viewerActiveLocationId,
-} from '../registry'
-
-const SCHEDULE_APPROVER_ROLES = ['manager', 'head_coach', 'owner']
+import { viewerActiveLocationId } from '../registry'
 
 const TYPE_LABELS = {
   holiday: 'Holiday',
@@ -22,15 +17,13 @@ const TYPE_LABELS = {
 
 export const timeOffProvider = {
   key: 'time_off',
+  permissionKey: 'approvals_time_off',
   label: 'Time off',
   reviewBase: '/schedule/time-off',
 
   async fetchPending(db, user) {
     const activeId = viewerActiveLocationId(user)
     if (!activeId) return { count: 0, items: [] }
-    if (!canApproveAtActiveLocation(user, SCHEDULE_APPROVER_ROLES)) {
-      return { count: 0, items: [] }
-    }
 
     const q = db
       .from('time_off_requests')
@@ -69,7 +62,6 @@ export const timeOffProvider = {
   async countPending(db, user) {
     const activeId = viewerActiveLocationId(user)
     if (!activeId) return 0
-    if (!canApproveAtActiveLocation(user, SCHEDULE_APPROVER_ROLES)) return 0
     const q = db
       .from('time_off_requests')
       .select('*', { count: 'exact', head: true })

@@ -12,6 +12,7 @@ import {
   ownerLocationIds,
   scheduleApproverLocationIds,
   getPendingApprovalsCount,
+  getPendingApprovals,
 } from './registry'
 
 describe('APPROVALS_PROVIDERS', () => {
@@ -109,6 +110,57 @@ describe('getPendingApprovalsCount', () => {
       expect(total).toBe(expected)
     } finally {
       APPROVALS_PROVIDERS.forEach((p, i) => { p.countPending = original[i] })
+    }
+  })
+})
+
+// APPROVALS-PERCAT.1 — the six category providers now gate on their
+// permissionKey (resolved via hasPermission) instead of self-gating
+// on ROLE. Uses a minimal stub db — providers whose fetchPending
+// needs a query method the stub lacks (.gte/.not/.limit/etc.) will
+// throw, but the registry's Promise.allSettled still returns their
+// bucket (key present, count 0), which is all these assertions check.
+describe('registry per-category gating', () => {
+  const db = {
+    from() { return this },
+    select() { return this },
+    eq() { return this },
+    in() { return this },
+    order() { return this },
+    is() { return this },
+    then(res) { return Promise.resolve({ data: [], count: 0, error: null }).then(res) },
+  }
+
+  function user(role, perms = {}) {
+    return {
+      role,
+      activeLocation: { id: 'loc1', features: {} },
+      activeAssignment: { permissions: perms },
+      activeRoleTemplate: null,
+      rolesByLocation: { loc1: role },
+    }
+  }
+
+  it('a staff member with no grants sees no approval tabs', async () => {
+    const { providers } = await getPendingApprovals(db, user('staff'))
+    const keys = providers.map((p) => p.key)
+    expect(keys).not.toContain('time_off')
+    expect(keys).not.toContain('contractor_invoices')
+  })
+
+  it('a staff member granted only time_off sees just the time_off tab (of the six)', async () => {
+    const { providers } = await getPendingApprovals(db, user('staff', { approvals_time_off: true }))
+    const keys = providers.map((p) => p.key)
+    expect(keys).toContain('time_off')
+    expect(keys).not.toContain('shift_swaps')
+    expect(keys).not.toContain('contractor_invoices')
+  })
+
+  it('an owner sees all six category tabs', async () => {
+    const { providers } = await getPendingApprovals(db, user('owner'))
+    const keys = providers.map((p) => p.key)
+    for (const k of ['contractor_invoices', 'fte_expenses', 'agent_requests', 'time_off', 'shift_swaps', 'rosters']) {
+      expect(keys).toContain(k)
     }
   })
 })

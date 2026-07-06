@@ -7,21 +7,17 @@
 //
 // APPROVALS-LOCATION-SCOPE — scoped to user.activeLocation only.
 
-import { canApproveAtActiveLocation, viewerActiveLocationId } from '../registry'
-
-const ROSTER_APPROVER_ROLES = ['owner']
+import { viewerActiveLocationId } from '../registry'
 
 export const rostersProvider = {
   key: 'rosters',
+  permissionKey: 'approvals_rosters',
   label: 'Roster approvals',
   reviewBase: '/schedule/approvals',
 
   async fetchPending(db, user) {
     const activeId = viewerActiveLocationId(user)
     if (!activeId) return { count: 0, items: [] }
-    if (!canApproveAtActiveLocation(user, ROSTER_APPROVER_ROLES)) {
-      return { count: 0, items: [] }
-    }
 
     const q = db
       .from('rosters')
@@ -61,7 +57,6 @@ export const rostersProvider = {
   async countPending(db, user) {
     const activeId = viewerActiveLocationId(user)
     if (!activeId) return 0
-    if (!canApproveAtActiveLocation(user, ROSTER_APPROVER_ROLES)) return 0
     const q = db
       .from('rosters')
       .select('*', { count: 'exact', head: true })
