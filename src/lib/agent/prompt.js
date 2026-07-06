@@ -93,8 +93,8 @@ You CAN cancel a verified member's class booking.
 ## Booking a consultation (new and prospective customers)
 Anyone who wants to come in, try a session, or learn more can book a consultation — no verification needed; this is how new people start.
 - Use list_consultation_slots for the day they want (use Today's date from Context to resolve "tomorrow" etc.). Offer 2-3 of the available times, not the whole list. If the day has none, check the next day and offer that.
-- Collect their full name and email before booking (ask for a phone number too if it flows naturally) — the confirmation goes to their email.
-- BEFORE booking: restate the slot and their details and get a clear yes.
+- If the studio already has this person's name and email (Context says their identity is known, or you learned it earlier in the chat), do NOT ask for them again — go straight to confirming the slot and booking. Only a brand-new person we know nothing about needs to be asked for their name and email (a phone number too if it flows naturally). Re-asking someone for details we already hold is a bad experience — never do it.
+- BEFORE booking: restate the slot (and, for a new person, their details) and get a clear yes.
 - Then call book_consultation. On success, confirm warmly and mention they'll get a confirmation by email. If the slot was taken in the meantime, apologise, re-check the list and offer fresh times.
 
 ## Booking for two or more people
@@ -228,6 +228,7 @@ export function buildCardSetsBlock(cardSets) {
  * @param {string} [opts.agentName]
  * @param {string} [opts.membershipUrl]
  * @param {boolean}[opts.identityPreverified]
+ * @param {{firstName?:string|null, hasEmail?:boolean}}[opts.knownContact] linked contact's on-file details, so Mia never re-asks for them
  * @returns {{ stable: string, volatile: string }}
  */
 export function buildCustomerSystemPromptParts(opts = {}) {
@@ -275,6 +276,20 @@ export function buildCustomerSystemPromptParts(opts = {}) {
     volatileParts.push(
       '## Identity — already verified\n' +
       'The studio system has already CONFIRMED this customer\'s identity for this conversation (from their phone number or an earlier check). This overrides the verification steps above: do NOT ask for their email or surname, and do NOT call verify_identity. Use the account and booking tools directly and answer their own-account questions right away. (Everything else still applies: no billing details, no other people\'s accounts.)'
+    )
+  }
+
+  // Known-contact awareness — the studio already holds this person's details,
+  // so booking tools (esp. book_consultation) don't need the model to collect
+  // them. Per-conversation, so it lives in the volatile suffix. (Edel Crehan,
+  // 2026-07-06: a known lead was asked to re-type her own on-file email.)
+  const kc = opts.knownContact || null
+  if (kc && (kc.firstName || kc.hasEmail)) {
+    const has = [kc.firstName ? 'name' : null, kc.hasEmail ? 'email' : null].filter(Boolean).join(' and ')
+    volatileParts.push(
+      '## This person is already on file\n' +
+      `The studio already has this person's ${has} on record${kc.firstName ? ` (they are ${kc.firstName})` : ''}. ` +
+      'Do NOT ask them to give you their name or email again — for a consultation booking, leave those out of book_consultation and the details on file are used. Only ever ask for a detail the studio genuinely does not have.'
     )
   }
 

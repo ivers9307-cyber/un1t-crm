@@ -127,6 +127,25 @@ describe('identity pre-verification section', () => {
   })
 })
 
+describe('known-contact awareness (no re-asking for on-file details)', () => {
+  it('tells Mia not to re-ask when the contact has a name/email on file', () => {
+    const out = buildCustomerSystemPrompt({ knownContact: { firstName: 'Edel', hasEmail: true } })
+    expect(out).toMatch(/already on file|already has this person/i)
+    expect(out).toMatch(/do not ask/i)
+    expect(out).toContain('Edel')
+  })
+  it('renders for a name-only contact and stays in the volatile (uncached) suffix', () => {
+    const parts = buildCustomerSystemPromptParts({ knownContact: { firstName: 'Sam', hasEmail: false } })
+    expect(parts.volatile).toMatch(/already on file|already has this person/i)
+    expect(parts.stable).not.toMatch(/already on file/i)
+  })
+  it('omits the block entirely when nothing is on file', () => {
+    const out = buildCustomerSystemPrompt({ knownContact: { firstName: null, hasEmail: false } })
+    expect(out).not.toMatch(/already on file/i)
+    expect(buildCustomerSystemPrompt({})).not.toMatch(/already on file/i)
+  })
+})
+
 // AGENT-ID.1 — named agent + Meta AI-disclosure rules (Jan 2026
 // AI-Assisted Business Messaging Guidelines: disclose AI in the first
 // message, never claim to be human, human escalation available).

@@ -84,20 +84,23 @@ export const BOOKING_TOOLS = [
   {
     name: 'book_consultation',
     description:
-      'Book a consultation slot from list_consultation_slots for a new/prospective customer. ' +
-      'FIRST collect their full name and email address (ask for a phone number too if natural) ' +
-      '— the booking needs both. CRITICAL: restate the slot (date + time) and their details ' +
-      'and get a clear yes before calling. They will receive a confirmation automatically.',
+      'Book a consultation slot from list_consultation_slots. If the studio already has this ' +
+      "person's name and email on file (Context says their identity is known, or you already " +
+      'know it from earlier in the chat), do NOT ask again — leave name/email out and the ' +
+      'booking uses the details on file. Only ask a brand-new person we know nothing about for ' +
+      'their name and email (a phone number too if it flows naturally). CRITICAL either way: ' +
+      'restate the slot (date + time) and get a clear yes before calling. They will receive a ' +
+      'confirmation automatically.',
     input_schema: {
       type: 'object',
       properties: {
         date: { type: 'string', description: 'YYYY-MM-DD, from list_consultation_slots.' },
         start_time: { type: 'string', description: 'HH:MM start of the chosen slot.' },
-        name: { type: 'string', description: "The customer's full name." },
-        email: { type: 'string', description: "The customer's email address." },
+        name: { type: 'string', description: "The customer's full name. Omit if already on file — do not re-ask a known person." },
+        email: { type: 'string', description: "The customer's email address. Omit if already on file — do not re-ask a known person." },
         phone: { type: 'string', description: 'Phone number if given.' },
       },
-      required: ['date', 'start_time', 'name', 'email'],
+      required: ['date', 'start_time'],
     },
   },
   {
@@ -296,6 +299,24 @@ export function leadDetailsPatch(existing = {}, input = {}) {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 const TIME_RE = /^\d{2}:\d{2}$/
+
+/**
+ * Resolve the consultation booker's identity: prefer what the model passed,
+ * fall back to the details already on the linked contact, then the channel
+ * name hint. Lets Mia book a KNOWN person without re-interrogating them for a
+ * name/email the studio already holds (Edel Crehan, 2026-07-06 — verified
+ * contact asked to re-type her own on-file email, then handed to a human).
+ * Only a genuinely-new person with nothing on file still gets asked. Pure.
+ */
+export function resolveConsultationIdentity({ input = {}, contact = {}, nameHint = null } = {}) {
+  const clean = (v) => String(v ?? '').trim()
+  const inName = clean(input.name)
+  const contactName = [clean(contact.first_name), clean(contact.last_name)].filter(Boolean).join(' ')
+  const name = inName || contactName || clean(nameHint)
+  const email = (clean(input.email) || clean(contact.email)).toLowerCase()
+  const phone = clean(input.phone) || clean(contact.phone)
+  return { name, email, phone: phone || null }
+}
 
 /** Input validation for book_consultation. Pure. */
 export function consultationInputGuard({ name, email, date, start_time } = {}) {
@@ -569,7 +590,21 @@ export async function executeBookingTool(toolName, input, ctx) {
   }
 
   if (toolName === 'book_consultation') {
-    const guard = consultationInputGuard(input || {})
+    // Pre-fill from the linked contact so a KNOWN person (returning lead or
+    // verified member) is never re-asked for a name/email already on file —
+    // the model only needs to supply what's genuinely missing. Best-effort:
+    // if there's no contact yet, resolution falls back to the model's input.
+    const consultContactId = verifiedContactId || ctx.contactId || null
+    let consultContact = {}
+    if (consultContactId) {
+      const { data } = await db.from('contacts')
+        .select('first_name, last_name, email, phone')
+        .eq('id', consultContactId)
+        .maybeSingle()
+      consultContact = data || {}
+    }
+    const identity = resolveConsultationIdentity({ input: input || {}, contact: consultContact, nameHint: ctx.nameHint })
+    const guard = consultationInputGuard({ ...(input || {}), name: identity.name, email: identity.email })
     if (!guard.ok) return guard
 
     const { computeAvailableSlots } = await import('@/lib/booking-slots')
@@ -592,9 +627,9 @@ export async function executeBookingTool(toolName, input, ctx) {
       booking_date: input.date,
       start_time: slot.start,
       end_time: slot.end,
-      customer_name: String(input.name).trim(),
-      customer_email: String(input.email).toLowerCase().trim(),
-      customer_phone: input.phone ? String(input.phone).trim() : null,
+      customer_name: identity.name,
+      customer_email: identity.email,
+      customer_phone: identity.phone,
       custom_responses: {},
       source: 'agent',
     }).select().single()
@@ -626,7 +661,7 @@ export async function executeBookingTool(toolName, input, ctx) {
         booking_type: eventType.name,
         date: input.date,
         start_time: slot.start,
-        customer_name: String(input.name).trim(),
+        customer_name: identity.name,
         mode: 'auto',
       },
     })

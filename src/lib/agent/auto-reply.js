@@ -350,6 +350,32 @@ async function runChannelAgentInner(db, adapter, ctx) {
     // sweep compares against it after the reply goes out.
     const lastInboundSeenIso = (historyDesc || []).find((m) => m.direction === 'inbound')?.created_at || null
 
+    // Acting contact for this turn (a phone/link-preverified id, else a
+    // still-fresh prior verification). Resolved once and reused for both the
+    // prompt's known-contact awareness and the tool context so they agree.
+    const resolvedVerifiedContactId = preverifiedContactId
+      || (isVerificationFresh(conv?.agent_verified_at)
+        ? resolveActingContactId({ contactId: conv?.agent_verified_contact_id, groupOf, primaryOf })
+        : null)
+
+    // Known-contact awareness — if the linked contact already has a name/email
+    // on file, tell the prompt so Mia never re-asks for them (Edel Crehan,
+    // 2026-07-06). Best-effort; a missing contact just omits the block.
+    let knownContact = null
+    const promptContactId = resolvedVerifiedContactId || conv?.contact_id || contactId || null
+    if (promptContactId) {
+      const { data: kc } = await db.from('contacts')
+        .select('first_name, email')
+        .eq('id', promptContactId)
+        .maybeSingle()
+      if (kc) {
+        knownContact = {
+          firstName: String(kc.first_name || '').trim() || null,
+          hasEmail: !!String(kc.email || '').trim(),
+        }
+      }
+    }
+
     // CACHE.2 — content blocks with a cache breakpoint on the location-stable
     // prefix (base prompt + knowledge). Caches cumulatively after the tool
     // block; the volatile suffix (today + identity override) stays uncached.
@@ -372,6 +398,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
       // re-quizzed inside the 30-day window. (Tools already honour the stored
       // verification via toolCtx; this closes the prompt-side gap.)
       identityPreverified: !!preverifiedContactId || isVerificationFresh(conv?.agent_verified_at),
+      knownContact,
     })
 
     // EFFORT.1 — operator-tunable reasoning effort (defaults to `medium`, one
@@ -393,10 +420,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
       contactId: conv?.contact_id || contactId || null,
       // Only honour a prior verification if it's still fresh — a stale one
       // (handle changed hands) forces the customer to re-verify.
-      verifiedContactId: preverifiedContactId
-        || (isVerificationFresh(conv?.agent_verified_at)
-          ? resolveActingContactId({ contactId: conv?.agent_verified_contact_id, groupOf, primaryOf })
-          : null),
+      verifiedContactId: resolvedVerifiedContactId,
       locationId,
       channel: adapter.name,
       nameHint: (nameCol && conv?.[nameCol]) || null,
