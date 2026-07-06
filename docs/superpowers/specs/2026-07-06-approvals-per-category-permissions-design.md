@@ -63,52 +63,84 @@ Six new grant keys in `shared/permissions.js`, mapped 1:1 to the registry provid
 
 `approvals_inbox` is **repurposed to the location feature gate only** — the Settings
 feature card ("is Approvals switched on for this location at all"). It is removed as a
-per-role/per-user *grant*. The six sub-keys **inherit the location gate** from
-`approvals_inbox`: if the feature card is off for a location, all six resolve `false`
-there regardless of role/user grants.
+per-role/per-user *grant*. It stays the **only location-gated key**.
 
-**Inbox visibility rule:** the Approvals inbox (nav item + page) is visible iff the
-feature is enabled at the user's active location **and** the user holds ≥1 of the six
-grants. Each tab renders only for the categories the user holds.
+The six sub-keys are **not location-gated** (`isFeatureGatedByLocation` returns `false`
+for them). This is deliberate: today, turning the Approvals feature card off only hides
+the aggregator inbox — it does **not** disable approving on the source pages (those
+gate on their own permissions like `schedule` / `invoices_inbox`). If the six sub-keys
+were gated by the `approvals_inbox` feature flag, disabling the card would suddenly
+break source-page approvals too — a footgun. So the card governs the aggregator only;
+the six grants govern approve-ability everywhere else.
+
+**Inbox visibility rule (derived):** `hasPermission(user, 'approvals_inbox')` is
+redefined in the web adapter as *feature enabled at the active location* **AND** *user
+holds ≥1 of the six grants*. Every current consumer of `approvals_inbox` (nav item,
+page guard, command palette, today-feed badge) routes through `hasPermission`, so this
+single derived definition covers them all with no other call-site changes. Each tab
+renders only for the categories the user holds.
 
 ### 2. Role defaults — behaviour-preserving
 
-Each role's default for the six keys is **seeded from the current floor table**, so on
-deploy day nothing changes for anyone until an operator edits the Roles UI:
+Each role's default is **seeded from the category's current source-route approver
+set** — i.e. who can approve that category *today* — because approve-ability today is
+gated by the source routes, not by `approvals_inbox`. The rule is simple:
+
+- **Finance + rosters** (contractor invoices, employee expenses, rosters) → `owner`
+  (+ `master`), matching the current `['owner']` route checks.
+- **Agent requests, time off, shift swaps** → `MANAGER_ROLES`
+  (`master`, `owner`, `manager`, `head_coach`), matching the current
+  `MANAGER_ROLES` route checks.
 
 | Role | Contr. inv | Expenses | Agent req | Time off | Swaps | Rosters |
 |---|---|---|---|---|---|---|
 | master | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | owner | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | manager | — | — | ✓ | ✓ | ✓ | — |
-| head_coach | — | — | — | ✓ | ✓ | — |
+| head_coach | — | — | ✓ | ✓ | ✓ | — |
 | staff | — | — | — | — | — | — |
 | reception | — | — | — | — | — | — |
 
-(master bypasses tiers anyway once the location gate passes; listed ✓ for clarity.)
+(master bypasses the tiers anyway once past the location gate; listed ✓ for clarity.)
 
-These replace the `approvals_inbox: true/false` entries in
+These replace the single `approvals_inbox: true/false` entry in each role map of
 `DEFAULT_WEB_PERMISSIONS_BY_ROLE`.
+
+**One intended visible change:** `head_coach` previously had `approvals_inbox` off by
+default, so they never saw the aggregator inbox — even though they could already
+approve time-off / swaps / agent-requests on the source pages. Under the derived
+visibility rule they now *see* the Approvals inbox showing exactly those three
+categories. This grants no new authority (they could already approve those); it just
+surfaces the aggregator for someone who can act on it.
 
 ### 3. Enforcement — one central map, three call sites
 
 A single map in `shared/` — `APPROVAL_CATEGORY_PERMISSION` (provider key →
 permission key) — is the only place the category→permission relationship is defined.
-Consumed by all three enforcement points so the rule cannot drift:
+There are **two** enforcement points (not three): the inbox has no separate action
+route — its inline approve/decline buttons POST to the same per-category source routes,
+so gating the source routes covers both the source pages and the inbox inline actions.
 
-- **Inbox aggregation** (`src/lib/approvals/registry.js` + each provider under
-  `src/lib/approvals/providers/`): each provider gains a `permissionKey`. The registry
-  filters providers by `hasPermission(user, provider.permissionKey)`, and
-  `fetchPending` / `countPending` / tab visibility use the permission instead of the
-  hard-coded role list.
-- **Inline approve/decline action** (the shared inbox action endpoint): checks the
-  category's permission before mutating. Security-critical — inline approvals are live,
-  so this is the primary real mutation path.
-- **Source pages**: each category's own approve/decline action (Time-off page, roster
-  page, contractor-invoices page, etc.) swaps its role-floor check for the same
-  `hasPermission(user, APPROVAL_CATEGORY_PERMISSION[category])` check. The
-  implementation plan will inventory the exact endpoint/handler per category (six
-  source features).
+- **Inbox aggregation** (`src/lib/approvals/registry.js` + the six providers under
+  `src/lib/approvals/providers/`): each provider gains a `permissionKey`. The registry's
+  `getPendingApprovals` / `getPendingApprovalsCount` visibility filter gates each
+  provider by `hasPermission(user, provider.permissionKey)` — one central gate replacing
+  the six per-provider `canApproveAtActiveLocation(...)` role checks, which are then
+  deleted from the providers.
+- **Source routes** (the real mutation, shared by source pages *and* inbox inline
+  actions): each category's approve/decline route swaps its hard-coded role check for
+  `hasPermissionForLocation(user, <row>.location_id, APPROVAL_CATEGORY_PERMISSION[cat])`
+  — the location-specific resolver, because these routes act on a row at a specific
+  `location_id`. Routes and current checks:
+  - Contractor invoices — `/api/invoices/[id]/approve` + `/decline` (master/owner-at-loc → 404)
+  - Employee expenses — `/api/expenses/[id]/approve` + `/decline` (`canApprove`/`canDecline` helper → 403)
+  - Agent requests — `/api/agent/membership-requests/[id]` PATCH (location-membership only → 404). **Per the agent-requests decision, this route is now fully gated on `approvals_agent_requests` (default manager+); plain staff lose the comms-page action.**
+  - Time off — `/api/schedule/time-off/[id]` PUT (the `approved`/`rejected` branch's `MANAGER_ROLES` gate; the requester self-cancel path is left untouched)
+  - Shift swaps — `/api/schedule/swaps/[id]` PUT via `resolveSwapTransition` in
+    `src/lib/swap-lifecycle.js`; only the `approved` transition switches to the
+    permission (via a new `canApprove` arg defaulting to the old `MANAGER_ROLES` check
+    so existing callers/tests are unaffected). Claim/accept/reject-by-target stay as-is.
+  - Roster approvals — `/api/schedule/rosters/[id]/approve` POST (owner-at-loc → 403)
 
 ### 4. Roles / Settings UI
 
@@ -123,21 +155,30 @@ In `src/components/RolePermissions.jsx`:
 
 ### 5. Migration
 
-Forward-only, applied via Supabase MCP against un1t-crm. **Data-only** (no schema
-change) — expands existing stored grants:
+Forward-only, applied via Supabase MCP against un1t-crm (mig **378**). **Data-only**
+(no schema change): strip the now-inert `approvals_inbox` key from the two grant blobs.
 
-- For every row in `profile_locations.permissions` and
-  `location_role_permissions.permissions` that explicitly sets `approvals_inbox`:
-  - `approvals_inbox: true` → set all six sub-keys `true`
-  - `approvals_inbox: false` → set all six sub-keys `false`
-  - then remove `approvals_inbox` from that grant blob.
+- `UPDATE profile_locations SET permissions = permissions - 'approvals_inbox'
+  WHERE permissions ? 'approvals_inbox'`
+- `UPDATE location_role_permissions SET permissions = permissions - 'approvals_inbox'
+  WHERE permissions ? 'approvals_inbox'`
 - `locations.features.approvals_inbox` is **left untouched** — it remains the location
   feature gate.
-- Run `get_advisors` after applying (per estate convention), though no DDL is involved.
 
-`sanitizePermissionsBlob()` / `WEB_PERMISSION_KEYS` must include the six new keys so
-they survive save; `approvals_inbox` stays a recognised key for the location-features
-namespace but is dropped from the grant-key set.
+**Why strip, not expand:** as a *grant*, `approvals_inbox` only ever controlled who
+could open the aggregator page — it never gated approve-ability (the source routes do).
+The seeded role defaults already reproduce current approve-ability, and the derived
+visibility rule reproduces current aggregator access for everyone holding a grant.
+Expanding `approvals_inbox` into the six sub-keys would wrongly transfer aggregator-only
+signal into approve-ability. The one edge it doesn't preserve — a manager explicitly
+*denied* the aggregator via `approvals_inbox: false` will see it again once they hold a
+default grant — has no security impact (they could always approve via the source pages)
+and is accepted.
+
+`approvals_inbox` stays in `WEB_PERMISSIONS` (so `WEB_PERMISSION_KEYS` still recognises
+it as a valid location-feature key for `LocationFeatures` + the features route). The six
+new keys are added to `WEB_PERMISSIONS` so `sanitizePermissionsBlob()` preserves them on
+save.
 
 ### 6. Mobile
 
@@ -166,9 +207,9 @@ follow-up, not part of this build.
   - can approve a time-off request (inbox inline + source page),
   - is refused (403 / redirect) on a contractor-invoice approval via **both** the
     inbox inline action **and** the contractor-invoices source page.
-- **Migration test:** a stored `approvals_inbox: true` and a stored
-  `approvals_inbox: false` each expand to the six sub-keys with the right boolean and
-  drop `approvals_inbox`.
+- **Migration verification:** after applying mig 378, no row in
+  `profile_locations.permissions` or `location_role_permissions.permissions` still
+  contains an `approvals_inbox` key; `locations.features` rows are untouched.
 
 ## Rollout
 
