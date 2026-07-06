@@ -33,7 +33,10 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
-const ANALYSABLE_STATUSES = ['quality_approved', 'extracted']
+// 'received' is analysable too — the operator selecting it IS the
+// quality decision (see INV-BULK; mirrors bulk-queue-analysis). It gets
+// auto-quality-approved on a successful extract below.
+const ANALYSABLE_STATUSES = ['received', 'quality_approved', 'extracted']
 
 export async function POST(request) {
   const ctx = await loadBookkeeper()
@@ -106,15 +109,26 @@ export async function POST(request) {
     const allRequired = f.supplier_name && f.invoice_number && f.invoice_date && Number.isFinite(Number(f.total))
     const confidence = allRequired && reconciles ? 'high' : 'medium'
 
+    const nowIso = new Date().toISOString()
+    const patch = {
+      status: 'extracted',
+      extracted_at: nowIso,
+      extracted_fields: result.fields,
+      extraction_confidence: confidence,
+      extraction_error: null,
+      // clear any queue flags so a row can't be both extracted AND queued
+      analysis_queued_at: null,
+      analysis_claimed_at: null,
+    }
+    // Auto-quality-approve a 'received' row (operator selection = the
+    // quality decision) so it moves cleanly to 'extracted'.
+    if (row.status === 'received') {
+      patch.quality_reviewed_at = nowIso
+      patch.quality_reviewed_by = user.id
+    }
     const { error: updErr } = await db
       .from('invoices_queue')
-      .update({
-        status: 'extracted',
-        extracted_at: new Date().toISOString(),
-        extracted_fields: result.fields,
-        extraction_confidence: confidence,
-        extraction_error: null,
-      })
+      .update(patch)
       .eq('id', id)
       .in('status', ANALYSABLE_STATUSES)
 
