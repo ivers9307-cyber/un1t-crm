@@ -188,6 +188,18 @@ const WEB_ONLY_OK = {
   // manual overrides at /automations/devices). Desktop operator
   // surface; the mobile toggle ships in Tapo Wave T3.
   device_control: 'Mobile toggle ships in Tapo Wave T3; web-only until then.',
+  // APPROVALS-PERCAT.1 — six per-category approval grants (splitting the
+  // former all-or-nothing approvals_inbox). Each gates a source
+  // approve/decline route + the inbox tab for that category; the mobile
+  // `approvals` permission (webEquivalent: 'approvals_inbox') still covers
+  // the aggregate mobile approvals surface. No per-category mobile grant
+  // yet — revisit if/when mobile splits its own approvals screen by category.
+  approvals_contractor_invoices: 'Per-category approval grant (APPROVALS-PERCAT.1). Mobile approvals surface is still gated by the aggregate `approvals` permission; no per-category mobile split yet.',
+  approvals_fte_expenses: 'Per-category approval grant (APPROVALS-PERCAT.1). Mobile approvals surface is still gated by the aggregate `approvals` permission; no per-category mobile split yet.',
+  approvals_agent_requests: 'Per-category approval grant (APPROVALS-PERCAT.1). Mobile approvals surface is still gated by the aggregate `approvals` permission; no per-category mobile split yet.',
+  approvals_time_off: 'Per-category approval grant (APPROVALS-PERCAT.1). Mobile approvals surface is still gated by the aggregate `approvals` permission; no per-category mobile split yet.',
+  approvals_shift_swaps: 'Per-category approval grant (APPROVALS-PERCAT.1). Mobile approvals surface is still gated by the aggregate `approvals` permission; no per-category mobile split yet.',
+  approvals_rosters: 'Per-category approval grant (APPROVALS-PERCAT.1). Mobile approvals surface is still gated by the aggregate `approvals` permission; no per-category mobile split yet.',
 }
 
 const webDrift = []

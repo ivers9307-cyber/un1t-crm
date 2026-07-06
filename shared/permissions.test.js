@@ -396,10 +396,14 @@ describe('diffPermissionsBlob — sparse diff vs a base blob', () => {
 // the intent: staff-tier access plus the WhatsApp inbox + bookings desk.
 describe('reception role defaults', () => {
   it('covers every web + mobile permission key (no gaps, no orphans)', async () => {
-    const { WEB_PERMISSION_KEYS, MOBILE_PERMISSION_KEYS } = await import('./permissions.js')
+    const { WEB_PERMISSIONS, WEB_PERMISSION_KEYS, MOBILE_PERMISSION_KEYS } = await import('./permissions.js')
+    // locationGateOnly keys (e.g. approvals_inbox — APPROVALS-PERCAT.1) are
+    // derived-visibility aggregator cards, not directly-granted role perms,
+    // so they're deliberately absent from every role default map.
+    const directWebKeys = WEB_PERMISSIONS.filter(p => !p.locationGateOnly).map(p => p.key)
     const web = DEFAULT_WEB_PERMISSIONS_BY_ROLE.reception
     const mob = DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.reception
-    expect(WEB_PERMISSION_KEYS.filter(k => !(k in web))).toEqual([])
+    expect(directWebKeys.filter(k => !(k in web))).toEqual([])
     expect(Object.keys(web).filter(k => !WEB_PERMISSION_KEYS.includes(k))).toEqual([])
     expect(MOBILE_PERMISSION_KEYS.filter(k => !(k in mob))).toEqual([])
     expect(Object.keys(mob).filter(k => !MOBILE_PERMISSION_KEYS.includes(k))).toEqual([])
@@ -410,7 +414,14 @@ describe('reception role defaults', () => {
     expect(web.whatsapp).toBe(true)            // the front-desk channel
     expect(web.bookings).toBe(true)
     expect(web.settings).toBe(false)           // no admin surfaces
-    expect(web.approvals_inbox).toBe(false)
+    // approvals_inbox is now locationGateOnly (APPROVALS-PERCAT.1) — no
+    // direct role grant; reception holds none of the six sub-permissions.
+    expect(web.approvals_contractor_invoices).toBe(false)
+    expect(web.approvals_fte_expenses).toBe(false)
+    expect(web.approvals_agent_requests).toBe(false)
+    expect(web.approvals_time_off).toBe(false)
+    expect(web.approvals_shift_swaps).toBe(false)
+    expect(web.approvals_rosters).toBe(false)
     const mob = DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.reception
     expect(mob.whatsapp).toBe(true)
     expect(mob.bookings).toBe(true)

@@ -149,7 +149,20 @@ export const WEB_PERMISSIONS = Object.freeze([
   // expense claims, time-off, swap requests, and any future
   // approval surfaces. Master + owner + manager by default; head
   // coach + staff don't approve anything so it's off for them.
-  { key: 'approvals_inbox', label: 'Approvals',                 hint: 'Central inbox aggregating contractor invoices, FTE expenses, time-off and swap requests awaiting your review. Master + owner + manager by default.' },
+  { key: 'approvals_inbox', label: 'Approvals',                 locationGateOnly: true,
+    hint: 'Central inbox aggregating contractor invoices, FTE expenses, time-off and swap requests awaiting your review. Visible to anyone holding at least one per-category approval permission below.' },
+  // APPROVALS-PERCAT.1 — per-category approval grants. Each maps 1:1 to an
+  // approvals provider (src/lib/approvals/registry.js) and gates BOTH the
+  // inbox tab and that category's source approve/decline route. `group`
+  // renders them under an "Approvals" subsection in the grant editors;
+  // they are NOT location-gated (see isFeatureGatedByLocation) — the
+  // approvals_inbox feature card governs the aggregator only.
+  { key: 'approvals_contractor_invoices', group: 'approvals', label: '… Contractor invoices', hint: 'Approve or decline contractor invoices. Owner + master by default.' },
+  { key: 'approvals_fte_expenses',        group: 'approvals', label: '… Employee expenses',    hint: 'Approve or decline FTE expense claims. Owner + master by default.' },
+  { key: 'approvals_agent_requests',      group: 'approvals', label: '… Agent requests',       hint: 'Approve or decline customer-agent requests (pause / cancel / booking drafts). Manager + head coach + owner + master by default.' },
+  { key: 'approvals_time_off',            group: 'approvals', label: '… Time off',             hint: 'Approve or reject staff time-off requests. Manager + head coach + owner + master by default.' },
+  { key: 'approvals_shift_swaps',         group: 'approvals', label: '… Shift swaps',          hint: 'Approve shift-swap requests. Manager + head coach + owner + master by default.' },
+  { key: 'approvals_rosters',             group: 'approvals', label: '… Roster approvals',     hint: 'Approve over-budget draft rosters. Owner + master by default.' },
   // AUTOMATIONS-HUB.1 — operator surface for toggling per-location
   // automations (e.g. auto-creating new leads in Glofox). Web-only;
   // no mobile counterpart (operator/admin surface only). Master +
@@ -197,6 +210,25 @@ export const WEB_PERMISSIONS = Object.freeze([
   { key: 'landing_page', label: 'Landing page editor',          hint: 'Edit the public marketing page at /welcome. Includes WYSIWYG editor + sidebar settings form.' },
 ])
 
+// APPROVALS-PERCAT.1 — provider key → per-category permission key. The
+// single definition of the category↔permission relationship, consumed by
+// the registry (tab gating) and each source route (approve-ability).
+export const APPROVAL_CATEGORY_PERMISSION = Object.freeze({
+  contractor_invoices: 'approvals_contractor_invoices',
+  fte_expenses: 'approvals_fte_expenses',
+  agent_requests: 'approvals_agent_requests',
+  time_off: 'approvals_time_off',
+  shift_swaps: 'approvals_shift_swaps',
+  rosters: 'approvals_rosters',
+})
+
+// Ordered list of the six per-category permission keys (matches
+// APPROVAL_CATEGORY_PERMISSION values). Used to derive approvals_inbox
+// visibility (holds ≥1) and to exempt them from the location gate.
+export const APPROVAL_SUBPERMISSION_KEYS = Object.freeze(
+  Object.values(APPROVAL_CATEGORY_PERMISSION)
+)
+
 export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
   // Platform super-admin (mig 033) — every web feature on by default.
   // hasPermission() also short-circuits to true for master regardless
@@ -220,7 +252,8 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     card_receipts: true,
     invoices_inbox: true,
     accounting_hub: true,
-    approvals_inbox: true,
+    approvals_contractor_invoices: true, approvals_fte_expenses: true, approvals_agent_requests: true,
+    approvals_time_off: true, approvals_shift_swaps: true, approvals_rosters: true,
     automations: true,
     challenges: true,
     issues_inbox: true,
@@ -248,7 +281,8 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,                         // supplier-invoice approval is finance, not staff
     accounting_hub: false,                         // bookkeeping oversight — master + owner only
-    approvals_inbox: false,                        // staff don't approve anything
+    approvals_contractor_invoices: false, approvals_fte_expenses: false, approvals_agent_requests: false,
+    approvals_time_off: false, approvals_shift_swaps: false, approvals_rosters: false,  // staff don't approve anything
     automations: false,                             // operator surface — not a staff concern
     challenges: false,                              // operator challenge admin — not a staff concern
     issues_inbox: false,                            // staff submit; owner + master handle
@@ -280,7 +314,8 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     card_receipts: false,
     invoices_inbox: false,
     accounting_hub: false,                         // bookkeeping oversight — master + owner only
-    approvals_inbox: false,
+    approvals_contractor_invoices: false, approvals_fte_expenses: false, approvals_agent_requests: false,
+    approvals_time_off: false, approvals_shift_swaps: false, approvals_rosters: false,
     automations: false,
     challenges: false,
     issues_inbox: false,
@@ -309,7 +344,8 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     card_receipts: false,                          // card holders only — grant per user
     invoices_inbox: false,
     accounting_hub: false,                         // bookkeeping oversight — master + owner only
-    approvals_inbox: false,                        // head coach isn't an approver by default
+    approvals_contractor_invoices: false, approvals_fte_expenses: false, approvals_agent_requests: true,
+    approvals_time_off: true, approvals_shift_swaps: true, approvals_rosters: false,  // head coach approves schedule items only
     automations: false,                             // operator surface — head coach doesn't manage automations
     challenges: false,                              // operator challenge admin — head coach doesn't create challenges
     issues_inbox: false,                            // owner + master only by default
@@ -339,7 +375,8 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     card_receipts: true,                           // managers commonly hold a company card
     invoices_inbox: false,                         // manager isn't an approver — owner/master only
     accounting_hub: false,                         // bookkeeping oversight — master + owner only
-    approvals_inbox: true,                         // managers approve schedule items (time-off, swaps)
+    approvals_contractor_invoices: false, approvals_fte_expenses: false, approvals_agent_requests: true,
+    approvals_time_off: true, approvals_shift_swaps: true, approvals_rosters: false,  // managers approve schedule items (time-off, swaps)
     automations: true,                              // managers can toggle per-location automations
     challenges: true,                               // managers can create/edit challenges
     issues_inbox: false,                            // owner + master only by default
@@ -369,7 +406,8 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     card_receipts: true,                           // owners hold a company card
     invoices_inbox: true,                          // owner approves their location's supplier invoices
     accounting_hub: true,                          // owner reviews receipt coverage, same tier as invoices_inbox
-    approvals_inbox: true,                         // owner approves invoices, expenses, schedule items
+    approvals_contractor_invoices: true, approvals_fte_expenses: true, approvals_agent_requests: true,
+    approvals_time_off: true, approvals_shift_swaps: true, approvals_rosters: true,  // owner approves invoices, expenses, schedule items
     automations: true,                              // owner manages per-location automations
     challenges: true,                               // owner manages member challenges
     issues_inbox: true,                             // owner IS the handler per the routing design
@@ -902,7 +940,11 @@ export const NOTIFY_KEYS = Object.freeze(
 
 export function isFeatureGatedByLocation(key) {
   // Notification preferences are personal — never location-gated.
-  return !NOTIFY_KEYS.includes(key)
+  if (NOTIFY_KEYS.includes(key)) return false
+  // APPROVALS-PERCAT.1 — per-category approval grants are pure grants,
+  // not location features; the approvals_inbox card is the only gate.
+  if (APPROVAL_SUBPERMISSION_KEYS.includes(key)) return false
+  return true
 }
 
 /**

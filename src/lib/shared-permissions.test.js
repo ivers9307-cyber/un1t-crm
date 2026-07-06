@@ -15,6 +15,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   MOBILE_PERMISSIONS,
+  WEB_PERMISSIONS,
   WEB_PERMISSION_KEYS, MOBILE_PERMISSION_KEYS,
   DEFAULT_WEB_PERMISSIONS_BY_ROLE,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
@@ -29,6 +30,11 @@ import { hasPermission, hasMobilePermission } from './permissions.js'
 
 const ROLES = ['owner', 'manager', 'head_coach', 'staff']
 
+// locationGateOnly keys (e.g. approvals_inbox — APPROVALS-PERCAT.1) are
+// derived-visibility aggregator cards, not directly-granted role perms,
+// so they're deliberately absent from every role default map.
+const DIRECT_WEB_KEYS = WEB_PERMISSIONS.filter(p => !p.locationGateOnly).map(p => p.key)
+
 describe('shared/permissions.js', () => {
   it('every role has a default-by-role map for both web and mobile', () => {
     for (const r of ROLES) {
@@ -37,9 +43,9 @@ describe('shared/permissions.js', () => {
     }
   })
 
-  it('every web permission key appears in every role default map', () => {
+  it('every directly-granted web permission key appears in every role default map', () => {
     for (const r of ROLES) {
-      for (const k of WEB_PERMISSION_KEYS) {
+      for (const k of DIRECT_WEB_KEYS) {
         expect(
           DEFAULT_WEB_PERMISSIONS_BY_ROLE[r][k],
           `${r}/${k} should be a boolean`
