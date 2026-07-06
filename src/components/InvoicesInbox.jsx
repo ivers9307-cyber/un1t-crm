@@ -73,6 +73,7 @@ const STATUS_FILTERS = [
 // Human-friendly labels for bulk-action outcome keys in the summary.
 const OUTCOME_LABEL = {
   ok: 'sent',
+  extracted: 'extracted',
   linked: 'linked to Xero',
   already_in_xero: 'already in Xero',
   queued: 'queued',
@@ -272,6 +273,47 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
     [rows, bulkSelection],
   )
 
+  // INV-BULK.4 — "Extract selected": hybrid. Synchronously extract the
+  // first EXTRACT_SYNC_CAP right now (visible in ~1–2 min, well under the
+  // route's 300s cap) and queue the rest to the background drainer cron.
+  // Clears the selection after so you never re-send the same rows.
+  const EXTRACT_SYNC_CAP = 10
+  async function extractSelected() {
+    const ids = selectedRows
+      .filter((r) => ['received', 'quality_approved'].includes(r.status) && !r.analysis_claimed_at)
+      .map((r) => r.id)
+    if (!ids.length) return
+    const syncIds = ids.slice(0, EXTRACT_SYNC_CAP)
+    const queueIds = ids.slice(EXTRACT_SYNC_CAP)
+    setBulkBusy('extract')
+    setBulkError(null)
+    setBulkSummary(null)
+    try {
+      const post = (path, body) =>
+        fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json())
+      const syncJson = await post('/api/invoices-inbox/bulk-analyse', { ids: syncIds })
+      if (!syncJson.success) throw new Error(syncJson.error || 'Extract failed')
+      let queueJson = null
+      if (queueIds.length) {
+        queueJson = await post('/api/invoices-inbox/bulk-queue-analysis', { ids: queueIds })
+        if (!queueJson.success) throw new Error(queueJson.error || 'Queue failed')
+      }
+      const counts = {}
+      const add = (k, n) => { if (n) counts[k] = (counts[k] || 0) + n }
+      add('extracted', syncJson.data?.counts?.ok || 0)
+      add('failed', syncJson.data?.counts?.failed || 0)
+      add('skipped', syncJson.data?.counts?.skipped || 0)
+      add('queued', queueJson?.data?.counts?.queued || 0)
+      setBulkSummary({ action: 'Extract', counts })
+      setBulkSelection(new Set()) // clear so the same rows aren't re-sent
+      await loadRows()
+    } catch (e) {
+      setBulkError(e.message)
+    } finally {
+      setBulkBusy(null)
+    }
+  }
+
   return (
     // INV-BULK.3 — reserve space at the bottom while the fixed bulk
     // action bar is shown, so it never covers the detail panel's lower
@@ -374,7 +416,7 @@ export default function InvoicesInbox({ locations, isMaster, isBookkeeper = fals
           busy={bulkBusy}
           error={bulkError}
           summary={bulkSummary}
-          onQueueAnalyse={() => runBulk('queue-analysis', { ids: Array.from(bulkSelection) })}
+          onExtract={extractSelected}
           onSend={() => runBulk('send', { ids: Array.from(bulkSelection) })}
           onMarkInXero={(ids) => runBulk('mark-in-xero', { ids })}
           onReject={(reason) => runBulk('reject', { ids: Array.from(bulkSelection), reason })}
@@ -514,7 +556,7 @@ function SourceTypePill({ source }) {
 
 function BulkActionBar({
   selectedCount, selectedRows, busy, error, summary,
-  onQueueAnalyse, onSend, onMarkInXero, onReject, onClear,
+  onExtract, onSend, onMarkInXero, onReject, onClear,
 }) {
   const [showRejectForm, setShowRejectForm] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
@@ -557,11 +599,11 @@ function BulkActionBar({
           <button
             type="button"
             disabled={queueableCount === 0 || !!busy}
-            onClick={onQueueAnalyse}
+            onClick={onExtract}
             className="px-3 py-1.5 text-sm rounded-md border border-un1t-border text-un1t-text disabled:opacity-40"
-            title={queueableCount === 0 ? 'No selected rows are eligible for analysis' : 'Queues these for background extraction'}
+            title={queueableCount === 0 ? 'No selected rows are eligible for extraction' : 'Extracts the first 10 now; queues the rest for background extraction'}
           >
-            {busy === 'queue-analysis' ? 'Queuing…' : `Send for analysis (${queueableCount})`}
+            {busy === 'extract' ? 'Extracting…' : `Extract selected (${queueableCount})`}
           </button>
           <button
             type="button"
