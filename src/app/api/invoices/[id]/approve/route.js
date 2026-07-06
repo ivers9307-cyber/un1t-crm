@@ -15,6 +15,8 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
+import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { computeScheduledForPeriod, periodLabel } from '@/lib/contractor-invoices'
 import { sendInvoiceApprovedEmail } from '@/lib/contractor-invoice-email'
 import { notifyUsersOnce } from '@/lib/push-dedup'
@@ -42,12 +44,11 @@ export async function POST(_request, props) {
 
   // Auth FIRST — before the status check — so a non-owner can't probe an
   // invoice's existence or state. 404 (not 403) to avoid the existence leak.
-  if (user.role !== 'master') {
-    const ownerLocations = Object.entries(user.rolesByLocation || {})
-      .filter(([, r]) => r === 'owner').map(([loc]) => loc)
-    if (!ownerLocations.includes(inv.location_id)) {
-      return NextResponse.json({ success: false, error: 'Invoice not found' }, { status: 404 })
-    }
+  // APPROVALS-PERCAT.1 — permission is the only gate. 404 (not 403)
+  // preserves the IDOR posture: a caller without rights can't tell the
+  // invoice exists.
+  if (!hasPermissionForLocation(user, inv.location_id, APPROVAL_CATEGORY_PERMISSION.contractor_invoices)) {
+    return NextResponse.json({ success: false, error: 'Invoice not found' }, { status: 404 })
   }
 
   if (inv.status !== 'submitted') {
