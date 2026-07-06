@@ -6,10 +6,13 @@
 // link to the existing source page (operators can also visit those
 // pages directly — this is an aggregator, not a replacement).
 //
-// Access: anyone with the `approvals_inbox` permission. Defaults:
-// master, owner, manager ON; head_coach + staff OFF. Per-provider
-// scoping inside the API ensures users only see items they can
-// actually approve.
+// Access (APPROVALS-PERCAT.1): `approvals_inbox` is now a DERIVED
+// permission — visible iff the Approvals feature is enabled at the
+// active location AND the user holds ≥1 of the six per-category
+// approval grants. The registry gates each tab on its own
+// permissionKey, so users only see the categories they can approve.
+// Default holders: master + owner (all six); manager + head_coach
+// (agent requests, time off, shift swaps); staff + reception (none).
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
