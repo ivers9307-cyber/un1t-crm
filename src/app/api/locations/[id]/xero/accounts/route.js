@@ -5,9 +5,16 @@
 // PR 1's pullAccounts sync helper). No live Xero call.
 //
 // Query params:
-//   ?type=EXPENSE      — filter to a single AccountType (default: EXPENSE)
-//   ?type=ALL          — bypass the type filter (advanced use; e.g.
-//                        a future flow that needs revenue accounts).
+//   (none) / ?type=SPEND — the DEFAULT: every account class you can
+//                        code a supplier bill to (see BILL_ACCOUNT_TYPES).
+//                        Filtering to the single 'EXPENSE' class was a
+//                        bug: standard Irish/UK charts (e.g. SourceIt)
+//                        put day-to-day expenses under OVERHEADS and
+//                        DIRECTCOSTS, so a bill picker limited to
+//                        'EXPENSE' hid the accounts operators actually
+//                        use (they saw 4 of 29+).
+//   ?type=<ACCOUNTTYPE>  — filter to one specific Xero AccountType.
+//   ?type=ALL          — bypass the type filter entirely.
 //
 // Always filters status='ACTIVE' — archived accounts never appear
 // in the picker. The cache still holds them so historical
@@ -27,6 +34,15 @@ export const dynamic = 'force-dynamic'
 
 const STALE_AFTER_DAYS = 30
 
+// Xero AccountTypes you can code a purchase bill (ACCPAY) line to —
+// the debit side. Covers P&L expenses (EXPENSE/OVERHEADS/DIRECTCOSTS)
+// plus balance-sheet postings a bill legitimately hits: capital
+// purchases (FIXED), prepayments (CURRENT), and creditor/tax
+// liabilities (CURRLIAB). Deliberately EXCLUDES income (SALES,
+// REVENUE, OTHERINCOME), EQUITY, and BANK — you never debit those on
+// a supplier bill.
+const BILL_ACCOUNT_TYPES = ['EXPENSE', 'OVERHEADS', 'DIRECTCOSTS', 'FIXED', 'CURRENT', 'CURRLIAB']
+
 export async function GET(request, props) {
   const params = await props.params
   const locationId = params?.id
@@ -43,8 +59,8 @@ export async function GET(request, props) {
   }
 
   const url = new URL(request.url)
-  const typeRaw = (url.searchParams.get('type') || 'EXPENSE').toUpperCase()
-  const wantAll = typeRaw === 'ALL'
+  // Default (no param) = SPEND: the full bill-codeable set.
+  const typeRaw = (url.searchParams.get('type') || 'SPEND').toUpperCase()
 
   const db = createServerClient()
 
@@ -54,7 +70,13 @@ export async function GET(request, props) {
     .eq('location_id', locationId)
     .eq('status', 'ACTIVE')
     .order('code', { ascending: true, nullsFirst: false })
-  if (!wantAll) q = q.eq('account_type', typeRaw)
+  if (typeRaw === 'ALL') {
+    // no account_type filter
+  } else if (typeRaw === 'SPEND') {
+    q = q.in('account_type', BILL_ACCOUNT_TYPES)
+  } else {
+    q = q.eq('account_type', typeRaw) // single specific AccountType
+  }
 
   const { data: accounts, error } = await q.limit(500)
   if (error) {
