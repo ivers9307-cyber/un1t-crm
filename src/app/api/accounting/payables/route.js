@@ -30,12 +30,15 @@ export async function GET() {
 
   try {
     const { xfetch } = await withFreshToken(locationId)
-    // Unpaid, approved supplier bills. Server-side where keeps the
-    // payload small; pagination at Xero's 100/page.
+    // Unpaid, approved supplier bills. Server-side `where` keeps the
+    // payload small; pagination at Xero's 100/page. NO `order` (Xero's
+    // order field is the raw name e.g. `DueDate`, NOT `DueDateString` —
+    // an invalid order field 400s) and NO `summaryOnly` (keep the full,
+    // reliable payload) — agePayables sorts client-side anyway.
     const where = encodeURIComponent('Type=="ACCPAY" AND Status=="AUTHORISED"')
     const rows = []
     for (let page = 1; page <= MAX_PAGES; page += 1) {
-      const res = await xfetch(`/Invoices?where=${where}&order=DueDateString&page=${page}&summaryOnly=true`)
+      const res = await xfetch(`/Invoices?where=${where}&page=${page}`)
       const mapped = mapPayableInvoices(res)
       rows.push(...mapped)
       const rawCount = Array.isArray(res?.Invoices) ? res.Invoices.length : 0
@@ -48,10 +51,36 @@ export async function GET() {
     const aged = agePayables(rows, dublinTodayStr())
     return NextResponse.json({ success: true, data: { ...aged, asOf: dublinTodayStr() } })
   } catch (e) {
+    // Surface the REAL cause — never blanket-label an API error as
+    // "not connected" (that masked a bad `order` field as a missing
+    // connection). Branch on the machine-readable .status / the
+    // withFreshToken no-connection message.
     if (e instanceof XeroError) {
+      const status = e.status
+      if (/No Xero connection/i.test(String(e.message))) {
+        return NextResponse.json(
+          { success: false, error: 'Xero is not connected for this location — connect it in Settings first.' },
+          { status: 409 }
+        )
+      }
+      if (status === 401) {
+        return NextResponse.json(
+          { success: false, error: 'Xero session expired — reconnect Xero in Settings.' },
+          { status: 409 }
+        )
+      }
+      if (status === 403) {
+        return NextResponse.json(
+          { success: false, error: 'Xero connection is missing the invoices permission — reconnect Xero in Settings to grant it.' },
+          { status: 409 }
+        )
+      }
+      // Any other Xero API failure: report it as an upstream error with
+      // the actual message so it's diagnosable, not disguised.
+      console.error('[accounting/payables] Xero error:', status, e.message)
       return NextResponse.json(
-        { success: false, error: 'Xero is not connected for this location — connect it in Settings first.' },
-        { status: 409 }
+        { success: false, error: `Xero error${status ? ` (${status})` : ''}: ${e.message}` },
+        { status: 502 }
       )
     }
     throw e
