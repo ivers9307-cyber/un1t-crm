@@ -117,7 +117,11 @@ export default function RolePermissions({ locationId }) {
     : data?.[activeRole]?.variants?.[segment]?.effective
   const blob = edits[editKey] || serverBlob
 
-  const webItems = WEB_PERMISSIONS
+  // APPROVALS-PERCAT.1 — approvals_inbox is location-gate-only (edited in
+  // Location Features, not here); the six per-category grants render in
+  // their own "Approvals" group below.
+  const webItems = WEB_PERMISSIONS.filter((p) => !p.locationGateOnly && p.group !== 'approvals')
+  const approvalItems = WEB_PERMISSIONS.filter((p) => p.group === 'approvals')
   const mobileItems = MOBILE_PERMISSIONS.filter((p) => !p.isNotify)
   const notifyItems = MOBILE_PERMISSIONS.filter((p) => p.isNotify)
 
@@ -171,6 +175,7 @@ export default function RolePermissions({ locationId }) {
   const dirty = !!edits[editKey]
   const changedCount =
     webItems.filter((p) => blob[p.key] !== baseline[p.key]).length +
+    approvalItems.filter((p) => blob[p.key] !== baseline[p.key]).length +
     MOBILE_PERMISSIONS.filter((p) => blob.mobile?.[p.key] !== baseline.mobile?.[p.key]).length
 
   const roleLabel = ROLE_TABS.find((t) => t.key === activeRole)?.label
@@ -232,6 +237,23 @@ export default function RolePermissions({ locationId }) {
           <h3 className="text-xs font-semibold uppercase tracking-wide text-un1t-subtle mb-1">Web features</h3>
           <div className="divide-y divide-un1t-border/60">
             {webItems.map((p) => (
+              <Toggle
+                key={p.key}
+                label={p.label}
+                hint={p.hint}
+                on={blob[p.key] === true}
+                changed={blob[p.key] !== baseline[p.key]}
+                busy={saving}
+                onToggle={() => setKey(p.key, false, !(blob[p.key] === true))}
+              />
+            ))}
+          </div>
+        </section>
+
+        <section>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-un1t-subtle mb-1">Approvals</h3>
+          <div className="divide-y divide-un1t-border/60">
+            {approvalItems.map((p) => (
               <Toggle
                 key={p.key}
                 label={p.label}
