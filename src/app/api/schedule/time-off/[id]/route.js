@@ -5,6 +5,8 @@ import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { timeOffStatusSchema , MANAGER_ROLES} from '@/lib/schemas'
 import { notifyUsersOnce } from '@/lib/push-dedup'
+import { hasPermissionForLocation } from '@/lib/permissions'
+import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 
 const TimeOffReviewSchema = z.object({
   status: timeOffStatusSchema,
@@ -49,8 +51,9 @@ export async function PUT(request, props) {
 
   // If approving or rejecting, record who did it
   if (status === 'approved' || status === 'rejected') {
-    if (!MANAGER_ROLES.includes(user.role)) {
-      return NextResponse.json({ success: false, error: 'Only managers can approve or reject requests' }, { status: 403 })
+    // APPROVALS-PERCAT.1 — permission is the only gate for the decision.
+    if (!hasPermissionForLocation(user, existing.location_id, APPROVAL_CATEGORY_PERMISSION.time_off)) {
+      return NextResponse.json({ success: false, error: 'You do not have permission to approve or reject time-off requests.' }, { status: 403 })
     }
     updates.reviewed_by = user.id
     updates.reviewed_at = new Date().toISOString()
