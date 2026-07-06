@@ -39,7 +39,7 @@ export default function XeroAccountPicker({ locationId, value, onChange, label =
     const abortTimer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
     setLoading(true)
     setError(null)
-    fetch(`/api/locations/${locationId}/xero/accounts?type=EXPENSE`, { signal: controller.signal })
+    fetch(`/api/locations/${locationId}/xero/accounts?type=SPEND`, { signal: controller.signal })
       .then((r) => r.json())
       .then((j) => {
         if (cancelled) return

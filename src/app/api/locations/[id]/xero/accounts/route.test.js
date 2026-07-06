@@ -31,6 +31,7 @@ function makeChain(terminal) {
   return {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    in: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn(() => Promise.resolve(terminal)),
     maybeSingle: vi.fn(() => Promise.resolve(terminal)),
@@ -61,14 +62,14 @@ describe('GET /api/locations/[id]/xero/accounts', () => {
     expect(res.status).toBe(403)
   })
 
-  it('applies EXPENSE + ACTIVE filters and reports fresh cache', async () => {
+  it('defaults to the bill-codeable account set (SPEND) + ACTIVE, and reports fresh cache', async () => {
     const getCurrentUser = await getMock()
     getCurrentUser.mockResolvedValueOnce({
       id: 'u1', role: 'owner', locations: [{ id: 'loc1' }],
     })
 
     const accountsChain = makeChain({
-      data: [{ id: 'a1', xero_account_id: 'X1', code: '400', name: 'Sales', account_type: 'EXPENSE', tax_type: 'INPUT2' }],
+      data: [{ id: 'a1', xero_account_id: 'X1', code: '7460', name: 'Subsistence', account_type: 'OVERHEADS', tax_type: 'INPUT2' }],
       error: null,
     })
     const connChain = makeChain({
@@ -87,11 +88,27 @@ describe('GET /api/locations/[id]/xero/accounts', () => {
     expect(j.success).toBe(true)
     expect(j.accounts).toHaveLength(1)
     expect(j.stale).toBe(false)
-    // Filters were applied: status=ACTIVE + account_type=EXPENSE.
+    // status/location via .eq; the account_type filter is now a
+    // multi-type .in() (EXPENSE was too narrow — hid OVERHEADS/DIRECTCOSTS).
     const eqCalls = accountsChain.eq.mock.calls.map((c) => c[0] + '=' + c[1])
     expect(eqCalls).toContain('location_id=loc1')
     expect(eqCalls).toContain('status=ACTIVE')
-    expect(eqCalls).toContain('account_type=EXPENSE')
+    expect(eqCalls).not.toContain('account_type=EXPENSE')
+    const inCall = accountsChain.in.mock.calls.find((c) => c[0] === 'account_type')
+    expect(inCall).toBeTruthy()
+    expect(inCall[1]).toEqual(expect.arrayContaining(['EXPENSE', 'OVERHEADS', 'DIRECTCOSTS']))
+  })
+
+  it('filters to a single AccountType when an explicit type is passed', async () => {
+    const getCurrentUser = await getMock()
+    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', locations: [] })
+    const accountsChain = makeChain({ data: [], error: null })
+    const connChain = makeChain({ data: { accounts_last_synced_at: new Date().toISOString() }, error: null })
+    mockDb.from.mockImplementation((t) => t === 'xero_accounts' ? accountsChain : connChain)
+
+    await GET(fakeReq('http://localhost/api/locations/loc1/xero/accounts?type=OVERHEADS'), fakeProps)
+    const eqCalls = accountsChain.eq.mock.calls.map((c) => c[0] + '=' + c[1])
+    expect(eqCalls).toContain('account_type=OVERHEADS')
   })
 
   it('reports stale=true when last_synced_at is null', async () => {
