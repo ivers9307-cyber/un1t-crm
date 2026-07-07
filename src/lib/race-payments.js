@@ -23,7 +23,14 @@
 // merchant accounts), this module is where the env-var indirection
 // would land.
 
-import { createOrder, getOrder } from './revolut'
+import { paymentsFor } from './payments'
+import {
+  resolveEventHost,
+  resolvePaymentProvider,
+  computeApplicationFeeCents,
+  hostCanTakePayments,
+  PROVIDER_STRIPE_CONNECT,
+} from './event-hosts'
 import { syncOrderFromRacePayment } from './orders'
 import { emitEvent, applyTagRules, EVENT_TYPES } from './contact-events'
 import { triggerSequencesForOrderStatus } from './sequences'
@@ -64,7 +71,7 @@ import { logWarn } from './log'
  *   checkout: { token: string|null, url: string|null, free: boolean }
  * }>}
  */
-export async function createRacePayment({ db, race, registration, captain, pricing, returnUrl }) {
+export async function createRacePayment({ db, race, registration, captain, pricing, returnUrl, cancelUrl }) {
   const amount = Number(pricing?.total_cents || 0)
   const currency = race?.payment_currency || 'EUR'
 
@@ -136,19 +143,34 @@ export async function createRacePayment({ db, race, registration, captain, prici
     return { payment: row, checkout: { token: null, url: null, free: true } }
   }
 
-  // Paid entry — create Revolut order first so we can stamp the
-  // returned id + token on the inserted payment row.
-  const order = await createOrder({
-    amount,
+  // Paid entry — resolve the host (payee) → processor → per-ticket booking fee.
+  // Internal/UN1T events (no host) settle through Revolut exactly as before;
+  // third-party-hosted events take a DIRECT charge on the host's Stripe
+  // connected account, with the flat booking fee added on top as the
+  // application fee. All order creation flows through the payments dispatcher.
+  const host = await resolveEventHost(db, race)
+  const providerName = resolvePaymentProvider(host) // 'revolut' | 'stripe_connect'
+  if (providerName === PROVIDER_STRIPE_CONNECT && !hostCanTakePayments(host)) {
+    throw new Error("This event host hasn't finished connecting their Stripe account — payments can't be taken yet.")
+  }
+  const seatCount = Number(pricing.member_count || 0) + Number(pricing.non_member_count || 0)
+  const applicationFee = computeApplicationFeeCents(host, seatCount) // 0 for internal/Revolut
+  const chargeAmount = amount + applicationFee                       // customer pays ticket + booking fee
+
+  const created = await paymentsFor(providerName).createPayment({
+    amountCents: chargeAmount,
     currency,
     description: `${race.name} — race entry`,
-    redirectUrl: returnUrl,
+    returnUrl,
+    cancelUrl,
     metadata: {
       race_event_id: race.id,
       race_registration_id: registration.id,
-      domain: 'un1t_race', // disambiguates from cars in shared webhook stream
+      domain: 'un1t_race', // disambiguates from cars in the shared webhook stream
     },
     idempotencyKey: registration.id, // re-issuing for the same registration is safe
+    connectedAccountId: host?.stripe_connected_account_id || null,
+    applicationFeeCents: applicationFee,
   })
 
   const { data: row, error } = await db
@@ -160,17 +182,20 @@ export async function createRacePayment({ db, race, registration, captain, prici
       contact_email: captain.email,
       contact_phone: captain.phone || null,
       contact_name: captain.name || null,
-      amount_cents: amount,
+      amount_cents: chargeAmount,
       currency,
       member_count: pricing.member_count,
       non_member_count: pricing.non_member_count,
       member_fee_cents: pricing.member_fee_cents,
       non_member_fee_cents: pricing.non_member_fee_cents,
       status: 'pending',
-      payment_provider: 'revolut',
-      payment_provider_ref: order.id,
-      payment_checkout_token: order.token || null,
-      payment_checkout_url: order.checkout_url || null,
+      payment_provider: providerName,
+      payment_provider_ref: created.providerRef,
+      payment_checkout_token: created.checkoutToken || null,
+      payment_checkout_url: created.checkoutUrl || null,
+      connected_account_id: host?.stripe_connected_account_id || null,
+      application_fee_cents: applicationFee || null,
+      net_to_host_cents: providerName === PROVIDER_STRIPE_CONNECT ? amount : null,
     })
     .select('*')
     .single()
@@ -214,9 +239,10 @@ export async function createRacePayment({ db, race, registration, captain, prici
   return {
     payment: row,
     checkout: {
-      token: order.token || null,
-      url: order.checkout_url || null,
+      token: created.checkoutToken || null,
+      url: created.checkoutUrl || null,
       free: false,
+      provider: providerName,
     },
   }
 }
@@ -352,20 +378,22 @@ export async function markRacePaymentStatus({ db, payment, revolutState, revolut
  */
 export async function refreshRacePaymentFromProvider(db, payment) {
   if (!payment?.payment_provider_ref) return payment
-  if (payment.payment_provider !== 'revolut') return payment
-  let order
+  const providerName = payment.payment_provider
+  if (providerName !== 'revolut' && providerName !== 'stripe_connect') return payment
+  let normalized
   try {
-    order = await getOrder(payment.payment_provider_ref)
+    normalized = await paymentsFor(providerName).getPayment(payment.payment_provider_ref, {
+      connectedAccountId: payment.connected_account_id || null,
+    })
   } catch {
     return payment
   }
-  if (!order) return payment
-  const state = String(order.state || '').toLowerCase()
+  if (!normalized) return payment
   await markRacePaymentStatus({
     db,
     payment,
-    revolutState: state,
-    revolutAmount: Number.isFinite(order.amount) ? order.amount : null,
+    revolutState: normalized.state,
+    revolutAmount: Number.isFinite(normalized.amountCents) ? normalized.amountCents : null,
   })
   const { data: refreshed } = await db
     .from('race_payments')
