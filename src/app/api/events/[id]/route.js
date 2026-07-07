@@ -9,7 +9,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
+import { ADMIN_ROLES, MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -119,7 +119,7 @@ export async function PUT(request, props) {
   const db = createServerClient()
   const { data: existing, error: lookupErr } = await db
     .from('race_events')
-    .select('id, location_id')
+    .select('id, location_id, host_id')
     .eq('id', params.id)
     .single()
   if (lookupErr || !existing) {
@@ -127,6 +127,16 @@ export async function PUT(request, props) {
   }
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
+
+  // EVENTS-HOST.4 — changing the payee (assign, switch, or clear) routes
+  // ticket money, so it's gated to ADMIN_ROLES — matching who can manage the
+  // host itself. An UNCHANGED host_id (staff editing other fields of a
+  // hosted event) passes untouched; only an actual payee change is gated.
+  if (body.host_id !== undefined
+      && (body.host_id || null) !== (existing.host_id || null)
+      && !ADMIN_ROLES.includes(user.role)) {
+    return NextResponse.json({ success: false, error: 'Changing the payment host requires manager access.' }, { status: 403 })
+  }
 
   // EVENTS-HOST.4 — payment-routing security. When the caller reassigns the
   // payee, verify the target host is a real event_hosts row in THIS event's
