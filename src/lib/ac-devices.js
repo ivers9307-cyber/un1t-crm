@@ -26,6 +26,7 @@ import { logAuditEvent } from '@/lib/audit'
 import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 import * as sensibo from '@/lib/sensibo'
 import * as thinq from '@/lib/thinq'
+import { resolveAcAllowlist, isAcDeviceAllowed } from '@shared/permissions'
 
 // ============================================================
 // Public API — each function returns either
@@ -81,7 +82,12 @@ export async function loadDeviceForUser(deviceId, { user, db } = {}) {
     return { ok: false, status: 404, error: 'Location for AC device not found.', code: 'location_not_found' }
   }
 
-  const auth = authoriseDevice({ user, assignment, deviceId: device.id })
+  const auth = authoriseDevice({
+    user,
+    assignment,
+    deviceId: device.id,
+    templateList: user?.acDeviceTemplatesByLocation?.[device.location_id] ?? null,
+  })
   if (!auth.ok) return auth
 
   return { ok: true, device, location, role: auth.role }
@@ -329,12 +335,11 @@ export async function extendSession(deviceId, ctx) {
  *   - User must have a profile_locations row at this location.
  *     No row → 403 (user isn't assigned to this location).
  *   - Per-location role = assignment.role ?? user.profileRole.
- *   - If ac_device_ids IS NULL AND role ∈ {owner, manager}: allowed
- *     (legacy unrestricted access on deploy day; masters can
- *     tighten later).
- *   - Else: device.id must be in ac_device_ids.
+ *   - Else: resolved through resolveAcAllowlist — per-user override
+ *     (assignment.ac_device_ids) → role template (templateList) →
+ *     code default (manager/owner = all, everyone else = none).
  */
-export function authoriseDevice({ user, assignment, deviceId }) {
+export function authoriseDevice({ user, assignment, deviceId, templateList = null }) {
   if (user?.role === 'master') return { ok: true, role: 'master' }
 
   if (!assignment) {
@@ -347,15 +352,11 @@ export function authoriseDevice({ user, assignment, deviceId }) {
   }
 
   const role = assignment.role || user?.profileRole || user?.role || null
-  const allowlist = assignment.ac_device_ids
-  // NULL = legacy unrestricted, for manager/owner only. Anyone
-  // below that line who happens to have NULL is treated as empty
-  // (which means they get no access until tasked).
-  if ((allowlist === null || allowlist === undefined) && (role === 'manager' || role === 'owner')) {
-    return { ok: true, role }
-  }
-
-  if (Array.isArray(allowlist) && allowlist.includes(deviceId)) {
+  // AC-ROLE.1 — resolve through per-user override → role template →
+  // code default (manager/owner = all). Replaces the old inline
+  // "NULL + manager/owner ⇒ all" special-case.
+  const resolved = resolveAcAllowlist({ role, userList: assignment.ac_device_ids ?? null, templateList })
+  if (isAcDeviceAllowed(resolved, deviceId)) {
     return { ok: true, role }
   }
 

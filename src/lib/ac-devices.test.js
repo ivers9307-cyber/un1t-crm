@@ -603,3 +603,29 @@ describe('getState', () => {
     expect(out).toMatchObject({ ok: false, status: 502, code: 'vendor_error' })
   })
 })
+
+describe('authoriseDevice with role-template fallback (AC-ROLE.1)', () => {
+  const user = { id: 'u1', role: 'staff' }
+  it('staff with null per-user list falls to the role template', () => {
+    const a = { role: 'staff', ac_device_ids: null }
+    expect(authoriseDevice({ user, assignment: a, deviceId: 'd1', templateList: ['d1'] }).ok).toBe(true)
+    expect(authoriseDevice({ user, assignment: a, deviceId: 'd2', templateList: ['d1'] }).ok).toBe(false)
+  })
+  it('per-user explicit list overrides the template', () => {
+    const a = { role: 'staff', ac_device_ids: ['d2'] }
+    expect(authoriseDevice({ user, assignment: a, deviceId: 'd2', templateList: ['d1'] }).ok).toBe(true)
+    expect(authoriseDevice({ user, assignment: a, deviceId: 'd1', templateList: ['d1'] }).ok).toBe(false)
+  })
+  it('staff with null list and no template resolves to none (code default)', () => {
+    const a = { role: 'staff', ac_device_ids: null }
+    expect(authoriseDevice({ user, assignment: a, deviceId: 'd1', templateList: null }).ok).toBe(false)
+  })
+  it('manager with null list and no template still gets all (code default)', () => {
+    const mgr = { id: 'm', role: 'manager' }
+    const a = { role: 'manager', ac_device_ids: null }
+    expect(authoriseDevice({ user: mgr, assignment: a, deviceId: 'anything', templateList: null }).ok).toBe(true)
+  })
+  it('master is always allowed', () => {
+    expect(authoriseDevice({ user: { role: 'master' }, assignment: null, deviceId: 'd', templateList: null }).ok).toBe(true)
+  })
+})
