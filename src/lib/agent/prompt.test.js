@@ -127,6 +127,36 @@ describe('identity pre-verification section', () => {
   })
 })
 
+describe('multi-person bookings hand off instead of partial-booking', () => {
+  it('tells Mia to hand off when more than one person wants to come in', () => {
+    const out = buildCustomerSystemPrompt({})
+    expect(out).toMatch(/two or more people/i)
+    expect(out).toMatch(/hand off/i)
+    expect(out).toMatch(/never book just one of them/i)
+    // the old "book each person separately" behaviour is gone
+    expect(out).not.toMatch(/book each person separately/i)
+  })
+})
+
+describe('known-contact awareness (no re-asking for on-file details)', () => {
+  it('tells Mia not to re-ask when the contact has a name/email on file', () => {
+    const out = buildCustomerSystemPrompt({ knownContact: { firstName: 'Edel', hasEmail: true } })
+    expect(out).toMatch(/already on file|already has this person/i)
+    expect(out).toMatch(/do not ask/i)
+    expect(out).toContain('Edel')
+  })
+  it('renders for a name-only contact and stays in the volatile (uncached) suffix', () => {
+    const parts = buildCustomerSystemPromptParts({ knownContact: { firstName: 'Sam', hasEmail: false } })
+    expect(parts.volatile).toMatch(/already on file|already has this person/i)
+    expect(parts.stable).not.toMatch(/already on file/i)
+  })
+  it('omits the block entirely when nothing is on file', () => {
+    const out = buildCustomerSystemPrompt({ knownContact: { firstName: null, hasEmail: false } })
+    expect(out).not.toMatch(/already on file/i)
+    expect(buildCustomerSystemPrompt({})).not.toMatch(/already on file/i)
+  })
+})
+
 // AGENT-ID.1 — named agent + Meta AI-disclosure rules (Jan 2026
 // AI-Assisted Business Messaging Guidelines: disclose AI in the first
 // message, never claim to be human, human escalation available).

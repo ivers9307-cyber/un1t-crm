@@ -11,6 +11,7 @@ import {
   classBookingGuard,
   shapeClassListForAgent,
   consultationInputGuard,
+  resolveConsultationIdentity,
   findSlot,
   shapeMemberBookingsForAgent,
   cancelBookingGuard,
@@ -112,6 +113,39 @@ describe('consultationInputGuard', () => {
     expect(consultationInputGuard({ ...good, email: 'not-an-email' }).error).toBe('need_email')
     expect(consultationInputGuard({ ...good, date: '13/06/2026' }).error).toBe('bad_date')
     expect(consultationInputGuard({ ...good, start_time: '10am' }).error).toBe('bad_time')
+  })
+})
+
+describe('book_consultation schema — does not force re-collecting on-file details', () => {
+  it('requires only date + start_time (name/email are pre-filled from the contact)', () => {
+    const t = BOOKING_TOOLS.find((x) => x.name === 'book_consultation')
+    expect(t.input_schema.required).toEqual(['date', 'start_time'])
+    expect(t.description.toLowerCase()).toContain('do not ask again')
+  })
+})
+
+describe('resolveConsultationIdentity', () => {
+  const contact = { first_name: 'Edel', last_name: 'Crehan', email: 'Edel.Crehan@GMAIL.com', phone: '353871234567' }
+  it('uses the on-file contact when the model supplies nothing (known lead — never re-ask)', () => {
+    expect(resolveConsultationIdentity({ input: {}, contact })).toEqual({
+      name: 'Edel Crehan', email: 'edel.crehan@gmail.com', phone: '353871234567',
+    })
+  })
+  it('prefers explicit model input over the contact record', () => {
+    const out = resolveConsultationIdentity({
+      input: { name: 'New Person', email: 'NEW@x.com', phone: '999' }, contact,
+    })
+    expect(out).toEqual({ name: 'New Person', email: 'new@x.com', phone: '999' })
+  })
+  it('falls back to the channel name hint when no contact name exists', () => {
+    const out = resolveConsultationIdentity({ input: {}, contact: { email: 'a@b.com' }, nameHint: 'Sam' })
+    expect(out.name).toBe('Sam')
+    expect(out.email).toBe('a@b.com')
+  })
+  it('leaves fields blank for a brand-new person with nothing on file → guard still asks', () => {
+    const out = resolveConsultationIdentity({ input: {}, contact: {}, nameHint: null })
+    expect(out).toEqual({ name: '', email: '', phone: null })
+    expect(consultationInputGuard({ ...out, date: '2026-06-13', start_time: '10:00' }).error).toBe('need_name')
   })
 })
 
