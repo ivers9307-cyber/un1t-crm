@@ -417,16 +417,16 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
 
   if (loadError) {
     return (
-      <div className="w-full max-w-md text-center py-20">
-        <AlertCircle size={36} className="mx-auto mb-3 text-red-500" />
-        <p className="text-gray-700">{loadError}</p>
+      <div className="min-h-[60vh] w-full flex flex-col items-center justify-center text-center px-5 py-20">
+        <AlertCircle size={36} className="mb-3 text-red-400" />
+        <p className="text-white/70">{loadError}</p>
       </div>
     )
   }
   if (!race) {
     return (
-      <div className="w-full max-w-md text-center py-20">
-        <Loader2 size={28} className="mx-auto animate-spin text-gray-400" />
+      <div className="min-h-[60vh] w-full flex items-center justify-center py-20">
+        <Loader2 size={28} className="animate-spin text-white/40" />
       </div>
     )
   }
@@ -443,62 +443,195 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   const showPricingCard = !!(memberPricing || nonMemberFeeCents != null)
   const wavesArr = Array.isArray(race.waves) ? race.waves : []
 
+  // ── Render-only derived values (no behaviour change) ──────────────
+  // Human label for the event kind, used in the hero eyebrow.
+  const KIND_LABELS = {
+    race: 'Race',
+    workshop: 'Workshop',
+    seminar: 'Seminar',
+    open_day: 'Open day',
+    masterclass: 'Masterclass',
+    lead_gen: 'Sign up',
+  }
+  const kindLabel = KIND_LABELS[kind] || 'Event'
+
+  // Status pill — derived ONLY from registration_state + per-wave
+  // is_full booleans. Never exposes raw capacity / counts.
+  const regState = race.registration_state
+  let pillLabel = 'Registration open'
+  let pillLive = false
+  if (regState === 'full') pillLabel = 'Sold out'
+  else if (regState === 'closed') pillLabel = 'Registration closed'
+  else if (regState === 'not_yet_open') pillLabel = 'Opens soon'
+  else {
+    pillLive = true
+    pillLabel = wavesArr.some((w) => w.is_full) ? 'Filling fast' : 'Registration open'
+  }
+
+  // Hero eyebrow parts — lead_gen stays minimal (no date implication).
+  const heroDateStr = (!isLeadGen && race.race_date)
+    ? new Date(race.race_date).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
+    : null
+  const eyebrowParts = [kindLabel, heroDateStr, location?.name].filter(Boolean)
+
+  // First non-empty line of the description → hero sub-line.
+  const heroSub = race.description
+    ? (race.description.split(/\r?\n/).map((s) => s.trim()).find(Boolean) || null)
+    : null
+
+  // Poster background (monochrome gradient copied from the approved
+  // mockup's .hero-media .bg) — works with no image (this PR adds none).
+  const heroBg =
+    'radial-gradient(120% 90% at 78% 6%, rgba(255,255,255,.16), rgba(255,255,255,0) 46%),' +
+    'radial-gradient(90% 80% at 12% 100%, rgba(255,255,255,.10), rgba(255,255,255,0) 40%),' +
+    'linear-gradient(180deg,#141414 0%,#0a0a0a 55%,#000 100%)'
+
+  // Dynamic submit label — identical logic to the pre-reskin button;
+  // shared by the desktop submit and the mobile sticky action bar.
+  const submitLabel = submitting
+    ? 'Submitting…'
+    : totalCents > 0
+      ? copy.submitPaidLabel(fmtMoney(totalCents))
+      : copy.submitFreeLabel
+
+  const liveTotalLabel = totalCents > 0 ? fmtMoney(totalCents) : 'Free'
+
+  // Dark input / label / error class recipes (design-system tokens).
+  const inputCls = (invalid) =>
+    `w-full bg-white/5 border rounded-xl px-3.5 py-3 text-[15px] text-white placeholder-white/35 focus:outline-none focus:bg-white/10 transition-colors ${invalid ? 'border-red-400/70 focus:border-red-400' : 'border-white/15 focus:border-white/45'}`
+  const labelCls = 'block text-[11px] font-semibold uppercase tracking-[0.14em] text-white/55 mb-2'
+  const errCls = 'text-[11px] text-red-400 mt-1'
+  const sectionEyebrow = 'text-[11px] font-semibold uppercase tracking-[0.2em] text-white/45 mb-3'
+
+  // Stable per-slug form id so the fixed mobile action bar (rendered
+  // outside the <form>) can submit it via the `form` attribute.
+  const formId = `event-signup-form-${slug}`
+
   return (
-    <div className="w-full max-w-6xl bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-      {/* Container widened max-w-4xl → max-w-6xl and sidebar 360px →
-          520px so the description (often multi-bullet workshop blurb)
-          gets enough horizontal room that bullet items stay on a
-          single line where reasonable. Form column still 540+px so
-          inputs aren't crowded. */}
-      <div className={`grid ${isLeadGen ? 'md:grid-cols-2' : 'md:grid-cols-[520px_1fr]'} divide-y md:divide-y-0 md:divide-x divide-gray-200`}>
-        {/* Event info sidebar */}
-        <aside className="p-6">
-          {location && (
-            <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-3">
-              {location.name}
-            </div>
+    <div className="relative w-full">
+      {/* ── HERO (poster style, works with no image) — full page only;
+             the paste-anywhere iframe embed uses a compact header ──── */}
+      {!embedded && (
+      <section className="relative min-h-[58svh] flex items-end overflow-hidden lp-grain">
+        {/* monochrome poster background + slow ken-burns zoom */}
+        <div className="absolute inset-0 overflow-hidden">
+          <div className="absolute inset-[-4%] lp-kenburns" style={{ background: heroBg }} />
+          <div
+            className="absolute inset-0 opacity-50"
+            style={{
+              backgroundImage: 'linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px)',
+              backgroundSize: '56px 100%',
+              maskImage: 'linear-gradient(180deg,transparent,#000 40%,transparent)',
+              WebkitMaskImage: 'linear-gradient(180deg,transparent,#000 40%,transparent)',
+            }}
+          />
+        </div>
+        {/* huge outlined watermark of the event name */}
+        <div
+          aria-hidden="true"
+          className="lp-outline absolute z-[1] select-none uppercase"
+          style={{ fontSize: '26vw', lineHeight: 0.8, fontWeight: 800, letterSpacing: '-0.03em', whiteSpace: 'nowrap', left: '-2vw', bottom: '-2vw' }}
+        >
+          {race.name}
+        </div>
+        {/* legibility scrim */}
+        <div className="absolute inset-0 z-[2] bg-gradient-to-t from-black via-black/60 to-black/20" />
+
+        {/* hero content */}
+        <div className="relative z-10 max-w-6xl mx-auto w-full px-5 pb-12 lp-hero-stagger">
+          <div>
+            <span className={`inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] px-3 py-1.5 rounded-full border ${pillLive ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-white/10 border-white/15 text-white/80'}`}>
+              {pillLive && (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_0_4px_rgba(34,197,94,0.18)]" />
+              )}
+              {pillLabel}
+            </span>
+          </div>
+          {eyebrowParts.length > 0 && (
+            <p className="mt-5 text-[11px] uppercase tracking-[0.2em] text-white/45">
+              {eyebrowParts.join(' · ')}
+            </p>
           )}
-          <h1 className="text-2xl font-bold text-gray-900 mb-4">{race.name}</h1>
+          <h1 className="mt-3 font-bold uppercase tracking-tight text-5xl md:text-7xl leading-[0.95] text-white">
+            {race.name}
+          </h1>
+          {heroSub && (
+            <p className="mt-4 text-[15px] md:text-lg text-white/70 max-w-[42ch]">
+              {heroSub}
+            </p>
+          )}
+        </div>
+      </section>
+      )}
+
+      {/* ── BODY ─────────────────────────────────────────────────── */}
+      <div className={embedded
+        ? 'max-w-xl mx-auto px-4 py-6'
+        : 'max-w-6xl mx-auto px-5 pb-28 pt-10 grid gap-10 md:grid-cols-[1fr_420px] md:items-start'}>
+        {/* Compact event header — embed only (the hero is hidden there) */}
+        {embedded && (
+          <div className="mb-5">
+            <span className={`inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] px-3 py-1.5 rounded-full border ${pillLive ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-white/10 border-white/15 text-white/80'}`}>
+              {pillLive && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+              {pillLabel}
+            </span>
+            <h1 className="mt-3 font-bold uppercase tracking-tight text-2xl leading-tight text-white">{race.name}</h1>
+            {eyebrowParts.length > 0 && (
+              <p className="mt-1.5 text-[11px] uppercase tracking-[0.2em] text-white/45">{eyebrowParts.join(' · ')}</p>
+            )}
+          </div>
+        )}
+        {/* LEFT — event story + details + pricing (full page only) */}
+        {!embedded && (
+        <div className="min-w-0">
           {race.description && (
-            <p className="text-base text-gray-700 whitespace-pre-line leading-relaxed mb-5">
+            <p className="text-[15px] md:text-base text-white/70 whitespace-pre-line leading-relaxed">
               {race.description}
             </p>
           )}
-          <div className="space-y-2 text-sm text-gray-700">
-            <div className="flex items-center gap-2">
-              <Calendar size={14} className="text-gray-400" />
-              {!isLeadGen && race.race_date ? new Date(race.race_date).toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : null}
-            </div>
-            {wavesArr.length > 0 && (
-              <div className="flex items-start gap-2">
-                <Clock size={14} className="text-gray-400 mt-0.5 shrink-0" />
-                <span>
-                  {wavesArr.length === 1
-                    ? copy.sidebarTimeOne((wavesArr[0].start_time || '').slice(0, 5))
-                    : copy.sidebarTimeMany(
-                        wavesArr.length,
-                        wavesArr.map(w => (w.start_time || '').slice(0, 5)).join(', ')
-                      )}
-                </span>
-              </div>
-            )}
-            {location?.address && (
-              <div className="flex items-start gap-2">
-                <MapPin size={14} className="text-gray-400 mt-0.5 shrink-0" />
-                <span>{location.address}</span>
-              </div>
-            )}
-          </div>
 
-          {/* Pricing summary card. Same logic as before — kind-agnostic. */}
+          {/* date / time / location rows */}
+          {(!isLeadGen || wavesArr.length > 0 || location?.address) && (
+            <div className={`${race.description ? 'mt-8' : ''} rounded-2xl border border-white/10 bg-white/[0.03] p-5 space-y-3.5 text-sm text-white/70`}>
+              {!isLeadGen && race.race_date && (
+                <div className="flex items-center gap-3">
+                  <Calendar size={16} className="text-white/40 shrink-0" />
+                  <span className="text-white/85">
+                    {new Date(race.race_date).toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+                  </span>
+                </div>
+              )}
+              {wavesArr.length > 0 && (
+                <div className="flex items-start gap-3">
+                  <Clock size={16} className="text-white/40 mt-0.5 shrink-0" />
+                  <span>
+                    {wavesArr.length === 1
+                      ? copy.sidebarTimeOne((wavesArr[0].start_time || '').slice(0, 5))
+                      : copy.sidebarTimeMany(
+                          wavesArr.length,
+                          wavesArr.map(w => (w.start_time || '').slice(0, 5)).join(', ')
+                        )}
+                  </span>
+                </div>
+              )}
+              {location?.address && (
+                <div className="flex items-start gap-3">
+                  <MapPin size={16} className="text-white/40 mt-0.5 shrink-0" />
+                  <span>{location.address}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Pricing summary — same logic as before, kind-agnostic. */}
           {showPricingCard && (
-            <div className="mt-5 p-3 rounded-md bg-gray-50 border border-gray-200">
-              <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-2">Total</div>
-              <div className="text-2xl font-bold text-gray-900">
-                {totalCents > 0 ? fmtMoney(totalCents) : 'Free'}
+            <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/45 mb-2">Total</div>
+              <div className="text-3xl font-bold text-white">
+                {liveTotalLabel}
               </div>
               {memberPricing && (memberCount > 0 || nonMemberCount > 0) && (
-                <div className="text-[11px] text-gray-600 mt-2 space-y-0.5">
+                <div className="text-[12px] text-white/55 mt-3 space-y-1">
                   {memberCount > 0 && (
                     <div>{memberCount} × member {memberFeeCents != null ? fmtMoney(memberFeeCents) : 'free'}</div>
                   )}
@@ -509,40 +642,42 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
               )}
             </div>
           )}
-        </aside>
+        </div>
 
-        {/* Form */}
-        <main className="p-6">
-          <h2 className="text-base font-semibold text-gray-900 mb-1">{copy.headingTitle}</h2>
-          <p className="text-xs text-gray-500 mb-4">
+        )}
+
+        {/* RIGHT — registration form */}
+        <div className="lp-card-glow rounded-2xl p-6 md:sticky md:top-6">
+          <h2 className="text-lg font-semibold text-white">{copy.headingTitle}</h2>
+          <p className="text-[13px] text-white/55 mt-1 mb-5">
             {copy.headingSubtitle}
           </p>
 
           {showMemberNotice && (
-            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-md inline-flex items-start gap-2">
-              <Info size={14} className="mt-0.5 shrink-0 text-amber-700" />
+            <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2">
+              <Info size={14} className="mt-0.5 shrink-0 text-amber-300" />
               <span>
-                <strong>UN1T members:</strong> use the email on your UN1T account so member pricing applies. We&apos;ll match each entrant&apos;s email against active member records.
+                <strong className="text-amber-200">UN1T members:</strong> use the email on your UN1T account so member pricing applies. We&apos;ll match each entrant&apos;s email against active member records.
                 {race.members_only && copy.membersOnlyExtra}
               </span>
             </div>
           )}
 
           {isClosed && (
-            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-md inline-flex items-start gap-2">
+            <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-sm flex items-start gap-2">
               <AlertCircle size={14} className="mt-0.5 shrink-0" /> {closeMsg}
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form id={formId} onSubmit={handleSubmit} className="space-y-4">
             <fieldset disabled={isClosed} className="space-y-4">
               {/* Wave picker — race-only. Non-race kinds have a single
-                  auto-selected wave; the time is shown in the sidebar
-                  under the date so the operator UX still surfaces it. */}
+                  auto-selected wave; the time is shown in the details
+                  block so the operator UX still surfaces it. */}
               {copy.showWavePicker && wavesArr.length > 0 && (
                 <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Pick your wave *</label>
-                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+                  <label className={labelCls}>Pick your wave *</label>
+                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-3 gap-2">
                     {wavesArr.map((w) => {
                       const full = !!w.is_full
                       const selected = waveId === w.id
@@ -555,17 +690,17 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                           onClick={() => setWaveId(w.id)}
                           aria-pressed={selected}
                           title={w.label ? `${time} — ${w.label}${full ? ' (full)' : ''}` : full ? `${time} (full)` : time}
-                          className={`px-2 py-2 rounded-md border text-center transition-colors ${
+                          className={`px-2 py-2.5 rounded-xl border text-center transition-colors ${
                             selected
-                              ? 'border-gray-900 bg-gray-900 text-white'
+                              ? 'border-white bg-white/10 text-white'
                               : full
-                                ? 'border-gray-200 bg-gray-50 text-gray-700 line-through cursor-not-allowed'
-                                : 'border-gray-300 hover:border-gray-500 bg-white text-gray-900'
+                                ? 'border-white/10 bg-white/[0.03] text-white/40 line-through cursor-not-allowed'
+                                : 'border-white/15 bg-white/5 text-white hover:border-white/40'
                           }`}
                         >
-                          <div className="text-sm font-semibold leading-tight">{time}</div>
+                          <div className="text-sm font-semibold leading-tight tabular-nums">{time}</div>
                           {w.label && (
-                            <div className={`text-[10px] truncate leading-tight mt-0.5 ${selected ? 'text-gray-200' : 'text-gray-500'}`}>
+                            <div className={`text-[10px] truncate leading-tight mt-0.5 ${selected ? 'text-white/70' : 'text-white/50'}`}>
                               {w.label}
                             </div>
                           )}
@@ -576,7 +711,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                       )
                     })}
                   </div>
-                  {fieldErrors.wave_id && <p className="text-[11px] text-red-600 mt-1">{fieldErrors.wave_id}</p>}
+                  {fieldErrors.wave_id && <p className={errCls}>{fieldErrors.wave_id}</p>}
                 </div>
               )}
 
@@ -584,32 +719,32 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                   team_name from the captain + group size on submit. */}
               {copy.showTeamName && (
                 <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Team name *</label>
+                  <label className={labelCls}>Team name *</label>
                   <input
                     type="text"
                     required
                     value={teamName}
                     onChange={e => setTeamName(e.target.value)}
                     placeholder="The Iron Dogs"
-                    className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors.team_name ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
+                    className={inputCls(!!fieldErrors.team_name)}
                   />
-                  {fieldErrors.team_name && <p className="text-[11px] text-red-600 mt-1">{fieldErrors.team_name}</p>}
+                  {fieldErrors.team_name && <p className={errCls}>{fieldErrors.team_name}</p>}
                 </div>
               )}
 
               {(race.allowed_team_sizes || []).length > 1 && (
                 <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">{copy.sizeLabel}</label>
+                  <label className={labelCls}>{copy.sizeLabel}</label>
                   <div className="flex flex-wrap gap-2">
                     {[...(race.allowed_team_sizes || [])].sort((a, b) => a - b).map((s) => (
                       <button
                         key={s}
                         type="button"
                         onClick={() => setTeamSize(s)}
-                        className={`text-xs px-3 py-2 rounded-md border ${
+                        className={`text-sm px-4 py-2.5 rounded-xl border font-semibold transition-colors ${
                           teamSize === s
-                            ? 'border-gray-700 bg-gray-100 text-gray-900 font-semibold'
-                            : 'border-gray-300 bg-white text-gray-600 hover:border-gray-400'
+                            ? 'border-white bg-white text-black'
+                            : 'border-white/15 bg-white/5 text-white/70 hover:border-white/40'
                         }`}
                       >
                         {s}-{copy.sizeButtonSuffix}
@@ -619,18 +754,18 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                 </div>
               )}
 
-              <div className="pt-3 border-t border-gray-200">
-                <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">{copy.captainSectionLabel}</div>
-                <div className="space-y-2">
+              <div className="pt-4 border-t border-white/10">
+                <div className={sectionEyebrow}>{copy.captainSectionLabel}</div>
+                <div className="space-y-2.5">
                   <input
                     type="text"
                     required
                     placeholder="Your name *"
                     value={captainName}
                     onChange={e => setCaptainName(e.target.value)}
-                    className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors.captain_name ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
+                    className={inputCls(!!fieldErrors.captain_name)}
                   />
-                  {fieldErrors.captain_name && <p className="text-[11px] text-red-600">{fieldErrors.captain_name}</p>}
+                  {fieldErrors.captain_name && <p className={errCls}>{fieldErrors.captain_name}</p>}
                   <div>
                     <input
                       type="email"
@@ -642,7 +777,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                         scheduleMemberCheck(e.target.value)
                       }}
                       onBlur={() => scheduleMemberCheck(captainEmail)}
-                      className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors.captain_email ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
+                      className={inputCls(!!fieldErrors.captain_email)}
                     />
                     <MemberStatusBadge
                       email={captainEmail}
@@ -652,7 +787,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                       memberPricing={memberPricing}
                       fmt={fmtMoney}
                     />
-                    {fieldErrors.captain_email && <p className="text-[11px] text-red-600 mt-0.5">{fieldErrors.captain_email}</p>}
+                    {fieldErrors.captain_email && <p className={errCls}>{fieldErrors.captain_email}</p>}
                   </div>
                   <div>
                     <input
@@ -661,19 +796,19 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                       placeholder="Your phone *"
                       value={captainPhone}
                       onChange={e => setCaptainPhone(e.target.value)}
-                      className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors.captain_phone ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
+                      className={inputCls(!!fieldErrors.captain_phone)}
                     />
-                    {fieldErrors.captain_phone && <p className="text-[11px] text-red-600 mt-0.5">{fieldErrors.captain_phone}</p>}
+                    {fieldErrors.captain_phone && <p className={errCls}>{fieldErrors.captain_phone}</p>}
                   </div>
                 </div>
               </div>
 
               {members.length > 0 && (
-                <div className="pt-3 border-t border-gray-200">
-                  <div className="text-xs text-gray-500 uppercase tracking-wider mb-2">{copy.membersSectionLabel}</div>
-                  <div className="space-y-3">
+                <div className="pt-4 border-t border-white/10">
+                  <div className={sectionEyebrow}>{copy.membersSectionLabel}</div>
+                  <div className="space-y-4">
                     {members.map((m, i) => (
-                      <div key={i} className="space-y-1">
+                      <div key={i} className="space-y-1.5">
                         <div className="grid grid-cols-2 gap-2">
                           <div>
                             <input
@@ -682,9 +817,9 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                               placeholder={`${kind === 'race' ? 'Member' : 'Attendee'} ${i + 2} name *`}
                               value={m.name}
                               onChange={e => setMembers(prev => prev.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
-                              className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors[`member_${i}_name`] ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
+                              className={inputCls(!!fieldErrors[`member_${i}_name`])}
                             />
-                            {fieldErrors[`member_${i}_name`] && <p className="text-[11px] text-red-600 mt-0.5">{fieldErrors[`member_${i}_name`]}</p>}
+                            {fieldErrors[`member_${i}_name`] && <p className={errCls}>{fieldErrors[`member_${i}_name`]}</p>}
                           </div>
                           <div>
                             <input
@@ -697,9 +832,9 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                                 scheduleMemberCheck(next)
                               }}
                               onBlur={() => scheduleMemberCheck(m.email)}
-                              className={`w-full border rounded-md px-3 py-2 text-sm focus:outline-none ${fieldErrors[`member_${i}_email`] ? 'border-red-400' : 'border-gray-300 focus:border-gray-500'}`}
+                              className={inputCls(!!fieldErrors[`member_${i}_email`])}
                             />
-                            {fieldErrors[`member_${i}_email`] && <p className="text-[11px] text-red-600 mt-0.5">{fieldErrors[`member_${i}_email`]}</p>}
+                            {fieldErrors[`member_${i}_email`] && <p className={errCls}>{fieldErrors[`member_${i}_email`]}</p>}
                           </div>
                         </div>
                         <MemberStatusBadge
@@ -721,12 +856,12 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                   interest service relationship that qualifies under
                   PECR / GDPR soft opt-in. Operator-side helper
                   excludes ClassPass contacts regardless. */}
-              <label className="flex items-start gap-2 text-xs text-gray-600 cursor-pointer select-none">
+              <label className="flex items-start gap-2.5 text-[12px] text-white/55 cursor-pointer select-none">
                 <input
                   type="checkbox"
                   checked={marketingConsent}
                   onChange={(e) => setMarketingConsent(e.target.checked)}
-                  className="mt-0.5 shrink-0"
+                  className="mt-0.5 shrink-0 accent-white"
                 />
                 <span>
                   Yes, send me UN1T promotional updates and offers via email, SMS or WhatsApp.
@@ -735,7 +870,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
               </label>
 
               {submitError && (
-                <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-md inline-flex items-start gap-2">
+                <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-sm flex items-start gap-2">
                   <AlertCircle size={14} className="mt-0.5 shrink-0" /> {submitError}
                 </div>
               )}
@@ -743,19 +878,35 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
               <button
                 type="submit"
                 disabled={submitting || isClosed}
-                className="w-full bg-gray-900 hover:bg-gray-800 text-white font-semibold py-2.5 rounded-md disabled:opacity-50 inline-flex items-center justify-center gap-2"
+                className="lp-btn w-full mt-1 disabled:opacity-50 disabled:pointer-events-none"
               >
-                {submitting ? <Loader2 size={14} className="animate-spin" /> : null}
-                {submitting
-                  ? 'Submitting…'
-                  : totalCents > 0
-                    ? copy.submitPaidLabel(fmtMoney(totalCents))
-                    : copy.submitFreeLabel}
+                {submitting && <Loader2 size={16} className="animate-spin" />}
+                <span>{submitLabel}</span>
+                {!submitting && <span className="lp-btn-arrow">→</span>}
               </button>
             </fieldset>
           </form>
-        </main>
+        </div>
       </div>
+
+      {/* ── MOBILE STICKY ACTION BAR (full page only) ─────────────── */}
+      {!isClosed && !embedded && (
+        <div className="md:hidden fixed inset-x-0 bottom-0 z-40 flex items-center justify-between gap-3 px-4 py-3 bg-black/85 backdrop-blur border-t border-white/10" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
+          <div className="shrink-0">
+            <div className="text-lg font-bold text-white tabular-nums leading-none">{liveTotalLabel}</div>
+          </div>
+          <button
+            type="submit"
+            form={formId}
+            disabled={submitting}
+            className="lp-btn flex-1 disabled:opacity-50 disabled:pointer-events-none"
+          >
+            {submitting && <Loader2 size={16} className="animate-spin" />}
+            <span className="truncate">{submitLabel}</span>
+            {!submitting && <span className="lp-btn-arrow">→</span>}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -772,32 +923,45 @@ function MemberStatusBadge({ email, checks, memberFeeCents, nonMemberFeeCents, m
   if (!c) return null
   if (c.state === 'checking') {
     return (
-      <p className="text-[11px] text-gray-500 inline-flex items-center gap-1 mt-0.5">
-        <Loader2 size={10} className="animate-spin" /> Checking membership…
+      <p className="text-[11px] text-white/50 inline-flex items-center gap-1.5 mt-1.5">
+        <Loader2 size={11} className="animate-spin" /> Checking membership…
       </p>
     )
   }
   if (c.state === 'verified') {
     const fee = memberFeeCents != null ? fmt(memberFeeCents) : 'free'
     const count = Number.isFinite(c.races_finished_count) ? c.races_finished_count : null
-    let greeting = c.first_name ? ` — welcome back, ${c.first_name}` : ''
+    // Same underlying data as before (first_name + races-finished
+    // count); the boxed treatment splits it into a title + subtitle.
+    const title = c.first_name
+      ? (count === 0 ? `Welcome, ${c.first_name}` : `Welcome back, ${c.first_name}`)
+      : 'UN1T member'
+    let subtitle = 'Verified member'
     if (count != null && count >= 2) {
-      greeting = c.first_name
-        ? ` — welcome back, ${c.first_name} · ${count} race${count === 1 ? '' : 's'} finished`
-        : ` — ${count} race${count === 1 ? '' : 's'} finished`
-    } else if (count === 0 && c.first_name) {
-      greeting = ` — welcome, ${c.first_name} · first race?`
+      subtitle = `Verified member · ${count} race${count === 1 ? '' : 's'} finished`
+    } else if (count === 0) {
+      subtitle = 'Verified member · first race?'
     }
     return (
-      <p className="text-[11px] text-emerald-700 inline-flex items-center gap-1 mt-0.5">
-        <BadgeCheck size={11} /> UN1T member{greeting} · {fee}
-      </p>
+      <div className="mt-2 flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-3">
+        <div className="w-8 h-8 flex-none rounded-full bg-emerald-500/20 grid place-items-center">
+          <BadgeCheck size={16} className="text-emerald-400" />
+        </div>
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold text-white truncate">{title}</div>
+          <div className="text-[12px] text-white/60 truncate">{subtitle}</div>
+        </div>
+        <div className="ml-auto text-right shrink-0">
+          <div className="text-[14px] font-bold text-emerald-400">{fee}</div>
+          <div className="text-[11px] text-white/45">member rate</div>
+        </div>
+      </div>
     )
   }
   if (c.state === 'not_member') {
     const fee = nonMemberFeeCents != null ? fmt(nonMemberFeeCents) : 'free'
     return (
-      <p className="text-[11px] text-gray-500 inline-flex items-center gap-1 mt-0.5">
+      <p className="text-[11px] text-white/50 inline-flex items-center gap-1.5 mt-1.5">
         <Check size={11} /> Non-member rate · {fee}
       </p>
     )

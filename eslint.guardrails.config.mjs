@@ -50,8 +50,16 @@ const config = [
   {
     // Genuinely DARK surfaces — TV boards + the presentation screen render on
     // black; low text ramps are the correct idiom there, so the light-theme
-    // chip-contrast rule does not apply.
-    files: ['src/app/tv/**', 'src/app/present/**', 'src/components/RaceDisplayBoard.jsx'],
+    // chip-contrast rule does not apply. The public event booking flow
+    // (register / checkout / confirmation / embed) was reskinned to the dark
+    // UN1T brand (EVENTS-RESKIN.1), so it joins the same exemption.
+    files: [
+      'src/app/tv/**', 'src/app/present/**', 'src/components/RaceDisplayBoard.jsx',
+      'src/app/event/**', 'src/app/event-pay/**', 'src/app/embed/event/**',
+      'src/components/RaceSignupWidget.jsx',
+      'src/components/RaceConfirmedPage.jsx',
+      'src/components/RaceCheckoutPage.jsx',
+    ],
     plugins: { guardrails },
     rules: {
       'guardrails/no-low-contrast-chip': 'off',

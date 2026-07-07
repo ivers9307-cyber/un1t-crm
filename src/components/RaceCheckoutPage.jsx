@@ -150,18 +150,18 @@ export default function RaceCheckoutPage({ paymentId }) {
 
   if (loadError) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
-        <div className="bg-white border border-gray-200 rounded-xl p-8 max-w-sm text-center">
-          <AlertCircle size={32} className="mx-auto text-red-500 mb-3" />
-          <p className="text-gray-700">{loadError}</p>
+      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
+        <div className="lp-card-glow rounded-2xl p-8 max-w-sm text-center">
+          <AlertCircle size={32} className="mx-auto text-red-300 mb-3" />
+          <p className="text-white/70">{loadError}</p>
         </div>
       </div>
     )
   }
   if (!data) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
-        <Loader2 size={28} className="animate-spin text-gray-400" />
+      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
+        <Loader2 size={28} className="animate-spin text-white/40" />
       </div>
     )
   }
@@ -174,31 +174,55 @@ export default function RaceCheckoutPage({ paymentId }) {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-10 px-4">
-      <div className="max-w-md mx-auto bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
-        <div className="text-center mb-6">
-          <div className="text-[11px] uppercase tracking-wider text-gray-500 mb-1">UN1T Race Entry</div>
-          <h1 className="text-xl font-bold text-gray-900">{data.race?.name || 'Your race'}</h1>
-          {data.registration?.team_name && (
-            <p className="text-sm text-gray-600 mt-1">
-              Team <strong>{data.registration.team_name}</strong>
-            </p>
-          )}
-          <div className="mt-3 text-3xl font-bold text-gray-900">
-            {fmt(data.amount_cents, data.currency)}
+    <div className="min-h-screen bg-black text-white py-14 px-4">
+      <div className="max-w-md mx-auto">
+        <p className="text-[11px] uppercase tracking-[0.2em] text-white/45 font-semibold mb-4">
+          Checkout
+        </p>
+
+        <div className="lp-card-glow rounded-2xl overflow-hidden">
+          {/* Ticket stub — top: event + team */}
+          <div className="px-6 pt-6 pb-5">
+            <h1 className="font-bold text-lg leading-snug">{data.race?.name || 'Your race'}</h1>
+            {data.registration?.team_name && (
+              <p className="text-sm text-white/60 mt-1">
+                Team <strong className="text-white font-semibold">{data.registration.team_name}</strong>
+              </p>
+            )}
           </div>
-        </div>
 
-        {phaseError && (
-          <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-md inline-flex items-start gap-2">
-            <AlertCircle size={14} className="mt-0.5 shrink-0" /> {phaseError}
+          {/* Perforated divider with punched notches */}
+          <div className="relative h-0 border-t border-dashed border-white/15">
+            <span className="absolute -left-3 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-black" />
+            <span className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-black" />
           </div>
-        )}
 
-        <div ref={targetRef} className="min-h-[280px]" />
+          {/* Ticket stub — bottom: total + payment */}
+          <div className="px-6 pt-5 pb-6">
+            <div className="flex items-baseline justify-between">
+              <span className="text-[11px] uppercase tracking-[0.16em] text-white/55 font-semibold">
+                Total
+              </span>
+              <span className="text-3xl font-bold tabular-nums">
+                {fmt(data.amount_cents, data.currency)}
+              </span>
+            </div>
 
-        <div className="text-center text-[11px] text-gray-500 mt-4 inline-flex items-center justify-center gap-1.5 w-full">
-          <Lock size={11} /> Secure payment by Revolut
+            {phaseError && (
+              <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 text-red-300 text-sm rounded-lg flex items-start gap-2">
+                <AlertCircle size={14} className="mt-0.5 shrink-0" /> {phaseError}
+              </div>
+            )}
+
+            {/* Revolut Embedded Checkout mounts here — ref + min-height must remain */}
+            <div className="mt-5 rounded-xl bg-white/[0.03] border border-white/10 p-3">
+              <div ref={targetRef} className="min-h-[280px]" />
+            </div>
+
+            <div className="text-white/45 text-[11px] mt-4 flex items-center justify-center gap-1.5 w-full">
+              <Lock size={11} /> Secure payment by Revolut
+            </div>
+          </div>
         </div>
       </div>
     </div>
