@@ -91,7 +91,7 @@ export async function POST(request, props) {
       id, location_id, name, slug, race_date, kind, capacity_mode, allowed_team_sizes,
       registration_opens_at, registration_closes_at, active,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
-      members_only, payment_currency, create_in_glofox,
+      members_only, payment_currency, create_in_glofox, host_id,
       waves:race_waves ( id, start_time, capacity, label )
     `)
     .eq('slug', params.slug)
@@ -551,6 +551,9 @@ export async function POST(request, props) {
   try {
     const baseUrl = getAppUrl()
     const returnUrl = `${baseUrl}/event/${race.slug}/confirmed?registration=${registration.id}`
+    // Stripe-hosted checkout needs a cancel target (buyer backs out); Revolut
+    // ignores it. Send them back to the event page.
+    const cancelUrl = `${baseUrl}/event/${race.slug}`
     paymentResult = await createRacePayment({
       db,
       race,
@@ -562,6 +565,7 @@ export async function POST(request, props) {
       },
       pricing,
       returnUrl,
+      cancelUrl,
     })
   } catch (e) {
     // Roll back the registration so the team can retry — leaving a

@@ -14,6 +14,8 @@
 import { NextResponse } from 'next/server'
 import { verifyStripeWebhook } from '@/lib/stripe'
 import { createServerClient } from '@/lib/supabase'
+import { resolveRacePaymentByProviderRef, markRacePaymentStatus } from '@/lib/race-payments'
+import { sendRaceConfirmations } from '@/lib/race-confirmations'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -53,9 +55,38 @@ export async function POST(request) {
         }
         await db.from('event_hosts').update(updates).eq('id', host.id)
       }
+    } else if (event.type === 'checkout.session.completed') {
+      // A third-party host's ticket payment succeeded. markRacePaymentStatus
+      // confirms the registration + projects the order + fires sequences
+      // (idempotent — safe on Stripe retries); then send confirmations once.
+      const session = event.data.object
+      const db = createServerClient()
+      const payment = await resolveRacePaymentByProviderRef(db, session.id)
+      if (payment) {
+        const result = await markRacePaymentStatus({
+          db,
+          payment,
+          revolutState: 'completed',
+          revolutAmount: Number.isFinite(session.amount_total) ? session.amount_total : null,
+        })
+        if (result.applied?.status === 'completed') {
+          try {
+            await sendRaceConfirmations({ db, paymentId: payment.id })
+          } catch (e) {
+            logWarn('stripe-webhook', 'race confirmations failed', { err: e, paymentId: payment.id })
+          }
+        }
+      }
+    } else if (event.type === 'checkout.session.expired') {
+      const session = event.data.object
+      const db = createServerClient()
+      const payment = await resolveRacePaymentByProviderRef(db, session.id)
+      if (payment) {
+        await markRacePaymentStatus({ db, payment, revolutState: 'cancelled', revolutAmount: null })
+      }
     }
-    // Other event types (payment_intent, payout, charge.refunded) are handled
-    // in the charge slice — safely ignored (200) here.
+    // Other event types (payout, charge.refunded) land in a follow-up slice —
+    // safely ignored (200) here.
   } catch (e) {
     // Logged, not surfaced: returning non-2xx would make Stripe retry + risk
     // auto-disabling the endpoint. The state will re-sync on the next event.

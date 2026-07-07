@@ -29,9 +29,12 @@ describe('paymentsFor — provider dispatch', () => {
     expect(PAYMENT_PROVIDERS).toContain('stripe_connect')
   })
 
-  it('the stripe_connect stub fails LOUD until the Stripe PR wires it', async () => {
+  it('the stripe_connect adapter validates charge inputs; refunds are still a follow-up stub', async () => {
     const a = paymentsFor('stripe_connect')
-    await expect(a.createPayment({})).rejects.toThrow(/not wired yet/)
+    // createPayment is wired (EVENTS-HOST.3): it now validates inputs (a direct
+    // charge needs the host connected account id) rather than being a blanket stub.
+    await expect(a.createPayment({})).rejects.toThrow(/connected account/)
+    // Refunds are a follow-up slice — still a loud stub.
     await expect(a.refundPayment('x', {})).rejects.toThrow(/not wired yet/)
   })
 })

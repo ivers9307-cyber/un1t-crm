@@ -75,6 +75,13 @@ export default function RaceCheckoutPage({ paymentId }) {
           const slug = j.data.race?.slug
           const regId = j.data.registration?.id
           if (slug) router.replace(`/event/${slug}/confirmed?registration=${regId || ''}`)
+          return
+        }
+        // Stripe Connect hosts use Stripe's hosted Checkout (a redirect, not an
+        // embedded widget). Send the buyer straight there; they return to the
+        // confirmation page via the session's success_url.
+        if (j.data?.status === 'pending' && j.data?.provider === 'stripe_connect' && j.data?.checkout?.url) {
+          window.location.href = j.data.checkout.url
         }
       })
       .catch(e => {
@@ -90,6 +97,9 @@ export default function RaceCheckoutPage({ paymentId }) {
   useEffect(() => {
     if (!data) return
     if (data.status !== 'pending') return
+    // Stripe hosts redirect to hosted Checkout (handled in the load effect);
+    // never mount the Revolut widget for them.
+    if (data.provider === 'stripe_connect') return
     if (!targetRef.current || instanceRef.current) return
     if (!REVOLUT_PUBLIC_KEY) {
       setPhase('error')
