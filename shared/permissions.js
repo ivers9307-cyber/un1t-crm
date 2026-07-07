@@ -1030,6 +1030,49 @@ export function resolvePermission({ role, location, permissions, roleTemplate, d
   return defaults?.[role]?.[key] === true
 }
 
+// ============================================================
+// AC-ROLE.1 — AC device allowlist resolution
+//
+// The set of AC units a user may operate resolves through the same
+// tier order as resolvePermission: per-user override (mig 210,
+// profile_locations.ac_device_ids) → role template (mig 379,
+// location_role_permissions.ac_device_ids) → code default.
+//
+// Allowlist value semantics at every tier:
+//   null  → not set, inherit the next tier
+//   []    → explicit "none"
+//   [ids] → exactly those device ids
+// The code default supplies the "all" that manager/owner rely on
+// (returned as the sentinel string 'ALL').
+// ============================================================
+
+export const DEFAULT_AC_ACCESS_BY_ROLE = Object.freeze({
+  master: 'all',
+  owner: 'all',
+  manager: 'all',
+  head_coach: 'none',
+  staff: 'none',
+  reception: 'none',
+})
+
+// Returns the sentinel 'ALL' or a concrete array of allowed ids.
+export function resolveAcAllowlist({ role, userList, templateList, defaults = DEFAULT_AC_ACCESS_BY_ROLE }) {
+  if (role === 'master') return 'ALL'
+  if (Array.isArray(userList)) return userList        // tier 2: per-user override ([] = none)
+  if (Array.isArray(templateList)) return templateList // tier 2.5: role template
+  return defaults?.[role] === 'all' ? 'ALL' : []       // tier 3: code default
+}
+
+export function isAcDeviceAllowed(resolved, deviceId) {
+  return resolved === 'ALL' || (Array.isArray(resolved) && resolved.includes(deviceId))
+}
+
+export function filterAcDevices(resolved, devices) {
+  if (resolved === 'ALL') return devices
+  const allowed = new Set(Array.isArray(resolved) ? resolved : [])
+  return devices.filter((d) => allowed.has(d.id))
+}
+
 // Convenience exports — saves callers from doing array-to-set work.
 export const WEB_PERMISSION_KEYS = Object.freeze(
   WEB_PERMISSIONS.map(p => p.key)
