@@ -409,13 +409,10 @@ export default function StaffForm({
         // null is reserved for the manager+ legacy "all doors"
         // fallback and isn't reachable from this form.
         unifi_door_ids: Array.isArray(a.unifi_door_ids) ? a.unifi_door_ids : [],
-        // STUDIO-AC-DEVICES.3 — same shape as unifi_door_ids.
-        // Always send an array (defaulting to [] for legacy null
-        // values) so the server can detect "user cleared the
-        // allowlist" vs "field absent — leave alone". Master users
-        // editing other masters never see the picker, so this
-        // never overwrites their legacy NULL fallback.
-        ac_device_ids: Array.isArray(a.ac_device_ids) ? a.ac_device_ids : [],
+        // AC-ROLE.1 — send the tri-state as-is: null = inherit role
+        // default, [] = explicit none, [ids] = those. Always present so
+        // buildAssignmentRow writes it (it already round-trips null).
+        ac_device_ids: a.ac_device_ids === undefined ? null : a.ac_device_ids,
         permissions: a.permissions || {},
       })),
       active: form.active,
@@ -703,16 +700,16 @@ export default function StaffForm({
                   }
                 />
               )}
-              {/* STUDIO-AC-DEVICES.3 — per-location AC device allowlist.
-                  Sibling of the doors picker, same semantics. Empty
-                  array = the user sees no AC; null is reserved for
-                  the manager+ legacy "all devices" fallback and isn't
-                  reachable from this form. */}
+              {/* STUDIO-AC-DEVICES.3 / AC-ROLE.1 — per-location AC device
+                  allowlist. Tri-state: null = inherit the role-template
+                  (or code) default, [] = this user explicitly sees no
+                  AC, [ids] = this user sees exactly those. */}
               {isEdit && configured && (
                 <AcDeviceAllowlistPicker
                   locationId={a.location_id}
                   locationName={loc.name}
-                  value={Array.isArray(a.ac_device_ids) ? a.ac_device_ids : []}
+                  value={a.ac_device_ids === undefined ? null : a.ac_device_ids}
+                  inheritLabel="Inherit from role default"
                   onChange={(ac_device_ids) =>
                     updateAssignment(a.location_id, { ac_device_ids })
                   }
