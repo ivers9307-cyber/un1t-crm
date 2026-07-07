@@ -25,7 +25,7 @@
 // (mig 084) regardless of kind — that revenue path is preserved
 // verbatim across all kinds.
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon } from 'lucide-react'
 import Link from 'next/link'
@@ -260,6 +260,26 @@ export default function RaceEventForm({ race, locationId }) {
   // for the welcome sequence. Default off — operator opts in per
   // event.
   const [createInGlofox, setCreateInGlofox] = useState(!!race?.create_in_glofox)
+  // EVENTS-HOST.4 — payout routing. '' = internal UN1T event (settled via
+  // Revolut, the default); a host id = pay that third-party host directly
+  // via Stripe Connect. Hosts are org-scoped and fetched on mount; a fetch
+  // failure just leaves the list empty (operator keeps the UN1T default).
+  const [hostId, setHostId] = useState(race?.host_id || '')
+  const [hosts, setHosts] = useState([])
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/hosts')
+      .then((r) => r.json())
+      .then((j) => {
+        if (!cancelled && j?.success && Array.isArray(j.data)) setHosts(j.data)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+  // EVENTS-HOST.4 — only third-party (stripe_connect) hosts are selectable
+  // payees; a Revolut/UN1T host is the implicit default (host_id '').
+  const stripeHosts = hosts.filter((h) => h.payment_provider === 'stripe_connect')
+  const selectedHost = stripeHosts.find((h) => h.id === hostId) || null
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
@@ -436,6 +456,8 @@ export default function RaceEventForm({ race, locationId }) {
       member_pricing_enabled: memberPricingEnabled,
       members_only: membersOnly,
       shared,
+      // EVENTS-HOST.4 — payout routing. '' → null = internal UN1T (Revolut).
+      host_id: hostId || null,
       member_fee_cents: memberPricingEnabled ? memberFeeCents : null,
       non_member_fee_cents: nonMemberFeeCents,
       // TV logos: race-only. For non-race kinds we send an empty
@@ -839,6 +861,48 @@ export default function RaceEventForm({ race, locationId }) {
           non-members on a 4-{meta.value === 'race' ? 'person team' : 'seat group'} = 2 × member fee + 2 × non-member fee). Leave a fee blank
           to make that category free. UN1T members are matched by the email on their member account.
         </p>
+
+        {/* EVENTS-HOST.4 — payout routing: who gets paid for this event */}
+        <div className="pb-1">
+          <label className="block text-sm text-un1t-subtle mb-1">Who gets paid</label>
+          {stripeHosts.length === 0 ? (
+            <p className="text-[11px] text-un1t-muted">
+              UN1T (settles via Revolut). Add a third-party host in{' '}
+              <Link href="/settings/hosts" className="text-un1t-text underline">Settings → Event hosts</Link>{' '}
+              to pay someone else directly.
+            </p>
+          ) : (
+            <>
+              <select
+                value={hostId}
+                onChange={(e) => setHostId(e.target.value)}
+                className="w-full max-w-md bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+              >
+                <option value="">UN1T (settles via Revolut)</option>
+                {stripeHosts.map((h) => (
+                  <option key={h.id} value={h.id}>
+                    {h.name}{h.charges_enabled ? '' : ' — Stripe not connected'}
+                  </option>
+                ))}
+              </select>
+              {selectedHost ? (
+                <p className="text-[11px] text-un1t-muted mt-1">
+                  Tickets settle to {selectedHost.name}&apos;s own Stripe account, with UN1T&apos;s €{(((selectedHost.platform_fee_cents ?? 0)) / 100).toFixed(2)} booking fee added per ticket.
+                </p>
+              ) : (
+                <p className="text-[11px] text-un1t-muted mt-1">
+                  UN1T event — ticket money settles to UN1T via Revolut.
+                </p>
+              )}
+              {selectedHost && !selectedHost.charges_enabled && (
+                <p className="mt-1 text-[11px] text-amber-700">
+                  {selectedHost.name} hasn&apos;t finished connecting Stripe — this event can&apos;t take paid registrations until they do.{' '}
+                  <Link href={`/settings/hosts/${selectedHost.id}`} className="underline">Finish setup</Link>.
+                </p>
+              )}
+            </>
+          )}
+        </div>
 
         <div>
           <label className="block text-sm text-un1t-subtle mb-1">Non-member fee (€ per person)</label>

@@ -9,7 +9,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES } from '@/lib/schemas'
+import { MANAGER_ROLES, uuidLike } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -44,6 +44,9 @@ const UpdateSchema = z.object({
   members_only: z.boolean().optional(),
   // EVENTS-LOC.2: shared = show this event in every location's list.
   shared: z.boolean().optional(),
+  // EVENTS-HOST.4: reassign the payee. NULL = internal UN1T (Revolut);
+  // set = pay that host directly via Stripe. Org-validated in PUT below.
+  host_id: uuidLike.nullable().optional(),
   member_fee_cents: z.number().int().nonnegative().nullable().optional(),
   non_member_fee_cents: z.number().int().nonnegative().nullable().optional(),
   payment_currency: z.string().length(3).optional(),
@@ -67,7 +70,7 @@ async function loadRace(db, id) {
       registration_opens_at, registration_closes_at,
       allowed_team_sizes, active, created_at, updated_at,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
-      members_only, payment_currency, tv_logos, shared,
+      members_only, payment_currency, tv_logos, shared, host_id,
       hero_image_url, accent_hex,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       registrations:race_registrations (
@@ -124,6 +127,28 @@ export async function PUT(request, props) {
   }
   const guard = assertLocationAccessOr404(user, existing.location_id)
   if (guard) return guard
+
+  // EVENTS-HOST.4 — payment-routing security. When the caller reassigns the
+  // payee, verify the target host is a real event_hosts row in THIS event's
+  // organization (resolved from the event's location). Otherwise an operator
+  // could route this event's takings to another org's Stripe account (IDOR).
+  // host_id flows through the generic `updates` patch below; validate it
+  // here first. host_id NULL/absent = internal UN1T event, no check needed.
+  if (body.host_id) {
+    const { data: loc } = await db
+      .from('locations')
+      .select('organization_id')
+      .eq('id', existing.location_id)
+      .single()
+    const { data: host } = await db
+      .from('event_hosts')
+      .select('id, organization_id')
+      .eq('id', body.host_id)
+      .single()
+    if (!loc || !host || host.organization_id !== loc.organization_id) {
+      return NextResponse.json({ success: false, error: 'invalid_host' }, { status: 400 })
+    }
+  }
 
   // Pull waves out before building the race_events update payload —
   // they go to a different table.
