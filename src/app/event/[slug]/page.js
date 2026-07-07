@@ -1,5 +1,18 @@
 import RaceSignupWidget from '@/components/RaceSignupWidget'
 import { createServerClient } from '@/lib/supabase'
+import { Poppins } from 'next/font/google'
+
+// Brand font for this public surface. Loaded via next/font (self-hosted
+// at build, zero external requests / layout shift) and exposed as the
+// `--font-body` CSS variable that the `font-body` Tailwind family
+// resolves to. Defining the variable on the page wrapper scopes Poppins
+// to this subtree only — the CRM app keeps its default stack.
+const poppins = Poppins({
+  weight: ['400', '500', '600', '700', '800'],
+  subsets: ['latin'],
+  variable: '--font-body',
+  display: 'swap',
+})
 
 // Dynamic so wave / pricing edits in the operator UI surface to the
 // public page on the next request — `force-static` (the previous
@@ -55,7 +68,7 @@ export async function generateMetadata(props) {
 export default async function PublicRaceSignupPage(props) {
   const params = await props.params;
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+    <div className={`${poppins.variable} font-body min-h-screen bg-black text-white`}>
       <RaceSignupWidget slug={params.slug} />
     </div>
   )

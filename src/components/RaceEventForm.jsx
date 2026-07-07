@@ -27,7 +27,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus } from 'lucide-react'
+import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon } from 'lucide-react'
 import Link from 'next/link'
 import { toSlug } from '@/lib/slug'
 
@@ -245,6 +245,14 @@ export default function RaceEventForm({ race, locationId }) {
   })
   const [logoBusy, setLogoBusy] = useState(null) // slot index currently uploading
   const [logoError, setLogoError] = useState(null)
+  // Public-page hero image + accent colour. Shown for every kind (every
+  // public event page has a hero). hero_image_url is set after the
+  // /hero upload route returns the bytes URL; accent_hex is an optional,
+  // clearable 6-digit hex persisted via the main save payload.
+  const [heroUrl, setHeroUrl] = useState(race?.hero_image_url || null)
+  const [heroBusy, setHeroBusy] = useState(false)
+  const [heroError, setHeroError] = useState(null)
+  const [accentHex, setAccentHex] = useState(race?.accent_hex || '')
   // GLOFOX3.3 (mig 145). When on, every confirmed public registration
   // on this event pushes the registrant + every team_member with a
   // contact to Glofox: search-by-email first (link if found),
@@ -300,6 +308,44 @@ export default function RaceEventForm({ race, locationId }) {
       setLogos(next)
     } finally {
       setLogoBusy(null)
+    }
+  }
+
+  // Upload the single public-page hero image. Like logos, gated on a
+  // saved event because the upload route namespaces storage by id.
+  async function handleHeroUpload(file) {
+    if (!race?.id) {
+      setHeroError('Save the event first, then add a hero image.')
+      return
+    }
+    setHeroError(null)
+    setHeroBusy(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const r = await fetch(`/api/events/${race.id}/hero`, { method: 'POST', body: fd })
+      const j = await r.json()
+      if (!r.ok || j.success === false) {
+        setHeroError(j.error || `Upload failed (${r.status})`)
+        return
+      }
+      setHeroUrl(j.url)
+    } catch (e) {
+      setHeroError(e.message || 'Network error')
+    } finally {
+      setHeroBusy(false)
+    }
+  }
+
+  async function handleHeroRemove() {
+    if (!race?.id) return
+    setHeroError(null)
+    setHeroBusy(true)
+    try {
+      await fetch(`/api/events/${race.id}/hero`, { method: 'DELETE' })
+      setHeroUrl(null)
+    } finally {
+      setHeroBusy(false)
     }
   }
 
@@ -367,6 +413,13 @@ export default function RaceEventForm({ race, locationId }) {
       return
     }
 
+    // Accent colour is optional; if set it must be a 6-digit hex.
+    const accentTrimmed = accentHex.trim()
+    if (accentTrimmed && !/^#[0-9a-fA-F]{6}$/.test(accentTrimmed)) {
+      setError('Accent colour must be a 6-digit hex like #1A2B3C (or leave it blank).')
+      return
+    }
+
     setSaving(true)
     const payload = {
       ...(isEditing ? {} : { location_id: locationId, kind }),
@@ -391,6 +444,10 @@ export default function RaceEventForm({ race, locationId }) {
       tv_logos: meta.showLogos
         ? logos.filter((u) => typeof u === 'string' && u.length > 0).slice(0, 3)
         : [],
+      // Public-page hero + accent — shown for every kind. hero bytes
+      // are already uploaded via /hero; here we persist the URL + colour.
+      hero_image_url: heroUrl || null,
+      accent_hex: accentTrimmed || null,
       // GLOFOX3.3 — explicit boolean so toggling off persists.
       create_in_glofox: createInGlofox === true,
       ...(meta.isLeadGen ? {} : {
@@ -907,6 +964,110 @@ export default function RaceEventForm({ race, locationId }) {
           )}
         </div>
       )}
+
+      {/* Public-page hero image + accent colour. Shown for every kind —
+          every public event page has a hero. The upload UX mirrors the
+          TV-logo slot but as a single hero: it needs a saved event
+          first (the /hero route namespaces storage by id), whereas the
+          accent colour persists via the main save payload and so is
+          always editable. */}
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <div className="flex items-start gap-3">
+          <ImageIcon size={18} className="text-un1t-subtle mt-0.5 shrink-0" />
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Hero image</h3>
+            <p className="text-[11px] text-un1t-subtle mt-1">
+              A wide banner shown at the top of the public {meta.value === 'race' ? 'race' : 'event'} page. PNG/JPEG/WebP, max 5MB.
+            </p>
+          </div>
+        </div>
+
+        {!isEditing ? (
+          <div className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-[11px] text-un1t-subtle">
+            Save the {meta.value === 'race' ? 'race' : 'event'} first — you&apos;ll be able to add a hero image after it&apos;s created.
+          </div>
+        ) : (
+          <>
+            {heroError && (
+              <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md px-3 py-2">
+                {heroError}
+              </div>
+            )}
+            {heroUrl ? (
+              <div className="relative bg-un1t-bg border border-un1t-border rounded-md overflow-hidden">
+                { }
+                <img src={heroUrl} alt="Event hero" className="w-full max-h-56 object-cover" />
+                <button
+                  type="button"
+                  onClick={handleHeroRemove}
+                  disabled={heroBusy}
+                  className="absolute top-2 right-2 bg-un1t-surface/90 border border-un1t-border rounded-full p-1 text-un1t-subtle hover:text-red-500 disabled:opacity-50"
+                  title="Remove hero image"
+                >
+                  {heroBusy ? <Loader2 size={14} className="animate-spin" /> : <XIcon size={14} />}
+                </button>
+              </div>
+            ) : (
+              <label
+                htmlFor="event-hero-input"
+                className={`bg-un1t-bg border-2 border-dashed border-un1t-border hover:border-un1t-muted rounded-md h-40 flex flex-col items-center justify-center text-un1t-subtle cursor-pointer ${heroBusy ? 'opacity-50 pointer-events-none' : ''}`}
+              >
+                {heroBusy ? <Loader2 size={24} className="animate-spin" /> : <ImagePlus size={24} />}
+                <span className="text-[11px] mt-1">{heroBusy ? 'Uploading…' : 'Add hero image'}</span>
+                <input
+                  id="event-hero-input"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (f) handleHeroUpload(f)
+                    e.target.value = '' // reset so re-picking the same file fires onChange
+                  }}
+                />
+              </label>
+            )}
+            <p className="text-[11px] text-un1t-muted">
+              Image bytes save immediately.
+            </p>
+          </>
+        )}
+
+        {/* Accent colour — optional, clearable. Persisted via the main
+            save payload, so it's editable on create and edit. */}
+        <div className="pt-3 border-t border-un1t-border">
+          <label className="block text-sm text-un1t-subtle mb-1">Accent colour</label>
+          <div className="flex items-center gap-3">
+            <input
+              type="color"
+              value={/^#[0-9a-fA-F]{6}$/.test(accentHex) ? accentHex : '#000000'}
+              onChange={e => setAccentHex(e.target.value)}
+              aria-label="Accent colour picker"
+              className="h-9 w-12 bg-un1t-bg border border-un1t-border rounded-md cursor-pointer p-0.5"
+            />
+            <input
+              type="text"
+              value={accentHex}
+              onChange={e => setAccentHex(e.target.value.trim())}
+              placeholder="#000000"
+              pattern="^#[0-9a-fA-F]{6}$"
+              className="w-32 bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text font-mono"
+            />
+            {accentHex && (
+              <button
+                type="button"
+                onClick={() => setAccentHex('')}
+                className="text-xs text-un1t-subtle hover:text-red-700"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <p className="text-[11px] text-un1t-muted mt-1">
+            Optional brand colour for the public {meta.value === 'race' ? 'race' : 'event'} page. Leave blank to use the default.
+          </p>
+        </div>
+      </div>
 
       {/* Glofox sync (GLOFOX3.3 / mig 145). Operator opts each event
           in. When on, every confirmed public registration on this
