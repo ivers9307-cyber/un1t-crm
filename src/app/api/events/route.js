@@ -22,7 +22,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { uuidLike } from '@/lib/schemas'
+import { ADMIN_ROLES, uuidLike } from '@/lib/schemas'
 import { toSlug } from '@/lib/slug'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
 import { isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
@@ -187,6 +187,15 @@ export async function POST(request) {
   }
 
   const db = createServerClient()
+
+  // EVENTS-HOST.4 — assigning a payee routes ticket money DIRECTLY to that
+  // host's Stripe, so it's gated to the host-management bar (ADMIN_ROLES) —
+  // the same level that can create/delete the host itself — not the
+  // staff-level 'races' permission that guards ordinary event edits.
+  // Internal events (host_id null) stay staff-creatable.
+  if (body.host_id && !ADMIN_ROLES.includes(user.role)) {
+    return NextResponse.json({ success: false, error: 'Assigning a payment host requires manager access.' }, { status: 403 })
+  }
 
   // EVENTS-HOST.4 — payment-routing security. If the operator assigned a
   // host, verify it's a real event_hosts row in THIS event's organization
