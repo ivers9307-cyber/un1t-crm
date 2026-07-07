@@ -27,6 +27,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
+import { resolveAcAllowlist, filterAcDevices } from '@shared/permissions'
 
 const AcDeviceCreateSchema = z.object({
   provider: z.string().optional(),
@@ -63,8 +64,8 @@ export const GET = withAuth(
       return NextResponse.json({ success: false, error: devErr.message }, { status: 500 })
     }
 
-    // Filter by the caller's allowlist unless they're master or
-    // a manager/owner with the legacy NULL value.
+    // AC-ROLE.1 — filter to what the caller may actually control:
+    // per-user override → role template → code default (via resolver).
     let visible = devices || []
     if (user.role !== 'master') {
       const { data: pl } = await db
@@ -74,14 +75,12 @@ export const GET = withAuth(
         .eq('location_id', locationId)
         .maybeSingle()
       const role = pl?.role || user.profileRole || user.role
-      const allowlist = pl?.ac_device_ids
-      const legacyUnrestricted =
-        (allowlist === null || allowlist === undefined) &&
-        (role === 'manager' || role === 'owner')
-      if (!legacyUnrestricted) {
-        const allowed = new Set(Array.isArray(allowlist) ? allowlist : [])
-        visible = visible.filter((d) => allowed.has(d.id))
-      }
+      const resolved = resolveAcAllowlist({
+        role,
+        userList: pl?.ac_device_ids ?? null,
+        templateList: user?.acDeviceTemplatesByLocation?.[locationId] ?? null,
+      })
+      visible = filterAcDevices(resolved, visible)
     }
 
     return NextResponse.json({ success: true, data: visible })
