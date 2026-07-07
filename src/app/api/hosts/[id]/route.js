@@ -1,5 +1,7 @@
-// GET   /api/hosts/[id]        — one host (org-scoped; 404 if not in caller's org)
-// PATCH /api/hosts/[id] { … }  — update name / email / booking fee
+// GET    /api/hosts/[id]        — one host (org-scoped; 404 if not in caller's org)
+// PATCH  /api/hosts/[id] { … }  — update name / email / booking fee
+// DELETE /api/hosts/[id]        — remove the host (assigned events revert to
+//                                 internal/Revolut via ON DELETE SET NULL)
 //
 // Auth: Manager+. Detail routes 404 (not 403) on a cross-org id — no IDOR
 // enumeration. (EVENTS-HOST.2)
@@ -64,4 +66,21 @@ export async function PATCH(request, props) {
     .single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true, data })
+}
+
+export async function DELETE(_request, props) {
+  const params = await props.params
+  const g = await gate()
+  if (g.error) return g.error
+  const db = createServerClient()
+  const host = await loadHostForOrg(db, params.id, g.orgId)
+  if (!host) return NextResponse.json({ success: false, error: 'Host not found' }, { status: 404 })
+  // race_events.host_id is ON DELETE SET NULL (mig 381), so any events assigned
+  // to this host revert to internal/UN1T (Revolut) automatically — no orphaned
+  // FK, no broken checkout. The host's own Stripe connected account is NOT
+  // touched: it lives on Stripe and belongs to them, not us. We only drop our
+  // row (the payee record + fee config).
+  const { error } = await db.from('event_hosts').delete().eq('id', host.id)
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  return NextResponse.json({ success: true })
 }

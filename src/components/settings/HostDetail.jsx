@@ -14,6 +14,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   CreditCard, Check, Minus, Save, RefreshCw, AlertTriangle, ExternalLink, Store,
+  Link2, Copy, Trash2,
 } from 'lucide-react'
 import { Button, Card, Field, Loading } from '@/components/ui'
 import { hostCanTakePayments, PROVIDER_STRIPE_CONNECT } from '@/lib/event-hosts'
@@ -65,6 +66,15 @@ export default function HostDetail({ hostId }) {
   const [connecting, setConnecting] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [actionError, setActionError] = useState(null)
+
+  // Self-serve onboarding link the operator sends to the host (EVENTS-HOST.5).
+  const [linkLoading, setLinkLoading] = useState(false)
+  const [linkUrl, setLinkUrl] = useState(null)
+  const [linkError, setLinkError] = useState(null)
+  const [copied, setCopied] = useState(false)
+
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState(null)
 
   // Hydrate the editable form from a freshly-loaded host row.
   const applyHost = useCallback((h) => {
@@ -174,6 +184,58 @@ export default function HostDetail({ hostId }) {
     }
   }
 
+  // Mint the secure self-serve link. The host opens it with no login and
+  // connects their own Stripe account; we reveal it for the operator to copy.
+  async function getOnboardingLink() {
+    if (linkLoading) return
+    setLinkLoading(true)
+    setLinkError(null)
+    setCopied(false)
+    try {
+      const res = await fetch(`/api/hosts/${hostId}/onboarding-link`, { method: 'POST' })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.success || !j.data?.url) throw new Error(j.error || `HTTP ${res.status}`)
+      setLinkUrl(j.data.url)
+    } catch (err) {
+      setLinkError(err.message || 'Failed to create onboarding link')
+    } finally {
+      setLinkLoading(false)
+    }
+  }
+
+  async function copyLink() {
+    if (!linkUrl) return
+    try {
+      await navigator.clipboard.writeText(linkUrl)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      setLinkError('Could not copy — select the link and copy it manually.')
+    }
+  }
+
+  // Remove the host. Events assigned to them fall back to internal/UN1T
+  // (Revolut) via ON DELETE SET NULL — the host's own Stripe account is
+  // untouched. On success we bounce back to the hosts list.
+  async function handleDelete() {
+    if (deleting) return
+    const label = name.trim() || 'this host'
+    if (!window.confirm(
+      `Delete ${label}?\n\nAny events currently assigned to them will switch back to UN1T (settled via Revolut). Their Stripe account is not affected — this only removes the payee record here.`
+    )) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      const res = await fetch(`/api/hosts/${hostId}`, { method: 'DELETE' })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
+      window.location.href = '/settings/hosts'
+    } catch (e) {
+      setDeleting(false)
+      setDeleteError(e.message || 'Could not delete host')
+    }
+  }
+
   if (loading) {
     return <Loading label={checking ? 'Checking your Stripe status…' : 'Loading host…'} />
   }
@@ -250,12 +312,54 @@ export default function HostDetail({ hostId }) {
                   {!connecting && <ExternalLink size={12} className="opacity-70" />}
                 </Button>
               )}
+              {!ready && (
+                <Button
+                  variant="secondary"
+                  icon={Link2}
+                  loading={linkLoading}
+                  onClick={getOnboardingLink}
+                >
+                  Get onboarding link for the host
+                </Button>
+              )}
               {hasAccount && (
                 <Button variant="secondary" icon={RefreshCw} loading={syncing} onClick={() => syncHost()}>
                   Refresh status
                 </Button>
               )}
             </div>
+
+            {linkError && (
+              <p className="mt-3 text-xs text-stage-lost flex items-center gap-1">
+                <AlertTriangle size={12} /> {linkError}
+              </p>
+            )}
+
+            {linkUrl && (
+              <div className="mt-4 rounded-lg border border-un1t-border bg-un1t-bg p-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <input
+                    readOnly
+                    value={linkUrl}
+                    onFocus={(e) => e.target.select()}
+                    aria-label="Host onboarding link"
+                    className={`${INPUT_CLASS} font-mono text-xs`}
+                  />
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={copied ? Check : Copy}
+                    onClick={copyLink}
+                    className="shrink-0"
+                  >
+                    {copied ? 'Copied!' : 'Copy'}
+                  </Button>
+                </div>
+                <p className="mt-2 text-xs text-un1t-subtle">
+                  Send this to the host — they open it and connect their own Stripe account, no login needed.
+                </p>
+              </div>
+            )}
           </>
         )}
       </Card>
@@ -319,6 +423,38 @@ export default function HostDetail({ hostId }) {
             {saved && <span className="text-xs text-green-700">Saved.</span>}
           </div>
         </form>
+      </Card>
+
+      {/* Danger zone — a separate card so a delete can't be fat-fingered next
+          to Save. Deleting only drops our payee record; assigned events revert
+          to UN1T (Revolut) via ON DELETE SET NULL and the host keeps their own
+          Stripe account. */}
+      <Card title="Danger zone">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-un1t-text">Delete this host</p>
+            <p className="mt-1 text-xs text-un1t-muted">
+              Removes the payee record here. Any events assigned to this host
+              switch back to UN1T (settled via Revolut). Their Stripe account
+              isn&apos;t affected.
+            </p>
+            {deleteError && (
+              <p className="mt-2 text-xs text-stage-lost flex items-center gap-1">
+                <AlertTriangle size={12} /> {deleteError}
+              </p>
+            )}
+          </div>
+          <Button
+            type="button"
+            variant="danger"
+            size="sm"
+            icon={Trash2}
+            loading={deleting}
+            onClick={handleDelete}
+          >
+            Delete host
+          </Button>
+        </div>
       </Card>
     </div>
   )
