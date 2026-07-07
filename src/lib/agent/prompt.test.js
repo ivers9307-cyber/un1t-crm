@@ -127,6 +127,17 @@ describe('identity pre-verification section', () => {
   })
 })
 
+describe('multi-person bookings hand off instead of partial-booking', () => {
+  it('tells Mia to hand off when more than one person wants to come in', () => {
+    const out = buildCustomerSystemPrompt({})
+    expect(out).toMatch(/two or more people/i)
+    expect(out).toMatch(/hand off/i)
+    expect(out).toMatch(/never book just one of them/i)
+    // the old "book each person separately" behaviour is gone
+    expect(out).not.toMatch(/book each person separately/i)
+  })
+})
+
 describe('known-contact awareness (no re-asking for on-file details)', () => {
   it('tells Mia not to re-ask when the contact has a name/email on file', () => {
     const out = buildCustomerSystemPrompt({ knownContact: { firstName: 'Edel', hasEmail: true } })
