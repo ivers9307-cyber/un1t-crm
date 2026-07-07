@@ -12,10 +12,10 @@ import { usePolledCount } from '../use-polled-count'
 export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp }) {
   const pathname = usePathname()
 
-  // Unread WhatsApp messages awaiting a reply at the active location —
-  // same endpoint + poller as the sidebar Communications badge, so the
-  // two counts can never disagree.
-  const inboxUnread = usePolledCount({
+  // Conversations needing action (awaiting a reply or handed off) at the
+  // active location — same endpoint + poller as the sidebar Communications
+  // badge, so the two counts can never disagree.
+  const inboxActionCount = usePolledCount({
     enabled: !!canWhatsapp,
     url: '/api/whatsapp/unread-count',
   })
@@ -50,9 +50,9 @@ export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp }) {
             )}
           >
             {t.label}
-            {t.id === 'inbox' && inboxUnread > 0 && (
+            {t.id === 'inbox' && inboxActionCount > 0 && (
               <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold align-middle">
-                {inboxUnread > 99 ? '99+' : inboxUnread}
+                {inboxActionCount > 99 ? '99+' : inboxActionCount}
               </span>
             )}
           </Link>
