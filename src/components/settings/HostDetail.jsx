@@ -14,7 +14,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   CreditCard, Check, Minus, Save, RefreshCw, AlertTriangle, ExternalLink, Store,
-  Link2, Copy,
+  Link2, Copy, Trash2,
 } from 'lucide-react'
 import { Button, Card, Field, Loading } from '@/components/ui'
 import { hostCanTakePayments, PROVIDER_STRIPE_CONNECT } from '@/lib/event-hosts'
@@ -72,6 +72,9 @@ export default function HostDetail({ hostId }) {
   const [linkUrl, setLinkUrl] = useState(null)
   const [linkError, setLinkError] = useState(null)
   const [copied, setCopied] = useState(false)
+
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState(null)
 
   // Hydrate the editable form from a freshly-loaded host row.
   const applyHost = useCallback((h) => {
@@ -208,6 +211,28 @@ export default function HostDetail({ hostId }) {
       setTimeout(() => setCopied(false), 2000)
     } catch {
       setLinkError('Could not copy — select the link and copy it manually.')
+    }
+  }
+
+  // Remove the host. Events assigned to them fall back to internal/UN1T
+  // (Revolut) via ON DELETE SET NULL — the host's own Stripe account is
+  // untouched. On success we bounce back to the hosts list.
+  async function handleDelete() {
+    if (deleting) return
+    const label = name.trim() || 'this host'
+    if (!window.confirm(
+      `Delete ${label}?\n\nAny events currently assigned to them will switch back to UN1T (settled via Revolut). Their Stripe account is not affected — this only removes the payee record here.`
+    )) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      const res = await fetch(`/api/hosts/${hostId}`, { method: 'DELETE' })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
+      window.location.href = '/settings/hosts'
+    } catch (e) {
+      setDeleting(false)
+      setDeleteError(e.message || 'Could not delete host')
     }
   }
 
@@ -398,6 +423,38 @@ export default function HostDetail({ hostId }) {
             {saved && <span className="text-xs text-green-700">Saved.</span>}
           </div>
         </form>
+      </Card>
+
+      {/* Danger zone — a separate card so a delete can't be fat-fingered next
+          to Save. Deleting only drops our payee record; assigned events revert
+          to UN1T (Revolut) via ON DELETE SET NULL and the host keeps their own
+          Stripe account. */}
+      <Card title="Danger zone">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-un1t-text">Delete this host</p>
+            <p className="mt-1 text-xs text-un1t-muted">
+              Removes the payee record here. Any events assigned to this host
+              switch back to UN1T (settled via Revolut). Their Stripe account
+              isn&apos;t affected.
+            </p>
+            {deleteError && (
+              <p className="mt-2 text-xs text-stage-lost flex items-center gap-1">
+                <AlertTriangle size={12} /> {deleteError}
+              </p>
+            )}
+          </div>
+          <Button
+            type="button"
+            variant="danger"
+            size="sm"
+            icon={Trash2}
+            loading={deleting}
+            onClick={handleDelete}
+          >
+            Delete host
+          </Button>
+        </div>
       </Card>
     </div>
   )
