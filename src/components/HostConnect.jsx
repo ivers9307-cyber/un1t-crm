@@ -158,8 +158,7 @@ export default function HostConnect({ token }) {
 
         <div className="lp-card-glow rounded-2xl p-6">
           <p className="text-sm text-white/70 leading-relaxed">
-            Connect your Stripe account so your event ticket sales are paid directly to you
-            (UN1T keeps a small booking fee per ticket).
+            Connect your Stripe account so your event ticket sales are paid directly to you.
           </p>
 
           {started && (
