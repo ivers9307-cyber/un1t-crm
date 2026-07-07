@@ -68,6 +68,11 @@ const CreateSchema = z.object({
   members_only: z.boolean().optional(),
   // EVENTS-LOC.2: when true, this event shows in every location's list.
   shared: z.boolean().optional(),
+  // EVENTS-HOST.4: nullable FK -> event_hosts. NULL = internal UN1T event
+  // (settled via Revolut, the default); set = that host is paid directly
+  // via Stripe Connect with UN1T's per-ticket booking fee. Org-validated
+  // against the event's location below before it's persisted.
+  host_id: uuidLike.nullable().optional(),
   member_fee_cents: z.number().int().nonnegative().nullable().optional(),
   non_member_fee_cents: z.number().int().nonnegative().nullable().optional(),
   payment_currency: z.string().length(3).optional(),
@@ -182,6 +187,29 @@ export async function POST(request) {
   }
 
   const db = createServerClient()
+
+  // EVENTS-HOST.4 — payment-routing security. If the operator assigned a
+  // host, verify it's a real event_hosts row in THIS event's organization
+  // (resolved from the event's location). Without this, an operator could
+  // set host_id to another org's host and route this event's takings to
+  // that org's Stripe account (an IDOR on the payout). Rejected BEFORE the
+  // insert. host_id NULL/absent = internal UN1T event, no check needed.
+  if (body.host_id) {
+    const { data: loc } = await db
+      .from('locations')
+      .select('organization_id')
+      .eq('id', body.location_id)
+      .single()
+    const { data: host } = await db
+      .from('event_hosts')
+      .select('id, organization_id')
+      .eq('id', body.host_id)
+      .single()
+    if (!loc || !host || host.organization_id !== loc.organization_id) {
+      return NextResponse.json({ success: false, error: 'invalid_host' }, { status: 400 })
+    }
+  }
+
   const { data, error } = await db
     .from('race_events')
     .insert({
@@ -202,6 +230,8 @@ export async function POST(request) {
       member_pricing_enabled: body.member_pricing_enabled ?? false,
       members_only: body.members_only ?? false,
       shared: body.shared ?? false,
+      // EVENTS-HOST.4 — payment routing. NULL = internal (Revolut).
+      host_id: body.host_id ?? null,
       // Only persist member_fee_cents when pricing is on — keeps the
       // table consistent ("if you see member_fee, member pricing is enabled").
       member_fee_cents: (body.member_pricing_enabled && body.member_fee_cents != null) ? body.member_fee_cents : null,
