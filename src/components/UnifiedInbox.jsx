@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
+import { needsReply, isAgentHandoff } from '@/lib/inbox-queues'
 import {
   MessageCircle, Instagram, RefreshCw, Check, Inbox as InboxIcon,
   ArrowLeft,
@@ -38,18 +39,6 @@ function rowName(conv) {
   if (conv._ch === 'wa') return conv.wa_profile_name || conv.wa_phone
   if (conv.ig_username) return `@${conv.ig_username}`
   return 'Instagram user'
-}
-
-function needsReply(c) {
-  return !c.resolved_at && c.last_message_direction === 'inbound'
-}
-
-// INBOX-HANDOFF.1 — the agent escalated this thread to a human and
-// nobody has resolved it yet. agent_handed_off_at is stamped by the
-// customer agent's handoff path (auto-reply.js); resolving the thread
-// clears it from this queue.
-function isAgentHandoff(c) {
-  return !!c.agent_handed_off_at && !c.resolved_at
 }
 
 const CHANNELS = [

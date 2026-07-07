@@ -98,9 +98,11 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
     enabled: hasPerm('issues_inbox'),
     url: '/api/issues/count',
   })
-  // SIDEBAR-BADGES.1 — Communications badge: total unread WhatsApp
-  // messages at the active location (matches the Studio dashboard KPI).
-  const whatsappUnreadCount = usePolledCount({
+  // SIDEBAR-BADGES.2 — Communications badge: conversations NEEDING ACTION
+  // (unresolved WhatsApp + Instagram threads awaiting a reply or handed off
+  // by the agent) at the active location. Not raw unread — an opened-but-
+  // unanswered or handed-off thread must still badge. See the count endpoint.
+  const communicationsActionCount = usePolledCount({
     enabled: hasPerm('whatsapp'),
     url: '/api/whatsapp/unread-count',
   })
@@ -111,7 +113,7 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
     '/invoices': invoicesPendingCount,
     '/approvals': approvalsPendingCount,
     '/issues': issuesPendingCount,
-    '/communications': whatsappUnreadCount,
+    '/communications': communicationsActionCount,
   }
 
   // Browser tab title prefix — surfaces the combined pending count

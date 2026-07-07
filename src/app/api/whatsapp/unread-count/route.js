@@ -1,21 +1,28 @@
 // GET /api/whatsapp/unread-count
 //
-// SIDEBAR-BADGES.1 — sidebar badge count for the Communications hub.
-// UIX-P1b made the inbox a unified WhatsApp + Instagram queue, so the
-// count now sums unread across BOTH channels' conversations at the
-// active location (route name kept — both pollers point here).
-// Follows the { success, data: { count } } envelope the Sidebar's
-// usePolledCount expects; returns 0 for users without the whatsapp
-// permission (or no active location).
+// SIDEBAR-BADGES.2 — the Communications badge (sidebar nav item AND the
+// Communications tab-strip Inbox tab both poll this one endpoint). It counts
+// conversations that NEED A HUMAN TO ACT — unresolved threads awaiting a reply
+// or handed off by the agent — across BOTH channels (WhatsApp + Instagram) at
+// the active location. This mirrors the UnifiedInbox's own needs-reply/handoff
+// queues via the shared `needsAction` predicate, so the badge and the inbox can
+// never disagree.
 //
-// Not paginated, by design — this mirrors the established dashboard query
-// (one gym location never has >1000 conversations sitting unread); the
-// badge caps its display at 99+ regardless.
+// It used to sum raw unread_count, which read 0 the moment a thread was opened
+// (without being replied to or resolved) and never saw an agent handoff whose
+// last line was Mia's holding message — so genuinely-pending work showed no
+// badge. Route path kept ("unread-count") because both pollers point here.
+//
+// Follows the { success, data: { count } } envelope the Sidebar's
+// usePolledCount expects; returns 0 for users without the whatsapp permission
+// (or no active location). Not paginated, by design — one gym never has >1000
+// unresolved conversations; the badge caps display at 99+ regardless.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
+import { needsAction } from '@/lib/inbox-queues'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -31,21 +38,21 @@ export async function GET() {
   }
 
   const db = createServerClient()
+  // Only the columns the needsAction predicate reads. Pre-filter to unresolved
+  // rows in the query so the payload stays tiny; the predicate does the final
+  // needs-reply-or-handoff decision (and drops empty conversation shells).
+  const cols = 'resolved_at, last_message_at, last_message_direction, agent_handed_off_at'
+  const countActionable = rows => (rows || []).filter(needsAction).length
   try {
-    const sum = rows => (rows || []).reduce((s, c) => s + (c.unread_count || 0), 0)
     const [wa, ig] = await Promise.all([
-      db.from('whatsapp_conversations')
-        .select('unread_count')
-        .eq('location_id', locationId)
-        .gt('unread_count', 0),
-      db.from('instagram_conversations')
-        .select('unread_count')
-        .eq('location_id', locationId)
-        .gt('unread_count', 0),
+      db.from('whatsapp_conversations').select(cols)
+        .eq('location_id', locationId).is('resolved_at', null),
+      db.from('instagram_conversations').select(cols)
+        .eq('location_id', locationId).is('resolved_at', null),
     ])
     // A failure on either channel degrades to that channel counting 0
     // rather than erroring the badge.
-    const count = sum(wa.error ? [] : wa.data) + sum(ig.error ? [] : ig.data)
+    const count = countActionable(wa.error ? [] : wa.data) + countActionable(ig.error ? [] : ig.data)
     return NextResponse.json({ success: true, data: { count } })
   } catch {
     return NextResponse.json({ success: true, data: { count: 0 } })
