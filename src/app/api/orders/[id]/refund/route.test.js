@@ -116,4 +116,54 @@ describe('resolveRefund — money guards', () => {
     expect(result.ok).toBe(true)
     expect(result.refundAmount).toBe(5000)
   })
+
+  // ── Partial vs full + cumulative refunds ───────────────────────────────────
+
+  it('flags a full refund as isFull with the whole amount as the new total', () => {
+    const result = resolveRefund(completedOrder, 5000)
+    expect(result.ok).toBe(true)
+    expect(result.isFull).toBe(true)
+    expect(result.newRefundedTotal).toBe(5000)
+  })
+
+  it('flags a partial refund as NOT isFull (order stays completed)', () => {
+    const result = resolveRefund(completedOrder, 2500)
+    expect(result.ok).toBe(true)
+    expect(result.isFull).toBe(false)
+    expect(result.newRefundedTotal).toBe(2500)
+  })
+
+  it('guards against the REMAINING balance after a prior partial refund', () => {
+    // €50 order, €20 already refunded → only €30 left; €40 must be rejected.
+    const order = { ...completedOrder, refunded_amount_cents: 2000 }
+    const result = resolveRefund(order, 4000)
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('refund_exceeds_order')
+    expect(result.error).toMatch(/3000/)
+  })
+
+  it('accepts a top-up refund up to the remaining balance and marks it full', () => {
+    const order = { ...completedOrder, refunded_amount_cents: 2000 }
+    const result = resolveRefund(order, 3000)
+    expect(result.ok).toBe(true)
+    expect(result.refundAmount).toBe(3000)
+    expect(result.newRefundedTotal).toBe(5000)
+    expect(result.isFull).toBe(true)
+  })
+
+  it('defaults to refunding the REMAINING balance when no amount is supplied', () => {
+    const order = { ...completedOrder, refunded_amount_cents: 2000 }
+    const result = resolveRefund(order, undefined)
+    expect(result.ok).toBe(true)
+    expect(result.refundAmount).toBe(3000)
+    expect(result.isFull).toBe(true)
+  })
+
+  it('rejects a refund on an already fully-refunded order (balance exhausted)', () => {
+    const order = { ...completedOrder, refunded_amount_cents: 5000 }
+    const result = resolveRefund(order, undefined)
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('already_refunded')
+    expect(result.status).toBe(409)
+  })
 })

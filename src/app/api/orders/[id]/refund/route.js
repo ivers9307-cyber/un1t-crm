@@ -67,15 +67,37 @@ export function resolveRefund(order, requestedAmountCents) {
       status: 422,
     }
   }
-  if (requestedAmountCents && requestedAmountCents > order.amount_cents) {
+  // Refunds are cumulative: a partial refund leaves the order 'completed'
+  // (see the handler), so guard against the REMAINING refundable balance,
+  // not the gross total — otherwise a second partial refund could push the
+  // total refunded past what was captured.
+  const alreadyRefunded = Number(order.refunded_amount_cents) || 0
+  const remaining = Number(order.amount_cents) - alreadyRefunded
+  if (remaining <= 0) {
+    return {
+      ok: false,
+      code: 'already_refunded',
+      error: 'This order has already been fully refunded.',
+      status: 409,
+    }
+  }
+  if (requestedAmountCents && requestedAmountCents > remaining) {
     return {
       ok: false,
       code: 'refund_exceeds_order',
-      error: `Refund amount (${requestedAmountCents}) exceeds order total (${order.amount_cents}).`,
+      error: `Refund amount (${requestedAmountCents}) exceeds the remaining refundable balance (${remaining}) on this ${order.amount_cents}-cent order.`,
       status: 400,
     }
   }
-  return { ok: true, refundAmount: requestedAmountCents || order.amount_cents }
+  const refundAmount = requestedAmountCents || remaining
+  const newRefundedTotal = alreadyRefunded + refundAmount
+  return {
+    ok: true,
+    refundAmount,
+    newRefundedTotal,
+    // True when this refund clears the remaining balance → order becomes 'refunded'.
+    isFull: newRefundedTotal >= Number(order.amount_cents),
+  }
 }
 
 export async function POST(request, props) {
@@ -134,13 +156,17 @@ export async function POST(request, props) {
     }, { status })
   }
 
-  // Update orders row.
+  // Update orders row. Partial refunds keep the order 'completed' (a valid
+  // enum value) with the CUMULATIVE refunded_amount_cents recorded; only a
+  // refund that clears the remaining balance flips it to 'refunded'.
+  // (Previously every refund — partial included — was mislabelled 'refunded',
+  // which both hid partials and blocked any legitimate top-up refund.)
   const nowIso = new Date().toISOString()
-  const newStatus = refundAmount === order.amount_cents ? 'refunded' : 'refunded' // partial still 'refunded' for v1
+  const newStatus = resolution.isFull ? 'refunded' : order.status
   const updates = {
     status: newStatus,
     refunded_at: nowIso,
-    refunded_amount_cents: refundAmount,
+    refunded_amount_cents: resolution.newRefundedTotal,
     metadata: {
       ...(order.metadata || {}),
       refund_reason: body.reason || null,
@@ -153,9 +179,14 @@ export async function POST(request, props) {
   // Cascade to source. Both target tables have their own status enum.
   if (order.source_type === 'race_registration') {
     await db.from('race_payments')
-      .update({ status: 'refunded', refunded_at: nowIso, refunded_amount_cents: refundAmount })
+      .update({
+        status: resolution.isFull ? 'refunded' : 'completed',
+        refunded_at: nowIso,
+        refunded_amount_cents: resolution.newRefundedTotal,
+      })
       .eq('id', order.source_id)
-  } else if (order.source_type === 'car_deposit') {
+  } else if (order.source_type === 'car_deposit' && resolution.isFull) {
+    // Car deposits are fixed-amount; only a full refund clears the deposit.
     await db.from('cars')
       .update({ deposit_status: 'refunded' })
       .eq('id', order.source_id)
