@@ -1,10 +1,10 @@
 // /api/studio-management/ac/devices
 //
 //   GET  → list AC devices visible to the caller at the active
-//          location, filtered by the per-staff allowlist. Master
-//          sees every device at the location; manager/owner with
-//          NULL allowlist sees every device; everyone else sees
-//          only the devices ticked in profile_locations.ac_device_ids.
+//          location, filtered by resolveAcAllowlist (AC-ROLE.1):
+//          master sees every device; everyone else resolves per-user
+//          override → role-template default → code default
+//          (manager/owner = all, others = none).
 //          Live state is NOT fetched here — that's the per-device
 //          /state route. The list returns the row + label + provider
 //          so the panel can render one card per visible device and

@@ -4,9 +4,11 @@
 // / state-read flows. Centralising here means three things can never
 // be accidentally skipped:
 //
-//   1. The per-device permission gate — master bypasses, manager+ at
-//      legacy NULL allowlist gets unrestricted access, everyone else
-//      must have device.id in their profile_locations.ac_device_ids.
+//   1. The per-device permission gate — master bypasses; everyone else
+//      resolves through resolveAcAllowlist (AC-ROLE.1): per-user override
+//      (profile_locations.ac_device_ids) → role template
+//      (location_role_permissions.ac_device_ids) → code default
+//      (manager/owner = all devices, others = none).
 //   2. The vendor dispatch — Sensibo vs ThinQ pick happens here, not
 //      in each route, so a typo in one route can't silently route to
 //      the wrong vendor.
