@@ -436,32 +436,46 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // whose profiles.employment_type matches. We merge here so every
   // consumer downstream still sees ONE template blob per location.
   const roleTemplatesByLocation = {}
+  const acDeviceTemplatesByLocation = {}
   if (!isMaster) {
     const templateLocationIds = Object.keys(rolesByLocation)
     if (templateLocationIds.length > 0) {
       try {
         const { data: templateRows } = await db
           .from('location_role_permissions')
-          .select('location_id, role, employment_type, permissions')
+          .select('location_id, role, employment_type, permissions, ac_device_ids')
           .in('location_id', templateLocationIds)
-        const rowFor = (locId, emp) => (templateRows || []).find(r =>
+        const findRow = (locId, emp) => (templateRows || []).find(r =>
           r.location_id === locId && r.role === rolesByLocation[locId] && r.employment_type === emp
-        )?.permissions || null
+        ) || null
+        const rowFor = (locId, emp) => findRow(locId, emp)?.permissions || null
         for (const locId of templateLocationIds) {
           const merged = mergeTemplates(
             rowFor(locId, 'all'),
             profile.employment_type ? rowFor(locId, profile.employment_type) : null
           )
           if (merged) roleTemplatesByLocation[locId] = merged
+          // AC-ROLE.1 — resolve the role-template AC device list:
+          // employment-type variant wins if set (non-null), else the
+          // 'all' row, else inherit (null). Stored ABSOLUTE, not diffed.
+          const allRow = findRow(locId, 'all')
+          const varRow = profile.employment_type ? findRow(locId, profile.employment_type) : null
+          const acList = Array.isArray(varRow?.ac_device_ids)
+            ? varRow.ac_device_ids
+            : (Array.isArray(allRow?.ac_device_ids) ? allRow.ac_device_ids : null)
+          if (acList !== null) acDeviceTemplatesByLocation[locId] = acList
         }
       } catch {
         // Defensive: a failed template fetch degrades to code
-        // defaults (empty map) rather than failing the request.
+        // defaults (empty maps) rather than failing the request.
       }
     }
   }
   const activeRoleTemplate = activeLocation?.id
     ? roleTemplatesByLocation[activeLocation.id] || null
+    : null
+  const activeAcDeviceTemplate = activeLocation?.id
+    ? (acDeviceTemplatesByLocation[activeLocation.id] ?? null)
     : null
 
   // Active organization mirrors active location — useful for any UI
@@ -494,6 +508,8 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     // reads activeRoleTemplate; hasPermissionForLocation reads the map.
     roleTemplatesByLocation,
     activeRoleTemplate,
+    acDeviceTemplatesByLocation,
+    activeAcDeviceTemplate,
     // Active-location role — flips when the user switches location.
     role: activeLocationRole,
     // Original global value, for callers that need canonical/highest role.
