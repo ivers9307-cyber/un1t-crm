@@ -11,6 +11,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { signCheckinToken } from '@/lib/event-checkin-tokens'
 
 export const runtime = 'nodejs'
 
@@ -36,6 +37,25 @@ export async function GET(_request, props) {
     return NextResponse.json({ success: false, error: 'Registration not found' }, { status: 404 })
   }
 
+  // On-screen check-in QR — mint the SAME per-attendee signed token the
+  // confirmation email already uses (event-checkin-tokens + the public
+  // checkin-qr PNG route), so the buyer can show their pass on this page
+  // too. Same exposure as the email they just received; the token only
+  // opens a staff-gated scan page (identity, not authorisation). Minted
+  // only once the registration is confirmed (paid) — never for pending.
+  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || null
+  const eventId = data.race?.id || null
+  const canMintQr = data.status === 'confirmed' && !!secret && !!eventId
+  const withQr = (rawMembers) => (rawMembers || []).map((m) => {
+    const base = { id: m.id, name: m.name, role: m.role, is_member: m.is_member }
+    if (!canMintQr || !m?.id) return base
+    const token = signCheckinToken({ eventId, registrationId: data.id, memberId: m.id }, secret)
+    return { ...base, qr_url: `/api/public/events/checkin-qr?t=${encodeURIComponent(token)}` }
+  })
+  const team = data.teams
+    ? { id: data.teams.id, name: data.teams.name, size: data.teams.size, team_members: withQr(data.teams.team_members) }
+    : null
+
   return NextResponse.json({
     success: true,
     data: {
@@ -45,7 +65,7 @@ export async function GET(_request, props) {
       team_composition: data.team_composition,
       race: data.race,
       wave: data.wave,
-      team: data.teams,
+      team,
     },
   })
 }

@@ -76,6 +76,8 @@ export default function RaceConfirmedPage({ slug, registrationId }) {
   const members = (team.team_members || []).slice().sort((a, b) =>
     (a.role === 'captain' ? 0 : 1) - (b.role === 'captain' ? 0 : 1)
   )
+  // Per-attendee check-in QR URLs, minted server-side once confirmed.
+  const membersWithQr = members.filter((m) => m.qr_url)
 
   // Client-side .ics — no backend. 2h default duration, TZ-safe (all
   // UTC getters so the host machine's offset never contaminates the
@@ -154,12 +156,49 @@ export default function RaceConfirmedPage({ slug, registrationId }) {
             <p className="text-[11px] uppercase tracking-[0.2em] text-white/45 font-semibold mb-4">
               {race.name}
             </p>
-            <div className="mx-auto w-[150px] h-[150px] rounded-2xl bg-white/[0.04] border border-white/12 grid place-items-center">
-              <QrCode size={54} strokeWidth={1.25} className="text-white/25" />
-            </div>
-            <p className="mt-3 text-[11px] uppercase tracking-[0.16em] text-white/45">
-              Your check-in QR is in your confirmation email
-            </p>
+            {membersWithQr.length > 0 ? (
+              <>
+                <div className={`grid gap-4 ${membersWithQr.length === 1 ? 'grid-cols-1 justify-items-center' : 'grid-cols-2'}`}>
+                  {membersWithQr.map((m) => {
+                    const dim = membersWithQr.length === 1 ? 150 : 128
+                    return (
+                      <div key={m.id} className="flex flex-col items-center">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={m.qr_url}
+                          alt={`Check-in code for ${m.name}`}
+                          width={dim}
+                          height={dim}
+                          style={{ width: dim, height: dim }}
+                          className="rounded-2xl bg-white p-2.5"
+                        />
+                        <span className="mt-2 text-[12px] text-white/75 inline-flex items-center gap-1">
+                          {m.is_member && <BadgeCheck size={12} className="text-emerald-400" />}
+                          {m.name}
+                          {m.role === 'captain' && (
+                            <span className="text-[10px] uppercase tracking-wider text-amber-400 font-semibold">· Captain</span>
+                          )}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+                <p className="mt-4 text-[11px] uppercase tracking-[0.16em] text-white/45">
+                  {membersWithQr.length > 1 ? 'Show each attendee’s code at the door' : 'Show at the door to check in'}
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="mx-auto w-[150px] h-[150px] rounded-2xl bg-white/[0.04] border border-white/12 grid place-items-center">
+                  <QrCode size={54} strokeWidth={1.25} className="text-white/25" />
+                </div>
+                <p className="mt-3 text-[11px] uppercase tracking-[0.16em] text-white/45">
+                  {isConfirmed
+                    ? 'Your check-in QR is in your confirmation email'
+                    : 'Your check-in code appears once payment is confirmed'}
+                </p>
+              </>
+            )}
           </div>
 
           {/* perforated divider — notches clip against the card's overflow-hidden */}
@@ -200,7 +239,7 @@ export default function RaceConfirmedPage({ slug, registrationId }) {
               )}
             </dl>
 
-            {members.length > 0 && (
+            {members.length > 0 && membersWithQr.length === 0 && (
               <div className="mt-4 flex flex-wrap gap-2">
                 {members.map((m) => (
                   <span key={m.id} className="inline-flex items-center gap-1.5 text-[13px] px-3 py-1.5 rounded-full bg-white/5 border border-white/12">
