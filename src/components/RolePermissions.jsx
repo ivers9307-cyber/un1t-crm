@@ -29,6 +29,7 @@ import {
   MOBILE_PERMISSIONS,
   hydratePermissions,
 } from '@shared/permissions'
+import AcDeviceAllowlistPicker from './AcDeviceAllowlistPicker'
 
 const ROLE_TABS = [
   { key: 'owner', label: 'Owner' },
@@ -117,6 +118,16 @@ export default function RolePermissions({ locationId }) {
     : data?.[activeRole]?.variants?.[segment]?.effective
   const blob = edits[editKey] || serverBlob
 
+  const [acEdits, setAcEdits] = useState({})
+  const serverAc = segment === 'all'
+    ? (data?.[activeRole]?.ac_device_ids ?? null)
+    : (data?.[activeRole]?.variants?.[segment]?.ac_device_ids ?? null)
+  const currentAc = (editKey in acEdits) ? acEdits[editKey] : serverAc
+  function setAc(next) {
+    setAcEdits((prev) => ({ ...prev, [editKey]: next }))
+    setSavedAt(null)
+  }
+
   // APPROVALS-PERCAT.1 — approvals_inbox is location-gate-only (edited in
   // Location Features, not here); the six per-category grants render in
   // their own "Approvals" group below.
@@ -140,7 +151,7 @@ export default function RolePermissions({ locationId }) {
       const res = await fetch(`/api/locations/${locationId}/role-permissions`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: activeRole, employment_type: segment, permissions: blob }),
+        body: JSON.stringify({ role: activeRole, employment_type: segment, permissions: blob, ac_device_ids: currentAc }),
       })
       const json = await res.json()
       if (!json.success) throw new Error(json.error || 'Save failed')
@@ -148,6 +159,11 @@ export default function RolePermissions({ locationId }) {
       // every variant inherits, so a local patch isn't enough.
       await load()
       setEdits((prev) => {
+        const next = { ...prev }
+        delete next[editKey]
+        return next
+      })
+      setAcEdits((prev) => {
         const next = { ...prev }
         delete next[editKey]
         return next
@@ -172,7 +188,7 @@ export default function RolePermissions({ locationId }) {
     return <div className="text-sm text-un1t-subtle">Loading role permissions…</div>
   }
 
-  const dirty = !!edits[editKey]
+  const dirty = !!edits[editKey] || (editKey in acEdits)
   const changedCount =
     webItems.filter((p) => blob[p.key] !== baseline[p.key]).length +
     approvalItems.filter((p) => blob[p.key] !== baseline[p.key]).length +
@@ -265,6 +281,21 @@ export default function RolePermissions({ locationId }) {
               />
             ))}
           </div>
+        </section>
+
+        <section>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-un1t-subtle mb-1">AC devices</h3>
+          <p className="text-[11px] text-un1t-subtle mb-2">
+            Default AC units this role controls at this location. Takes effect only when
+            Studio Management is on for the role. Individual profiles can override.
+          </p>
+          <AcDeviceAllowlistPicker
+            locationId={locationId}
+            locationName=""
+            value={currentAc}
+            inheritLabel="Inherit code default"
+            onChange={setAc}
+          />
         </section>
 
         <section>
