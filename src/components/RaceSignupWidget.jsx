@@ -480,11 +480,41 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
     : null
 
   // Poster background (monochrome gradient copied from the approved
-  // mockup's .hero-media .bg) — works with no image (this PR adds none).
+  // mockup's .hero-media .bg) — the graceful fallback when no hero
+  // photo is set.
   const heroBg =
     'radial-gradient(120% 90% at 78% 6%, rgba(255,255,255,.16), rgba(255,255,255,0) 46%),' +
     'radial-gradient(90% 80% at 12% 100%, rgba(255,255,255,.10), rgba(255,255,255,0) 40%),' +
     'linear-gradient(180deg,#141414 0%,#0a0a0a 55%,#000 100%)'
+
+  // Optional hero photo. When race.hero_image_url is a non-empty string
+  // we render it as the hero background (keeping the ken-burns zoom and
+  // the legibility scrim on top); otherwise we fall back to the
+  // generated monochrome poster gradient above.
+  const heroImageUrl =
+    typeof race.hero_image_url === 'string' && race.hero_image_url.trim()
+      ? race.hero_image_url.trim()
+      : null
+  const hasHeroImage = !!heroImageUrl
+  // CSS-escape the url() argument so a stray quote/backslash can't break
+  // out of the string (operator-set data, but cheap to harden).
+  const heroImageCss = heroImageUrl
+    ? `url("${heroImageUrl.replace(/["\\]/g, (c) => `\\${c}`)}")`
+    : null
+
+  // Optional per-event accent. Only accept a strict #rrggbb value so a
+  // bad/injected string can never leak into an inline style. Used to
+  // subtly tint the "live" status pill; the default (no accent) leaves
+  // the pill exactly as before.
+  const accentHex =
+    typeof race.accent_hex === 'string' && /^#[0-9a-fA-F]{6}$/.test(race.accent_hex.trim())
+      ? race.accent_hex.trim()
+      : null
+  const livePillStyle =
+    pillLive && accentHex
+      ? { backgroundColor: `${accentHex}1a`, borderColor: `${accentHex}55`, color: accentHex }
+      : undefined
+  const liveDotStyle = pillLive && accentHex ? { backgroundColor: accentHex } : undefined
 
   // Dynamic submit label — identical logic to the pre-reskin button;
   // shared by the desktop submit and the mobile sticky action bar.
@@ -513,18 +543,33 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
              the paste-anywhere iframe embed uses a compact header ──── */}
       {!embedded && (
       <section className="relative min-h-[58svh] flex items-end overflow-hidden lp-grain">
-        {/* monochrome poster background + slow ken-burns zoom */}
+        {/* Hero background + slow ken-burns zoom. When a hero photo is
+            set we render it (cover/center); otherwise the monochrome
+            poster gradient + grid-lines fallback. */}
         <div className="absolute inset-0 overflow-hidden">
-          <div className="absolute inset-[-4%] lp-kenburns" style={{ background: heroBg }} />
-          <div
-            className="absolute inset-0 opacity-50"
-            style={{
-              backgroundImage: 'linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px)',
-              backgroundSize: '56px 100%',
-              maskImage: 'linear-gradient(180deg,transparent,#000 40%,transparent)',
-              WebkitMaskImage: 'linear-gradient(180deg,transparent,#000 40%,transparent)',
-            }}
-          />
+          {hasHeroImage ? (
+            <div
+              className="absolute inset-[-4%] lp-kenburns"
+              style={{
+                backgroundImage: heroImageCss,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+              }}
+            />
+          ) : (
+            <>
+              <div className="absolute inset-[-4%] lp-kenburns" style={{ background: heroBg }} />
+              <div
+                className="absolute inset-0 opacity-50"
+                style={{
+                  backgroundImage: 'linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px)',
+                  backgroundSize: '56px 100%',
+                  maskImage: 'linear-gradient(180deg,transparent,#000 40%,transparent)',
+                  WebkitMaskImage: 'linear-gradient(180deg,transparent,#000 40%,transparent)',
+                }}
+              />
+            </>
+          )}
         </div>
         {/* huge outlined watermark of the event name */}
         <div
@@ -540,9 +585,12 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
         {/* hero content */}
         <div className="relative z-10 max-w-6xl mx-auto w-full px-5 pb-12 lp-hero-stagger">
           <div>
-            <span className={`inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] px-3 py-1.5 rounded-full border ${pillLive ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-white/10 border-white/15 text-white/80'}`}>
+            <span
+              style={livePillStyle}
+              className={`inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] px-3 py-1.5 rounded-full border ${pillLive ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-white/10 border-white/15 text-white/80'}`}
+            >
               {pillLive && (
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_0_4px_rgba(34,197,94,0.18)]" />
+                <span style={liveDotStyle} className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_0_4px_rgba(34,197,94,0.18)]" />
               )}
               {pillLabel}
             </span>
@@ -571,8 +619,11 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
         {/* Compact event header — embed only (the hero is hidden there) */}
         {embedded && (
           <div className="mb-5">
-            <span className={`inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] px-3 py-1.5 rounded-full border ${pillLive ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-white/10 border-white/15 text-white/80'}`}>
-              {pillLive && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+            <span
+              style={livePillStyle}
+              className={`inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] px-3 py-1.5 rounded-full border ${pillLive ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-white/10 border-white/15 text-white/80'}`}
+            >
+              {pillLive && <span style={liveDotStyle} className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
               {pillLabel}
             </span>
             <h1 className="mt-3 font-bold uppercase tracking-tight text-2xl leading-tight text-white">{race.name}</h1>

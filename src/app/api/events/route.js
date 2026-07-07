@@ -75,6 +75,12 @@ const CreateSchema = z.object({
   // Schema CHECK caps the array at 6 to leave headroom; UI caps at 3.
   // Each entry must be an http(s) URL (no data: blobs).
   tv_logos: z.array(z.string().url().max(2000)).max(6).optional(),
+  // Public-page hero image + accent colour. Hero is normally uploaded
+  // after the event is saved (needs an id to namespace the storage
+  // path), so these are typically set on the follow-up PUT — but the
+  // create schema accepts them too. accent_hex is a 6-digit hex.
+  hero_image_url: z.string().url().max(2000).nullable().optional(),
+  accent_hex: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
   // Waves (mig 083) — at least one required for a usable race.
   // Server normalises by start_time ascending; UNIQUE on
   // (race_event_id, start_time) catches duplicates from the DB side.
@@ -202,6 +208,8 @@ export async function POST(request) {
       non_member_fee_cents: body.non_member_fee_cents ?? null,
       payment_currency: body.payment_currency ?? 'EUR',
       tv_logos: Array.isArray(body.tv_logos) ? body.tv_logos : [],
+      hero_image_url: body.hero_image_url ?? null,
+      accent_hex: body.accent_hex ?? null,
     })
     .select()
     .single()
