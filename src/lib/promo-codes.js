@@ -26,8 +26,11 @@ export function computeDiscountCents(code, orderCents) {
 
 /**
  * Returns null when the code may be applied, else a customer-facing reason.
- * The redemption CAP is also enforced atomically at claim time in the route —
- * this is the pre-check for a clean error message.
+ * The redemption cap here is a BEST-EFFORT pre-check: the route increments
+ * redeemed_count non-atomically after the booking, so under high concurrency a
+ * capped code can be honoured a few extra times (bounded overshoot, never a
+ * credit or a negative charge). Fine for the low-concurrency reality; swap in
+ * an atomic SQL increment if a hard cap is ever required.
  * @param {object} code  promo_codes row (already loaded for this location)
  * @param {{eventId?:string, nowMs?:number, isMemberOrder?:boolean}} ctx
  */
