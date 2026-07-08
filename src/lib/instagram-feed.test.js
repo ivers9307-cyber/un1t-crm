@@ -117,4 +117,20 @@ describe('syncLocationIgFeed', () => {
     expect(r.synced).toBe(1)
     expect(ops.upserts.map((u) => u.row.ig_media_id)).toEqual(['A'])
   })
+
+  it('does NOT wipe the last-good cache when EVERY re-host fails (keep-last-good)', async () => {
+    // Graph returns A+B fine, but every image re-host blips this run. The
+    // existing A/B rows must survive — prune keys on the ids IG returned, not
+    // on what re-hosted successfully.
+    const { db, ops } = fakeDb(['A', 'B'])
+    const allImagesFail = async (url) => {
+      if (url.includes('/media')) return mediaResp
+      if (url.includes('fields=username')) return { ok: true, json: async () => ({ username: 'un1t' }) }
+      return { ok: false, status: 503 } // every image fetch fails
+    }
+    const r = await syncLocationIgFeed({ db, connection: conn, fetchImpl: allImagesFail })
+    expect(r.synced).toBe(0)
+    expect(ops.upserts).toHaveLength(0)
+    expect(ops.deletedIn).toBeNull() // A/B preserved — nothing pruned
+  })
 })

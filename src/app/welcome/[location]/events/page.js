@@ -37,7 +37,7 @@ async function loadInstagramPosts(db, locationId) {
     .from('instagram_feed_posts')
     .select('id, ig_username, is_reel, permalink, caption, thumb_path, posted_at')
     .eq('location_id', locationId)
-    .order('posted_at', { ascending: false })
+    .order('posted_at', { ascending: false, nullsFirst: false })
     .limit(10)
   if (!data || data.length === 0) return { posts: [], username: null }
   const posts = data.map((p) => ({

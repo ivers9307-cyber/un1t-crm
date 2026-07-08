@@ -116,9 +116,14 @@ export async function syncLocationIgFeed({ db, connection, fetchImpl = fetch }) 
     }, { onConflict: 'location_id,ig_media_id' })
     keptIds.push(post.ig_media_id)
   }
-  // Prune rows no longer in the latest set (only reached when posts.length > 0).
+  // Prune ONLY rows for posts IG no longer returns — keyed on the ids IG
+  // returned this run (`posts`), NOT on keptIds. A post whose re-host merely
+  // failed this run is still in `posts`, so its last-good row is preserved;
+  // if EVERY re-host blips, keptIds is empty but returnedIds still covers them,
+  // so nothing is wrongly wiped (keep-last-good holds).
+  const returnedIds = posts.map((p) => p.ig_media_id)
   const { data: existing } = await db.from('instagram_feed_posts').select('ig_media_id').eq('location_id', locationId)
-  const stale = (existing || []).map((r) => r.ig_media_id).filter((id) => !keptIds.includes(id))
+  const stale = (existing || []).map((r) => r.ig_media_id).filter((id) => !returnedIds.includes(id))
   if (stale.length > 0) await db.from('instagram_feed_posts').delete().eq('location_id', locationId).in('ig_media_id', stale)
   return { synced: keptIds.length }
 }

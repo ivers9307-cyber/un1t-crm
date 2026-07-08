@@ -34,6 +34,11 @@ export async function GET(request) {
       console.error(`[instagram-feed-sync] location ${conn.location_id}: ${e.message}`)
     }
   }
-  await stampHeartbeat('instagram-feed-sync')
+  // Heartbeat only on overall success: if there were connections and EVERY one
+  // failed, skip the stamp so the stale-cron watcher surfaces the systemic
+  // outage. No connections = nothing to do = success.
+  if (ok > 0 || (conns || []).length === 0) {
+    await stampHeartbeat('instagram-feed-sync')
+  }
   return NextResponse.json({ success: true, data: { locations: (conns || []).length, ok, failed } })
 }
