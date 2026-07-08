@@ -41,6 +41,7 @@ export async function generateMetadata(props) {
       .select('name, description, kind')
       .eq('slug', params.slug)
       .eq('active', true)
+      .eq('status', 'published')
       .single()
     if (!data) return {}
     const title = `${data.name} — UN1T Dublin`

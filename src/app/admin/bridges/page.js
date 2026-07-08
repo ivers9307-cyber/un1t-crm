@@ -30,6 +30,7 @@ export default async function BridgesAdminPage() {
   const { data: locations } = await db
     .from('locations')
     .select('id, name')
+    .eq('is_host_anchor', false)
     .order('name', { ascending: true })
 
   return <BridgesAdmin locations={locations || []} />

@@ -34,7 +34,7 @@ export default async function AdminMatrixPage() {
 
   const [orgsRes, locsRes, staffRes] = await Promise.all([
     db.from('organizations').select('*').eq('active', true).order('name'),
-    db.from('locations').select('*').eq('active', true).order('name'),
+    db.from('locations').select('*').eq('active', true).eq('is_host_anchor', false).order('name'),
     db
       .from('profiles')
       .select(`

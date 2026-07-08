@@ -36,6 +36,7 @@ import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
 import { wouldFit, spotsLeft } from '@/lib/event-signups'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
+import { eventIsPublic } from '@/lib/host-events'
 
 export const runtime = 'nodejs'
 
@@ -92,15 +93,23 @@ export async function POST(request, props) {
     .from('race_events')
     .select(`
       id, location_id, name, slug, race_date, kind, capacity_mode, allowed_team_sizes,
-      registration_opens_at, registration_closes_at, active,
+      registration_opens_at, registration_closes_at, active, status,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
       members_only, payment_currency, create_in_glofox, host_id,
       waves:race_waves ( id, start_time, capacity, label )
     `)
     .eq('slug', params.slug)
     .eq('active', true)
+    .eq('status', 'published')
     .single()
   if (raceErr || !race) {
+    return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
+  }
+
+  // Belt-and-suspenders: never take a booking for a non-public
+  // (unapproved host) event, even if the status=published filter above
+  // were ever bypassed. Same 404 shape as a missing race.
+  if (!race || !eventIsPublic(race)) {
     return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   }
 

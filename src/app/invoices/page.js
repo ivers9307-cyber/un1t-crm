@@ -42,6 +42,7 @@ export default async function InvoicesInboxPage() {
       .from('locations')
       .select('id, name, invoices_inbound_slug')
       .eq('active', true)
+      .eq('is_host_anchor', false)
       .order('name')
     locations = data || []
   } else {

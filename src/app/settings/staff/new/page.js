@@ -14,7 +14,7 @@ export default async function NewStaffPage() {
 
   const db = createServerClient()
   const [{ data: locations }, { data: templateRows }] = await Promise.all([
-    db.from('locations').select('*').eq('active', true).order('name'),
+    db.from('locations').select('*').eq('active', true).eq('is_host_anchor', false).order('name'),
     // PERM-AUDIT.3 — role templates (mig 364) so new assignments
     // start at the role's EFFECTIVE defaults for the chosen location.
     db.from('location_role_permissions').select('location_id, role, employment_type, permissions'),

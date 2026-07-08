@@ -31,7 +31,7 @@ export default async function AdminAuditLogPage() {
   // Filter source data — small enough to load whole-cloth.
   const [staffRes, locsRes] = await Promise.all([
     db.from('profiles').select('id, full_name, email, role').eq('active', true).order('full_name'),
-    db.from('locations').select('id, name').eq('active', true).order('name'),
+    db.from('locations').select('id, name').eq('active', true).eq('is_host_anchor', false).order('name'),
   ])
 
   return (

@@ -7,6 +7,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { loadForMode } from '@/lib/event-signups'
+import { eventIsPublic } from '@/lib/host-events'
 
 export const runtime = 'nodejs'
 // Force-dynamic so wave / fee edits in the operator UI show up
@@ -23,17 +24,26 @@ export async function GET(_request, props) {
       id, name, slug, description, race_date, kind, capacity_mode,
       registration_opens_at, registration_closes_at,
       allowed_team_sizes, location_id,
+      venue_name, venue_address,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
       members_only, payment_currency,
-      hero_image_url, accent_hex,
+      hero_image_url, accent_hex, active, status,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       locations:location_id ( id, name, address, timezone )
     `)
     .eq('slug', params.slug)
     .eq('active', true)
+    .eq('status', 'published')
     .single()
 
   if (error || !data) {
+    return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
+  }
+
+  // Belt-and-suspenders: even with the status=published DB filter above,
+  // never surface a non-public (unapproved host) event. Same 404 shape
+  // so an unpublished event is indistinguishable from a missing one.
+  if (!eventIsPublic(data)) {
     return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   }
 

@@ -54,6 +54,7 @@ export default async function NotificationRegistryPage() {
     db.from('locations')
       .select('id, name, slug, active, notification_config')
       .eq('active', true)
+      .eq('is_host_anchor', false)
       .order('name'),
   ])
 

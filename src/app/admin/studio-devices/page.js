@@ -27,6 +27,7 @@ export default async function StudioDevicesPage() {
   const { data: locations } = await db
     .from('locations')
     .select('id, name')
+    .eq('is_host_anchor', false)
     .order('name', { ascending: true })
 
   return (

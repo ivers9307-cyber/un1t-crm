@@ -29,7 +29,7 @@ export default async function ExpensesPage() {
   const db = createServerClient()
   let locations = []
   if (user.profileRole === 'master' || user.role === 'master') {
-    const { data } = await db.from('locations').select('id, name').eq('active', true).order('name')
+    const { data } = await db.from('locations').select('id, name').eq('active', true).eq('is_host_anchor', false).order('name')
     locations = data || []
   } else {
     locations = (user.locations || []).map((l) => ({ id: l.id, name: l.name }))

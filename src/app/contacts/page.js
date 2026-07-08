@@ -117,7 +117,7 @@ export default async function ContactsPage(props) {
   // Skip the query for non-master callers so the page stays cheap.
   let locationsForImport = []
   if (canImport) {
-    const { data } = await db.from('locations').select('id, name').eq('active', true).order('name')
+    const { data } = await db.from('locations').select('id, name').eq('active', true).eq('is_host_anchor', false).order('name')
     locationsForImport = data || []
   }
 

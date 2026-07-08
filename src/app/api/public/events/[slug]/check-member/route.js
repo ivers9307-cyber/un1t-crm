@@ -53,9 +53,10 @@ export async function POST(request, props) {
   // by slug also implicitly validates the race exists and is active.
   const { data: race } = await db
     .from('race_events')
-    .select('id, location_id, member_pricing_enabled, members_only')
+    .select('id, location_id, member_pricing_enabled, members_only, status')
     .eq('slug', params.slug)
     .eq('active', true)
+    .eq('status', 'published')
     .maybeSingle()
 
   if (!race) {

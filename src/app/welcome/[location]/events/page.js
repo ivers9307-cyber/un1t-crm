@@ -93,6 +93,8 @@ export default async function StudioEventsPage(props) {
     .select('slug, name, kind, race_date, start_time, capacity_mode, registration_opens_at, registration_closes_at, member_pricing_enabled, member_fee_cents, non_member_fee_cents, waves:race_waves ( id, capacity ), registrations:race_registrations ( status, wave_id, team:teams ( size ) )')
     .or(`location_id.eq.${locationId},shared.eq.true`)
     .eq('active', true)
+    .eq('status', 'published')
+    .is('host_id', null)
     .gte('race_date', today)
 
   // Drop events whose registration window has closed; order nearest-first.
