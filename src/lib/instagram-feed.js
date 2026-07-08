@@ -30,3 +30,40 @@ export function normalizeIgMedia(items) {
     })
     .filter((r) => r.image_url)
 }
+
+const MEDIA_FIELDS = 'id,media_type,media_product_type,media_url,thumbnail_url,permalink,caption,timestamp'
+
+/**
+ * Fetch + normalize the latest media for a connected IG account.
+ * Throws on a Graph/HTTP error so the caller can keep the last-good cache.
+ * @param {{external_account_id:string, access_token:string}} connection
+ * @param {{limit?:number, fetchImpl?:Function}} [opts]
+ */
+export async function fetchIgMedia(connection, { limit = 12, fetchImpl = fetch } = {}) {
+  const igId = connection?.external_account_id
+  const token = connection?.access_token
+  if (!igId || !token) throw new Error('instagram-feed: connection missing external_account_id/access_token')
+  const url = `${GRAPH}/${igId}/media?fields=${MEDIA_FIELDS}&limit=${limit}&access_token=${encodeURIComponent(token)}`
+  const res = await fetchImpl(url)
+  const json = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(`instagram-feed graph ${res.status}: ${json?.error?.message || 'unknown'}`)
+  return normalizeIgMedia(json?.data || [])
+}
+
+/**
+ * Fetch the account's @username (for the "Follow" header). Best-effort: returns
+ * null on any error — the strip still renders without it.
+ */
+export async function fetchIgUsername(connection, { fetchImpl = fetch } = {}) {
+  const igId = connection?.external_account_id
+  const token = connection?.access_token
+  if (!igId || !token) return null
+  try {
+    const res = await fetchImpl(`${GRAPH}/${igId}?fields=username&access_token=${encodeURIComponent(token)}`)
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok) return null
+    return json?.username || null
+  } catch {
+    return null
+  }
+}
