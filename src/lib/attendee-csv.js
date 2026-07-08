@@ -22,12 +22,18 @@ export function csvCell(value) {
 /**
  * Build the attendee CSV. One row per team member; a booking with no members
  * still emits a single row (blank person columns) so it isn't silently dropped.
+ *
+ * `includeMembership` (default true) controls the "Membership" column. Staff
+ * exports keep it; the host portal drops it — a 3rd-party host doesn't need to
+ * know which of their attendees are UN1T members (that's internal CRM data).
  * @param {{name?:string, race_date?:string}} event
  * @param {Array<object>} registrations  race_registrations with teams.team_members + payment
+ * @param {{includeMembership?:boolean}} [opts]
  * @returns {string} CSV text (CRLF line endings, header first)
  */
-export function buildAttendeeCsv(event, registrations) {
-  const rows = [HEADER]
+export function buildAttendeeCsv(event, registrations, { includeMembership = true } = {}) {
+  const header = includeMembership ? HEADER : HEADER.filter((h) => h !== 'Membership')
+  const rows = [header]
   for (const reg of (registrations || [])) {
     const team = reg?.teams || {}
     const wave = reg?.wave || {}
@@ -43,18 +49,14 @@ export function buildAttendeeCsv(event, registrations) {
     ]
     const members = Array.isArray(team.team_members) ? team.team_members : []
     if (members.length === 0) {
-      rows.push([...base, '', '', '', '', phone])
+      rows.push(includeMembership ? [...base, '', '', '', '', phone] : [...base, '', '', '', phone])
       continue
     }
     for (const m of members) {
-      rows.push([
-        ...base,
-        m?.name || '',
-        m?.email || '',
-        m?.role || '',
-        m?.is_member ? 'Member' : 'Non-member',
-        phone,
-      ])
+      const person = includeMembership
+        ? [m?.name || '', m?.email || '', m?.role || '', m?.is_member ? 'Member' : 'Non-member', phone]
+        : [m?.name || '', m?.email || '', m?.role || '', phone]
+      rows.push([...base, ...person])
     }
   }
   return rows.map((r) => r.map(csvCell).join(',')).join('\r\n')

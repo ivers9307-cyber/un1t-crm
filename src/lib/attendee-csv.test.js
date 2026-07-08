@@ -47,6 +47,17 @@ describe('buildAttendeeCsv', () => {
     expect(buildAttendeeCsv(event, []).split('\r\n')).toHaveLength(1)
     expect(buildAttendeeCsv(event, null).split('\r\n')).toHaveLength(1)
   })
+
+  it('drops the Membership column when includeMembership:false (host export)', () => {
+    const lines = buildAttendeeCsv(event, [reg], { includeMembership: false }).split('\r\n')
+    expect(lines[0]).toBe('Event,Date,Team,Wave,Booking status,Registered at,Name,Email,Role,Booking phone')
+    expect(lines[0]).not.toContain('Membership')
+    expect(lines[1]).toBe("Spring Hyrox,2026-03-01,Team A,Wave 1,confirmed,2026-02-01T10:00:00Z,Jane,jane@x.ie,captain,'+353871234567")
+    expect(lines[1]).not.toContain('Member')
+    // empty-team row keeps its column count aligned (no membership blank)
+    const solo = buildAttendeeCsv(event, [{ ...reg, teams: { name: 'Solo', team_members: [] } }], { includeMembership: false }).split('\r\n')
+    expect(solo[1]).toBe("Spring Hyrox,2026-03-01,Solo,Wave 1,confirmed,2026-02-01T10:00:00Z,,,,'+353871234567")
+  })
 })
 
 describe('csvCell', () => {
