@@ -84,5 +84,21 @@ async function resolveHostImpersonation(db) {
     .maybeSingle()
   if (!host) return null
 
+  // Audit-authoritative: only an OPEN host_impersonation_log row counts as a
+  // live view-as session. This makes exit fully effective (a lingering cookie
+  // without an open row grants nothing) and mirrors the staff impersonation
+  // gate in auth.js. Re-checked every request alongside the admin+org guard.
+  // Query on hostId (what the cookie asserts) to stay symmetric with the cookie.
+  // Known limitation: abandoned sessions rely on cookie expiry (8h); a
+  // stale-open-row reaper is a follow-up.
+  const { data: openRow } = await db
+    .from('host_impersonation_log')
+    .select('id')
+    .eq('admin_user_id', user.id)
+    .eq('host_id', hostId)
+    .is('ended_at', null)
+    .maybeSingle()
+  if (!openRow) return null
+
   return { host, authUserId: user.id, email: user.email || null, impersonatedBy: { id: user.id } }
 }
