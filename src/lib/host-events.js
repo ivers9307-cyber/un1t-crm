@@ -148,8 +148,16 @@ export async function ensureAnchorLocation(db, host) {
       .insert({ organization_id: host.organization_id, name: `${host.name} (host events)`, slug, active: true, is_host_anchor: true })
       .select('id')
       .single()
-    if (error || !data) throw new Error(`anchor location provisioning failed: ${error?.message || 'no row'}`)
-    id = data.id
+    if (data?.id) {
+      id = data.id
+    } else {
+      // First-create race: two concurrent provisions both missed the SELECT and
+      // one INSERT lost the UNIQUE slug. Self-heal by re-selecting the row the
+      // winner created rather than surfacing a spurious 500.
+      const { data: raced } = await db.from('locations').select('id').eq('slug', slug).eq('is_host_anchor', true).maybeSingle()
+      if (raced?.id) id = raced.id
+      else throw new Error(`anchor location provisioning failed: ${error?.message || 'no row'}`)
+    }
   }
   const { error: linkErr } = await db.from('event_hosts').update({ anchor_location_id: id }).eq('id', host.id)
   if (linkErr) throw new Error(`anchor link failed: ${linkErr.message}`)

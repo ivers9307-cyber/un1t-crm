@@ -24,6 +24,7 @@ export async function GET(_request, props) {
       id, name, slug, description, race_date, kind, capacity_mode,
       registration_opens_at, registration_closes_at,
       allowed_team_sizes, location_id,
+      venue_name, venue_address,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
       members_only, payment_currency,
       hero_image_url, accent_hex, active, status,

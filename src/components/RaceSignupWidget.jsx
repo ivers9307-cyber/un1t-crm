@@ -448,6 +448,13 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   }
 
   const location = race.locations || null
+  // Host events store the real, free-text venue on the race row; their
+  // location_id points at a hidden internal anchor ("<host> (host events)",
+  // null address). Prefer the venue fields when set so the public surfaces
+  // show where the event actually is. UN1T events have no venue_name, so
+  // these fall through to the anchor location's own name/address unchanged.
+  const venueName = race.venue_name || location?.name || null
+  const venueAddress = race.venue_address || location?.address || null
   const closedReasons = {
     not_yet_open: copy.closedNotYet,
     closed: copy.closedClosed,
@@ -488,7 +495,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   const heroDateStr = (!isLeadGen && race.race_date)
     ? new Date(race.race_date).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })
     : null
-  const eyebrowParts = [kindLabel, heroDateStr, location?.name].filter(Boolean)
+  const eyebrowParts = [kindLabel, heroDateStr, venueName].filter(Boolean)
 
   // First non-empty line of the description → hero sub-line.
   const heroSub = race.description
@@ -658,7 +665,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
           )}
 
           {/* date / time / location rows */}
-          {(!isLeadGen || wavesArr.length > 0 || location?.address) && (
+          {(!isLeadGen || wavesArr.length > 0 || venueAddress) && (
             <div className={`${race.description ? 'mt-8' : ''} rounded-2xl border border-white/10 bg-white/[0.03] p-5 space-y-3.5 text-sm text-white/70`}>
               {!isLeadGen && race.race_date && (
                 <div className="flex items-center gap-3">
@@ -681,10 +688,10 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                   </span>
                 </div>
               )}
-              {location?.address && (
+              {venueAddress && (
                 <div className="flex items-start gap-3">
                   <MapPin size={16} className="text-white/40 mt-0.5 shrink-0" />
-                  <span>{location.address}</span>
+                  <span>{venueAddress}</span>
                 </div>
               )}
             </div>

@@ -116,4 +116,35 @@ describe('ensureAnchorLocation', () => {
     expect(db.calls.inserted.name).toContain('Acme')
     expect(db.calls.updatedHost).toEqual({ anchor_location_id: 'loc-new' })
   })
+
+  it('self-heals a first-create race: insert loses the UNIQUE slug → re-selects the winner', async () => {
+    // Simulate two concurrent first-creates: this run misses the initial SELECT
+    // (probe → null) but its INSERT trips the UNIQUE slug the winner already
+    // holds. The re-select then finds the winner's row instead of throwing.
+    const calls = { updatedHost: null, reselects: 0 }
+    let probed = false
+    const db = {
+      calls,
+      from(table) {
+        if (table === 'locations') {
+          return {
+            select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => {
+              if (!probed) { probed = true; return { data: null, error: null } } // initial probe: none
+              calls.reselects++
+              return { data: { id: 'loc-winner' }, error: null } // re-select after the failed insert
+            } }) }) }),
+            insert: () => ({ select: () => ({ single: async () => ({ data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } }) }) }),
+          }
+        }
+        if (table === 'event_hosts') {
+          return { update: (patch) => ({ eq: async () => { calls.updatedHost = patch; return { error: null } } }) }
+        }
+        throw new Error('unexpected table ' + table)
+      },
+    }
+    const id = await ensureAnchorLocation(db, { id: 'h1', name: 'Acme', organization_id: 'org1', anchor_location_id: null })
+    expect(id).toBe('loc-winner')
+    expect(calls.reselects).toBe(1)
+    expect(calls.updatedHost).toEqual({ anchor_location_id: 'loc-winner' })
+  })
 })

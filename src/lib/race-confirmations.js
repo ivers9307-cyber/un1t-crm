@@ -62,6 +62,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
       race_event_id, race_registration_id,
       race:race_event_id (
         id, name, slug, race_date, location_id,
+        venue_name, venue_address,
         accent_hex, hero_image_url,
         confirmation_email_subject, confirmation_email_intro, confirmation_email_template_id,
         locations:location_id ( id, name, twilio_alpha_sender_id )
@@ -114,7 +115,11 @@ export async function sendRaceConfirmations({ db, paymentId }) {
     waveLabel: wave
       ? (wave.label ? `${wave.label} · ${fmtWaveTime(wave.start_time)}` : fmtWaveTime(wave.start_time))
       : '',
-    locationName: location?.name || '',
+    // Host events hang off a hidden internal anchor location ("<host>
+    // (host events)"); the real venue lives in race.venue_name. Prefer it
+    // so the attendee's receipt shows the actual venue, not the ops string.
+    // UN1T events have no venue_name → falls through to the location name.
+    locationName: race?.venue_name || location?.name || '',
     teamName: team?.name || '',
     teamSize: team?.size || 0,
     teamMembers: teamMembersWithQr,

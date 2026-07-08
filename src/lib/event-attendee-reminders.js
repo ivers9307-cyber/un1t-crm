@@ -211,6 +211,7 @@ export async function runEventReminders({ db, todayStr } = {}) {
   const { data: events, error: evErr } = await db
     .from('race_events')
     .select(`id, name, slug, race_date, start_time, location_id, kind, active,
+             venue_name, venue_address,
              accent_hex, hero_image_url,
              reminder_email_subject, reminder_email_intro, reminder_email_template_id,
              locations:location_id ( id, name )`)
@@ -230,7 +231,10 @@ export async function runEventReminders({ db, todayStr } = {}) {
     const offset = reminderOffsetForDate(ev.race_date, today)
     if (!offset) continue
     result.events++
-    const locationName = ev.locations?.name || ''
+    // Host events point at a hidden anchor location ("<host> (host events)");
+    // the real venue is on ev.venue_name. Prefer it so the reminder shows the
+    // actual venue. UN1T events have no venue_name → the location name stands.
+    const locationName = ev.venue_name || ev.locations?.name || ''
 
     // Confirmed registrations for this event — paginate past the 1k-row cap.
     const registrations = []
