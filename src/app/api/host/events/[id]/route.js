@@ -1,0 +1,90 @@
+// GET loads the host's own event for the edit form; PUT applies edits and the
+// price/date re-review transition. host_id === session.host.id or 404. (HOST-PORTAL.3)
+import { NextResponse } from 'next/server'
+import { getCurrentHost } from '@/lib/host-auth'
+import { createServerClient } from '@/lib/supabase'
+import { HostEventSchema, computeEditTransition } from '@/lib/host-events'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+async function loadOwn(db, session, id) {
+  const { data } = await db
+    .from('race_events')
+    .select('id, host_id, status, kind, name, slug, description, race_date, registration_opens_at, registration_closes_at, allowed_team_sizes, non_member_fee_cents, hero_image_url, accent_hex, venue_name, venue_address, confirmation_email_subject, confirmation_email_intro, reminder_email_subject, reminder_email_intro, race_waves ( id, start_time, capacity, label, display_order )')
+    .eq('id', id)
+    .maybeSingle()
+  if (!data || data.host_id !== session.host.id) return null
+  return data
+}
+
+export async function GET(_request, props) {
+  const params = await props.params
+  const session = await getCurrentHost()
+  if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  const db = createServerClient()
+  const event = await loadOwn(db, session, params.id)
+  if (!event) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  return NextResponse.json({ success: true, data: event })
+}
+
+export async function PUT(request, props) {
+  const params = await props.params
+  const session = await getCurrentHost()
+  if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  let body
+  try { body = await request.json() } catch { return NextResponse.json({ success: false, error: 'Invalid JSON' }, { status: 400 }) }
+  const parsed = HostEventSchema.safeParse(body)
+  if (!parsed.success) return NextResponse.json({ success: false, error: 'Invalid event', issues: parsed.error.issues }, { status: 400 })
+  const input = parsed.data
+
+  const db = createServerClient()
+  const current = await loadOwn(db, session, params.id)
+  if (!current) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+
+  const firstWave = (current.race_waves || [])[0] || null
+  // Normalize to DB-column names so computeEditTransition compares like-for-like.
+  const changes = {
+    race_date: input.race_date,
+    non_member_fee_cents: input.ticket_price_cents,
+    waves: firstWave ? [{ id: firstWave.id, start_time: input.session_start_time }] : [],
+  }
+  const currentForDiff = {
+    status: current.status,
+    race_date: current.race_date,
+    non_member_fee_cents: current.non_member_fee_cents,
+    waves: firstWave ? [{ id: firstWave.id, start_time: firstWave.start_time }] : [],
+  }
+  const transition = computeEditTransition(currentForDiff, changes)
+
+  const { error } = await db.from('race_events').update({
+    kind: input.kind,
+    name: input.name,
+    description: input.description ?? null,
+    race_date: input.race_date,
+    registration_opens_at: input.registration_opens_at ?? null,
+    registration_closes_at: input.registration_closes_at ?? null,
+    allowed_team_sizes: input.allowed_team_sizes,
+    non_member_fee_cents: input.ticket_price_cents,
+    hero_image_url: input.hero_image_url ?? null,
+    accent_hex: input.accent_hex ?? null,
+    venue_name: input.venue_name,
+    venue_address: input.venue_address ?? null,
+    confirmation_email_subject: input.confirmation_email_subject ?? null,
+    confirmation_email_intro: input.confirmation_email_intro ?? null,
+    reminder_email_subject: input.reminder_email_subject ?? null,
+    reminder_email_intro: input.reminder_email_intro ?? null,
+    status: transition.status,
+    ...(transition.reReview ? { submitted_at: new Date().toISOString(), reviewed_at: null } : {}),
+  }).eq('id', current.id)
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+
+  if (firstWave) {
+    await db.from('race_waves').update({ start_time: input.session_start_time, capacity: input.session_capacity, label: input.session_label ?? null }).eq('id', firstWave.id)
+  } else {
+    await db.from('race_waves').insert({ race_event_id: current.id, start_time: input.session_start_time, capacity: input.session_capacity, label: input.session_label ?? null, display_order: 0 })
+  }
+
+  return NextResponse.json({ success: true, data: { id: current.id, status: transition.status, reReview: transition.reReview } })
+}
