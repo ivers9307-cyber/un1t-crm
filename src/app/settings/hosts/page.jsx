@@ -17,6 +17,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { ChevronLeft, Store } from 'lucide-react'
 import HostsManager from '@/components/settings/HostsManager'
+import HostEventReviewQueue from '@/components/settings/HostEventReviewQueue'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,6 +45,12 @@ export default async function HostsSettingsPage() {
           Third-party organisers who get paid directly for their events. Connect a host to Stripe so
           their tickets settle to their own account, with UN1T&rsquo;s booking fee kept per ticket.
         </p>
+      </div>
+
+      {/* HOST-PORTAL.3 — host self-serve events land here for staff approval
+          before they publish. Self-fetches; renders above the hosts list. */}
+      <div className="mb-6">
+        <HostEventReviewQueue />
       </div>
 
       <HostsManager />
