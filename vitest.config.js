@@ -18,8 +18,12 @@ export default defineConfig({
     // doesn't import any React-Native runtime, safe to run under
     // vitest's Node environment. Anything in mobile/lib that DOES
     // pull in RN modules must not have a test in this glob.
+    // src also matches *.test.jsx so co-located React component tests
+    // (rendered to static markup via react-dom/server under this Node
+    // environment — no jsdom/testing-library) are collected, e.g.
+    // landing-page/InstagramStrip.test.jsx (EVENTS-IG.1).
     include: [
-      'src/**/*.{test,spec}.js',
+      'src/**/*.{test,spec}.{js,jsx}',
       'shared/**/*.{test,spec}.js',
       'tests/**/*.{test,spec}.js',
       'mobile/lib/**/*.{test,spec}.js',
