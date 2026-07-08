@@ -207,6 +207,13 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
   const [submitError, setSubmitError] = useState(null)
   const [fieldErrors, setFieldErrors] = useState({})
 
+  // EVENTS-PROMO.1 — optional discount code. Validated + applied
+  // server-side at /register; the discounted total shows at the payment
+  // step (no live preview here by design). `promoError` surfaces a 400
+  // invalid_promo_code inline so the customer can fix + retry.
+  const [promoCode, setPromoCode] = useState('')
+  const [promoError, setPromoError] = useState(null)
+
   // Initial load
   useEffect(() => {
     fetch(`/api/public/events/${slug}`)
@@ -338,6 +345,7 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
     e.preventDefault()
     setSubmitError(null)
     setFieldErrors({})
+    setPromoError(null)
 
     const errors = {}
     // Team name required only for races. Non-race kinds synthesise
@@ -395,12 +403,20 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
         })),
         source: 'race_signup_widget',
         marketing_consent: marketingConsent,
+        ...(promoCode.trim() ? { promo_code: promoCode.trim() } : {}),
       }),
     })
     const json = await res.json()
     setSubmitting(false)
 
     if (!res.ok || json.success === false) {
+      // A rejected promo code is recoverable — surface it next to the
+      // promo field so the customer can fix it + retry, not as a generic
+      // registration failure.
+      if (res.status === 400 && json.code === 'invalid_promo_code') {
+        setPromoError(json.error || 'That code isn’t valid.')
+        return
+      }
       setSubmitError(json.error || `Registration failed (${res.status})`)
       return
     }
@@ -899,6 +915,27 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* EVENTS-PROMO.1 — optional discount code. Only shown on
+                  paid events (nothing to discount otherwise). No live
+                  preview by design — the discounted total shows at the
+                  payment step. An invalid code comes back as a 400 and
+                  is surfaced inline here so the customer can retry. */}
+              {showPricingCard && (
+                <div className="pt-4 border-t border-white/10">
+                  <label className={labelCls}>Promo code</label>
+                  <input
+                    type="text"
+                    value={promoCode}
+                    onChange={e => { setPromoCode(e.target.value); if (promoError) setPromoError(null) }}
+                    placeholder="Have a code? Enter it here"
+                    autoCapitalize="characters"
+                    autoComplete="off"
+                    className={inputCls(!!promoError)}
+                  />
+                  {promoError && <p className={errCls}>{promoError}</p>}
                 </div>
               )}
 
