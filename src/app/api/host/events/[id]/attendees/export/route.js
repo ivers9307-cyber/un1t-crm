@@ -33,7 +33,8 @@ export async function GET(_request, props) {
 
   try {
     const regs = await fetchEventAttendees(db, params.id)
-    return attendeeCsvResponse(race, regs)
+    // Drop the UN1T-membership column — internal CRM data an external host doesn't need.
+    return attendeeCsvResponse(race, regs, { includeMembership: false })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message }, { status: 500 })
   }

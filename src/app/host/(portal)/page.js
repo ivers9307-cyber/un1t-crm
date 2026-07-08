@@ -40,16 +40,28 @@ export default async function HostDashboard() {
   const cur = revenue?.currency || 'EUR'
   const netByEvent = new Map((revenue?.perEvent || []).map((r) => [r.event_id, r]))
 
-  const needsStripe = session.host.payment_provider === 'stripe_connect' && !session.host.charges_enabled
+  // Only Stripe-Connect hosts have a UN1T booking fee + a settled "net to host"
+  // (mig 381 columns). Revolut/internal hosts collect directly, so those columns
+  // are NULL (→0) and would misrepresent as "€0 net" — show them gross only.
+  const isStripe = session.host.payment_provider === 'stripe_connect'
+  const needsStripe = isStripe && !session.host.charges_enabled
 
-  const tiles = revenue
-    ? [
-        { label: 'Gross collected', value: formatMoney(revenue.totals.gross_cents, cur) },
-        { label: 'UN1T booking fees', value: formatMoney(revenue.totals.fee_cents, cur) },
-        { label: 'Net to you', value: formatMoney(revenue.totals.net_to_host_cents, cur) },
-        { label: 'Refunded', value: formatMoney(revenue.totals.refunded_cents, cur) },
-      ]
-    : []
+  const tiles = !revenue
+    ? []
+    : isStripe
+      ? [
+          { label: 'Gross collected', value: formatMoney(revenue.totals.gross_cents, cur) },
+          { label: 'UN1T booking fees', value: formatMoney(revenue.totals.fee_cents, cur) },
+          { label: 'Net to you', value: formatMoney(revenue.totals.net_to_host_cents, cur) },
+          { label: 'Refunded', value: formatMoney(revenue.totals.refunded_cents, cur) },
+        ]
+      : [
+          { label: 'Gross collected', value: formatMoney(revenue.totals.gross_cents, cur) },
+          { label: 'Refunded', value: formatMoney(revenue.totals.refunded_cents, cur) },
+        ]
+  const tilesGridCls = tiles.length === 4
+    ? 'grid grid-cols-2 sm:grid-cols-4 gap-3'
+    : 'grid grid-cols-2 gap-3 max-w-md'
 
   return (
     <div>
@@ -70,7 +82,7 @@ export default async function HostDashboard() {
           <p className="text-white/50 text-sm">No ticket sales yet.</p>
         ) : (
           <>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className={tilesGridCls}>
               {tiles.map((t) => (
                 <div key={t.label} className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
                   <p className="text-[11px] uppercase tracking-wide text-white/40">{t.label}</p>
@@ -100,7 +112,7 @@ export default async function HostDashboard() {
                     <p className="font-medium truncate">{e.name}</p>
                     <p className="text-xs text-white/45">
                       {e.race_date || '—'} · {e.kind}{e.active ? '' : ' · inactive'}
-                      {rev ? ` · ${rev.paidCount} sold · ${formatMoney(rev.net_to_host_cents, cur)} net` : ''}
+                      {rev ? ` · ${rev.paidCount} sold · ${formatMoney(isStripe ? rev.net_to_host_cents : rev.gross_cents, cur)} ${isStripe ? 'net' : 'gross'}` : ''}
                     </p>
                   </a>
                   <div className="shrink-0 flex items-center gap-4 text-xs">

@@ -79,13 +79,15 @@ export async function fetchEventAttendees(db, eventId) {
 }
 
 /**
- * Build the CSV download Response for an event's attendees — byte-identical
- * across the staff + host surfaces.
+ * Build the CSV download Response for an event's attendees. Same filename +
+ * headers on both surfaces; `opts` is forwarded to buildAttendeeCsv (the host
+ * export passes { includeMembership: false } to drop the UN1T-membership column).
  * @param {{name:string, slug?:string, race_date:string|null}} race
  * @param {Array} regs  from fetchEventAttendees
+ * @param {{includeMembership?:boolean}} [opts]
  */
-export function attendeeCsvResponse(race, regs) {
-  const csv = buildAttendeeCsv({ name: race.name, race_date: race.race_date }, regs)
+export function attendeeCsvResponse(race, regs, opts = {}) {
+  const csv = buildAttendeeCsv({ name: race.name, race_date: race.race_date }, regs, opts)
   const safe = String(race.slug || race.name || 'event')
     .replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'event'
 

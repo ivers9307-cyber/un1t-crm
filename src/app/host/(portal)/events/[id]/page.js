@@ -41,7 +41,7 @@ export default async function HostEventDetail(props) {
     const phone = reg.payment?.contact_phone || ''
     const members = Array.isArray(team.team_members) ? team.team_members : []
     if (members.length === 0) {
-      rows.push({ key: reg.id, team: team.name || '—', wave: waveLabel, status: reg.status, name: '—', email: '', membership: '', phone })
+      rows.push({ key: reg.id, team: team.name || '—', wave: waveLabel, status: reg.status, name: '—', email: '', phone })
     } else {
       for (const m of members) {
         rows.push({
@@ -51,7 +51,6 @@ export default async function HostEventDetail(props) {
           status: reg.status,
           name: m.name || '—',
           email: m.email || '',
-          membership: m.is_member ? 'Member' : 'Non-member',
           phone,
         })
       }
@@ -94,7 +93,6 @@ export default async function HostEventDetail(props) {
                   <th className={th}>Name</th>
                   <th className={th}>Team</th>
                   <th className={th}>Wave</th>
-                  <th className={th}>Membership</th>
                   <th className={th}>Status</th>
                   <th className={th}>Email</th>
                   <th className={th}>Phone</th>
@@ -106,7 +104,6 @@ export default async function HostEventDetail(props) {
                     <td className={td}>{r.name}</td>
                     <td className={`${td} text-white/70`}>{r.team}</td>
                     <td className={`${td} text-white/70`}>{r.wave}</td>
-                    <td className={`${td} text-white/70`}>{r.membership}</td>
                     <td className={`${td} text-white/70`}>{STATUS_LABEL[r.status] || r.status}</td>
                     <td className={`${td} text-white/60`}>{r.email}</td>
                     <td className={`${td} text-white/60`}>{r.phone}</td>
