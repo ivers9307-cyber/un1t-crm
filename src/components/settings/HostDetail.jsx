@@ -14,7 +14,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   CreditCard, Check, Minus, Save, RefreshCw, AlertTriangle, ExternalLink, Store,
-  Link2, Copy, Trash2,
+  Link2, Copy, Trash2, Mail,
 } from 'lucide-react'
 import { Button, Card, Field, Loading } from '@/components/ui'
 import { hostCanTakePayments, PROVIDER_STRIPE_CONNECT } from '@/lib/event-hosts'
@@ -91,6 +91,8 @@ export default function HostDetail({ hostId }) {
   const [linkUrl, setLinkUrl] = useState(null)
   const [linkError, setLinkError] = useState(null)
   const [copied, setCopied] = useState(false)
+  const [sendingLink, setSendingLink] = useState(false)
+  const [linkSentTo, setLinkSentTo] = useState(null)
 
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState(null)
@@ -249,6 +251,26 @@ export default function HostDetail({ hostId }) {
     }
   }
 
+  // Email the onboarding link straight to the host (server mints a fresh token
+  // + sends). Only offered when the host has an email on file.
+  async function emailOnboardingLink() {
+    if (sendingLink) return
+    setSendingLink(true)
+    setLinkError(null)
+    setLinkSentTo(null)
+    try {
+      const res = await fetch(`/api/hosts/${hostId}/onboarding-link/send`, { method: 'POST' })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
+      setLinkSentTo(j.data?.sentTo || host?.email || 'the host')
+      setTimeout(() => setLinkSentTo(null), 4000)
+    } catch (err) {
+      setLinkError(err.message || 'Could not email the link')
+    } finally {
+      setSendingLink(false)
+    }
+  }
+
   // Remove the host. Events assigned to them fall back to internal/UN1T
   // (Revolut) via ON DELETE SET NULL — the host's own Stripe account is
   // untouched. On success we bounce back to the hosts list.
@@ -357,12 +379,28 @@ export default function HostDetail({ hostId }) {
                   Get onboarding link for the host
                 </Button>
               )}
+              {!ready && host?.email && (
+                <Button
+                  variant="secondary"
+                  icon={Mail}
+                  loading={sendingLink}
+                  onClick={emailOnboardingLink}
+                >
+                  Email link to host
+                </Button>
+              )}
               {hasAccount && (
                 <Button variant="secondary" icon={RefreshCw} loading={syncing} onClick={() => syncHost()}>
                   Refresh status
                 </Button>
               )}
             </div>
+
+            {linkSentTo && (
+              <p className="mt-3 text-xs text-green-700 flex items-center gap-1">
+                <Check size={12} /> Onboarding link emailed to {linkSentTo}.
+              </p>
+            )}
 
             {linkError && (
               <p className="mt-3 text-xs text-stage-lost flex items-center gap-1">
