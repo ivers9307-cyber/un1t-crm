@@ -26,6 +26,7 @@ import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
 import { validateTeamRoster, computeTeamPricing } from '@/lib/member-validation'
+import { normalizeCode, computeDiscountCents, promoCodeError } from '@/lib/promo-codes'
 import { createRacePayment } from '@/lib/race-payments'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
 import { getAppUrl } from '@/lib/app-url'
@@ -66,6 +67,8 @@ const RegisterSchema = z.object({
   // client-side; missing/undefined here is treated as true to
   // preserve back-compat for older form deployments still in cache.
   marketing_consent: z.boolean().optional(),
+  // EVENTS-PROMO.1 — optional discount code applied to the ticket amount.
+  promo_code: z.string().trim().max(64).optional(),
 })
 
 export async function POST(request, props) {
@@ -474,6 +477,35 @@ export async function POST(request, props) {
   // Pricing breakdown.
   const pricing = computeTeamPricing({ validatedRoster, race })
 
+  // ── Promo code (EVENTS-PROMO.1) ──────────────────────────────────────────
+  // Applied to the ticket amount BEFORE the per-ticket booking fee. A bad code
+  // is rejected so the customer sees why; a valid one reduces pricing.total_cents
+  // (which drives the free-vs-paid branch + the charge). Redemption is recorded
+  // after the registration is created. Note: a 100%-off / free-total code makes
+  // the booking fully free (no booking fee) via the existing amount<=0 path.
+  let appliedPromo = null
+  let promoDiscountCents = 0
+  const rawPromo = normalizeCode(body.promo_code)
+  if (rawPromo) {
+    // Exact match on the normalized (uppercased) code — never ILIKE with raw
+    // customer input (a '%' would wildcard-match any code).
+    const { data: code } = await db
+      .from('promo_codes')
+      .select('id, event_id, discount_type, discount_value, max_redemptions, redeemed_count, member_only, expires_at, active')
+      .eq('location_id', race.location_id)
+      .eq('code', rawPromo)
+      .maybeSingle()
+    const err = code
+      ? promoCodeError(code, { eventId: race.id, isMemberOrder: (pricing.member_count || 0) > 0 })
+      : 'That code isn’t valid.'
+    if (err) {
+      return NextResponse.json({ success: false, error: err, code: 'invalid_promo_code' }, { status: 400 })
+    }
+    promoDiscountCents = computeDiscountCents(code, pricing.total_cents)
+    pricing.total_cents = Math.max(0, pricing.total_cents - promoDiscountCents)
+    appliedPromo = code
+  }
+
   // Refresh team_members for THIS registration's roster, stamping
   // member-validation results AND contact_id linkage (mig 086).
   // Every member with an email gets a find-or-create contact lookup
@@ -522,6 +554,8 @@ export async function POST(request, props) {
       status: initialStatus,
       wave_id: wave.id,
       team_composition: pricing.team_composition,
+      promo_code_id: appliedPromo?.id || null,
+      promo_discount_cents: appliedPromo ? promoDiscountCents : null,
     })
     .select('id, registered_at, wave_id, contact_id')
     .single()
@@ -535,6 +569,19 @@ export async function POST(request, props) {
       }, { status: 409 })
     }
     return NextResponse.json({ success: false, error: regErr.message }, { status: 500 })
+  }
+
+  // Record the promo redemption (best-effort — the booking already succeeded).
+  // redeemed_count counts applications; the cap pre-check above keeps it near
+  // the limit under normal (low-concurrency) load.
+  if (appliedPromo) {
+    try {
+      await db.from('promo_codes')
+        .update({ redeemed_count: (appliedPromo.redeemed_count || 0) + 1 })
+        .eq('id', appliedPromo.id)
+    } catch (e) {
+      logWarn('race-register', 'promo redeemed_count increment failed', { err: e })
+    }
   }
 
   // Fire the race_registered sequence trigger (Tier 1A). Best-effort —
