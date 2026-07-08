@@ -93,6 +93,9 @@ export default function HostDetail({ hostId }) {
   const [copied, setCopied] = useState(false)
   const [sendingLink, setSendingLink] = useState(false)
   const [linkSentTo, setLinkSentTo] = useState(null)
+  const [invitingPortal, setInvitingPortal] = useState(false)
+  const [portalInvitedTo, setPortalInvitedTo] = useState(null)
+  const [portalError, setPortalError] = useState(null)
 
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState(null)
@@ -268,6 +271,26 @@ export default function HostDetail({ hostId }) {
       setLinkError(err.message || 'Could not email the link')
     } finally {
       setSendingLink(false)
+    }
+  }
+
+  // Invite the host to their self-serve portal — creates/links a login and
+  // emails them a set-password link. (HOST-PORTAL.1)
+  async function inviteToPortal() {
+    if (invitingPortal) return
+    setInvitingPortal(true)
+    setPortalError(null)
+    setPortalInvitedTo(null)
+    try {
+      const res = await fetch(`/api/hosts/${hostId}/invite`, { method: 'POST' })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
+      setPortalInvitedTo(j.data?.sentTo || host?.email || 'the host')
+      setTimeout(() => setPortalInvitedTo(null), 5000)
+    } catch (err) {
+      setPortalError(err.message || 'Could not send the portal invite')
+    } finally {
+      setInvitingPortal(false)
     }
   }
 
@@ -544,6 +567,37 @@ export default function HostDetail({ hostId }) {
             {saved && <span className="text-xs text-green-700">Saved.</span>}
           </div>
         </form>
+      </Card>
+
+      {/* Host portal access (HOST-PORTAL.1) — give the host a login to their
+          own self-serve dashboard. Emails them a set-password link. */}
+      <Card title="Host portal">
+        <p className="text-sm text-un1t-subtle">
+          Give this host a login to their own portal (their events, and — soon —
+          revenue + attendees). We email them a link to set a password.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <Button
+            variant="secondary"
+            icon={Mail}
+            loading={invitingPortal}
+            onClick={inviteToPortal}
+            disabled={!host?.email}
+          >
+            Invite to portal
+          </Button>
+          {!host?.email && <span className="text-xs text-un1t-muted">Add an email above first.</span>}
+          {portalInvitedTo && (
+            <span className="text-xs text-green-700 inline-flex items-center gap-1">
+              <Check size={12} /> Invite sent to {portalInvitedTo}.
+            </span>
+          )}
+        </div>
+        {portalError && (
+          <p className="mt-2 text-xs text-stage-lost flex items-center gap-1">
+            <AlertTriangle size={12} /> {portalError}
+          </p>
+        )}
       </Card>
 
       {/* Danger zone — a separate card so a delete can't be fat-fingered next
