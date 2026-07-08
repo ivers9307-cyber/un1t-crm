@@ -70,6 +70,10 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
   const [logoAlt,     setLogoAlt]     = useState(initialSettings?.logo_alt || '')
   const [logoWidthPx, setLogoWidthPx] = useState(String(initialSettings?.logo_width_px || ''))
 
+  // EVENTS-IG.1 (mig 382) — flat column outside the blocks list, like the logo.
+  // Absent → default ON; only an explicit false hides the events-page IG strip.
+  const [showInstagramFeed, setShowInstagramFeed] = useState(initialSettings?.show_instagram_feed !== false)
+
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState(null)
   const [savedAt, setSavedAt] = useState(null)
@@ -305,6 +309,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
         logo_url:      logoUrl.trim() || null,
         logo_alt:      logoAlt.trim() || null,
         logo_width_px: widthPxOrNull,
+        show_instagram_feed: showInstagramFeed,
       }
       const r = await fetch('/api/landing-page-settings', {
         method: 'PUT',
@@ -394,6 +399,26 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
             />
           </Field>
         </div>
+      </section>
+
+      {/* Instagram strip (EVENTS-IG.1) — flat toggle outside the blocks list,
+          gating the carousel of latest posts on the public events page. */}
+      <section className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Instagram</h3>
+        </div>
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={showInstagramFeed}
+            onChange={(e) => setShowInstagramFeed(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="block text-sm text-un1t-text">Show Instagram posts on the events page</span>
+            <span className="block text-[11px] text-un1t-muted mt-0.5">Latest posts from your connected Instagram account. Turn off to hide the strip.</span>
+          </span>
+        </label>
       </section>
 
       {/* Sortable block list */}
