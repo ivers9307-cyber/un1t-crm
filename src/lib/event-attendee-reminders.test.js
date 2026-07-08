@@ -9,7 +9,7 @@
 // boundary + a month/year boundary to lock that in.
 
 import { describe, it, expect } from 'vitest'
-import { reminderOffsetForDate, buildReminderEmailHtml } from './event-reminders'
+import { reminderOffsetForDate, buildReminderEmailHtml } from './event-attendee-reminders'
 
 describe('reminderOffsetForDate', () => {
   it("returns '3d' when the race is exactly three days out", () => {

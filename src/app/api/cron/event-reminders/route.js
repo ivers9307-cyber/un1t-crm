@@ -8,7 +8,7 @@
 // event_reminder_sends UNIQUE(registration_id, reminder_offset).
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { runEventReminders } from '@/lib/event-reminders'
+import { runEventReminders } from '@/lib/event-attendee-reminders'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
