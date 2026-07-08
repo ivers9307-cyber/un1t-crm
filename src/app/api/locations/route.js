@@ -12,6 +12,7 @@ export async function GET(request) {
     .from('locations')
     .select('id, name, slug, address, active, timezone, country')
     .eq('active', true)
+    .eq('is_host_anchor', false)
     .order('name')
   // APIKEYS.3 — per-org key: only this org's locations (locations carries
   // organization_id directly). Legacy/cookie callers unchanged.

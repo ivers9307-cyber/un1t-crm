@@ -36,7 +36,7 @@ export default async function SettingsPage() {
   // 50+ rows + profile_locations joins for what's effectively a badge.
   const [{ count: staffCount }, locationsRes] = await Promise.all([
     db.from('profiles').select('id', { count: 'exact', head: true }),
-    db.from('locations').select('*').order('created_at'),
+    db.from('locations').select('*').eq('is_host_anchor', false).order('created_at'),
   ])
   const locations = locationsRes.data || []
 

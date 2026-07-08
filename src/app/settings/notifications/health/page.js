@@ -68,7 +68,7 @@ export default async function PushHealthPage() {
   // (~30 staff, ~few hundred device tokens at most).
   const [profilesRes, locationsRes, tokensRes, sendsRes, plRes] = await Promise.all([
     db.from('profiles').select('id, full_name, email, role, active').eq('active', true),
-    db.from('locations').select('id, name, active').eq('active', true).order('name'),
+    db.from('locations').select('id, name, active').eq('active', true).eq('is_host_anchor', false).order('name'),
     db.from('device_tokens').select('id, user_id, platform, device_name, app_version, created_at, last_seen_at'),
     db.from('push_reminder_sends')
       .select('recipient_id, sent_at')

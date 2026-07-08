@@ -38,6 +38,7 @@ export default async function AdminAchievementsPage() {
     db.from('locations')
       .select('id, name')
       .eq('active', true)
+      .eq('is_host_anchor', false)
       .order('name'),
     db.from('contact_achievements').select('rule_id'),
   ])
