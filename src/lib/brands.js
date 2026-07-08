@@ -87,18 +87,33 @@ export const BRANDS = [
     fallbackRewriteTo: '/welcome',
   },
 
-  // ─── Add a third brand here ────────────────────────────────────
-  // Example shape — uncomment + customise:
-  //
-  // {
-  //   id: 'partner-pay',
-  //   description: 'Partner studio buyer-facing checkout',
-  //   hostnames: (process.env.PARTNER_PAY_HOSTNAME || 'pay.partner.com')
-  //     .split(',').map(s => s.trim()).filter(Boolean),
-  //   allowedPaths: ['/deposit/', '/api/public/deposit/'],
-  //   rootHandler: 'reject',
-  //   fallbackHandler: 'reject',
-  // },
+  // ─── UN1T Hosts — third-party event host portal ────────────────
+  // Hosts reaching this subdomain get ONLY their own scoped portal (/host/*)
+  // + the ability to preview their public event/checkout pages. Everything
+  // else 404s — no staff CRM, no marketing, nothing that hints at the shared
+  // deployment. Auth is enforced INSIDE /host (host session via
+  // getCurrentHost); the router just isolates the surface. (HOST-PORTAL.1)
+  {
+    id: 'un1t-hosts',
+    description: 'UN1T third-party event host portal',
+    hostnames: (process.env.HOST_PORTAL_HOSTNAME || 'host.un1tdublin.com')
+      .split(',').map((s) => s.trim()).filter(Boolean),
+    allowedPaths: [
+      '/host',        // the portal — login + gated dashboard pages
+      '/api/host/',   // host-scoped API (getCurrentHost)
+      '/api/auth/',   // sign-in/out plumbing
+      '/event/',      // preview their own public event pages
+      '/event-pay/',  // + the checkout
+      '/api/public/', // backing API for the above
+    ],
+    rootHandler: 'rewrite',
+    rootRewriteTo: '/host',
+    fallbackHandler: 'reject',
+  },
+
+  // ─── Add another brand here ────────────────────────────────────
+  // Copy any entry above: one { id, hostnames, allowedPaths, rootHandler,
+  // fallbackHandler } object — no edit to proxy.js needed.
 ]
 
 // ─────────────────────────────────────────────────────────────────
