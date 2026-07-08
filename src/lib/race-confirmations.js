@@ -18,6 +18,7 @@ import { sendLocationSms, TwilioError } from './twilio'
 import { formatWeekdayLongDateInTZ } from './dates'
 import { getAppUrl } from './app-url'
 import { signCheckinToken } from './event-checkin-tokens'
+import { buildEventEmailShell, resolveEventEmail } from './event-email'
 
 function fmtRaceDate(dateStr) {
   if (!dateStr) return ''
@@ -61,6 +62,8 @@ export async function sendRaceConfirmations({ db, paymentId }) {
       race_event_id, race_registration_id,
       race:race_event_id (
         id, name, slug, race_date, location_id,
+        accent_hex, hero_image_url,
+        confirmation_email_subject, confirmation_email_intro, confirmation_email_template_id,
         locations:location_id ( id, name, twilio_alpha_sender_id )
       ),
       registration:race_registration_id (
@@ -126,7 +129,7 @@ export async function sendRaceConfirmations({ db, paymentId }) {
   // Email — only if not already sent.
   if (!payment.confirmation_email_sent_at) {
     try {
-      const r = await sendEmail({ payment, ctx })
+      const r = await sendEmail({ db, payment, ctx })
       if (r.status === 'sent') {
         await db.from('race_payments')
           .update({ confirmation_email_sent_at: new Date().toISOString() })
@@ -164,11 +167,17 @@ export async function sendRaceConfirmations({ db, paymentId }) {
   return result
 }
 
-async function sendEmail({ payment, ctx }) {
-  if (!payment.contact_email) return { status: 'skipped', reason: 'no_email' }
-
-  const subject = `${ctx.raceName} — you're in!`
-
+/**
+ * Compose the DEFAULT (unconfigured) shell slots for the confirmation email
+ * from the `ctx` sendRaceConfirmations builds. Each *Html slot is the exact raw
+ * fragment the old inline template produced, so buildEventEmailShell reproduces
+ * today's email byte-for-byte. resolveEventEmail layers per-event config on top.
+ *
+ * @param {object} ctx
+ * @returns {{ subject:string, heading:string, introHtml:string, infoRows:string,
+ *   afterInfoHtml:string, memberQrs:Array, footerHtml:string, locationName:string }}
+ */
+export function buildConfirmationDefaults(ctx) {
   const memberLineup = ctx.teamMembers
     .map((m) => `<li>${escapeHtml(m.name)}${m.role === 'captain' ? ' <em>(captain)</em>' : ''}${m.is_member ? ' <span style="color:#7a5a00;font-size:11px;background:#fff4cc;padding:1px 6px;border-radius:9999px;margin-left:6px">UN1T member</span>' : ''}</li>`)
     .join('')
@@ -184,42 +193,89 @@ async function sendEmail({ payment, ctx }) {
     ? `<p style="color:#666;font-size:13px;margin:4px 0 0">${breakdown.join(' &nbsp;·&nbsp; ')}</p>`
     : ''
 
-  const html = `
-<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#fff;color:#111;max-width:560px;margin:0 auto;padding:24px">
-  <div style="background:#000;color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px">UN1T</div>
-  <h1 style="font-size:24px;margin:24px 0 8px">You're registered, ${escapeHtml(ctx.captainFirstName || 'team captain')}.</h1>
-  <p style="margin:0 0 16px;color:#444;font-size:15px">Team <strong>${escapeHtml(ctx.teamName)}</strong> is locked in for <strong>${escapeHtml(ctx.raceName)}</strong>.</p>
-
-  <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:24px 0;font-size:14px">
-    <tr><td style="padding:8px 0;color:#666;width:120px">Date</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.raceDateLabel)}</td></tr>
+  const infoRows = `    <tr><td style="padding:8px 0;color:#666;width:120px">Date</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.raceDateLabel)}</td></tr>
     ${ctx.waveLabel ? `<tr><td style="padding:8px 0;color:#666">Wave</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.waveLabel)}</td></tr>` : ''}
     ${ctx.locationName ? `<tr><td style="padding:8px 0;color:#666">Where</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.locationName)}</td></tr>` : ''}
     <tr><td style="padding:8px 0;color:#666">Team size</td><td style="padding:8px 0;font-weight:600">${ctx.teamSize}-person</td></tr>
-    <tr><td style="padding:8px 0;color:#666;vertical-align:top">Total paid</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.amountLabel)}${breakdownLine}</td></tr>
-  </table>
+    <tr><td style="padding:8px 0;color:#666;vertical-align:top">Total paid</td><td style="padding:8px 0;font-weight:600">${escapeHtml(ctx.amountLabel)}${breakdownLine}</td></tr>`
+
+  const afterInfoHtml = `
 
   <h3 style="font-size:16px;margin:24px 0 8px">Your team</h3>
-  <ul style="padding-left:20px;margin:0 0 24px;font-size:14px;line-height:1.7">${memberLineup}</ul>
-${ctx.teamMembers.some((m) => m.qrSrc) ? `
-  <h3 style="font-size:16px;margin:24px 0 8px">Check-in codes</h3>
-  <p style="margin:0 0 12px;color:#666;font-size:13px">Show your code to a team member at the door for a quick check-in.</p>
-  <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:0 0 24px">
-    ${ctx.teamMembers.filter((m) => m.qrSrc).map((m) => `<tr>
-      <td style="padding:10px 0;font-size:14px;vertical-align:middle">${escapeHtml(m.name)}${m.role === 'captain' ? ' <em style="color:#666">(captain)</em>' : ''}</td>
-      <td style="padding:10px 0;text-align:right"><img src="${m.qrSrc}" alt="Check-in code" width="110" height="110" style="border:1px solid #eee;border-radius:8px"/></td>
-    </tr>`).join('')}
-  </table>` : ''}
-  <div style="background:#f5f5f5;padding:16px;border-radius:8px;font-size:13px;color:#333;line-height:1.5">
-    <strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.
-  </div>
+  <ul style="padding-left:20px;margin:0 0 24px;font-size:14px;line-height:1.7">${memberLineup}</ul>`
 
-  <p style="color:#999;font-size:12px;margin-top:24px;text-align:center">UN1T · ${escapeHtml(ctx.locationName || '')}</p>
-</div>`.trim()
+  const memberQrs = (ctx.teamMembers || []).map((m) => ({
+    name: m.name,
+    qrSrc: m.qrSrc,
+    captain: m.role === 'captain',
+  }))
+
+  return {
+    subject: `${ctx.raceName} — you're in!`,
+    heading: `You're registered, ${escapeHtml(ctx.captainFirstName || 'team captain')}.`,
+    introHtml: `Team <strong>${escapeHtml(ctx.teamName)}</strong> is locked in for <strong>${escapeHtml(ctx.raceName)}</strong>.`,
+    infoRows,
+    afterInfoHtml,
+    memberQrs,
+    footerHtml: `<strong>What's next:</strong> arrive 30 minutes before your wave. Bring water, a towel, and your race-day energy. We'll send a reminder the day before with parking + check-in details.`,
+    locationName: ctx.locationName || '',
+  }
+}
+
+/**
+ * Pure builder for the DEFAULT (unconfigured) confirmation email body — the
+ * shared shell with no per-event tint. Characterization-tested byte-for-byte
+ * (event-email.test.js); resolveEventEmail reproduces this when the race has no
+ * per-event config.
+ *
+ * @param {object} ctx
+ * @returns {string} HTML body
+ */
+export function buildConfirmationEmailHtml(ctx) {
+  const d = buildConfirmationDefaults(ctx)
+  return buildEventEmailShell({
+    heading: d.heading,
+    introHtml: d.introHtml,
+    accentHex: null,
+    headerImageUrl: null,
+    infoRows: d.infoRows,
+    memberQrs: d.memberQrs,
+    afterInfoHtml: d.afterInfoHtml,
+    footerHtml: d.footerHtml,
+    locationName: d.locationName,
+  })
+}
+
+async function sendEmail({ db, payment, ctx }) {
+  if (!payment.contact_email) return { status: 'skipped', reason: 'no_email' }
+
+  const race = payment.race || {}
+  const mergeContact = {
+    first_name: (payment.contact_name || '').split(' ')[0] || '',
+    name: payment.contact_name || '',
+    email: payment.contact_email || '',
+    phone: payment.contact_phone || '',
+  }
+  const extras = {
+    event_name: ctx.raceName,
+    team_name: ctx.teamName,
+    when: ctx.waveLabel || ctx.raceDateLabel,
+    location: ctx.locationName,
+  }
+
+  const { subject, htmlBody } = await resolveEventEmail({
+    db,
+    kind: 'confirmation',
+    race,
+    contact: mergeContact,
+    extras,
+    defaults: buildConfirmationDefaults(ctx),
+  })
 
   await sendTransactionalEmail({
     to: payment.contact_email,
     subject,
-    htmlBody: html,
+    htmlBody,
     contactId: payment.contact_id || null,
     locationId: payment.race?.location_id || null,
     tag: 'race-registration-confirmation',
