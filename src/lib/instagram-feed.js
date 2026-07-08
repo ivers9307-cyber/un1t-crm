@@ -67,3 +67,58 @@ export async function fetchIgUsername(connection, { fetchImpl = fetch } = {}) {
     return null
   }
 }
+
+const BUCKET = 'instagram-feed'
+
+async function rehostThumb({ db, locationId, post, fetchImpl }) {
+  const res = await fetchImpl(post.image_url)
+  if (!res.ok) throw new Error(`thumb fetch ${res.status}`)
+  const buf = Buffer.from(await res.arrayBuffer())
+  const path = `${locationId}/${post.ig_media_id}.jpg`
+  const { error } = await db.storage.from(BUCKET).upload(path, buf, { contentType: 'image/jpeg', upsert: true })
+  if (error) throw new Error(`thumb upload: ${error.message}`)
+  return path
+}
+
+/**
+ * Sync ONE location's IG feed: fetch latest media (+username), re-host thumbs,
+ * upsert rows, prune stale. Throws only on a Graph fetch error (caller keeps
+ * last-good). Empty (non-error) response = no writes, no prune.
+ * @param {{db:object, connection:object, fetchImpl?:Function}} args
+ * @returns {Promise<{synced:number}>}
+ */
+export async function syncLocationIgFeed({ db, connection, fetchImpl = fetch }) {
+  const locationId = connection.location_id
+  const posts = await fetchIgMedia(connection, { fetchImpl })      // throws → keep last-good
+  if (posts.length === 0) return { synced: 0 }                     // never wipe on empty
+  const username = await fetchIgUsername(connection, { fetchImpl })
+  const now = new Date().toISOString()
+  const keptIds = []
+  for (const post of posts) {
+    let thumb_path
+    try {
+      thumb_path = await rehostThumb({ db, locationId, post, fetchImpl })
+    } catch (e) {
+      console.error(`[instagram-feed] rehost ${locationId}/${post.ig_media_id}: ${e.message}`)
+      continue
+    }
+    await db.from('instagram_feed_posts').upsert({
+      location_id: locationId,
+      ig_media_id: post.ig_media_id,
+      ig_username: username,
+      media_type: post.media_type,
+      is_reel: post.is_reel,
+      permalink: post.permalink,
+      caption: post.caption,
+      thumb_path,
+      posted_at: post.posted_at,
+      fetched_at: now,
+    }, { onConflict: 'location_id,ig_media_id' })
+    keptIds.push(post.ig_media_id)
+  }
+  // Prune rows no longer in the latest set (only reached when posts.length > 0).
+  const { data: existing } = await db.from('instagram_feed_posts').select('ig_media_id').eq('location_id', locationId)
+  const stale = (existing || []).map((r) => r.ig_media_id).filter((id) => !keptIds.includes(id))
+  if (stale.length > 0) await db.from('instagram_feed_posts').delete().eq('location_id', locationId).in('ig_media_id', stale)
+  return { synced: keptIds.length }
+}

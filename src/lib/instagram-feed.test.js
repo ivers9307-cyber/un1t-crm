@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeIgMedia, fetchIgMedia, fetchIgUsername } from './instagram-feed.js'
+import { normalizeIgMedia, fetchIgMedia, fetchIgUsername, syncLocationIgFeed } from './instagram-feed.js'
 
 describe('normalizeIgMedia', () => {
   const img = { id: '1', media_type: 'IMAGE', media_url: 'https://cdn/i1.jpg', permalink: 'https://instagram.com/p/1', caption: 'hello', timestamp: '2026-07-01T10:00:00Z' }
@@ -54,5 +54,67 @@ describe('fetchIgUsername', () => {
     expect(await fetchIgUsername({ external_account_id: 'ig123', access_token: 'tok' }, { fetchImpl: ok })).toBe('un1tstillorgan')
     const bad = async () => ({ ok: false, status: 400, json: async () => ({}) })
     expect(await fetchIgUsername({ external_account_id: 'ig123', access_token: 'tok' }, { fetchImpl: bad })).toBeNull()
+  })
+})
+
+function fakeDb(existingIds = []) {
+  const ops = { upserts: [], deletedIn: null, uploads: [] }
+  const db = {
+    from: (table) => ({
+      upsert: async (row, opts) => { ops.upserts.push({ table, row, opts }); return { error: null } },
+      select: () => ({ eq: async () => ({ data: existingIds.map((id) => ({ ig_media_id: id })) }) }),
+      delete: () => ({ eq: () => ({ in: async (_c, ids) => { ops.deletedIn = ids; return { error: null } } }) }),
+    }),
+    storage: { from: () => ({ upload: async (path) => { ops.uploads.push(path); return { error: null } } }) },
+  }
+  return { db, ops }
+}
+
+describe('syncLocationIgFeed', () => {
+  const conn = { location_id: 'loc1', external_account_id: 'ig1', access_token: 'tok' }
+  const mediaResp = { ok: true, json: async () => ({ data: [
+    { id: 'A', media_type: 'IMAGE', media_url: 'https://cdn/a.jpg', permalink: 'https://instagram.com/p/A', timestamp: '2026-07-01T00:00:00Z' },
+    { id: 'B', media_type: 'VIDEO', media_product_type: 'REELS', thumbnail_url: 'https://cdn/b.jpg', permalink: 'https://instagram.com/reel/B', timestamp: '2026-07-02T00:00:00Z' },
+  ] }) }
+  // fetchImpl: media edge → mediaResp; username → username; image bytes → ok arrayBuffer
+  const fetchImpl = async (url) => {
+    if (url.includes('/media')) return mediaResp
+    if (url.includes('fields=username')) return { ok: true, json: async () => ({ username: 'un1t' }) }
+    return { ok: true, arrayBuffer: async () => new ArrayBuffer(8) }
+  }
+
+  it('re-hosts thumbnails, upserts each post, prunes stale rows', async () => {
+    const { db, ops } = fakeDb(['A', 'B', 'OLD'])
+    const r = await syncLocationIgFeed({ db, connection: conn, fetchImpl })
+    expect(r.synced).toBe(2)
+    expect(ops.uploads).toEqual(['loc1/A.jpg', 'loc1/B.jpg'])
+    expect(ops.upserts.map((u) => u.row.ig_media_id).sort()).toEqual(['A', 'B'])
+    expect(ops.upserts.find((u) => u.row.ig_media_id === 'B').row.is_reel).toBe(true)
+    expect(ops.upserts[0].row.ig_username).toBe('un1t')
+    expect(ops.deletedIn).toEqual(['OLD']) // stale pruned; A/B kept
+  })
+
+  it('does NOT prune when Graph returns zero posts (keep last-good)', async () => {
+    const { db, ops } = fakeDb(['A'])
+    const emptyFetch = async (url) => url.includes('/media')
+      ? { ok: true, json: async () => ({ data: [] }) }
+      : { ok: true, json: async () => ({ username: 'un1t' }) }
+    const r = await syncLocationIgFeed({ db, connection: conn, fetchImpl: emptyFetch })
+    expect(r.synced).toBe(0)
+    expect(ops.deletedIn).toBeNull()
+    expect(ops.upserts).toHaveLength(0)
+  })
+
+  it('skips a post whose image re-host fails but keeps the others', async () => {
+    const { db, ops } = fakeDb([])
+    const failB = async (url) => {
+      if (url.includes('/media')) return mediaResp
+      if (url.includes('fields=username')) return { ok: true, json: async () => ({ username: 'un1t' }) }
+      if (url.includes('b.jpg')) return { ok: false, status: 500 } // B's image fails
+      return { ok: true, arrayBuffer: async () => new ArrayBuffer(8) }
+    }
+    const r = await syncLocationIgFeed({ db, connection: conn, fetchImpl: failB })
+    expect(r.synced).toBe(1)
+    expect(ops.upserts.map((u) => u.row.ig_media_id)).toEqual(['A'])
   })
 })
