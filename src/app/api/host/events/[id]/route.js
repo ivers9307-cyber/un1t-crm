@@ -54,7 +54,11 @@ export async function PUT(request, props) {
     status: current.status,
     race_date: current.race_date,
     non_member_fee_cents: current.non_member_fee_cents,
-    waves: firstWave ? [{ id: firstWave.id, start_time: firstWave.start_time }] : [],
+    // race_waves.start_time is a Postgres TIME → PostgREST returns "HH:MM:SS";
+    // input.session_start_time is "HH:MM". Slice to 5 so the wave-key compares
+    // like-for-like — otherwise EVERY edit reads as a time change and a cosmetic
+    // edit (e.g. a description typo) would knock a published event offline.
+    waves: firstWave ? [{ id: firstWave.id, start_time: String(firstWave.start_time).slice(0, 5) }] : [],
   }
   const transition = computeEditTransition(currentForDiff, changes)
 
@@ -80,11 +84,10 @@ export async function PUT(request, props) {
   }).eq('id', current.id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  if (firstWave) {
-    await db.from('race_waves').update({ start_time: input.session_start_time, capacity: input.session_capacity, label: input.session_label ?? null }).eq('id', firstWave.id)
-  } else {
-    await db.from('race_waves').insert({ race_event_id: current.id, start_time: input.session_start_time, capacity: input.session_capacity, label: input.session_label ?? null, display_order: 0 })
-  }
+  const { error: waveErr } = firstWave
+    ? await db.from('race_waves').update({ start_time: input.session_start_time, capacity: input.session_capacity, label: input.session_label ?? null }).eq('id', firstWave.id)
+    : await db.from('race_waves').insert({ race_event_id: current.id, start_time: input.session_start_time, capacity: input.session_capacity, label: input.session_label ?? null, display_order: 0 })
+  if (waveErr) return NextResponse.json({ success: false, error: waveErr.message }, { status: 500 })
 
   return NextResponse.json({ success: true, data: { id: current.id, status: transition.status, reReview: transition.reReview } })
 }

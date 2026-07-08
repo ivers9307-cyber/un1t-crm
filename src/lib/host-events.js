@@ -136,18 +136,22 @@ export { uuidLike }
 // collides. Returns the anchor location id.
 export async function ensureAnchorLocation(db, host) {
   if (host.anchor_location_id) return host.anchor_location_id
-  const { data, error } = await db
-    .from('locations')
-    .insert({
-      organization_id: host.organization_id,
-      name: `${host.name} (host events)`,
-      slug: `host-${host.id}`,
-      active: true,
-      is_host_anchor: true,
-    })
-    .select('id')
-    .single()
-  if (error || !data) throw new Error(`anchor location provisioning failed: ${error?.message || 'no row'}`)
-  await db.from('event_hosts').update({ anchor_location_id: data.id }).eq('id', host.id)
-  return data.id
+  const slug = `host-${host.id}`
+  // Self-heal a prior partial run: the anchor row may already exist (holding the
+  // UNIQUE slug) but the link-back to event_hosts failed, leaving anchor_location_id
+  // null. Reuse it instead of re-inserting the same slug into a UNIQUE violation.
+  const { data: existing } = await db.from('locations').select('id').eq('slug', slug).eq('is_host_anchor', true).maybeSingle()
+  let id = existing?.id
+  if (!id) {
+    const { data, error } = await db
+      .from('locations')
+      .insert({ organization_id: host.organization_id, name: `${host.name} (host events)`, slug, active: true, is_host_anchor: true })
+      .select('id')
+      .single()
+    if (error || !data) throw new Error(`anchor location provisioning failed: ${error?.message || 'no row'}`)
+    id = data.id
+  }
+  const { error: linkErr } = await db.from('event_hosts').update({ anchor_location_id: id }).eq('id', host.id)
+  if (linkErr) throw new Error(`anchor link failed: ${linkErr.message}`)
+  return id
 }

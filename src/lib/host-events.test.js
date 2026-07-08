@@ -14,7 +14,13 @@ function fakeDb() {
     calls,
     from(table) {
       if (table === 'locations') {
-        return { insert: (row) => ({ select: () => ({ single: async () => { calls.inserted = row; return { data: { id: 'loc-new' }, error: null } } }) }) }
+        return {
+          // ensureAnchorLocation first probes for an existing unlinked anchor
+          // (.select().eq().eq().maybeSingle()) → none here, so it falls through
+          // to the insert path exercised by the "creates a hidden anchor" test.
+          select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }),
+          insert: (row) => ({ select: () => ({ single: async () => { calls.inserted = row; return { data: { id: 'loc-new' }, error: null } } }) }),
+        }
       }
       if (table === 'event_hosts') {
         return { update: (patch) => ({ eq: async () => { calls.updatedHost = patch; return { error: null } } }) }
