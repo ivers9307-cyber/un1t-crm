@@ -71,10 +71,38 @@ describe('resolveRefund — money guards', () => {
     expect(result.status).toBe(400)
   })
 
-  it('rejects a null payment_provider_ref (no Revolut handle to refund against)', () => {
+  it('rejects a null payment_provider_ref (no provider handle to refund against)', () => {
     const result = resolveRefund({ ...completedOrder, payment_provider_ref: null }, undefined)
     expect(result.ok).toBe(false)
     expect(result.code).toBe('no_provider_ref')
+    expect(result.status).toBe(422)
+  })
+
+  // ── Stripe Connect provider (EVENTS-HOST.7) ───────────────────────────────
+
+  it('allows a stripe_connect order that has a connected account', () => {
+    const stripeOrder = {
+      ...completedOrder,
+      payment_provider: 'stripe_connect',
+      payment_provider_ref: 'cs_abc',
+      connected_account_id: 'acct_host',
+    }
+    const result = resolveRefund(stripeOrder, undefined)
+    expect(result.ok).toBe(true)
+    expect(result.refundAmount).toBe(5000)
+    expect(result.isFull).toBe(true)
+  })
+
+  it('rejects a stripe_connect order missing the connected account — no way to refund the host', () => {
+    const stripeOrder = {
+      ...completedOrder,
+      payment_provider: 'stripe_connect',
+      payment_provider_ref: 'cs_abc',
+      connected_account_id: null,
+    }
+    const result = resolveRefund(stripeOrder, undefined)
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('no_connected_account')
     expect(result.status).toBe(422)
   })
 

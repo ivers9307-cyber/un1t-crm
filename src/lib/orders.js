@@ -72,6 +72,12 @@ export async function syncOrderFromRacePayment({ db, payment }) {
     abandoned_at: payment.abandoned_at || null,
     refunded_at: payment.refunded_at || null,
     refunded_amount_cents: payment.refunded_amount_cents || null,
+    // EVENTS-HOST.7 — carry the marketplace fields onto the order so the
+    // refund route can dispatch to the host's connected account (and reporting
+    // can read fee/net without re-joining race_payments). NULL for
+    // Revolut/internal events.
+    connected_account_id: payment.connected_account_id || null,
+    application_fee_cents: payment.application_fee_cents ?? null,
   }
 
   const { data, error } = await db

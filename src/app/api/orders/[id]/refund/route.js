@@ -9,9 +9,10 @@
 //
 // Flow:
 //   1. Resolve the order + verify caller has access
-//   2. Reject if not status='completed' or non-revolut provider
-//   3. Call refundOrder() against Revolut (idempotent — Revolut
-//      itself dedupes on the same idempotency key)
+//   2. Reject if not status='completed' or an unsupported provider
+//   3. Refund via the order's provider — Revolut (internal events/deposits)
+//      or the host's Stripe connected account (third-party events). A FULL
+//      refund also returns UN1T's per-ticket booking fee; a partial keeps it.
 //   4. Update orders.status='refunded', set refunded_at +
 //      refunded_amount_cents
 //   5. Cascade to source row (race_payments / cars.deposit_status)
@@ -23,7 +24,8 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { MANAGER_ROLES } from '@/lib/schemas'
-import { refundOrder, RevolutError } from '@/lib/revolut'
+import { RevolutError } from '@/lib/revolut'
+import { paymentsFor } from '@/lib/payments'
 import { emitEvent, applyTagRules, EVENT_TYPES } from '@/lib/contact-events'
 import { validateBody } from '@/lib/validate'
 
@@ -51,19 +53,31 @@ export function resolveRefund(order, requestedAmountCents) {
       status: 409,
     }
   }
-  if (order.payment_provider !== 'revolut') {
+  // Revolut (internal/UN1T events, deposits) and Stripe Connect (third-party
+  // host events — refunded on the host's own connected account) are both
+  // supported. Any other provider (e.g. legacy/free) still routes to a manual
+  // refund. (EVENTS-HOST.7)
+  if (!['revolut', 'stripe_connect'].includes(order.payment_provider)) {
     return {
       ok: false,
       code: 'unsupported_provider',
-      error: 'Refunds are only supported for Revolut-paid orders. Issue a manual refund via your provider.',
+      error: 'Refunds are only supported for Revolut- or Stripe-paid orders. Issue a manual refund via your provider.',
       status: 400,
+    }
+  }
+  if (order.payment_provider === 'stripe_connect' && !order.connected_account_id) {
+    return {
+      ok: false,
+      code: 'no_connected_account',
+      error: 'Stripe-paid order is missing the host connected account — cannot refund automatically.',
+      status: 422,
     }
   }
   if (!order.payment_provider_ref) {
     return {
       ok: false,
       code: 'no_provider_ref',
-      error: 'Order is missing a Revolut order reference — cannot refund.',
+      error: 'Order is missing a payment reference — cannot refund.',
       status: 422,
     }
   }
@@ -139,19 +153,28 @@ export async function POST(request, props) {
   }
   const refundAmount = resolution.refundAmount
 
-  // Hit Revolut. RevolutError → surface a clean 502.
-  let revolutResult = null
+  // Dispatch to the order's payment provider. Revolut → refundOrder (dedupes
+  // internally); Stripe Connect → a refund on the host's connected account.
+  // A FULL refund also returns UN1T's booking fee (refundApplicationFee) so the
+  // customer is made whole; a PARTIAL refund keeps the fee and comes out of the
+  // host's portion. Provider errors → a clean 502. (EVENTS-HOST.7)
+  let refundResult = null
   try {
-    revolutResult = await refundOrder(order.payment_provider_ref, {
-      amount: refundAmount,
+    refundResult = await paymentsFor(order.payment_provider).refundPayment(order.payment_provider_ref, {
+      amountCents: refundAmount,
       currency: order.currency || 'EUR',
       description: body.reason || `Refund of order ${order.id}`,
+      connectedAccountId: order.connected_account_id || null,
+      refundApplicationFee: resolution.isFull,
+      // Cumulative total is unique per refund step → retry-safe without
+      // colliding two distinct partial refunds of the same amount.
+      idempotencyKey: `refund:${order.id}:${resolution.newRefundedTotal}`,
     })
   } catch (e) {
     const status = e instanceof RevolutError ? Math.min(Math.max(e.status || 502, 400), 599) : 502
     return NextResponse.json({
       success: false,
-      error: `Revolut refund failed: ${e.message || 'unknown'}`,
+      error: `Refund failed: ${e.message || 'unknown'}`,
       code: 'provider_error',
     }, { status })
   }
@@ -171,7 +194,10 @@ export async function POST(request, props) {
       ...(order.metadata || {}),
       refund_reason: body.reason || null,
       refund_actor_id: user.id,
-      refund_revolut_id: revolutResult?.id || null,
+      refund_provider: order.payment_provider,
+      refund_provider_id: refundResult?.refundId || null,
+      // Back-compat: readers that keyed on the Revolut-specific field.
+      refund_revolut_id: order.payment_provider === 'revolut' ? (refundResult?.refundId || null) : null,
     },
   }
   await db.from('orders').update(updates).eq('id', order.id)
@@ -223,7 +249,9 @@ export async function POST(request, props) {
       order_id: order.id,
       refunded_amount_cents: refundAmount,
       refunded_at: nowIso,
-      revolut_refund_id: revolutResult?.id || null,
+      refund_id: refundResult?.refundId || null,
+      // Back-compat alias — same value; populated for Revolut as before.
+      revolut_refund_id: order.payment_provider === 'revolut' ? (refundResult?.refundId || null) : null,
     },
   })
 }
