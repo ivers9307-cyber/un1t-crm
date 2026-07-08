@@ -9,7 +9,7 @@ import { redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { Plus, Flag, ExternalLink, Users } from 'lucide-react'
+import { Plus, Flag, ExternalLink, Users, Tag } from 'lucide-react'
 import { getAppUrl } from '@/lib/app-url'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
 import { eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
@@ -89,12 +89,20 @@ export default async function EventsIndexPage(props) {
     <div className="p-8 max-w-5xl">
       <div className="flex items-start justify-between gap-4 mb-2">
         <h2 className="text-2xl font-bold">Events</h2>
-        <Link
-          href="/events/new"
-          className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
-        >
-          <Plus size={12} /> New event
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/events/promo-codes"
+            className="inline-flex items-center gap-1.5 text-xs border border-un1t-border text-un1t-subtle px-3 py-1.5 rounded-md hover:text-un1t-text hover:bg-un1t-border/40 font-medium"
+          >
+            <Tag size={12} /> Promo codes
+          </Link>
+          <Link
+            href="/events/new"
+            className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
+          >
+            <Plus size={12} /> New event
+          </Link>
+        </div>
       </div>
       <p className="text-sm text-un1t-subtle mb-6">
         Standalone events at this location — races (Hyrox sims with race-day timing + TV display), workshops, seminars, open days, masterclasses. Customers register via a dedicated public signup page; per-seat name + email is captured for every event kind.
