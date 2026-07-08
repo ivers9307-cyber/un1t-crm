@@ -182,6 +182,7 @@
     { "path": "/api/cron/ad-report-email", "schedule": "0 7 * * *" },
     { "path": "/api/cron/receipt-coverage-weekly", "schedule": "0 7 * * 5" },
     { "path": "/api/cron/receipt-coverage-weekly", "schedule": "0 8 * * 5" },
-    { "path": "/api/cron/process-receipt-hunts", "schedule": "*/5 * * * *" }
+    { "path": "/api/cron/process-receipt-hunts", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/instagram-feed-sync", "schedule": "0 */6 * * *" }
   ]
 }
