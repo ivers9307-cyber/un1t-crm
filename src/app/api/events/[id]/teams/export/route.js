@@ -67,8 +67,13 @@ export async function GET(_request, props) {
         .in('race_registration_id', regIds)
         .order('created_at', { ascending: false })
         .range(from, from + PAGE - 1)
+      // Keep the most-recent NON-EMPTY phone (payments are created_at DESC, so
+      // the first non-empty we see per registration is the latest good one) —
+      // a later attempt that dropped the phone shouldn't blank it out.
       for (const pmt of (data || [])) {
-        if (!(pmt.race_registration_id in phoneByReg)) phoneByReg[pmt.race_registration_id] = pmt.contact_phone || null
+        if (!phoneByReg[pmt.race_registration_id] && pmt.contact_phone) {
+          phoneByReg[pmt.race_registration_id] = pmt.contact_phone
+        }
       }
       if (!data || data.length < PAGE) break
     }
