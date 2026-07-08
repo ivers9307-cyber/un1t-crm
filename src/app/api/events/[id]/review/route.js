@@ -44,8 +44,19 @@ export async function POST(request, props) {
   const patch = parsed.data.action === 'approve'
     ? { status: 'published', reviewed_at: nowIso, reviewed_by: user.id, rejected_reason: null }
     : { status: 'rejected', reviewed_at: nowIso, reviewed_by: user.id, rejected_reason: parsed.data.reason.trim() }
-  const { error } = await db.from('race_events').update(patch).eq('id', event.id)
+  // CAS-on-status (repo convention): only flip a row that's still
+  // pending_review, so a concurrent approve+reject can't clobber each other.
+  // 0 rows affected = another reviewer already moved it → 409, not a silent win.
+  const { data: updated, error } = await db
+    .from('race_events')
+    .update(patch)
+    .eq('id', event.id)
+    .eq('status', 'pending_review')
+    .select('id')
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (!updated || updated.length === 0) {
+    return NextResponse.json({ success: false, error: 'Event is no longer pending review.' }, { status: 409 })
+  }
 
   return NextResponse.json({ success: true, data: { id: event.id, status: patch.status } })
 }
