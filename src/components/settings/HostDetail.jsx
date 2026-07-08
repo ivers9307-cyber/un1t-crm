@@ -50,6 +50,25 @@ function StatusFlag({ ok, label }) {
   )
 }
 
+function fmtEuro(cents, currency = 'EUR') {
+  const n = Number(cents)
+  const safe = Number.isFinite(n) ? n : 0
+  try {
+    return new Intl.NumberFormat('en-IE', { style: 'currency', currency: currency || 'EUR' }).format(safe / 100)
+  } catch {
+    return `€${(safe / 100).toFixed(2)}`
+  }
+}
+
+function Stat({ label, value }) {
+  return (
+    <div className="rounded-lg border border-un1t-border bg-un1t-bg px-3 py-2">
+      <p className="text-[11px] uppercase tracking-wide text-un1t-muted">{label}</p>
+      <p className="mt-0.5 text-lg font-semibold text-un1t-text tabular-nums">{value}</p>
+    </div>
+  )
+}
+
 export default function HostDetail({ hostId }) {
   const [host, setHost] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -75,6 +94,9 @@ export default function HostDetail({ hostId }) {
 
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState(null)
+
+  const [revenue, setRevenue] = useState(null)
+  const [revenueLoading, setRevenueLoading] = useState(true)
 
   // Hydrate the editable form from a freshly-loaded host row.
   const applyHost = useCallback((h) => {
@@ -138,6 +160,19 @@ export default function HostDetail({ hostId }) {
     // loadHost / syncHost are stable (useCallback keyed on hostId), so this
     // runs once per host — the intended mount behaviour.
   }, [loadHost, syncHost])
+
+  // Revenue loads independently of the host profile — a slow aggregation
+  // shouldn't hold up the rest of the page, and a failure is non-fatal.
+  useEffect(() => {
+    let alive = true
+    setRevenueLoading(true)
+    fetch(`/api/hosts/${hostId}/revenue`)
+      .then((r) => r.json())
+      .then((j) => { if (alive && j?.success) setRevenue(j.data) })
+      .catch(() => { /* non-fatal — the card just stays empty */ })
+      .finally(() => { if (alive) setRevenueLoading(false) })
+    return () => { alive = false }
+  }, [hostId])
 
   async function save(e) {
     e.preventDefault()
@@ -358,6 +393,54 @@ export default function HostDetail({ hostId }) {
                 <p className="mt-2 text-xs text-un1t-subtle">
                   Send this to the host — they open it and connect their own Stripe account, no login needed.
                 </p>
+              </div>
+            )}
+          </>
+        )}
+      </Card>
+
+      {/* Revenue rollup (EVENTS-HOST.8) */}
+      <Card title="Revenue">
+        {revenueLoading ? (
+          <p className="text-sm text-un1t-muted">Loading revenue…</p>
+        ) : !revenue || revenue.totals.paidCount === 0 ? (
+          <p className="text-sm text-un1t-muted">No ticket sales yet.</p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <Stat label="Gross collected" value={fmtEuro(revenue.totals.gross_cents, revenue.currency)} />
+              <Stat label="UN1T booking fees" value={fmtEuro(revenue.totals.fee_cents, revenue.currency)} />
+              <Stat label="Net to host" value={fmtEuro(revenue.totals.net_to_host_cents, revenue.currency)} />
+              <Stat label="Refunded" value={fmtEuro(revenue.totals.refunded_cents, revenue.currency)} />
+            </div>
+            <p className="mt-2 text-xs text-un1t-muted">
+              {revenue.totals.paidCount} paid {revenue.totals.paidCount === 1 ? 'ticket' : 'tickets'}
+              {' · '}net collected after refunds {fmtEuro(revenue.totals.net_collected_cents, revenue.currency)}
+            </p>
+            {revenue.perEvent.length > 0 && (
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-un1t-muted border-b border-un1t-border">
+                      <th className="py-2 pr-3 font-medium">Event</th>
+                      <th className="py-2 px-3 font-medium text-right">Tickets</th>
+                      <th className="py-2 px-3 font-medium text-right">Gross</th>
+                      <th className="py-2 px-3 font-medium text-right">Fee</th>
+                      <th className="py-2 pl-3 font-medium text-right">Net to host</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {revenue.perEvent.map((e) => (
+                      <tr key={e.event_id} className="border-b border-un1t-border/50">
+                        <td className="py-2 pr-3">{e.name}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">{e.paidCount}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">{fmtEuro(e.gross_cents, revenue.currency)}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">{fmtEuro(e.fee_cents, revenue.currency)}</td>
+                        <td className="py-2 pl-3 text-right tabular-nums">{fmtEuro(e.net_to_host_cents, revenue.currency)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </>
