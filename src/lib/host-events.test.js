@@ -6,6 +6,23 @@ import {
   deriveSlug,
   HOST_EVENT_KINDS,
 } from './host-events'
+import { ensureAnchorLocation } from './host-events'
+
+function fakeDb() {
+  const calls = { inserted: null, updatedHost: null }
+  return {
+    calls,
+    from(table) {
+      if (table === 'locations') {
+        return { insert: (row) => ({ select: () => ({ single: async () => { calls.inserted = row; return { data: { id: 'loc-new' }, error: null } } }) }) }
+      }
+      if (table === 'event_hosts') {
+        return { update: (patch) => ({ eq: async () => { calls.updatedHost = patch; return { error: null } } }) }
+      }
+      throw new Error('unexpected table ' + table)
+    },
+  }
+}
 
 describe('eventIsPublic', () => {
   it('is public only when active AND status=published', () => {
@@ -75,5 +92,22 @@ describe('HOST_EVENT_KINDS', () => {
   it('excludes lead_gen (UN1T-only)', () => {
     expect(HOST_EVENT_KINDS).not.toContain('lead_gen')
     expect(HOST_EVENT_KINDS).toContain('workshop')
+  })
+})
+
+describe('ensureAnchorLocation', () => {
+  it('returns the existing anchor without creating one', async () => {
+    const db = fakeDb()
+    const id = await ensureAnchorLocation(db, { id: 'h1', name: 'Acme', organization_id: 'org1', anchor_location_id: 'loc-existing' })
+    expect(id).toBe('loc-existing')
+    expect(db.calls.inserted).toBe(null)
+  })
+  it('creates a hidden anchor location + links it when none exists', async () => {
+    const db = fakeDb()
+    const id = await ensureAnchorLocation(db, { id: 'h1', name: 'Acme', organization_id: 'org1', anchor_location_id: null })
+    expect(id).toBe('loc-new')
+    expect(db.calls.inserted).toMatchObject({ organization_id: 'org1', is_host_anchor: true, active: true, slug: 'host-h1' })
+    expect(db.calls.inserted.name).toContain('Acme')
+    expect(db.calls.updatedHost).toEqual({ anchor_location_id: 'loc-new' })
   })
 })

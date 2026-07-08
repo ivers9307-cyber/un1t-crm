@@ -126,3 +126,28 @@ export const HostEventSchema = z
   .strict()
 
 export { uuidLike }
+
+// Lazily provision the hidden "anchor" location that a host's events
+// hang off. Each host gets exactly one anchor location, created on
+// first need and cached back onto the host row. The location is
+// flagged is_host_anchor so it stays out of the normal location
+// pickers, and its slug is `host-<hostId>` — the host id is a uuid,
+// so this guarantees the NOT-NULL, UNIQUE `locations.slug` never
+// collides. Returns the anchor location id.
+export async function ensureAnchorLocation(db, host) {
+  if (host.anchor_location_id) return host.anchor_location_id
+  const { data, error } = await db
+    .from('locations')
+    .insert({
+      organization_id: host.organization_id,
+      name: `${host.name} (host events)`,
+      slug: `host-${host.id}`,
+      active: true,
+      is_host_anchor: true,
+    })
+    .select('id')
+    .single()
+  if (error || !data) throw new Error(`anchor location provisioning failed: ${error?.message || 'no row'}`)
+  await db.from('event_hosts').update({ anchor_location_id: data.id }).eq('id', host.id)
+  return data.id
+}
