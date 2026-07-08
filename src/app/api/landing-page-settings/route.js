@@ -94,6 +94,8 @@ const PutSchema = z.object({
   logo_url:           z.string().url().max(2000).nullable().optional(),
   logo_alt:           z.string().trim().max(200).nullable().optional(),
   logo_width_px:      z.number().int().min(40).max(600).nullable().optional(),
+  // Mig 382 (EVENTS-IG.1) — operator toggle for the events-page IG strip.
+  show_instagram_feed: z.boolean().optional(),
 }).strict()
 
 export async function GET(request) {
@@ -149,6 +151,8 @@ export async function PUT(request) {
     'testimonial_quote','testimonial_author',
     // Mig 129 — site logo
     'logo_url','logo_alt','logo_width_px',
+    // Mig 382 (EVENTS-IG.1) — events-page IG strip toggle
+    'show_instagram_feed',
   ]) {
     if (body[key] !== undefined) payload[key] = body[key]
   }
