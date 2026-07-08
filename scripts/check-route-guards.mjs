@@ -63,6 +63,10 @@ const SESSION_GUARDS = [
   // resolves + scopes to their contacts row — verified in src/lib/customer-auth.js.
   // Used by the customer-authed direct Apple Health endpoints (members, not staff).
   'resolveCustomerContact(',
+  // getCurrentHost resolves the Supabase session → host_users → event_hosts and
+  // returns null for staff/non-host users; every /api/host route 401s on null
+  // and scopes all reads to host.id — verified in src/lib/host-auth.js. (HOST-PORTAL.1)
+  'getCurrentHost(',
 ]
 
 // Webhooks authenticate the SENDER (HMAC / shared secret / provider
