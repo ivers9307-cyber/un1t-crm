@@ -96,6 +96,8 @@ export default function HostDetail({ hostId }) {
   const [invitingPortal, setInvitingPortal] = useState(false)
   const [portalInvitedTo, setPortalInvitedTo] = useState(null)
   const [portalError, setPortalError] = useState(null)
+  const [openingPortal, setOpeningPortal] = useState(false)
+  const [openPortalError, setOpenPortalError] = useState(null)
 
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState(null)
@@ -291,6 +293,26 @@ export default function HostDetail({ hostId }) {
       setPortalError(err.message || 'Could not send the portal invite')
     } finally {
       setInvitingPortal(false)
+    }
+  }
+
+  // Open this host's portal as the admin ("view-as", HOST-PORTAL.4). Starts a
+  // server-side impersonation session (sets a cookie), then does a FULL
+  // navigation so the new cookie rides along on the /host request. The admin
+  // exits back to the CRM via the banner inside the portal — not sign-out.
+  async function openPortal() {
+    if (openingPortal) return
+    setOpeningPortal(true)
+    setOpenPortalError(null)
+    try {
+      const res = await fetch(`/api/hosts/${hostId}/impersonate`, { method: 'POST' })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
+      // Full navigation (not router.push) so the freshly-set cookie is sent.
+      window.location.href = '/host'
+    } catch (err) {
+      setOpenPortalError(err.message || 'Could not open the host portal')
+      setOpeningPortal(false)
     }
   }
 
@@ -578,6 +600,15 @@ export default function HostDetail({ hostId }) {
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <Button
+            type="button"
+            icon={ExternalLink}
+            loading={openingPortal}
+            onClick={openPortal}
+          >
+            Open host portal
+          </Button>
+          <Button
+            type="button"
             variant="secondary"
             icon={Mail}
             loading={invitingPortal}
@@ -593,6 +624,14 @@ export default function HostDetail({ hostId }) {
             </span>
           )}
         </div>
+        <p className="mt-2 text-xs text-un1t-muted">
+          Opens this host&apos;s portal as you (admin) — you can exit back to the CRM anytime.
+        </p>
+        {openPortalError && (
+          <p className="mt-2 text-xs text-stage-lost flex items-center gap-1">
+            <AlertTriangle size={12} /> {openPortalError}
+          </p>
+        )}
         {portalError && (
           <p className="mt-2 text-xs text-stage-lost flex items-center gap-1">
             <AlertTriangle size={12} /> {portalError}

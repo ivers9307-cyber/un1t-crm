@@ -6,6 +6,7 @@
 import { redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import HostSignOut from '@/components/host/HostSignOut'
+import HostImpersonationBanner from '@/components/host/HostImpersonationBanner'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,6 +16,10 @@ export default async function HostPortalLayout({ children }) {
 
   return (
     <div className="min-h-screen bg-black text-white">
+      {/* Admin "view-as-host" strip (HOST-PORTAL.4) — full-width, above the
+          header. Present only when an admin is impersonating; it carries the
+          only exit affordance in that mode (see the header safeguard below). */}
+      {session.impersonatedBy && <HostImpersonationBanner hostName={session.host.name} />}
       <header className="border-b border-white/10">
         <div className="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
           <div className="flex items-baseline gap-3">
@@ -23,7 +28,10 @@ export default async function HostPortalLayout({ children }) {
           </div>
           <div className="flex items-center gap-3 text-sm">
             <span className="text-white/70">{session.host.name}</span>
-            <HostSignOut />
+            {/* SAFEGUARD: HostSignOut calls supabase.auth.signOut(), which would
+                destroy the admin's real staff session. An admin viewing-as must
+                exit via the banner's "Exit to CRM", never sign out here. */}
+            {session.impersonatedBy ? null : <HostSignOut />}
           </div>
         </div>
       </header>
