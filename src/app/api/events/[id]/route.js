@@ -25,7 +25,7 @@ const WaveInputSchema = z.object({
   display_order: z.number().int().nonnegative().optional(),
 })
 
-const UpdateSchema = z.object({
+export const UpdateSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
   description: z.string().max(4000).nullable().optional(),
   race_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -57,6 +57,16 @@ const UpdateSchema = z.object({
   // accent_hex is a 6-digit hex (#RRGGBB). Both nullable to clear.
   hero_image_url: z.string().url().max(2000).nullable().optional(),
   accent_hex: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
+  // EVENTS-EMAILCFG.1 (mig 385) — per-event confirmation/reminder email
+  // styling. Scalars flow through the generic `updates` patch below; NULL
+  // clears back to the default copy/look, omit = leave untouched. The
+  // *_template_id fields are location-validated in PUT before persisting.
+  confirmation_email_subject: z.string().max(4000).nullable().optional(),
+  confirmation_email_intro: z.string().max(4000).nullable().optional(),
+  reminder_email_subject: z.string().max(4000).nullable().optional(),
+  reminder_email_intro: z.string().max(4000).nullable().optional(),
+  confirmation_email_template_id: uuidLike.nullable().optional(),
+  reminder_email_template_id: uuidLike.nullable().optional(),
   // When provided, replaces the wave set entirely (diff-and-apply).
   // Omitting leaves waves untouched. At least one wave required if set.
   waves: z.array(WaveInputSchema).min(1).max(50).optional(),
@@ -72,6 +82,9 @@ async function loadRace(db, id) {
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
       members_only, payment_currency, tv_logos, shared, host_id,
       hero_image_url, accent_hex,
+      confirmation_email_subject, confirmation_email_intro,
+      reminder_email_subject, reminder_email_intro,
+      confirmation_email_template_id, reminder_email_template_id,
       waves:race_waves ( id, start_time, capacity, label, display_order ),
       registrations:race_registrations (
         id, status, race_started_at, race_finished_at, registered_at, wave_id,
@@ -157,6 +170,29 @@ export async function PUT(request, props) {
       .single()
     if (!loc || !host || host.organization_id !== loc.organization_id) {
       return NextResponse.json({ success: false, error: 'invalid_host' }, { status: 400 })
+    }
+  }
+
+  // EVENTS-EMAILCFG.1 — email-template IDOR guard. A confirmation/reminder
+  // template pointer must reference an email_templates row in THIS event's
+  // location, otherwise an operator could pull another location's template
+  // HTML into this event's live transactional emails. NULL/absent = shared
+  // shell (no check). Runs before the scalar patch below persists the ids.
+  const emailTemplateIds = [
+    body.confirmation_email_template_id,
+    body.reminder_email_template_id,
+  ].filter(Boolean)
+  if (emailTemplateIds.length > 0) {
+    const { data: templates } = await db
+      .from('email_templates')
+      .select('id, location_id')
+      .in('id', emailTemplateIds)
+    const byId = new Map((templates || []).map((t) => [t.id, t]))
+    for (const templateId of emailTemplateIds) {
+      const tpl = byId.get(templateId)
+      if (!tpl || tpl.location_id !== existing.location_id) {
+        return NextResponse.json({ success: false, error: 'invalid_template' }, { status: 400 })
+      }
     }
   }
 

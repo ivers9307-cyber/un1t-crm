@@ -39,7 +39,7 @@ const WaveInputSchema = z.object({
   display_order: z.number().int().nonnegative().optional(),
 })
 
-const CreateSchema = z.object({
+export const CreateSchema = z.object({
   location_id: uuidLike,
   // Mig 122: discriminator. Defaults to 'race' so existing operator
   // muscle memory (where every event is a race) keeps working without
@@ -86,6 +86,17 @@ const CreateSchema = z.object({
   // create schema accepts them too. accent_hex is a 6-digit hex.
   hero_image_url: z.string().url().max(2000).nullable().optional(),
   accent_hex: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
+  // EVENTS-EMAILCFG.1 (mig 385) — per-event styling of the signup
+  // confirmation + pre-event reminder emails. subject/intro drop into the
+  // shared branded shell (merge-tagged); *_template_id overrides the shell
+  // with a full email_templates row. All nullable → NULL = default copy/look
+  // (behaviour-preserving). template_ids are org/location-validated below.
+  confirmation_email_subject: z.string().max(4000).nullable().optional(),
+  confirmation_email_intro: z.string().max(4000).nullable().optional(),
+  reminder_email_subject: z.string().max(4000).nullable().optional(),
+  reminder_email_intro: z.string().max(4000).nullable().optional(),
+  confirmation_email_template_id: uuidLike.nullable().optional(),
+  reminder_email_template_id: uuidLike.nullable().optional(),
   // Waves (mig 083) — at least one required for a usable race.
   // Server normalises by start_time ascending; UNIQUE on
   // (race_event_id, start_time) catches duplicates from the DB side.
@@ -219,6 +230,29 @@ export async function POST(request) {
     }
   }
 
+  // EVENTS-EMAILCFG.1 — email-template IDOR guard. If the operator points
+  // this event's confirmation/reminder email at a full email_templates row,
+  // that row MUST belong to THIS event's location. Without this, an operator
+  // could reference another location's template (leaking its HTML into this
+  // event's live transactional emails). NULL/absent = shared shell, no check.
+  const emailTemplateIds = [
+    body.confirmation_email_template_id,
+    body.reminder_email_template_id,
+  ].filter(Boolean)
+  if (emailTemplateIds.length > 0) {
+    const { data: templates } = await db
+      .from('email_templates')
+      .select('id, location_id')
+      .in('id', emailTemplateIds)
+    const byId = new Map((templates || []).map((t) => [t.id, t]))
+    for (const templateId of emailTemplateIds) {
+      const tpl = byId.get(templateId)
+      if (!tpl || tpl.location_id !== body.location_id) {
+        return NextResponse.json({ success: false, error: 'invalid_template' }, { status: 400 })
+      }
+    }
+  }
+
   const { data, error } = await db
     .from('race_events')
     .insert({
@@ -249,6 +283,13 @@ export async function POST(request) {
       tv_logos: Array.isArray(body.tv_logos) ? body.tv_logos : [],
       hero_image_url: body.hero_image_url ?? null,
       accent_hex: body.accent_hex ?? null,
+      // EVENTS-EMAILCFG.1 (mig 385) — per-event email config. NULL = default.
+      confirmation_email_subject: body.confirmation_email_subject ?? null,
+      confirmation_email_intro: body.confirmation_email_intro ?? null,
+      reminder_email_subject: body.reminder_email_subject ?? null,
+      reminder_email_intro: body.reminder_email_intro ?? null,
+      confirmation_email_template_id: body.confirmation_email_template_id ?? null,
+      reminder_email_template_id: body.reminder_email_template_id ?? null,
     })
     .select()
     .single()

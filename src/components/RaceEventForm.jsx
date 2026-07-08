@@ -27,7 +27,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon } from 'lucide-react'
+import { ArrowLeft, Calendar, Clock, Users, Save, AlertCircle, Loader2, Plus, Trash2, BadgeEuro, ImagePlus, X as XIcon, Tv, Flag, GraduationCap, Mic, Star, DoorOpen, UserPlus, Image as ImageIcon, Mail } from 'lucide-react'
 import Link from 'next/link'
 import { toSlug } from '@/lib/slug'
 
@@ -253,6 +253,36 @@ export default function RaceEventForm({ race, locationId }) {
   const [heroBusy, setHeroBusy] = useState(false)
   const [heroError, setHeroError] = useState(null)
   const [accentHex, setAccentHex] = useState(race?.accent_hex || '')
+  // EVENTS-EMAILCFG.1 (mig 385) — per-event styling of the two LIVE
+  // transactional emails this event sends: the signup CONFIRMATION and the
+  // pre-event REMINDER. For each: an optional subject + intro/body drop into
+  // the shared branded shell (which the accent colour + hero image above
+  // already tint); an optional "full template" pointer overrides that shell
+  // with a saved email_templates row's HTML. Blank everywhere = today's
+  // default copy/look (behaviour-preserving). Hydrated from the race on edit;
+  // '' means "use default" and is sent to the API as null.
+  const [confirmationSubject, setConfirmationSubject] = useState(race?.confirmation_email_subject || '')
+  const [confirmationIntro, setConfirmationIntro] = useState(race?.confirmation_email_intro || '')
+  const [confirmationTemplateId, setConfirmationTemplateId] = useState(race?.confirmation_email_template_id || '')
+  const [reminderSubject, setReminderSubject] = useState(race?.reminder_email_subject || '')
+  const [reminderIntro, setReminderIntro] = useState(race?.reminder_email_intro || '')
+  const [reminderTemplateId, setReminderTemplateId] = useState(race?.reminder_email_template_id || '')
+  // The location's saved email templates, for the "Advanced: use a full
+  // template" pickers. Fetched from the shared templates list endpoint,
+  // scoped to this event's location. A fetch failure just leaves the list
+  // empty (operator keeps the branded-default option).
+  const [emailTemplates, setEmailTemplates] = useState([])
+  useEffect(() => {
+    if (!locationId) return
+    let cancelled = false
+    fetch(`/api/templates?location_id=${encodeURIComponent(locationId)}`)
+      .then((r) => r.json())
+      .then((j) => {
+        if (!cancelled && j?.success && Array.isArray(j.templates)) setEmailTemplates(j.templates)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [locationId])
   // GLOFOX3.3 (mig 145). When on, every confirmed public registration
   // on this event pushes the registrant + every team_member with a
   // contact to Glofox: search-by-email first (link if found),
@@ -472,6 +502,16 @@ export default function RaceEventForm({ race, locationId }) {
       accent_hex: accentTrimmed || null,
       // GLOFOX3.3 — explicit boolean so toggling off persists.
       create_in_glofox: createInGlofox === true,
+      // EVENTS-EMAILCFG.1 (mig 385) — per-event email styling. Empty string
+      // → null = today's default copy/look; a template_id → the full-template
+      // override, '' → null = the branded shell. Always sent so clearing a
+      // field persists back to the default.
+      confirmation_email_subject: confirmationSubject.trim() || null,
+      confirmation_email_intro: confirmationIntro.trim() || null,
+      confirmation_email_template_id: confirmationTemplateId || null,
+      reminder_email_subject: reminderSubject.trim() || null,
+      reminder_email_intro: reminderIntro.trim() || null,
+      reminder_email_template_id: reminderTemplateId || null,
       ...(meta.isLeadGen ? {} : {
         waves: outboundWaves.map((w, i) => ({
           ...(w.id ? { id: w.id } : {}),
@@ -1133,6 +1173,57 @@ export default function RaceEventForm({ race, locationId }) {
         </div>
       </div>
 
+      {/* EVENTS-EMAILCFG.1 — per-event email styling. Configures the two
+          live transactional emails this event sends: the signup
+          confirmation and the pre-event reminder. Blank fields keep the
+          current default copy, wrapped in the branded shell that the accent
+          colour + hero image above already tint. Hidden for lead_gen — a
+          capture form sends neither a confirmation nor a reminder. */}
+      {!meta.isLeadGen && (
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-5">
+          <div className="flex items-start gap-3">
+            <Mail size={18} className="text-un1t-subtle mt-0.5 shrink-0" />
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Emails</h3>
+              <p className="text-[11px] text-un1t-subtle mt-1">
+                Style the signup confirmation and the pre-event reminder this {meta.value === 'race' ? 'race' : 'event'} sends.
+                Leave a field blank to keep the current default. The accent colour + hero image set above already brand these emails.
+              </p>
+            </div>
+          </div>
+
+          <EventEmailFields
+            title="Signup confirmation"
+            description="Sent as soon as a signup is confirmed."
+            subject={confirmationSubject}
+            onSubject={setConfirmationSubject}
+            subjectPlaceholder="{{event_name}} — you're in!"
+            intro={confirmationIntro}
+            onIntro={setConfirmationIntro}
+            introPlaceholder="What's next: arrive 30 minutes early, bring water + a towel…"
+            templateId={confirmationTemplateId}
+            onTemplateId={setConfirmationTemplateId}
+            templates={emailTemplates}
+          />
+
+          <div className="pt-4 border-t border-un1t-border">
+            <EventEmailFields
+              title="Pre-event reminder"
+              description="Sent automatically 3 days and 1 day before the event."
+              subject={reminderSubject}
+              onSubject={setReminderSubject}
+              subjectPlaceholder="Reminder: {{event_name}} is tomorrow"
+              intro={reminderIntro}
+              onIntro={setReminderIntro}
+              introPlaceholder="Before you arrive: get here 30 minutes early, bring water + a towel…"
+              templateId={reminderTemplateId}
+              onTemplateId={setReminderTemplateId}
+              templates={emailTemplates}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Glofox sync (GLOFOX3.3 / mig 145). Operator opts each event
           in. When on, every confirmed public registration on this
           event pushes the registrant + every team_member with a
@@ -1242,6 +1333,77 @@ function LogoSlot({ slot, url, busy, onPick, onRemove }) {
         }}
       />
     </label>
+  )
+}
+
+// EVENTS-EMAILCFG.1 — one email's operator controls: a subject line, an
+// intro/body textarea (with a merge-tag hint), and an "Advanced" full-template
+// picker. Presentation only — all state lives in RaceEventForm. A blank
+// subject/intro falls back to the default copy server-side; the picker's empty
+// option keeps the branded shell (tinted by the event's accent + hero image).
+function EventEmailFields({
+  title,
+  description,
+  subject,
+  onSubject,
+  subjectPlaceholder,
+  intro,
+  onIntro,
+  introPlaceholder,
+  templateId,
+  onTemplateId,
+  templates,
+}) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <h4 className="text-sm font-medium text-un1t-text">{title}</h4>
+        <p className="text-[11px] text-un1t-subtle">{description}</p>
+      </div>
+
+      <div>
+        <label className="block text-sm text-un1t-subtle mb-1">Subject</label>
+        <input
+          type="text"
+          value={subject}
+          onChange={(e) => onSubject(e.target.value)}
+          placeholder={subjectPlaceholder}
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+        />
+        <p className="text-[11px] text-un1t-muted mt-1">Blank = the default subject.</p>
+      </div>
+
+      <div>
+        <label className="block text-sm text-un1t-subtle mb-1">Intro / body</label>
+        <textarea
+          value={intro}
+          onChange={(e) => onIntro(e.target.value)}
+          rows={3}
+          placeholder={introPlaceholder}
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+        />
+        <p className="text-[11px] text-un1t-muted mt-1">
+          Merge tags: <code>{'{{event_name}}'}</code>, <code>{'{{team_name}}'}</code>, <code>{'{{when}}'}</code>, <code>{'{{location}}'}</code>. Blank = the default copy.
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-sm text-un1t-subtle mb-1">Advanced: use a full template</label>
+        <select
+          value={templateId}
+          onChange={(e) => onTemplateId(e.target.value)}
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+        >
+          <option value="">Branded default (uses this event&apos;s colour + hero image)</option>
+          {templates.map((t) => (
+            <option key={t.id} value={t.id}>{t.name}</option>
+          ))}
+        </select>
+        <p className="text-[11px] text-un1t-muted mt-1">
+          Overrides the intro/body above with a saved email template&apos;s full HTML. The subject line still applies.
+        </p>
+      </div>
+    </div>
   )
 }
 

@@ -26,6 +26,7 @@ import { getAppUrl } from '@/lib/app-url'
 import { sendCustomerPush } from '@/lib/customer-push'
 import { addDaysISO, dublinTodayStr } from '@/lib/dublin-time'
 import { formatWeekdayLongDateInTZ } from '@/lib/dates'
+import { buildEventEmailShell, resolveEventEmail, escapeHtml } from '@/lib/event-email'
 
 const EVENT_REMINDER_PAGE = 1000
 
@@ -47,63 +48,62 @@ export function reminderOffsetForDate(raceDateStr, todayStr) {
   return null
 }
 
-function escapeReminderHtml(s) {
-  if (s == null) return ''
-  return String(s)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
-}
-
 /**
- * Branded transactional reminder email. Mirrors the race-confirmation copy
- * (black UN1T header + check-in QR grid). Every interpolated value is
- * HTML-escaped — a member name or event name can carry arbitrary text.
+ * Compose the DEFAULT (unconfigured) shell slots for the reminder email. Each
+ * *Html slot is the exact raw fragment the old inline template produced, so
+ * buildEventEmailShell reproduces today's email byte-for-byte. resolveEventEmail
+ * layers per-event config on top.
  *
  * @param {object} args
  * @param {string} args.eventName
  * @param {string} args.whenLabel      e.g. "Saturday, 11 July 2026 · 09:30"
  * @param {string} args.locationName
  * @param {Array<{name:string, qrSrc:string}>} args.members  one QR per attendee
+ * @returns {{ heading:string, introHtml:string, infoRows:string,
+ *   afterInfoHtml:string, memberQrs:Array, footerHtml:string, locationName:string }}
+ */
+export function buildReminderDefaults({ eventName, whenLabel, locationName, members } = {}) {
+  const name = escapeHtml(eventName || 'Your event')
+  const when = escapeHtml(whenLabel || '')
+  const where = escapeHtml(locationName || '')
+
+  const infoRows = `    ${when ? `<tr><td style="padding:8px 0;color:#666;width:120px">When</td><td style="padding:8px 0;font-weight:600">${when}</td></tr>` : ''}
+    ${where ? `<tr><td style="padding:8px 0;color:#666">Where</td><td style="padding:8px 0;font-weight:600">${where}</td></tr>` : ''}`
+
+  return {
+    heading: 'See you soon.',
+    introHtml: `A quick reminder for <strong>${name}</strong>.`,
+    infoRows,
+    afterInfoHtml: '',
+    memberQrs: Array.isArray(members) ? members : [],
+    footerHtml: `<strong>Before you arrive:</strong> get here 30 minutes early, and bring water + a towel. Can't make it? Just reply to let us know.`,
+    locationName: locationName || '',
+  }
+}
+
+/**
+ * Branded transactional reminder email — the shared shell with no per-event
+ * tint (the DEFAULT look). Mirrors the race-confirmation copy (black UN1T
+ * header + check-in QR grid). Every interpolated value is HTML-escaped — a
+ * member name or event name can carry arbitrary text. Characterization-tested
+ * byte-for-byte (event-email.test.js).
+ *
+ * @param {object} args  see buildReminderDefaults
  * @returns {string} HTML body
  */
-export function buildReminderEmailHtml({ eventName, whenLabel, locationName, members } = {}) {
-  const name = escapeReminderHtml(eventName || 'Your event')
-  const when = escapeReminderHtml(whenLabel || '')
-  const where = escapeReminderHtml(locationName || '')
-  const list = Array.isArray(members) ? members : []
-  const qrRows = list
-    .filter((m) => m && m.qrSrc)
-    .map((m) => `<tr>
-      <td style="padding:10px 0;font-size:14px;vertical-align:middle">${escapeReminderHtml(m.name)}</td>
-      <td style="padding:10px 0;text-align:right"><img src="${m.qrSrc}" alt="Check-in code" width="110" height="110" style="border:1px solid #eee;border-radius:8px"/></td>
-    </tr>`)
-    .join('')
-
-  return `
-<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:#fff;color:#111;max-width:560px;margin:0 auto;padding:24px">
-  <div style="background:#000;color:#fff;padding:24px;text-align:center;letter-spacing:2px;font-weight:700;font-size:24px">UN1T</div>
-  <h1 style="font-size:24px;margin:24px 0 8px">See you soon.</h1>
-  <p style="margin:0 0 16px;color:#444;font-size:15px">A quick reminder for <strong>${name}</strong>.</p>
-
-  <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:24px 0;font-size:14px">
-    ${when ? `<tr><td style="padding:8px 0;color:#666;width:120px">When</td><td style="padding:8px 0;font-weight:600">${when}</td></tr>` : ''}
-    ${where ? `<tr><td style="padding:8px 0;color:#666">Where</td><td style="padding:8px 0;font-weight:600">${where}</td></tr>` : ''}
-  </table>
-${qrRows ? `
-  <h3 style="font-size:16px;margin:24px 0 8px">Check-in codes</h3>
-  <p style="margin:0 0 12px;color:#666;font-size:13px">Show your code to a team member at the door for a quick check-in.</p>
-  <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:0 0 24px">
-    ${qrRows}
-  </table>` : ''}
-  <div style="background:#f5f5f5;padding:16px;border-radius:8px;font-size:13px;color:#333;line-height:1.5">
-    <strong>Before you arrive:</strong> get here 30 minutes early, and bring water + a towel. Can't make it? Just reply to let us know.
-  </div>
-
-  <p style="color:#999;font-size:12px;margin-top:24px;text-align:center">UN1T${where ? ` · ${where}` : ''}</p>
-</div>`.trim()
+export function buildReminderEmailHtml(args = {}) {
+  const d = buildReminderDefaults(args)
+  return buildEventEmailShell({
+    heading: d.heading,
+    introHtml: d.introHtml,
+    accentHex: null,
+    headerImageUrl: null,
+    infoRows: d.infoRows,
+    memberQrs: d.memberQrs,
+    afterInfoHtml: d.afterInfoHtml,
+    footerHtml: d.footerHtml,
+    locationName: d.locationName,
+  })
 }
 
 // Human "when" label for a registration — prefers the wave start time, falls
@@ -144,7 +144,7 @@ function buildEventReminderPush({ ev, offset, whenLabel }) {
 // Send the reminder email to the registration's captain contact. Transactional,
 // so marketing consent is irrelevant; the HARD administrative opt-out and
 // bounced/complained/unsubscribed email states still suppress it.
-async function sendReminderEmail({ ev, reg, offset, whenLabel, locationName, members }) {
+async function sendReminderEmail({ db, ev, reg, offset, whenLabel, locationName, members }) {
   const c = reg?.contact
   const to = c?.email
   if (!to) return { status: 'skipped', reason: 'no_email' }
@@ -155,10 +155,26 @@ async function sendReminderEmail({ ev, reg, offset, whenLabel, locationName, mem
   const adminConsent = Array.isArray(prefs) ? prefs[0]?.email_administrative : prefs?.email_administrative
   if (adminConsent === false) return { status: 'skipped', reason: 'opted_out_administrative_email' }
 
-  const subject = offset === '3d'
+  const defaultSubject = offset === '3d'
     ? `Reminder: ${ev.name} is in 3 days`
     : `Reminder: ${ev.name} is tomorrow`
-  const htmlBody = buildReminderEmailHtml({ eventName: ev.name, whenLabel, locationName, members })
+  const extras = {
+    event_name: ev.name,
+    team_name: reg?.teams?.name || '',
+    when: whenLabel || '',
+    location: locationName || '',
+  }
+  const { subject, htmlBody } = await resolveEventEmail({
+    db,
+    kind: 'reminder',
+    race: ev,
+    contact: c || {},
+    extras,
+    defaults: {
+      subject: defaultSubject,
+      ...buildReminderDefaults({ eventName: ev.name, whenLabel, locationName, members }),
+    },
+  })
   await sendTransactionalEmail({
     to,
     subject,
@@ -195,6 +211,8 @@ export async function runEventReminders({ db, todayStr } = {}) {
   const { data: events, error: evErr } = await db
     .from('race_events')
     .select(`id, name, slug, race_date, start_time, location_id, kind, active,
+             accent_hex, hero_image_url,
+             reminder_email_subject, reminder_email_intro, reminder_email_template_id,
              locations:location_id ( id, name )`)
     .in('race_date', [d3, d1])
     .eq('active', true)
@@ -281,7 +299,7 @@ export async function runEventReminders({ db, todayStr } = {}) {
         // any send failure) we KEEP the claim: an opted-out registrant must
         // not be re-attempted on tomorrow's tick for the same offset.
         try {
-          await sendReminderEmail({ ev, reg, offset, whenLabel, locationName, members })
+          await sendReminderEmail({ db, ev, reg, offset, whenLabel, locationName, members })
         } catch (e) {
           logError('event-reminders', 'email send failed', { err: e, registrationId: reg.id })
         }
