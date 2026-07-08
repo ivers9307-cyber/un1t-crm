@@ -2,10 +2,13 @@
 // the host's own events (.eq('host_id', host.id)) + a revenue rollup over the
 // same host_id (getHostRevenue). Read-only.
 
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import { getHostRevenue } from '@/lib/host-revenue'
 import { createServerClient } from '@/lib/supabase'
+import { HOST_EVENT_STATUS_LABEL } from '@/lib/host-events'
+import HostSubmitButton from '@/components/host/HostSubmitButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,6 +21,16 @@ function formatMoney(cents, currency) {
   }
 }
 
+// Dark-surface status chips — readable light text on translucent dark fills
+// (this is a bg-black host page, so the light-theme -700 chip rule does NOT
+// apply). Unknown/undefined status falls back to a neutral chip.
+const STATUS_CHIP = {
+  draft: 'bg-white/10 text-white/70',
+  pending_review: 'bg-amber-500/15 text-amber-300',
+  published: 'bg-emerald-500/15 text-emerald-300',
+  rejected: 'bg-red-500/15 text-red-300',
+}
+
 export default async function HostDashboard() {
   const session = await getCurrentHost()
   if (!session) redirect('/host/login')
@@ -25,7 +38,7 @@ export default async function HostDashboard() {
   const db = createServerClient()
   const { data: events } = await db
     .from('race_events')
-    .select('id, name, slug, race_date, kind, active')
+    .select('id, name, slug, race_date, kind, active, status')
     .eq('host_id', session.host.id)
     .order('race_date', { ascending: false })
     .limit(200)
@@ -99,23 +112,45 @@ export default async function HostDashboard() {
       </section>
 
       <section className="mt-8">
-        <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">Your events</h2>
+        <div className="flex items-center justify-between gap-4 mb-3">
+          <h2 className="text-xs uppercase tracking-[0.15em] text-white/45">Your events</h2>
+          <Link
+            href="/host/events/new"
+            className="shrink-0 rounded-lg bg-white text-black text-xs font-semibold px-3 py-1.5 hover:bg-white/90"
+          >
+            + Create event
+          </Link>
+        </div>
         {list.length === 0 ? (
-          <p className="text-white/50 text-sm">No events assigned to you yet.</p>
+          <p className="text-white/50 text-sm">No events yet — create your first one.</p>
         ) : (
           <ul className="divide-y divide-white/10 rounded-xl border border-white/10 overflow-hidden">
             {list.map((e) => {
               const rev = netByEvent.get(e.id)
+              const chip = STATUS_CHIP[e.status] || 'bg-white/10 text-white/70'
+              const canEdit = e.status !== 'published'
+              const canSubmit = e.status === 'draft' || e.status === 'rejected'
               return (
                 <li key={e.id} className="px-4 py-3 flex items-center justify-between gap-4 hover:bg-white/[0.02]">
                   <a href={`/host/events/${e.id}`} className="min-w-0 flex-1">
-                    <p className="font-medium truncate">{e.name}</p>
+                    <p className="flex items-center gap-2 font-medium">
+                      <span className="truncate">{e.name}</span>
+                      {e.status && (
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${chip}`}>
+                          {HOST_EVENT_STATUS_LABEL[e.status] || e.status}
+                        </span>
+                      )}
+                    </p>
                     <p className="text-xs text-white/45">
                       {e.race_date || '—'} · {e.kind}{e.active ? '' : ' · inactive'}
                       {rev ? ` · ${rev.paidCount} sold · ${formatMoney(isStripe ? rev.net_to_host_cents : rev.gross_cents, cur)} ${isStripe ? 'net' : 'gross'}` : ''}
                     </p>
                   </a>
                   <div className="shrink-0 flex items-center gap-4 text-xs">
+                    {canSubmit && <HostSubmitButton eventId={e.id} />}
+                    {canEdit && (
+                      <a href={`/host/events/${e.id}/edit`} className="text-white/50 hover:text-white">Edit</a>
+                    )}
                     <a href={`/host/events/${e.id}`} className="text-white/50 hover:text-white">Attendees →</a>
                     <a href={`/event/${e.slug}`} target="_blank" rel="noopener noreferrer" className="text-white/40 hover:text-white">
                       View
@@ -127,8 +162,6 @@ export default async function HostDashboard() {
           </ul>
         )}
       </section>
-
-      <p className="text-white/30 text-xs mt-10">Read-only. Self-serve event creation lands next.</p>
     </div>
   )
 }
