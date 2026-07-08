@@ -7,8 +7,9 @@
 // UN1T balance.
 //
 // EVENTS-HOST.2 adds the onboarding half (create account, hosted onboarding
-// link, status retrieval). The charge/refund half (createPayment/…) is still
-// stubbed — it lands in the next slice once onboarding is verified end-to-end.
+// link, status retrieval); EVENTS-HOST.3 the charge (createPayment via hosted
+// Checkout); EVENTS-HOST.7 the refund (refundPayment on the connected account,
+// with the booking-fee return handled by the operator refund route).
 
 import { getStripe } from '../stripe'
 
@@ -138,10 +139,44 @@ export async function getPayment(providerRef, { connectedAccountId } = {}) {
   return { state, amountCents: Number.isFinite(session.amount_total) ? session.amount_total : null }
 }
 
-// Stripe Connect refunds are a follow-up slice. The operator refund route
-// still rejects any non-'revolut' provider, so this path is never reached
-// today (a Stripe refund attempt 400s cleanly rather than mis-refunding).
-// eslint-disable-next-line no-unused-vars
-export async function refundPayment(_providerRef, _opts) {
-  throw new Error('Stripe Connect refunds are not wired yet (follow-up slice).')
+/**
+ * Refund a Checkout Session's charge on the host's connected account (a DIRECT
+ * charge). The refund debits the HOST's balance for the ticket portion. When
+ * `refundApplicationFee` is set, Stripe ALSO returns UN1T's booking fee to the
+ * host — used on a FULL refund so the customer is made whole and each party
+ * gives back exactly what it received. A partial refund leaves the fee with
+ * UN1T and comes out of the host's portion. (EVENTS-HOST.7)
+ *
+ * The refund attaches to the PaymentIntent, not the Checkout Session, so we
+ * resolve the intent off the session first (on the connected account).
+ *
+ * @param {string} providerRef  the Checkout Session id (cs_…)
+ * @param {object} opts
+ * @param {number} opts.amountCents             refund amount in cents (partial or full)
+ * @param {string} [opts.connectedAccountId]    acct_… (REQUIRED — merchant of record)
+ * @param {boolean} [opts.refundApplicationFee] also refund UN1T's booking fee
+ * @param {string} [opts.idempotencyKey]        Stripe idempotency key (retry-safe)
+ * @returns {Promise<{ refundId: string|null }>}
+ */
+export async function refundPayment(providerRef, {
+  amountCents, connectedAccountId, refundApplicationFee = false, idempotencyKey,
+} = {}) {
+  if (!connectedAccountId) {
+    throw new Error('Stripe Connect refund requires the host connected account id.')
+  }
+  const stripe = getStripe()
+  const session = await stripe.checkout.sessions.retrieve(providerRef, { stripeAccount: connectedAccountId })
+  // session.payment_intent is the intent id string on an unexpanded retrieve.
+  const paymentIntent = session?.payment_intent
+  if (!paymentIntent) {
+    throw new Error('Stripe Connect refund: session has no payment_intent (not paid).')
+  }
+  const amt = Math.max(0, Number(amountCents) || 0)
+  const params = { payment_intent: paymentIntent }
+  if (amt > 0) params.amount = amt          // omit → Stripe refunds the full remaining charge
+  if (refundApplicationFee) params.refund_application_fee = true
+  const requestOpts = { stripeAccount: connectedAccountId }
+  if (idempotencyKey) requestOpts.idempotencyKey = idempotencyKey
+  const refund = await stripe.refunds.create(params, requestOpts)
+  return { refundId: refund?.id || null }
 }
