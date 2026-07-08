@@ -8,7 +8,7 @@
 // adjust without context-switching.
 
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy, Ban, MessageSquare } from 'lucide-react'
+import { Plus, Trash2, Loader2, AlertCircle, Users, Check, X, Pencil, Star, BadgeCheck, Clock, Copy, Ban, MessageSquare, Download } from 'lucide-react'
 
 export default function RaceTeamsManager({ race }) {
   const [registrations, setRegistrations] = useState(null)
@@ -65,15 +65,27 @@ export default function RaceTeamsManager({ race }) {
         <div className="text-sm text-un1t-subtle">
           {registrations.length} team{registrations.length === 1 ? '' : 's'} registered
         </div>
-        {!showAddForm && (
-          <button
-            type="button"
-            onClick={() => setShowAddForm(true)}
-            className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent inline-flex items-center gap-1.5"
-          >
-            <Plus size={12} /> Add team
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {registrations.length > 0 && (
+            <a
+              href={`/api/events/${race.id}/teams/export`}
+              download
+              className="text-xs border border-un1t-border text-un1t-text px-3 py-1.5 rounded-md hover:bg-un1t-bg inline-flex items-center gap-1.5"
+              title="Export every attendee (name, email, role, booking phone) as CSV"
+            >
+              <Download size={12} /> Export CSV
+            </a>
+          )}
+          {!showAddForm && (
+            <button
+              type="button"
+              onClick={() => setShowAddForm(true)}
+              className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent inline-flex items-center gap-1.5"
+            >
+              <Plus size={12} /> Add team
+            </button>
+          )}
+        </div>
       </div>
 
       {showAddForm && (
