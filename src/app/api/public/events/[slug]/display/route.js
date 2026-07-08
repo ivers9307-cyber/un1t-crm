@@ -25,11 +25,12 @@ export async function GET(_request, props) {
   const { data: race, error: raceErr } = await db
     .from('race_events')
     .select(`
-      id, name, slug, race_date, kind, location_id, tv_logos,
+      id, name, slug, race_date, kind, location_id, tv_logos, status,
       waves:race_waves ( id, start_time, label, display_order )
     `)
     .eq('slug', params.slug)
     .eq('active', true)
+    .eq('status', 'published')
     .single()
 
   if (raceErr || !race) {

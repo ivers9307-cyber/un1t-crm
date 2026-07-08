@@ -27,6 +27,7 @@ export async function generateMetadata(props) {
       .select('name')
       .eq('slug', params.slug)
       .eq('active', true)
+      .eq('status', 'published')
       .single()
     const title = data?.name ? `${data.name} — Sign up` : 'UN1T Dublin — Sign up'
     // Embeds shouldn't be indexed as standalone pages; the canonical
@@ -45,6 +46,7 @@ export default async function EventEmbedPage(props) {
     .select('id')
     .eq('slug', params.slug)
     .eq('active', true)
+    .eq('status', 'published')
     .single()
   if (!ev) notFound()
 
