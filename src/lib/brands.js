@@ -101,11 +101,12 @@ export const BRANDS = [
     allowedPaths: [
       '/host',        // the portal — login + gated dashboard pages
       '/api/host/',   // host-scoped API (getCurrentHost)
-      '/api/auth/',   // sign-in/out plumbing
       '/event/',      // preview their own public event pages
       '/event-pay/',  // + the checkout
       '/api/public/', // backing API for the above
     ],
+    // NOTE: login/sign-out talk to Supabase directly (client-side auth), so no
+    // /api/auth route is allowlisted — least privilege on the host surface.
     rootHandler: 'rewrite',
     rootRewriteTo: '/host',
     fallbackHandler: 'reject',

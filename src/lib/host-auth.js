@@ -7,6 +7,12 @@
 //   - getCurrentUser() returns null for host users (no profiles row)
 // i.e. the staff CRM and the host portal are cleanly firewalled over the shared
 // auth.users table. Server-only.
+//
+// PROVISIONING DISCIPLINE: never give one auth user BOTH a profiles row and a
+// host_users row — that would resolve as staff AND host. The future "invite
+// host" flow must create a dedicated auth user per host (never link a staff
+// login). There's no DB XOR constraint (mirrors the member `contacts.user_id`
+// model); it's an invariant the provisioning path must uphold.
 
 import { createAuthClient } from './auth'
 import { createServerClient } from './supabase'
