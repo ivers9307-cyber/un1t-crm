@@ -11,6 +11,7 @@ import { isPubliclyVisible } from '@/lib/landing-page-visibility'
 import { orderEventsForBrowse, todayIsoDublin } from '@shared/events'
 import { isEventSoldOut, toBrowseCard } from '@/lib/public-events'
 import PublicEventsList from '@/components/landing-page/PublicEventsList'
+import InstagramStrip from '@/components/landing-page/InstagramStrip'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,6 +29,25 @@ async function loadByPath(path) {
   } catch {
     return null
   }
+}
+
+// Latest cached IG posts for the strip, with public thumbnail URLs resolved.
+async function loadInstagramPosts(db, locationId) {
+  const { data } = await db
+    .from('instagram_feed_posts')
+    .select('id, ig_username, is_reel, permalink, caption, thumb_path, posted_at')
+    .eq('location_id', locationId)
+    .order('posted_at', { ascending: false })
+    .limit(10)
+  if (!data || data.length === 0) return { posts: [], username: null }
+  const posts = data.map((p) => ({
+    id: p.id,
+    permalink: p.permalink,
+    is_reel: p.is_reel,
+    caption: p.caption,
+    thumb_url: db.storage.from('instagram-feed').getPublicUrl(p.thumb_path).data.publicUrl,
+  }))
+  return { posts, username: data[0].ig_username || null }
 }
 
 export async function generateMetadata(props) {
@@ -85,6 +105,12 @@ export default async function StudioEventsPage(props) {
     toBrowseCard(e, { soldOut: isEventSoldOut(e.waves, e.registrations, e.capacity_mode), now: nowMs })
   )
 
+  // Instagram strip (EVENTS-IG.1) — cached posts for this studio, gated on the
+  // operator toggle. Absent/true → shown; only false hides it.
+  const ig = row.show_instagram_feed !== false
+    ? await loadInstagramPosts(db, locationId)
+    : { posts: [], username: null }
+
   const eventsHref = `/${row.public_path}/events`
 
   return (
@@ -99,6 +125,17 @@ export default async function StudioEventsPage(props) {
         eventsHref={eventsHref}
       />
       <PublicEventsList studioName={studioName} cards={cards} />
+      {ig.posts.length > 0 && (
+        <div className="bg-black px-5 sm:px-8">
+          <div className="max-w-5xl mx-auto">
+            <InstagramStrip
+              posts={ig.posts}
+              username={ig.username}
+              profileUrl={ig.username ? `https://instagram.com/${ig.username}` : null}
+            />
+          </div>
+        </div>
+      )}
       <SiteFooter ctaHref={`/${row.public_path}#book`} />
     </div>
   )
