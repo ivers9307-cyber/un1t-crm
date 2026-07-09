@@ -1256,7 +1256,7 @@ export async function syncGlofoxInteractions(db, locationId, contactId, interact
   // suppress our own echoes (a pushed note comes back on the inbound pull).
   // Unreconciled rows are fingerprint-matched; already-claimed ids are skipped
   // on every later run. Ledger unavailable → behave exactly as before.
-  let unreconciled = []
+  const unreconciled = []
   const claimedIds = new Set()
   try {
     const { data: pushes } = await db
@@ -1277,13 +1277,21 @@ export async function syncGlofoxInteractions(db, locationId, contactId, interact
     const matchIdx = unreconciled.findIndex((p) => matchesPush(i, p, contactId))
     if (matchIdx !== -1) {
       const push = unreconciled[matchIdx]
-      try {
-        await db.from('glofox_note_pushes')
-          .update({ glofox_interaction_id: String(i._id), status: 'reconciled' })
-          .eq('id', push.id)
+      // supabase-js RESOLVES with { error } on a DB-level failure (RLS,
+      // constraint, …) — it does not reject. Check the resolved error so a
+      // silently-failed claim is NOT counted as reconciled and does NOT fall
+      // through to the upsert (that recreates the duplicate we suppress).
+      const { error: claimErr } = await db.from('glofox_note_pushes')
+        .update({ glofox_interaction_id: String(i._id), status: 'reconciled' })
+        .eq('id', push.id)
+      if (claimErr) {
+        // Claim didn't persist — leave the push unreconciled (retry next sync)
+        // and DON'T upsert (avoid the duplicate). Count as an error.
+        result.errors++
+      } else {
+        unreconciled.splice(matchIdx, 1)
         result.reconciled++
-      } catch { result.errors++ }
-      unreconciled.splice(matchIdx, 1)
+      }
       continue
     }
 

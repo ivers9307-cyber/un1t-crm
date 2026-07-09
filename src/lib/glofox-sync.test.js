@@ -2062,12 +2062,12 @@ describe('syncGlofoxInteractions — echo reconciliation (GLOFOX-NOTES)', () => 
 
   // Fake db exposing the two tables the sync now touches. `pushes` is what the
   // ledger SELECT returns for this contact.
-  function makeDb({ pushes = [], claimSpy = () => {}, activitySpy = () => {} }) {
+  function makeDb({ pushes = [], claimSpy = () => {}, activitySpy = () => {}, claimError = null }) {
     return {
       from: (t) => {
         if (t === 'glofox_note_pushes') return {
           select: () => ({ eq: () => Promise.resolve({ data: pushes, error: null }) }),
-          update: (patch) => ({ eq: (col, val) => { claimSpy({ patch, col, val }); return Promise.resolve({ error: null }) } }),
+          update: (patch) => ({ eq: (col, val) => { claimSpy({ patch, col, val }); return Promise.resolve({ error: claimError }) } }),
         }
         if (t === 'activities') return { upsert: (row) => { activitySpy(row); return Promise.resolve({ error: null }) } }
         throw new Error(`unexpected table ${t}`)
@@ -2116,5 +2116,25 @@ describe('syncGlofoxInteractions — echo reconciliation (GLOFOX-NOTES)', () => 
     // First claims the push; second has no unreconciled push left → upserts to activities.
     expect(claimSpy).toHaveBeenCalledTimes(1)
     expect(activitySpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('claim UPDATE that resolves with { error } is NOT counted reconciled, NOT upserted, and stays claimable', async () => {
+    const push = { id: 'p1', contact_id: 'c1', type: 'NOTE', description: 'dup', pushed_at: '2026-07-04T10:00:00Z', glofox_interaction_id: null }
+    const claimSpy = vi.fn(); const activitySpy = vi.fn()
+    // supabase RESOLVES (does not throw) with an error on a DB-level failure.
+    const db = makeDb({ pushes: [push], claimSpy, activitySpy, claimError: { message: 'boom' } })
+    const interaction = { _id: 'a'.repeat(24), type: 'NOTE', description: 'dup', created: secs('2026-07-04T10:01:00Z') }
+    const r = await syncGlofoxInteractions(db, 'l1', 'c1', [interaction])
+    expect(claimSpy).toHaveBeenCalledTimes(1)     // it DID attempt the claim
+    expect(activitySpy).not.toHaveBeenCalled()    // but did NOT create the duplicate
+    expect(r.reconciled).toBe(0)                  // and did NOT count it as reconciled
+    expect(r.errors).toBe(1)                      // counted as an error instead
+    // Second echo (identical) still finds the push unreconciled → tries again.
+    const claimSpy2 = vi.fn(); const activitySpy2 = vi.fn()
+    const db2 = makeDb({ pushes: [push], claimSpy: claimSpy2, activitySpy: activitySpy2 })
+    const echo2 = { _id: 'b'.repeat(24), type: 'NOTE', description: 'dup', created: secs('2026-07-04T10:02:00Z') }
+    const r2 = await syncGlofoxInteractions(db2, 'l1', 'c1', [echo2])
+    expect(claimSpy2).toHaveBeenCalledTimes(1)
+    expect(r2.reconciled).toBe(1)
   })
 })
