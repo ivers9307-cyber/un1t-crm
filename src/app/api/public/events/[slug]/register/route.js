@@ -316,63 +316,10 @@ export async function POST(request, props) {
     }, { status: 500 })
   }
 
-  // Duplicate-registration guard — keyed on the CAPTAIN'S EMAIL (via
-  // their contact), not the team name. A person who already registered
-  // for this race (under any team name) is blocked from registering
-  // again. We match active registrations only (pending_payment or
-  // confirmed) so a previously cancelled/refunded entry doesn't lock
-  // them out. The team-name unique constraint remains as a secondary
-  // backstop on the insert below.
-  {
-    const { data: existingReg } = await db
-      .from('race_registrations')
-      .select('id, status')
-      .eq('race_event_id', race.id)
-      .eq('contact_id', captainContactId)
-      .in('status', ['pending_payment', 'confirmed'])
-      .maybeSingle()
-    if (existingReg) {
-      // RACE2.7 — re-book of an UNPAID registration. Supersedes the
-      // RACE2.6 "reuse the existing payment" behaviour: instead of
-      // sending them back to the stale checkout, discard the unpaid
-      // draft and re-register with the freshly-submitted roster + wave
-      // so any changes (added/removed/edited members, different wave or
-      // team size) are applied and the new payment reflects the correct
-      // amount.
-      //
-      // Deleting the pending registration does NOT delete its unpaid
-      // race_payments row — that FK is ON DELETE SET NULL, so the old
-      // payment survives orphaned + still 'pending'. Harmless: it was
-      // never completed and nothing references it anymore (the new
-      // registration gets its own fresh Revolut order below). The team
-      // is NOT deleted either, so the happy path find-or-creates the
-      // same team and replaces its team_members with the new roster.
-      //
-      // Only pending_payment is recoverable this way; a CONFIRMED
-      // (paid) registration is a genuine duplicate.
-      if (existingReg.status === 'pending_payment') {
-        const { error: delErr } = await db
-          .from('race_registrations')
-          .delete()
-          .eq('id', existingReg.id)
-          .eq('status', 'pending_payment') // guard against a concurrent confirm
-        if (delErr) {
-          return NextResponse.json({
-            success: false,
-            error: 'Could not update your existing booking. Please contact the studio.',
-            code: 'rebook_cleanup_failed',
-          }, { status: 500 })
-        }
-        // fall through to the normal registration flow below
-      } else {
-        return NextResponse.json({
-          success: false,
-          error: `${captainEmail} is already registered for this event.`,
-          code: 'already_registered',
-        }, { status: 409 })
-      }
-    }
-  }
+  // Re-book handling moved BELOW, after the team is resolved — the real
+  // uniqueness is (race_event_id, team_id), so we key the resume/replace
+  // logic on the team, not the captain's contact. A person is NOT blocked
+  // from booking again (different team name = a new booking).
 
   // CONSENT.4 — soft opt-in for marketing comms. Applies to the
   // captain (the only contact whose phone we collect and the
@@ -436,6 +383,64 @@ export async function POST(request, props) {
       }
     } else {
       teamId = insertedTeam.id
+    }
+  }
+
+  // ─── re-book handling (EVENTS-REBOOK) ─────────────────────────────
+  // A team holds at most ONE registration per event (UNIQUE
+  // (race_event_id, team_id)); teams are keyed by name, so re-submitting
+  // the same team name lands on the same team. Instead of the old hard
+  // "a registration already exists" error we:
+  //   • pending_payment + a still-pending payment → RESUME it: return the
+  //     existing payment so the buyer is sent back to their OWN
+  //     /event-pay link and finishes the booking they started, never
+  //     double-charged ("utilise the pending booking link");
+  //   • confirmed (already paid) → genuine duplicate for THIS team, block
+  //     (they can still book again under a different team name);
+  //   • any other stale state (cancelled / no_show / abandoned, or pending
+  //     with no usable payment) → discard the row so the fresh
+  //     registration can take the (event, team) slot.
+  // Different team name ⇒ a different team ⇒ a fresh booking, so the same
+  // person can book multiple times.
+  {
+    const { data: teamReg } = await db
+      .from('race_registrations')
+      .select('id, status, active_payment_id')
+      .eq('race_event_id', race.id)
+      .eq('team_id', teamId)
+      .maybeSingle()
+    if (teamReg) {
+      if (teamReg.status === 'confirmed') {
+        return NextResponse.json({
+          success: false,
+          error: `Team "${teamName}" is already registered for ${race.name}.`,
+          code: 'already_registered',
+        }, { status: 409 })
+      }
+      if (teamReg.status === 'pending_payment' && teamReg.active_payment_id) {
+        const { data: pay } = await db
+          .from('race_payments')
+          .select('id, status')
+          .eq('id', teamReg.active_payment_id)
+          .maybeSingle()
+        if (pay && pay.status === 'pending') {
+          return NextResponse.json({
+            success: true,
+            data: {
+              registration_id: teamReg.id,
+              team_id: teamId,
+              team_name: teamName,
+              race: { id: race.id, name: race.name, race_date: race.race_date, slug: race.slug },
+              payment: { id: pay.id, free: false, status: pay.status, resumed: true },
+            },
+            message: `You've already started booking Team "${teamName}" — complete payment to confirm.`,
+          })
+        }
+        // Payment no longer usable (completed/failed) — fall through to
+        // discard + re-register below.
+      }
+      // Stale row: clear it so the fresh registration can be inserted.
+      await db.from('race_registrations').delete().eq('id', teamReg.id)
     }
   }
 
