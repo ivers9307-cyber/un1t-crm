@@ -352,6 +352,57 @@ describe('aggregatePerson', () => {
     }
   })
 
+  it('includes CRM notes-table entries in the grouped timeline', async () => {
+    // GLOFOX-NOTES-FIX regression: the grouped/linked-profile timeline used to
+    // read only the activities table, so a note saved against any linked
+    // account was invisible. Notes must now surface with body = content.
+    const db = makeDb({
+      person_groups: personGroups,
+      person_group_members: personGroupMembers,
+      contacts,
+      glofox_invoices: glofoxInvoices,
+      deals,
+      activities: [],
+      notes: [
+        { id: 'note-1', contact_id: PRIMARY_ID, content: 'Called about renewal', created_at: '2026-07-01T10:00:00.000Z' },
+        { id: 'note-2', contact_id: SHADOW_ID, content: 'Prefers evening classes', created_at: '2026-07-02T10:00:00.000Z' },
+      ],
+    })
+    const result = await aggregatePerson(db, GROUP_ID)
+
+    const noteBodies = result.timeline.filter(e => e.type === 'note').map(e => e.body)
+    expect(noteBodies).toEqual(
+      expect.arrayContaining(['Called about renewal', 'Prefers evening classes']),
+    )
+
+    const one = result.timeline.find(e => e.body === 'Called about renewal')
+    expect(one.sourceContactId).toBe(PRIMARY_ID)
+    expect(one.source).toBe(null) // CRM-authored notes carry no glofox provenance
+  })
+
+  it('surfaces Glofox-synced activity note body + provenance in the timeline', async () => {
+    // A Glofox-synced note lands in the activities table with source='glofox'
+    // and its text in `note`. The timeline must expose both body and source so
+    // the grouped render can show content and the "Glofox" chip.
+    const db = makeDb({
+      person_groups: personGroups,
+      person_group_members: personGroupMembers,
+      contacts,
+      glofox_invoices: glofoxInvoices,
+      deals,
+      activities: [
+        { id: 'act-g', contact_id: PRIMARY_ID, type: 'note', title: null, note: 'Synced from Glofox', source: 'glofox', created_at: '2026-07-03T10:00:00.000Z' },
+      ],
+      notes: [],
+    })
+    const result = await aggregatePerson(db, GROUP_ID)
+
+    const entry = result.timeline.find(e => e.body === 'Synced from Glofox')
+    expect(entry).toBeTruthy()
+    expect(entry.source).toBe('glofox')
+    expect(entry.sourceContactId).toBe(PRIMARY_ID)
+  })
+
   it('caps timeline at 50 entries even when more exist', async () => {
     // We seeded 55 activities; the function should only return 50
     const db = makeSeededDb()

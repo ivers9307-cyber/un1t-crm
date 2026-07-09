@@ -91,7 +91,7 @@ export async function aggregatePerson(db, groupId) {
   const contacts = contactRows || []
 
   // ── Step 3: Build parallel fetches ───────────────────────────────────────
-  const [pastDueRows, pendingRows, paidRows, dealCountRes, timelineRes] = await Promise.all([
+  const [pastDueRows, pendingRows, paidRows, dealCountRes, timelineRes, notesRes] = await Promise.all([
     // Arrears: PAST_DUE invoices for these members
     fetchGroupInvoicesByStatus(
       db,
@@ -116,10 +116,22 @@ export async function aggregatePerson(db, groupId) {
     // Deals count — select ids and count client-side (avoids head-only count
     // which supabase-js requires on the FIRST .select() call, not chained)
     db.from('deals').select('id').in('contact_id', memberIds),
-    // Timeline: newest 50 activities across all members
+    // Timeline: newest 50 activities across all members. `note` carries the
+    // body of a Glofox-synced note/call/email (mapGlofoxInteraction), `source`
+    // flags 'glofox' vs CRM-authored — both surfaced so the grouped timeline
+    // shows note content + provenance (GLOFOX-NOTES-FIX).
     db
       .from('activities')
-      .select('id, contact_id, type, title, created_at')
+      .select('id, contact_id, type, title, note, source, created_at')
+      .in('contact_id', memberIds)
+      .order('created_at', { ascending: false })
+      .limit(50),
+    // Notes: the CRM sticky-notes table is a SEPARATE source from activities.
+    // Without this the grouped/linked-profile timeline never showed notes at
+    // all (they saved but were invisible — the bug that surfaced GLOFOX-NOTES).
+    db
+      .from('notes')
+      .select('id, contact_id, content, created_at')
       .in('contact_id', memberIds)
       .order('created_at', { ascending: false })
       .limit(50),
@@ -215,17 +227,31 @@ export async function aggregatePerson(db, groupId) {
   // ── Step 9: Deals count ───────────────────────────────────────────────────
   const dealsCount = Array.isArray(dealCountRes?.data) ? dealCountRes.data.length : 0
 
-  // ── Step 10: Timeline — newest-first, capped at 50, tagged with sourceContactId
-  const rawTimeline = timelineRes?.data || []
-  const timeline = rawTimeline.map(e => ({
-    sourceContactId: e.contact_id,
-    type: e.type || null,
-    title: e.title || null,
-    createdAt: e.created_at,
-  }))
-  // The .order('created_at', { ascending: false }).limit(50) on the builder
-  // already returns the newest 50 rows from the mock (and from Supabase).
-  // The slice below is a safety cap in case the mock returns more.
+  // ── Step 10: Timeline — merge activities + notes, newest-first, capped at 50,
+  //    each tagged with sourceContactId. `body` carries the display text: an
+  //    activity's title (or its note body for Glofox-synced notes/calls/emails),
+  //    or a CRM note's content. `source` flags 'glofox' for the provenance chip.
+  const rawActivities = timelineRes?.data || []
+  const rawNotes = notesRes?.data || []
+  const timeline = [
+    ...rawActivities.map(e => ({
+      sourceContactId: e.contact_id,
+      type: e.type || null,
+      title: e.title || null,
+      body: e.title || e.note || null,
+      source: e.source || null,
+      createdAt: e.created_at,
+    })),
+    ...rawNotes.map(n => ({
+      sourceContactId: n.contact_id,
+      type: 'note',
+      title: null,
+      body: n.content || null,
+      source: null, // CRM-authored (notes table); Glofox notes come via activities
+      createdAt: n.created_at,
+    })),
+  ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+  // Cap at 50 after the merge (both sources were individually limited to 50).
   const cappedTimeline = timeline.slice(0, 50)
 
   return {
