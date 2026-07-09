@@ -78,7 +78,8 @@ export async function retrieveAccountStatus(accountId) {
  * host receives the ticket total (less Stripe's own processing fee, which the
  * host bears under direct charges); UN1T keeps the fee. (EVENTS-HOST.3)
  *
- * Uses EMBEDDED checkout (`ui_mode: 'embedded'`): the buyer completes payment
+ * Uses EMBEDDED checkout (`ui_mode: 'embedded_page'` — Stripe retired the old
+ * `'embedded'` value): the buyer completes payment
  * inline on our own /event-pay page — no bounce to checkout.stripe.com. We
  * return the session's `client_secret` (as `checkoutToken`) which the browser
  * mounts via Stripe.js; there is no hosted URL. `redirect_on_completion:
@@ -112,7 +113,7 @@ export async function createPayment({
 
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
-    ui_mode: 'embedded',
+    ui_mode: 'embedded_page',
     line_items: lineItems,
     // Direct charge: the application fee is skimmed to the platform; the rest
     // stays on the host's connected account. Omitted entirely when fee is 0.

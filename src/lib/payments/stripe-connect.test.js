@@ -44,7 +44,7 @@ describe('stripe-connect createPayment (embedded checkout)', () => {
     const res = await createPayment(base)
     const [params, opts] = sessionsCreate.mock.calls[0]
     // Embedded, not hosted redirect.
-    expect(params.ui_mode).toBe('embedded')
+    expect(params.ui_mode).toBe('embedded_page')
     expect(params.return_url).toBe(base.returnUrl)
     expect(params.redirect_on_completion).toBe('if_required')
     // Hosted-only fields must be ABSENT (Stripe rejects them in embedded mode).
