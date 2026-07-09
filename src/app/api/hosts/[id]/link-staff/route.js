@@ -8,6 +8,7 @@ import { createServerClient } from '@/lib/supabase'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { loadHostForOrg } from '@/lib/hosts'
 import { linkStaffDecision } from '@/lib/host-staff-link'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -57,7 +58,10 @@ export async function POST(request, props) {
   if (!parsed.success) return NextResponse.json({ success: false, error: 'Enter a valid email.' }, { status: 400 })
   const email = parsed.data.email.trim()
 
-  const { data: staffProfile } = await db.from('profiles').select('id, full_name, email').ilike('email', email).maybeSingle()
+  // Exact (case-insensitive) match — escape LIKE metacharacters so an email with
+  // '_' or '%' can't act as a wildcard and match the wrong profile.
+  const likeEmail = email.replace(/[\\%_]/g, '\\$&')
+  const { data: staffProfile } = await db.from('profiles').select('id, full_name, email').ilike('email', likeEmail).maybeSingle()
   const sameOrg = staffProfile ? await staffSharesOrg(db, staffProfile.id, orgId) : false
   const existingLink = staffProfile
     ? (await db.from('host_users').select('host_id').eq('auth_user_id', staffProfile.id).maybeSingle()).data
@@ -73,7 +77,10 @@ export async function POST(request, props) {
   if (decision !== 'ok') return NextResponse.json({ success: false, error: errors[decision] }, { status: 400 })
 
   const { error: insErr } = await db.from('host_users').insert({ host_id: hostId, auth_user_id: staffProfile.id, email: staffProfile.email || email })
-  if (insErr) return NextResponse.json({ success: false, error: insErr.message }, { status: 500 })
+  if (insErr) {
+    logError('host-link-staff', 'link insert failed', { err: insErr })
+    return NextResponse.json({ success: false, error: 'Could not link that staff login.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, data: { linked: { full_name: staffProfile.full_name, email: staffProfile.email || email } } })
 }
 
@@ -83,6 +90,9 @@ export async function DELETE(request, props) {
   const parsed = UnlinkSchema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ success: false, error: 'Invalid request.' }, { status: 400 })
   const { error } = await g.db.from('host_users').delete().eq('host_id', g.hostId).eq('auth_user_id', parsed.data.auth_user_id)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('host-link-staff', 'unlink delete failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not unlink.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true })
 }
