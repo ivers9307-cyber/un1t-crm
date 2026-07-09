@@ -9,6 +9,7 @@ import { fetchUserCredits, fetchMembership, fetchUserBookings, fetchUserInteract
 import { classifyContact } from './pipeline-classifier.js'
 import { upsertClassBookings } from './class-bookings.js'
 import { logWarn } from './log.js'
+import { matchesPush } from './glofox-notes.js'
 //
 // Source-of-truth contract:
 //   Glofox owns:  glofox_member_id, glofox_membership_status,
@@ -1248,16 +1249,56 @@ export function mapGlofoxInteraction(interaction, contactId, locationId) {
  * dry-run preview can show what happened.
  */
 export async function syncGlofoxInteractions(db, locationId, contactId, interactions) {
-  const result = { synced: 0, skipped: 0, errors: 0 }
+  const result = { synced: 0, skipped: 0, errors: 0, reconciled: 0 }
   if (!db || !contactId || !locationId || !Array.isArray(interactions)) return result
+
+  // GLOFOX-NOTES — load this contact's outbound pushes so we can recognise and
+  // suppress our own echoes (a pushed note comes back on the inbound pull).
+  // Unreconciled rows are fingerprint-matched; already-claimed ids are skipped
+  // on every later run. Ledger unavailable → behave exactly as before.
+  const unreconciled = []
+  const claimedIds = new Set()
+  try {
+    const { data: pushes } = await db
+      .from('glofox_note_pushes')
+      .select('id, contact_id, type, description, pushed_at, glofox_interaction_id')
+      .eq('contact_id', contactId)
+    for (const p of pushes || []) {
+      if (p.glofox_interaction_id) claimedIds.add(String(p.glofox_interaction_id))
+      else unreconciled.push(p)
+    }
+  } catch { /* no reconciliation, fall through to plain upsert */ }
+
   for (const i of interactions) {
+    // (a) already claimed as ours on a previous run → never re-import.
+    if (i && i._id && claimedIds.has(String(i._id))) { result.skipped++; continue }
+
+    // (b) first sight of our echo → claim the ledger row, suppress the dupe.
+    const matchIdx = unreconciled.findIndex((p) => matchesPush(i, p, contactId))
+    if (matchIdx !== -1) {
+      const push = unreconciled[matchIdx]
+      // supabase-js RESOLVES with { error } on a DB-level failure (RLS,
+      // constraint, …) — it does not reject. Check the resolved error so a
+      // silently-failed claim is NOT counted as reconciled and does NOT fall
+      // through to the upsert (that recreates the duplicate we suppress).
+      const { error: claimErr } = await db.from('glofox_note_pushes')
+        .update({ glofox_interaction_id: String(i._id), status: 'reconciled' })
+        .eq('id', push.id)
+      if (claimErr) {
+        // Claim didn't persist — leave the push unreconciled (retry next sync)
+        // and DON'T upsert (avoid the duplicate). Count as an error.
+        result.errors++
+      } else {
+        unreconciled.splice(matchIdx, 1)
+        result.reconciled++
+      }
+      continue
+    }
+
+    // (c) genuine Glofox-originated interaction → upsert into activities.
     const row = mapGlofoxInteraction(i, contactId, locationId)
     if (!row) { result.skipped++; continue }
-    // Upsert via PostgREST onConflict — uses the partial UNIQUE
-    // index from mig 138 on glofox_interaction_id.
-    const { error } = await db
-      .from('activities')
-      .upsert(row, { onConflict: 'glofox_interaction_id' })
+    const { error } = await db.from('activities').upsert(row, { onConflict: 'glofox_interaction_id' })
     if (error) result.errors++
     else result.synced++
   }

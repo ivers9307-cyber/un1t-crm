@@ -1,4 +1,10 @@
--- 370 — FUNNEL.4: operator "Cold" dismissal — remove a lead from the pipeline.
+-- 391 — FUNNEL.4: operator "Cold" dismissal — remove a lead from the pipeline.
+--
+-- NOTE: already APPLIED to prod under Supabase history name
+-- "370_pipeline_cold_dismiss" (version 20260709142549). The repo file was
+-- renumbered 370 -> 391 to clear a filename collision with 370_receipt_hunt.sql
+-- after this branch fell behind main. Do NOT re-apply — the column + stage
+-- already exist. Repo-file number != applied history name is expected here.
 --
 -- Operator request (Richard, 2026-07-04): a button to take someone off the
 -- pipeline — reserved for a lead who is not worth selling to or has said
