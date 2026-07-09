@@ -843,7 +843,9 @@ export default function RaceEventForm({ race, locationId }) {
                     : 'bg-un1t-bg border-un1t-border text-un1t-subtle hover:border-un1t-muted'
                 }`}
               >
-                {s}-{meta.value === 'race' ? 'person' : 'spot'}
+                {s}-{s === 1
+                  ? (meta.value === 'race' ? 'person' : 'spot')
+                  : (meta.value === 'race' ? 'people' : 'spots')}
               </button>
             )
           })}

@@ -811,7 +811,9 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
                             : 'border-white/15 bg-white/5 text-white/70 hover:border-white/40'
                         }`}
                       >
-                        {s}-{copy.sizeButtonSuffix}
+                        {s}-{s === 1 || !copy.sizeButtonSuffix
+                          ? copy.sizeButtonSuffix
+                          : copy.sizeButtonSuffix === 'person' ? 'people' : `${copy.sizeButtonSuffix}s`}
                       </button>
                     ))}
                   </div>
