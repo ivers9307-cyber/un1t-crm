@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   mapGlofoxMember,
   mapMembershipStatus,
@@ -14,6 +14,7 @@ import {
   computeBookingAggregates,
   mergeBookingAggregates,
   mapGlofoxInteraction,
+  syncGlofoxInteractions,
   computeCreditsRemaining,
   detectTrialTransitionTags,
   shouldStampConversion,
@@ -2053,5 +2054,67 @@ describe('shouldStampConversion (FUNNEL.1)', () => {
       action: 'update', previousStatus: null, newStatus: 'member',
       existingConvertedAt: null, joinedAt: null, now: NOW,
     })).toBe(false)
+  })
+})
+
+describe('syncGlofoxInteractions — echo reconciliation (GLOFOX-NOTES)', () => {
+  const secs = (iso) => Math.floor(new Date(iso).getTime() / 1000)
+
+  // Fake db exposing the two tables the sync now touches. `pushes` is what the
+  // ledger SELECT returns for this contact.
+  function makeDb({ pushes = [], claimSpy = () => {}, activitySpy = () => {} }) {
+    return {
+      from: (t) => {
+        if (t === 'glofox_note_pushes') return {
+          select: () => ({ eq: () => Promise.resolve({ data: pushes, error: null }) }),
+          update: (patch) => ({ eq: (col, val) => { claimSpy({ patch, col, val }); return Promise.resolve({ error: null }) } }),
+        }
+        if (t === 'activities') return { upsert: (row) => { activitySpy(row); return Promise.resolve({ error: null }) } }
+        throw new Error(`unexpected table ${t}`)
+      },
+    }
+  }
+
+  it('claims a matching echo (stamps the ledger row) and does NOT duplicate it into activities', async () => {
+    const push = { id: 'p1', contact_id: 'c1', type: 'NOTE', description: '[UN1T CRM · Jane] hi', pushed_at: '2026-07-04T10:00:00Z', glofox_interaction_id: null }
+    const claimSpy = vi.fn(); const activitySpy = vi.fn()
+    const db = makeDb({ pushes: [push], claimSpy, activitySpy })
+    const interaction = { _id: 'g'.repeat(24), type: 'NOTE', description: '[UN1T CRM · Jane] hi', created: secs('2026-07-04T10:01:00Z') }
+    const r = await syncGlofoxInteractions(db, 'l1', 'c1', [interaction])
+    expect(claimSpy).toHaveBeenCalledTimes(1)
+    expect(claimSpy.mock.calls[0][0].patch).toMatchObject({ glofox_interaction_id: interaction._id, status: 'reconciled' })
+    expect(claimSpy.mock.calls[0][0].val).toBe('p1') // claimed by ledger row id
+    expect(activitySpy).not.toHaveBeenCalled()
+    expect(r.reconciled).toBe(1)
+  })
+
+  it('skips an interaction whose _id is already claimed on the ledger (no re-import)', async () => {
+    const claimed = { id: 'p1', contact_id: 'c1', type: 'NOTE', description: 'x', pushed_at: '2026-07-04T10:00:00Z', glofox_interaction_id: 'g'.repeat(24) }
+    const activitySpy = vi.fn()
+    const db = makeDb({ pushes: [claimed], activitySpy })
+    const interaction = { _id: 'g'.repeat(24), type: 'NOTE', description: 'anything', created: secs('2026-07-04T10:05:00Z') }
+    await syncGlofoxInteractions(db, 'l1', 'c1', [interaction])
+    expect(activitySpy).not.toHaveBeenCalled()
+  })
+
+  it('upserts a genuine (non-echo) interaction into activities', async () => {
+    const activitySpy = vi.fn()
+    const db = makeDb({ pushes: [], activitySpy })
+    const interaction = { _id: 'h'.repeat(24), type: 'NOTE', description: 'front desk note', created: secs('2026-07-04T09:00:00Z') }
+    const r = await syncGlofoxInteractions(db, 'l1', 'c1', [interaction])
+    expect(activitySpy).toHaveBeenCalledTimes(1)
+    expect(r.synced).toBe(1)
+  })
+
+  it('a single unreconciled push is claimed by only ONE of two identical echoes', async () => {
+    const push = { id: 'p1', contact_id: 'c1', type: 'NOTE', description: 'dup', pushed_at: '2026-07-04T10:00:00Z', glofox_interaction_id: null }
+    const claimSpy = vi.fn(); const activitySpy = vi.fn()
+    const db = makeDb({ pushes: [push], claimSpy, activitySpy })
+    const i1 = { _id: 'a'.repeat(24), type: 'NOTE', description: 'dup', created: secs('2026-07-04T10:01:00Z') }
+    const i2 = { _id: 'b'.repeat(24), type: 'NOTE', description: 'dup', created: secs('2026-07-04T10:02:00Z') }
+    await syncGlofoxInteractions(db, 'l1', 'c1', [i1, i2])
+    // First claims the push; second has no unreconciled push left → upserts to activities.
+    expect(claimSpy).toHaveBeenCalledTimes(1)
+    expect(activitySpy).toHaveBeenCalledTimes(1)
   })
 })
