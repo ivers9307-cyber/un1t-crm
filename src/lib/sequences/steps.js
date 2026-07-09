@@ -75,8 +75,9 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
   // {{unsubscribe_url}} tokens still resolve; then auto-append the
   // 7pt "Unsubscribe" footer so every marketing sequence email has a
   // compliance link without the operator having to remember it. The
-  // append always runs — it doesn't try to detect an operator-placed
-  // inline link, per the operator's "always append" spec.
+  // append is idempotent — if the merged body already contains the
+  // unsubscribe link, appendUnsubscribeFooter skips it so recipients
+  // don't see two "Unsubscribe" links.
   const baseUrl = getAppUrl()
   const unsubscribeUrl = buildUnsubscribeUrl(contact, baseUrl)
   const mergedSubject = applyMergeTags(subject, contact)

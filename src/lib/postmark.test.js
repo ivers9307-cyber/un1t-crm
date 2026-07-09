@@ -255,15 +255,28 @@ describe('appendUnsubscribeFooter', () => {
     expect(out).toContain('Unsubscribe')
   })
 
-  it('always appends — even when {{unsubscribe_url}} was already inlined', () => {
-    // Operator spec: "always append auto-footer". Even if the body
-    // already has an unsubscribe link, the auto footer still goes
-    // in. Both links must point at the same URL.
+  it('does NOT append when the body already links to the unsubscribe URL', () => {
+    // Idempotent: if the operator placed a {{unsubscribe_url}} link in
+    // the template body, adding the auto-footer would render two
+    // "Unsubscribe" links (looks broken to recipients). We skip the
+    // footer — the operator's link already satisfies compliance.
     const body = `<p>Read more: <a href="${URL}">unsubscribe here</a></p>`
     const out = appendUnsubscribeFooter(body, URL)
-    // Two occurrences of the URL — operator's + the auto footer.
+    // Exactly one occurrence of the URL — the operator's link only.
     expect((out.match(new RegExp(URL.replace(/[/.]/g, '\\$&'), 'g')) || []).length)
-      .toBe(2)
+      .toBe(1)
+    // And no second 7pt auto-footer was added.
+    expect(out).not.toContain('font-size:7pt')
+    expect(out).toBe(body)
+  })
+
+  it('still appends when the body has other links but no unsubscribe link', () => {
+    // Only an unrelated link present → the compliance footer is still
+    // guaranteed for templates that forgot to add one.
+    const body = `<p>See our <a href="https://un1t.ie/classes">classes</a></p>`
+    const out = appendUnsubscribeFooter(body, URL)
+    expect(out).toContain('font-size:7pt')
+    expect(out).toContain(`href="${URL}"`)
   })
 
   it('returns input unchanged when html is empty', () => {
