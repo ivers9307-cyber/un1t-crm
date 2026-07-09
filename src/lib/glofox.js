@@ -1095,7 +1095,14 @@ export async function createGlofoxInteraction(creds, userId, { type, description
     const r = await glofoxFetch(
       creds,
       `/2.1/branches/${encodeURIComponent(creds.branchId)}/leads/${encodeURIComponent(userId)}/interactions`,
-      { method: 'POST', body: JSON.stringify({ user_id: userId, type, description: description ?? '' }) },
+      {
+        method: 'POST',
+        // Required: without it fetch sends the body as text/plain, Glofox never
+        // parses the JSON and rejects every field as "required" (the exact bug
+        // that broke registration). Mirrors registerGlofoxMember/createBooking.
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId, type, description: description ?? '' }),
+      },
     )
     return { ok: r.ok, status: r.status }
   } catch (e) {

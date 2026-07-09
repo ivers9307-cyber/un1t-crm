@@ -400,6 +400,8 @@ describe('createGlofoxInteraction', () => {
     const [url, opts] = global.fetch.mock.calls[0]
     expect(url).toContain(`/2.1/branches/${creds.branchId}/leads/${uid}/interactions`)
     expect(opts.method).toBe('POST')
+    // Content-Type is required or Glofox rejects the body as text/plain.
+    expect(opts.headers['Content-Type']).toBe('application/json')
     const sent = JSON.parse(opts.body)
     expect(sent).toMatchObject({ user_id: uid, type: 'NOTE', description: 'hi' })
   })
