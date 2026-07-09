@@ -2508,6 +2508,21 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/api/accounting/event-fees',
+  tags: ['Accounting'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Org-wide event booking fees (per-ticket fee UN1T earned on host events)',
+  description: 'Rollup of race_payments.application_fee_cents across ALL of the session org\'s event hosts, settled (completed/refunded) payments only: grand total, per-host breakdown, per-month buckets. Requires the accounting_hub permission.',
+  responses: {
+    200: { description: 'Total + per-host + per-month fee rollup', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — accounting_hub permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'No active organization', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/accounting/coverage/accounts',
   tags: ['Accounting'],
   security: [{ CookieAuth: [] }],

@@ -11,6 +11,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import AccountingTabs from '@/components/accounting/AccountingTabs'
 import HuntInboxesCard from '@/components/accounting/HuntInboxesCard'
+import EventFeesCard from '@/components/accounting/EventFeesCard'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,8 +26,9 @@ export default async function AccountingPage() {
       <p className="text-sm text-un1t-subtle mb-6">
         Receipt coverage, aged payables, and bookkeeping health for this location.
       </p>
-      <div className="mb-6">
+      <div className="mb-6 space-y-6">
         <HuntInboxesCard />
+        <EventFeesCard />
       </div>
       <AccountingTabs locationName={user.activeLocation?.name || ''} />
     </div>
