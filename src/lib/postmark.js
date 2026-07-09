@@ -256,10 +256,19 @@ export function buildUnsubscribeUrl(contact, baseUrl) {
 
 /**
  * Append a small "Unsubscribe" footer (7pt, muted) to a fully-
- * rendered marketing email body. Always appends regardless of
- * whether the operator already placed a {{unsubscribe_url}} link
- * in the body — operator choice was "always append" so the
- * compliance link is guaranteed and nobody has to remember.
+ * rendered marketing email body — but only when the body does not
+ * already contain an unsubscribe link.
+ *
+ * Idempotent by design: operators can insert a {{unsubscribe_url}}
+ * merge tag from the Campaign / Template / Unlayer editors, and
+ * many branded templates already carry a styled unsubscribe link.
+ * Appending unconditionally rendered TWO "Unsubscribe" links
+ * (operator-reported — a styled one plus this plain footer). We
+ * now skip the auto-footer when the contact's unsubscribe URL is
+ * already present, so recipients see exactly one link. Compliance
+ * is still guaranteed: templates with no unsubscribe link get the
+ * footer, and the List-Unsubscribe email-client header is added
+ * separately in sendBatch/sendTransactionalEmail regardless.
  *
  * Insertion strategy: insert immediately before the LAST </body>
  * tag if one exists (so the footer lands inside the body), else
@@ -273,6 +282,10 @@ export function buildUnsubscribeUrl(contact, baseUrl) {
  */
 export function appendUnsubscribeFooter(html, unsubscribeUrl) {
   if (!html || !unsubscribeUrl) return html
+
+  // Already has this contact's unsubscribe link (e.g. an inlined
+  // {{unsubscribe_url}} merge tag) → don't add a duplicate.
+  if (html.includes(unsubscribeUrl)) return html
 
   const footer = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:24px 0 0 0;border-collapse:collapse;"><tr><td align="center" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:7pt;color:#888888;padding:16px 8px;line-height:1.4;"><a href="${unsubscribeUrl}" style="color:#888888;text-decoration:underline;">Unsubscribe</a></td></tr></table>`
 
