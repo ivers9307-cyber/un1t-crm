@@ -23,7 +23,15 @@ export default function ContactActions({ contactId, locationId }) {
     setSaving(true)
     const content = e.target.content.value.trim()
     if (!content) return
-    await db.from('notes').insert({ contact_id: contactId, content, location_id: locationId })
+    // GLOFOX-NOTES — go through the session-authed route (not a direct browser
+    // insert) so the server can attribute the note to the current user and push
+    // it into Glofox for the front desk. The direct-insert path had no author +
+    // no server-side push.
+    await fetch(`/api/contacts/${contactId}/notes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    })
     setSaving(false)
     setShowForm(null)
     router.refresh()
