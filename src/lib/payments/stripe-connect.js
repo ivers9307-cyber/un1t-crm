@@ -74,15 +74,21 @@ export async function retrieveAccountStatus(accountId) {
 /**
  * Create a Stripe Checkout Session as a DIRECT charge on the host's connected
  * account, with UN1T's per-ticket booking fee as the application fee. The
- * customer pays the ticket total PLUS the booking fee (itemised on Stripe's
- * page); the host receives the ticket total (less Stripe's own processing fee,
- * which the host bears under direct charges); UN1T keeps the fee. Returns the
- * hosted Checkout URL to redirect the buyer to (no embedded widget — SCA/3DS
- * is handled by Checkout). (EVENTS-HOST.3)
- * @returns {Promise<{ providerRef: string, checkoutToken: null, checkoutUrl: string, state: string, amountCents: number }>}
+ * customer pays the ticket total PLUS the booking fee (two itemised lines); the
+ * host receives the ticket total (less Stripe's own processing fee, which the
+ * host bears under direct charges); UN1T keeps the fee. (EVENTS-HOST.3)
+ *
+ * Uses EMBEDDED checkout (`ui_mode: 'embedded'`): the buyer completes payment
+ * inline on our own /event-pay page — no bounce to checkout.stripe.com. We
+ * return the session's `client_secret` (as `checkoutToken`) which the browser
+ * mounts via Stripe.js; there is no hosted URL. `redirect_on_completion:
+ * 'if_required'` keeps card payments (incl. 3DS, handled in-widget) on-page and
+ * only redirects to `return_url` for payment methods that genuinely need it, so
+ * success is normally driven by the widget's onComplete + the Stripe webhook.
+ * @returns {Promise<{ providerRef: string, checkoutToken: string|null, checkoutUrl: null, state: string, amountCents: number }>}
  */
 export async function createPayment({
-  amountCents, currency, description, returnUrl, cancelUrl, metadata,
+  amountCents, currency, description, returnUrl, metadata,
   connectedAccountId, applicationFeeCents = 0,
 }) {
   if (!connectedAccountId) {
@@ -106,19 +112,22 @@ export async function createPayment({
 
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
+    ui_mode: 'embedded',
     line_items: lineItems,
     // Direct charge: the application fee is skimmed to the platform; the rest
     // stays on the host's connected account. Omitted entirely when fee is 0.
     payment_intent_data: fee > 0 ? { application_fee_amount: fee } : undefined,
-    success_url: returnUrl,
-    cancel_url: cancelUrl || returnUrl,
+    // Embedded mode rejects success_url/cancel_url. return_url is only followed
+    // for redirect-based methods; cards complete inline (onComplete).
+    return_url: returnUrl,
+    redirect_on_completion: 'if_required',
     metadata: metadata || {},
   }, { stripeAccount: connectedAccountId })
 
   return {
     providerRef: session.id,
-    checkoutToken: null,
-    checkoutUrl: session.url,
+    checkoutToken: session.client_secret,
+    checkoutUrl: null,
     state: 'pending',
     amountCents: Number(amountCents),
   }

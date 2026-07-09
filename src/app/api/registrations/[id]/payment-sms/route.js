@@ -1,8 +1,14 @@
 // POST /api/registrations/[id]/payment-sms — text a pending registrant
-// their Revolut payment link.
+// their payment link.
+//
+// The link points at our own /event-pay/[paymentId] page (which mounts
+// the right embedded checkout — Revolut or Stripe — for the event's
+// provider), NOT a provider-hosted URL. Stripe Connect events have no
+// hosted URL at all (embedded checkout), so the app link is the only
+// provider-agnostic option.
 //
 // Sibling of the race-control "Payment link" copy button: instead of
-// copying the checkout URL to the clipboard for the operator to paste
+// copying the link to the clipboard for the operator to paste
 // somewhere, this sends it straight to the registrant over the
 // platform's Twilio sender (sendLocationSms — per-location alpha
 // sender, one-way). Mirrors /api/contacts/[id]/sms for the send +
@@ -24,6 +30,7 @@ import { getCurrentUser, getUserLocationIds } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
+import { getAppUrl } from '@/lib/app-url'
 
 export const runtime = 'nodejs'
 
@@ -72,14 +79,14 @@ export async function POST(_request, props) {
   // the teams list uses to attach the "current" payment).
   const { data: payment } = await db
     .from('race_payments')
-    .select('id, status, contact_id, contact_name, contact_phone, amount_cents, currency, payment_checkout_url')
+    .select('id, status, contact_id, contact_name, contact_phone, amount_cents, currency')
     .eq('race_registration_id', params.id)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
 
-  if (!payment || !payment.payment_checkout_url) {
-    return NextResponse.json({ success: false, error: 'No payment link available for this registrant yet.' }, { status: 400 })
+  if (!payment) {
+    return NextResponse.json({ success: false, error: 'No payment for this registrant yet.' }, { status: 400 })
   }
   if (payment.status === 'completed') {
     return NextResponse.json({ success: false, error: 'This registration is already paid.' }, { status: 400 })
@@ -98,7 +105,8 @@ export async function POST(_request, props) {
     : ''
   const locationName = reg.race_events.locations?.name
   const signoff = locationName ? ` — ${locationName}` : ''
-  const body = `Hi ${firstName}, here's your link to pay ${amount}and secure your spot for ${raceName}: ${payment.payment_checkout_url}${signoff}`
+  const payLink = `${getAppUrl()}/event-pay/${payment.id}`
+  const body = `Hi ${firstName}, here's your link to pay ${amount}and secure your spot for ${raceName}: ${payLink}${signoff}`
 
   let twilioResult
   try {

@@ -287,7 +287,11 @@ function TeamCard({ registration, waves, onChanged, onError }) {
   }
 
   async function copyPaymentLink() {
-    const url = registration.payment?.checkout_url
+    // Link to our own /event-pay page (embedded checkout for either
+    // provider) rather than a provider-hosted URL — Stripe Connect events
+    // have no hosted URL. Same origin as the CRM, so window.origin is safe.
+    const paymentId = registration.payment?.id
+    const url = paymentId ? `${window.location.origin}/event-pay/${paymentId}` : null
     if (!url) { onError('No payment link available for this team yet.'); return }
     try {
       await navigator.clipboard.writeText(url)
@@ -390,7 +394,7 @@ function TeamCard({ registration, waves, onChanged, onError }) {
               </option>
             ))}
           </select>
-          {registration.status === 'pending_payment' && registration.payment?.checkout_url && (
+          {registration.status === 'pending_payment' && registration.payment?.id && (
             <button
               type="button"
               onClick={copyPaymentLink}
@@ -401,7 +405,7 @@ function TeamCard({ registration, waves, onChanged, onError }) {
               <Copy size={11} /> {copied ? 'Copied!' : 'Payment link'}
             </button>
           )}
-          {registration.status === 'pending_payment' && registration.payment?.checkout_url && registration.payment?.contact_phone && (
+          {registration.status === 'pending_payment' && registration.payment?.id && registration.payment?.contact_phone && (
             <button
               type="button"
               onClick={sendPaymentSms}

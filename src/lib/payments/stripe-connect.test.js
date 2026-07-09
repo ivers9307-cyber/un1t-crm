@@ -5,22 +5,74 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { retrieve, create } = vi.hoisted(() => ({ retrieve: vi.fn(), create: vi.fn() }))
+const { retrieve, create, sessionsCreate } = vi.hoisted(() => ({
+  retrieve: vi.fn(), create: vi.fn(), sessionsCreate: vi.fn(),
+}))
 
 vi.mock('../stripe', () => ({
   getStripe: () => ({
-    checkout: { sessions: { retrieve } },
+    checkout: { sessions: { retrieve, create: sessionsCreate } },
     refunds: { create },
   }),
 }))
 
-const { refundPayment } = await import('./stripe-connect.js')
+const { refundPayment, createPayment } = await import('./stripe-connect.js')
 
 beforeEach(() => {
   retrieve.mockReset()
   create.mockReset()
+  sessionsCreate.mockReset()
   retrieve.mockResolvedValue({ id: 'cs_1', payment_intent: 'pi_123' })
   create.mockResolvedValue({ id: 're_456' })
+  sessionsCreate.mockResolvedValue({ id: 'cs_new', client_secret: 'cs_new_secret', url: 'https://hosted.example/x' })
+})
+
+describe('stripe-connect createPayment (embedded checkout)', () => {
+  const base = {
+    amountCents: 4700, currency: 'EUR', description: 'Test Race — race entry',
+    returnUrl: 'https://crm.test/event/x/confirmed?registration=r1',
+    cancelUrl: 'https://crm.test/event/x', metadata: { race_registration_id: 'r1' },
+    connectedAccountId: 'acct_host', applicationFeeCents: 200,
+  }
+
+  it('requires the connected account id (fails before any Stripe call)', async () => {
+    await expect(createPayment({ ...base, connectedAccountId: null })).rejects.toThrow(/connected account/)
+    expect(sessionsCreate).not.toHaveBeenCalled()
+  })
+
+  it('creates an EMBEDDED session (ui_mode) and returns the client secret, not a hosted url', async () => {
+    const res = await createPayment(base)
+    const [params, opts] = sessionsCreate.mock.calls[0]
+    // Embedded, not hosted redirect.
+    expect(params.ui_mode).toBe('embedded')
+    expect(params.return_url).toBe(base.returnUrl)
+    expect(params.redirect_on_completion).toBe('if_required')
+    // Hosted-only fields must be ABSENT (Stripe rejects them in embedded mode).
+    expect(params.success_url).toBeUndefined()
+    expect(params.cancel_url).toBeUndefined()
+    // Direct charge on the host account with UN1T's booking fee skimmed.
+    expect(opts).toEqual({ stripeAccount: 'acct_host' })
+    expect(params.payment_intent_data).toEqual({ application_fee_amount: 200 })
+    // Two line items: ticket portion (amount − fee) + the booking fee.
+    expect(params.line_items[0].price_data.unit_amount).toBe(4500)
+    expect(params.line_items[1].price_data.unit_amount).toBe(200)
+    // The buyer renders the widget against the client secret; no url.
+    expect(res).toEqual({
+      providerRef: 'cs_new',
+      checkoutToken: 'cs_new_secret',
+      checkoutUrl: null,
+      state: 'pending',
+      amountCents: 4700,
+    })
+  })
+
+  it('omits the application fee entirely when it is 0', async () => {
+    await createPayment({ ...base, applicationFeeCents: 0 })
+    const [params] = sessionsCreate.mock.calls[0]
+    expect(params.payment_intent_data).toBeUndefined()
+    expect(params.line_items).toHaveLength(1)
+    expect(params.line_items[0].price_data.unit_amount).toBe(4700)
+  })
 })
 
 describe('stripe-connect refundPayment', () => {

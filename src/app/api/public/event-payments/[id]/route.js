@@ -26,7 +26,7 @@ export async function GET(_request, props) {
     .select(`
       id, status, amount_cents, currency,
       payment_provider, payment_provider_ref,
-      payment_checkout_token, payment_checkout_url,
+      payment_checkout_token, payment_checkout_url, connected_account_id,
       race_event_id, race_registration_id,
       race:race_event_id ( id, name, slug ),
       registration:race_registration_id ( id, status, team_id,
@@ -43,7 +43,11 @@ export async function GET(_request, props) {
   // refresh from the provider in case the webhook hasn't landed yet.
   // Side effect: markRacePaymentStatus may update the row inline.
   let row = data
-  if (data.status === 'pending' && data.payment_provider === 'revolut' && data.payment_provider_ref) {
+  if (
+    data.status === 'pending' &&
+    (data.payment_provider === 'revolut' || data.payment_provider === 'stripe_connect') &&
+    data.payment_provider_ref
+  ) {
     try {
       const refreshed = await refreshRacePaymentFromProvider(db, data)
       if (refreshed) {
@@ -77,8 +81,13 @@ export async function GET(_request, props) {
       currency: row.currency,
       provider: row.payment_provider,
       checkout: {
+        // For Stripe embedded, `token` carries the Checkout Session
+        // client_secret and `connected_account_id` is the host acct the
+        // browser must init Stripe.js against (direct charge). For Revolut,
+        // `token` is the order token and connected_account_id is null.
         token: row.payment_checkout_token,
         url: row.payment_checkout_url,
+        connected_account_id: row.connected_account_id || null,
       },
       race: row.race,
       registration: row.registration

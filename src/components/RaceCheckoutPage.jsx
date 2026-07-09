@@ -16,6 +16,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { loadStripe } from '@stripe/stripe-js'
 import { Loader2, AlertCircle, Lock } from 'lucide-react'
 
 const SDK_URLS = {
@@ -42,6 +43,20 @@ function loadRevolutSdk(mode) {
 
 const REVOLUT_MODE = process.env.NEXT_PUBLIC_REVOLUT_MODE === 'prod' ? 'prod' : 'sandbox'
 const REVOLUT_PUBLIC_KEY = process.env.NEXT_PUBLIC_REVOLUT_PUBLIC_KEY || ''
+const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || ''
+
+// loadStripe caches per (key, options) internally; we still guard so a
+// re-render doesn't spin up a second loader for the same connected account.
+const stripePromises = new Map()
+function getStripe(pubKey, connectedAccountId) {
+  const cacheKey = `${pubKey}::${connectedAccountId || ''}`
+  if (!stripePromises.has(cacheKey)) {
+    // Direct charge: init Stripe.js against the platform key WITH the host's
+    // connected account, so the embedded widget renders on the host's account.
+    stripePromises.set(cacheKey, loadStripe(pubKey, connectedAccountId ? { stripeAccount: connectedAccountId } : undefined))
+  }
+  return stripePromises.get(cacheKey)
+}
 
 export default function RaceCheckoutPage({ paymentId }) {
   const router = useRouter()
@@ -77,12 +92,8 @@ export default function RaceCheckoutPage({ paymentId }) {
           if (slug) router.replace(`/event/${slug}/confirmed?registration=${regId || ''}`)
           return
         }
-        // Stripe Connect hosts use Stripe's hosted Checkout (a redirect, not an
-        // embedded widget). Send the buyer straight there; they return to the
-        // confirmation page via the session's success_url.
-        if (j.data?.status === 'pending' && j.data?.provider === 'stripe_connect' && j.data?.checkout?.url) {
-          window.location.href = j.data.checkout.url
-        }
+        // Both providers now render inline below: Revolut via its embed SDK,
+        // Stripe Connect via Stripe Embedded Checkout — no off-site redirect.
       })
       .catch(e => {
         if (!cancelled) {
@@ -97,10 +108,57 @@ export default function RaceCheckoutPage({ paymentId }) {
   useEffect(() => {
     if (!data) return
     if (data.status !== 'pending') return
-    // Stripe hosts redirect to hosted Checkout (handled in the load effect);
-    // never mount the Revolut widget for them.
-    if (data.provider === 'stripe_connect') return
     if (!targetRef.current || instanceRef.current) return
+
+    // ─── Stripe Connect: mount Stripe Embedded Checkout inline ───────
+    if (data.provider === 'stripe_connect') {
+      if (!STRIPE_PUBLISHABLE_KEY) {
+        setPhase('error')
+        setPhaseError('Payment is not configured (NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY missing).')
+        return
+      }
+      const clientSecret = data.checkout?.token
+      const connectedAccountId = data.checkout?.connected_account_id
+      if (!clientSecret) {
+        setPhase('error')
+        setPhaseError('Payment session is missing. Please refresh.')
+        return
+      }
+
+      let destroyed = false
+      setPhase('paying')
+      getStripe(STRIPE_PUBLISHABLE_KEY, connectedAccountId)
+        .then(async (stripe) => {
+          if (destroyed) return
+          if (!stripe) throw new Error('Could not load payment widget')
+          const checkout = await stripe.createEmbeddedCheckoutPage({
+            clientSecret,
+            onComplete: () => {
+              if (destroyed) return
+              const slug = data.race?.slug
+              const regId = data.registration?.id
+              router.push(`/event/${slug}/confirmed?registration=${regId || ''}`)
+            },
+          })
+          if (destroyed) { try { checkout.destroy() } catch {} ; return }
+          checkout.mount(targetRef.current)
+          instanceRef.current = checkout
+          setPhase('ready')
+        })
+        .catch((e) => {
+          if (destroyed) return
+          setPhase('error')
+          setPhaseError(e.message || 'Could not load payment widget')
+        })
+
+      return () => {
+        destroyed = true
+        try { instanceRef.current?.destroy?.() } catch {}
+        instanceRef.current = null
+      }
+    }
+
+    // ─── Revolut: mount the Revolut embed SDK ────────────────────────
     if (!REVOLUT_PUBLIC_KEY) {
       setPhase('error')
       setPhaseError('Payment widget is not configured (NEXT_PUBLIC_REVOLUT_PUBLIC_KEY missing).')
@@ -224,13 +282,13 @@ export default function RaceCheckoutPage({ paymentId }) {
               </div>
             )}
 
-            {/* Revolut Embedded Checkout mounts here — ref + min-height must remain */}
+            {/* Embedded Checkout (Revolut or Stripe) mounts here — ref + min-height must remain */}
             <div className="mt-5 rounded-xl bg-white/[0.03] border border-white/10 p-3">
               <div ref={targetRef} className="min-h-[280px]" />
             </div>
 
             <div className="text-white/45 text-[11px] mt-4 flex items-center justify-center gap-1.5 w-full">
-              <Lock size={11} /> Secure payment by Revolut
+              <Lock size={11} /> Secure payment by {data.provider === 'stripe_connect' ? 'Stripe' : 'Revolut'}
             </div>
           </div>
         </div>
