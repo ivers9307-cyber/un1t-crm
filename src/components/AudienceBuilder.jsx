@@ -12,7 +12,7 @@ const FIELD_OPTIONS = [
   // dead (>99% defaulted on import and was never reliably updated).
   { value: 'pipeline_stage_slug',   label: 'Stage',                 type: 'select',
     options: ['new_lead', 'first_class', 'second_class', 'trial_done',
-              'converted', 'member', 'pack_member', 'classpass', 'dormant'] },
+              'converted', 'member', 'pack_member', 'classpass', 'cold_lead', 'dormant'] },
   // GLOFOX2.1.8 — Glofox-side raw membership status. This is what the
   // pipeline classifier reads — most operators should filter on
   // "Stage" above instead. Kept as an advanced filter for power users

@@ -45,9 +45,10 @@ The home page showing key metrics: total contacts, open deals, upcoming bookings
 
 ### Pipeline (/pipeline)
 Kanban-style deal board with funnel stages:
-- New Lead → First Class → Second Class → Trial Done → Converted (plus off-funnel: Member, Class Pack, ClassPass, Dormant)
+- New Lead → First Class → Second Class → Trial Done → Converted (plus off-funnel: Member, Class Pack, ClassPass, Cold, Dormant)
 - "Class Pack" (slug pack_member) = bought a UN1T credit pack of 4+ classes — that purchase IS a conversion, so they are reported there and never re-enter the funnel. Distinct from "ClassPass" (the third-party aggregator platform).
-Stage placement is automatic — derived by the classifier from booking/attendance/membership activity (webhook + nightly sync). Deals CANNOT be moved manually; a manual stage change would be reverted by the next sync. Click a deal to see details. Each deal is linked to a contact.
+- "Cold" (slug cold_lead) = a staffer used the Cold button to remove a lead not worth selling to / who said they're not interested. Off the funnel, but auto-rejoins the moment they attend a class again.
+Stage placement is automatic — derived by the classifier from booking/attendance/membership activity (webhook + nightly sync). Deals CANNOT be dragged between stages; the ONE manual control is the Cold button (mark not-interested / return to pipeline). Any other manual stage change would be reverted by the next sync. Click a deal to see details. Each deal is linked to a contact.
 
 ### Contacts (/contacts)
 Central contact database. Each contact has: name, email, phone, lead source, lead status, Glofox member ID, trial credits remaining.

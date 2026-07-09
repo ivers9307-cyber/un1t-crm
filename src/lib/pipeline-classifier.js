@@ -19,6 +19,10 @@
 //                  in the funnel. Membership outranks it. (off funnel)
 //   classpass    — classpass_payg, always (off funnel — distinct motion;
 //                  the ClassPass PLATFORM, not our Class Packs)
+//   cold_lead    — operator marked "not worth selling to / not interested"
+//                  (FUNNEL.4, contacts.pipeline_dismissed_at). Off funnel,
+//                  auto-revoked when they attend a class after the
+//                  dismissal. Members/pack/classpass outrank it.
 //   dormant      — aged-out leads, ex_members, ghosts (off funnel)
 //
 // Attended counts come from contacts.recent_bookings (last 10 from the
@@ -125,6 +129,27 @@ export function classifyContact(contact, now = Date.now()) {
   const isPackCustomer = Boolean(contact.pack_customer_at)
     || (credits !== null && credits >= PIPELINE_THRESHOLDS.PACK_CUSTOMER_MIN_CREDITS)
   if (isPackCustomer) return 'pack_member'
+
+  // ── Cold — operator-dismissed (FUNNEL.4) ───────────────────────
+  // A staffer marked this lead "not worth selling to / not interested"
+  // with the Cold button (contacts.pipeline_dismissed_at). Removes them
+  // from the funnel — but AUTO-REVOKED the moment they come back and
+  // TRAIN: if last_attended_at is after the dismissal, the dismissal is
+  // stale and they fall through to the normal funnel rules below and
+  // rejoin (Richard, 2026-07-04). Paying-customer states (member / pack /
+  // classpass) are checked above, so a cold lead who later converts or
+  // buys a pack still shows correctly.
+  const dismissedMs = contact.pipeline_dismissed_at
+    ? new Date(contact.pipeline_dismissed_at).getTime()
+    : null
+  if (dismissedMs !== null && Number.isFinite(dismissedMs)) {
+    const attendedMs = contact.last_attended_at
+      ? new Date(contact.last_attended_at).getTime()
+      : null
+    const trainedSinceDismissal = attendedMs !== null
+      && Number.isFinite(attendedMs) && attendedMs > dismissedMs
+    if (!trainedSinceDismissal) return 'cold_lead'
+  }
 
   // ── Funnel candidates: lead/cold/tour/no_sale_*/trial/null ─────
   // last_attended_at backstops the count: it's advance-only on the

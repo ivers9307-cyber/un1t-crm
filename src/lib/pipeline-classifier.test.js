@@ -219,6 +219,58 @@ describe('classifyContact — pack customers (FUNNEL.3)', () => {
   })
 })
 
+describe('classifyContact — cold / operator-dismissed (FUNNEL.4)', () => {
+  // A staffer marked the lead "not worth selling to / not interested" via the
+  // Cold button (contacts.pipeline_dismissed_at). Removes them from the funnel,
+  // auto-revoked the moment they come back and TRAIN (attend after the dismissal).
+  it('a dismissed lead → cold_lead, off the funnel', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'lead', joined_at: daysAgo(5),
+      pipeline_dismissed_at: daysAgo(1), recent_bookings: [],
+    }, NOW)).toBe('cold_lead')
+  })
+  it('a dismissed lead who had attended BEFORE the dismissal stays cold_lead', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'trial', joined_at: daysAgo(30),
+      last_attended_at: daysAgo(10), pipeline_dismissed_at: daysAgo(2),
+      recent_bookings: [attendedBooking(10)],
+    }, NOW)).toBe('cold_lead')
+  })
+  it('comes back and TRAINS after being dismissed → rejoins the funnel', () => {
+    // dismissed 10d ago, then attended 2d ago (after the dismissal) → first_class
+    expect(classifyContact({
+      glofox_membership_status: 'trial', joined_at: daysAgo(40),
+      last_attended_at: daysAgo(2), pipeline_dismissed_at: daysAgo(10),
+      recent_bookings: [attendedBooking(2)],
+    }, NOW)).toBe('first_class')
+  })
+  it('two classes after the dismissal → second_class (normal funnel rules resume)', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'trial', joined_at: daysAgo(40),
+      last_attended_at: daysAgo(1), pipeline_dismissed_at: daysAgo(10),
+      recent_bookings: [attendedBooking(1), attendedBooking(4)],
+    }, NOW)).toBe('second_class')
+  })
+  it('membership OUTRANKS a dismissal — a cold lead who joins shows as converted', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'member', converted_at: daysAgo(3),
+      pipeline_dismissed_at: daysAgo(20), joined_at: daysAgo(20),
+    }, NOW)).toBe('converted')
+  })
+  it('a pack purchase OUTRANKS a dismissal — cold lead who buys a pack → pack_member', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'lead', joined_at: daysAgo(20),
+      pipeline_dismissed_at: daysAgo(10), trial_credits_remaining: 10,
+    }, NOW)).toBe('pack_member')
+  })
+  it('null pipeline_dismissed_at → normal funnel rules', () => {
+    expect(classifyContact({
+      glofox_membership_status: 'lead', joined_at: daysAgo(5),
+      pipeline_dismissed_at: null, recent_bookings: [],
+    }, NOW)).toBe('new_lead')
+  })
+})
+
 describe('idempotency', () => {
   it('same input twice → same output, and the input is never mutated', () => {
     const c = Object.freeze({
