@@ -1422,6 +1422,35 @@ registry.registerPath({
   },
 })
 
+// GLOFOX-NOTES — staff-authored note on a contact (session-authed path; also
+// pushes the note into Glofox as an interaction, best-effort)
+registry.registerPath({
+  method: 'post',
+  path: '/api/contacts/{id}/notes',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Add a note to a contact (contacts permission)',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            content: z.string().min(1).max(20_000),
+          }).openapi('ContactNoteCreateBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Note created', content: { 'application/json': { schema: z.object({ success: z.literal(true), data: z.object({}).passthrough() }) } } },
+    400: { description: 'Validation error', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — contacts permission required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'put',
   path: '/api/contacts/{id}/consultations/{cid}',

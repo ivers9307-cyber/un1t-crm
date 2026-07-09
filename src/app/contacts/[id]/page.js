@@ -573,6 +573,18 @@ export default async function ContactDetailPage(props) {
                         {item.type === 'activity' && item.activityType !== 'note' && (
                           <span className="text-sm font-medium">{item.subject}</span>
                         )}
+                        {/* GLOFOX-NOTES.7 — provenance chip. Glofox-synced
+                            activities (notes/calls/emails logged front-desk
+                            side, see mapGlofoxInteraction in glofox-sync.js)
+                            already appear in this unified timeline; this just
+                            makes the source obvious so staff don't mistake a
+                            front-desk Glofox note for a CRM-authored one.
+                            Light-theme chip ramp (bg-*-500/10 text-*-700). */}
+                        {item.type === 'activity' && item.source === 'glofox' && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-slate-500/10 text-slate-700">
+                            Glofox
+                          </span>
+                        )}
                       </div>
                       <span className="text-xs text-un1t-muted">
                         {new Date(item.date).toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}

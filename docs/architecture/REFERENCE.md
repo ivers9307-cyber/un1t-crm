@@ -192,6 +192,25 @@ The canonical "where is this contact in the funnel" field is `contacts.pipeline_
 **Sequence goal `lead_status` type is deprecated but aliased.** `scheduler.isGoalMet` still accepts `goal.type === 'lead_status'` for back-compat but reads `pipeline_stage_slug` under the hood and emits a `console.warn`. New sequences should use `goal.type === 'pipeline_stage'`.
 
 
+## Glofox interactions sync — member notes/calls/emails (GLOFOX-NOTES, 2026-07)
+
+Glofox's `/2.1/branches/{branchId}/leads/{userId}/interactions` endpoint is the only surface for member-facing notes/calls/emails, and it's narrow: **create + list only** — no update, no delete, no webhook event for interactions. Descriptions are capped at **500 chars** and carry **no author field**. Every design choice below follows from those three constraints.
+
+**Inbound (pre-existing, extended with a provenance chip).** The member-sync poll (`applyMemberSync` in `src/lib/glofox-sync.js`) pulls each member's interactions and `syncGlofoxInteractions` upserts them into `activities` (`onConflict: 'glofox_interaction_id'`, via `mapGlofoxInteraction`) — there's no realtime path, so a front-desk-logged Glofox note lands on the next sync tick, not instantly. The contact Activity/Notes timeline (`src/app/contacts/[id]/page.js`) now tags rows with `item.source === 'glofox'` with a small "Glofox" chip so staff can distinguish a front-desk-logged note from one written in the CRM.
+
+**Outbound (new): notes only, fire-and-forget, create-only.** When a staffer adds a note via the session-authed `POST /api/contacts/[id]/notes` (`ContactActions.jsx` uses this route, not a direct `notes` insert), the route inserts the CRM row and then — un-awaited — calls `pushNoteToGlofox` (`src/lib/glofox-note-push.js`), which:
+  1. Loads the contact's `location_id` + `glofox_member_id`; no-ops (not an error) if the contact isn't Glofox-linked or the location has no Glofox creds.
+  2. Builds the description via `buildInteractionDescription` (`src/lib/glofox-notes.js`): prefixes `[UN1T CRM · <staff name>] ` (there's no author field on the Glofox side, so attribution has to live in the text) and truncates to 500 chars with an ellipsis marker.
+  3. POSTs via `createGlofoxInteraction` (`src/lib/glofox.js`) — `type: 'NOTE'`.
+  4. Records the push in `glofox_note_pushes` regardless of success/failure (`status: 'sent'|'failed'`), for audit and for step 5 below.
+
+Because the endpoint is create-only, an edit or delete of the CRM note is **never propagated** — there is no Glofox call that could do it. And because it's the session route (not the API-key `/api/notes` bulk-import path) that carries the author name and fires the push, the import path deliberately does **not** push, to avoid mass-spamming Glofox with thousands of imported historical notes on a bulk import.
+
+**Echo suppression — `glofox_note_pushes` ledger (mig 390, applied).** `createGlofoxInteraction`'s response carries no id to key off, so there's no way to mark "this is ours" at push time. Instead, every push writes a row to `glofox_note_pushes` (`contact_id`, `type`, `description`, `pushed_at`, `glofox_interaction_id` initially NULL, `status`). On the next inbound sync, `syncGlofoxInteractions` loads the contact's unreconciled (`glofox_interaction_id IS NULL`) push rows and fingerprint-matches each incoming interaction against them via `matchesPush` (`src/lib/glofox-notes.js`): exact `description` + `type` + same contact, and the interaction's Glofox `created` (unix seconds) within a 2-hour window of `pushed_at`. On a match, the sync UPDATEs the ledger row (`glofox_interaction_id`, `status: 'reconciled'`) instead of upserting into `activities` — so the pushed note appears exactly once in the timeline. Already-claimed `glofox_interaction_id`s are checked first and skipped on every later sync run (`uq_glofox_note_pushes_interaction`). The claim UPDATE's `{error}` is checked explicitly (supabase-js *resolves* with an error object on an RLS/constraint failure rather than throwing) so a silently-failed claim doesn't fall through to a duplicate upsert.
+
+**Scope (operator-approved, Richard 2026-07-04): notes only.** Call/email touchpoints are **not** mirrored outbound — the CRM's call/email `activities` are to-do tasks (things staff plan to do), not completed-touchpoint logs, so pushing one to Glofox as a member-facing comment would misrepresent it. Only Glofox-linked contacts (`glofox_member_id` set) push; contacts without a Glofox link, or at a non-Glofox location (CCF Autos, SourceIt), silently no-op.
+
+
 ## RBAC Matrix
 
 | Capability | Owner | Manager | Head Coach | Staff |
