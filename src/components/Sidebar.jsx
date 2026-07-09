@@ -106,6 +106,13 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
     enabled: hasPerm('whatsapp'),
     url: '/api/whatsapp/unread-count',
   })
+  // HOST-PORTAL.6 — host events awaiting review (pending_review). Admin-only
+  // (the API short-circuits to 0 for everyone else); surfaces on Settings,
+  // where the hosts review queue lives (/settings/hosts).
+  const hostEventsPendingCount = usePolledCount({
+    enabled: ['master', 'owner', 'manager'].includes(user?.role),
+    url: '/api/hosts/pending-events/count',
+  })
   // Badge map by href. Add more entries here when another nav item
   // needs a notification dot.
   const badges = {
@@ -114,6 +121,7 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
     '/approvals': approvalsPendingCount,
     '/issues': issuesPendingCount,
     '/communications': communicationsActionCount,
+    '/settings': hostEventsPendingCount,
   }
 
   // Browser tab title prefix — surfaces the combined pending count

@@ -109,6 +109,12 @@ export default async function HostDashboard() {
             </p>
           </>
         )}
+        {isStripe && session.host.stripe_connected_account_id && (
+          <p className="mt-3">
+            <a href="https://dashboard.stripe.com" target="_blank" rel="noopener noreferrer"
+               className="text-xs text-white/40 hover:text-white">Stripe dashboard →</a>
+          </p>
+        )}
       </section>
 
       <section className="mt-8">
