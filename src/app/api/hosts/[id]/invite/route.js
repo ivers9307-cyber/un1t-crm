@@ -60,7 +60,7 @@ export async function POST(_request, props) {
     if (staffProfile) {
       return NextResponse.json({
         success: false,
-        error: 'That email is a UN1T staff account — use a different email for the host portal.',
+        error: 'That email is a UN1T staff account. Use "Open host portal" above to manage this host as admin, or invite them on a different email.',
       }, { status: 400 })
     }
     const { data: otherLink } = await db.from('host_users').select('host_id').eq('auth_user_id', authUserId).maybeSingle()
@@ -97,7 +97,7 @@ export async function POST(_request, props) {
     }
     return NextResponse.json({
       success: false,
-      error: 'That email already has an account and isn’t linked to this host — use a different email for the host portal.',
+      error: 'That email already has an account (e.g. a staff login). Use "Open host portal" above to manage this host as admin, or invite them on a different email.',
     }, { status: 400 })
   }
 
