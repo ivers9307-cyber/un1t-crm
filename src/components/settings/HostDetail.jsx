@@ -99,6 +99,13 @@ export default function HostDetail({ hostId }) {
   const [openingPortal, setOpeningPortal] = useState(false)
   const [openPortalError, setOpenPortalError] = useState(null)
 
+  // Staff logins linked to this host (HOST-PORTAL.5) — an existing UN1T staff
+  // member who is also this host, accessing the portal with their normal login.
+  const [staffLinks, setStaffLinks] = useState([])
+  const [staffLinkEmail, setStaffLinkEmail] = useState('')
+  const [staffLinkError, setStaffLinkError] = useState(null)
+  const [staffLinkBusy, setStaffLinkBusy] = useState(false)
+
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState(null)
 
@@ -180,6 +187,18 @@ export default function HostDetail({ hostId }) {
       .finally(() => { if (alive) setRevenueLoading(false) })
     return () => { alive = false }
   }, [hostId])
+
+  // Linked staff logins load independently — a failure is non-fatal (the
+  // subsection just shows "No staff logins linked."). Keyed on hostId.
+  const loadStaffLinks = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/hosts/${hostId}/link-staff`)
+      const j = await res.json().catch(() => ({}))
+      if (res.ok && j.success) setStaffLinks(Array.isArray(j.data) ? j.data : [])
+    } catch { /* non-fatal — leave the current list in place */ }
+  }, [hostId])
+
+  useEffect(() => { loadStaffLinks() }, [loadStaffLinks])
 
   async function save(e) {
     e.preventDefault()
@@ -335,6 +354,48 @@ export default function HostDetail({ hostId }) {
     } catch (e) {
       setDeleting(false)
       setDeleteError(e.message || 'Could not delete host')
+    }
+  }
+
+  // Link an existing UN1T staff login to this host (HOST-PORTAL.5). On success
+  // clear the input + error and refresh the list; the API returns a friendly
+  // { error } for not-staff / cross-org / already-linked-elsewhere cases.
+  async function linkStaff() {
+    const email = staffLinkEmail.trim()
+    if (!email || staffLinkBusy) return
+    setStaffLinkBusy(true)
+    setStaffLinkError(null)
+    try {
+      const res = await fetch(`/api/hosts/${hostId}/link-staff`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
+      setStaffLinkEmail('')
+      setStaffLinkError(null)
+      await loadStaffLinks()
+    } catch (err) {
+      setStaffLinkError(err.message || 'Could not link that staff login.')
+    } finally {
+      setStaffLinkBusy(false)
+    }
+  }
+
+  async function unlinkStaff(authUserId) {
+    setStaffLinkError(null)
+    try {
+      const res = await fetch(`/api/hosts/${hostId}/link-staff`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auth_user_id: authUserId }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
+      await loadStaffLinks()
+    } catch (err) {
+      setStaffLinkError(err.message || 'Could not unlink.')
     }
   }
 
@@ -637,6 +698,71 @@ export default function HostDetail({ hostId }) {
             <AlertTriangle size={12} /> {portalError}
           </p>
         )}
+
+        {/* Staff logins (HOST-PORTAL.5) — link an existing UN1T staff member's
+            normal login to this host, for someone who is both staff and host. */}
+        <div className="mt-4 pt-4 border-t border-un1t-border">
+          <p className="text-sm font-medium text-un1t-text">Staff logins</p>
+          <p className="mt-1 text-xs text-un1t-muted">
+            Give an existing UN1T staff member access to this host&apos;s portal with their normal login.
+          </p>
+
+          <div className="mt-3 space-y-2">
+            {staffLinks.length === 0 ? (
+              <p className="text-xs text-un1t-muted">No staff logins linked.</p>
+            ) : (
+              staffLinks.map((link) => (
+                <div
+                  key={link.auth_user_id}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-un1t-border bg-un1t-bg px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm text-un1t-text">{link.full_name || link.email}</p>
+                    {link.full_name && (
+                      <p className="truncate text-xs text-un1t-muted">{link.email}</p>
+                    )}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => unlinkStaff(link.auth_user_id)}
+                    className="shrink-0"
+                  >
+                    Unlink
+                  </Button>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+            <input
+              type="email"
+              value={staffLinkEmail}
+              onChange={(e) => setStaffLinkEmail(e.target.value)}
+              placeholder="staff@un1tdublin.com"
+              aria-label="Staff email to link"
+              className={INPUT_CLASS}
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              icon={Link2}
+              loading={staffLinkBusy}
+              onClick={linkStaff}
+              className="shrink-0"
+            >
+              Link staff login
+            </Button>
+          </div>
+
+          {staffLinkError && (
+            <p className="mt-2 text-xs text-stage-lost flex items-center gap-1">
+              <AlertTriangle size={12} /> {staffLinkError}
+            </p>
+          )}
+        </div>
       </Card>
 
       {/* Danger zone — a separate card so a delete can't be fat-fingered next
