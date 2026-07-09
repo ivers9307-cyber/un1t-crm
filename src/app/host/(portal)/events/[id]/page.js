@@ -1,12 +1,14 @@
 // Host event detail (HOST-PORTAL.1) — the roster for ONE of the host's events,
 // plus an Export CSV button. Server-rendered + scoped: getCurrentHost() then
 // race.host_id === host.id (notFound() otherwise, so ids can't be enumerated).
-// Read-only. Attendee fetch is shared with the CSV export via attendee-export.
+// Roster is read-only (attendee fetch shared with the CSV export via
+// attendee-export); a self-serve promo-codes section (HOST-PORTAL.9) sits below.
 
 import { notFound, redirect } from 'next/navigation'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { fetchEventAttendees } from '@/lib/attendee-export'
+import HostPromoCodes from '@/components/host/HostPromoCodes'
 
 export const dynamic = 'force-dynamic'
 
@@ -114,6 +116,8 @@ export default async function HostEventDetail(props) {
           </div>
         )}
       </section>
+
+      <HostPromoCodes eventId={race.id} />
     </div>
   )
 }
