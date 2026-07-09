@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHmac } from 'node:crypto'
-import { verifyGlofoxSignature, parseGlofoxEvent, tagsForGlofoxEvent, generateGlofoxPasscode, purchaseGlofoxMembership } from './glofox.js'
+import { verifyGlofoxSignature, parseGlofoxEvent, tagsForGlofoxEvent, generateGlofoxPasscode, purchaseGlofoxMembership, createGlofoxInteraction } from './glofox.js'
 
 function sign(secret, body) {
   return createHmac('sha256', secret).update(body).digest('hex')
@@ -382,5 +382,30 @@ describe('generateGlofoxPasscode (Glofox password policy)', () => {
     const seen = new Set()
     for (let i = 0; i < 500; i++) seen.add(generateGlofoxPasscode())
     expect(seen.size).toBeGreaterThan(490)
+  })
+})
+
+describe('createGlofoxInteraction', () => {
+  beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  const creds = { branchId: 'b'.repeat(24), apiKey: 'k', apiToken: 't' }
+  const res = (status, body) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => null }, json: async () => body })
+
+  it('POSTs to the interactions endpoint with user_id, type, description', async () => {
+    global.fetch.mockResolvedValueOnce(res(200, {}))
+    const uid = 'a'.repeat(24)
+    const r = await createGlofoxInteraction(creds, uid, { type: 'NOTE', description: 'hi' })
+    expect(r.ok).toBe(true)
+    const [url, opts] = global.fetch.mock.calls[0]
+    expect(url).toContain(`/2.1/branches/${creds.branchId}/leads/${uid}/interactions`)
+    expect(opts.method).toBe('POST')
+    const sent = JSON.parse(opts.body)
+    expect(sent).toMatchObject({ user_id: uid, type: 'NOTE', description: 'hi' })
+  })
+
+  it('returns { ok:false } on missing creds/userId (no throw)', async () => {
+    expect((await createGlofoxInteraction(null, 'x', { type: 'NOTE', description: 'y' })).ok).toBe(false)
+    expect((await createGlofoxInteraction(creds, '', { type: 'NOTE', description: 'y' })).ok).toBe(false)
   })
 })

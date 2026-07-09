@@ -1081,6 +1081,29 @@ export async function fetchUserInteractions(creds, userId) {
 }
 
 /**
+ * Create a Glofox interaction (note / manual email) for a user via
+ * POST /2.1/branches/{branchId}/leads/{userId}/interactions.
+ *
+ * Glofox accepts only type NOTE or MANUAL_EMAIL on create, description
+ * <= 500 chars. The response has NO body (the created interaction id is
+ * not returned) — reconciliation happens later via the inbound pull +
+ * the glofox_note_pushes ledger. Best-effort: returns { ok, status }.
+ */
+export async function createGlofoxInteraction(creds, userId, { type, description } = {}) {
+  if (!creds || !creds.branchId || !userId || !type) return { ok: false, status: 0 }
+  try {
+    const r = await glofoxFetch(
+      creds,
+      `/2.1/branches/${encodeURIComponent(creds.branchId)}/leads/${encodeURIComponent(userId)}/interactions`,
+      { method: 'POST', body: JSON.stringify({ user_id: userId, type, description: description ?? '' }) },
+    )
+    return { ok: r.ok, status: r.status }
+  } catch (e) {
+    return { ok: false, status: 0, error: e?.message || 'network error' }
+  }
+}
+
+/**
  * Fetch a Glofox member's recent bookings via /2.0/bookings.
  *
  * Per the spec, the endpoint is paginated (limit defaults 50, max
