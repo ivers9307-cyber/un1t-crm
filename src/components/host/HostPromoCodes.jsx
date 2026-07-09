@@ -107,9 +107,11 @@ export default function HostPromoCodes({ eventId }) {
 
     let discountValue
     if (discountType === 'percent') {
+      // Host codes cap at 99% — the ticket can never be fully free (the €2
+      // booking fee is only collected when checkout goes through Stripe).
       discountValue = parseInt(value, 10)
-      if (!Number.isFinite(discountValue) || discountValue < 0 || discountValue > 100) {
-        setFormError('Percent must be a whole number between 0 and 100.')
+      if (!Number.isFinite(discountValue) || discountValue < 0 || discountValue > 99) {
+        setFormError("Percent must be a whole number between 0 and 99 — the ticket can't be fully free.")
         return
       }
     } else {
@@ -258,7 +260,7 @@ export default function HostPromoCodes({ eventId }) {
                 id="hpc-value"
                 type="number"
                 min={0}
-                max={discountType === 'percent' ? 100 : undefined}
+                max={discountType === 'percent' ? 99 : undefined}
                 step={discountType === 'percent' ? 1 : '0.01'}
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
@@ -267,6 +269,9 @@ export default function HostPromoCodes({ eventId }) {
                 required
               />
             </div>
+            <p className="mt-1.5 text-xs text-white/35">
+              {discountType === 'percent' ? 'Up to 99%.' : 'Must be less than the ticket price.'}
+            </p>
           </div>
           <div>
             <label htmlFor="hpc-max" className={labelCls}>

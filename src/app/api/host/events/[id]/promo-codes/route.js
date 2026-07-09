@@ -11,6 +11,17 @@
 // false (host events have member pricing off). Because the public register
 // route looks codes up by (location_id, code), host-created codes work at
 // checkout with zero changes there.
+//
+// FEE PRESERVATION (trust boundary): UN1T's €2/ticket booking fee is collected
+// inside the Stripe checkout — a code that zeroes the order total makes the
+// register route skip Stripe entirely, which would waive the fee. Hosts sit on
+// the other side of that fee, so unlike staff codes, a HOST code must never be
+// able to zero an order: percent is capped at 99 and fixed must be ≤ ticket
+// price − 1 cent. Order totals are price × seats ≥ price, and
+// computeDiscountCents caps the discount at the order, so fixed ≤ price − 1
+// guarantees total > 0 → checkout always goes through Stripe → the booking fee
+// is always charged. Free events (price null/0) can't take codes at all.
+// Staff routes are deliberately unchanged — operators may still zero an order.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -28,18 +39,20 @@ const SELECT_COLS =
   'id, location_id, event_id, code, discount_type, discount_value, max_redemptions, redeemed_count, member_only, expires_at, active, created_at'
 
 // Host-editable fields ONLY — no event_id / location_id / member_only, which
-// are server-set. Mirrors the staff CreateSchema incl. the percent≤100 refine.
+// are server-set. Mirrors the staff CreateSchema except percent maxes at 99,
+// not 100 (fee preservation — see the header comment); the fixed-vs-ticket-
+// price cap needs the loaded event, so it's enforced in POST below.
 const CreateSchema = z
   .object({
     code: z.string().trim().min(1).max(64),
     discount_type: z.enum(['percent', 'fixed']),
-    // percent: 0-100 (refined below); fixed: cents.
+    // percent: 0-99 (refined below); fixed: cents.
     discount_value: z.number().int().min(0),
     max_redemptions: z.number().int().min(1).optional(),
     expires_at: z.string().datetime().optional(),
   })
-  .refine((d) => d.discount_type !== 'percent' || d.discount_value <= 100, {
-    message: 'A percent discount cannot exceed 100.',
+  .refine((d) => d.discount_type !== 'percent' || d.discount_value <= 99, {
+    message: "Host discounts can go up to 99% — the ticket can't be fully free.",
     path: ['discount_value'],
   })
 
@@ -47,7 +60,7 @@ const CreateSchema = z
 async function loadOwnEvent(db, session, id) {
   const { data: race } = await db
     .from('race_events')
-    .select('id, host_id, location_id')
+    .select('id, host_id, location_id, non_member_fee_cents')
     .eq('id', id)
     .maybeSingle()
   if (!race || race.host_id !== session.host.id) return null
@@ -97,6 +110,25 @@ export async function POST(request, props) {
     )
   }
   const input = parsed.data
+
+  // Fee preservation (see header): the per-person ticket price bounds every
+  // host discount. Free events have no Stripe checkout to discount at all.
+  const priceCents = Number(race.non_member_fee_cents) || 0
+  if (priceCents <= 0) {
+    return NextResponse.json(
+      { success: false, error: "This event is already free — promo codes don't apply." },
+      { status: 400 }
+    )
+  }
+  if (input.discount_type === 'fixed' && input.discount_value > priceCents - 1) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: `Fixed discounts must be less than the ticket price (€${(priceCents / 100).toFixed(2)}).`,
+      },
+      { status: 400 }
+    )
+  }
 
   const { data, error } = await db
     .from('promo_codes')
