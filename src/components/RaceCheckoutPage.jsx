@@ -274,8 +274,28 @@ export default function RaceCheckoutPage({ paymentId }) {
               <span className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-black" />
             </div>
 
-            {/* bottom: total */}
+            {/* bottom: itemised breakdown + total. When there's a booking
+                fee we spell out entry + fee so the buyer sees what they're
+                paying for here, rather than under Stripe's collapsed
+                "View details". No fee (Revolut/internal) → just the total. */}
             <div className="px-6 pt-5 pb-6">
+              {data.booking_fee_cents > 0 && (
+                <div className="space-y-2 text-sm mb-4">
+                  <div className="flex items-baseline justify-between text-white/70">
+                    <span>Entry</span>
+                    <span className="tabular-nums text-white/90">
+                      {fmt(data.amount_cents - data.booking_fee_cents, data.currency)}
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-between text-white/70">
+                    <span>Booking fee</span>
+                    <span className="tabular-nums text-white/90">
+                      {fmt(data.booking_fee_cents, data.currency)}
+                    </span>
+                  </div>
+                  <div className="border-t border-dashed border-white/15 pt-3" />
+                </div>
+              )}
               <div className="flex items-baseline justify-between">
                 <span className="text-[11px] uppercase tracking-[0.16em] text-white/55 font-semibold">
                   Total

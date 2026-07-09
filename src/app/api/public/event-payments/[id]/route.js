@@ -27,6 +27,7 @@ export async function GET(_request, props) {
       id, status, amount_cents, currency,
       payment_provider, payment_provider_ref,
       payment_checkout_token, payment_checkout_url, connected_account_id,
+      application_fee_cents,
       race_event_id, race_registration_id,
       race:race_event_id ( id, name, slug ),
       registration:race_registration_id ( id, status, team_id,
@@ -78,6 +79,11 @@ export async function GET(_request, props) {
       id: row.id,
       status: row.status,
       amount_cents: row.amount_cents,
+      // The per-ticket booking fee UN1T adds on top (0/null for Revolut and
+      // internal events). Ticket subtotal = amount_cents − booking_fee_cents.
+      // Lets the checkout page itemise "what you're paying for" without the
+      // buyer having to expand Stripe's collapsed "View details".
+      booking_fee_cents: row.application_fee_cents || 0,
       currency: row.currency,
       provider: row.payment_provider,
       checkout: {
