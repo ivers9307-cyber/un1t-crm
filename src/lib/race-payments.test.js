@@ -188,4 +188,42 @@ describe('markRacePaymentStatus', () => {
     })
     expect(result.state_changed).toBe(false)
   })
+
+  it("treats 'refunded' as terminal — a late completed retry writes nothing", async () => {
+    // HOST-PORTAL.7: after a Stripe-side refund flips the payment to
+    // 'refunded', a redelivered checkout.session.completed (or the buyer
+    // revisiting the return page) must not resurrect it to 'completed' —
+    // that would re-fire confirmation side-effects and mask the refund.
+    const db = makeUpdateDb()
+    const result = await markRacePaymentStatus({
+      db,
+      payment: {
+        id: 'pay-1',
+        status: 'refunded',
+        race_registration_id: 'reg-1',
+        amount_cents: 5000,
+        refunded_amount_cents: 5000,
+      },
+      revolutState: 'completed',
+      revolutAmount: 5000,
+    })
+    expect(result.state_changed).toBe(false)
+    expect(result.applied).toBeNull()
+    expect(db._updates).toHaveLength(0) // no race_payments OR race_registrations write
+  })
+
+  it("treats 'refunded' as terminal for failed/cancelled transitions too", async () => {
+    const db = makeUpdateDb()
+    for (const revolutState of ['failed', 'cancelled']) {
+      const result = await markRacePaymentStatus({
+        db,
+        payment: { id: 'pay-1', status: 'refunded', amount_cents: 5000, refunded_amount_cents: 5000 },
+        revolutState,
+        revolutAmount: null,
+      })
+      expect(result.state_changed).toBe(false)
+      expect(result.applied).toBeNull()
+    }
+    expect(db._updates).toHaveLength(0)
+  })
 })

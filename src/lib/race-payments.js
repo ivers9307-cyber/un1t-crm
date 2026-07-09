@@ -281,6 +281,15 @@ export async function resolveRacePaymentByProviderRef(db, providerRef) {
  * @param {number|null} args.revolutAmount  Revolut order.amount (minor units)
  */
 export async function markRacePaymentStatus({ db, payment, revolutState, revolutAmount }) {
+  // 'refunded' is TERMINAL (HOST-PORTAL.7). Refunds are written by the staff
+  // refund route / charge.refunded webhook, never through this state machine —
+  // a late checkout.session.completed retry (or the buyer revisiting the
+  // return page) must not resurrect a refunded payment to 'completed' and
+  // re-fire the completed side-effects (confirmation emails, sequences).
+  if (payment?.status === 'refunded') {
+    return { applied: null, state_changed: false }
+  }
+
   const updates = {}
   const nowIso = new Date().toISOString()
 
