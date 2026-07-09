@@ -524,6 +524,13 @@ export default async function ContactDetailPage(props) {
                         <span className="text-xs font-medium text-un1t-subtle uppercase">
                           {item.type || 'Event'}
                         </span>
+                        {/* GLOFOX-NOTES — provenance chip on the grouped
+                            timeline too (matches the single-account view). */}
+                        {item.source === 'glofox' && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-slate-500/10 text-slate-700">
+                            Glofox
+                          </span>
+                        )}
                         {/* Tag the source account when the group has more
                             than one, so a merged timeline stays legible. */}
                         {acct?.name && (
@@ -536,8 +543,8 @@ export default async function ContactDetailPage(props) {
                         {item.createdAt ? new Date(item.createdAt).toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
                       </span>
                     </div>
-                    {item.title && (
-                      <p className="text-sm mt-1 whitespace-pre-wrap text-un1t-subtle">{item.title}</p>
+                    {(item.body || item.title) && (
+                      <p className="text-sm mt-1 whitespace-pre-wrap text-un1t-subtle">{item.body || item.title}</p>
                     )}
                   </div>
                 </div>
