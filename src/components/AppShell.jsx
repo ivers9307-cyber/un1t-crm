@@ -27,7 +27,7 @@ import { Analytics } from '@vercel/analytics/next'
 // brand allowlist in src/lib/brands.js — add a new studio's path in BOTH.
 const PUBLIC_PATHS = ['/login', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/deposit', '/book', '/event', '/event-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host']
 
-export default function AppShell({ user, children }) {
+export default function AppShell({ user, children, isLinkedHost = false }) {
   const pathname = usePathname()
   const router = useRouter()
   // Hooks must run before any early return — keep them at the top so the
@@ -85,7 +85,7 @@ export default function AppShell({ user, children }) {
       <CommandPalette user={user} />
 
       {/* Sidebar */}
-      <Sidebar user={user} mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
+      <Sidebar user={user} isLinkedHost={isLinkedHost} mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
 
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">

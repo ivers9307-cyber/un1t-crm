@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LogOut, Activity, ExternalLink, X, ChevronDown, ChevronRight as ChevronRightIcon } from 'lucide-react'
+import { LogOut, Activity, ExternalLink, X, ChevronDown, ChevronRight as ChevronRightIcon, Store } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -30,7 +30,7 @@ const roleLabels = {
 // badge). Drives the red circles next to nav items that surface
 // pending counts; polls every 60s and refreshes on tab refocus.
 
-export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
+export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false, onMobileClose }) {
   const pathname = usePathname()
   const router = useRouter()
   const [branding, setBranding] = useState(null)
@@ -316,6 +316,24 @@ export default function Sidebar({ user, mobileOpen = false, onMobileClose }) {
           )
         })}
       </nav>
+
+      {/* HOST-PORTAL.5 — "Host portal" jump-link for a linked staff-host
+          (this login also holds a host_users row, resolved server-side in
+          AppShellServer as isLinkedHost). Gated on isLinkedHost, NOT a
+          permission — so it lives OUTSIDE the ALL_NAV permission filter.
+          Static internal href → next/link. Reuses leafClassName so it
+          renders like any other leaf nav link, plus a top border to set it
+          apart from the scrollable nav above. */}
+      {isLinkedHost && (
+        <Link
+          href="/host"
+          className={clsx(leafClassName(isPathActive(pathname, '/host')), 'border-t border-un1t-border')}
+          title="Open the host portal for a host linked to your login"
+        >
+          <Store size={18} />
+          Host portal
+        </Link>
+      )}
 
       {/* Master-only Platform link. Opens the standalone ops
           dashboard at platform.un1tdublin.com in a new tab —
