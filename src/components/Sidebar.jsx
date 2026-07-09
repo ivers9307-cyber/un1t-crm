@@ -328,10 +328,10 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
         <Link
           href="/host"
           className={clsx(leafClassName(isPathActive(pathname, '/host')), 'border-t border-un1t-border')}
-          title="Open the host portal for a host linked to your login"
+          title="Open the event host portal for a host linked to your login"
         >
           <Store size={18} />
-          Host portal
+          Event Host Portal
         </Link>
       )}
 
