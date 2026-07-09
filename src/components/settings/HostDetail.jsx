@@ -595,8 +595,8 @@ export default function HostDetail({ hostId }) {
           own self-serve dashboard. Emails them a set-password link. */}
       <Card title="Host portal">
         <p className="text-sm text-un1t-subtle">
-          Give this host a login to their own portal (their events, and — soon —
-          revenue + attendees). We email them a link to set a password.
+          Give this host a login to their own portal — their events, revenue,
+          and attendees. We email them a link to set a password.
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <Button
