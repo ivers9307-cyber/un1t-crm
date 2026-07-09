@@ -456,10 +456,20 @@ export default function HostDetail({ hostId }) {
 
         {isStripe && (
           <>
-            <div className="mt-4 flex flex-wrap gap-2">
+            <div className="mt-4 flex flex-wrap items-center gap-2">
               <StatusFlag ok={!!host.charges_enabled} label="Charges enabled" />
               <StatusFlag ok={!!host.payouts_enabled} label="Payouts enabled" />
               <StatusFlag ok={!!host.details_submitted} label="Details submitted" />
+              {host?.stripe_connected_account_id && (
+                <a
+                  href={`https://dashboard.stripe.com/connect/accounts/${host.stripe_connected_account_id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-un1t-subtle hover:text-un1t-text inline-flex items-center gap-1"
+                >
+                  View in Stripe <ExternalLink size={10} />
+                </a>
+              )}
             </div>
 
             {actionError && (
