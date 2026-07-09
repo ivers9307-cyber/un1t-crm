@@ -243,47 +243,60 @@ export default function RaceCheckoutPage({ paymentId }) {
 
   return (
     <div className="min-h-screen bg-black text-white py-14 px-4">
-      <div className="max-w-md mx-auto">
+      {/* Narrow single column on mobile; roomier two-column on desktop so
+          the booking summary sits alongside the payment widget (which the
+          provider SDK sizes to fill its container) instead of above it. */}
+      <div className="max-w-md lg:max-w-4xl mx-auto">
         <p className="text-[11px] uppercase tracking-[0.2em] text-white/45 font-semibold mb-4">
           Checkout
         </p>
 
-        <div className="lp-card-glow rounded-2xl overflow-hidden">
-          {/* Ticket stub — top: event + team */}
-          <div className="px-6 pt-6 pb-5">
-            <h1 className="font-bold text-lg leading-snug">{data.race?.name || 'Your race'}</h1>
-            {data.registration?.team_name && (
-              <p className="text-sm text-white/60 mt-1">
-                Team <strong className="text-white font-semibold">{data.registration.team_name}</strong>
-              </p>
-            )}
-          </div>
-
-          {/* Perforated divider with punched notches */}
-          <div className="relative h-0 border-t border-dashed border-white/15">
-            <span className="absolute -left-3 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-black" />
-            <span className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-black" />
-          </div>
-
-          {/* Ticket stub — bottom: total + payment */}
-          <div className="px-6 pt-5 pb-6">
-            <div className="flex items-baseline justify-between">
-              <span className="text-[11px] uppercase tracking-[0.16em] text-white/55 font-semibold">
-                Total
-              </span>
-              <span className="text-3xl font-bold tabular-nums">
-                {fmt(data.amount_cents, data.currency)}
-              </span>
+        <div className="lg:grid lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:gap-6 lg:items-start">
+          {/* Booking summary — ticket stub. Sticky on desktop so it stays
+              in view while a tall payment form scrolls. */}
+          <div className="lp-card-glow rounded-2xl overflow-hidden lg:sticky lg:top-14">
+            {/* top: event + team */}
+            <div className="px-6 pt-6 pb-5">
+              <h1 className="font-bold text-lg leading-snug">{data.race?.name || 'Your race'}</h1>
+              {data.registration?.team_name && (
+                <p className="text-sm text-white/60 mt-1">
+                  Team <strong className="text-white font-semibold">{data.registration.team_name}</strong>
+                </p>
+              )}
+              {data.registration?.team_size > 1 && (
+                <p className="text-xs text-white/45 mt-1 tabular-nums">{data.registration.team_size} people</p>
+              )}
             </div>
 
+            {/* Perforated divider with punched notches */}
+            <div className="relative h-0 border-t border-dashed border-white/15">
+              <span className="absolute -left-3 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-black" />
+              <span className="absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-black" />
+            </div>
+
+            {/* bottom: total */}
+            <div className="px-6 pt-5 pb-6">
+              <div className="flex items-baseline justify-between">
+                <span className="text-[11px] uppercase tracking-[0.16em] text-white/55 font-semibold">
+                  Total
+                </span>
+                <span className="text-3xl font-bold tabular-nums">
+                  {fmt(data.amount_cents, data.currency)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Payment widget */}
+          <div className="lp-card-glow rounded-2xl p-4 sm:p-5 mt-4 lg:mt-0">
             {phaseError && (
-              <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 text-red-300 text-sm rounded-lg flex items-start gap-2">
+              <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 text-red-300 text-sm rounded-lg flex items-start gap-2">
                 <AlertCircle size={14} className="mt-0.5 shrink-0" /> {phaseError}
               </div>
             )}
 
             {/* Embedded Checkout (Revolut or Stripe) mounts here — ref + min-height must remain */}
-            <div className="mt-5 rounded-xl bg-white/[0.03] border border-white/10 p-3">
+            <div className="rounded-xl bg-white/[0.03] border border-white/10 p-3">
               <div ref={targetRef} className="min-h-[280px]" />
             </div>
 
