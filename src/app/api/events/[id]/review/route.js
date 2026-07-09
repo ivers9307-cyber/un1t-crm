@@ -5,6 +5,8 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { loadHostForOrg } from '@/lib/hosts'
+import { notifyHostEventReviewed } from '@/lib/host-notifications'
+import { logError } from '@/lib/log'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
@@ -32,7 +34,7 @@ export async function POST(request, props) {
   }
 
   const db = createServerClient()
-  const { data: event } = await db.from('race_events').select('id, host_id, status').eq('id', params.id).maybeSingle()
+  const { data: event } = await db.from('race_events').select('id, host_id, status, name, slug, location_id').eq('id', params.id).maybeSingle()
   if (!event || !event.host_id) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   const host = await loadHostForOrg(db, event.host_id, orgId)
   if (!host) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
@@ -57,6 +59,13 @@ export async function POST(request, props) {
   if (!updated || updated.length === 0) {
     return NextResponse.json({ success: false, error: 'Event is no longer pending review.' }, { status: 409 })
   }
+
+  // Fire-and-forget: tell the host their event was approved/rejected.
+  // HOST_COLS includes name + email, so `host` is enough. Never changes
+  // the response — the review already succeeded.
+  try {
+    await notifyHostEventReviewed({ db, event, host, action: parsed.data.action, reason: parsed.data.reason?.trim() || null })
+  } catch (e) { logError('host-event-review', 'notify host failed', { err: e }) }
 
   return NextResponse.json({ success: true, data: { id: event.id, status: patch.status } })
 }
