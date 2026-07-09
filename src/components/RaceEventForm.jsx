@@ -58,12 +58,12 @@ const KINDS = [
     value: 'workshop',
     label: 'Workshop',
     icon: GraduationCap,
-    description: 'Hands-on, capacity-limited, single time slot. Per-seat name + email capture.',
+    description: 'Hands-on, capacity-limited, single time slot. Per-spot name + email capture.',
     sectionLabel: 'Workshop details',
     dateLabel: 'Workshop date',
     timeLabel: 'Start time',
     sizeLabel: 'Available group sizes',
-    sizeHint: 'How customers can buy seats: 1 = solo, 2 = bring a friend, larger sizes = group buys. For sizes > 1, the signup form captures name + email for every seat.',
+    sizeHint: 'How customers can buy spots: 1 = solo, 2 = bring a friend, larger sizes = group buys. For sizes > 1, the signup form captures name + email for every spot.',
     submitLabel: 'Create workshop',
     showWaves: false,
     showLogos: false,
@@ -78,7 +78,7 @@ const KINDS = [
     dateLabel: 'Seminar date',
     timeLabel: 'Start time',
     sizeLabel: 'Available group sizes',
-    sizeHint: 'How customers can buy seats: 1 = solo, 2 = bring a friend, larger sizes = group buys. For sizes > 1, the signup form captures name + email for every seat.',
+    sizeHint: 'How customers can buy spots: 1 = solo, 2 = bring a friend, larger sizes = group buys. For sizes > 1, the signup form captures name + email for every spot.',
     submitLabel: 'Create seminar',
     showWaves: false,
     showLogos: false,
@@ -93,7 +93,7 @@ const KINDS = [
     dateLabel: 'Open day date',
     timeLabel: 'Start time',
     sizeLabel: 'Available group sizes',
-    sizeHint: 'How customers can buy seats: 1 = solo, 2 = bring a friend, larger sizes = group buys. For sizes > 1, the signup form captures name + email for every seat.',
+    sizeHint: 'How customers can buy spots: 1 = solo, 2 = bring a friend, larger sizes = group buys. For sizes > 1, the signup form captures name + email for every spot.',
     submitLabel: 'Create open day',
     showWaves: false,
     showLogos: false,
@@ -108,7 +108,7 @@ const KINDS = [
     dateLabel: 'Masterclass date',
     timeLabel: 'Start time',
     sizeLabel: 'Available group sizes',
-    sizeHint: 'How customers can buy seats: 1 = solo, 2 = bring a friend, larger sizes = group buys. For sizes > 1, the signup form captures name + email for every seat.',
+    sizeHint: 'How customers can buy spots: 1 = solo, 2 = bring a friend, larger sizes = group buys. For sizes > 1, the signup form captures name + email for every spot.',
     submitLabel: 'Create masterclass',
     showWaves: false,
     showLogos: false,
@@ -691,7 +691,7 @@ export default function RaceEventForm({ race, locationId }) {
                 onChange={e => setSingleCapacity(e.target.value)}
                 className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
               />
-              <p className="text-[11px] text-un1t-muted mt-1">Total seats. Empty = unlimited.</p>
+              <p className="text-[11px] text-un1t-muted mt-1">Total spots. Empty = unlimited.</p>
             </div>
           </div>
         )}
@@ -843,7 +843,7 @@ export default function RaceEventForm({ race, locationId }) {
                     : 'bg-un1t-bg border-un1t-border text-un1t-subtle hover:border-un1t-muted'
                 }`}
               >
-                {s}-{meta.value === 'race' ? 'person' : 'seat'}
+                {s}-{meta.value === 'race' ? 'person' : 'spot'}
               </button>
             )
           })}
@@ -898,7 +898,7 @@ export default function RaceEventForm({ race, locationId }) {
         </h3>
         <p className="text-[11px] text-un1t-subtle -mt-2">
           Per-person pricing. Mixed groups pay each head at their own rate (e.g. 2 members + 2
-          non-members on a 4-{meta.value === 'race' ? 'person team' : 'seat group'} = 2 × member fee + 2 × non-member fee). Leave a fee blank
+          non-members on a 4-{meta.value === 'race' ? 'person team' : 'spot group'} = 2 × member fee + 2 × non-member fee). Leave a fee blank
           to make that category free. UN1T members are matched by the email on their member account.
         </p>
 

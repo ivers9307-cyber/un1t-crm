@@ -62,13 +62,13 @@ const KIND_COPY = {
     sidebarTimeMany: (n, list) => `Sessions at ${list}`,
     showWavePicker: false,
     showTeamName: false,
-    headingTitle: 'Book your seat',
-    headingSubtitle: "Add anyone joining you below — every seat captures a name and email.",
+    headingTitle: 'Book your spot',
+    headingSubtitle: "Add anyone joining you below — every spot captures a name and email.",
     captainSectionLabel: 'Your details',
     membersSectionLabel: 'Other attendees',
-    sizeLabel: 'How many seats? *',
-    sizeButtonSuffix: 'seat',
-    submitFreeLabel: 'Book seat',
+    sizeLabel: 'How many spots? *',
+    sizeButtonSuffix: 'spot',
+    submitFreeLabel: 'Book spot',
     submitPaidLabel: (price) => `Book and pay ${price}`,
     closedFull: 'This workshop is full.',
     closedNotYet: "Bookings haven't opened yet for this workshop.",
@@ -82,13 +82,13 @@ const KIND_COPY = {
     sidebarTimeMany: (n, list) => `Sessions at ${list}`,
     showWavePicker: false,
     showTeamName: false,
-    headingTitle: 'Book your seat',
-    headingSubtitle: "Add anyone joining you below — every seat captures a name and email.",
+    headingTitle: 'Book your spot',
+    headingSubtitle: "Add anyone joining you below — every spot captures a name and email.",
     captainSectionLabel: 'Your details',
     membersSectionLabel: 'Other attendees',
-    sizeLabel: 'How many seats? *',
-    sizeButtonSuffix: 'seat',
-    submitFreeLabel: 'Book seat',
+    sizeLabel: 'How many spots? *',
+    sizeButtonSuffix: 'spot',
+    submitFreeLabel: 'Book spot',
     submitPaidLabel: (price) => `Book and pay ${price}`,
     closedFull: 'This seminar is full.',
     closedNotYet: "Bookings haven't opened yet for this seminar.",
@@ -122,13 +122,13 @@ const KIND_COPY = {
     sidebarTimeMany: (n, list) => `Sessions at ${list}`,
     showWavePicker: false,
     showTeamName: false,
-    headingTitle: 'Book your seat',
-    headingSubtitle: "Add anyone joining you below — every seat captures a name and email.",
+    headingTitle: 'Book your spot',
+    headingSubtitle: "Add anyone joining you below — every spot captures a name and email.",
     captainSectionLabel: 'Your details',
     membersSectionLabel: 'Other attendees',
-    sizeLabel: 'How many seats? *',
-    sizeButtonSuffix: 'seat',
-    submitFreeLabel: 'Book seat',
+    sizeLabel: 'How many spots? *',
+    sizeButtonSuffix: 'spot',
+    submitFreeLabel: 'Book spot',
     submitPaidLabel: (price) => `Book and pay ${price}`,
     closedFull: 'This masterclass is full.',
     closedNotYet: "Bookings haven't opened yet for this masterclass.",
@@ -497,11 +497,6 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
     : null
   const eyebrowParts = [kindLabel, heroDateStr, venueName].filter(Boolean)
 
-  // First non-empty line of the description → hero sub-line.
-  const heroSub = race.description
-    ? (race.description.split(/\r?\n/).map((s) => s.trim()).find(Boolean) || null)
-    : null
-
   // Poster background (monochrome gradient copied from the approved
   // mockup's .hero-media .bg) — the graceful fallback when no hero
   // photo is set.
@@ -626,11 +621,6 @@ export default function RaceSignupWidget({ slug, embedded = false }) {
           <h1 className="mt-3 font-bold uppercase tracking-tight text-5xl md:text-7xl leading-[0.95] text-white">
             {race.name}
           </h1>
-          {heroSub && (
-            <p className="mt-4 text-[15px] md:text-lg text-white/70 max-w-[42ch]">
-              {heroSub}
-            </p>
-          )}
         </div>
       </section>
       )}
