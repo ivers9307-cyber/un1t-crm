@@ -22,6 +22,7 @@ const STATUS_LABEL = {
   member: 'Members',
   pack_member: 'Class Pack',
   classpass: 'ClassPass',
+  cold_lead: 'Cold',
   dormant: 'Dormant',
   unknown: 'Other',
 }

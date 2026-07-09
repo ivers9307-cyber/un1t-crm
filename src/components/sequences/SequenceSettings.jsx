@@ -13,7 +13,7 @@ import AudienceBuilder from '@/components/AudienceBuilder'
 
 const PIPELINE_SLUGS = [
   'new_lead', 'first_class', 'second_class', 'trial_done',
-  'converted', 'member', 'pack_member', 'classpass', 'dormant',
+  'converted', 'member', 'pack_member', 'classpass', 'cold_lead', 'dormant',
 ]
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 

@@ -48,6 +48,9 @@ const SELECT_COLS = [
   'converted_at',
   // FUNNEL.3 — the sticky Class Pack stamp; same parity rule applies.
   'pack_customer_at',
+  // FUNNEL.4 — operator Cold dismissal; same parity rule (else the
+  // nightly cron flaps a cold lead back onto the board).
+  'pipeline_dismissed_at',
 ].join(', ')
 
 /**
@@ -242,6 +245,7 @@ export async function reclassifyAllContacts(db, args) {
       recent_bookings: c.recent_bookings,
       converted_at: c.converted_at,
       pack_customer_at: c.pack_customer_at,
+      pipeline_dismissed_at: c.pipeline_dismissed_at,
     })
     const targetStageId = stageIdBySlug.get(targetSlug)
     if (!targetStageId) {

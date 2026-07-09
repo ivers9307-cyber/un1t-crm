@@ -27,6 +27,7 @@ import CreateInGlofoxButton from '@/components/CreateInGlofoxButton'
 import { getPersonGroup } from '@/lib/person-links'
 import { aggregatePerson } from '@/lib/person-aggregate'
 import PersonHeader from '@/components/PersonHeader'
+import PersonActionBar from '@/components/PersonActionBar'
 import LinkedAccountsCard from '@/components/LinkedAccountsCard'
 import ContactDetailTabs from '@/components/ContactDetailTabs'
 import { formatLastSeen } from '@/lib/person-view'
@@ -915,6 +916,14 @@ export default async function ContactDetailPage(props) {
                 {risk.label}
               </span>
             )}
+            {/* FUNNEL.4 — Message / Task / Sequence + the Cold toggle
+                (mark not-interested / return to pipeline). */}
+            <PersonActionBar
+              contactId={contact.id}
+              locationId={contact.location_id}
+              actions={['message', 'task', 'sequence', 'cold']}
+              isCold={contact.pipeline_stage_slug === 'cold_lead'}
+            />
           </PersonHeader>
         </div>
       </div>

@@ -19,7 +19,7 @@
 
 import { useRouter } from 'next/navigation'
 import { useState, useRef, useEffect } from 'react'
-import { MoreVertical, MessageSquare, CheckSquare, Repeat } from 'lucide-react'
+import { MoreVertical, MessageSquare, CheckSquare, Repeat, Snowflake, RotateCcw } from 'lucide-react'
 import dynamic from 'next/dynamic'
 import { createBrowserClient } from '@/lib/supabase'
 
@@ -31,12 +31,18 @@ const ACTION_DEFS = {
   message: { label: 'Message', icon: MessageSquare },
   task: { label: 'Task', icon: CheckSquare },
   sequence: { label: 'Sequence', icon: Repeat },
+  // FUNNEL.4 — label/icon are dynamic (see renderColdItem); this entry just
+  // keeps 'cold' a recognised action so callers can opt in via `actions`.
+  cold: { label: 'Cold', icon: Snowflake },
 }
 
 export default function PersonActionBar({
   contactId,
   locationId,
   actions = ['message', 'task', 'sequence'],
+  // FUNNEL.4 — when the 'cold' action is enabled, this drives the toggle
+  // label: true → "Return to pipeline" (clear), false → "Mark as Cold".
+  isCold = false,
   align = 'right',
   className = '',
 }) {
@@ -69,7 +75,33 @@ export default function PersonActionBar({
       if (contactId) router.push(`/contacts/${contactId}#message`)
       return
     }
+    if (action === 'cold') { toggleCold() ; return }
     setOverlay(action)
+  }
+
+  // FUNNEL.4 — mark Cold (off the pipeline) / return to the pipeline. The
+  // classifier re-places the deal server-side; refresh to reflect it.
+  async function toggleCold() {
+    if (saving) return
+    setSaving(true)
+    try {
+      const res = await fetch(`/api/contacts/${contactId}/pipeline-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cold: !isCold }),
+      })
+      if (!res.ok) {
+        let msg = 'Could not update pipeline status'
+        try { const j = await res.json(); msg = j.error || msg } catch { /* non-JSON */ }
+        alert(msg)
+        return
+      }
+      router.refresh()
+    } catch {
+      alert('Could not update pipeline status')
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function addTask(e) {
@@ -122,6 +154,24 @@ export default function PersonActionBar({
           className={`absolute ${align === 'right' ? 'right-0' : 'left-0'} top-7 z-20 bg-un1t-surface border border-un1t-border rounded-md shadow-lg py-1 min-w-[150px]`}
         >
           {items.map((a) => {
+            // FUNNEL.4 — the Cold toggle: dynamic label + icon, and a subtle
+            // divider above it since it's a state change, not a compose action.
+            if (a === 'cold') {
+              const Icon = isCold ? RotateCcw : Snowflake
+              const label = isCold ? 'Return to pipeline' : 'Mark as Cold'
+              return (
+                <button
+                  key={a}
+                  type="button"
+                  role="menuitem"
+                  disabled={saving}
+                  onClick={(e) => pick(a, e)}
+                  className="w-full text-left px-3 py-1.5 text-xs text-un1t-text hover:bg-un1t-border/40 flex items-center gap-2 border-t border-un1t-border/60 disabled:opacity-50"
+                >
+                  <Icon size={13} className="text-un1t-subtle" /> {label}
+                </button>
+              )
+            }
             const { label, icon: Icon } = ACTION_DEFS[a]
             return (
               <button

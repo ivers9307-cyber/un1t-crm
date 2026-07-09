@@ -29,6 +29,7 @@ const statusColors = {
   member:       'border-l-slate-500',
   pack_member:  'border-l-cyan-600',
   classpass:    'border-l-purple-500',
+  cold_lead:    'border-l-zinc-600',
   dormant:      'border-l-gray-500',
 }
 
@@ -55,7 +56,12 @@ export default function DealCard({ deal, locationId }) {
         <div className="flex items-start justify-between gap-2">
           <p className="text-sm font-medium truncate flex-1">{deal.title}</p>
           {contact.id && (
-            <PersonActionBar contactId={contact.id} locationId={locationId} />
+            <PersonActionBar
+              contactId={contact.id}
+              locationId={locationId}
+              actions={['message', 'task', 'sequence', 'cold']}
+              isCold={contact.pipeline_stage_slug === 'cold_lead'}
+            />
           )}
         </div>
         {contact.name && (
