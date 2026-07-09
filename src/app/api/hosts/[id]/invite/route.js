@@ -12,6 +12,11 @@
 //      already has a profiles row (a real staff account — inviteUserByEmail
 //      returns 200 for an existing UNCONFIRMED user, so we can't rely on it
 //      erroring) or is already linked to a different host.
+//
+// To give an EXISTING staff member host access, do NOT invite — this route
+// deliberately refuses a staff email. Use the admin link-staff action instead
+// (POST /api/hosts/[id]/link-staff, HOST-PORTAL.5); that is the one sanctioned
+// path where a login is intentionally both staff and host.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'

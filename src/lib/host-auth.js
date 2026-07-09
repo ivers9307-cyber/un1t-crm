@@ -8,11 +8,19 @@
 // i.e. the staff CRM and the host portal are cleanly firewalled over the shared
 // auth.users table. Server-only.
 //
-// PROVISIONING DISCIPLINE: never give one auth user BOTH a profiles row and a
-// host_users row — that would resolve as staff AND host. The future "invite
-// host" flow must create a dedicated auth user per host (never link a staff
-// login). There's no DB XOR constraint (mirrors the member `contacts.user_id`
-// model); it's an invariant the provisioning path must uphold.
+// PROVISIONING DISCIPLINE: by default, never give one auth user BOTH a profiles
+// row and a host_users row — that would resolve as staff AND host. The "invite
+// host" flow creates a dedicated auth user per host and refuses a staff email;
+// with mig 387 (host-portal invites make no profiles row) a pure 3rd-party host
+// never gets CRM access. There's no DB XOR constraint (mirrors the member
+// `contacts.user_id` model); it's an invariant the invite path upholds.
+//
+// DELIBERATE EXCEPTION (HOST-PORTAL.5): a user MAY hold BOTH rows when an admin
+// links an EXISTING staff member to a host in their org via the admin action
+// POST /api/hosts/[id]/link-staff — that one login is intentionally staff (CRM)
+// AND host (portal): getCurrentHost resolves them as the host, getCurrentUser
+// still resolves them as staff. This applies ONLY to that admin link action;
+// the invite path + mig 387 still forbid it for 3rd-party hosts.
 //
 // ADMIN VIEW-AS (HOST-PORTAL.4): getCurrentHost also falls through to a
 // transient admin override (resolveHostImpersonation) — an ADMIN whose org owns
