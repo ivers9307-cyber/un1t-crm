@@ -27,7 +27,7 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { validateBody } from '@/lib/validate'
 import { validateTeamRoster, computeTeamPricing } from '@/lib/member-validation'
 import { normalizeCode, computeDiscountCents, promoCodeError } from '@/lib/promo-codes'
-import { createRacePayment } from '@/lib/race-payments'
+import { createRacePayment, refreshRacePaymentFromProvider } from '@/lib/race-payments'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
 import { getAppUrl } from '@/lib/app-url'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
@@ -410,36 +410,63 @@ export async function POST(request, props) {
       .eq('team_id', teamId)
       .maybeSingle()
     if (teamReg) {
-      if (teamReg.status === 'confirmed') {
+      // Resolve the true, current state before deciding. For a pending
+      // booking we refresh the payment from the provider so we don't
+      // resume a DEAD checkout session: a Stripe Checkout Session expires
+      // (~24h) and a Revolut order can lapse, after which our row still
+      // reads 'pending' but the buyer's link no longer works. The refresh
+      // flips a lapsed session to abandoned/cancelled (or catches a
+      // just-completed one) inline.
+      let regStatus = teamReg.status
+      let livePaymentId = null
+      if (teamReg.status === 'pending_payment' && teamReg.active_payment_id) {
+        const { data: pay } = await db
+          .from('race_payments')
+          .select('id, status, payment_provider, payment_provider_ref, connected_account_id')
+          .eq('id', teamReg.active_payment_id)
+          .maybeSingle()
+        if (pay) {
+          let refreshed = pay
+          if (pay.status === 'pending') {
+            try {
+              refreshed = (await refreshRacePaymentFromProvider(db, pay)) || pay
+            } catch {
+              // Provider unreachable — trust the DB view (treat as live).
+              refreshed = pay
+            }
+          }
+          if (refreshed.status === 'pending') {
+            livePaymentId = refreshed.id           // session still live → resume it
+          } else if (refreshed.status === 'completed') {
+            regStatus = 'confirmed'                // paid in the meantime
+          }
+          // failed / abandoned / expired → livePaymentId null → re-register
+        }
+      }
+
+      if (regStatus === 'confirmed') {
         return NextResponse.json({
           success: false,
           error: `Team "${teamName}" is already registered for ${race.name}.`,
           code: 'already_registered',
         }, { status: 409 })
       }
-      if (teamReg.status === 'pending_payment' && teamReg.active_payment_id) {
-        const { data: pay } = await db
-          .from('race_payments')
-          .select('id, status')
-          .eq('id', teamReg.active_payment_id)
-          .maybeSingle()
-        if (pay && pay.status === 'pending') {
-          return NextResponse.json({
-            success: true,
-            data: {
-              registration_id: teamReg.id,
-              team_id: teamId,
-              team_name: teamName,
-              race: { id: race.id, name: race.name, race_date: race.race_date, slug: race.slug },
-              payment: { id: pay.id, free: false, status: pay.status, resumed: true },
-            },
-            message: `You've already started booking Team "${teamName}" — complete payment to confirm.`,
-          })
-        }
-        // Payment no longer usable (completed/failed) — fall through to
-        // discard + re-register below.
+      if (livePaymentId) {
+        return NextResponse.json({
+          success: true,
+          data: {
+            registration_id: teamReg.id,
+            team_id: teamId,
+            team_name: teamName,
+            race: { id: race.id, name: race.name, race_date: race.race_date, slug: race.slug },
+            payment: { id: livePaymentId, free: false, status: 'pending', resumed: true },
+          },
+          message: `You've already started booking Team "${teamName}" — complete payment to confirm.`,
+        })
       }
-      // Stale row: clear it so the fresh registration can be inserted.
+      // Stale/dead row (lapsed session, cancelled, no_show, abandoned, or
+      // pending with no usable payment): clear it so the flow below inserts
+      // a fresh registration and mints a NEW payment session.
       await db.from('race_registrations').delete().eq('id', teamReg.id)
     }
   }
