@@ -799,6 +799,92 @@ registry.registerPath({
   },
 })
 
+// EMAIL-INBOX.1 — inbound email → unified inbox (mig 394)
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/postmark-inbound/{token}',
+  tags: ['Webhooks (Inbound)'],
+  security: [],
+  summary: 'Tokenised Postmark inbound email (unified inbox)',
+  description: 'Postmark inbound stream → CRM. Threads customer email replies into email_conversations for the unified inbox. Authenticated by the unguessable `{token}` path segment (POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN), not a header.',
+  request: {
+    params: z.object({ token: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('PostmarkInboundEmailEvent') } } },
+  },
+  responses: {
+    200: { description: 'Accepted' },
+    404: { description: 'Invalid token (404 by design — no URL-pattern oracle)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// Email inbox conversations (cookie auth) — EMAIL-INBOX.1
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/conversations',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List email inbox conversations',
+  description: "Operator inbox list for the email channel. Location-scoped: ?location_id (access-checked) or the union of the caller's locations.",
+  request: {
+    query: z.object({ location_id: uuidLike.optional() }),
+  },
+  responses: {
+    200: { description: 'Conversation list' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/conversations/{id}',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Email conversation + message thread',
+  description: 'Returns the conversation and its most recent messages (text bodies only) and resets unread_count. 404 for foreign-location ids.',
+  request: {
+    params: z.object({ id: uuidLike }),
+  },
+  responses: {
+    200: { description: 'Conversation + messages' },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/email/conversations/{id}',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Resolve / reopen an email conversation',
+  description: 'Stamps or clears resolved_at (UIX-P1 queue semantics). A new inbound email auto-clears it in the webhook.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ resolved: z.boolean() }).openapi('EmailConversationPatch') } } },
+  },
+  responses: {
+    200: { description: 'Updated' },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/conversations/{id}/send',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Reply to an email conversation',
+  description: "Sends a plain-text operator reply via Postmark's transactional stream with In-Reply-To/References threading headers, logs it to the thread (and email_sends when a contact is linked).",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ text: z.string().min(1).max(10000), subject: z.string().max(500).optional() }).openapi('EmailInboxReply') } } },
+  },
+  responses: {
+    200: { description: 'Reply sent' },
+    400: { description: 'Send failed / no recipient', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/webhooks/sequence/{token}',

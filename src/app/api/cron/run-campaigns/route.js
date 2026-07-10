@@ -61,7 +61,9 @@ export async function GET(request) {
   // STEP 2 — pick campaigns to tick this run.
   const { data: campaigns, error: pickErr } = await db
     .from('campaigns')
-    .select('*, locations(name, slug)')
+    // email_inbox_reply_to (mig 394) — per-location Reply-To default so
+    // campaign replies route into the unified inbox (EMAIL-INBOX.1).
+    .select('*, locations(name, slug, email_inbox_reply_to)')
     .in('status', ['queued', 'sending'])
     .order('updated_at', { ascending: true })
     .limit(MAX_CAMPAIGNS_PER_TICK)

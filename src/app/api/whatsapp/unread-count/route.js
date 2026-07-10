@@ -44,15 +44,24 @@ export async function GET() {
   const cols = 'resolved_at, last_message_at, last_message_direction, agent_handed_off_at'
   const countActionable = rows => (rows || []).filter(needsAction).length
   try {
-    const [wa, ig] = await Promise.all([
+    // EMAIL-INBOX.1 — email_conversations joins the badge (third
+    // channel). It has no agent_handed_off_at column; the select list
+    // is per-channel so the shared needsAction predicate still works
+    // (missing column ≡ never handed off).
+    const emailCols = 'resolved_at, last_message_at, last_message_direction'
+    const [wa, ig, em] = await Promise.all([
       db.from('whatsapp_conversations').select(cols)
         .eq('location_id', locationId).is('resolved_at', null),
       db.from('instagram_conversations').select(cols)
         .eq('location_id', locationId).is('resolved_at', null),
+      db.from('email_conversations').select(emailCols)
+        .eq('location_id', locationId).is('resolved_at', null),
     ])
-    // A failure on either channel degrades to that channel counting 0
+    // A failure on any channel degrades to that channel counting 0
     // rather than erroring the badge.
-    const count = countActionable(wa.error ? [] : wa.data) + countActionable(ig.error ? [] : ig.data)
+    const count = countActionable(wa.error ? [] : wa.data)
+      + countActionable(ig.error ? [] : ig.data)
+      + countActionable(em.error ? [] : em.data)
     return NextResponse.json({ success: true, data: { count } })
   } catch {
     return NextResponse.json({ success: true, data: { count: 0 } })

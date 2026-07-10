@@ -84,6 +84,9 @@ export function toListUnsubscribeUrl(pageUrl) {
  * @param {string} options.tag - tracking tag
  * @param {Object} options.metadata - custom metadata
  * @param {string} options.unsubscribeUrl - List-Unsubscribe URL for GDPR
+ * @param {Array<{Name: string, Value: string}>} options.headers - extra SMTP
+ *   headers (EMAIL-INBOX.1 — inbox replies pass In-Reply-To/References so the
+ *   reply threads correctly in the recipient's mail client)
  */
 export async function sendEmail({
   to,
@@ -96,6 +99,7 @@ export async function sendEmail({
   tag,
   metadata = {},
   unsubscribeUrl,
+  headers: extraHeaders,
 }) {
   const headers = {
     'Accept': 'application/json',
@@ -135,6 +139,12 @@ export async function sendEmail({
       { Name: 'List-Unsubscribe', Value: `<${toListUnsubscribeUrl(unsubscribeUrl)}>` },
       { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' },
     ]
+  }
+
+  // EMAIL-INBOX.1 — caller-supplied headers (threading headers for inbox
+  // replies). Appended after the compliance headers, never replacing them.
+  if (Array.isArray(extraHeaders) && extraHeaders.length) {
+    body.Headers = [...(body.Headers || []), ...extraHeaders]
   }
 
   const response = await fetch(`${POSTMARK_API_URL}/email`, {
@@ -491,6 +501,27 @@ export async function sendTransactionalEmail({
 }
 
 /**
+ * EMAIL-INBOX.1 — the location's inbound-inbox address (mig 394,
+ * locations.email_inbox_reply_to). When set, campaign + marketing
+ * sends stamp it as Reply-To so customer replies route back into the
+ * unified inbox via /api/webhooks/postmark-inbound. Returns null when
+ * unset or on any error (callers treat it as best-effort).
+ */
+export async function getLocationInboxReplyTo(locationId) {
+  if (!locationId) return null
+  try {
+    const db = createServerClient()
+    const { data } = await db.from('locations')
+      .select('email_inbox_reply_to')
+      .eq('id', locationId)
+      .maybeSingle()
+    return data?.email_inbox_reply_to || null
+  } catch {
+    return null
+  }
+}
+
+/**
  * COMMS-AUDIT 2026-07-10 (SEQ batch) — marketing sibling of
  * sendTransactionalEmail for single sends that are MARKETING mail
  * (sequence step emails: welcome / nurture / win-back).
@@ -511,13 +542,23 @@ export async function sendTransactionalEmail({
  * per-contact unsubscribeUrl so the one-click headers are attached.
  */
 export async function sendMarketingEmail({
-  to, subject, htmlBody, contactId, locationId, tag, unsubscribeUrl,
+  to, subject, htmlBody, contactId, locationId, tag, unsubscribeUrl, replyTo,
   sourceType = 'sequence', sequenceId = null, sequenceStepId = null,
 }) {
+  // EMAIL-INBOX.1 — marketing sends default their Reply-To to the
+  // location's inbound-inbox address so replies land in the unified
+  // inbox instead of an external mailbox. Best-effort: a lookup
+  // failure sends with no Reply-To rather than failing the send.
+  let resolvedReplyTo = replyTo
+  if (!resolvedReplyTo && locationId) {
+    resolvedReplyTo = await getLocationInboxReplyTo(locationId)
+  }
+
   const result = await sendEmail({
     to,
     subject,
     htmlBody,
+    replyTo: resolvedReplyTo || undefined,
     stream: 'broadcast',  // Postmark marketing stream — attaches List-Unsubscribe headers
     tag: tag || 'marketing',
     unsubscribeUrl,
