@@ -63,7 +63,9 @@ export async function GET(request) {
     .from('campaigns')
     // email_inbox_reply_to (mig 394) — per-location Reply-To default so
     // campaign replies route into the unified inbox (EMAIL-INBOX.1).
-    .select('*, locations(name, slug, email_inbox_reply_to)')
+    // settings — feeds the FREQ-CAP.1 marketing frequency-cap gate
+    // (locations.settings.comms_frequency_cap) inside tickCampaignSend.
+    .select('*, locations(name, slug, email_inbox_reply_to, settings)')
     .in('status', ['queued', 'sending'])
     .order('updated_at', { ascending: true })
     .limit(MAX_CAMPAIGNS_PER_TICK)

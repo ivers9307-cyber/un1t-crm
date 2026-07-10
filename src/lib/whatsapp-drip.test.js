@@ -111,6 +111,53 @@ describe('selectDripRecipients', () => {
     expect(r.toSend).toHaveLength(0)
     expect(r.exhausted).toBe(true)
   })
+
+  // FREQ-CAP.1 — the isEligible predicate holds contacts out of THIS
+  // tick without recording anything, and deferred contacts block
+  // exhaustion so the drip stays open until they clear.
+  describe('isEligible (frequency cap deferral)', () => {
+    it('filters ineligible contacts out of toSend and reports deferred', () => {
+      const audience = aud(5)
+      const r = selectDripRecipients({
+        audience, doneIds: [], headroom: 100, perTickMax: 100,
+        isEligible: (c) => c.id !== 'c1' && c.id !== 'c3',
+      })
+      expect(r.toSend.map(c => c.id)).toEqual(['c0', 'c2', 'c4'])
+      expect(r.deferred).toBe(2)
+      expect(r.remainingCount).toBe(5)
+    })
+    it('deferred contacts block exhaustion (drip stays open)', () => {
+      const r = selectDripRecipients({
+        audience: aud(5), doneIds: [], headroom: 100, perTickMax: 100,
+        isEligible: (c) => c.id !== 'c1',
+      })
+      expect(r.toSend).toHaveLength(4)
+      expect(r.exhausted).toBe(false)
+    })
+    it('everyone deferred → empty batch, not exhausted', () => {
+      const r = selectDripRecipients({
+        audience: aud(3), doneIds: [], headroom: 100, perTickMax: 100,
+        isEligible: () => false,
+      })
+      expect(r.toSend).toHaveLength(0)
+      expect(r.deferred).toBe(3)
+      expect(r.exhausted).toBe(false)
+    })
+    it('already-done contacts do not count as deferred', () => {
+      const audience = aud(4)
+      const r = selectDripRecipients({
+        audience, doneIds: ['c0', 'c1'], headroom: 100, perTickMax: 100,
+        isEligible: () => true,
+      })
+      expect(r.deferred).toBe(0)
+      expect(r.exhausted).toBe(true)
+    })
+    it('default predicate keeps legacy behaviour (deferred 0, exhausted on last batch)', () => {
+      const r = selectDripRecipients({ audience: aud(5), doneIds: [], headroom: 100, perTickMax: 100 })
+      expect(r.deferred).toBe(0)
+      expect(r.exhausted).toBe(true)
+    })
+  })
 })
 
 describe('dripOutcome', () => {

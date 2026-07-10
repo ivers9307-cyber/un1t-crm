@@ -7,6 +7,7 @@ import {
 } from './whatsapp-drip.js'
 import { getSendBudget, blastBudgetBlockError, effectiveTickHeadroom } from './whatsapp-budget.js'
 import { sliceBlastChunk } from './whatsapp-schedule.js'
+import { getLocationFrequencyCap, isFrequencyCapped, stampMarketingTouch } from './frequency-cap.js'
 import { getLocationBranding } from './location-branding'
 import { extractNamedVariables } from './whatsapp-template-samples.js'
 import { sendPushToRolesAtLocation } from './push'
@@ -1034,6 +1035,25 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
   const doneIds = new Set(await fetchDripDoneContactIds(db, broadcastId))
   const pending = contacts.filter(c => !doneIds.has(c.id))
 
+  // FREQ-CAP.1 — cross-channel marketing frequency cap. Runs AFTER the
+  // consent/reachability gate (applied by the audience query above) so a
+  // suppressed contact is excluded there, never cap-deferred here. Capped
+  // contacts (touched by ANY marketing channel inside the operator's
+  // window) are dropped from THIS pass WITHOUT a recipient row: they are
+  // not in doneIds, so a later pass (cron resume of a 'sending' blast, or
+  // an operator re-send of a 'draft') re-evaluates and sends them once
+  // their window clears. A blast that completes without them is accepted
+  // — a blast is a point-in-time message; guaranteed eventual delivery is
+  // drip territory. The count lands in delivery_summary for visibility.
+  const capSetting = await getLocationFrequencyCap(db, broadcast.location_id)
+  const eligible = capSetting.enabled
+    ? pending.filter(c => !isFrequencyCapped(c, capSetting))
+    : pending
+  const capDeferredCount = pending.length - eligible.length
+  if (deliverySummary && capDeferredCount > 0) {
+    deliverySummary = { ...deliverySummary, frequency_capped: capDeferredCount }
+  }
+
   // WA-BUDGET.1 — tier budget preflight: refuse to start a blast whose PENDING
   // audience (already-recorded recipients excluded, so a resume only needs
   // budget for the remainder) exceeds the number's remaining Meta daily
@@ -1053,9 +1073,12 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
   }
 
   // WA-SCHEDULE — cap this pass to the caller's chunk AFTER the budget gate
-  // (which deliberately saw the full pending set). Deferred recipients stay
-  // unclaimed; the cron's resume pass picks them up next tick.
-  const { batch, deferred } = sliceBlastChunk(pending, maxRecipients)
+  // (which deliberately saw the full pending set — INCLUDING cap-deferred
+  // contacts, since a 'sending' resume may still deliver them later today
+  // once their window clears; counting them keeps WA-BUDGET.1's "the whole
+  // blast fits today's headroom" invariant conservative). Deferred
+  // recipients stay unclaimed; the cron's resume pass picks them up next tick.
+  const { batch, deferred } = sliceBlastChunk(eligible, maxRecipients)
 
   const template = broadcast.whatsapp_templates
   const variableMapping = broadcast.variable_mapping || {}
@@ -1068,6 +1091,9 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
   let consecutiveFailures = 0
   let abortedAfterFailures = 0
   let lastErrorMessage = null
+  // FREQ-CAP.1 — successful sends get their marketing-touch stamp in one
+  // batch after the loop (stamped even while the cap is disabled).
+  const sentContactIds = []
 
   // AGENT-TAKEOVER — an individual targeted send (audience of 1), or a bulk
   // send the operator opted to handle, pauses Mia on each recipient thread so
@@ -1126,6 +1152,7 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
       if (pauseAgent) await pauseAgentOnThread(db, conversationId)
 
       sentCount++
+      sentContactIds.push(contact.id)
       consecutiveFailures = 0
     } catch (err) {
       console.error(`Failed to send to ${contact.wa_phone}:`, err.message)
@@ -1167,6 +1194,12 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
       await new Promise(r => setTimeout(r, 1000))
     }
   }
+
+  // FREQ-CAP.1 — stamp the marketing touch for everyone this pass reached
+  // (blasts are marketing by definition: the audience gate requires
+  // whatsapp_marketing consent). Best-effort inside the helper; stamped
+  // regardless of whether the cap is enabled so enabling later has history.
+  await stampMarketingTouch(db, sentContactIds)
 
   // Recompute cumulative metrics from the recipients table — a resumed
   // pass only sent the remainder, so sentCount/failedCount under-count.
@@ -1347,8 +1380,22 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
     return { status: 'sent', sent: 0, failed: 0, recipients: 0 }
   }
   const doneIds = await fetchDripDoneContactIds(db, broadcastId)
+  // FREQ-CAP.1 — cross-channel marketing frequency cap: contacts touched by
+  // ANY marketing channel inside the operator's window are held out of THIS
+  // tick via the selection predicate (no recipient row written — they're not
+  // in doneIds, so a later tick re-picks them once the window clears, and
+  // `deferred` > 0 blocks exhaustion so the drip stays open until then).
+  // Runs after the consent/reachability audience gate by construction.
+  // See selectDripRecipients for why this beats the 131049 'capped' park.
+  const capSetting = await getLocationFrequencyCap(db, broadcast.location_id)
   // Per-drip burstiness override (mig 328) — falls back to the code default.
-  const { toSend, exhausted } = selectDripRecipients({ audience, doneIds, headroom, perTickMax: broadcast.per_tick_max || perTickMax })
+  const { toSend, exhausted, deferred } = selectDripRecipients({
+    audience,
+    doneIds,
+    headroom,
+    perTickMax: broadcast.per_tick_max || perTickMax,
+    isEligible: (c) => !isFrequencyCapped(c, capSetting),
+  })
 
   if (toSend.length === 0) {
     if (exhausted) {
@@ -1370,6 +1417,11 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
       }).eq('id', broadcastId)
       return { status: 'sent', sent: 0, failed: 0, recipients: audience.length }
     }
+    // FREQ-CAP.1 — everyone still owed a send is inside their cap window:
+    // hold the drip open and let a later tick re-pick them.
+    if (deferred > 0) {
+      return { status: 'sending', skipped: 'awaiting_frequency_cap', deferred, sent: 0, failed: 0 }
+    }
     return { status: 'sending', skipped: 'no_capacity', sent: 0, failed: 0 }
   }
 
@@ -1379,6 +1431,9 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   // (audience of 1) or an opt-in bulk drip the operator is handling.
   const pauseAgent = shouldPauseAgentForBroadcast(broadcast, audience.length)
   let sent = 0, failed = 0, capped = 0, consecutiveFailures = 0, autoPaused = false
+  // FREQ-CAP.1 — batch marketing-touch stamp after the loop (always stamped,
+  // even while the cap is disabled, so enabling it later has history).
+  const dripSentContactIds = []
 
   for (const contact of toSend) {
     try {
@@ -1402,6 +1457,7 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
       })
       if (pauseAgent) await pauseAgentOnThread(db, conversationId)
       sent++; consecutiveFailures = 0
+      dripSentContactIds.push(contact.id)
     } catch (err) {
       // Meta's cross-business per-user marketing frequency cap (131049) is a
       // SOFT failure: the user is temporarily saturated, not unreachable. Park
@@ -1430,6 +1486,9 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
     // Same conservative rate-limit as the blast sender (~50/sec ceiling).
     if (sent % 50 === 0 && sent > 0) await new Promise(r => setTimeout(r, 1000))
   }
+
+  // FREQ-CAP.1 — marketing-touch stamp for this tick's successful sends.
+  await stampMarketingTouch(db, dripSentContactIds)
 
   // Cumulative totals from the recipients table. "Sent" = successfully dispatched,
   // which includes rows the status webhook has since moved to delivered/read —
