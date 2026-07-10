@@ -1,7 +1,44 @@
 import { createServerClient } from './supabase'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
+import { htmlToPlainText } from './email-content'
 
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'
+
+// ── Error classification (CAMPAIGN-REL.1) ─────────────────────────
+//
+// Postmark API error codes (https://postmarkapp.com/developer/api/overview#error-codes):
+//   100 — Maintenance (HTTP 503)              → transient
+//   429 — Rate limit exceeded (HTTP 429)      → transient
+//   300 — Invalid email request               → permanent
+//   400 — Sender signature not found          → permanent
+//   406 — Inactive recipient (prior bounce)   → permanent
+//   ... every other real code needs operator action, not a retry.
+// Our own synthetic code:
+//    -1 — network error / unparseable response for the WHOLE batch
+//         call (see sendBatch) → transient.
+// Synthetic whole-batch results also carry HttpStatus so a 429/5xx
+// on the HTTP layer classifies as transient even when Postmark's
+// body ErrorCode is absent or unknown.
+const TRANSIENT_POSTMARK_CODES = new Set([-1, 100, 429])
+
+/**
+ * True when a per-email send result represents a TRANSIENT failure —
+ * one where retrying the same email later can plausibly succeed
+ * (network blip, rate limit, provider maintenance/5xx). Permanent
+ * rejections (invalid address, inactive recipient, bad signature)
+ * return false: retrying those can never succeed and hurts sender
+ * reputation.
+ *
+ * @param {{ ErrorCode?: number, HttpStatus?: number } | null} result
+ * @returns {boolean}
+ */
+export function isTransientSendError(result) {
+  if (!result) return false
+  if (TRANSIENT_POSTMARK_CODES.has(result.ErrorCode)) return true
+  const status = result.HttpStatus
+  if (typeof status === 'number' && (status === 429 || status >= 500)) return true
+  return false
+}
 
 function getPostmarkToken() {
   const token = process.env.POSTMARK_API_KEY || process.env.POSTMARK_SERVER_TOKEN
@@ -52,6 +89,7 @@ export async function sendEmail({
   to,
   subject,
   htmlBody,
+  textBody,
   from,
   replyTo,
   stream = 'broadcast',
@@ -70,6 +108,10 @@ export async function sendEmail({
     To: to,
     Subject: subject,
     HtmlBody: htmlBody,
+    // CAMPAIGN-REL.4 — always ship a plain-text alternative. HTML-only
+    // multipart is a spam signal; derive a conservative text part from
+    // the HTML when the caller didn't supply one.
+    TextBody: textBody || htmlToPlainText(htmlBody) || undefined,
     ReplyTo: replyTo || undefined,
     MessageStream: stream,
     Tag: tag || undefined,
@@ -139,6 +181,8 @@ export async function sendBatch(emails) {
       To: email.to,
       Subject: email.subject,
       HtmlBody: email.htmlBody,
+      // CAMPAIGN-REL.4 — plain-text alternative (see sendEmail above).
+      TextBody: email.textBody || htmlToPlainText(email.htmlBody) || undefined,
       ReplyTo: email.replyTo || undefined,
       MessageStream: email.stream || 'broadcast',
       Tag: email.tag || undefined,
@@ -174,7 +218,9 @@ export async function sendBatch(emails) {
       if (!response.ok || !Array.isArray(result)) {
         const code = result?.ErrorCode || -1
         const message = result?.Message || `Postmark batch failed (HTTP ${response.status})`
-        results.push(...chunk.map(() => ({ ErrorCode: code, Message: message })))
+        // HttpStatus rides along so callers can classify a 429/5xx on
+        // the whole batch call as transient (isTransientSendError).
+        results.push(...chunk.map(() => ({ ErrorCode: code, Message: message, HttpStatus: response.status })))
         continue
       }
     } catch (err) {

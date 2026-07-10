@@ -22,6 +22,7 @@ import {
   buildAudienceQuery,
   consentFieldForStream,
   sendBatch,
+  isTransientSendError,
 } from './postmark.js'
 
 // Fluent fake recording method calls (mirrors sms.test.js).
@@ -399,5 +400,76 @@ describe('sendBatch — failure handling (COMMS-AUDIT batch 3)', () => {
     expect(results).toHaveLength(2)
     expect(results.every(r => r.ErrorCode === -1)).toBe(true)
     expect(results[0].Message).toMatch(/ECONNRESET/)
+  })
+
+  it('carries the HTTP status on synthetic whole-batch failures so callers can classify', async () => {
+    // A 429/5xx on the whole batch call is TRANSIENT (retry); a 422
+    // with a real Postmark ErrorCode may be permanent. The synthetic
+    // per-email results need the status for that call to be possible.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: async () => ({ ErrorCode: 429, Message: 'Rate limit exceeded' }),
+    })
+    const results = await sendBatch(two)
+    expect(results).toHaveLength(2)
+    expect(results.every(r => r.HttpStatus === 429)).toBe(true)
+  })
+
+  it('sends a TextBody derived from the html when none is provided (CAMPAIGN-REL.4)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [{ ErrorCode: 0, MessageID: 'm1' }],
+    })
+    await sendBatch([{ to: 'a@x.ie', subject: 'S', htmlBody: '<p>Hello <a href="https://un1t.ie/b">book</a></p>' }])
+    const sent = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(sent[0].TextBody).toBe('Hello book (https://un1t.ie/b)')
+  })
+
+  it('respects an explicit textBody over the derived one', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [{ ErrorCode: 0, MessageID: 'm1' }],
+    })
+    await sendBatch([{ to: 'a@x.ie', subject: 'S', htmlBody: '<p>Hello</p>', textBody: 'Custom text' }])
+    const sent = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(sent[0].TextBody).toBe('Custom text')
+  })
+})
+
+describe('isTransientSendError (CAMPAIGN-REL.1)', () => {
+  it('classifies the synthetic -1 (network / unparseable response) as transient', () => {
+    expect(isTransientSendError({ ErrorCode: -1, Message: 'ECONNRESET' })).toBe(true)
+  })
+
+  it('classifies whole-batch HTTP 429 / 5xx as transient', () => {
+    expect(isTransientSendError({ ErrorCode: 429, Message: 'Rate limit exceeded', HttpStatus: 429 })).toBe(true)
+    expect(isTransientSendError({ ErrorCode: 0, Message: 'Bad gateway', HttpStatus: 502 })).toBe(true)
+    expect(isTransientSendError({ ErrorCode: 100, Message: 'Maintenance', HttpStatus: 503 })).toBe(true)
+  })
+
+  it('classifies Postmark rate-limit / maintenance codes as transient even without HttpStatus', () => {
+    expect(isTransientSendError({ ErrorCode: 429, Message: 'Rate limit exceeded' })).toBe(true)
+    expect(isTransientSendError({ ErrorCode: 100, Message: 'Maintenance' })).toBe(true)
+  })
+
+  it('classifies real Postmark rejections as permanent', () => {
+    // 300 invalid email, 406 inactive recipient, 400 signature not
+    // found — retrying these can never succeed.
+    expect(isTransientSendError({ ErrorCode: 300, Message: 'Invalid email request' })).toBe(false)
+    expect(isTransientSendError({ ErrorCode: 406, Message: 'Inactive recipient' })).toBe(false)
+    expect(isTransientSendError({ ErrorCode: 400, Message: 'Sender signature not found' })).toBe(false)
+  })
+
+  it('a 4xx whole-batch failure with a permanent ErrorCode stays permanent', () => {
+    expect(isTransientSendError({ ErrorCode: 300, Message: 'Invalid batch', HttpStatus: 422 })).toBe(false)
+  })
+
+  it('treats success / missing input as not transient', () => {
+    expect(isTransientSendError({ ErrorCode: 0, MessageID: 'm1' })).toBe(false)
+    expect(isTransientSendError(null)).toBe(false)
+    expect(isTransientSendError(undefined)).toBe(false)
   })
 })
