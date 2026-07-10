@@ -10,7 +10,7 @@
 //
 // All pushes upsert the single tv_content row (RLS-direct).
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   Modal, View, Text, TextInput, Pressable, ActivityIndicator, ScrollView,
   KeyboardAvoidingView, Platform, Image, Alert,
@@ -19,9 +19,20 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import {
+  setRunStyle, clearRunStyle, rangeStyle, lineRangeAt, shiftRuns,
+} from '../../shared/tv-template'
+import {
   listTvTemplates, seedTemplateValues, tvImageUrl, uploadTvImage, pushTvContent,
 } from '../lib/tv-api'
 import TvTemplateCanvas from './TvTemplateCanvas'
+
+// TV-STYLE.6 — swatches offered by the per-zone style toolbar.
+// Mirror of the web push modal's palette (TVAdmin.jsx) — keep in sync.
+const STYLE_SWATCHES = [
+  '#FFFFFF', '#FFD400', '#F97316', '#EF4444', '#22C55E', '#38BDF8', '#000000',
+]
+
+const clampFontSize = (n) => Math.min(40, Math.max(2, n))
 
 const TABS = [
   { key: 'template', icon: 'albums-outline', label: 'Template' },
@@ -82,7 +93,30 @@ export default function TvPushModal({ visible, tv, locationId, userId, onClose, 
   }
 
   function setZone(zoneId, text) {
-    setZoneText((v) => ({ ...v, [zoneId]: { ...v[zoneId], text } }))
+    setZoneText((v) => {
+      const cur = v[zoneId] || {}
+      const prev = cur.text ?? ''
+      const next = { ...cur, text }
+      // TV-STYLE.6 — text edits remap the style runs so each style
+      // stays attached to the same words through inserts + deletes.
+      if (Array.isArray(cur.styleRuns)) next.styleRuns = shiftRuns(cur.styleRuns, prev, text)
+      if (Array.isArray(cur.colorRuns) && cur.colorRuns.length) {
+        next.colorRuns = shiftRuns(cur.colorRuns, prev, text)
+      }
+      return { ...v, [zoneId]: next }
+    })
+  }
+
+  // TV-STYLE.6 — style-toolbar writes. `updater(currentValue)` returns
+  // a partial patch (styleRuns, and colorRuns: [] on legacy migration)
+  // computed against the FRESH state, so rapid taps can't clobber
+  // each other.
+  function styleZone(zoneId, updater) {
+    setZoneText((v) => {
+      const cur = v[zoneId] || {}
+      const patch = updater(cur)
+      return patch ? { ...v, [zoneId]: { ...cur, ...patch } } : v
+    })
   }
 
   async function pickPhoto(fromCamera) {
@@ -161,6 +195,7 @@ export default function TvPushModal({ visible, tv, locationId, userId, onClose, 
                   zoneText={zoneText}
                   onPick={pickTemplate}
                   onZone={setZone}
+                  onStyle={styleZone}
                 />
               )}
 
@@ -231,7 +266,7 @@ export default function TvPushModal({ visible, tv, locationId, userId, onClose, 
   )
 }
 
-function TemplateBody({ templates, templateId, selectedTemplate, zoneText, onPick, onZone }) {
+function TemplateBody({ templates, templateId, selectedTemplate, zoneText, onPick, onZone, onStyle }) {
   if (templates === null) return <ActivityIndicator color="#94A3B8" />
   if (templates.length === 0) {
     return (
@@ -277,22 +312,167 @@ function TemplateBody({ templates, templateId, selectedTemplate, zoneText, onPic
         ) : (
           <View className="gap-2.5">
             {(selectedTemplate.zones || []).map((z) => (
-              <View key={z.id}>
-                <Text className="text-[11px] uppercase tracking-wide text-un1t-subtle mb-1">{z.label}</Text>
-                <TextInput
-                  value={zoneText[z.id]?.text ?? ''}
-                  onChangeText={(t) => onZone(z.id, t)}
-                  multiline
-                  placeholder={z.defaultText || 'Type the text for this zone…'}
-                  placeholderTextColor="#94A3B8"
-                  className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-2 text-base text-un1t-text min-h-[44px]"
-                  textAlignVertical="top"
-                />
-              </View>
+              <ZoneEditor
+                key={z.id}
+                zone={z}
+                value={zoneText[z.id]}
+                onText={onZone}
+                onStyle={onStyle}
+              />
             ))}
           </View>
         )
       )}
+    </View>
+  )
+}
+
+// ── TV-STYLE.6 — per-zone text input + style toolbar ────────────
+//
+// Same semantics as the web push-modal toolbar: a non-empty
+// selection styles just the selection; a collapsed cursor (or no
+// selection at all) styles the whole line the cursor is on. B/U
+// toggle by uniformity (whole target already styled → clear), size
+// −/+ steps the target's effective size by 1 (clamped 2–40), a
+// swatch paints the target, Clear removes every style prop there.
+//
+// Selection is tracked via onSelectionChange into a ref (+ state,
+// so active button states re-render). The surrounding ScrollView
+// has keyboardShouldPersistTaps="handled", so a toolbar tap doesn't
+// dismiss the keyboard — but even if the input blurs, the ref keeps
+// the last in-focus selection so the tap still targets the right
+// range. Selection changes fired while unfocused (mount / blur
+// resets) are ignored so they can't clobber that cache.
+
+function ZoneEditor({ zone, value, onText, onStyle }) {
+  const selRef = useRef(null)      // last in-focus {start,end}
+  const focusedRef = useRef(false)
+  const [, setSelTick] = useState(0) // re-render for active states
+
+  const text = value?.text ?? ''
+  // What the canvas effectively renders: styleRuns when present,
+  // else legacy colour-only runs (folded in by resolveZone).
+  const hasStyleRuns = Array.isArray(value?.styleRuns) && value.styleRuns.length > 0
+  const runs = hasStyleRuns
+    ? value.styleRuns
+    : (Array.isArray(value?.colorRuns) ? value.colorRuns : [])
+
+  // Selection non-empty → the selection; collapsed/absent → the
+  // line the cursor is on (cursor defaults to the end of the text).
+  function targetRange() {
+    const s = selRef.current
+    if (s && s.end > s.start) {
+      const start = Math.max(0, Math.min(s.start, text.length))
+      const end = Math.max(0, Math.min(s.end, text.length))
+      if (end > start) return { start, end }
+    }
+    const cursor = Number.isFinite(s?.start) ? Math.min(s.start, text.length) : text.length
+    return lineRangeAt(text, cursor)
+  }
+
+  // Apply a runs mutation against the FRESH zone value. Legacy
+  // migration: a value with colour runs but no styleRuns seeds
+  // styleRuns from colorRuns and empties colorRuns in the same
+  // update, so the two never disagree from here on.
+  function applyRuns(mutate) {
+    onStyle(zone.id, (cur) => {
+      const curHasStyle = Array.isArray(cur.styleRuns) && cur.styleRuns.length > 0
+      const legacy = !curHasStyle && Array.isArray(cur.colorRuns) && cur.colorRuns.length > 0
+      const base = curHasStyle ? cur.styleRuns : (legacy ? cur.colorRuns : (cur.styleRuns || []))
+      const patch = { styleRuns: mutate(base) }
+      if (legacy) patch.colorRuns = []
+      return patch
+    })
+  }
+
+  function toggleProp(key) {
+    const { start, end } = targetRange()
+    if (!(end > start)) return
+    const active = rangeStyle(runs, start, end)[key] === true
+    applyRuns((base) => (active
+      ? clearRunStyle(base, start, end, [key])
+      : setRunStyle(base, start, end, { [key]: true })))
+  }
+
+  function stepSize(delta) {
+    const { start, end } = targetRange()
+    if (!(end > start)) return
+    const effective = rangeStyle(runs, start, end).fontSize
+      ?? (value?.fontSize ?? zone.fontSize ?? 6)
+    applyRuns((base) => setRunStyle(base, start, end, {
+      fontSize: clampFontSize(effective + delta),
+    }))
+  }
+
+  function paint(color) {
+    const { start, end } = targetRange()
+    if (!(end > start)) return
+    applyRuns((base) => setRunStyle(base, start, end, { color }))
+  }
+
+  function clearStyles() {
+    const { start, end } = targetRange()
+    if (!(end > start)) return
+    applyRuns((base) => clearRunStyle(base, start, end))
+  }
+
+  const { start, end } = targetRange()
+  const uniform = rangeStyle(runs, start, end)
+  const boldActive = uniform.bold === true
+  const underlineActive = uniform.underline === true
+
+  const btnCls = (active) => `px-2.5 py-1.5 rounded-lg border items-center justify-center min-w-[32px] ${
+    active ? 'bg-un1t-text border-un1t-text' : 'bg-un1t-surface border-un1t-border'
+  } active:opacity-70`
+  const btnTextCls = (active) => `text-xs ${active ? 'text-un1t-bg' : 'text-un1t-text'}`
+
+  return (
+    <View>
+      <Text className="text-[11px] uppercase tracking-wide text-un1t-subtle mb-1">{zone.label}</Text>
+      <TextInput
+        value={text}
+        onChangeText={(t) => onText(zone.id, t)}
+        onFocus={() => { focusedRef.current = true }}
+        onBlur={() => { focusedRef.current = false }}
+        onSelectionChange={(e) => {
+          if (!focusedRef.current) return
+          const s = e.nativeEvent?.selection
+          if (!s) return
+          selRef.current = { start: s.start, end: s.end }
+          setSelTick((n) => n + 1)
+        }}
+        multiline
+        placeholder={zone.defaultText || 'Type the text for this zone…'}
+        placeholderTextColor="#94A3B8"
+        className="bg-un1t-surface border border-un1t-border rounded-xl px-3 py-2 text-base text-un1t-text min-h-[44px]"
+        textAlignVertical="top"
+      />
+      <View className="flex-row flex-wrap items-center gap-1.5 mt-1.5">
+        <Pressable onPress={() => stepSize(-1)} hitSlop={4} className={btnCls(false)}>
+          <Text className={`${btnTextCls(false)} font-semibold`}>A−</Text>
+        </Pressable>
+        <Pressable onPress={() => stepSize(1)} hitSlop={4} className={btnCls(false)}>
+          <Text className={`${btnTextCls(false)} font-semibold`}>A+</Text>
+        </Pressable>
+        {STYLE_SWATCHES.map((c) => (
+          <Pressable
+            key={c}
+            onPress={() => paint(c)}
+            hitSlop={4}
+            className="w-6 h-6 rounded-full border border-un1t-border active:opacity-70"
+            style={{ backgroundColor: c }}
+          />
+        ))}
+        <Pressable onPress={() => toggleProp('bold')} hitSlop={4} className={btnCls(boldActive)}>
+          <Text className={`${btnTextCls(boldActive)} font-bold`}>B</Text>
+        </Pressable>
+        <Pressable onPress={() => toggleProp('underline')} hitSlop={4} className={btnCls(underlineActive)}>
+          <Text className={btnTextCls(underlineActive)} style={{ textDecorationLine: 'underline' }}>U</Text>
+        </Pressable>
+        <Pressable onPress={clearStyles} hitSlop={4} className={btnCls(false)}>
+          <Text className="text-xs text-un1t-subtle">Clear</Text>
+        </Pressable>
+      </View>
     </View>
   )
 }

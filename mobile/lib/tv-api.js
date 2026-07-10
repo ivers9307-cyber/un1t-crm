@@ -156,6 +156,14 @@ export function seedTemplateValues(template, priorValues) {
   for (const z of template?.zones || []) {
     const prior = priorValues?.[z.id]
     const p = prior && typeof prior === 'object' ? prior : (prior != null ? { text: prior } : null)
+    // TV-STYLE.6 — per-range style overrides survive a reopen. Only
+    // seeded when the prior push (or the zone default) actually has
+    // them: a legacy colour-run-only value must keep styleRuns UNSET
+    // so the editor's first style edit knows to migrate colorRuns.
+    // Mirrors the web seedZoneValues in TVAdmin.jsx.
+    const styleRuns = Array.isArray(p?.styleRuns)
+      ? p.styleRuns
+      : (Array.isArray(z.styleRuns) ? z.styleRuns : null)
     seed[z.id] = {
       text: p?.text ?? z.defaultText ?? '',
       fontSize: p?.fontSize ?? z.fontSize ?? 6,
@@ -167,6 +175,7 @@ export function seedTemplateValues(template, priorValues) {
       lineHeight: p?.lineHeight ?? z.lineHeight ?? 1.15,
       x: p?.x ?? z.x ?? 0, y: p?.y ?? z.y ?? 0, width: p?.width ?? z.width ?? 100, height: p?.height ?? z.height ?? 100,
       colorRuns: Array.isArray(p?.colorRuns) ? p.colorRuns : (Array.isArray(z.colorRuns) ? z.colorRuns : []),
+      ...(styleRuns ? { styleRuns } : {}),
     }
   }
   return seed

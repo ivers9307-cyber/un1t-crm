@@ -215,7 +215,12 @@ function ZoneBox({ zone, resolved, frame, selected, editable, onSelect, onChange
   const fitKey = [
     resolvedText, maxFontPx, w, h,
     resolved.lineHeight, resolved.fontWeight, resolved.uppercase,
-  ].join(' ')
+    // TV-STYLE.4 — per-segment sizes/weights change wrapping, so a
+    // run edit must re-measure from the seed like a text edit does.
+    JSON.stringify(resolved.styleRuns),
+    // NUL separator: unlike a space it can never appear in the text,
+    // so distinct inputs can't collide into one key.
+  ].join('\0')
   useEffect(() => {
     fitIterations.current = 0
     setFitPx(seedPx)
@@ -260,11 +265,36 @@ function ZoneBox({ zone, resolved, frame, selected, editable, onSelect, onChange
           textTransform: resolved.uppercase ? 'uppercase' : 'none',
         }}
       >
-        {/* Per-character colour runs (TV-TEMPLATE.5) — same split as
-            web's textSegments, nested <Text> per run. */}
-        {textSegments(resolvedText, resolved.colorRuns, resolved.color).map((seg, i) => (
-          <Text key={i} style={{ color: seg.color }}>{seg.text}</Text>
-        ))}
+        {/* Per-character style runs (TV-STYLE.4) — same split as
+            web's textSegments, nested <Text> per run. A segment's
+            fontSize is the ratio of the two stored percentages × the
+            fitted base px, so mixed sizes shrink proportionally with
+            the fit loop (matching web's em rendering). */}
+        {textSegments(resolvedText, resolved.styleRuns, resolved.color).map((seg, i) => {
+          const segPx = seg.fontSize && resolved.fontSize
+            ? (seg.fontSize / resolved.fontSize) * fitPx
+            : fitPx
+          return (
+            <Text
+              key={i}
+              style={{
+                color: seg.color,
+                fontSize: segPx,
+                // Per-segment line box, proportional to its own size.
+                lineHeight: segPx * resolved.lineHeight,
+                // Bold/regular override rides the family name too
+                // (see poppinsFamily above); unset falls back to the
+                // zone's resolved weight.
+                fontFamily: poppinsFamily(
+                  seg.bold === true ? 800 : seg.bold === false ? 400 : resolved.fontWeight,
+                ),
+                textDecorationLine: seg.underline ? 'underline' : undefined,
+              }}
+            >
+              {seg.text}
+            </Text>
+          )
+        })}
       </Text>
 
       {editable && selected && (
