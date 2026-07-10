@@ -98,7 +98,7 @@ describe('POST /api/whatsapp/broadcasts/[id]/send — authz gate', () => {
     createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1' } }))
     const res = await POST(req(), props)
     expect(res.status).toBe(200)
-    expect(sendBroadcast).toHaveBeenCalledWith('b1')
+    expect(sendBroadcast).toHaveBeenCalledWith('b1', { force: false })
     const body = await res.json()
     expect(body.success).toBe(true)
   })
@@ -108,6 +108,33 @@ describe('POST /api/whatsapp/broadcasts/[id]/send — authz gate', () => {
     createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1' } }))
     const res = await POST(req(), props)
     expect(res.status).toBe(200)
-    expect(sendBroadcast).toHaveBeenCalledWith('b1')
+    expect(sendBroadcast).toHaveBeenCalledWith('b1', { force: false })
+  })
+
+  // WA-QUALITY.2 — quality-gate override: only an explicit JSON `force: true`
+  // bypasses the RED-number preflight refusal inside sendBroadcast.
+  it('passes force: true through to sendBroadcast when the body asks for it', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1' } }))
+    const request = new Request('http://localhost/api/whatsapp/broadcasts/b1/send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ force: true }),
+    })
+    const res = await POST(request, props)
+    expect(res.status).toBe(200)
+    expect(sendBroadcast).toHaveBeenCalledWith('b1', { force: true })
+  })
+
+  it('a non-boolean force is not honoured', async () => {
+    getCurrentUser.mockResolvedValue({ role: 'manager', locations: [{ id: 'loc-1' }] })
+    createServerClient.mockReturnValue(mockDb({ broadcast: { location_id: 'loc-1' } }))
+    const request = new Request('http://localhost/api/whatsapp/broadcasts/b1/send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ force: 'yes' }),
+    })
+    await POST(request, props)
+    expect(sendBroadcast).toHaveBeenCalledWith('b1', { force: false })
   })
 })
