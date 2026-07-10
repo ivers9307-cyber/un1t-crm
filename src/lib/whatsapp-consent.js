@@ -48,10 +48,16 @@ export async function applyWhatsappConsentKeyword({ db, contact, waPhone, locati
 
   try {
     // 1. The marketing consent flag (source of truth for audiences).
+    //    UPSERT by contact_id (same convention as marketing-consent.js):
+    //    a contact without a preferences row matched zero rows under the
+    //    old .update(), so STOP flipped wa_status but never the flag —
+    //    the contact stayed in marketing audiences.
     await db
       .from('contact_preferences')
-      .update({ whatsapp_marketing: !optingOut })
-      .eq('contact_id', contact.id)
+      .upsert(
+        { contact_id: contact.id, whatsapp_marketing: !optingOut, updated_at: new Date().toISOString() },
+        { onConflict: 'contact_id' },
+      )
 
     // 2. The hard wa_status signal on the contact row.
     await db
@@ -131,9 +137,13 @@ export async function applyMetaUserPreference(db, pref = {}) {
 
   const optingOut = pref.value === 'stop'
   try {
+    // Upsert, not update — see applyWhatsappConsentKeyword: a contact
+    // with no preferences row must still get the flag flipped.
     await db.from('contact_preferences')
-      .update({ whatsapp_marketing: !optingOut })
-      .eq('contact_id', contact.id)
+      .upsert(
+        { contact_id: contact.id, whatsapp_marketing: !optingOut, updated_at: new Date().toISOString() },
+        { onConflict: 'contact_id' },
+      )
     await db.from('contacts')
       .update({ wa_status: optingOut ? 'opted_out' : 'active' })
       .eq('id', contact.id)
