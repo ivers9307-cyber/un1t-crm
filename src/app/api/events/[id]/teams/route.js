@@ -13,6 +13,8 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
+import { addEventAttendeesToHostList } from '@/lib/host-contact-list'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -251,6 +253,15 @@ export async function POST(request, props) {
     await triggerSequencesForRaceRegistered(registration.id)
   } catch (e) {
     console.warn(`[races-teams] race_registered trigger failed: ${e?.message || e}`)
+  }
+
+  // HOST-EMAIL.1 — operator-added teams are confirmed immediately: sync this
+  // event's attendees into the host's contact list (no-op for internal
+  // events). Fire-and-forget with its own catch — never affects the response.
+  try {
+    await addEventAttendeesToHostList(db, params.id)
+  } catch (e) {
+    logError('races-teams', 'host contact list sync (manual add) failed', { err: e })
   }
 
   return NextResponse.json({

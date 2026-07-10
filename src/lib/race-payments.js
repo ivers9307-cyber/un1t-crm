@@ -34,7 +34,8 @@ import {
 import { syncOrderFromRacePayment } from './orders'
 import { emitEvent, applyTagRules, EVENT_TYPES } from './contact-events'
 import { triggerSequencesForOrderStatus } from './sequences'
-import { logWarn } from './log'
+import { addEventAttendeesToHostList } from './host-contact-list'
+import { logWarn, logError } from './log'
 
 /**
  * Resolve which Revolut credentials to use for race payments. For
@@ -102,6 +103,14 @@ export async function createRacePayment({ db, race, registration, captain, prici
     await db.from('race_registrations')
       .update({ active_payment_id: row.id, status: 'confirmed' })
       .eq('id', registration.id)
+    // HOST-EMAIL.1 — the registration just confirmed: sync this event's
+    // attendees into the host's contact list. Fire-and-forget with its own
+    // catch — list upkeep must never affect the payment response.
+    try {
+      await addEventAttendeesToHostList(db, race.id)
+    } catch (e) {
+      logError('race-payments', 'host contact list sync (free entry) failed', { err: e })
+    }
     // Project into orders + emit lifecycle events (mig 085).
     // Best-effort — orders/events failures must not break the
     // payment write that's already committed.
@@ -334,6 +343,14 @@ export async function markRacePaymentStatus({ db, payment, revolutState, revolut
       .update({ status: 'confirmed' })
       .eq('id', payment.race_registration_id)
       .eq('status', 'pending_payment') // don't clobber operator edits
+    // HOST-EMAIL.1 — registration confirmed by the payment: sync the host's
+    // contact list. Fire-and-forget with its own catch — never affects the
+    // webhook/state-machine response. (Re-running is safe: ignoreDuplicates.)
+    try {
+      await addEventAttendeesToHostList(db, payment.race_event_id)
+    } catch (e) {
+      logError('race-payments', 'host contact list sync (payment completed) failed', { err: e })
+    }
   }
 
   // Project into orders + emit lifecycle event (mig 085).
