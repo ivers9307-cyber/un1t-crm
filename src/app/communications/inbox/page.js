@@ -1,7 +1,8 @@
 // /communications/inbox — THE unified inbox (UIX-P1b): WhatsApp +
-// Instagram in one queue. Deep links: ?c=<conversation_id> selects a
-// thread; ?ch=ig marks it as an Instagram conversation (default wa,
-// which keeps every pre-existing WhatsApp deep link working).
+// Instagram + Email (EMAIL-INBOX.1) in one queue. Deep links:
+// ?c=<conversation_id> selects a thread; ?ch=ig|em marks the channel
+// (default wa, which keeps every pre-existing WhatsApp deep link
+// working).
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
@@ -22,7 +23,7 @@ export default async function InboxPage(props) {
       locationId={user.activeLocation?.id}
       userId={user.id}
       initialConversationId={searchParams?.c || null}
-      initialChannel={searchParams?.ch === 'ig' ? 'ig' : 'wa'}
+      initialChannel={['ig', 'em'].includes(searchParams?.ch) ? searchParams.ch : 'wa'}
       canEditConsent={ADMIN_ROLES.includes(user.role)}
     />
   )

@@ -265,7 +265,10 @@ export async function tickCampaignSend(db, campaign) {
       from: campaign.from_name
         ? `${campaign.from_name} <${campaign.from_email || process.env.POSTMARK_FROM_EMAIL}>`
         : undefined,
-      replyTo: campaign.reply_to,
+      // EMAIL-INBOX.1 — a per-campaign reply_to still wins; otherwise
+      // default to the location's inbound-inbox address (mig 394) so
+      // replies land in the unified inbox instead of an external mailbox.
+      replyTo: campaign.reply_to || campaign.locations?.email_inbox_reply_to || undefined,
       stream,
       tag: `campaign-${campaignId}`,
       metadata: {
