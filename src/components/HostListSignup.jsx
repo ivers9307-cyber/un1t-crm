@@ -1,0 +1,111 @@
+'use client'
+
+// Public mailing-list signup form for /h/[slug] (HOST-EMAIL.2). Dark,
+// host-branded, deliberately tiny: name (optional) + email + join. The
+// consent copy IS the opt-in basis — the backing API stamps marketing
+// consent TRUE, so keep the promise explicit and the unsubscribe mention
+// intact. Inline success (no redirect); the API always answers
+// { success: true } once the host resolves, so "done" here means "recorded
+// or already on the list" — indistinguishable by design.
+
+import { useState } from 'react'
+
+const INPUT_CLASS =
+  'w-full rounded-lg border border-white/15 bg-white/5 px-4 py-3 text-sm text-white ' +
+  'placeholder:text-white/40 focus:outline-none focus:border-white/40'
+
+export default function HostListSignup({ slug, hostName }) {
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [done, setDone] = useState(false)
+  const [error, setError] = useState(null)
+
+  async function submit(e) {
+    e.preventDefault()
+    if (submitting) return
+    const trimmedEmail = email.trim()
+    if (!trimmedEmail) {
+      setError('Enter your email address.')
+      return
+    }
+    setSubmitting(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/public/host-list/${encodeURIComponent(slug)}/subscribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: trimmedEmail,
+          ...(name.trim() ? { name: name.trim() } : {}),
+        }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.success) {
+        throw new Error(j.error || 'Something went wrong — please try again.')
+      }
+      setDone(true)
+    } catch (err) {
+      setError(err.message || 'Something went wrong — please try again.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (done) {
+    return (
+      <div className="w-full max-w-md text-center">
+        <p className="text-xs font-semibold uppercase tracking-[0.3em] text-white/50">Mailing list</p>
+        <h1 className="mt-3 text-3xl font-bold">You&apos;re on the list</h1>
+        <p className="mt-4 text-sm text-white/70">
+          We&apos;ll email you about {hostName}&apos;s upcoming events. You can
+          unsubscribe anytime from any email.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="w-full max-w-md">
+      <p className="text-center text-xs font-semibold uppercase tracking-[0.3em] text-white/50">Mailing list</p>
+      <h1 className="mt-3 text-center text-3xl font-bold">{hostName}</h1>
+      <p className="mt-3 text-center text-sm text-white/70">
+        Get emails about {hostName}&apos;s events. Unsubscribe anytime.
+      </p>
+
+      <form onSubmit={submit} className="mt-8 space-y-3">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Your name (optional)"
+          maxLength={200}
+          aria-label="Your name"
+          className={INPUT_CLASS}
+        />
+        <input
+          type="email"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@example.com"
+          maxLength={320}
+          aria-label="Your email address"
+          className={INPUT_CLASS}
+        />
+        <button
+          type="submit"
+          disabled={submitting}
+          className="w-full rounded-lg bg-white px-4 py-3 text-sm font-semibold uppercase tracking-widest text-black transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          {submitting ? 'Joining…' : 'Join the list'}
+        </button>
+      </form>
+
+      {error && <p className="mt-3 text-center text-sm text-red-400">{error}</p>}
+
+      <p className="mt-6 text-center text-xs text-white/40">
+        By joining you agree to receive emails about {hostName}&apos;s events.
+      </p>
+    </div>
+  )
+}

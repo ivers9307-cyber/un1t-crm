@@ -101,7 +101,10 @@ export async function proxy(request) {
   // (sha256 match against ble_bridges.api_token_hash) — same self-guarding
   // pattern as /api/webhooks/ (HMAC) and /api/cron/ (CRON_SECRET). Without
   // this entry every bridge call 307s to /login and never reaches the handler.
-  const publicPaths = ['/login', '/reset-password', '/book/', '/event/', '/event-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/deposit/', '/welcome', '/free-class', '/start', '/privacy', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/']
+  // /h/ — public host mailing-list signup pages (HOST-EMAIL.2); their backing
+  // API (/api/public/host-list/) rides the existing /api/public/ prefix. The
+  // per-host unsubscribe page (/unsubscribe/host/[token]) rides /unsubscribe/.
+  const publicPaths = ['/login', '/reset-password', '/book/', '/event/', '/event-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/deposit/', '/welcome', '/free-class', '/start', '/privacy', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/']
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
   if (isPublic) return NextResponse.next()
 

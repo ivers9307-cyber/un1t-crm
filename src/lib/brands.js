@@ -103,7 +103,8 @@ export const BRANDS = [
       '/api/host/',   // host-scoped API (getCurrentHost)
       '/event/',      // preview their own public event pages
       '/event-pay/',  // + the checkout
-      '/api/public/', // backing API for the above
+      '/h/',          // public mailing-list signup pages (HOST-EMAIL.2)
+      '/api/public/', // backing API for the above (incl. /api/public/host-list/)
     ],
     // NOTE: login/sign-out talk to Supabase directly (client-side auth), so no
     // /api/auth route is allowlisted — least privilege on the host surface.
