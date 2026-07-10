@@ -10,6 +10,10 @@ export {
   clearRunColor,
   shiftRuns,
   textSegments,
+  MIN_FIT_PX,
+  nextFitPx,
+  seedFitPx,
+  fitStepFromLines,
   FLEX_V,
   FLEX_H,
 } from '@shared/tv-template'
