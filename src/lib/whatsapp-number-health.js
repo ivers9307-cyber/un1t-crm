@@ -58,14 +58,73 @@ export function healthDowngradeReason(prev, next) {
   return null
 }
 
+// WA-QUALITY.5 — quality collapse detected by the health POLL (the webhook
+// path pauses on FLAGGED via whatsapp-number-events; the 30-min poll can be
+// FIRST to record RED and must trigger the same drip auto-pause). Fires only
+// on the transition INTO RED/FLAGGED — a number sitting at RED doesn't
+// re-pause/re-page every tick — and treats a first-seed RED (prev null) as a
+// transition: RED is an emergency regardless of what we knew before. Pure.
+export function pollQualityPauseReason(prevRating, nextRating) {
+  const collapsed = (r) => r === 'RED' || r === 'FLAGGED'
+  if (!collapsed(nextRating) || collapsed(prevRating)) return null
+  return `the number quality was rated ${nextRating} by Meta`
+}
+
+// WA-TOKEN.1 — is this fetchNumberHealth failure a Meta AUTH failure (dead /
+// expired / revoked access token: error code 190, type OAuthException) rather
+// than a scope gap or transient hiccup? A dying System User token silently
+// kills EVERY outbound send (the invariant that bit agent sends before), so
+// the poll classifies it distinctly instead of degrading to "unavailable". Pure.
+export function isMetaAuthError(err) {
+  if (!err) return false
+  if (String(err.metaCode ?? '') === '190') return true
+  return /oauthexception/i.test(String(err.metaType || ''))
+}
+
+// Token-state transition for one poll tick. `prevInvalidAt` is the stored
+// whatsapp_numbers.token_invalid_at (mig 393); alerts key off the TRANSITION
+// (mirroring the webhook idempotency style) so managers are paged ONCE per
+// death/recovery, not every 30 minutes.
+export function tokenTransition(prevInvalidAt, authErrorNow) {
+  if (authErrorNow && !prevInvalidAt) return 'invalidated'
+  if (!authErrorNow && prevInvalidAt) return 'recovered'
+  return null
+}
+
+export function tokenInvalidNotification(label) {
+  const num = label || 'a WhatsApp number'
+  return {
+    title: 'WhatsApp access token INVALID',
+    body: `🚨 Meta rejected the access token for ${num} (OAuth error 190). Every outbound WhatsApp send — ` +
+      'Mia, broadcasts, sequences, reminders — is failing silently until it is replaced. Generate a PERMANENT ' +
+      'System User token in Meta Business Manager (never a 24h temp token) and update the number under ' +
+      'Settings → Locations → Integrations → WhatsApp.',
+  }
+}
+
+export function tokenRecoveredNotification(label) {
+  const num = label || 'a WhatsApp number'
+  return {
+    title: 'WhatsApp access token recovered',
+    body: `✅ The access token for ${num} is valid again — outbound sends are back.`,
+  }
+}
+
 // Fetch a number's health from the Meta Graph API. Returns the parsed fields;
 // throws on a Meta error (e.g. a token without whatsapp_business_management scope —
 // the caller stores null + logs, so a bad token degrades to "unavailable").
+// The thrown error carries Meta's code/type (metaCode/metaType) so the poll
+// can classify token deaths (isMetaAuthError) instead of lumping them in.
 export async function fetchNumberHealth({ phoneNumberId, token }) {
   const url = `${META_API_URL}/${phoneNumberId}?fields=quality_rating,messaging_limit_tier,name_status,display_phone_number,verified_name`
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
   const json = await res.json()
-  if (json.error) throw new Error(json.error.message || 'Meta number-health fetch failed')
+  if (json.error) {
+    const err = new Error(json.error.message || 'Meta number-health fetch failed')
+    err.metaCode = json.error.code ?? null
+    err.metaType = json.error.type || null
+    throw err
+  }
   return {
     quality_rating: json.quality_rating || null,
     messaging_limit_tier: json.messaging_limit_tier || null,

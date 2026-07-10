@@ -5,6 +5,7 @@ import {
   PER_TICK_MAX, AUTO_PAUSE_CONSECUTIVE_FAILURES,
   rollingHeadroom, selectDripRecipients, dripOutcome,
 } from './whatsapp-drip.js'
+import { getSendBudget, blastBudgetBlockError, effectiveTickHeadroom } from './whatsapp-budget.js'
 import { getLocationBranding } from './location-branding'
 import { extractNamedVariables } from './whatsapp-template-samples.js'
 import { sendPushToRolesAtLocation } from './push'
@@ -1025,6 +1026,24 @@ export async function sendBroadcast(broadcastId, { force = false } = {}) {
   const doneIds = new Set(await fetchDripDoneContactIds(db, broadcastId))
   const pending = contacts.filter(c => !doneIds.has(c.id))
 
+  // WA-BUDGET.1 — tier budget preflight: refuse to start a blast whose PENDING
+  // audience (already-recorded recipients excluded, so a resume only needs
+  // budget for the remainder) exceeds the number's remaining Meta daily
+  // headroom. Deliberately NOT bypassed by `force` (unlike the quality gate) —
+  // the tier is Meta's hard limit and over-tier sends hard-reject anyway.
+  // Gated AFTER the pending count is known, so on refusal we un-strand the row
+  // this call just flipped draft→sending; a 'sending' entry (crash resume)
+  // stays 'sending' — re-running later is legitimate.
+  const budget = await getSendBudget(db, { locationId: broadcast.location_id, tier: broadcastConfig.messagingLimitTier })
+  const budgetBlock = blastBudgetBlockError(budget, pending.length)
+  if (budgetBlock) {
+    if (broadcast.status === 'draft') {
+      await db.from('whatsapp_broadcasts').update({ status: 'draft' })
+        .eq('id', broadcastId).eq('status', 'sending')
+    }
+    throw new Error(budgetBlock)
+  }
+
   const template = broadcast.whatsapp_templates
   const variableMapping = broadcast.variable_mapping || {}
   const branding = await getLocationBranding(db, broadcast.location_id)
@@ -1247,6 +1266,11 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
     return { status: 'sending', skipped: 'template_not_approved', paused: true, sent: 0, failed: 0 }
   }
 
+  // Resolve the location's WA config once for the whole tick (as the blast
+  // does). Resolved up here (moved from below the recipient selection) because
+  // the tier-budget layer needs config.messagingLimitTier before sizing the tick.
+  const config = await getWhatsAppConfig(broadcast.location_id)
+
   // Rolling-24h headroom. head:true count — the .select() is the first one off
   // .from() so it reads the count option (see CLAUDE.md postgrest two-overload lesson).
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
@@ -1258,8 +1282,19 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
     // or the rolling-24h consumption under-counts and the drip exceeds daily_cap.
     .in('status', DISPATCHED_STATUSES)
     .gt('sent_at', since)
-  const headroom = rollingHeadroom(broadcast.daily_cap, sentLast24h || 0)
-  if (headroom <= 0) return { status: 'sending', skipped: 'no_headroom', headroom: 0, sent: 0, failed: 0 }
+  const capHeadroom = rollingHeadroom(broadcast.daily_cap, sentLast24h || 0)
+  if (capHeadroom <= 0) return { status: 'sending', skipped: 'no_headroom', headroom: 0, sent: 0, failed: 0 }
+
+  // WA-BUDGET.2 — layer the GLOBAL cross-sender tier budget on top of the
+  // per-broadcast daily_cap above: that cap only counts THIS broadcast's
+  // recipients, so two concurrent drips (or a drip beside a blast/sequence
+  // spike) could jointly blow the number's Meta tier. The tick is capped to
+  // whatever the tier has left; a fully-spent tier parks the drip until
+  // earlier sends age out of the rolling 24h window (no pause needed — the
+  // next tick re-checks). Ungated tier (null budget) changes nothing.
+  const budget = await getSendBudget(db, { locationId: broadcast.location_id, tier: config.messagingLimitTier })
+  const headroom = effectiveTickHeadroom(capHeadroom, budget)
+  if (headroom <= 0) return { status: 'sending', skipped: 'no_tier_headroom', headroom: 0, sent: 0, failed: 0 }
 
   // Eligible audience (paginated) minus already-processed, capped to this tick.
   const audience = await fetchAllWhatsAppAudience(db, broadcast.audience_filter, broadcast.location_id)
@@ -1302,8 +1337,6 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
     return { status: 'sending', skipped: 'no_capacity', sent: 0, failed: 0 }
   }
 
-  // Resolve the location's WA config once for the whole tick (as the blast does).
-  const config = await getWhatsAppConfig(broadcast.location_id)
   const branding = await getLocationBranding(db, broadcast.location_id)
   const variableMapping = broadcast.variable_mapping || {}
   // AGENT-TAKEOVER — pause Mia on each recipient thread for an individual send

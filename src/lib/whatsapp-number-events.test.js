@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
-import { NUMBER_EVENT_FIELDS, numberColumnUpdate, numberNotification, broadcastPauseReason, applyNumberEvent } from './whatsapp-number-events.js'
+import {
+  NUMBER_EVENT_FIELDS, numberColumnUpdate, numberNotification, broadcastPauseReason,
+  applyNumberEvent, pauseLocationDrips, dripPauseNote,
+} from './whatsapp-number-events.js'
 
 describe('NUMBER_EVENT_FIELDS', () => {
   it('covers the four health webhook fields', () => {
@@ -190,5 +193,41 @@ describe('applyNumberEvent — auto-pause on quality collapse (WA-QUALITY.1)', (
     const { db } = fakeDb({ numbers: [STILLORGAN], pausedRows: [] })
     const res = await applyNumberEvent(db, 'phone_number_quality_update', { display_phone_number: '35315789401', event: 'FLAGGED' })
     expect(res.notify.body).not.toMatch(/auto-paused/i)
+  })
+})
+
+// ── WA-QUALITY.5 — shared drip-pause helpers (extracted so the health POLL
+// reuses the exact webhook pause, not a copy) ────────────────────────────────
+
+describe('pauseLocationDrips', () => {
+  it('pauses only the location\'s in-flight, not-already-paused drips and returns them', async () => {
+    const { db, calls } = fakeDb({ pausedRows: [{ id: 'b1', name: 'July promo' }] })
+    const paused = await pauseLocationDrips(db, 'loc9')
+    expect(paused).toEqual([{ id: 'b1', name: 'July promo' }])
+    const [table, patch] = calls.updates[0]
+    expect(table).toBe('whatsapp_broadcasts')
+    expect(patch).toEqual({ paused_at: expect.any(String) })
+    expect(calls.pauseFilters[0]).toEqual([
+      ['eq', 'location_id', 'loc9'],
+      ['eq', 'status', 'sending'],
+      ['eq', 'delivery_mode', 'drip'],
+      ['is', 'paused_at', null],
+    ])
+  })
+  it('nothing in flight → empty list', async () => {
+    const { db } = fakeDb({ pausedRows: [] })
+    expect(await pauseLocationDrips(db, 'loc9')).toEqual([])
+  })
+})
+
+describe('dripPauseNote', () => {
+  it('singular / plural phrasing with the reason embedded', () => {
+    expect(dripPauseNote([{ id: 'b1' }], 'the number quality was rated RED by Meta'))
+      .toMatch(/auto-paused 1 in-flight drip broadcast because the number quality was rated RED/i)
+    expect(dripPauseNote([{ id: 'b1' }, { id: 'b2' }], 'x')).toMatch(/2 in-flight drip broadcasts/i)
+  })
+  it('no pauses → null (no misleading note)', () => {
+    expect(dripPauseNote([], 'x')).toBeNull()
+    expect(dripPauseNote(undefined, 'x')).toBeNull()
   })
 })
