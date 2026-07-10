@@ -50,6 +50,16 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
   const INVOICE_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,40}$/
   const invoiceSlugInvalid = invoicesInboundSlug.length > 0 && !INVOICE_SLUG_RE.test(invoicesInboundSlug)
 
+  // EMAIL-INBOX.1 (mig 394) — the Postmark inbound address stamped as
+  // Reply-To on campaign + marketing sends so customer replies land in
+  // the unified inbox. Empty = email inbox channel off. DB CHECK
+  // enforces the address shape; mirrored client-side for feedback.
+  const [emailInboxReplyTo, setEmailInboxReplyTo] = useState(
+    location?.email_inbox_reply_to || ''
+  )
+  const REPLY_TO_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
+  const replyToInvalid = emailInboxReplyTo.trim().length > 0 && !REPLY_TO_RE.test(emailInboxReplyTo.trim())
+
   // SETTINGS.1 — Glofox / UniFi / Sensibo / AC are now their own
   // tabs under <LocationIntegrations> below this form. Their state
   // + save logic lives in the per-tab components; LocationForm
@@ -76,6 +86,11 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
     }
     if (invoiceSlugInvalid) {
       setError('Invoice forwarding slug must be 2–41 chars: lowercase letters, digits, hyphens (must start with a letter or digit).')
+      setSaving(false)
+      return
+    }
+    if (replyToInvalid) {
+      setError('Email inbox Reply-To must be a valid email address (or blank to disable).')
       setSaving(false)
       return
     }
@@ -107,6 +122,10 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
       // CHECK accepts only the slug regex; we already block bad
       // inputs at submit time, but trim defensively just in case.
       invoices_inbound_slug: invoicesInboundSlug.trim() === '' ? null : invoicesInboundSlug.trim(),
+      // EMAIL-INBOX.1 — null = email inbox channel off for this location
+      // (campaign/marketing sends carry no Reply-To default and inbound
+      // recipient-matching skips this studio).
+      email_inbox_reply_to: emailInboxReplyTo.trim() === '' ? null : emailInboxReplyTo.trim().toLowerCase(),
       // SETTINGS.1 — sensibo_api_key / sensibo_pod_id / ac_default_*,
       // settings.glofox, and settings.unifi are deliberately NOT
       // included in this payload. Postgres leaves untouched columns
@@ -346,6 +365,37 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
           {invoiceSlugInvalid && (
             <p className="text-[11px] text-red-400 mt-1">
               Must be 2–41 chars, start with a letter or digit, lowercase only.
+            </p>
+          )}
+        </div>
+      </div>
+
+
+      {/* EMAIL-INBOX.1 — per-location email inbox Reply-To (mig 394).
+          Set this to the Postmark inbound-stream address (or an alias
+          forwarding to it). Campaign + marketing sends stamp it as
+          Reply-To, and the inbound webhook routes replies delivered to
+          it into this location's unified inbox. */}
+      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
+        <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Email Inbox</h3>
+        <p className="text-xs text-un1t-muted">
+          Replies to campaign and marketing emails land in the <a href="/communications/inbox" className="underline text-un1t-subtle">unified inbox</a> when this is set to the Postmark inbound address for this studio. Outbound marketing mail uses it as the Reply-To. Leave blank to keep replies going to the sender mailbox.
+        </p>
+
+        <div>
+          <label className="block text-sm mb-1.5">Reply-To / inbound address</label>
+          <input
+            type="email"
+            value={emailInboxReplyTo}
+            onChange={e => setEmailInboxReplyTo(e.target.value)}
+            placeholder="e.g. replies@mail.un1tdublin.com"
+            className={`w-80 max-w-full bg-un1t-bg border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted ${
+              replyToInvalid ? 'border-red-500' : 'border-un1t-border'
+            }`}
+          />
+          {replyToInvalid && (
+            <p className="text-[11px] text-red-400 mt-1">
+              Must be a valid email address.
             </p>
           )}
         </div>
