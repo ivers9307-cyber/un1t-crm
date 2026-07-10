@@ -40,12 +40,19 @@ function pickEnum(value, allowed, fallback) {
  * @returns {{text:string,fontSize:number,fontWeight:number,color:string,
  *            align:string,vAlign:string,uppercase:boolean,lineHeight:number,
  *            x:number,y:number,width:number,height:number}}
+ *          plus a `styleRuns` property (TV-STYLE.1) — see below.
  */
 export function resolveZone(zone = {}, value) {
   // Legacy plain-string value → treat as a text-only override.
   const v = value && typeof value === 'object' ? value : { text: value }
 
-  return {
+  // TV-TEMPLATE.5 — per-character colour overrides. Array of
+  // { start, end, color }; any text not covered uses `color`.
+  const colorRuns = Array.isArray(v.colorRuns)
+    ? v.colorRuns
+    : (Array.isArray(zone.colorRuns) ? zone.colorRuns : [])
+
+  const out = {
     text: (v.text ?? zone.defaultText ?? '').toString(),
     // fontSize is a % of the base-image height (2–40).
     fontSize: pickNum(v.fontSize, pickNum(zone.fontSize, 6)),
@@ -60,31 +67,70 @@ export function resolveZone(zone = {}, value) {
     y: pickNum(v.y, pickNum(zone.y, 0)),
     width: pickNum(v.width, pickNum(zone.width, 100)),
     height: pickNum(v.height, pickNum(zone.height, 100)),
-    // TV-TEMPLATE.5 — per-character colour overrides. Array of
-    // { start, end, color }; any text not covered uses `color`.
-    colorRuns: Array.isArray(v.colorRuns)
-      ? v.colorRuns
-      : (Array.isArray(zone.colorRuns) ? zone.colorRuns : []),
+    colorRuns,
   }
+
+  // TV-STYLE.1 — unified style runs. Legacy colour runs are folded
+  // in as colour-only runs so old pushes render unchanged, then the
+  // value/zone styleRuns are overlaid on top (winning any overlap
+  // per-property, via setRunStyle).
+  const explicit = Array.isArray(v.styleRuns)
+    ? v.styleRuns
+    : (Array.isArray(zone.styleRuns) ? zone.styleRuns : [])
+  let styleRuns = mergeStyleRuns(colorRuns)
+  for (const r of explicit) {
+    if (r && Number.isFinite(r.start) && Number.isFinite(r.end)) {
+      styleRuns = setRunStyle(styleRuns, r.start, r.end, r)
+    }
+  }
+  out.styleRuns = styleRuns
+
+  return out
 }
 
-// ── Colour runs (TV-TEMPLATE.5) ─────────────────────────────────
+// ── Style runs (TV-STYLE.1, generalises TV-TEMPLATE.5) ──────────
 //
-// A zone's text is one string with one base colour. To colour part
-// of it, the push screen records "colour runs" — half-open
-// character ranges { start, end, color } — kept sorted and
-// non-overlapping. The base colour fills any gap.
+// A zone's text is one string with one base style. To style part of
+// it, editors record "style runs" — half-open character ranges
+// { start, end, color?, fontSize?, bold?, underline? } — kept
+// sorted, non-empty and non-overlapping; adjacent runs merge only
+// when EVERY prop is strictly equal. Absent props fall back to the
+// zone style; the base style fills any gap. The colour-only helpers
+// below (TV-TEMPLATE.5) are thin wrappers over this engine.
+//
+// - fontSize: % of the base-image height, same unit as zone fontSize
+// - bold: true → weight 800, false → weight 400, absent → zone weight
+// - underline: absent/false → none
+// - color: CSS hex, absent → zone color
 
-// Sort runs, drop empties, and merge touching runs of equal colour.
-export function mergeRuns(runs) {
+const STYLE_KEYS = ['color', 'fontSize', 'bold', 'underline']
+
+// Only the defined style props of a run (or a patch). An explicit
+// false is a real value; undefined means "not set here".
+function pickStyle(run) {
+  const out = {}
+  for (const k of STYLE_KEYS) {
+    if (run && run[k] !== undefined) out[k] = run[k]
+  }
+  return out
+}
+
+function sameStyle(a, b) {
+  return STYLE_KEYS.every(k => a[k] === b[k])
+}
+
+// Sort runs, drop empties (and prop-less runs), and merge touching
+// runs whose style props are all strictly equal.
+export function mergeStyleRuns(runs) {
   const sorted = (runs || [])
     .filter(r => r && Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start)
-    .map(r => ({ start: Math.floor(r.start), end: Math.floor(r.end), color: r.color }))
+    .map(r => ({ start: Math.floor(r.start), end: Math.floor(r.end), ...pickStyle(r) }))
+    .filter(r => STYLE_KEYS.some(k => r[k] !== undefined))
     .sort((a, b) => a.start - b.start)
   const out = []
   for (const r of sorted) {
     const last = out[out.length - 1]
-    if (last && last.color === r.color && last.end >= r.start) {
+    if (last && sameStyle(last, r) && last.end >= r.start) {
       last.end = Math.max(last.end, r.end)
     } else {
       out.push({ ...r })
@@ -93,35 +139,118 @@ export function mergeRuns(runs) {
   return out
 }
 
-// Clip every existing run so nothing covers [start, end).
-function carve(runs, start, end) {
+// Overlay `patch` props on [start, end), PRESERVING any other props
+// already present there (per-property merge, not replace). Patch
+// props with value undefined are ignored; explicit false sticks.
+export function setRunStyle(runs, start, end, patch) {
+  const props = pickStyle(patch)
+  if (!(end > start) || Object.keys(props).length === 0) return mergeStyleRuns(runs)
   const out = []
-  for (const r of runs || []) {
+  let cursor = start
+  for (const r of mergeStyleRuns(runs)) {
     if (r.end <= start || r.start >= end) { out.push(r); continue }
-    if (r.start < start) out.push({ ...r, end: start })
-    if (r.end > end) out.push({ ...r, start: end })
+    const own = pickStyle(r)
+    if (r.start < start) out.push({ start: r.start, end: start, ...own })
+    const a = Math.max(r.start, start)
+    const b = Math.min(r.end, end)
+    if (a > cursor) out.push({ start: cursor, end: a, ...props })   // gap → patch only
+    out.push({ start: a, end: b, ...own, ...props })
+    cursor = b
+    if (r.end > end) out.push({ start: end, end: r.end, ...own })
+  }
+  if (cursor < end) out.push({ start: cursor, end, ...props })
+  return mergeStyleRuns(out)
+}
+
+// Remove the listed prop keys (all of them when `keys` is omitted)
+// from [start, end). Chars left with no props drop out of the runs.
+export function clearRunStyle(runs, start, end, keys) {
+  if (!(end > start)) return mergeStyleRuns(runs)
+  const clear = Array.isArray(keys) && keys.length ? keys : STYLE_KEYS
+  const out = []
+  for (const r of mergeStyleRuns(runs)) {
+    if (r.end <= start || r.start >= end) { out.push(r); continue }
+    const own = pickStyle(r)
+    const kept = {}
+    for (const k of STYLE_KEYS) {
+      if (own[k] !== undefined && !clear.includes(k)) kept[k] = own[k]
+    }
+    if (r.start < start) out.push({ start: r.start, end: start, ...own })
+    if (Object.keys(kept).length) {
+      out.push({ start: Math.max(r.start, start), end: Math.min(r.end, end), ...kept })
+    }
+    if (r.end > end) out.push({ start: end, end: r.end, ...own })
+  }
+  return mergeStyleRuns(out)
+}
+
+// The props that hold the SAME value across every char of
+// [start, end) — editors use this to show active states and decide
+// toggle direction. Uniformly-absent props are simply omitted; a
+// prop set on only part of the range is not uniform.
+export function rangeStyle(runs, start, end) {
+  if (!(end > start)) return {}
+  // Slice the range into covered pieces + gaps, then keep only the
+  // props with one value across all pieces.
+  const pieces = []
+  let cursor = start
+  for (const r of mergeStyleRuns(runs)) {
+    if (r.end <= start || r.start >= end) continue
+    const a = Math.max(r.start, start)
+    if (a > cursor) pieces.push({})
+    pieces.push(pickStyle(r))
+    cursor = Math.min(r.end, end)
+  }
+  if (cursor < end) pieces.push({})
+  const out = {}
+  for (const k of STYLE_KEYS) {
+    const v = pieces[0][k]
+    if (v !== undefined && pieces.every(p => p[k] === v)) out[k] = v
   }
   return out
 }
 
-// Paint [start, end) with `color` (replacing any run there).
-export function setRunColor(runs, start, end, color) {
-  if (!(end > start)) return mergeRuns(runs)
-  return mergeRuns([...carve(runs, start, end), { start, end, color }])
+// {start, end} of the line containing `index` (clamped into
+// [0, text.length]); end excludes the trailing \n. An index sitting
+// exactly on a line's end belongs to THAT line; an index right
+// after a \n belongs to the next line. Cursor-→-line targeting for
+// the editors.
+export function lineRangeAt(text, index) {
+  const str = text == null ? '' : String(text)
+  const raw = Number.isFinite(index) ? Math.floor(index) : 0
+  const i = Math.max(0, Math.min(raw, str.length))
+  const start = i > 0 ? str.lastIndexOf('\n', i - 1) + 1 : 0
+  const nl = str.indexOf('\n', start)
+  return { start, end: nl === -1 ? str.length : nl }
 }
 
-// Revert [start, end) to the base colour (remove runs there).
+// ── Colour-only wrappers (TV-TEMPLATE.5) ────────────────────────
+//
+// Kept for the current colour-paint UI + old call sites; each is a
+// thin wrapper over the style-run engine above with identical
+// behaviour for colour-only runs.
+
+// Sort runs, drop empties, and merge touching runs of equal colour.
+export function mergeRuns(runs) {
+  return mergeStyleRuns(runs)
+}
+
+// Paint [start, end) with `color` (replacing any colour there).
+export function setRunColor(runs, start, end, color) {
+  return setRunStyle(runs, start, end, { color })
+}
+
+// Revert [start, end) to the base colour (remove colour there).
 export function clearRunColor(runs, start, end) {
-  if (!(end > start)) return mergeRuns(runs)
-  return mergeRuns(carve(runs, start, end))
+  return clearRunStyle(runs, start, end, ['color'])
 }
 
 // Remap run offsets after the text is edited, by diffing the old
-// and new strings (common prefix / suffix). Keeps colour roughly
-// attached to the same words through inserts + deletes.
+// and new strings (common prefix / suffix). Keeps every style prop
+// roughly attached to the same words through inserts + deletes.
 export function shiftRuns(runs, oldText, newText) {
   const o = oldText || '', n = newText || ''
-  if (o === n) return mergeRuns(runs)
+  if (o === n) return mergeStyleRuns(runs)
   let p = 0
   while (p < o.length && p < n.length && o[p] === n[p]) p++
   let s = 0
@@ -134,29 +263,39 @@ export function shiftRuns(runs, oldText, newText) {
     if (i >= p + oldMid) return i + delta
     return p   // inside the edited span — collapse to its start
   }
-  return mergeRuns((runs || []).map(r => ({
-    start: remap(r.start), end: remap(r.end), color: r.color,
+  return mergeStyleRuns((runs || []).map(r => ({
+    start: remap(r.start), end: remap(r.end), ...pickStyle(r),
   })))
 }
 
-// Split `text` into contiguous { text, color } segments for render.
+// Split `text` into contiguous render segments, splitting wherever
+// ANY style prop changes. Every segment carries a resolved color
+// (base fallback); fontSize/bold/underline appear only when set.
 export function textSegments(text, runs, baseColor) {
   const str = text == null ? '' : String(text)
   const base = baseColor || '#FFFFFF'
   const n = str.length
   if (n === 0) return [{ text: '', color: base }]
-  const colors = new Array(n).fill(base)
+  const NONE = {}
+  const styles = new Array(n).fill(NONE)
   for (const r of runs || []) {
     if (!r || !Number.isFinite(r.start) || !Number.isFinite(r.end)) continue
     const a = Math.max(0, Math.floor(r.start))
     const b = Math.min(n, Math.floor(r.end))
-    for (let i = a; i < b; i++) colors[i] = r.color || base
+    if (b <= a) continue
+    const style = pickStyle(r)
+    for (let i = a; i < b; i++) styles[i] = style
   }
   const segs = []
   let start = 0
   for (let i = 1; i <= n; i++) {
-    if (i === n || colors[i] !== colors[start]) {
-      segs.push({ text: str.slice(start, i), color: colors[start] })
+    if (i === n || !sameStyle(styles[i], styles[start])) {
+      const st = styles[start]
+      const seg = { text: str.slice(start, i), color: st.color || base }
+      if (st.fontSize !== undefined) seg.fontSize = st.fontSize
+      if (st.bold !== undefined) seg.bold = st.bold
+      if (st.underline !== undefined) seg.underline = st.underline
+      segs.push(seg)
       start = i
     }
   }

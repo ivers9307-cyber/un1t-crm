@@ -20,7 +20,7 @@ import { createBrowserClient } from '@/lib/supabase'
 import { Tv, Plus, Copy, Check, Trash2, Upload, Link2, X, Image as ImageIcon, AlertCircle, RotateCcw, RotateCw, LayoutTemplate, Pencil, Type } from 'lucide-react'
 import TemplateEditor, { bucketPublicUrl } from './TemplateEditor'
 import TemplateCanvas from '@/components/TemplateCanvas'
-import { setRunColor, clearRunColor, shiftRuns } from '@/lib/tv-template'
+import { setRunStyle, clearRunStyle, rangeStyle, lineRangeAt, shiftRuns } from '@/lib/tv-template'
 
 // TV-TEMPLATE.2 — weight options offered on the push screen.
 const PUSH_FONT_WEIGHTS = [
@@ -515,6 +515,13 @@ function seedZoneValues(tpl, priorValues) {
   for (const z of tpl?.zones || []) {
     const prior = priorValues?.[z.id]
     const p = prior && typeof prior === 'object' ? prior : (prior != null ? { text: prior } : null)
+    // TV-STYLE.5 — per-range style overrides. Only seeded when the
+    // prior push (or the zone default) actually has them: a legacy
+    // colour-run-only value must keep styleRuns UNSET so the
+    // editor's first style edit knows to migrate colorRuns.
+    const styleRuns = Array.isArray(p?.styleRuns)
+      ? p.styleRuns
+      : (Array.isArray(z.styleRuns) ? z.styleRuns : null)
     seed[z.id] = {
       text: p?.text ?? z.defaultText ?? '',
       fontSize: p?.fontSize ?? z.fontSize ?? 6,
@@ -530,8 +537,9 @@ function seedZoneValues(tpl, priorValues) {
       y: p?.y ?? z.y ?? 0,
       width: p?.width ?? z.width ?? 100,
       height: p?.height ?? z.height ?? 100,
-      // Per-selection colour overrides.
+      // Per-selection colour overrides (legacy TV-TEMPLATE.5 shape).
       colorRuns: Array.isArray(p?.colorRuns) ? p.colorRuns : (Array.isArray(z.colorRuns) ? z.colorRuns : []),
+      ...(styleRuns ? { styleRuns } : {}),
     }
   }
   return seed
@@ -551,7 +559,8 @@ function PushModal({ onClose, onPush, locationId, templates, content }) {
   const [externalUrl, setExternalUrl] = useState('')
   const [label, setLabel] = useState('')
   const [templateId, setTemplateId] = useState(initialTemplateId)
-  // { zoneId: { text, fontSize, fontWeight, color, align, vAlign, uppercase } }
+  // { zoneId: { text, fontSize, fontWeight, color, align, vAlign,
+  //   uppercase, lineHeight, geometry, colorRuns, styleRuns? } }
   const [zoneText, setZoneText] = useState(() => (
     initialTemplateId
       ? seedZoneValues(templates?.find(t => t.id === initialTemplateId), content.template_values)
@@ -788,48 +797,114 @@ function PushModal({ onClose, onPush, locationId, templates, content }) {
 
 // ── Per-zone push editor ────────────────────────────────────────
 //
-// TV-TEMPLATE.5 — on the push screen each zone gets its text, an
-// emoji palette, per-selection text colouring, and full styling
-// controls. Size is exact (no auto-fit); position + box size are
-// set by dragging on the preview. Everything is snapshotted into
-// tv_content.template_values.
+// TV-TEMPLATE.5 / TV-STYLE.5 — on the push screen each zone gets
+// its text, an emoji palette, a per-selection / per-line style
+// toolbar (size, colour, bold, underline), and full zone-level
+// styling controls. Size is exact (no auto-fit); position + box
+// size are set by dragging on the preview. Everything is
+// snapshotted into tv_content.template_values.
 
 function ZonePushEditor({ zone, value, onChange }) {
   const v = value || {}
   const taRef = useRef(null)
-  // Last non-empty selection the user made in the textarea. A real
-  // mouse click on Apply blurs the textarea and the live selection
-  // is gone by the time the click handler runs — so we capture it
-  // continuously (on select / mouseup / keyup / blur, and on the
-  // button's own mousedown) and Apply uses the captured range.
+  // Last selection (or collapsed caret) the user made in the
+  // textarea. A real mouse click on a toolbar button blurs the
+  // textarea and the live selection can be gone by the time the
+  // click handler runs — so we capture it continuously (on select /
+  // mouseup / keyup / blur, and on each button's own mousedown) and
+  // the style handlers use the captured range. Mirrored into state
+  // so the B/U active indicators re-render as the caret moves.
   const selRef = useRef({ start: 0, end: 0 })
+  const [sel, setSel] = useState({ start: 0, end: 0 })
   const [selColor, setSelColor] = useState('#FFD400')
   const [selNote, setSelNote] = useState('')
   const cls = 'w-full bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-xs text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted'
 
   function captureSelection() {
     const ta = taRef.current
-    if (ta && ta.selectionEnd > ta.selectionStart) {
-      selRef.current = { start: ta.selectionStart, end: ta.selectionEnd }
-    }
-  }
-  // The live selection if the textarea still has one, else the last
-  // one we captured before focus left.
-  function currentSelection() {
-    const ta = taRef.current
-    if (ta && ta.selectionEnd > ta.selectionStart) {
-      return { start: ta.selectionStart, end: ta.selectionEnd }
-    }
-    const r = selRef.current
-    return r.end > r.start ? r : null
+    if (!ta) return
+    const next = { start: ta.selectionStart ?? 0, end: ta.selectionEnd ?? 0 }
+    selRef.current = next
+    setSel(s => (s.start === next.start && s.end === next.end) ? s : next)
   }
 
-  // Any text edit remaps the colour runs so each colour stays
-  // attached to the same words through inserts + deletes. The
-  // captured selection is dropped — offsets no longer apply.
+  // TV-STYLE.5 — the range a style edit applies to: the highlighted
+  // text if the selection is non-empty, else the whole line under
+  // the caret.
+  function targetOf(r) {
+    return r.end > r.start ? r : lineRangeAt(v.text ?? '', r.start)
+  }
+
+  // The runs a style edit starts from. A legacy colour-only push
+  // carries v.colorRuns with no v.styleRuns — those seed the edit
+  // (colour runs are valid style runs), and the first style edit
+  // blanks colorRuns in the same patch (see styleEdit) so clearing
+  // a colour here actually removes the legacy run resolveZone would
+  // otherwise keep folding in underneath.
+  const editRuns = Array.isArray(v.styleRuns)
+    ? v.styleRuns
+    : (Array.isArray(v.colorRuns) ? v.colorRuns : [])
+
+  // Uniform style over the current target — drives the B/U active
+  // states and the toggle direction.
+  const target = targetOf(sel)
+  const targetStyle = rangeStyle(editRuns, target.start, target.end)
+
+  // Run one style operation against the captured target and write
+  // the result to v.styleRuns (migrating legacy colorRuns on the
+  // first edit).
+  function styleEdit(fn) {
+    const r = targetOf(selRef.current)
+    if (!(r.end > r.start)) { setSelNote('Click into a line or highlight some text first.'); return }
+    setSelNote('')
+    const patch = { styleRuns: fn(editRuns, r.start, r.end) }
+    if (!Array.isArray(v.styleRuns) && Array.isArray(v.colorRuns) && v.colorRuns.length > 0) {
+      patch.colorRuns = []
+    }
+    onChange(patch)
+    requestAnimationFrame(() => {
+      taRef.current?.focus()
+      taRef.current?.setSelectionRange(r.start, r.end)
+    })
+  }
+
+  // B / U flip on uniformity: whole target already has the prop →
+  // clear it there, else set it everywhere in the target.
+  function toggleProp(prop) {
+    styleEdit((runs, start, end) => (
+      rangeStyle(runs, start, end)[prop] === true
+        ? clearRunStyle(runs, start, end, [prop])
+        : setRunStyle(runs, start, end, { [prop]: true })
+    ))
+  }
+  // Size steps the target's uniform effective size (falling back to
+  // the zone size) by ±1, clamped to the 2–40 fontSize range.
+  function stepSize(delta) {
+    styleEdit((runs, start, end) => {
+      const eff = rangeStyle(runs, start, end).fontSize ?? (v.fontSize ?? zone.fontSize ?? 6)
+      return setRunStyle(runs, start, end, { fontSize: Math.min(40, Math.max(2, eff + delta)) })
+    })
+  }
+  function paintColor() {
+    styleEdit((runs, start, end) => setRunStyle(runs, start, end, { color: selColor }))
+  }
+  // Clears EVERY style prop (size, colour, bold, underline) on the
+  // target — back to the zone's base styling.
+  function clearStyles() {
+    styleEdit((runs, start, end) => clearRunStyle(runs, start, end))
+  }
+
+  // Any text edit remaps the runs so styling stays attached to the
+  // same words through inserts + deletes. The captured selection is
+  // dropped — offsets no longer apply.
   function changeText(next) {
     selRef.current = { start: 0, end: 0 }
-    onChange({ text: next, colorRuns: shiftRuns(v.colorRuns || [], v.text ?? '', next) })
+    setSel({ start: 0, end: 0 })
+    const prev = v.text ?? ''
+    const patch = { text: next }
+    if (Array.isArray(v.styleRuns)) patch.styleRuns = shiftRuns(v.styleRuns, prev, next)
+    if (Array.isArray(v.colorRuns) && v.colorRuns.length > 0) patch.colorRuns = shiftRuns(v.colorRuns, prev, next)
+    onChange(patch)
   }
 
   function insertEmoji(emoji) {
@@ -846,25 +921,12 @@ function ZonePushEditor({ zone, value, onChange }) {
     })
   }
 
-  function applySelColor() {
-    const r = currentSelection()
-    if (!r) { setSelNote('Highlight some text in the box above first.'); return }
-    setSelNote('')
-    onChange({ colorRuns: setRunColor(v.colorRuns || [], r.start, r.end, selColor) })
-    requestAnimationFrame(() => {
-      taRef.current?.focus()
-      taRef.current?.setSelectionRange(r.start, r.end)
-    })
-  }
-  function clearSelColor() {
-    const r = currentSelection()
-    if (!r) { setSelNote('Highlight some text in the box above first.'); return }
-    setSelNote('')
-    onChange({ colorRuns: clearRunColor(v.colorRuns || [], r.start, r.end) })
-    requestAnimationFrame(() => {
-      taRef.current?.focus()
-      taRef.current?.setSelectionRange(r.start, r.end)
-    })
+  // Toolbar button — same border/hover language as the Apply/Reset
+  // buttons this toolbar replaces, plus a pressed state for B/U.
+  function toolBtn(active) {
+    return `text-[11px] px-2 py-1 rounded border ${active
+      ? 'bg-un1t-border border-un1t-text/40 text-un1t-text'
+      : 'border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/40'}`
   }
 
   return (
@@ -898,30 +960,59 @@ function ZonePushEditor({ zone, value, onChange }) {
         ))}
       </div>
 
-      {/* Per-selection colour — recolour just the highlighted words. */}
+      {/* TV-STYLE.5 — per-selection / per-line style toolbar. Acts
+          on the highlighted text, or the whole line under the caret
+          when nothing is highlighted. */}
       <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-        <span className="text-[10px] text-un1t-muted">Colour selected text:</span>
+        <span className="text-[10px] text-un1t-muted">Style selection / line:</span>
+        <button
+          type="button" onMouseDown={captureSelection} onClick={() => stepSize(-1)}
+          title="Smaller text" className={toolBtn(false)}
+        >
+          −
+        </button>
+        <button
+          type="button" onMouseDown={captureSelection} onClick={() => stepSize(1)}
+          title="Bigger text" className={toolBtn(false)}
+        >
+          +
+        </button>
         <input
           type="color"
           value={selColor}
           onChange={e => setSelColor(e.target.value)}
+          title="Pick a colour, then Apply"
           className="w-7 h-7 bg-un1t-bg border border-un1t-border rounded cursor-pointer"
         />
         <button
-          type="button" onMouseDown={captureSelection} onClick={applySelColor}
-          className="text-[11px] px-2 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/40"
+          type="button" onMouseDown={captureSelection} onClick={paintColor}
+          title="Colour the selection / line" className={toolBtn(false)}
         >
           Apply
         </button>
         <button
-          type="button" onMouseDown={captureSelection} onClick={clearSelColor}
-          className="text-[11px] px-2 py-1 rounded border border-un1t-border text-un1t-subtle hover:text-un1t-text hover:border-un1t-text/40"
+          type="button" onMouseDown={captureSelection} onClick={() => toggleProp('bold')}
+          title="Bold" aria-pressed={targetStyle.bold === true}
+          className={`${toolBtn(targetStyle.bold === true)} font-bold`}
         >
-          Reset
+          B
+        </button>
+        <button
+          type="button" onMouseDown={captureSelection} onClick={() => toggleProp('underline')}
+          title="Underline" aria-pressed={targetStyle.underline === true}
+          className={`${toolBtn(targetStyle.underline === true)} underline`}
+        >
+          U
+        </button>
+        <button
+          type="button" onMouseDown={captureSelection} onClick={clearStyles}
+          title="Remove all styling from the selection / line" className={toolBtn(false)}
+        >
+          Clear
         </button>
       </div>
       <p className={`text-[10px] mb-2 ${selNote ? 'text-amber-400' : 'text-un1t-muted'}`}>
-        {selNote || 'Highlight words in the text box, pick a colour, then Apply — only those words change.'}
+        {selNote || 'Highlight words to style just them — or click into a line to style that whole line.'}
       </p>
 
       <div className="grid grid-cols-2 gap-2">

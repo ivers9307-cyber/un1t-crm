@@ -67,6 +67,25 @@ function measureFit(el, maxPx, w, h, minPx = MIN_FIT_PX) {
   return px
 }
 
+// TV-STYLE.3 — inline style for one textSegments() segment. The
+// container carries the zone's base style; each segment overrides
+// only what its run sets. A run fontSize renders as an em RATIO of
+// the zone's fontSize (both are % of base-image height, so the
+// ratio is unit-free) — em tracks the container's px, so
+// useFitText's px-mutating measure loop scales every segment
+// proportionally without knowing about runs.
+// Shared with TemplateEditor's ZoneBox so both previews render
+// segments identically.
+export function segmentStyle(seg, baseFontSize) {
+  const style = { color: seg.color }
+  if (seg.fontSize !== undefined) {
+    style.fontSize = `${baseFontSize ? seg.fontSize / baseFontSize : 1}em`
+  }
+  if (seg.bold !== undefined) style.fontWeight = seg.bold ? 800 : 400
+  if (seg.underline) style.textDecoration = 'underline'
+  return style
+}
+
 // Shared by TemplateCanvas's Zone and TemplateEditor's ZoneBox so
 // the TV, the push preview and the template editor all agree on
 // the fitted size for the same text/box/maxPx.
@@ -192,7 +211,9 @@ function Zone({ s, frame, editable, onChange }) {
   // rendered size to whatever actually fits the zone box.
   const maxFontPx = (s.fontSize / 100) * frame.h
   const fontPx = useFitText(textRef, maxFontPx, w, h, [
+    // Style runs change per-segment sizes/weights → wrapping/height.
     s.text, maxFontPx, w, h, s.lineHeight, s.fontWeight, s.uppercase,
+    JSON.stringify(s.styleRuns),
   ])
 
   function begin(e, mode) {
@@ -269,11 +290,11 @@ function Zone({ s, frame, editable, onChange }) {
           pointerEvents: 'none',
         }}
       >
-        {/* Per-selection colour (TV-TEMPLATE.5): the text is split
-            into runs; each renders in its own colour, the base
-            colour fills the gaps. */}
-        {textSegments(s.text, s.colorRuns, s.color).map((seg, i) => (
-          <span key={i} style={{ color: seg.color }}>{seg.text}</span>
+        {/* Per-selection styling (TV-STYLE.3): the text is split
+            into runs; each renders its own colour/size/weight/
+            underline, the zone style fills the gaps. */}
+        {textSegments(s.text, s.styleRuns, s.color).map((seg, i) => (
+          <span key={i} style={segmentStyle(seg, s.fontSize)}>{seg.text}</span>
         ))}
       </div>
       {editable && (

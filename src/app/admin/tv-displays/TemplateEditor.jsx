@@ -17,7 +17,8 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { X, Plus, Trash2, Upload, AlertCircle, Image as ImageIcon, Type } from 'lucide-react'
-import { useFitText } from '@/components/TemplateCanvas'
+import { useFitText, segmentStyle } from '@/components/TemplateCanvas'
+import { resolveZone, textSegments } from '@/lib/tv-template'
 import { tvFontFamily } from '@/components/tv-font'
 
 const SUPA_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -365,8 +366,14 @@ function ZoneBox({ zone, canvasSize, selected, onSelect, onChange }) {
   const text = zone.defaultText || zone.label || ''
   const boxW = ((zone.width || 0) / 100) * (canvasSize.w || 0)
   const boxH = ((zone.height || 0) / 100) * (canvasSize.h || 0)
+  // TV-STYLE.3 — the preview honours the zone's default style runs
+  // exactly like the shared renderer (resolveZone folds legacy
+  // colorRuns into styleRuns; there's no push value here).
+  const { styleRuns } = resolveZone(zone, undefined)
   const fontPx = useFitText(textRef, maxFontPx, boxW, boxH, [
+    // Style runs change per-segment sizes/weights → wrapping/height.
     text, maxFontPx, boxW, boxH, zone.fontWeight, zone.uppercase,
+    JSON.stringify(styleRuns),
   ])
 
   return (
@@ -422,7 +429,12 @@ function ZoneBox({ zone, canvasSize, selected, onSelect, onChange }) {
           pointerEvents: 'none',
         }}
       >
-        {text}
+        {/* Per-selection styling (TV-STYLE.3): same segment render
+            as TemplateCanvas's Zone, so this preview matches the
+            push preview and the TV. */}
+        {textSegments(text, styleRuns, zone.color || '#fff').map((seg, i) => (
+          <span key={i} style={segmentStyle(seg, zone.fontSize)}>{seg.text}</span>
+        ))}
       </span>
       {/* resize handle */}
       <div

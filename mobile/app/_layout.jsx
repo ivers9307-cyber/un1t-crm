@@ -24,6 +24,13 @@ import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useEffect } from 'react'
 import * as Notifications from 'expo-notifications'
+import {
+  useFonts,
+  Poppins_400Regular,
+  Poppins_600SemiBold,
+  Poppins_700Bold,
+  Poppins_800ExtraBold,
+} from '@expo-google-fonts/poppins'
 import { AuthProvider, useAuth } from '../lib/auth-context'
 import { routeForNotification } from '../lib/notification-nav'
 import { BiometricLockProvider } from '../lib/biometric-lock'
@@ -87,6 +94,19 @@ function NotificationRouter() {
 }
 
 export default function RootLayout() {
+  // TV-STYLE.2 — load Poppins (the TV-template face) app-wide.
+  // Deliberately NON-blocking: we don't gate rendering or hold the
+  // splash on the load — the TV canvas simply falls back to the
+  // system font until the family is ready (expo-font resolves the
+  // fontFamily on later renders). expo-font's native module is
+  // already in the build (Ionicons dep), so this is OTA-safe.
+  useFonts({
+    Poppins_400Regular,
+    Poppins_600SemiBold,
+    Poppins_700Bold,
+    Poppins_800ExtraBold,
+  })
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <RootErrorBoundary>

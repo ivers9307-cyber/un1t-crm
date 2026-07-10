@@ -39,6 +39,20 @@ import {
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
+// TV-STYLE.2 — Poppins is the TV-template face (matches web
+// tv-font.js). RN custom fonts are ONE family per weight — the
+// numeric fontWeight style is ignored for them — so zone text maps
+// its resolved weight to the nearest loaded Poppins family instead.
+// Families are loaded non-blocking in app/_layout.jsx; until then RN
+// falls back to the system font for an unknown family name.
+function poppinsFamily(weight) {
+  const w = Number(weight) || 400
+  if (w <= 450) return 'Poppins_400Regular'
+  if (w <= 650) return 'Poppins_600SemiBold'
+  if (w <= 750) return 'Poppins_700Bold'
+  return 'Poppins_800ExtraBold'
+}
+
 // Same cap as web TemplateCanvas — each shrink changes wrapping, which
 // can call for another shrink; iterate but never spin forever.
 const MAX_FIT_ITERATIONS = 6
@@ -201,7 +215,12 @@ function ZoneBox({ zone, resolved, frame, selected, editable, onSelect, onChange
   const fitKey = [
     resolvedText, maxFontPx, w, h,
     resolved.lineHeight, resolved.fontWeight, resolved.uppercase,
-  ].join(' ')
+    // TV-STYLE.4 — per-segment sizes/weights change wrapping, so a
+    // run edit must re-measure from the seed like a text edit does.
+    JSON.stringify(resolved.styleRuns),
+    // NUL separator: unlike a space it can never appear in the text,
+    // so distinct inputs can't collide into one key.
+  ].join('\0')
   useEffect(() => {
     fitIterations.current = 0
     setFitPx(seedPx)
@@ -235,7 +254,10 @@ function ZoneBox({ zone, resolved, frame, selected, editable, onSelect, onChange
         style={{
           width: '100%',
           fontSize: fitPx,
-          fontWeight: String(resolved.fontWeight),
+          // TV-STYLE.2 — weight is carried by the family name, not
+          // the fontWeight style (RN ignores fontWeight for
+          // single-weight custom families like Poppins_*).
+          fontFamily: poppinsFamily(resolved.fontWeight),
           textAlign: resolved.align,
           // Scales with the fitted size — a fixed max-size lineHeight
           // would keep full-height line boxes after the glyphs shrink.
@@ -243,11 +265,36 @@ function ZoneBox({ zone, resolved, frame, selected, editable, onSelect, onChange
           textTransform: resolved.uppercase ? 'uppercase' : 'none',
         }}
       >
-        {/* Per-character colour runs (TV-TEMPLATE.5) — same split as
-            web's textSegments, nested <Text> per run. */}
-        {textSegments(resolvedText, resolved.colorRuns, resolved.color).map((seg, i) => (
-          <Text key={i} style={{ color: seg.color }}>{seg.text}</Text>
-        ))}
+        {/* Per-character style runs (TV-STYLE.4) — same split as
+            web's textSegments, nested <Text> per run. A segment's
+            fontSize is the ratio of the two stored percentages × the
+            fitted base px, so mixed sizes shrink proportionally with
+            the fit loop (matching web's em rendering). */}
+        {textSegments(resolvedText, resolved.styleRuns, resolved.color).map((seg, i) => {
+          const segPx = seg.fontSize && resolved.fontSize
+            ? (seg.fontSize / resolved.fontSize) * fitPx
+            : fitPx
+          return (
+            <Text
+              key={i}
+              style={{
+                color: seg.color,
+                fontSize: segPx,
+                // Per-segment line box, proportional to its own size.
+                lineHeight: segPx * resolved.lineHeight,
+                // Bold/regular override rides the family name too
+                // (see poppinsFamily above); unset falls back to the
+                // zone's resolved weight.
+                fontFamily: poppinsFamily(
+                  seg.bold === true ? 800 : seg.bold === false ? 400 : resolved.fontWeight,
+                ),
+                textDecorationLine: seg.underline ? 'underline' : undefined,
+              }}
+            >
+              {seg.text}
+            </Text>
+          )
+        })}
       </Text>
 
       {editable && selected && (
