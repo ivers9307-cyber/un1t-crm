@@ -1,5 +1,8 @@
 // GET loads the host's own event for the edit form; PUT applies edits and the
 // price/date re-review transition. host_id === session.host.id or 404. (HOST-PORTAL.3)
+// DELETE hard-deletes the host's own event, but ONLY when it is not published
+// (unpublish first — closes the register-vs-delete race) AND has zero
+// registrations — paid registrations mean money, and refunds are staff-only. (HOST-PORTAL.10)
 import { NextResponse } from 'next/server'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
@@ -90,4 +93,58 @@ export async function PUT(request, props) {
   if (waveErr) return NextResponse.json({ success: false, error: waveErr.message }, { status: 500 })
 
   return NextResponse.json({ success: true, data: { id: current.id, status: transition.status, reReview: transition.reReview } })
+}
+
+export async function DELETE(_request, props) {
+  const params = await props.params
+  const session = await getCurrentHost()
+  if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  const db = createServerClient()
+  const { data: race } = await db
+    .from('race_events')
+    .select('id, host_id, status, name')
+    .eq('id', params.id)
+    .maybeSingle()
+  if (!race || race.host_id !== session.host.id) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+
+  // Published events must come off sale BEFORE deletion. Public registration
+  // only works on status='published', so a fresh registration could race in
+  // between the zero-count check below and the delete — cascading away a
+  // registration/payment row while the customer's Stripe checkout session
+  // still exists (they'd pay for a deleted event). Non-published events can't
+  // take new registrations, which makes the count check race-free.
+  if (race.status === 'published') {
+    return NextResponse.json(
+      { success: false, error: 'Take the event off sale first, then delete it.' },
+      { status: 409 }
+    )
+  }
+
+  // ANY registration row (confirmed, pending, even cancelled) blocks the
+  // delete — those rows carry payment history a host must not erase.
+  // NOTE: head/count options are only read on the FIRST .select() after
+  // .from(), and embedded-resource filters break under head:true — keep this
+  // a bare count with plain .eq filters.
+  const { count, error: countErr } = await db
+    .from('race_registrations')
+    .select('id', { count: 'exact', head: true })
+    .eq('race_event_id', race.id)
+  if (countErr) return NextResponse.json({ success: false, error: countErr.message }, { status: 500 })
+  if ((count ?? 0) > 0) {
+    return NextResponse.json(
+      { success: false, error: 'This event has registrations — take it off sale instead; contact UN1T to cancel it fully.' },
+      { status: 409 }
+    )
+  }
+
+  // Zero registrations → hard delete. Children clean up via FK cascades:
+  // race_waves (mig 083), race_registrations/race_payments (migs 082/084) and
+  // promo_codes.event_id (mig 383) are all ON DELETE CASCADE.
+  const { error: delErr } = await db.from('race_events').delete().eq('id', race.id)
+  if (delErr) return NextResponse.json({ success: false, error: delErr.message }, { status: 500 })
+
+  return NextResponse.json({ success: true })
 }
