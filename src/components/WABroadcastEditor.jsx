@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Save, Send, Users, CheckCircle2, XCircle } from 'lucide-react'
+import { ArrowLeft, Save, Send, Users, CheckCircle2, XCircle, Ban, Clock } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
 import { estimateDripDays } from '@/lib/whatsapp-drip'
 
@@ -13,6 +13,9 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
   const isCancelled = broadcast?.status === 'cancelled'
   const isTerminal = isSent || isCancelled   // finished (sent or cancelled) → read-only results, not the editor
   const isDripInFlight = broadcast?.delivery_mode === 'drip' && broadcast?.status === 'sending'
+  // WA-SCHEDULE — scheduled stays editable (SMS idiom: un-schedule via the
+  // same page); the cron promotes it at scheduled_at.
+  const isScheduled = broadcast?.status === 'scheduled'
 
   const [name, setName] = useState(broadcast?.name || '')
   const [templateId, setTemplateId] = useState(broadcast?.template_id || '')
@@ -138,6 +141,31 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
     }
   }
 
+  // WA-SCHEDULE — cancel-before-send: back to a plain draft (the SMS
+  // un-schedule idiom). The cron only promotes status='scheduled' rows, so
+  // this reliably stops the send.
+  async function handleUnschedule() {
+    if (!confirm('Cancel the scheduled send? The broadcast returns to draft — nothing will go out until you send or re-schedule it.')) return
+    setCancelling(true)
+    setError(null)
+    try {
+      // scheduled_at cleared too (not just the status): the cron's blast
+      // resume arm keys on scheduled_at IS NOT NULL, so a stale timestamp
+      // would put a later operator-fired send of this row under cron care.
+      const res = await fetch(`/api/whatsapp/broadcasts/${broadcastId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'draft', scheduled_at: null }),
+      }).then(r => r.json())
+      if (!res.success) throw new Error(res.error)
+      router.refresh()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   async function handleCancel() {
     if (!confirm('Cancel this campaign? Messages already sent stay sent, but no more will go out — this cannot be undone.')) return
     setCancelling(true)
@@ -203,6 +231,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
             <span className={`text-xs px-2 py-0.5 rounded-full ${
               broadcast.status === 'sent' ? 'bg-green-500/20 text-green-700'
                 : broadcast.status === 'cancelled' ? 'bg-rose-500/20 text-rose-700'
+                : broadcast.status === 'scheduled' ? 'bg-blue-500/15 text-blue-700'
                 : 'bg-gray-500/20 text-gray-700'
             }`}>
               {broadcast.status}
@@ -220,17 +249,45 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
               <Save size={14} />
               {saving ? 'Saving...' : 'Save'}
             </button>
-            <button
-              onClick={handleSend}
-              disabled={sending || !templateId}
-              className="flex items-center gap-1.5 text-sm bg-green-600 text-white font-medium px-4 py-1.5 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50"
-            >
-              <Send size={14} />
-              {sending ? 'Sending...' : 'Send Broadcast'}
-            </button>
+            {/* A scheduled broadcast is fired by the cron, not this button —
+                offer cancel-schedule instead (sendBroadcast would refuse the
+                'scheduled' entry state anyway). */}
+            {isScheduled ? (
+              <button
+                onClick={handleUnschedule}
+                disabled={cancelling}
+                className="flex items-center gap-1.5 text-sm border border-rose-500/30 text-rose-700 font-medium px-4 py-1.5 rounded-md hover:bg-rose-500/10 transition-colors disabled:opacity-50"
+              >
+                <Ban size={14} />
+                {cancelling ? 'Cancelling…' : 'Cancel schedule'}
+              </button>
+            ) : (
+              <button
+                onClick={handleSend}
+                disabled={sending || !templateId}
+                className="flex items-center gap-1.5 text-sm bg-green-600 text-white font-medium px-4 py-1.5 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50"
+              >
+                <Send size={14} />
+                {sending ? 'Sending...' : 'Send Broadcast'}
+              </button>
+            )}
           </div>
         )}
       </div>
+
+      {/* WA-SCHEDULE — scheduled banner: when it goes out + how to stop it. */}
+      {isScheduled && (
+        <div className="bg-blue-500/10 border-b border-blue-500/30 text-blue-700 text-sm px-5 py-2 flex items-center gap-2">
+          <Clock size={14} className="shrink-0" />
+          <span>
+            Scheduled — goes out {broadcast?.scheduled_at
+              ? new Date(broadcast.scheduled_at).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })
+              : 'soon'}
+            {broadcast?.delivery_mode === 'drip' ? ' (drip starts then and paces itself inside its daily window)' : ''}.
+            {' '}Use “Cancel schedule” to stop it before then.
+          </span>
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-500/10 border-b border-red-500/30 text-red-700 text-sm px-5 py-2">
