@@ -10,6 +10,12 @@ export {
   clearRunColor,
   shiftRuns,
   textSegments,
+  // TV-STYLE.1 — unified style runs.
+  mergeStyleRuns,
+  setRunStyle,
+  clearRunStyle,
+  rangeStyle,
+  lineRangeAt,
   MIN_FIT_PX,
   nextFitPx,
   seedFitPx,

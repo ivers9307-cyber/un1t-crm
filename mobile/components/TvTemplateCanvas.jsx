@@ -39,6 +39,20 @@ import {
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 
+// TV-STYLE.2 — Poppins is the TV-template face (matches web
+// tv-font.js). RN custom fonts are ONE family per weight — the
+// numeric fontWeight style is ignored for them — so zone text maps
+// its resolved weight to the nearest loaded Poppins family instead.
+// Families are loaded non-blocking in app/_layout.jsx; until then RN
+// falls back to the system font for an unknown family name.
+function poppinsFamily(weight) {
+  const w = Number(weight) || 400
+  if (w <= 450) return 'Poppins_400Regular'
+  if (w <= 650) return 'Poppins_600SemiBold'
+  if (w <= 750) return 'Poppins_700Bold'
+  return 'Poppins_800ExtraBold'
+}
+
 // Same cap as web TemplateCanvas — each shrink changes wrapping, which
 // can call for another shrink; iterate but never spin forever.
 const MAX_FIT_ITERATIONS = 6
@@ -235,7 +249,10 @@ function ZoneBox({ zone, resolved, frame, selected, editable, onSelect, onChange
         style={{
           width: '100%',
           fontSize: fitPx,
-          fontWeight: String(resolved.fontWeight),
+          // TV-STYLE.2 — weight is carried by the family name, not
+          // the fontWeight style (RN ignores fontWeight for
+          // single-weight custom families like Poppins_*).
+          fontFamily: poppinsFamily(resolved.fontWeight),
           textAlign: resolved.align,
           // Scales with the fitted size — a fixed max-size lineHeight
           // would keep full-height line boxes after the glyphs shrink.

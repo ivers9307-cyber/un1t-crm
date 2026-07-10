@@ -1,19 +1,19 @@
 // TV-TEMPLATE.7 — brand font for zone text + the idle view.
 //
-// The CRM brand face is NEXA (not licensed in this repo — see the
-// /welcome layout's Poppins note for the same constraint on the
-// marketing site). Montserrat is a close-enough geometric-sans
-// stand-in for TV surfaces: heavy weights read well at a distance
-// on a gym TV, and next/font self-hosts it at build time (no
-// external request from the cast page, no layout shift).
+// Poppins is the operator-chosen face for TV template surfaces
+// (Richard, 2026-07-10 — "poppins is the only font needed"),
+// replacing the Montserrat stand-in used while NEXA (the CRM brand
+// face) remained unlicensed in this repo. Heavy weights read well
+// at a distance on a gym TV, and next/font self-hosts it at build
+// time (no external request from the cast page, no layout shift).
 //
 // Imported once here (module scope, per next/font's rule) and
 // reused by TemplateCanvas (zone text), TemplateEditor (ZoneBox
 // preview text) and TVDisplay (idle-view mark + clock) so every
 // surface that can show template text agrees on the face.
-import { Montserrat } from 'next/font/google'
+import { Poppins } from 'next/font/google'
 
-export const tvFont = Montserrat({
+export const tvFont = Poppins({
   weight: ['400', '600', '700', '800', '900'],
   subsets: ['latin'],
   display: 'swap',
