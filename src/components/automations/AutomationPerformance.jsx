@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
-  BarChart3, Users, CheckCircle2, LogOut, PauseCircle, RefreshCw, Clock, UserPlus,
+  BarChart3, Users, CheckCircle2, LogOut, PauseCircle, RefreshCw, Clock, UserPlus, Play,
 } from 'lucide-react'
 import { describeNode } from '@/lib/sequences/graph'
 import { describeNextStep } from '@/lib/sequences/run-history'
@@ -82,6 +82,8 @@ export default function AutomationPerformance({ sequenceId, steps = [] }) {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [hidden, setHidden] = useState(false)
+  const [resumingId, setResumingId] = useState(null)
+  const [resumeError, setResumeError] = useState(null)
   const aliveRef = useRef(true)
 
   const load = useCallback(async (isRefresh) => {
@@ -103,6 +105,26 @@ export default function AutomationPerformance({ sequenceId, steps = [] }) {
       if (aliveRef.current) { setLoading(false); setRefreshing(false) }
     }
   }, [sequenceId])
+
+  // SEQ-RESUME.1 — put a paused (MAX_ERRORS) enrollment back into the flow.
+  // The route CAS-es on status='paused', so a double-click or a concurrent
+  // resume comes back 409 — treated as "already resumed", not an error.
+  const resume = useCallback(async (enrollmentId) => {
+    setResumingId(enrollmentId)
+    setResumeError(null)
+    try {
+      const res = await fetch(`/api/sequences/${sequenceId}/enrollments/${enrollmentId}/resume`, { method: 'POST' })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok && res.status !== 409 && aliveRef.current) {
+        setResumeError(j?.error || 'Resume failed')
+      }
+    } catch {
+      if (aliveRef.current) setResumeError('Resume failed — network error')
+    } finally {
+      if (aliveRef.current) setResumingId(null)
+      await load(true)
+    }
+  }, [sequenceId, load])
 
   useEffect(() => {
     aliveRef.current = true
@@ -167,6 +189,9 @@ export default function AutomationPerformance({ sequenceId, steps = [] }) {
           <h3 className="text-sm font-semibold text-un1t-text mb-2 flex items-center gap-1.5">
             <UserPlus size={14} className="text-un1t-subtle" /> Enrolled contacts
           </h3>
+          {resumeError && (
+            <p className="text-xs text-red-700 bg-red-500/10 rounded-lg px-3 py-2 mb-2">{resumeError}</p>
+          )}
           {(!runs || runs.length === 0) ? (
             <div className="bg-un1t-surface border border-un1t-border rounded-xl px-4 py-6 text-center">
               <p className="text-sm text-un1t-subtle">
@@ -200,7 +225,17 @@ export default function AutomationPerformance({ sequenceId, steps = [] }) {
                     </div>
                     <NextStepNote run={r} />
                     {r.state === 'paused' && r.outcome?.startsWith('Paused:') && (
-                      <span className="text-xs text-amber-700 max-w-xs truncate">{r.outcome}</span>
+                      <span className="text-xs text-amber-700 max-w-xs truncate" title={r.outcome}>{r.outcome}</span>
+                    )}
+                    {r.state === 'paused' && (
+                      <button
+                        type="button"
+                        onClick={() => resume(r.id)}
+                        disabled={resumingId === r.id}
+                        className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 disabled:opacity-50"
+                      >
+                        <Play size={10} /> {resumingId === r.id ? 'Resuming…' : 'Resume'}
+                      </button>
                     )}
                   </div>
                 </div>

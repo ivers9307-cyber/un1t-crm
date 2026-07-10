@@ -15,6 +15,7 @@ import { FLOW_EVENT_FIELDS, applyFlowEvent } from '@/lib/whatsapp-flow-events'
 import { recordCtwaTouch } from '@/lib/meta-capi'
 import { pricingColumnsFromStatus } from '@/lib/whatsapp-pricing'
 import { ensureMediaRehosted } from '@/lib/whatsapp-media-server'
+import { captureInboundBsuid } from '@/lib/whatsapp-bsuid'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
 export const runtime = 'nodejs'
@@ -276,6 +277,13 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
   // CTWA attribution — stamp the click id (conversation + contact) and fire
   // the Lead conversion once. Swallows its own errors; never blocks the webhook.
   await recordCtwaTouch(db, { ctwaClid: message.referral?.ctwa_clid, conversationId, contact, locationId })
+
+  // WA-BSUID.1 — capture Meta's Business-Scoped User ID (arrives as
+  // contacts[].user_id once usernames roll out) onto the matched
+  // conversation + contact. Capture ONLY — identity resolution above stays
+  // phone-keyed. Best-effort: never overwrites a differing stored value
+  // (warns — that's a collision signal) and never throws out of the webhook.
+  await captureInboundBsuid(db, { contacts, senderPhone, conversationId, contactId: contact?.id || null })
 
   // Update profile name if we have one (it can change)
   if (senderName) {
