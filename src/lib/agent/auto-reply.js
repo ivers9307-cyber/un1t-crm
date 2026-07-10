@@ -452,7 +452,17 @@ async function runChannelAgentInner(db, adapter, ctx) {
         })
         if (!res.ok) {
           console.error('[radar-agent] Anthropic error', res.status, await res.text().catch(() => ''))
-          return { handled: false, reason: 'model_error' }
+          // COMMS-AUDIT 2026-07-10 — a model outage must not mean dead air:
+          // send the holding message + page managers via the soft-handoff
+          // path (its agent_last_reply_at debounce keeps webhook retries /
+          // message bursts to ONE holding message). The agent stays armed,
+          // so it resumes as soon as the API recovers.
+          return await softHandoff(db, adapter, {
+            conversationId, locationId, recipient, contactId, connection, settings,
+            lastReplyAt: conv?.agent_last_reply_at,
+            reason: 'model_error',
+            notify: modelFailureNotify(adapter),
+          })
         }
         const data = await res.json()
         const content = data.content || []
@@ -504,7 +514,15 @@ async function runChannelAgentInner(db, adapter, ctx) {
       }
     } catch (err) {
       console.error('[radar-agent] model call failed', err?.message)
-      return { handled: false, reason: 'model_exception' }
+      // Same soft handoff as the non-2xx path above — holding message once
+      // (debounced) + manager push, agent stays armed for when the model
+      // comes back.
+      return await softHandoff(db, adapter, {
+        conversationId, locationId, recipient, contactId, connection, settings,
+        lastReplyAt: conv?.agent_last_reply_at,
+        reason: 'model_exception',
+        notify: modelFailureNotify(adapter),
+      })
     }
 
     const parsed = parseAgentResponse(modelText)
@@ -616,11 +634,24 @@ async function handoff(db, adapter, { conversationId, locationId, recipient, con
   }
 }
 
-// A non-text message the agent can't read (photo / voice / sticker).
-// Acknowledge the customer and flag a human, but DON'T disable the agent —
-// a follow-up text re-engages it. Debounced via agent_last_reply_at so a
-// burst of photos sends one ack, not a string of them.
-async function softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, lastReplyAt }) {
+// Manager-push copy for a model (Anthropic API) failure taking the
+// soft-handoff path — the customer got the holding message, but the reply
+// they were owed never existed, so a human needs to pick the thread up.
+function modelFailureNotify(adapter) {
+  return {
+    title: `${adapter.label} · agent unavailable`,
+    body: 'The AI agent could not generate a reply (model API failure). The customer got the holding message — needs a human.',
+  }
+}
+
+// The agent is on duty but can't produce a real reply: a non-text message
+// it can't read (photo / voice / sticker), or — COMMS-AUDIT 2026-07-10 —
+// a model API failure. Acknowledge the customer with the holding message
+// and flag a human, but DON'T disable the agent — a follow-up text (or the
+// API recovering) re-engages it. Debounced via agent_last_reply_at so a
+// burst of photos / webhook retries during an outage sends ONE ack, not a
+// string of them. `notify` overrides the push copy per cause.
+async function softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, lastReplyAt, reason = 'unsupported_type', notify = null }) {
   if (lastReplyAt && Date.now() - new Date(lastReplyAt).getTime() < SOFT_NOTIFY_GAP_MS) {
     return { handled: false, reason: 'soft_handoff_debounced' }
   }
@@ -642,15 +673,15 @@ async function softHandoff(db, adapter, { conversationId, locationId, recipient,
   }
   try {
     await sendPushToRolesAtLocation(locationId, MANAGER_ROLES, {
-      title: `${adapter.label} · non-text message`,
-      body: "Customer sent a photo / voice / attachment the agent can't read — needs a human.",
+      title: notify?.title || `${adapter.label} · non-text message`,
+      body: notify?.body || "Customer sent a photo / voice / attachment the agent can't read — needs a human.",
       category: adapter.pushCategory,
       data: { type: adapter.handoffType, conversation_id: conversationId },
     })
   } catch (err) {
     console.error(`[radar-agent] ${adapter.name} soft-handoff push failed`, err?.message)
   }
-  return { handled: true, action: 'soft_handoff', reason: 'unsupported_type' }
+  return { handled: true, action: 'soft_handoff', reason }
 }
 
 // ── WhatsApp adapter ────────────────────────────────────────────────

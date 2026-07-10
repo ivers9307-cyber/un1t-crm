@@ -129,6 +129,7 @@ function consentDb({ contact, writes }) {
   return {
     from: (table) => ({
       select: () => ({ or: () => ({ limit: () => Promise.resolve({ data: contact ? [contact] : [] }) }) }),
+      upsert: (row) => { writes.push([table, row]); return Promise.resolve({ error: null }) },
       update: (patch) => { writes.push([table, patch]); return { eq: () => Promise.resolve({ error: null }) } },
       insert: (row) => { writes.push([table, row]); return Promise.resolve({ error: null }) },
     }),
@@ -142,7 +143,8 @@ describe('applyMetaUserPreference', () => {
     const r = await applyMetaUserPreference(db, { wa_id: '353871234567', category: 'marketing_messages', value: 'stop' })
     expect(r).toMatchObject({ applied: true, action: 'opted_out' })
     expect(writes).toEqual([
-      ['contact_preferences', { whatsapp_marketing: false }],
+      // Upserted by contact_id so a contact with no preferences row still opts out.
+      ['contact_preferences', expect.objectContaining({ contact_id: 'c1', whatsapp_marketing: false })],
       ['contacts', { wa_status: 'opted_out' }],
       ['consent_log', expect.objectContaining({ action: 'opted_out', source: 'meta_user_preferences' })],
     ])
@@ -152,7 +154,7 @@ describe('applyMetaUserPreference', () => {
     const db = consentDb({ contact: { id: 'c1' }, writes })
     const r = await applyMetaUserPreference(db, { wa_id: '353871234567', value: 'resume' })
     expect(r.action).toBe('opted_in')
-    expect(writes[0]).toEqual(['contact_preferences', { whatsapp_marketing: true }])
+    expect(writes[0]).toEqual(['contact_preferences', expect.objectContaining({ contact_id: 'c1', whatsapp_marketing: true })])
   })
   it('unknown contact / bad value → not applied, no writes', async () => {
     const writes = []

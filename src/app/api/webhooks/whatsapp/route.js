@@ -1,6 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
-import { refreshWindow, parseConsentKeyword, markUndeliverableIfPermanent } from '@/lib/whatsapp'
+import { refreshWindow, parseConsentKeyword, pickInboundContact, markUndeliverableIfPermanent } from '@/lib/whatsapp'
 import { applyWhatsappConsentKeyword, applyMetaUserPreference } from '@/lib/whatsapp-consent'
 import { handleFlowCompletion } from '@/lib/whatsapp-flow/completion.js'
 import { resolveWhatsAppNumberByPhoneNumberId } from '@/lib/whatsapp-config'
@@ -196,15 +196,24 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
   const phoneWithPlus = senderPhone.startsWith('+') ? senderPhone : `+${senderPhone}`
   const phoneWithout = senderPhone.startsWith('+') ? senderPhone.slice(1) : senderPhone
 
+  // COMMS-AUDIT 2026-07-10 — the phone can match contacts at SEVERAL
+  // locations (multi-gym members, shared numbers). Prefer the contact in
+  // the receiving number's location (resolved above); only fall back to a
+  // cross-location match when none exists in-location, with an explicit
+  // order (oldest contact first) so the fallback is deterministic instead
+  // of Postgres row order. The matched contact's location still decides
+  // the conversation's location below — this just stops a random
+  // other-location contact hijacking a thread that belongs here.
   let contact = null
   const { data: existingContacts } = await db.from('contacts')
     .select('id, location_id')
     .or(`wa_phone.eq.${phoneWithout},wa_phone.eq.${phoneWithPlus},phone.eq.${phoneWithout},phone.eq.${phoneWithPlus}`)
-    .limit(1)
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true })
+    .limit(20)
 
-  if (existingContacts?.length) {
-    contact = existingContacts[0]
-
+  contact = pickInboundContact(existingContacts, defaultLocationId)
+  if (contact) {
     // Ensure wa_phone is set on the contact (store without + to match Meta's format)
     await db.from('contacts')
       .update({ wa_phone: phoneWithout })

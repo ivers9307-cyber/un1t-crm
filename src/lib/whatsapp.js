@@ -1553,6 +1553,32 @@ export function parseConsentKeyword(text) {
 }
 
 /**
+ * Pick the contact an inbound message should link to when the sender's
+ * phone matches several contact rows. Pure — used by the WhatsApp
+ * webhook (COMMS-AUDIT 2026-07-10).
+ *
+ * Policy: prefer a contact in the RECEIVING number's location (each
+ * WhatsApp number belongs to one location; a member of that gym texting
+ * its number must land on their record there, not on a same-phone
+ * contact at another location). Only when no in-location match exists
+ * fall back to a cross-location match — the caller passes the list
+ * deterministically ordered (oldest contact first) so the fallback is
+ * stable rather than Postgres row order.
+ *
+ * @param {Array<{id: string, location_id: string}>|null} matches
+ * @param {string|null} preferredLocationId  the receiving number's location
+ * @returns {object|null}
+ */
+export function pickInboundContact(matches, preferredLocationId) {
+  if (!Array.isArray(matches) || matches.length === 0) return null
+  if (preferredLocationId) {
+    const inLocation = matches.find((m) => m?.location_id === preferredLocationId)
+    if (inLocation) return inLocation
+  }
+  return matches[0]
+}
+
+/**
  * Get or create a conversation for a contact. Exported so the
  * sequence runner can attribute its outbound messages to the
  * right conversation row.
