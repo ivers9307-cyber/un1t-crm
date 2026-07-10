@@ -4,6 +4,11 @@
 // the host + a host_users row, and email them a link to set their password.
 // Manager+ (ADMIN_ROLES), org-scoped. (HOST-PORTAL.1)
 //
+// A host may have MULTIPLE portal members (HOST-PORTAL.14): pass an optional
+// JSON body { email } to invite a specific person; with no body we invite the
+// host's own email as before. One host per login still holds — host_users has
+// UNIQUE(auth_user_id), so each invited login belongs to exactly one host.
+//
 // STAFF-XOR invariant (see host-auth.js): a host auth user must never also hold
 // a profiles row. Two things enforce it:
 //   1. mig 387 gates handle_new_user so a host-portal invite (invited_for=
@@ -19,6 +24,7 @@
 // path where a login is intentionally both staff and host.
 
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { getAppUrl } from '@/lib/app-url'
@@ -29,7 +35,10 @@ import { logError } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, props) {
+// Optional body — invite a specific member email instead of host.email.
+const BodySchema = z.object({ email: z.string().email().max(320).optional() })
+
+export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
@@ -39,14 +48,26 @@ export async function POST(_request, props) {
   const orgId = user.activeOrganization?.id || user.activeLocation?.organization_id || null
   if (!orgId) return NextResponse.json({ success: false, error: 'no_active_organization' }, { status: 400 })
 
+  // Body is optional (no/empty body = classic "invite the host" call).
+  let body = {}
+  try { body = await request.json() } catch { /* no JSON body — fall back to host.email */ }
+  const parsed = BodySchema.safeParse(body)
+  if (!parsed.success) {
+    return NextResponse.json({ success: false, error: 'Enter a valid email.' }, { status: 400 })
+  }
+
   const db = createServerClient()
   const host = await loadHostForOrg(db, params.id, orgId)
   if (!host) return NextResponse.json({ success: false, error: 'Host not found' }, { status: 404 })
-  if (!host.email) {
+
+  // Resolved invite email: explicit member email if given, else the host's own.
+  // Every guard below (STAFF-XOR, other-host refusal, resend) applies to this
+  // email exactly as it always did for host.email.
+  const email = parsed.data?.email?.trim().toLowerCase() || String(host.email || '').trim().toLowerCase()
+  if (!email) {
     return NextResponse.json({ success: false, error: 'This host has no email on file — add one first.' }, { status: 400 })
   }
 
-  const email = String(host.email).trim().toLowerCase()
   const redirectTo = `${getAppUrl()}/host/set-password`
 
   // New host → invite (creates the auth user + sends the set-password email).
