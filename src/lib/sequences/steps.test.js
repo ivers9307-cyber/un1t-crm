@@ -21,8 +21,12 @@ import { glofoxProvisionStep } from './steps.js'
 
 vi.mock('@/lib/postmark', () => ({
   sendTransactionalEmail: vi.fn(),
+  sendMarketingEmail: vi.fn(),
   applyMergeTags: vi.fn((s) => s),
+  buildUnsubscribeUrl: vi.fn((contact, baseUrl) => `${baseUrl}/unsubscribe/${contact.id}`),
+  appendUnsubscribeFooter: vi.fn((html) => html),
 }))
+vi.mock('@/lib/app-url', () => ({ getAppUrl: vi.fn(() => 'https://crm.test') }))
 vi.mock('@/lib/whatsapp', () => ({
   sendTemplateMessage: vi.fn(),
   buildTemplateComponents: vi.fn(),
@@ -575,7 +579,7 @@ describe('send-step return ids are row uuids, never provider ids (re-send loop g
     const out = await steps.sendWhatsappStep(sendStepDb(), {
       step: { id: 'step-1', whatsapp_template_id: 't1', whatsapp_variables: {} },
       sequence: { id: 'seq-1', location_id: 'loc-1' },
-      contact: { id: 'c1', wa_phone: '353860000000' },
+      contact: { id: 'c1', wa_phone: '353860000000', whatsapp_marketing: true, wa_status: 'active' },
     })
     expect(out).toBe('aaaaaaaa-0000-0000-0000-000000000001')
     expect(String(out)).not.toContain('wamid')
@@ -589,7 +593,7 @@ describe('send-step return ids are row uuids, never provider ids (re-send loop g
     const out = await steps.sendWhatsappStep(sendStepDb({ msgRowResult: { data: null, error: { message: 'insert failed' } } }), {
       step: { id: 'step-1', whatsapp_template_id: 't1', whatsapp_variables: {} },
       sequence: { id: 'seq-1', location_id: 'loc-1' },
-      contact: { id: 'c1', wa_phone: '353860000000' },
+      contact: { id: 'c1', wa_phone: '353860000000', whatsapp_marketing: true, wa_status: 'active' },
     })
     expect(out).toBeNull()
   })
@@ -604,5 +608,238 @@ describe('send-step return ids are row uuids, never provider ids (re-send loop g
     })
     expect(out).toBe('bbbbbbbb-0000-0000-0000-000000000002')
     expect(String(out)).not.toContain('SM')
+  })
+})
+
+// ── COMMS-AUDIT 2026-07-10 (SEQ batch) — WhatsApp step consent gate,
+// location routing, and graceful skips ────────────────────────────
+//
+// Production incident this locks down: 11 of 17 enrollments of the live
+// "New Lead – First Class Booking Nudge" sequence were auto-paused because
+// a contact with no wa_phone made sendWhatsappStep THROW — error_count hit
+// MAX_ERRORS and the enrolment wedged. Per-contact data/consent conditions
+// must be recorded SKIPS (resolve null → the scheduler advances the cursor
+// exactly once through its normal path), never errors. Sequence-config
+// faults (missing/unapproved template) still throw — the operator must fix
+// those, and the error path is how they surface.
+describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AUDIT)', () => {
+  const WA_TEMPLATE = { id: 't1', status: 'APPROVED', location_id: 'loc-1', name: 'book_first_visit', language: 'en', components: [] }
+  const step = { id: 'step-1', step_order: 2, whatsapp_template_id: 't1', whatsapp_variables: {} }
+  const sequence = { id: 'seq-1', name: 'New Lead – First Class Booking Nudge', location_id: 'loc-1' }
+  const consentedContact = {
+    id: 'c1', location_id: 'loc-1', wa_phone: '353860000000',
+    whatsapp_marketing: true, wa_status: 'active',
+  }
+
+  function consentDb({ failActivityInsert = false } = {}) {
+    const activityInserts = []
+    const rpcCalls = []
+    return {
+      activityInserts,
+      rpcCalls,
+      from(table) {
+        if (table === 'activities') {
+          return {
+            insert: (row) => {
+              if (failActivityInsert) return Promise.reject(new Error('activities down'))
+              activityInserts.push(row)
+              return Promise.resolve({ error: null })
+            },
+          }
+        }
+        if (table === 'whatsapp_templates') return { select: () => ({ eq: () => ({ single: async () => ({ data: WA_TEMPLATE }) }) }) }
+        if (table === 'whatsapp_messages') return { insert: () => ({ select: () => ({ single: async () => ({ data: { id: 'aaaaaaaa-0000-0000-0000-000000000001' } }) }) }) }
+        throw new Error(`unexpected table ${table}`)
+      },
+      rpc(name) { rpcCalls.push(name); return Promise.resolve({ data: null, error: null }) },
+    }
+  }
+
+  let wa
+  beforeEach(async () => {
+    wa = await import('@/lib/whatsapp')
+    wa.sendTemplateMessage.mockReset()
+    wa.sendTemplateMessage.mockResolvedValue({ messageId: 'wamid.X==' })
+    wa.buildTemplateComponents.mockReturnValue([])
+    wa.getOrCreateConversation.mockResolvedValue('conv-1')
+  })
+
+  it('missing wa_phone → recorded skip (resolves null, nothing sent, no throw)', async () => {
+    const db = consentDb()
+    const out = await steps.sendWhatsappStep(db, {
+      step, sequence, contact: { ...consentedContact, wa_phone: null },
+    })
+    expect(out).toBeNull()
+    expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+    expect(db.activityInserts).toHaveLength(1)
+    expect(db.activityInserts[0]).toMatchObject({
+      contact_id: 'c1',
+      location_id: 'loc-1',
+    })
+    expect(db.activityInserts[0].subject).toMatch(/skipped/i)
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/whatsapp phone/i)
+  })
+
+  it('whatsapp_marketing not true → recorded skip (mirrors the broadcast reachability gate)', async () => {
+    for (const whatsapp_marketing of [false, null, undefined]) {
+      const db = consentDb()
+      const out = await steps.sendWhatsappStep(db, {
+        step, sequence, contact: { ...consentedContact, whatsapp_marketing },
+      })
+      expect(out).toBeNull()
+      expect(db.activityInserts).toHaveLength(1)
+    }
+    expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+  })
+
+  it.each(['opted_out', 'blocked', 'undeliverable'])(
+    'wa_status %s → recorded skip (a mid-sequence STOP must never get another WA step)',
+    async (wa_status) => {
+      const db = consentDb()
+      const out = await steps.sendWhatsappStep(db, {
+        step, sequence, contact: { ...consentedContact, wa_status },
+      })
+      expect(out).toBeNull()
+      expect(wa.sendTemplateMessage).not.toHaveBeenCalled()
+      expect(db.activityInserts).toHaveLength(1)
+      expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toContain(wa_status)
+    },
+  )
+
+  it('a skip does not bump the per-step sent metric', async () => {
+    const db = consentDb()
+    await steps.sendWhatsappStep(db, {
+      step, sequence, contact: { ...consentedContact, wa_phone: null },
+    })
+    expect(db.rpcCalls).not.toContain('increment_step_sent')
+  })
+
+  it('a skip still resolves even when the activities insert fails (never wedge the runner)', async () => {
+    const db = consentDb({ failActivityInsert: true })
+    await expect(steps.sendWhatsappStep(db, {
+      step, sequence, contact: { ...consentedContact, wa_phone: null },
+    })).resolves.toBeNull()
+  })
+
+  it('consented contact sends, routed from the sequence location (locationId opt → whatsapp_numbers row, not env fallback)', async () => {
+    const db = consentDb()
+    const out = await steps.sendWhatsappStep(db, { step, sequence, contact: consentedContact })
+    expect(out).toBe('aaaaaaaa-0000-0000-0000-000000000001')
+    expect(wa.sendTemplateMessage).toHaveBeenCalledWith(
+      '353860000000',
+      'book_first_visit',
+      'en',
+      [],
+      { locationId: 'loc-1' },
+    )
+    expect(db.rpcCalls).toContain('increment_step_sent')
+  })
+
+  it('a missing template still throws (sequence-config fault → operator must fix; error path is correct)', async () => {
+    const db = {
+      from: (table) => {
+        if (table === 'whatsapp_templates') return { select: () => ({ eq: () => ({ single: async () => ({ data: null }) }) }) }
+        throw new Error(`unexpected table ${table}`)
+      },
+      rpc: async () => ({}),
+    }
+    await expect(steps.sendWhatsappStep(db, { step, sequence, contact: consentedContact }))
+      .rejects.toThrow(/template not found/)
+  })
+})
+
+// ── COMMS-AUDIT 2026-07-10 (SEQ batch) — email step: broadcast stream
+// + campaign-parity marketing consent gate ────────────────────────
+describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)', () => {
+  const step = { id: 'st-9', step_order: 1, subject: 'Welcome', html_content: '<p>Hi {{first_name}}</p>' }
+  const sequence = { id: 'seq-9', name: 'Welcome flow', location_id: 'loc-1' }
+  const consentedContact = {
+    id: 'c9', location_id: 'loc-1', email: 'a@b.ie',
+    email_marketing: true, email_status: 'active',
+  }
+
+  function emailDb({ failActivityInsert = false } = {}) {
+    const activityInserts = []
+    const rpcCalls = []
+    return {
+      activityInserts,
+      rpcCalls,
+      from(table) {
+        if (table === 'activities') {
+          return {
+            insert: (row) => {
+              if (failActivityInsert) return Promise.reject(new Error('activities down'))
+              activityInserts.push(row)
+              return Promise.resolve({ error: null })
+            },
+          }
+        }
+        throw new Error(`unexpected table ${table}`)
+      },
+      rpc(name) { rpcCalls.push(name); return Promise.resolve({ data: null, error: null }) },
+    }
+  }
+
+  let pm
+  beforeEach(async () => {
+    pm = await import('@/lib/postmark')
+    pm.sendMarketingEmail.mockReset()
+    pm.sendTransactionalEmail.mockReset()
+    pm.sendMarketingEmail.mockResolvedValue({ messageId: 'cccccccc-0000-0000-0000-000000000003' })
+  })
+
+  it('sends via sendMarketingEmail (broadcast stream), NOT sendTransactionalEmail, with unsubscribe URL + atomic sequence attribution', async () => {
+    const db = emailDb()
+    const out = await steps.sendEmailStep(db, { enrollment: { id: 'e9' }, step, sequence, contact: consentedContact })
+    expect(out).toBe('cccccccc-0000-0000-0000-000000000003')
+    expect(pm.sendTransactionalEmail).not.toHaveBeenCalled()
+    expect(pm.sendMarketingEmail).toHaveBeenCalledTimes(1)
+    expect(pm.sendMarketingEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: 'a@b.ie',
+      locationId: 'loc-1',
+      contactId: 'c9',
+      unsubscribeUrl: 'https://crm.test/unsubscribe/c9',
+      sourceType: 'sequence',
+      sequenceId: 'seq-9',
+      sequenceStepId: 'st-9',
+    }))
+    expect(db.rpcCalls).toContain('increment_step_sent')
+  })
+
+  it('email_marketing not true → recorded skip (campaign sends gate on email_marketing=true; sequences must match)', async () => {
+    for (const email_marketing of [false, null, undefined]) {
+      const db = emailDb()
+      const out = await steps.sendEmailStep(db, {
+        enrollment: { id: 'e9' }, step, sequence,
+        contact: { ...consentedContact, email_marketing },
+      })
+      expect(out).toBeNull()
+      expect(db.activityInserts).toHaveLength(1)
+      expect(db.activityInserts[0].subject).toMatch(/skipped/i)
+      expect(db.rpcCalls).not.toContain('increment_step_sent')
+    }
+    expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
+  })
+
+  it.each(['bounced', 'complained', 'unsubscribed'])(
+    'email_status %s → recorded skip, not an error (mid-sequence unsubscribe must not pause the enrolment)',
+    async (email_status) => {
+      const db = emailDb()
+      const out = await steps.sendEmailStep(db, {
+        enrollment: { id: 'e9' }, step, sequence,
+        contact: { ...consentedContact, email_status },
+      })
+      expect(out).toBeNull()
+      expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
+      expect(db.activityInserts).toHaveLength(1)
+      expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toContain(email_status)
+    },
+  )
+
+  it('missing email still throws (unchanged contract)', async () => {
+    await expect(steps.sendEmailStep(emailDb(), {
+      enrollment: { id: 'e9' }, step, sequence,
+      contact: { ...consentedContact, email: null },
+    })).rejects.toThrow(/no email address/)
   })
 })
