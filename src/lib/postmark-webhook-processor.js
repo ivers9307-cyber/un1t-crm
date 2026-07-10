@@ -248,7 +248,7 @@ export async function processPostmarkEvent(db, body) {
       case 'SubscriptionChange': {
         if (body.SuppressSending) {
           const { data: unsubSend } = await db.from('email_sends')
-            .select('contact_id')
+            .select('contact_id, campaign_id')
             .eq('postmark_message_id', messageId)
             .single()
 
@@ -263,6 +263,22 @@ export async function processPostmarkEvent(db, body) {
             })
             if (!unsubResult.ok) {
               console.error('[postmark processor] auto-unsubscribe on one-click failed:', unsubResult.error)
+            }
+
+            // COMMS-AUDIT 2026-07-10 — attribute the unsubscribe to the
+            // campaign whose email carried the unsubscribe link. This was
+            // never wired: total_unsubscribed sat at 0 on every campaign
+            // while the other counters incremented. Only count when the
+            // flag actually FLIPPED (changed includes email_marketing) so
+            // webhook replays and already-unsubscribed contacts don't
+            // inflate the metric — same reason recalculate_campaign_stats
+            // deliberately leaves this counter alone (mig 157).
+            if (unsubResult.ok && unsubResult.changed?.includes('email_marketing') && unsubSend.campaign_id) {
+              const { error: incErr } = await db.rpc('increment_campaign_metric', {
+                p_campaign_id: unsubSend.campaign_id,
+                p_field: 'total_unsubscribed',
+              })
+              if (incErr) console.error('[postmark processor] total_unsubscribed increment failed:', incErr.message)
             }
           }
         }
