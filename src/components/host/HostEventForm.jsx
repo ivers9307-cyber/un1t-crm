@@ -10,6 +10,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { ImagePlus, Loader2, X } from 'lucide-react'
 import { HOST_EVENT_KINDS } from '@/lib/host-events'
 
 const KIND_LABELS = {
@@ -65,6 +66,10 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
   )
   const [description, setDescription] = useState(initial?.description || '')
   const [heroImageUrl, setHeroImageUrl] = useState(initial?.hero_image_url || '')
+  // HOST-PORTAL.11 — direct hero upload (edit mode only; the upload route
+  // namespaces storage by event id, which doesn't exist until first save).
+  const [heroBusy, setHeroBusy] = useState(false)
+  const [heroError, setHeroError] = useState(null)
   const [accentHex, setAccentHex] = useState(initial?.accent_hex || '')
 
   const [confirmSubject, setConfirmSubject] = useState(initial?.confirmation_email_subject || '')
@@ -92,6 +97,51 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
     setTeamSizes((prev) =>
       prev.includes(n) ? prev.filter((x) => x !== n) : [...prev, n].sort((a, b) => a - b)
     )
+  }
+
+  // HOST-PORTAL.11 — upload the hero bytes through the host-scoped mirror of
+  // the staff hero route. The returned URL lands in the hero field and
+  // persists onto the event via the normal PUT on save (the upload route only
+  // owns the bytes, not the race_events row — same contract as staff).
+  async function handleHeroUpload(file) {
+    if (!isEdit || !eventId) return
+    setHeroError(null)
+    setHeroBusy(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch(`/api/host/events/${eventId}/hero`, { method: 'POST', body: fd })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || json.success === false) {
+        setHeroError(json.error || `Upload failed (${res.status})`)
+        return
+      }
+      setHeroImageUrl(json.url)
+    } catch (err) {
+      setHeroError(err?.message || 'Network error — please try again.')
+    } finally {
+      setHeroBusy(false)
+    }
+  }
+
+  async function handleHeroRemove() {
+    if (!isEdit || !eventId) return
+    setHeroError(null)
+    setHeroBusy(true)
+    try {
+      const res = await fetch(`/api/host/events/${eventId}/hero`, { method: 'DELETE' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || json.success === false) {
+        setHeroError(json.error || `Remove failed (${res.status})`)
+        return
+      }
+      // Clear the field too — hero_image_url persists as null on next save.
+      setHeroImageUrl('')
+    } catch (err) {
+      setHeroError(err?.message || 'Network error — please try again.')
+    } finally {
+      setHeroBusy(false)
+    }
   }
 
   function clientValidate() {
@@ -353,18 +403,88 @@ export default function HostEventForm({ mode = 'create', initial = null, eventId
             className={`${input} resize-y`}
           />
         </div>
+        {/* Hero image — HOST-PORTAL.11. Edit mode uploads bytes directly via
+            /api/host/events/[id]/hero (host-scoped mirror of the staff hero
+            route); the returned URL fills the field below and persists via
+            the normal PUT on save. The URL input stays as a secondary
+            paste-a-link option. Create mode is URL-paste only — the upload
+            route namespaces storage by event id, which doesn't exist yet. */}
+        <div className="mt-4">
+          {isEdit && eventId ? (
+            <div>
+              <span className={labelCls}>Hero image <span className="text-white/30 normal-case">(optional)</span></span>
+              <div className="space-y-3">
+                {heroError && (
+                  <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                    {heroError}
+                  </div>
+                )}
+                {heroImageUrl.trim() ? (
+                  <div className="relative overflow-hidden rounded-lg border border-white/12 bg-white/[0.02]">
+                    <img src={heroImageUrl} alt="Event hero" className="w-full max-h-56 object-cover" />
+                    <button
+                      type="button"
+                      onClick={handleHeroRemove}
+                      disabled={heroBusy}
+                      title="Remove hero image"
+                      className="absolute top-2 right-2 rounded-full border border-white/15 bg-black/70 p-1.5 text-white/60 hover:text-red-400 disabled:opacity-50"
+                    >
+                      {heroBusy ? <Loader2 size={14} className="animate-spin" /> : <X size={14} />}
+                    </button>
+                  </div>
+                ) : (
+                  <label
+                    htmlFor="he-hero-file"
+                    className={`flex h-36 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-white/12 bg-white/[0.02] text-white/45 transition hover:border-white/30 hover:text-white/70 ${heroBusy ? 'pointer-events-none opacity-50' : ''}`}
+                  >
+                    {heroBusy ? <Loader2 size={22} className="animate-spin" /> : <ImagePlus size={22} />}
+                    <span className="mt-1.5 text-xs">{heroBusy ? 'Uploading…' : 'Upload hero image'}</span>
+                    <span className="mt-0.5 text-[11px] text-white/30">PNG, JPEG or WebP · max 5MB</span>
+                    <input
+                      id="he-hero-file"
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0]
+                        if (f) handleHeroUpload(f)
+                        e.target.value = '' // reset so re-picking the same file fires onChange
+                      }}
+                    />
+                  </label>
+                )}
+                <div>
+                  <label htmlFor="he-hero" className="mb-1.5 block text-[11px] text-white/35">Or paste an image URL</label>
+                  <input
+                    id="he-hero"
+                    type="url"
+                    value={heroImageUrl}
+                    onChange={(e) => setHeroImageUrl(e.target.value)}
+                    placeholder="https://…"
+                    className={input}
+                  />
+                </div>
+                <p className="text-xs text-white/35">
+                  Uploads save straight away — press “Save changes” to update your event page.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <label htmlFor="he-hero" className={labelCls}>Hero image URL <span className="text-white/30 normal-case">(optional)</span></label>
+              <input
+                id="he-hero"
+                type="url"
+                value={heroImageUrl}
+                onChange={(e) => setHeroImageUrl(e.target.value)}
+                placeholder="https://…"
+                className={input}
+              />
+              <p className="mt-1.5 text-xs text-white/35">You can upload an image after saving.</p>
+            </div>
+          )}
+        </div>
         <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label htmlFor="he-hero" className={labelCls}>Hero image URL <span className="text-white/30 normal-case">(optional)</span></label>
-            <input
-              id="he-hero"
-              type="url"
-              value={heroImageUrl}
-              onChange={(e) => setHeroImageUrl(e.target.value)}
-              placeholder="https://…"
-              className={input}
-            />
-          </div>
           <div>
             <label htmlFor="he-accent" className={labelCls}>Accent colour <span className="text-white/30 normal-case">(optional)</span></label>
             <div className="flex items-center gap-3">
