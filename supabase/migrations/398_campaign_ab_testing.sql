@@ -100,8 +100,16 @@ AS $$
   GROUP BY cr.ab_variant;
 $$;
 
+-- service_role ONLY: both call sites (the campaign detail server page,
+-- which runs assertLocationAccess before querying, and the campaign-
+-- sender cron) use the service client. Granting authenticated would let
+-- any signed-in user probe any campaign's variant stats by uuid via
+-- /rest/v1/rpc (the estate audit's IDOR class) and add a SECURITY
+-- DEFINER advisor warning for no benefit.
+REVOKE EXECUTE ON FUNCTION public.campaign_ab_variant_stats(UUID)
+  FROM PUBLIC, authenticated, anon;
 GRANT EXECUTE ON FUNCTION public.campaign_ab_variant_stats(UUID)
-  TO authenticated, service_role;
+  TO service_role;
 
 -- No new index: the slice-phase chunk query filters
 -- (campaign_id, status, ab_variant IS NOT NULL) and the decide query
