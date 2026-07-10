@@ -410,6 +410,15 @@ export function buildAudienceQuery(db, filter, locationId, { columns = '*', sele
     .eq(assertConsentField(consentField), true)
     .not('email_status', 'in', '("bounced","complained")')
 
+  // EMAIL-HYGIENE.1 — the MARKETING path additionally excludes contacts
+  // suppressed for inactivity (email_suppressed_at, mig 395: stamped by
+  // the email-engagement-sweep cron on 90-day non-openers, auto-cleared
+  // on any open/click or re-consent). The administrative path is never
+  // suppression-gated: transactional mail must always reach the contact.
+  if (consentField === 'email_marketing') {
+    query = query.is('email_suppressed_at', null)
+  }
+
   return applyAudienceFilter(query, filter)
 }
 
@@ -434,6 +443,11 @@ export async function buildAudienceQueryAsync(db, filter, locationId, { columns 
     .eq('location_id', locationId)
     .eq(assertConsentField(consentField), true)
     .not('email_status', 'in', '("bounced","complained")')
+  // EMAIL-HYGIENE.1 — same marketing-only inactivity-suppression gate as
+  // buildAudienceQuery above (email_suppressed_at, mig 395).
+  if (consentField === 'email_marketing') {
+    query = query.is('email_suppressed_at', null)
+  }
   // Returns { query } so the caller can destructure without the
   // thenable-protocol auto-unwrap firing the underlying HTTP call
   // before the caller intends. See audience-filter.js resolveTagFilters

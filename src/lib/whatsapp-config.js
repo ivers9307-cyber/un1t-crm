@@ -70,6 +70,10 @@ function rowToConfig(row) {
     // (GREEN/YELLOW/RED, null = never fetched). sendBroadcast's preflight
     // gate reads this; env-fallback configs carry no rating (no gate).
     qualityRating: row.quality_rating ?? null,
+    // WA-BUDGET — Meta messaging-limit tier as of the last webhook/poll
+    // (TIER_250 … UNLIMITED, null = never fetched). The blast/drip tier-budget
+    // gates read this; env-fallback configs carry no tier (no gate).
+    messagingLimitTier: row.messaging_limit_tier ?? null,
   }
 }
 

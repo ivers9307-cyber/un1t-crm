@@ -53,6 +53,62 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
+// EMAIL-HYGIENE.1 — any Open or Click clears the engagement-hygiene
+// suppression stamp (contacts.email_suppressed_at, mig 395). The write
+// is guarded with .not('email_suppressed_at','is',null) so the common
+// case (not suppressed) is a filtered no-op, not a row write.
+function stubEngagementDb({ send }) {
+  const contactUpdates = []
+  return {
+    contactUpdates,
+    from: (table) => ({
+      select: () => ({
+        eq: () => ({
+          single: () => Promise.resolve({
+            data: table === 'email_sends' ? send : null,
+            error: null,
+          }),
+        }),
+      }),
+      update: (values) => {
+        const filters = []
+        const chain = {
+          eq: (col, val) => { filters.push(['eq', col, val]); return chain },
+          in: (col, val) => { filters.push(['in', col, val]); return chain },
+          not: (col, op, val) => { filters.push(['not', col, op, val]); return chain },
+          then: (resolve, reject) => {
+            if (table === 'contacts') contactUpdates.push({ values, filters })
+            return Promise.resolve({ error: null }).then(resolve, reject)
+          },
+        }
+        return chain
+      },
+    }),
+    rpc: () => Promise.resolve({ error: null }),
+  }
+}
+
+describe('processPostmarkEvent — Open/Click clear the hygiene suppression stamp (EMAIL-HYGIENE.1)', () => {
+  it.each(['Open', 'Click'])('%s clears email_suppressed_at for the contact, guarded to skip already-null rows', async (recordType) => {
+    const db = stubEngagementDb({ send: { id: 's1', contact_id: 'c1', campaign_id: null } })
+    const r = await processPostmarkEvent(db, { RecordType: recordType, MessageID: 'pm-9', FirstOpen: true })
+    expect(r.ok).toBe(true)
+    const clear = db.contactUpdates.find((u) => 'email_suppressed_at' in u.values)
+    expect(clear).toBeTruthy()
+    expect(clear.values).toEqual({ email_suppressed_at: null })
+    expect(clear.filters).toContainEqual(['eq', 'id', 'c1'])
+    // Guard: no-op when already null (no unconditional contact write).
+    expect(clear.filters).toContainEqual(['not', 'email_suppressed_at', 'is', null])
+  })
+
+  it.each(['Open', 'Click'])('%s with no matching email_sends row never touches contacts', async (recordType) => {
+    const db = stubEngagementDb({ send: null })
+    const r = await processPostmarkEvent(db, { RecordType: recordType, MessageID: 'pm-9' })
+    expect(r.ok).toBe(true)
+    expect(db.contactUpdates).toEqual([])
+  })
+})
+
 describe('processPostmarkEvent — SubscriptionChange', () => {
   it('increments total_unsubscribed for the source campaign when the opt-out actually flipped', async () => {
     const rpcCalls = []

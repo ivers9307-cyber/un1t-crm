@@ -55,6 +55,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   const [counting, setCounting] = useState(false)
   const [reachable, setReachable] = useState(null)   // WhatsApp only
   const [excluded, setExcluded] = useState(null)     // { no_number, no_consent, opted_out }
+  const [suppressed, setSuppressed] = useState(null) // email only — inactivity-suppressed (EMAIL-HYGIENE.1)
   // Submit
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
@@ -94,8 +95,9 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         setCount(data?.success ? data.count : null)
         setReachable(data?.success && channel === 'whatsapp' ? (data.reachable ?? null) : null)
         setExcluded(data?.success && channel === 'whatsapp' ? (data.excluded ?? null) : null)
+        setSuppressed(data?.success && channel === 'email' ? (data.suppressed ?? null) : null)
       } catch {
-        if (alive) { setCount(null); setReachable(null); setExcluded(null) }
+        if (alive) { setCount(null); setReachable(null); setExcluded(null); setSuppressed(null) }
       } finally {
         if (alive) setCounting(false)
       }
@@ -337,6 +339,12 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
                   ? <span><b className="text-un1t-text">{count.toLocaleString()}</b> match · <b className="text-un1t-text">{(reachable ?? 0).toLocaleString()}</b> reachable on WhatsApp</span>
                   : <span><b className="text-un1t-text">{count.toLocaleString()}</b> contact{count === 1 ? '' : 's'} match this filter</span>}
           </div>
+          {channel === 'email' && !counting && (suppressed ?? 0) > 0 && (
+            <div className="flex items-start gap-1.5 text-amber-700">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+              <span>{suppressed.toLocaleString()} excluded for inactivity (no opens or clicks in 90 days)</span>
+            </div>
+          )}
           {channel === 'whatsapp' && !counting && count != null && reachable != null && (count - reachable) > 0 && (
             <div className="flex items-start gap-1.5 text-amber-700">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />

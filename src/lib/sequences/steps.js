@@ -98,6 +98,16 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
     await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: `email_status is '${contact.email_status}'` })
     return null
   }
+  // EMAIL-HYGIENE.1 — engagement-suppressed contacts (90-day non-openers,
+  // stamped on contacts.email_suppressed_at by the email-engagement-sweep
+  // cron, mig 395) are a recorded SKIP, mirroring the campaign audience
+  // gate in buildAudienceQuery. Suppression is reversible: any open/click
+  // (or re-consent) clears the stamp, so a re-engaged contact resumes
+  // receiving sequence email from their next step.
+  if (contact.email_suppressed_at) {
+    await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: 'suppressed for email inactivity (no opens or clicks in 90 days)' })
+    return null
+  }
 
   // Resolve content: inline OR via template_id reference.
   let subject = step.subject
