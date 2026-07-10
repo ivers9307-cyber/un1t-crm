@@ -68,6 +68,7 @@
 import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch, consentFieldForStream, isTransientSendError } from './postmark.js'
 import { injectPreheader, htmlToPlainText } from './email-content.js'
 import { resolveAbPhase, assignAbVariants, clampAbTestPct, decideAbWinner, subjectForVariant } from './campaign-ab.js'
+import { frequencyCapFromLocationSettings, capCutoffIso, stampMarketingTouch, CAMPAIGN_CAP_SKIP_AFTER_MS } from './frequency-cap.js'
 import { getAppUrl } from './app-url.js'
 
 const CHUNK_SIZE = 500             // recipients per cron tick per campaign
@@ -94,7 +95,9 @@ export const SENDING_LEASE_MS = 10 * 60_000
  * Process one cron tick of work for one campaign.
  *
  * @param {SupabaseClient} db — service-role client
- * @param {object} campaign — full campaigns row (joined with locations(name, slug))
+ * @param {object} campaign — full campaigns row (joined with
+ *   locations(name, slug, email_inbox_reply_to, settings) — settings feeds
+ *   the FREQ-CAP.1 gate; a missing join degrades to cap-disabled)
  * @returns {Promise<{ phase: string, sent?: number, error?: string }>}
  */
 export async function tickCampaignSend(db, campaign) {
@@ -104,6 +107,14 @@ export async function tickCampaignSend(db, campaign) {
   // the Postmark stream, and whether an unsubscribe footer is appended.
   const stream = campaign.postmark_stream === 'outbound' ? 'outbound' : 'broadcast'
   const consentField = consentFieldForStream(stream)
+
+  // FREQ-CAP.1 — cross-channel marketing frequency cap. Setting rides the
+  // run-campaigns join (locations.settings); a missing join degrades to
+  // disabled (fail open). Only MARKETING (broadcast-stream) campaigns are
+  // gated OR stamped — utility/outbound campaigns are administrative mail
+  // and must never consume a contact's marketing window.
+  const capSetting = frequencyCapFromLocationSettings(campaign.locations?.settings)
+  const capActive = stream === 'broadcast' && capSetting.enabled
 
   // Hard stop — cancel-while-sending.
   if (campaign.cancel_requested_at) {
@@ -263,6 +274,7 @@ export async function tickCampaignSend(db, campaign) {
       contact:contacts!inner(
         id, email, first_name, last_name, name, phone, pipeline_stage_slug,
         email_status, email_marketing, email_administrative, glofox_passcode,
+        last_marketing_touch_at,
         contact_preferences(unsubscribe_token)
       )
     `)
@@ -271,6 +283,23 @@ export async function tickCampaignSend(db, campaign) {
   if (abPhase === 'slice') {
     queuedQuery = queuedQuery.not('ab_variant', 'is', null)
   }
+  // FREQ-CAP.1 — when the cap is on, contacts inside their marketing window
+  // are NOT selectable this tick: the embedded-contact filter (contacts is
+  // !inner-joined, so it drops the parent row) leaves their recipient rows
+  // 'queued' and untouched — no attempts bump, no terminal status — and a
+  // later tick sends them once the window clears. Filtering in the query
+  // (not post-fetch) also stops a fully-capped front-of-queue chunk from
+  // starving uncapped rows behind it (selection is ordered by id).
+  // Runs AFTER the consent gate in spirit: consent was applied at populate
+  // time and is re-checked post-claim below; a contact who is both capped
+  // and since-unsubscribed just stays queued until the window clears, then
+  // gets cancelled by the consent re-check — never sent, never stamped.
+  if (capActive) {
+    queuedQuery = queuedQuery.or(
+      `last_marketing_touch_at.is.null,last_marketing_touch_at.lt.${capCutoffIso(capSetting)}`,
+      { referencedTable: 'contact' },
+    )
+  }
   const { data: candidateRows, error: queuedErr } = await queuedQuery
     .order('id', { ascending: true })
     .limit(CHUNK_SIZE)
@@ -278,6 +307,46 @@ export async function tickCampaignSend(db, campaign) {
   if (queuedErr) return { phase: 'send', error: `queued fetch failed: ${queuedErr.message}` }
 
   if (!candidateRows || candidateRows.length === 0) {
+    // FREQ-CAP.1 — with the cap filter on, an empty fetch can mean "every
+    // remaining queued row is cap-deferred", NOT "done". Count the queue
+    // without the cap filter before finalising (or before starting the A/B
+    // wait clock — a capped slice row hasn't been sent its variant yet).
+    if (capActive) {
+      let remainingQuery = db
+        .from('campaign_recipients')
+        .select('id', { count: 'exact', head: true })
+        .eq('campaign_id', campaignId)
+        .eq('status', 'queued')
+      if (abPhase === 'slice') remainingQuery = remainingQuery.not('ab_variant', 'is', null)
+      const { count: capHeld } = await remainingQuery
+      if ((capHeld || 0) > 0) {
+        // Safety valve: a contact re-touched by other channels every day
+        // could hold this campaign at 'sending' forever. Rows still cap-
+        // deferred CAMPAIGN_CAP_SKIP_AFTER_MS (7 days) after the send
+        // started are skipped terminally ('skipped_frequency_cap' — free
+        // TEXT status; stats come from email_sends so counters stay true),
+        // and the next tick finalises normally.
+        const startedMs = campaign.send_started_at ? new Date(campaign.send_started_at).getTime() : null
+        if (startedMs && Date.now() - startedMs > CAMPAIGN_CAP_SKIP_AFTER_MS) {
+          let skipQuery = db
+            .from('campaign_recipients')
+            .update({ status: 'skipped_frequency_cap' })
+            .eq('campaign_id', campaignId)
+            .eq('status', 'queued')
+          if (abPhase === 'slice') skipQuery = skipQuery.not('ab_variant', 'is', null)
+          await skipQuery
+          return { phase: 'cap_skipped', skipped: capHeld, sent: 0 }
+        }
+        // Leave the campaign 'sending' (acceptable — the window is hours)
+        // and rotate it to the back of the cron's pick order, mirroring
+        // ab_waiting, so an hours-long cap hold can't pin a per-tick slot.
+        await db.from('campaigns')
+          .update({ updated_at: new Date().toISOString() })
+          .eq('id', campaignId)
+        return { phase: 'cap_deferred', deferred: capHeld, sent: 0 }
+      }
+    }
+
     if (abPhase === 'slice') {
       // Slice drained — but only start the wait clock once nothing is
       // still in flight ('sending' within its lease). Reclaim above
@@ -487,6 +556,13 @@ export async function tickCampaignSend(db, campaign) {
 
   if (sendRecords.length > 0) {
     await db.from('email_sends').insert(sendRecords)
+    // FREQ-CAP.1 — batch marketing-touch stamp for this chunk's successful
+    // sends. Marketing stream only (utility campaigns never stamp); stamped
+    // even while the cap is DISABLED so enabling it later has history.
+    // Best-effort inside the helper — a stamp failure never fails the tick.
+    if (stream === 'broadcast') {
+      await stampMarketingTouch(db, sendRecords.map(r => r.contact_id))
+    }
   }
 
   // Refresh all rollup counters from email_sends so the progress

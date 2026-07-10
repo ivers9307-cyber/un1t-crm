@@ -1898,6 +1898,37 @@ registry.registerPath({
   },
 })
 
+// Marketing frequency cap (FREQ-CAP.1, mig 399)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/comms-frequency-cap',
+  tags: ['Communications'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Cross-channel marketing frequency cap for a location',
+  description: 'Returns { enabled, min_hours_between, can_edit } (locations.settings.comms_frequency_cap; defaults enabled=false, 24h). When enabled, one contact receives at most one MARKETING touch (email campaign / WA blast / WA drip / sequence email+WA step) per window; capped sends are deferred, transactional sends are unaffected.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Current cap setting' },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/comms-frequency-cap',
+  tags: ['Communications'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save the marketing frequency cap (owner or master)',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ enabled: z.boolean(), min_hours_between: z.number().int().min(1).max(168) }).openapi('CommsFrequencyCapSave') } } },
+  },
+  responses: {
+    200: { description: 'Cap saved' },
+    403: { description: 'Forbidden — owner or master', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Schedule
 registry.registerPath({
   method: 'get',

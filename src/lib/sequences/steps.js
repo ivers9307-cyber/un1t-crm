@@ -38,6 +38,31 @@ import {
 } from '@/lib/whatsapp'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { getLocationBranding } from '@/lib/location-branding'
+import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
+
+// ── FREQ-CAP.1 — cross-channel marketing frequency cap ──────────
+//
+// The email + WhatsApp send handlers receive the sequence location's
+// normalised cap setting as ctx.frequencyCap (resolved + cached per
+// tick by the scheduler). When the contact is inside the window the
+// handler throws FrequencyCapDeferral BEFORE any provider call; the
+// scheduler catches it specifically and pushes next_step_at to the
+// window-clear time (+ jitter) WITHOUT touching error_count or the
+// cursor — the step is DEFERRED, never skipped, and because nothing
+// was sent a deferral can never create a re-send loop.
+//
+// Order of gates: the cap check runs AFTER the per-contact consent/
+// hygiene gates above it — a suppressed contact is a recorded skip
+// (excluded anyway) and must be neither deferred nor stamped.
+//
+// SMS steps are deliberately NOT gated or stamped in this slice (the
+// cap covers email + WhatsApp, the two channels campaigns/broadcasts
+// share) — extend here if SMS marketing volume ever warrants it.
+function assertNotFrequencyCapped(contact, frequencyCap) {
+  if (frequencyCap?.enabled && isFrequencyCapped(contact, frequencyCap)) {
+    throw new FrequencyCapDeferral(frequencyCapDeferUntil(contact, frequencyCap))
+  }
+}
 
 // ── recorded skips (COMMS-AUDIT 2026-07-10, SEQ batch) ──────────
 //
@@ -75,7 +100,7 @@ async function recordStepSkip(db, { contact, sequence, step, channel, reason }) 
 
 // ── email ───────────────────────────────────────────────────────
 
-export async function sendEmailStep(db, { enrollment: _enrollment, step, sequence, contact }) {
+export async function sendEmailStep(db, { enrollment: _enrollment, step, sequence, contact, frequencyCap }) {
   if (!contact?.email) {
     throw new Error('Contact has no email address — cannot send email step.')
   }
@@ -108,6 +133,9 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
     await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: 'suppressed for email inactivity (no opens or clicks in 90 days)' })
     return null
   }
+  // FREQ-CAP.1 — after every consent/hygiene gate, before any send work.
+  // Throws FrequencyCapDeferral (deferred, not skipped — see module header).
+  assertNotFrequencyCapped(contact, frequencyCap)
 
   // Resolve content: inline OR via template_id reference.
   let subject = step.subject
@@ -167,6 +195,10 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
     sequenceStepId: step.id,
   })
 
+  // FREQ-CAP.1 — marketing-touch stamp after the successful send (best-
+  // effort in the helper; stamped even while the cap is disabled).
+  await stampMarketingTouch(db, [contact.id])
+
   // Bump per-step metric.
   // supabase-js builders don't have .catch — try/catch around await.
   try { await db.rpc('increment_step_sent', { p_step_id: step.id }) } catch {}
@@ -176,7 +208,7 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
 
 // ── whatsapp ────────────────────────────────────────────────────
 
-export async function sendWhatsappStep(db, { step, sequence, contact }) {
+export async function sendWhatsappStep(db, { step, sequence, contact, frequencyCap }) {
   if (!step.whatsapp_template_id) {
     throw new Error('WhatsApp step has no template_id.')
   }
@@ -203,6 +235,9 @@ export async function sendWhatsappStep(db, { step, sequence, contact }) {
     await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: `wa_status is '${contact.wa_status}'` })
     return null
   }
+  // FREQ-CAP.1 — after every consent gate, before any send work. Throws
+  // FrequencyCapDeferral (deferred, not skipped — see module header).
+  assertNotFrequencyCapped(contact, frequencyCap)
 
   // Resolve the template; must be APPROVED to send.
   const { data: template } = await db
@@ -278,6 +313,10 @@ export async function sendWhatsappStep(db, { step, sequence, contact }) {
     }).select('id').single()
     sendRowId = msgRow?.id || null
   }
+
+  // FREQ-CAP.1 — marketing-touch stamp after the successful send (best-
+  // effort in the helper; stamped even while the cap is disabled).
+  await stampMarketingTouch(db, [contact.id])
 
   // Bump per-step metric.
   // supabase-js builders don't have .catch — try/catch around await.

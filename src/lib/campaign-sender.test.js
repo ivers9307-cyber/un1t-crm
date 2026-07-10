@@ -663,3 +663,163 @@ describe('tickCampaignSend — A/B final phase + cancel', () => {
     expect(hasVariantFilter(parked)).toBe(false)
   })
 })
+
+// ── FREQ-CAP.1 — cross-channel marketing frequency cap ─────────────
+
+describe('tickCampaignSend — marketing frequency cap (FREQ-CAP.1)', () => {
+  const capLocations = (enabled = true, hours = 24) => ({
+    name: 'Stillorgan',
+    settings: { comms_frequency_cap: { enabled, min_hours_between: hours } },
+  })
+  const capCampaign = (overrides = {}) => ({
+    ...campaign,
+    locations: capLocations(),
+    ...overrides,
+  })
+
+  // The queued-chunk fetch (non-head select on campaign_recipients with
+  // status='queued').
+  const chunkSelect = (statements) =>
+    statements.find(s =>
+      s.table === 'campaign_recipients' &&
+      s.ops[0]?.method === 'select' &&
+      !s.ops[0].args[1]?.head &&
+      hasEq(s, 'status', 'queued')
+    )
+  const capOrOp = (state) =>
+    state?.ops.find(o =>
+      o.method === 'or' &&
+      String(o.args[0]).includes('last_marketing_touch_at') &&
+      o.args[1]?.referencedTable === 'contact'
+    )
+
+  it('applies the embedded-contact cap filter to the queued fetch when enabled', async () => {
+    const { db, statements } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, capCampaign())
+
+    const orOp = capOrOp(chunkSelect(statements))
+    expect(orOp).toBeTruthy()
+    expect(orOp.args[0]).toContain('last_marketing_touch_at.is.null')
+    expect(orOp.args[0]).toContain('last_marketing_touch_at.lt.')
+  })
+
+  it('does NOT filter when the cap is disabled (default)', async () => {
+    const { db, statements } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, campaign) // locations.settings absent
+
+    expect(capOrOp(chunkSelect(statements))).toBeFalsy()
+  })
+
+  it('does NOT filter utility (outbound-stream) campaigns even when enabled', async () => {
+    const { db, statements } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, capCampaign({ postmark_stream: 'outbound' }))
+
+    expect(capOrOp(chunkSelect(statements))).toBeFalsy()
+  })
+
+  // Route for the "everything remaining is cap-deferred" shape: recipients
+  // exist (existingCount=5), the cap-filtered chunk fetch is empty, and the
+  // unfiltered queued head-count still shows rows.
+  const capHeldRoute = ({ queuedRemaining = 3 }) => (state) => {
+    if (state.table !== 'campaign_recipients') return { data: [] }
+    const first = state.ops[0]
+    if (first.method === 'select' && first.args[1]?.head) {
+      return hasEq(state, 'status', 'queued') ? { count: queuedRemaining } : { count: 5 }
+    }
+    if (first.method === 'select' && hasEq(state, 'status', 'sending')) return { data: [] }
+    if (first.method === 'select') return { data: [] }
+    return {}
+  }
+
+  it('holds the campaign open (cap_deferred) while queued rows are cap-held', async () => {
+    const { db, statements } = makeDb(capHeldRoute({ queuedRemaining: 3 }))
+    sendBatch.mockResolvedValue([])
+
+    const result = await tickCampaignSend(db, capCampaign({
+      send_started_at: new Date().toISOString(),
+    }))
+
+    expect(result.phase).toBe('cap_deferred')
+    expect(result.deferred).toBe(3)
+    // NOT finalised — and rotated to the back of the pick order.
+    const updates = campaignUpdates(statements)
+    expect(updates.some(u => u.status === 'sent')).toBe(false)
+    expect(updates).toContainEqual(expect.objectContaining({ updated_at: expect.any(String) }))
+  })
+
+  it('skips cap-held rows terminally after 7 days so the campaign can finalise', async () => {
+    const { db, statements } = makeDb(capHeldRoute({ queuedRemaining: 2 }))
+    sendBatch.mockResolvedValue([])
+
+    const result = await tickCampaignSend(db, capCampaign({
+      send_started_at: new Date(Date.now() - 8 * 24 * 60 * 60_000).toISOString(),
+    }))
+
+    expect(result.phase).toBe('cap_skipped')
+    const skip = statements.find(s =>
+      s.table === 'campaign_recipients' &&
+      s.ops[0]?.method === 'update' &&
+      s.ops[0].args[0].status === 'skipped_frequency_cap'
+    )
+    expect(skip).toBeTruthy()
+    expect(hasEq(skip, 'status', 'queued')).toBe(true)
+  })
+
+  it('finalises normally when the cap is on and the queue is truly empty', async () => {
+    const { db, statements } = makeDb(capHeldRoute({ queuedRemaining: 0 }))
+    sendBatch.mockResolvedValue([])
+
+    const result = await tickCampaignSend(db, capCampaign())
+
+    expect(result.phase).toBe('finalise')
+    expect(campaignUpdates(statements)).toContainEqual(expect.objectContaining({ status: 'sent' }))
+  })
+
+  const touchStamps = (statements) =>
+    statements.filter(s =>
+      s.table === 'contacts' &&
+      s.ops[0]?.method === 'update' &&
+      'last_marketing_touch_at' in s.ops[0].args[0]
+    )
+
+  it('stamps last_marketing_touch_at for sent contacts even while the cap is DISABLED', async () => {
+    const { db, statements } = makeDb(routeFor({
+      candidates: [makeRecipient('r1', 0), makeRecipient('r2', 0)],
+    }))
+    sendBatch.mockResolvedValue([
+      { ErrorCode: 0, MessageID: 'pm-1' },
+      { ErrorCode: 0, MessageID: 'pm-2' },
+    ])
+
+    await tickCampaignSend(db, campaign) // cap not configured
+
+    const stamps = touchStamps(statements)
+    expect(stamps).toHaveLength(1)
+    expect(stamps[0].ops.find(o => o.method === 'in').args[1])
+      .toEqual(['contact-r1', 'contact-r2'])
+  })
+
+  it('does NOT stamp failed/bounced recipients', async () => {
+    const { db, statements } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 406, Message: 'Inactive recipient' }])
+
+    await tickCampaignSend(db, campaign)
+
+    expect(touchStamps(statements)).toHaveLength(0)
+  })
+
+  it('never stamps utility (outbound-stream) sends', async () => {
+    const { db, statements } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, capCampaign({ postmark_stream: 'outbound' }))
+
+    expect(touchStamps(statements)).toHaveLength(0)
+  })
+})

@@ -16,6 +16,7 @@
 // broken contact (e.g. invalid email) can't fill the cron logs forever.
 
 import { createServerClient } from '@/lib/supabase'
+import { getLocationFrequencyCap, FrequencyCapDeferral } from '@/lib/frequency-cap'
 import {
   sendEmailStep,
   sendWhatsappStep,
@@ -215,7 +216,18 @@ export async function isGoalMet({ db, contact, goalConfig }) {
  */
 export async function runSequences({ now = new Date() } = {}) {
   const db = createServerClient()
-  const stats = { picked: 0, sent: 0, completed: 0, errored: 0, paused: 0, skipped: 0 }
+  const stats = { picked: 0, sent: 0, completed: 0, errored: 0, paused: 0, skipped: 0, deferred: 0 }
+
+  // FREQ-CAP.1 — the marketing frequency-cap setting is per LOCATION;
+  // resolve it once per location per tick (a 100-enrolment batch is
+  // usually one or two locations).
+  const capCache = new Map()
+  const capSettingFor = async (locationId) => {
+    if (!capCache.has(locationId)) {
+      capCache.set(locationId, await getLocationFrequencyCap(db, locationId))
+    }
+    return capCache.get(locationId)
+  }
 
   // Pick due rows. Order by next_step_at so older deliveries fire
   // first. SKIP LOCKED isn't directly available via PostgREST so we
@@ -323,9 +335,14 @@ export async function runSequences({ now = new Date() } = {}) {
         // Wait step has no send — just advance with the delay.
         sendId = null
       } else if (step.step_type === 'email' || !step.step_type) {
-        sendId = await sendEmailStep(db, { enrollment, step, sequence, contact })
+        // FREQ-CAP.1 — the handler checks the cap AFTER its consent gates
+        // and throws FrequencyCapDeferral BEFORE sending; the catch below
+        // defers the enrolment without touching error_count or the cursor.
+        const frequencyCap = await capSettingFor(sequence.location_id)
+        sendId = await sendEmailStep(db, { enrollment, step, sequence, contact, frequencyCap })
       } else if (step.step_type === 'whatsapp') {
-        sendId = await sendWhatsappStep(db, { enrollment, step, sequence, contact })
+        const frequencyCap = await capSettingFor(sequence.location_id)
+        sendId = await sendWhatsappStep(db, { enrollment, step, sequence, contact, frequencyCap })
       } else if (step.step_type === 'sms') {
         sendId = await sendSmsStep(db, { enrollment, step, sequence, contact })
       } else if (step.step_type === 'apply_tag') {
@@ -438,6 +455,24 @@ export async function runSequences({ now = new Date() } = {}) {
       }
       stats.sent++
     } catch (e) {
+      // FREQ-CAP.1 — a frequency-cap deferral is control flow, not an
+      // error: NOTHING was sent (the handler throws before the provider
+      // call), so the cursor stays put and the step fires again once the
+      // contact's window clears. next_step_at moves to deferUntil
+      // (window remaining + jitter — replacing the claim lease written
+      // above); error_count / last_error / status are untouched, so a
+      // capped contact can never be auto-paused by deferrals. If THIS
+      // update fails, next_step_at stays at the claim lease (~10 min out)
+      // and the gate simply re-evaluates then — still nothing sent, so no
+      // re-send loop is possible on any path.
+      if (e instanceof FrequencyCapDeferral) {
+        await db.from('sequence_enrollments').update({
+          next_step_at: e.deferUntil,
+          last_processed_at: now.toISOString(),
+        }).eq('id', enrollment.id)
+        stats.deferred++
+        continue
+      }
       const errCount = (enrollment.error_count || 0) + 1
       const shouldPause = errCount >= MAX_ERRORS
       await db.from('sequence_enrollments').update({

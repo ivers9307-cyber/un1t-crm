@@ -68,12 +68,31 @@ export function estimateDripDays(remaining, dailyCap) {
 // to min(headroom, perTickMax). `exhausted` means this batch finishes the list
 // (or there was nothing left) — note headroom===0 yields an empty batch that is
 // NOT exhaustion (there's capacity-wait, not completion).
-export function selectDripRecipients({ audience, doneIds, headroom, perTickMax = PER_TICK_MAX }) {
+//
+// FREQ-CAP.1 — `isEligible(contact)` (default: everyone) lets the caller hold
+// individual contacts out of THIS tick without recording anything: the drip
+// engine passes the marketing frequency-cap predicate, so a contact touched
+// by another channel inside the cap window is simply not picked. Deferred
+// contacts still count as remaining — `exhausted` stays false while any
+// exist, so the drip is held open ('sending') and a later tick re-picks them
+// once their window clears. This reuses the existing done-ids/resume
+// machinery instead of the 131049 'capped'-row park pattern: parking would
+// write recipient rows for sends never attempted at Meta (polluting
+// delivery_summary/failure counts) and its retry cadence is pinned to
+// CAPPED_RETRY_HOURS rather than the operator's configured window.
+export function selectDripRecipients({ audience, doneIds, headroom, perTickMax = PER_TICK_MAX, isEligible = () => true }) {
   const done = new Set(doneIds)
   const remaining = audience.filter(c => !done.has(c.id))
+  const eligible = remaining.filter(isEligible)
+  const deferred = remaining.length - eligible.length
   const cap = Math.max(0, Math.min(headroom, perTickMax))
-  const toSend = remaining.slice(0, cap)
-  return { toSend, remainingCount: remaining.length, exhausted: remaining.length <= toSend.length }
+  const toSend = eligible.slice(0, cap)
+  return {
+    toSend,
+    remainingCount: remaining.length,
+    deferred,
+    exhausted: deferred === 0 && remaining.length <= toSend.length,
+  }
 }
 
 // Decide the broadcast's post-tick row state. autoPaused beats everything (we hit

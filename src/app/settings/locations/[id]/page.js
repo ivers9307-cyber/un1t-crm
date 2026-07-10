@@ -27,6 +27,7 @@ import BrandingSettings from '@/components/BrandingSettings'
 import OrgBrandingSettings from '@/components/OrgBrandingSettings'
 import LocationIntegrations from '@/components/settings/LocationIntegrations'
 import NotificationConfigCard from '@/components/settings/NotificationConfigCard'
+import CommsFrequencyCapCard from '@/components/settings/CommsFrequencyCapCard'
 
 export const dynamic = 'force-dynamic'
 
@@ -145,7 +146,13 @@ export default async function EditLocationPage(props) {
       </div>
 
       {active === 'details' && (
-        <LocationForm location={location} callerRole={user.role} organizations={organizations || []} />
+        <>
+          <LocationForm location={location} callerRole={user.role} organizations={organizations || []} />
+          {/* FREQ-CAP.1 — cross-channel marketing frequency cap. Lives on
+              Details (not Integrations — it carries no credentials and
+              spans email + WhatsApp, so no single integration tab fits). */}
+          <CommsFrequencyCapCard locationId={location.id} />
+        </>
       )}
 
       {/* Features matrix — master only. */}
