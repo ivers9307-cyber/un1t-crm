@@ -10,6 +10,7 @@ import { createServerClient } from '@/lib/supabase'
 import { HOST_EVENT_STATUS_LABEL } from '@/lib/host-events'
 import HostSubmitButton from '@/components/host/HostSubmitButton'
 import HostPayouts from '@/components/host/HostPayouts'
+import HostStatements from '@/components/host/HostStatements'
 
 export const dynamic = 'force-dynamic'
 
@@ -122,6 +123,11 @@ export default async function HostDashboard() {
           /api/host/stripe/payouts and renders nothing for non-Stripe hosts or
           when Stripe is unavailable (HOST-PORTAL.12). */}
       <HostPayouts />
+
+      {/* Monthly statement CSV downloads — self-fetches from
+          /api/host/statements and renders nothing until a month has settled
+          ticket activity (HOST-PORTAL.13). */}
+      <HostStatements />
 
       <section className="mt-8">
         <div className="flex items-center justify-between gap-4 mb-3">
