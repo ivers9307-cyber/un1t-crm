@@ -77,7 +77,10 @@ export const AUDIENCE_FIELDS = Object.freeze({
   // opted-out / invalid recipients in audience builders.
   sms_status:                 { type: 'select',  ops: ['eq', 'neq'] },
   label:                     { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
-  tags:                      { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
+  // contacts.tags is text[] — `array: true` routes it through the
+  // array-operator branch (PostgREST `cs`); the scalar eq/ilike the
+  // other text fields use are a PostgREST 400 on an array column.
+  tags:                      { type: 'text',    array: true, ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
   glofox_member_id:          { type: 'text',    ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
 
   // Contact identifiers (filtering only — never returned by these queries)
@@ -221,9 +224,56 @@ function orIlikePattern(v) {
   return pat
 }
 
+// Postgres array literal for a single element, for `cs` filters on a
+// text[] column ({"PTC"}). Always quoted so commas/braces in a tag
+// can't be parsed as separators.
+function pgArrayLiteral(v) {
+  const s = String(v ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  return `{"${s}"}`
+}
+
+// Array-typed columns (fieldConfig.array) — element membership is the
+// only comparison that makes sense for a tag, so eq and contains both
+// mean "has this tag" (cs) and neq/not_contains mean "doesn't" —
+// scalar eq/ilike on a text[] column is a PostgREST 400.
+function applyArrayFieldOp(query, field, op, v) {
+  switch (op) {
+    case 'eq':
+    case 'contains':
+      return query.contains(field, [String(v ?? '')])
+    case 'neq':
+    case 'not_contains':
+      return query.not(field, 'cs', pgArrayLiteral(v))
+    case 'is_null':
+      return query.is(field, null)
+    case 'is_not_null':
+    case 'not_null':
+      return query.not(field, 'is', null)
+    default:
+      throw new InvalidAudienceFilterError(`Operator "${op}" is not supported on array field "${field}"`)
+  }
+}
+
 // Build the PostgREST condition string for one validated (field, op, v).
 // Mirrors the AND switch in applyAudienceFilter exactly.
-function toOrCondition(field, op, v) {
+function toOrCondition(field, op, v, fieldConfig) {
+  if (fieldConfig?.array) {
+    switch (op) {
+      case 'eq':
+      case 'contains':
+        return `${field}.cs.${orValue(pgArrayLiteral(v))}`
+      case 'neq':
+      case 'not_contains':
+        return `${field}.not.cs.${orValue(pgArrayLiteral(v))}`
+      case 'is_null':
+        return `${field}.is.null`
+      case 'is_not_null':
+      case 'not_null':
+        return `${field}.not.is.null`
+      default:
+        throw new InvalidAudienceFilterError(`Operator "${op}" is not supported on array field "${field}"`)
+    }
+  }
   switch (op) {
     case 'eq': return `${field}.eq.${orValue(v)}`
     case 'neq': return `${field}.neq.${orValue(v)}`
@@ -335,7 +385,12 @@ export function applyAudienceFilter(query, filter) {
     // OR logic — accumulate a PostgREST condition string instead of
     // chaining (which would AND). Applied once after the loop.
     if (useOr) {
-      orParts.push(toOrCondition(field, op, v))
+      orParts.push(toOrCondition(field, op, v, fieldConfig))
+      continue
+    }
+
+    if (fieldConfig.array) {
+      query = applyArrayFieldOp(query, field, op, v)
       continue
     }
 
