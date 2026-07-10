@@ -39,9 +39,9 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'No booking Flow is configured for this location.' }, { status: 400 })
   }
 
-  // Launch on the PATH screen with empty data — identical to what the
-  // endpoint's INIT returns (pathScreen()), so the session send and the
-  // template button open the exact same first screen.
+  // No `screen` → data_exchange: Meta calls our INIT endpoint, which returns the
+  // class Day screen with live days (classDayScreen) — identical to what the
+  // template button opens, so both open the exact same first screen.
   let sendResult
   try {
     sendResult = await sendFlowMessage(conversation.wa_phone, {
@@ -50,7 +50,6 @@ export async function POST(request, props) {
       flowToken: `${conversation.contact_id}.${conversation.location_id}`,
       flowCta: cfg.cta_text || undefined,
       bodyText: cfg.invite_text || undefined,
-      screen: 'PATH',
     })
   } catch (e) {
     return NextResponse.json({ success: false, error: e?.message || 'Meta flow send failed' }, { status: 502 })
