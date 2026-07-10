@@ -1,6 +1,6 @@
 // ADS-FUNNEL — the /start booking-funnel drop-off panel for /dashboard/ads.
-// Shows where visitors fall out of the wizard (landed → chose a path → entered
-// details → saw the times → booked), read from funnel_events. The single
+// Shows where visitors fall out of the wizard (landed → entered details → saw
+// the times → booked), read from funnel_events. The single
 // biggest between-stage drop is highlighted amber — the step most worth fixing.
 // Presentational only (RSC-compatible, no directive).
 
