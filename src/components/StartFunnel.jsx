@@ -1,6 +1,6 @@
 'use client'
 
-// /start booking funnel. Choose path → details → pick a slot/class → done.
+// /start booking funnel. Details → pick a class → booked, then a skippable consult upsell.
 // Consultation reuses the public booking APIs (POST /api/public/book, which
 // fires a WhatsApp confirm on source='meta_book'). Class enqueues to the async
 // pipeline (POST /api/public/class-booking) → the cron books + WhatsApp-confirms.
@@ -254,7 +254,7 @@ export default function StartFunnel() {
           <h1 className="font-display font-extrabold uppercase text-2xl mb-4">Pick a time</h1>
           {daysLoading && <p className="text-white/50 text-sm">Loading available days…</p>}
           {!daysLoading && days.length === 0 && (
-            <p className="text-white/50 text-sm">No consultation times available right now — try booking a class instead, or message us and we&apos;ll sort one for you.</p>
+            <p className="text-white/50 text-sm">No consultation times available right now — message us and we&apos;ll sort one for you.</p>
           )}
           {days.length > 0 && (
             <>
@@ -286,7 +286,7 @@ export default function StartFunnel() {
         <div>
           <h1 className="font-display font-extrabold uppercase text-2xl mb-4">Pick a class</h1>
           {classesLoading && <p className="text-white/50 text-sm">Loading classes…</p>}
-          {!classesLoading && classes.length === 0 && <p className="text-white/50 text-sm">No classes available right now — try a consultation instead.</p>}
+          {!classesLoading && classes.length === 0 && <p className="text-white/50 text-sm">No classes are bookable online right now — message us and we&apos;ll get you booked in.</p>}
           {!classesLoading && classes.length > 0 && (
             <>
               <div className="flex gap-2 overflow-x-auto pb-3 mb-4">
