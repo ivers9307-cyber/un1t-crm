@@ -1,6 +1,7 @@
 // GET loads the host's own event for the edit form; PUT applies edits and the
 // price/date re-review transition. host_id === session.host.id or 404. (HOST-PORTAL.3)
-// DELETE hard-deletes the host's own event, but ONLY when it has zero
+// DELETE hard-deletes the host's own event, but ONLY when it is not published
+// (unpublish first — closes the register-vs-delete race) AND has zero
 // registrations — paid registrations mean money, and refunds are staff-only. (HOST-PORTAL.10)
 import { NextResponse } from 'next/server'
 import { getCurrentHost } from '@/lib/host-auth'
@@ -107,6 +108,19 @@ export async function DELETE(_request, props) {
     .maybeSingle()
   if (!race || race.host_id !== session.host.id) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+
+  // Published events must come off sale BEFORE deletion. Public registration
+  // only works on status='published', so a fresh registration could race in
+  // between the zero-count check below and the delete — cascading away a
+  // registration/payment row while the customer's Stripe checkout session
+  // still exists (they'd pay for a deleted event). Non-published events can't
+  // take new registrations, which makes the count check race-free.
+  if (race.status === 'published') {
+    return NextResponse.json(
+      { success: false, error: 'Take the event off sale first, then delete it.' },
+      { status: 409 }
+    )
   }
 
   // ANY registration row (confirmed, pending, even cancelled) blocks the

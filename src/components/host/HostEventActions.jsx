@@ -3,8 +3,10 @@
 // HOST-PORTAL.10 — "Take off sale" / "Delete event" actions on the host event
 // detail page. Take off sale = POST unpublish (published → draft; attendees
 // keep their tickets, new sales stop, relisting needs re-approval). Delete is
-// only offered when the event has ZERO registrations — the API enforces the
-// same rule, this just hides a button that would always 409.
+// only offered when the event is NOT published (take-off-sale is the path —
+// deleting a live event races incoming registrations) AND has ZERO
+// registrations — the API enforces both, this just hides buttons that would
+// always 409.
 
 import { useState } from 'react'
 
@@ -53,7 +55,7 @@ export default function HostEventActions({ eventId, status, hasRegistrations }) 
   }
 
   const showOffSale = status === 'published'
-  const showDelete = !hasRegistrations
+  const showDelete = status !== 'published' && !hasRegistrations
   if (!showOffSale && !showDelete) return null
 
   return (
