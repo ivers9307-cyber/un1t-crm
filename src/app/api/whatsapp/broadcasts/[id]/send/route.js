@@ -23,8 +23,19 @@ export async function POST(request, props) {
   const guard = assertLocationAccessOr404(user, row.location_id)
   if (guard) return guard
 
+  // WA-QUALITY.2 — optional JSON body `{ force: true }` bypasses the
+  // number-quality preflight refusal inside sendBroadcast (explicit
+  // operator override). The body is optional; absent/invalid → no force.
+  let force = false
   try {
-    const result = await sendBroadcast(params.id)
+    const body = await request.json()
+    force = body?.force === true
+  } catch {
+    // no/invalid body — normal send
+  }
+
+  try {
+    const result = await sendBroadcast(params.id, { force })
     return NextResponse.json({ success: true, ...result })
   } catch (error) {
     console.error('Broadcast send error:', error)

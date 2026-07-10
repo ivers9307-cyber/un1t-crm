@@ -33,6 +33,19 @@ export function numberColumnUpdate(field, value = {}) {
   }
 }
 
+// WA-QUALITY.1 — should this event auto-pause in-flight drip broadcasts?
+// Returns the operator-facing reason, or null. Only genuine collapses pause:
+// quality FLAGGED (→ RED) or a messaging-limit DOWNGRADE. Recoveries
+// (UNFLAGGED/UPGRADE) and every other field leave broadcasts alone.
+export function broadcastPauseReason(field, value = {}) {
+  if (field !== 'phone_number_quality_update') return null
+  if (value.event === 'FLAGGED') return 'the number quality was flagged RED by Meta'
+  if (value.event === 'DOWNGRADE') {
+    return `the messaging limit was downgraded${value.current_limit ? ` to ${value.current_limit}` : ''}`
+  }
+  return null
+}
+
 function restrictionSummary(info) {
   if (!Array.isArray(info) || !info.length) return null
   return info
@@ -122,7 +135,17 @@ export function numberNotification(field, value = {}, label) {
  * Account-level events (no phone number) fan out to every number's location.
  * Best-effort caller; may throw — the route wrapper swallows.
  *
- * @returns {Promise<{ locations: string[], notify: {title,body}|null, matched?: object }>}
+ * WA-QUALITY.1 — a quality collapse (FLAGGED / limit DOWNGRADE) also auto-pauses
+ * the matched location's in-flight drip broadcasts (status='sending',
+ * delivery_mode='drip', not already paused): the FLAGGED push used to say
+ * "Pause broadcasts" while nothing did it, and a drip left running drains the
+ * list into a throttled number. Idempotent twice over: an already-applied
+ * column patch skips the pause entirely (Meta redelivery), and the
+ * `paused_at IS NULL` filter makes a re-run a DB no-op. Blasts run inline on
+ * the request thread so there is nothing in-flight to pause; new blasts are
+ * refused by the preflight quality gate in sendBroadcast (WA-QUALITY.2).
+ *
+ * @returns {Promise<{ locations: string[], notify: {title,body}|null, matched?: object, pausedBroadcasts: Array<{id: string, name: string}> }>}
  */
 export async function applyNumberEvent(db, field, value = {}) {
   const { data: rows } = await db.from('whatsapp_numbers')
@@ -141,13 +164,36 @@ export async function applyNumberEvent(db, field, value = {}) {
     if (!unchanged) await db.from('whatsapp_numbers').update(update).eq('id', matched.id)
   }
 
+  // Quality collapse → pause the matched location's in-flight drips. Gated on
+  // `matched` (an unmatched event can't scope the pause to a location) and on
+  // the patch actually changing something (redelivered events stay no-ops).
+  const pauseReason = matched && !unchanged ? broadcastPauseReason(field, value) : null
+  let pausedBroadcasts = []
+  if (pauseReason) {
+    const { data: pausedRows } = await db.from('whatsapp_broadcasts')
+      .update({ paused_at: new Date().toISOString() })
+      .eq('location_id', matched.location_id)
+      .eq('status', 'sending')
+      .eq('delivery_mode', 'drip')
+      .is('paused_at', null)
+      .select('id, name')
+    pausedBroadcasts = pausedRows || []
+  }
+
   // Idempotency: a Meta retry of a column-bearing event we already applied
   // stays silent. Notify-only events (account/capability) always notify.
-  const notify = unchanged ? null : numberNotification(field, value, matched?.label)
+  let notify = unchanged ? null : numberNotification(field, value, matched?.label)
+  if (notify && pausedBroadcasts.length) {
+    const plural = pausedBroadcasts.length === 1 ? '' : 's'
+    notify = {
+      ...notify,
+      body: `${notify.body} Auto-paused ${pausedBroadcasts.length} in-flight drip broadcast${plural} because ${pauseReason} — resume from the broadcast page once the number recovers.`,
+    }
+  }
 
   const locations = matched
     ? [matched.location_id]
     : [...new Set(numbers.map((r) => r.location_id).filter(Boolean))]
 
-  return { locations, notify, matched }
+  return { locations, notify, matched, pausedBroadcasts }
 }

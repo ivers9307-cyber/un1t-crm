@@ -66,6 +66,10 @@ function rowToConfig(row) {
     appId: row.app_id || null,
     displayPhone: row.display_phone || null,
     sourceKind: row.source,        // 'cloud_api' | 'coexistence'
+    // WA-QUALITY.2 — Meta quality rating as of the last webhook/poll
+    // (GREEN/YELLOW/RED, null = never fetched). sendBroadcast's preflight
+    // gate reads this; env-fallback configs carry no rating (no gate).
+    qualityRating: row.quality_rating ?? null,
   }
 }
 
