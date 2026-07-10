@@ -429,3 +429,57 @@ export async function sendTransactionalEmail({
 
   return result
 }
+
+/**
+ * COMMS-AUDIT 2026-07-10 (SEQ batch) — marketing sibling of
+ * sendTransactionalEmail for single sends that are MARKETING mail
+ * (sequence step emails: welcome / nurture / win-back).
+ *
+ * Why a separate helper: sendEmail only attaches the RFC 8058
+ * List-Unsubscribe / List-Unsubscribe-Post one-click headers when
+ * stream === 'broadcast', so marketing mail routed through
+ * sendTransactionalEmail (stream 'outbound') shipped with no header
+ * unsubscribe at all — a Gmail/Yahoo bulk-sender compliance gap —
+ * and polluted the transactional stream's reputation. This helper
+ * rides the broadcast stream (same as campaign sends) and logs to
+ * email_sends with postmark_stream='broadcast' plus the same atomic
+ * sequence attribution as sendTransactionalEmail (see that
+ * function's race-with-the-open-webhook note).
+ *
+ * Callers still own the consent gate + the visible unsubscribe
+ * footer (applyMergeTags/appendUnsubscribeFooter) — pass the
+ * per-contact unsubscribeUrl so the one-click headers are attached.
+ */
+export async function sendMarketingEmail({
+  to, subject, htmlBody, contactId, locationId, tag, unsubscribeUrl,
+  sourceType = 'sequence', sequenceId = null, sequenceStepId = null,
+}) {
+  const result = await sendEmail({
+    to,
+    subject,
+    htmlBody,
+    stream: 'broadcast',  // Postmark marketing stream — attaches List-Unsubscribe headers
+    tag: tag || 'marketing',
+    unsubscribeUrl,
+  })
+
+  // Log to email_sends (same shape as the campaign + transactional paths).
+  if (contactId) {
+    const db = createServerClient()
+    await db.from('email_sends').insert({
+      contact_id: contactId,
+      location_id: locationId,
+      source_type: sourceType,
+      sequence_id: sequenceId,
+      sequence_step_id: sequenceStepId,
+      subject,
+      from_email: process.env.POSTMARK_FROM_EMAIL,
+      to_email: to,
+      postmark_message_id: result.messageId,
+      postmark_stream: 'broadcast',
+      status: 'sent',
+    })
+  }
+
+  return result
+}

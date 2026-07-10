@@ -24,7 +24,7 @@
 // returns; nothing to send.
 
 import {
-  sendTransactionalEmail,
+  sendMarketingEmail,
   applyMergeTags,
   buildUnsubscribeUrl,
   appendUnsubscribeFooter,
@@ -39,18 +39,64 @@ import {
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { getLocationBranding } from '@/lib/location-branding'
 
+// ── recorded skips (COMMS-AUDIT 2026-07-10, SEQ batch) ──────────
+//
+// A send step that CANNOT legitimately go to this contact — no
+// number/consent on file, or a channel status of opted_out/blocked/
+// undeliverable/bounced — is a per-CONTACT condition, not a sequence
+// fault. Throwing routed it to the runner's error path: error_count
+// climbed and after MAX_ERRORS the whole enrolment auto-PAUSED
+// (live 2026-07-10: 11 of 17 enrollments of "New Lead – First Class
+// Booking Nudge" wedged on "Contact has no WhatsApp phone number").
+//
+// Instead the handler records WHY on the contact's timeline
+// (best-effort, the movePipelineStageStep retired-step idiom) and
+// resolves null. The scheduler treats a null send id exactly like a
+// wait step: ONE cursor-advance update through the normal path, so
+// the throw-on-advance-failure discipline (the 22P02 re-send-loop
+// incident class) is untouched and a skipped step is never retried.
+//
+// Sequence-CONFIG faults (missing/unapproved template, no body, no
+// location) still throw — those need an operator fix, and the
+// error-then-pause path is how they surface.
+async function recordStepSkip(db, { contact, sequence, step, channel, reason }) {
+  try {
+    await db.from('activities').insert({
+      contact_id: contact.id,
+      location_id: sequence?.location_id || contact.location_id,
+      kind: 'event',
+      type: 'note',
+      subject: `Sequence ${channel} step skipped — ${reason}`,
+      note: `Step ${step?.step_order ?? '?'} of sequence "${sequence?.name || 'Untitled sequence'}" was not sent (${reason}). The enrolment advanced to the next step normally.`,
+      done: false,
+    })
+  } catch { /* best-effort logging only — never wedge the runner */ }
+}
+
 // ── email ───────────────────────────────────────────────────────
 
 export async function sendEmailStep(db, { enrollment: _enrollment, step, sequence, contact }) {
   if (!contact?.email) {
     throw new Error('Contact has no email address — cannot send email step.')
   }
-  // Consent/deliverability gate — mirror the SMS step + event-reminders +
-  // booking-confirmations. Without it an active sequence keeps emailing a
-  // contact who has since unsubscribed/bounced/complained (Postmark
-  // reputation + GDPR). Throwing routes to the standard sequence error path.
+  // Send-time consent gate — the same population campaign broadcasts
+  // enforce (campaign-sender consentOk: email_marketing === true AND
+  // email_status not bounced/complained; we also refuse a manually
+  // stamped 'unsubscribed' as belt-and-braces — the unsubscribe page
+  // normally flips email_marketing false via trigger). Without it an
+  // active sequence keeps emailing a contact who has since
+  // unsubscribed/bounced/complained (Postmark reputation + GDPR).
+  // A consent-blocked contact is a recorded SKIP, not an error —
+  // mid-sequence unsubscribes are normal contact behaviour, and the
+  // error path pauses the whole enrolment after MAX_ERRORS (see
+  // recordStepSkip).
+  if (contact.email_marketing !== true) {
+    await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: 'no email marketing consent' })
+    return null
+  }
   if (contact.email_status && ['bounced', 'complained', 'unsubscribed'].includes(contact.email_status)) {
-    throw new Error(`Contact's email_status is '${contact.email_status}' — refusing to send sequence email.`)
+    await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: `email_status is '${contact.email_status}'` })
+    return null
   }
 
   // Resolve content: inline OR via template_id reference.
@@ -92,13 +138,20 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
   // previous follow-up UPDATE keyed on postmark_message_id raced the open/
   // click webhook: a fast webhook could process the row before the UPDATE
   // landed, so the open was never attributed to the step.
-  const result = await sendTransactionalEmail({
+  //
+  // COMMS-AUDIT 2026-07-10: sequence step emails are MARKETING mail and
+  // ride Postmark's broadcast stream via sendMarketingEmail (previously
+  // sendTransactionalEmail → 'outbound', which never attached the RFC
+  // 8058 List-Unsubscribe one-click headers). unsubscribeUrl is passed
+  // through so sendEmail adds those headers alongside the visible footer.
+  const result = await sendMarketingEmail({
     to: contact.email,
     subject: mergedSubject,
     htmlBody: mergedHtml,
     contactId: contact.id,
     locationId: sequence.location_id,
     tag: `seq-${sequence.id}`,
+    unsubscribeUrl,
     sourceType: 'sequence',
     sequenceId: sequence.id,
     sequenceStepId: step.id,
@@ -117,8 +170,28 @@ export async function sendWhatsappStep(db, { step, sequence, contact }) {
   if (!step.whatsapp_template_id) {
     throw new Error('WhatsApp step has no template_id.')
   }
+  // Per-contact gates — recorded SKIPS, never errors (see recordStepSkip;
+  // the throw here is what auto-paused 11 of 17 live "First Class Booking
+  // Nudge" enrollments on contacts with no wa_phone).
   if (!contact?.wa_phone) {
-    throw new Error('Contact has no WhatsApp phone number — cannot send WhatsApp step.')
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'contact has no WhatsApp phone number' })
+    return null
+  }
+  // Send-time consent gate — mirrors the SMS step and the broadcast
+  // reachability predicate (applyWhatsAppReachability in
+  // src/lib/whatsapp.js, post mig 325: whatsapp_marketing is
+  // denormalised onto contacts): opted into WA marketing AND not
+  // opted_out/blocked/undeliverable. Broadcasts filter this at the
+  // audience layer; a sequence contact can text STOP mid-flow, so the
+  // gate must run at SEND time — that contact must never receive
+  // another WA step.
+  if (contact.whatsapp_marketing !== true) {
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no WhatsApp marketing consent' })
+    return null
+  }
+  if (['opted_out', 'blocked', 'undeliverable'].includes(contact.wa_status)) {
+    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: `wa_status is '${contact.wa_status}'` })
+    return null
   }
 
   // Resolve the template; must be APPROVED to send.
@@ -152,11 +225,20 @@ export async function sendWhatsappStep(db, { step, sequence, contact }) {
     { companyName: branding.companyName, locationId: sequence.location_id },
   )
 
+  // COMMS-AUDIT 2026-07-10: route from the sequence location's
+  // whatsapp_numbers row. Without { locationId } config resolution
+  // falls back to env vars — the wrong sender for any location that
+  // isn't the env default, and a dead send if the env token has
+  // rotted. The sequence's location is authoritative here (same as
+  // broadcasts, which pass broadcast.location_id): the template,
+  // branding, flow_token and conversation above are all already
+  // resolved against sequence.location_id.
   const result = await sendTemplateMessage(
     contact.wa_phone,
     template.name,
     template.language,
-    components
+    components,
+    { locationId: sequence.location_id },
   )
 
   // Log to whatsapp_messages so the inbox + analytics see it.
