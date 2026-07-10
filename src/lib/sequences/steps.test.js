@@ -836,6 +836,29 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     },
   )
 
+  it('email_suppressed_at set (engagement hygiene, EMAIL-HYGIENE.1) → recorded skip, mirrors the campaign audience gate', async () => {
+    const db = emailDb()
+    const out = await steps.sendEmailStep(db, {
+      enrollment: { id: 'e9' }, step, sequence,
+      contact: { ...consentedContact, email_suppressed_at: '2026-07-01T00:00:00.000Z' },
+    })
+    expect(out).toBeNull()
+    expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
+    expect(db.activityInserts).toHaveLength(1)
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/inactivity/i)
+    expect(db.rpcCalls).not.toContain('increment_step_sent')
+  })
+
+  it('email_suppressed_at null → sends normally (suppression is the exception, not the rule)', async () => {
+    const db = emailDb()
+    const out = await steps.sendEmailStep(db, {
+      enrollment: { id: 'e9' }, step, sequence,
+      contact: { ...consentedContact, email_suppressed_at: null },
+    })
+    expect(out).toBe('cccccccc-0000-0000-0000-000000000003')
+    expect(pm.sendMarketingEmail).toHaveBeenCalledTimes(1)
+  })
+
   it('missing email still throws (unchanged contract)', async () => {
     await expect(steps.sendEmailStep(emailDb(), {
       enrollment: { id: 'e9' }, step, sequence,
