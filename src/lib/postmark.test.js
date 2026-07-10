@@ -14,6 +14,11 @@
 // follow-up commit.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// sendMarketingEmail logs to email_sends via createServerClient —
+// mock the supabase seam so the tests below can observe the insert.
+vi.mock('./supabase', () => ({ createServerClient: vi.fn() }))
+
 import {
   applyMergeTags,
   buildUnsubscribeUrl,
@@ -23,7 +28,9 @@ import {
   consentFieldForStream,
   sendBatch,
   isTransientSendError,
+  sendMarketingEmail,
 } from './postmark.js'
+import { createServerClient } from './supabase'
 
 // Fluent fake recording method calls (mirrors sms.test.js).
 function makeFakeQuery() {
@@ -471,5 +478,93 @@ describe('isTransientSendError (CAMPAIGN-REL.1)', () => {
     expect(isTransientSendError({ ErrorCode: 0, MessageID: 'm1' })).toBe(false)
     expect(isTransientSendError(null)).toBe(false)
     expect(isTransientSendError(undefined)).toBe(false)
+  })
+})
+
+// ── sendMarketingEmail (COMMS-AUDIT 2026-07-10, SEQ batch) ────────
+//
+// Sequence step emails are marketing (welcome / nurture / win-back) and
+// must ride Postmark's broadcast stream — sendEmail only attaches the
+// RFC 8058 List-Unsubscribe / List-Unsubscribe-Post one-click headers
+// when stream === 'broadcast', so the old sendTransactionalEmail path
+// shipped marketing mail with no header unsubscribe at all.
+describe('sendMarketingEmail — broadcast stream + one-click unsubscribe headers', () => {
+  beforeEach(() => {
+    process.env.POSTMARK_API_KEY = 'test-token'
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function okFetch() {
+    return vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ MessageID: 'pm-msg-1', To: 'a@x.ie', SubmittedAt: '2026-07-10T10:00:00Z' }),
+    })
+  }
+
+  it('sends on the broadcast stream with RFC 8058 one-click unsubscribe headers (POST endpoint, not the page)', async () => {
+    const fetchSpy = okFetch()
+    const result = await sendMarketingEmail({
+      to: 'a@x.ie',
+      subject: 'Welcome',
+      htmlBody: '<p>hi</p>',
+      unsubscribeUrl: 'https://crm.test/unsubscribe/tok-1',
+    })
+    expect(result.messageId).toBe('pm-msg-1')
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.MessageStream).toBe('broadcast')
+    expect(body.Headers).toContainEqual({
+      Name: 'List-Unsubscribe',
+      Value: '<https://crm.test/api/unsubscribe/tok-1>',
+    })
+    expect(body.Headers).toContainEqual({
+      Name: 'List-Unsubscribe-Post',
+      Value: 'List-Unsubscribe=One-Click',
+    })
+  })
+
+  it('logs to email_sends with postmark_stream=broadcast + atomic sequence attribution', async () => {
+    okFetch()
+    const insertSpy = vi.fn().mockResolvedValue({ error: null })
+    createServerClient.mockReturnValue({ from: vi.fn(() => ({ insert: insertSpy })) })
+
+    await sendMarketingEmail({
+      to: 'a@x.ie',
+      subject: 'Welcome',
+      htmlBody: '<p>hi</p>',
+      contactId: 'c1',
+      locationId: 'loc-1',
+      tag: 'seq-s1',
+      unsubscribeUrl: 'https://crm.test/unsubscribe/tok-1',
+      sourceType: 'sequence',
+      sequenceId: 'seq-1',
+      sequenceStepId: 'st-1',
+    })
+
+    expect(insertSpy).toHaveBeenCalledWith(expect.objectContaining({
+      contact_id: 'c1',
+      location_id: 'loc-1',
+      source_type: 'sequence',
+      sequence_id: 'seq-1',
+      sequence_step_id: 'st-1',
+      to_email: 'a@x.ie',
+      postmark_message_id: 'pm-msg-1',
+      postmark_stream: 'broadcast',
+      status: 'sent',
+    }))
+  })
+
+  it('skips the email_sends insert when there is no contactId (parity with sendTransactionalEmail)', async () => {
+    okFetch()
+    createServerClient.mockClear()
+    await sendMarketingEmail({
+      to: 'a@x.ie',
+      subject: 'S',
+      htmlBody: '<p>x</p>',
+      unsubscribeUrl: 'https://crm.test/unsubscribe/tok-1',
+    })
+    expect(createServerClient).not.toHaveBeenCalled()
   })
 })

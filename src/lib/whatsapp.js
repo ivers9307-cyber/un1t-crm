@@ -7,6 +7,8 @@ import {
 } from './whatsapp-drip.js'
 import { getLocationBranding } from './location-branding'
 import { extractNamedVariables } from './whatsapp-template-samples.js'
+import { sendPushToRolesAtLocation } from './push'
+import { MANAGER_ROLES } from './schemas'
 
 // WA-MULTI.1 — config is now per-location. Resolution helper +
 // env fallback live in whatsapp-config.js; the META_API_URL +
@@ -718,6 +720,63 @@ export function isFrequencyCapError({ code, message } = {}) {
 
 export const CAPPED_RETRY_HOURS = 20
 
+// WA-QUALITY.2 — blast preflight quality gate. A RED/FLAGGED number is one
+// strike from a Meta messaging ban; blasting the whole list into it is how a
+// number dies. Returns the operator-facing refusal, or null to proceed.
+// GREEN/YELLOW/unknown (null — env config or never polled) pass. Pure.
+export function broadcastQualityBlockError(qualityRating) {
+  if (qualityRating !== 'RED' && qualityRating !== 'FLAGGED') return null
+  return `This location's WhatsApp number quality is ${qualityRating} — sending paused to protect the number. ` +
+    'Wait for the rating to recover in WhatsApp Manager before broadcasting again.'
+}
+
+// WA-QUALITY.4 — classify one blast send failure. Meta's cross-business
+// frequency cap (131049) is temporary saturation of the RECIPIENT, not a bad
+// number and not our problem: record it distinctly as 'capped' (never
+// undeliverable) and keep it out of the circuit breaker. Everything else is a
+// real failure that counts toward the consecutive-failure abort. Pure.
+export function classifyBlastFailure({ code, message } = {}) {
+  if (isFrequencyCapError({ code, message })) {
+    return { recipientStatus: 'capped', countsTowardBreaker: false }
+  }
+  return { recipientStatus: 'failed', countsTowardBreaker: true }
+}
+
+// WA-QUALITY.3 — broadcast row patch when the blast circuit breaker trips.
+// State choice: flip BACK to 'draft' (not a new status, not 'cancelled').
+// The send route's draft→sending CAS is the only blast entry, so 'draft' is
+// the one state an operator can re-send from without DB surgery; the resume
+// pass skips every already-recorded recipient (fetchDripDoneContactIds), so
+// pressing Send again only attempts the untouched remainder. paused_at +
+// delivery_summary.aborted record why it stopped (cleared/overwritten when a
+// later pass completes). Pure — unit-tested in whatsapp-drip-hardening.test.js.
+export function blastAbortPatch({ deliverySummary, consecutiveFailures, lastError }, nowIso) {
+  return {
+    status: 'draft',
+    paused_at: nowIso,
+    delivery_summary: {
+      ...(deliverySummary || {}),
+      aborted: {
+        reason: 'consecutive_send_failures',
+        consecutive_failures: consecutiveFailures,
+        last_error: lastError || null,
+        at: nowIso,
+      },
+    },
+  }
+}
+
+// Manager push for a tripped blast breaker. Pure.
+export function blastAbortNotification(broadcast = {}, consecutiveFailures, lastError) {
+  const name = broadcast.name ? `"${broadcast.name}"` : 'A WhatsApp broadcast'
+  return {
+    title: 'WhatsApp broadcast auto-stopped',
+    body: `🚨 ${name} was stopped after ${consecutiveFailures} consecutive send failures` +
+      `${lastError ? ` (last error: ${lastError})` : ''}. Already-sent messages are unaffected. ` +
+      'Fix the number/token, then press Send again to deliver the remainder.',
+  }
+}
+
 // A contact is flagged undeliverable after this many undeliverable failures.
 // Operator policy (Richard, 2026-06-29): suppress on the FIRST undeliverable
 // failure — stop marketing re-hitting a number that looks dead rather than
@@ -871,9 +930,15 @@ async function pauseAgentOnThread(db, conversationId) {
 }
 
 /**
- * Send a broadcast — template message to filtered audience
+ * Send a broadcast — template message to filtered audience.
+ *
+ * @param {string} broadcastId
+ * @param {object} [opts]
+ * @param {boolean} [opts.force=false]  WA-QUALITY.2 — bypass the number-quality
+ *   preflight refusal (explicit operator override; the gate exists to protect
+ *   the number, not to hard-lock it).
  */
-export async function sendBroadcast(broadcastId) {
+export async function sendBroadcast(broadcastId, { force = false } = {}) {
   const db = createServerClient()
 
   // Get broadcast with template
@@ -895,13 +960,29 @@ export async function sendBroadcast(broadcastId) {
     throw new Error(`Broadcast is in '${broadcast.status}' state — only draft / sending can be sent`)
   }
 
+  // WA-MULTI.1 — resolve the location's WA config ONCE upfront and
+  // reuse for every recipient. Cheaper than re-resolving per-send;
+  // also ensures the whole broadcast goes from one consistent
+  // number even if someone reconfigures defaults mid-send.
+  // Resolved BEFORE the status flip so a refusal (quality gate below, or an
+  // unconfigured location) leaves the broadcast in its entry state instead of
+  // stranding it at 'sending'.
+  const broadcastConfig = await getWhatsAppConfig(broadcast.location_id)
+
+  // WA-QUALITY.2 — preflight quality gate: refuse to start (or resume) a blast
+  // from a RED/FLAGGED number. Every blast entry funnels through this function,
+  // so the gate covers them all; `force: true` is the explicit operator override.
+  const qualityBlock = broadcastQualityBlockError(broadcastConfig.qualityRating)
+  if (qualityBlock && !force) throw new Error(qualityBlock)
+
   // Compare-and-swap the draft→sending flip so two concurrent clicks can't
   // both start a pass — only the request that actually flips it proceeds.
   // A broadcast already 'sending' is a legitimate resume (the per-recipient
-  // claim below de-dupes that path), so fall through.
+  // claim below de-dupes that path), so fall through. Clearing paused_at here
+  // re-opens a breaker-aborted broadcast the operator re-sends (WA-QUALITY.3).
   if (broadcast.status !== 'sending') {
     const { data: claimed } = await db.from('whatsapp_broadcasts')
-      .update({ status: 'sending' })
+      .update({ status: 'sending', paused_at: null })
       .eq('id', broadcastId)
       .eq('status', broadcast.status)
       .select('id')
@@ -909,12 +990,6 @@ export async function sendBroadcast(broadcastId) {
       return { sent: 0, failed: 0, total: 0, skipped: 'already-sending' }
     }
   }
-
-  // WA-MULTI.1 — resolve the location's WA config ONCE upfront and
-  // reuse for every recipient. Cheaper than re-resolving per-send;
-  // also ensures the whole broadcast goes from one consistent
-  // number even if someone reconfigures defaults mid-send.
-  const broadcastConfig = await getWhatsAppConfig(broadcast.location_id)
 
   // Get audience — AUDIT P1-2: route the blast through the paginated
   // fetchAllWhatsAppAudience (the drip path already does) instead of awaiting
@@ -955,6 +1030,12 @@ export async function sendBroadcast(broadcastId) {
   const branding = await getLocationBranding(db, broadcast.location_id)
   let sentCount = 0
   let failedCount = 0
+  // WA-QUALITY.3 — circuit breaker mirroring the drip's auto-pause: a run of
+  // consecutive hard failures (dead token, banned number) aborts the loop
+  // instead of draining the whole audience into failures.
+  let consecutiveFailures = 0
+  let abortedAfterFailures = 0
+  let lastErrorMessage = null
 
   // AGENT-TAKEOVER — an individual targeted send (audience of 1), or a bulk
   // send the operator opted to handle, pauses Mia on each recipient thread so
@@ -1013,22 +1094,39 @@ export async function sendBroadcast(broadcastId) {
       if (pauseAgent) await pauseAgentOnThread(db, conversationId)
 
       sentCount++
+      consecutiveFailures = 0
     } catch (err) {
       console.error(`Failed to send to ${contact.wa_phone}:`, err.message)
 
-      // Promote the claimed row to 'failed' (it already exists from the
-      // claim-first insert above).
+      // WA-QUALITY.4 — a frequency-capped recipient (131049) is parked as
+      // 'capped', never marked undeliverable, and doesn't count toward the
+      // breaker. No blast retry machinery (that's drip territory): the row is
+      // just recorded distinctly instead of being lumped into 'failed' — on a
+      // re-send the claim-first insert conflicts and skips it, so it is
+      // attempted at most once per blast.
+      const { recipientStatus, countsTowardBreaker } = classifyBlastFailure({ message: err.message })
+
+      // Promote the claimed row (it already exists from the claim-first
+      // insert above).
       await db.from('whatsapp_broadcast_recipients').update({
-        status: 'failed',
+        status: recipientStatus,
         error_message: err.message,
         failed_at: new Date().toISOString(),
       }).eq('broadcast_id', broadcastId).eq('contact_id', contact.id)
+
+      if (!countsTowardBreaker) continue
 
       // Permanently-undeliverable number (not on WhatsApp) → flag so future
       // audiences skip it. Reversible (inbound message reactivates). Best-effort.
       await markUndeliverableIfPermanent(db, contact.id, { message: err.message })
 
       failedCount++
+      consecutiveFailures++
+      if (consecutiveFailures >= AUTO_PAUSE_CONSECUTIVE_FAILURES) {
+        abortedAfterFailures = consecutiveFailures
+        lastErrorMessage = err.message
+        break
+      }
     }
 
     // Rate limiting — Meta allows ~80 messages/second for verified businesses
@@ -1050,19 +1148,61 @@ export async function sendBroadcast(broadcastId) {
     .eq('broadcast_id', broadcastId)
     .eq('status', 'failed')
 
-  // Update broadcast metrics
+  // Update template send count (atomic; best-effort). Only THIS pass's
+  // sends — a resume must not double-count rows a prior pass already added.
+  try { await db.rpc('increment_whatsapp_template_sent', { p_template_id: template.id, p_delta: sentCount }) } catch {}
+
+  // WA-QUALITY.3 — breaker tripped: park the broadcast back at 'draft' with
+  // the abort recorded (see blastAbortPatch for the state-machine rationale),
+  // page the location managers, and leave every already-sent recipient as-is.
+  if (abortedAfterFailures > 0) {
+    const abortPatch = blastAbortPatch({
+      deliverySummary,
+      consecutiveFailures: abortedAfterFailures,
+      lastError: lastErrorMessage,
+    }, new Date().toISOString())
+
+    await db.from('whatsapp_broadcasts').update({
+      ...abortPatch,
+      total_recipients: contacts.length,
+      total_sent: cumulativeSent || 0,
+      total_failed: cumulativeFailed || 0,
+    }).eq('id', broadcastId)
+
+    // Manager push — best-effort, never fails the abort handling.
+    try {
+      const notify = blastAbortNotification(broadcast, abortedAfterFailures, lastErrorMessage)
+      await sendPushToRolesAtLocation(broadcast.location_id, MANAGER_ROLES, {
+        title: notify.title,
+        body: notify.body,
+        category: 'whatsapp', // rides the existing notify_whatsapp opt-in
+        data: { type: 'broadcast_aborted', broadcast_id: broadcastId },
+      })
+    } catch (e) {
+      console.error(`[broadcast ${broadcastId}] abort push failed:`, e?.message || e)
+    }
+
+    return {
+      sent: cumulativeSent || 0,
+      failed: cumulativeFailed || 0,
+      total: contacts.length,
+      aborted: true,
+      abort_reason: `stopped after ${abortedAfterFailures} consecutive send failures`,
+      delivery_summary: abortPatch.delivery_summary,
+    }
+  }
+
+  // Update broadcast metrics. paused_at cleared: a completed pass supersedes
+  // any earlier breaker abort (WA-QUALITY.3).
   await db.from('whatsapp_broadcasts').update({
     status: 'sent',
     sent_at: new Date().toISOString(),
+    paused_at: null,
     total_recipients: contacts.length,
     total_sent: cumulativeSent || 0,
     total_failed: cumulativeFailed || 0,
     delivery_summary: deliverySummary,
   }).eq('id', broadcastId)
-
-  // Update template send count (atomic; best-effort). Only THIS pass's
-  // sends — a resume must not double-count rows a prior pass already added.
-  try { await db.rpc('increment_whatsapp_template_sent', { p_template_id: template.id, p_delta: sentCount }) } catch {}
 
   return { sent: cumulativeSent || 0, failed: cumulativeFailed || 0, total: contacts.length, delivery_summary: deliverySummary }
 }
@@ -1410,6 +1550,32 @@ export function parseConsentKeyword(text) {
   if (['stop', 'stopall', 'stop all', 'unsubscribe', 'cancel', 'end', 'quit'].includes(t)) return 'stop'
   if (['start', 'unstop', 'subscribe'].includes(t)) return 'start'
   return null
+}
+
+/**
+ * Pick the contact an inbound message should link to when the sender's
+ * phone matches several contact rows. Pure — used by the WhatsApp
+ * webhook (COMMS-AUDIT 2026-07-10).
+ *
+ * Policy: prefer a contact in the RECEIVING number's location (each
+ * WhatsApp number belongs to one location; a member of that gym texting
+ * its number must land on their record there, not on a same-phone
+ * contact at another location). Only when no in-location match exists
+ * fall back to a cross-location match — the caller passes the list
+ * deterministically ordered (oldest contact first) so the fallback is
+ * stable rather than Postgres row order.
+ *
+ * @param {Array<{id: string, location_id: string}>|null} matches
+ * @param {string|null} preferredLocationId  the receiving number's location
+ * @returns {object|null}
+ */
+export function pickInboundContact(matches, preferredLocationId) {
+  if (!Array.isArray(matches) || matches.length === 0) return null
+  if (preferredLocationId) {
+    const inLocation = matches.find((m) => m?.location_id === preferredLocationId)
+    if (inLocation) return inLocation
+  }
+  return matches[0]
 }
 
 /**

@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
-import { isFrequencyCapError, fetchDripDoneContactIds, CAPPED_RETRY_HOURS } from './whatsapp.js'
+import {
+  isFrequencyCapError, fetchDripDoneContactIds, CAPPED_RETRY_HOURS,
+  broadcastQualityBlockError, classifyBlastFailure, blastAbortPatch, blastAbortNotification,
+} from './whatsapp.js'
 import { applyMetaUserPreference } from './whatsapp-consent.js'
 
 describe('isFrequencyCapError', () => {
@@ -44,10 +47,89 @@ describe('fetchDripDoneContactIds — capped retry window', () => {
   })
 })
 
+// WA-QUALITY.2 — blast preflight quality gate.
+describe('broadcastQualityBlockError', () => {
+  it('refuses RED / FLAGGED with an operator-facing message', () => {
+    const red = broadcastQualityBlockError('RED')
+    expect(red).toMatch(/quality is RED/)
+    expect(red).toMatch(/paused to protect the number/i)
+    expect(broadcastQualityBlockError('FLAGGED')).toMatch(/quality is FLAGGED/)
+  })
+  it('GREEN / YELLOW / unknown ratings pass', () => {
+    expect(broadcastQualityBlockError('GREEN')).toBeNull()
+    expect(broadcastQualityBlockError('YELLOW')).toBeNull()
+    expect(broadcastQualityBlockError(null)).toBeNull()
+    expect(broadcastQualityBlockError(undefined)).toBeNull()
+  })
+})
+
+// WA-QUALITY.4 — 131049 in the blast catch block: capped is recorded distinctly
+// and never trips the circuit breaker (or the undeliverable flagger).
+describe('classifyBlastFailure', () => {
+  it('frequency cap (131049 / healthy-ecosystem) → capped, outside the breaker', () => {
+    expect(classifyBlastFailure({ code: 131049 })).toEqual({ recipientStatus: 'capped', countsTowardBreaker: false })
+    expect(classifyBlastFailure({ message: 'not delivered to maintain healthy ecosystem engagement' }))
+      .toEqual({ recipientStatus: 'capped', countsTowardBreaker: false })
+  })
+  it('undeliverable and generic failures → failed, count toward the breaker', () => {
+    expect(classifyBlastFailure({ code: 131026, message: 'Message undeliverable' }))
+      .toEqual({ recipientStatus: 'failed', countsTowardBreaker: true })
+    expect(classifyBlastFailure({ message: 'Invalid OAuth access token' }))
+      .toEqual({ recipientStatus: 'failed', countsTowardBreaker: true })
+    expect(classifyBlastFailure({})).toEqual({ recipientStatus: 'failed', countsTowardBreaker: true })
+  })
+})
+
+// WA-QUALITY.3 — blast circuit breaker outcome. The aborted broadcast flips
+// BACK to 'draft' (the send route's draft→sending CAS is the only blast entry,
+// so 'draft' is the one state an operator can re-send from without DB surgery;
+// the resume pass skips already-recorded recipients via fetchDripDoneContactIds).
+describe('blastAbortPatch', () => {
+  const NOW = '2026-07-10T10:00:00.000Z'
+  it('returns a recoverable draft with paused_at + the abort recorded in delivery_summary', () => {
+    const patch = blastAbortPatch({
+      deliverySummary: { matched: 100, reachable: 90 },
+      consecutiveFailures: 5,
+      lastError: 'Invalid OAuth access token',
+    }, NOW)
+    expect(patch.status).toBe('draft')
+    expect(patch.paused_at).toBe(NOW)
+    // Existing summary keys survive; the abort is additive.
+    expect(patch.delivery_summary.matched).toBe(100)
+    expect(patch.delivery_summary.reachable).toBe(90)
+    expect(patch.delivery_summary.aborted).toEqual({
+      reason: 'consecutive_send_failures',
+      consecutive_failures: 5,
+      last_error: 'Invalid OAuth access token',
+      at: NOW,
+    })
+  })
+  it('tolerates a missing summary (reachability count failed earlier)', () => {
+    const patch = blastAbortPatch({ deliverySummary: null, consecutiveFailures: 5, lastError: null }, NOW)
+    expect(patch.delivery_summary.aborted.last_error).toBeNull()
+  })
+})
+
+describe('blastAbortNotification', () => {
+  it('names the broadcast, the failure run, and how to recover', () => {
+    const n = blastAbortNotification({ name: 'July promo' }, 5, 'Invalid OAuth access token')
+    expect(n.title).toMatch(/broadcast/i)
+    expect(n.body).toContain('July promo')
+    expect(n.body).toContain('5 consecutive')
+    expect(n.body).toContain('Invalid OAuth access token')
+    expect(n.body).toMatch(/send/i)
+  })
+  it('degrades without a name or last error', () => {
+    const n = blastAbortNotification({}, 5, null)
+    expect(n.body).toMatch(/5 consecutive/)
+  })
+})
+
 function consentDb({ contact, writes }) {
   return {
     from: (table) => ({
       select: () => ({ or: () => ({ limit: () => Promise.resolve({ data: contact ? [contact] : [] }) }) }),
+      upsert: (row) => { writes.push([table, row]); return Promise.resolve({ error: null }) },
       update: (patch) => { writes.push([table, patch]); return { eq: () => Promise.resolve({ error: null }) } },
       insert: (row) => { writes.push([table, row]); return Promise.resolve({ error: null }) },
     }),
@@ -61,7 +143,8 @@ describe('applyMetaUserPreference', () => {
     const r = await applyMetaUserPreference(db, { wa_id: '353871234567', category: 'marketing_messages', value: 'stop' })
     expect(r).toMatchObject({ applied: true, action: 'opted_out' })
     expect(writes).toEqual([
-      ['contact_preferences', { whatsapp_marketing: false }],
+      // Upserted by contact_id so a contact with no preferences row still opts out.
+      ['contact_preferences', expect.objectContaining({ contact_id: 'c1', whatsapp_marketing: false })],
       ['contacts', { wa_status: 'opted_out' }],
       ['consent_log', expect.objectContaining({ action: 'opted_out', source: 'meta_user_preferences' })],
     ])
@@ -71,7 +154,7 @@ describe('applyMetaUserPreference', () => {
     const db = consentDb({ contact: { id: 'c1' }, writes })
     const r = await applyMetaUserPreference(db, { wa_id: '353871234567', value: 'resume' })
     expect(r.action).toBe('opted_in')
-    expect(writes[0]).toEqual(['contact_preferences', { whatsapp_marketing: true }])
+    expect(writes[0]).toEqual(['contact_preferences', expect.objectContaining({ contact_id: 'c1', whatsapp_marketing: true })])
   })
   it('unknown contact / bad value → not applied, no writes', async () => {
     const writes = []
