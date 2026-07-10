@@ -22,9 +22,11 @@ describe('flow screens', () => {
     expect(res.data.marketing_opt_in).toBe(true)
   })
 
-  it('FLOW_JSON declares all five screens and is terminal at CONFIRM', () => {
+  it('FLOW_JSON declares the four booking screens (DAY entry) and is terminal at CONFIRM', () => {
     const ids = FLOW_JSON.screens.map((s) => s.id)
-    expect(ids).toEqual([SCREEN.PATH, SCREEN.DAY, SCREEN.SLOT, SCREEN.DETAILS, SCREEN.CONFIRM])
+    expect(ids).toEqual([SCREEN.DAY, SCREEN.SLOT, SCREEN.DETAILS, SCREEN.CONFIRM])
+    expect(Object.keys(FLOW_JSON.routing_model)[0]).toBe(SCREEN.DAY)
+    expect(FLOW_JSON.routing_model.PATH).toBeUndefined()
     expect(FLOW_JSON.screens.find((s) => s.id === SCREEN.CONFIRM).terminal).toBe(true)
   })
 })

@@ -18,27 +18,16 @@ const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => (
 const db = { from: () => chain }
 
 describe('handleDataExchange', () => {
-  it('INIT returns the PATH screen', async () => {
+  it('INIT goes straight to the class DAY screen (no PATH step)', async () => {
     const res = await handleDataExchange(db, { decryptedBody: { action: 'INIT' }, contact, locationId: 'loc1', config })
-    expect(res.screen).toBe(SCREEN.PATH)
+    expect(res.screen).toBe(SCREEN.DAY)
+    expect(res.data.path).toBe('class')
+    expect(res.data.days[0]).toEqual({ id: '2026-07-03', title: expect.any(String) })
   })
 
   it('ping short-circuits to the health response', async () => {
     const res = await handleDataExchange(db, { decryptedBody: { action: 'ping' }, contact, locationId: 'loc1', config })
     expect(res).toEqual({ data: { status: 'active' } })
-  })
-
-  it('class PATH returns DAY with {id,title} days and threads path', async () => {
-    const res = await handleDataExchange(db, { decryptedBody: { action: 'data_exchange', screen: SCREEN.PATH, data: { path: 'class' } }, contact, locationId: 'loc1', config })
-    expect(res.screen).toBe(SCREEN.DAY)
-    expect(res.data.days[0]).toEqual({ id: '2026-07-03', title: expect.any(String) })
-    expect(res.data.path).toBe('class')
-  })
-
-  it('consult PATH maps computeAvailableDays {date,label} → {id,title}', async () => {
-    const res = await handleDataExchange(db, { decryptedBody: { action: 'data_exchange', screen: SCREEN.PATH, data: { path: 'consult' } }, contact, locationId: 'loc1', config })
-    expect(res.data.days).toEqual([{ id: '2026-07-03', title: 'Thu 3 Jul' }])
-    expect(res.data.path).toBe('consult')
   })
 
   it('class DAY returns SLOT with slot id `event|starts_at|name` and threads path', async () => {
