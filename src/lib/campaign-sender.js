@@ -14,10 +14,14 @@
 //           one row per intended recipient).
 //        c. Set status='sending'.
 //      Subsequent invocations:
+//        d0. Reclaim lease-expired 'sending' rows (CAMPAIGN-REL.2).
 //        d. SELECT first CHUNK_SIZE campaign_recipients WHERE
-//           status='queued' for this campaign.
+//           status='queued' for this campaign, CAS-claim them
+//           queued→sending (claimed_at stamps the lease).
 //        e. Send them via Postmark batch.
-//        f. UPDATE each to 'sent' / 'bounced' + log to email_sends.
+//        f. UPDATE each to 'sent' / 'bounced' (permanent rejection) /
+//           back to 'queued' (transient error, attempts+1, capped at
+//           MAX_SEND_ATTEMPTS then 'failed') + log sends to email_sends.
 //        g. Check campaigns.cancel_requested_at — if set, halt and
 //           transition status='cancelled'.
 //        h. If no more queued for this campaign, status='sent',
@@ -29,12 +33,29 @@
 // Postmark's batch limits and well within the deferred-webhook
 // queue's drain rate.
 
-import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch, consentFieldForStream } from './postmark.js'
+import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch, consentFieldForStream, isTransientSendError } from './postmark.js'
+import { injectPreheader, htmlToPlainText } from './email-content.js'
 import { getAppUrl } from './app-url.js'
 
 const CHUNK_SIZE = 500             // recipients per cron tick per campaign
 const AUDIENCE_PAGE_SIZE = 1000    // audience load page (CAMPAIGN.11)
 const RECIPIENT_INSERT_CHUNK = 1000
+
+// CAMPAIGN-REL.1 — bounded retry for transient provider errors.
+// A recipient is attempted at most MAX_SEND_ATTEMPTS times; each
+// transient failure (network blip, HTTP 429/5xx, Postmark rate
+// limit/maintenance) returns it to 'queued' with attempts+1 until
+// the cap, then it's marked 'failed'. Permanent rejections (invalid
+// address, inactive recipient) never retry. Requires the
+// campaign_recipients.attempts / claimed_at columns (mig 392).
+export const MAX_SEND_ATTEMPTS = 3
+
+// CAMPAIGN-REL.2 — how long a 'sending' claim is honoured before a
+// later tick assumes the claiming invocation died mid-flight and
+// reclaims the row. Mirrors the sequences scheduler's CLAIM_LEASE_MS
+// (src/lib/sequences/scheduler.js): long enough to cover a tick's
+// processing, short enough that a crashed tick's rows retry promptly.
+export const SENDING_LEASE_MS = 10 * 60_000
 
 /**
  * Process one cron tick of work for one campaign.
@@ -113,6 +134,19 @@ export async function tickCampaignSend(db, campaign) {
     return { phase: 'populate', sent: 0 }
   }
 
+  // CAMPAIGN-REL.2 — reclaim stuck 'sending' rows BEFORE reading the
+  // queue. If a cron invocation dies between the CAS claim (queued→
+  // sending below) and result application, its rows stay 'sending'
+  // forever — and finalisation (which only checks remaining 'queued')
+  // would close the campaign as 'sent' around them. Rows whose lease
+  // (claimed_at) expired — or that predate leasing entirely
+  // (claimed_at IS NULL) — go back to 'queued' for another attempt,
+  // or to 'failed' once the attempt cap is spent. NOTE: a crashed
+  // tick MAY have handed the batch to Postmark before dying, so a
+  // reclaimed retry can double-send — that's the accepted trade
+  // (bounded by MAX_SEND_ATTEMPTS) versus silently never delivering.
+  await reclaimStuckSending(db, campaignId)
+
   // Phase 2 — process one CHUNK_SIZE batch of queued recipients.
   // Join contacts inline so we have email + name + preferences for
   // the merge tags + unsubscribe URL without a second round-trip.
@@ -121,6 +155,7 @@ export async function tickCampaignSend(db, campaign) {
     .select(`
       id,
       contact_id,
+      attempts,
       contact:contacts!inner(
         id, email, first_name, last_name, name, phone, pipeline_stage_slug,
         email_status, email_marketing, email_administrative, glofox_passcode,
@@ -156,7 +191,9 @@ export async function tickCampaignSend(db, campaign) {
   const candidateIds = candidateRows.map(r => r.id)
   const { data: claimedRows } = await db
     .from('campaign_recipients')
-    .update({ status: 'sending' })
+    // claimed_at starts the CAMPAIGN-REL.2 lease clock — see
+    // reclaimStuckSending above.
+    .update({ status: 'sending', claimed_at: new Date().toISOString() })
     .in('id', candidateIds)
     .eq('status', 'queued')
     .select('id')
@@ -207,10 +244,24 @@ export async function tickCampaignSend(db, campaign) {
     })
     const personalizedHtml = unsubscribeUrl ? appendUnsubscribeFooter(merged, unsubscribeUrl) : merged
 
+    // CAMPAIGN-REL.4 — derive the plain-text alternative from the
+    // rendered content BEFORE the preheader goes in (the preheader is
+    // inbox chrome, not content — it shouldn't lead the text part).
+    const textBody = htmlToPlainText(personalizedHtml)
+
+    // CAMPAIGN-REL.3 — campaigns.preview_text was collected/stored by
+    // the editor but never used at send time. Inject it as a standard
+    // hidden preheader, first thing inside the body, merge tags applied.
+    const previewText = campaign.preview_text
+      ? applyMergeTags(campaign.preview_text, contact, { location_name: campaign.locations?.name || '' })
+      : null
+    const finalHtml = previewText ? injectPreheader(personalizedHtml, previewText) : personalizedHtml
+
     return {
       to: contact.email,
       subject: applyMergeTags(campaign.subject, contact),
-      htmlBody: personalizedHtml,
+      htmlBody: finalHtml,
+      textBody,
       from: campaign.from_name
         ? `${campaign.from_name} <${campaign.from_email || process.env.POSTMARK_FROM_EMAIL}>`
         : undefined,
@@ -224,6 +275,7 @@ export async function tickCampaignSend(db, campaign) {
       unsubscribeUrl,
       _recipientId: row.id,
       _contactId: contact.id,
+      _attempts: row.attempts || 0,
     }
   })
 
@@ -232,6 +284,8 @@ export async function tickCampaignSend(db, campaign) {
   // Apply results.
   let sentCount = 0
   let bouncedCount = 0
+  let retriedCount = 0
+  let failedCount = 0
   const sendRecords = []
   for (let i = 0; i < results.length; i++) {
     const result = results[i]
@@ -259,10 +313,35 @@ export async function tickCampaignSend(db, campaign) {
         postmark_stream: stream,
         status: 'sent',
       })
+    } else if (isTransientSendError(result)) {
+      // CAMPAIGN-REL.1 — transient (network/-1, HTTP 429/5xx, Postmark
+      // rate-limit/maintenance): retry on a later tick, bounded by
+      // MAX_SEND_ATTEMPTS. Previously ANY non-zero ErrorCode marked
+      // the recipient bounced — one Postmark blip mis-recorded a whole
+      // 500-chunk as permanently bounced.
+      const attempts = (item._attempts || 0) + 1
+      if (attempts < MAX_SEND_ATTEMPTS) {
+        retriedCount++
+        await db.from('campaign_recipients')
+          .update({ status: 'queued', attempts, last_error: result.Message || null })
+          .eq('id', item._recipientId)
+      } else {
+        failedCount++
+        await db.from('campaign_recipients')
+          .update({ status: 'failed', attempts, last_error: result.Message || null })
+          .eq('id', item._recipientId)
+      }
     } else {
+      // Permanent rejection (300 invalid email, 406 inactive recipient,
+      // ...): retrying can never succeed. Terminal immediately.
       bouncedCount++
       await db.from('campaign_recipients')
-        .update({ status: 'bounced', bounce_type: 'rejected' })
+        .update({
+          status: 'bounced',
+          bounce_type: 'rejected',
+          attempts: (item._attempts || 0) + 1,
+          last_error: result.Message || null,
+        })
         .eq('id', item._recipientId)
     }
   }
@@ -282,5 +361,58 @@ export async function tickCampaignSend(db, campaign) {
   await db.rpc('recalculate_campaign_stats', { p_campaign_id: campaignId })
     .then(({ error }) => { if (error) console.error('[campaign-sender] mid-send recalc failed:', error.message) })
 
-  return { phase: 'send', sent: sentCount, bounced: bouncedCount, suppressed: suppressed.length }
+  return {
+    phase: 'send',
+    sent: sentCount,
+    bounced: bouncedCount,
+    retried: retriedCount,
+    failed: failedCount,
+    suppressed: suppressed.length,
+  }
+}
+
+/**
+ * CAMPAIGN-REL.2 — return lease-expired 'sending' recipients to the
+ * queue (or 'failed' once the attempt cap is spent).
+ *
+ * A row is stuck when a cron invocation claimed it (queued→sending)
+ * and then died before applying the send result — Vercel invocation
+ * killed, deploy mid-tick, unhandled throw after the claim. Without
+ * this sweep those rows sit in 'sending' forever and the campaign
+ * finalises as 'sent' around them.
+ *
+ * Bulk-updated per attempts-bucket (at most MAX_SEND_ATTEMPTS distinct
+ * values) because PostgREST can't express `attempts = attempts + 1`.
+ * claimed_at IS NULL rows are pre-mig-392 strays — swept too, so any
+ * historically stuck recipients self-heal.
+ */
+async function reclaimStuckSending(db, campaignId) {
+  const cutoff = new Date(Date.now() - SENDING_LEASE_MS).toISOString()
+  const { data: stale, error } = await db
+    .from('campaign_recipients')
+    .select('id, attempts')
+    .eq('campaign_id', campaignId)
+    .eq('status', 'sending')
+    .or(`claimed_at.lt.${cutoff},claimed_at.is.null`)
+  if (error) {
+    console.error('[campaign-sender] stuck-sending sweep failed:', error.message)
+    return
+  }
+  if (!stale || stale.length === 0) return
+
+  const buckets = new Map() // attempts value → ids
+  for (const row of stale) {
+    const key = row.attempts || 0
+    if (!buckets.has(key)) buckets.set(key, [])
+    buckets.get(key).push(row.id)
+  }
+  for (const [prevAttempts, ids] of buckets) {
+    // The claim counted as an attempt — the batch may have reached
+    // Postmark before the tick died.
+    const attempts = prevAttempts + 1
+    const update = attempts < MAX_SEND_ATTEMPTS
+      ? { status: 'queued', attempts, last_error: 'send attempt timed out (reclaimed from sending)' }
+      : { status: 'failed', attempts, last_error: 'send attempt timed out (reclaimed from sending)' }
+    await db.from('campaign_recipients').update(update).in('id', ids)
+  }
 }
