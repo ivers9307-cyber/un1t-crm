@@ -14,8 +14,8 @@ const CONSULT_SLUG = 'free-un1t-consultation'
 const inputCls ='w-full bg-white/[0.06] border border-white/15 rounded-xl px-4 py-3.5 text-base text-white placeholder-white/40 focus:outline-none focus:border-white/50'
 
 export default function StartFunnel() {
-  const [step, setStep] = useState('choose') // choose | details | calendar | classpick | done | classdone
-  const [path, setPath] = useState(null)     // 'consultation' | 'class'
+  const [step, setStep] = useState('details') // details | calendar | classpick | done | classdone
+  const [path, setPath] = useState('class')   // 'class' (default) | 'consultation' (upsell only)
   // Marketing-consent defaults to ticked (operator's call — pre-ticked + required;
   // accepted GDPR/Planet49 risk to maximise opt-in). Still un-tickable, and the
   // booking confirmation is a UTILITY/transactional send that doesn't rely on it.
@@ -143,8 +143,9 @@ export default function StartFunnel() {
     } catch { setSlots([]) } finally { setSlotsLoading(false) }
   }
 
-  function chooseConsult() { fireStep('path_consult'); setPath('consultation'); setError(null); setStep('details') }
-  function chooseClass() { fireStep('path_class'); setPath('class'); setError(null); setStep('details') }
+  // Consult upsell (from the class success screen). Details are already captured;
+  // flipping path→consultation loads the consult event, step→calendar loads its days.
+  function addConsult() { setError(null); setPath('consultation'); setStep('calendar') }
 
   function detailsNext(e) {
     e.preventDefault()
@@ -155,8 +156,8 @@ export default function StartFunnel() {
     if (!isValidMobileNumber(form.phone)) {
       setError('Please enter a valid mobile number (e.g. 087 123 4567).'); return
     }
-    fireStep('details', { path })
-    setStep(path === 'class' ? 'classpick' : 'calendar')
+    fireStep('details')
+    setStep('classpick')
   }
 
   async function book(slot) {
@@ -216,29 +217,25 @@ export default function StartFunnel() {
         </div>
       )}
       {step === 'classdone' && (
-        <div className="text-center py-6">
-          <p className="font-display font-extrabold uppercase text-3xl text-white mb-3">You&apos;re being booked in 🎉</p>
-          <p className="text-white/70">That&apos;s the first of your 3 free classes — watch for a WhatsApp confirming it. See you at UN1T Stillorgan!</p>
-        </div>
-      )}
-      {step === 'choose' && (
-        <div className="space-y-4">
-          <h1 className="font-display font-extrabold uppercase text-3xl mb-2">Your first 3 classes are free</h1>
-          <p className="text-white/60 text-sm mb-6">Book your first one now — how do you want to start?</p>
-          <button onClick={chooseClass} className="w-full text-left rounded-2xl border-2 border-white/20 hover:border-white p-6 transition-colors">
-            <div className="font-bold text-lg">Book your first free class</div>
-            <div className="text-white/60 text-sm mt-1">Jump straight in — classes 2 and 3 are on us too.</div>
-          </button>
-          <button onClick={chooseConsult} className="w-full text-left rounded-2xl border-2 border-white/20 hover:border-white p-6 transition-colors">
-            <div className="font-bold text-lg">Start with a free consultation</div>
-            <div className="text-white/60 text-sm mt-1">Meet a coach, talk goals, get a plan.</div>
-          </button>
+        <div className="py-6">
+          <div className="text-center mb-6">
+            <p className="font-display font-extrabold uppercase text-3xl text-white mb-3">You&apos;re being booked in 🎉</p>
+            <p className="text-white/70">That&apos;s the first of your 3 free classes — watch for a WhatsApp confirming it. See you at UN1T Stillorgan!</p>
+          </div>
+          <div className="rounded-2xl border border-white/15 bg-white/[0.04] p-5">
+            <div className="font-bold text-lg">Want a coach in your corner?</div>
+            <div className="text-white/60 text-sm mt-1 mb-4">Add a free consult — meet a coach, talk goals, get a plan. On us.</div>
+            <button type="button" onClick={addConsult} className="lp-btn w-full">Add a free consult →</button>
+          </div>
         </div>
       )}
 
       {step === 'details' && (
         <form onSubmit={detailsNext} className="space-y-3.5">
-          <h1 className="font-display font-extrabold uppercase text-2xl mb-4">Your details</h1>
+          <div className="mb-4">
+            <h1 className="font-display font-extrabold uppercase text-3xl mb-2">Your first 3 classes are free</h1>
+            <p className="text-white/60 text-sm">Book your first class now — pop in your details to start.</p>
+          </div>
           <input className={inputCls} placeholder="First name" value={form.first_name} onChange={set('first_name')} maxLength={120} autoComplete="given-name" />
           <input className={inputCls} placeholder="Last name" value={form.last_name} onChange={set('last_name')} maxLength={120} autoComplete="family-name" />
           <input className={inputCls} type="email" placeholder="Email" value={form.email} onChange={set('email')} maxLength={320} autoComplete="email" />
@@ -273,7 +270,7 @@ export default function StartFunnel() {
               {selectedDate && !slotsLoading && slots.length === 0 && <p className="text-white/50 text-sm">No times left that day — try another.</p>}
               <div className="grid grid-cols-3 gap-2">
                 {slots.map((s) => (
-                  <button key={s.start} disabled={submitting} onClick={() => book(s)}
+                  <button key={s.start} disabled={!event || submitting} onClick={() => book(s)}
                     className="px-3 py-3 rounded-xl border-2 border-white/20 hover:border-white text-sm disabled:opacity-50">
                     {s.start}
                   </button>
