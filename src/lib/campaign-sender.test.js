@@ -28,7 +28,7 @@ vi.mock('./postmark.js', async (importOriginal) => {
   return { ...actual, sendBatch: vi.fn(), buildAudienceQueryAsync: vi.fn() }
 })
 
-import { sendBatch } from './postmark.js'
+import { sendBatch, buildAudienceQueryAsync } from './postmark.js'
 import { tickCampaignSend, MAX_SEND_ATTEMPTS, SENDING_LEASE_MS } from './campaign-sender.js'
 
 // ── chainable fake ─────────────────────────────────────────────────
@@ -53,8 +53,12 @@ function makeDb(route) {
       return b
     },
     rpc(...args) {
-      statements.push({ table: '__rpc__', ops: [{ method: 'rpc', args }] })
-      return Promise.resolve({ error: null })
+      const state = { table: '__rpc__', ops: [{ method: 'rpc', args }] }
+      statements.push(state)
+      // Routable like from() so tests can feed RPC results (e.g. the
+      // campaign_ab_variant_stats decide query); default keeps the
+      // historical { error: null } shape.
+      return Promise.resolve(route(state) ?? { error: null })
     },
   }
   return { db, statements }
@@ -292,5 +296,370 @@ describe('tickCampaignSend — preheader + text alternative (CAMPAIGN-REL.3/.4)'
 
     const batch = sendBatch.mock.calls[0][0]
     expect(batch[0].htmlBody).not.toMatch(/mso-hide/)
+  })
+})
+
+// ── CAMPAIGN-AB (COMMS-AUDIT 2026-07-10) — subject-line A/B testing ──
+
+const HOUR = 3600_000
+
+const abCampaign = (overrides = {}) => ({
+  ...campaign,
+  ab_subject_b: 'Better subject {{first_name}}',
+  ab_test_pct: 20,
+  ab_wait_hours: 4,
+  ab_winner: null,
+  ab_test_started_at: null,
+  ab_decided_at: null,
+  ...overrides,
+})
+
+const abRecipient = (id, variant) => ({ ...makeRecipient(id), ab_variant: variant })
+
+// Route for A/B phase-2 scenarios. Distinguishes the head-count
+// existing-recipients probe, the reclaim sweep, the inflight-slice
+// probe, the chunk select, the claim CAS, the winner CAS, and the
+// variant-stats RPC.
+function abRouteFor({
+  count = 1,
+  stale = [],
+  candidates = [],
+  inflight = 0,
+  statRows = [],
+  winnerCasGranted = true,
+} = {}) {
+  return (state) => {
+    if (state.table === '__rpc__') {
+      const [fn] = state.ops[0].args
+      if (fn === 'campaign_ab_variant_stats') return { data: statRows, error: null }
+      return { error: null }
+    }
+    if (state.table === 'campaigns') {
+      const first = state.ops[0]
+      if (first.method === 'update' && 'ab_winner' in (first.args[0] || {})) {
+        return winnerCasGranted ? { data: [{ id: 'camp-1' }] } : { data: [] }
+      }
+      return {}
+    }
+    if (state.table !== 'campaign_recipients') return { data: [] }
+    const first = state.ops[0]
+    if (first.method === 'select' && first.args[1]?.head) {
+      if (hasEq(state, 'status', 'sending')) return { count: inflight }
+      return { count }
+    }
+    if (first.method === 'select' && hasEq(state, 'status', 'sending')) return { data: stale }
+    if (first.method === 'select') return { data: candidates }
+    if (first.method === 'update' && op(state, 'select')) {
+      return { data: op(state, 'in').args[1].map(id => ({ id })) }
+    }
+    return {}
+  }
+}
+
+// All UPDATE payloads applied to the campaigns table.
+const campaignUpdates = (statements) =>
+  statements
+    .filter(s => s.table === 'campaigns' && s.ops[0]?.method === 'update')
+    .map(s => s.ops[0].args[0])
+
+// True when some statement filters ab_variant IS NOT NULL (`.not('ab_variant','is',null)`).
+const hasVariantFilter = (state) =>
+  state.ops.some(o => o.method === 'not' && o.args[0] === 'ab_variant')
+
+describe('tickCampaignSend — A/B default-path regression (no ab_subject_b)', () => {
+  it('never touches ab_* columns or filters by ab_variant for a plain campaign', async () => {
+    const { db, statements } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, campaign)
+
+    for (const u of campaignUpdates(statements)) {
+      expect(u).not.toHaveProperty('ab_test_started_at')
+      expect(u).not.toHaveProperty('ab_winner')
+      expect(u).not.toHaveProperty('ab_decided_at')
+    }
+    expect(statements.some(hasVariantFilter)).toBe(false)
+    // Subject is the plain campaign subject, merged.
+    expect(sendBatch.mock.calls[0][0][0].subject).toBe('Hi Alice')
+  })
+
+  it('finalises a drained plain campaign as sent (no A/B stamp detour)', async () => {
+    const { db, statements } = makeDb(routeFor({ candidates: [] }))
+    sendBatch.mockResolvedValue([])
+
+    const result = await tickCampaignSend(db, campaign)
+
+    expect(result.phase).toBe('finalise')
+    expect(campaignUpdates(statements)).toContainEqual(expect.objectContaining({ status: 'sent' }))
+  })
+
+  it('populate for a plain campaign inserts recipient rows WITHOUT an ab_variant key', async () => {
+    const contacts = [makeContact('c1'), makeContact('c2'), makeContact('c3'), makeContact('c4')]
+    buildAudienceQueryAsync.mockResolvedValue({
+      query: { range: vi.fn(async (from) => ({ data: from === 0 ? contacts : [], error: null })) },
+    })
+    const { db, statements } = makeDb(abRouteFor({ count: 0 }))
+
+    await tickCampaignSend(db, campaign)
+
+    const insert = statements.find(s => s.table === 'campaign_recipients' && s.ops[0].method === 'insert')
+    expect(insert).toBeTruthy()
+    for (const row of insert.ops[0].args[0]) {
+      expect(row).not.toHaveProperty('ab_variant')
+    }
+  })
+})
+
+describe('tickCampaignSend — A/B populate (slice assignment at populate time)', () => {
+  it('assigns ab_variant to ~pct% of recipients, half a / half b, remainder null', async () => {
+    const contacts = Array.from({ length: 10 }, (_, i) => makeContact(`c${i + 1}`))
+    buildAudienceQueryAsync.mockResolvedValue({
+      query: { range: vi.fn(async (from) => ({ data: from === 0 ? contacts : [], error: null })) },
+    })
+    const { db, statements } = makeDb(abRouteFor({ count: 0 }))
+
+    await tickCampaignSend(db, abCampaign()) // pct 20 of 10 → slice of 2
+
+    const insert = statements.find(s => s.table === 'campaign_recipients' && s.ops[0].method === 'insert')
+    const rows = insert.ops[0].args[0]
+    expect(rows).toHaveLength(10)
+    const a = rows.filter(r => r.ab_variant === 'a')
+    const b = rows.filter(r => r.ab_variant === 'b')
+    const rest = rows.filter(r => r.ab_variant === null)
+    expect(a).toHaveLength(1)
+    expect(b).toHaveLength(1)
+    expect(rest).toHaveLength(8)
+    // The A/B lifecycle has not started — no premature winner.
+    for (const u of campaignUpdates(statements)) {
+      expect(u).not.toHaveProperty('ab_winner')
+    }
+  })
+
+  it('an audience too small to test short-circuits to winner A at populate time', async () => {
+    const contacts = [makeContact('c1'), makeContact('c2')]
+    buildAudienceQueryAsync.mockResolvedValue({
+      query: { range: vi.fn(async (from) => ({ data: from === 0 ? contacts : [], error: null })) },
+    })
+    const { db, statements } = makeDb(abRouteFor({ count: 0 }))
+
+    await tickCampaignSend(db, abCampaign())
+
+    const insert = statements.find(s => s.table === 'campaign_recipients' && s.ops[0].method === 'insert')
+    for (const row of insert.ops[0].args[0]) expect(row.ab_variant).toBe(null)
+    expect(campaignUpdates(statements)).toContainEqual(expect.objectContaining({ ab_winner: 'a', status: 'sending' }))
+  })
+})
+
+describe('tickCampaignSend — A/B slice phase', () => {
+  it('sends only the test slice, with the subject per variant', async () => {
+    const { db, statements } = makeDb(abRouteFor({
+      candidates: [abRecipient('r1', 'a'), abRecipient('r2', 'b')],
+    }))
+    sendBatch.mockResolvedValue([
+      { ErrorCode: 0, MessageID: 'pm-1' },
+      { ErrorCode: 0, MessageID: 'pm-2' },
+    ])
+
+    await tickCampaignSend(db, abCampaign())
+
+    // Chunk select was restricted to slice rows (ab_variant IS NOT NULL).
+    const chunkSelect = statements.find(s =>
+      s.table === 'campaign_recipients' &&
+      s.ops[0]?.method === 'select' &&
+      !s.ops[0].args[1]?.head &&
+      hasEq(s, 'status', 'queued')
+    )
+    expect(hasVariantFilter(chunkSelect)).toBe(true)
+
+    const batch = sendBatch.mock.calls[0][0]
+    expect(batch[0].subject).toBe('Hi Alice')            // variant A = campaigns.subject
+    expect(batch[1].subject).toBe('Better subject Alice') // variant B = ab_subject_b
+
+    // email_sends logs the subject each recipient actually got.
+    const insert = statements.find(s => s.table === 'email_sends' && s.ops[0].method === 'insert')
+    const subjects = insert.ops[0].args[0].map(r => r.subject)
+    expect(subjects).toContain('Hi {{first_name}}')
+    expect(subjects).toContain('Better subject {{first_name}}')
+  })
+
+  it('stamps ab_test_started_at (CAS on IS NULL) once the slice is fully drained', async () => {
+    const { db, statements } = makeDb(abRouteFor({ candidates: [], inflight: 0 }))
+    sendBatch.mockResolvedValue([])
+
+    const result = await tickCampaignSend(db, abCampaign())
+
+    expect(result.phase).toBe('ab_test_started')
+    const stamp = statements.find(s =>
+      s.table === 'campaigns' &&
+      s.ops[0]?.method === 'update' &&
+      'ab_test_started_at' in s.ops[0].args[0]
+    )
+    expect(stamp).toBeTruthy()
+    // CAS — only one tick may start the wait clock.
+    expect(stamp.ops.some(o => o.method === 'is' && o.args[0] === 'ab_test_started_at' && o.args[1] === null)).toBe(true)
+    // The campaign must NOT be finalised as sent around the remainder.
+    expect(campaignUpdates(statements).some(u => u.status === 'sent')).toBe(false)
+  })
+
+  it('does not start the wait clock while slice rows are still in flight (sending)', async () => {
+    const { db, statements } = makeDb(abRouteFor({ candidates: [], inflight: 2 }))
+    sendBatch.mockResolvedValue([])
+
+    const result = await tickCampaignSend(db, abCampaign())
+
+    expect(result.phase).toBe('ab_slice')
+    expect(campaignUpdates(statements).every(u => !('ab_test_started_at' in u))).toBe(true)
+  })
+})
+
+describe('tickCampaignSend — A/B waiting phase', () => {
+  it('is a no-op for the remainder while inside the wait window', async () => {
+    const { db, statements } = makeDb(abRouteFor({}))
+    sendBatch.mockResolvedValue([])
+    const started = new Date(Date.now() - 1 * HOUR).toISOString()
+
+    const result = await tickCampaignSend(db, abCampaign({ ab_test_started_at: started }))
+
+    expect(result.phase).toBe('ab_waiting')
+    expect(sendBatch).not.toHaveBeenCalled()
+    expect(campaignUpdates(statements).some(u => u.status === 'sent')).toBe(false)
+  })
+
+  it('rotates the waiting campaign to the back of the cron pick order (updated_at touch)', async () => {
+    const { db, statements } = makeDb(abRouteFor({}))
+    const started = new Date(Date.now() - 1 * HOUR).toISOString()
+
+    await tickCampaignSend(db, abCampaign({ ab_test_started_at: started }))
+
+    expect(campaignUpdates(statements)).toContainEqual({ updated_at: expect.any(String) })
+  })
+})
+
+describe('tickCampaignSend — A/B decide phase', () => {
+  const statRowsBWins = [
+    { ab_variant: 'a', sent_count: 50, opened_count: 5 },
+    { ab_variant: 'b', sent_count: 50, opened_count: 20 },
+  ]
+  const startedLongAgo = () => new Date(Date.now() - 5 * HOUR).toISOString()
+
+  it('decides by open rate, CAS-stamps the winner, and sends the remainder with the winning subject in the same tick', async () => {
+    const { db, statements } = makeDb(abRouteFor({
+      candidates: [abRecipient('r9', null)],
+      statRows: statRowsBWins,
+    }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-9' }])
+
+    const result = await tickCampaignSend(db, abCampaign({ ab_test_started_at: startedLongAgo() }))
+
+    const stamp = statements.find(s =>
+      s.table === 'campaigns' && s.ops[0]?.method === 'update' && 'ab_winner' in s.ops[0].args[0]
+    )
+    expect(stamp.ops[0].args[0]).toEqual(expect.objectContaining({ ab_winner: 'b', ab_decided_at: expect.any(String) }))
+    // CAS — only one tick decides.
+    expect(stamp.ops.some(o => o.method === 'is' && o.args[0] === 'ab_winner' && o.args[1] === null)).toBe(true)
+
+    // Remainder went out with the winning (B) subject, merged.
+    expect(sendBatch.mock.calls[0][0][0].subject).toBe('Better subject Alice')
+    expect(result.sent).toBe(1)
+  })
+
+  it('ties (and zero-open data) go to A', async () => {
+    const { db, statements } = makeDb(abRouteFor({
+      candidates: [abRecipient('r9', null)],
+      statRows: [
+        { ab_variant: 'a', sent_count: 50, opened_count: 0 },
+        { ab_variant: 'b', sent_count: 50, opened_count: 0 },
+      ],
+    }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-9' }])
+
+    await tickCampaignSend(db, abCampaign({ ab_test_started_at: startedLongAgo() }))
+
+    const stamp = statements.find(s =>
+      s.table === 'campaigns' && s.ops[0]?.method === 'update' && 'ab_winner' in s.ops[0].args[0]
+    )
+    expect(stamp.ops[0].args[0].ab_winner).toBe('a')
+    expect(sendBatch.mock.calls[0][0][0].subject).toBe('Hi Alice')
+  })
+
+  it('a tick that loses the winner CAS sends nothing (single decider)', async () => {
+    const { db } = makeDb(abRouteFor({
+      candidates: [abRecipient('r9', null)],
+      statRows: statRowsBWins,
+      winnerCasGranted: false,
+    }))
+    sendBatch.mockResolvedValue([])
+
+    const result = await tickCampaignSend(db, abCampaign({ ab_test_started_at: startedLongAgo() }))
+
+    expect(result.phase).toBe('ab_decide')
+    expect(result.sent).toBe(0)
+    expect(sendBatch).not.toHaveBeenCalled()
+  })
+})
+
+describe('tickCampaignSend — A/B final phase + cancel', () => {
+  it('after a decision, the remainder AND retried slice rows each get their correct subject', async () => {
+    const { db, statements } = makeDb(abRouteFor({
+      candidates: [abRecipient('r9', null), abRecipient('r2', 'b'), abRecipient('r1', 'a')],
+    }))
+    sendBatch.mockResolvedValue([
+      { ErrorCode: 0, MessageID: 'pm-9' },
+      { ErrorCode: 0, MessageID: 'pm-2' },
+      { ErrorCode: 0, MessageID: 'pm-1' },
+    ])
+
+    await tickCampaignSend(db, abCampaign({
+      ab_winner: 'b',
+      ab_test_started_at: new Date(Date.now() - 9 * HOUR).toISOString(),
+      ab_decided_at: new Date(Date.now() - 4 * HOUR).toISOString(),
+    }))
+
+    const batch = sendBatch.mock.calls[0][0]
+    expect(batch[0].subject).toBe('Better subject Alice') // remainder → winner B
+    expect(batch[1].subject).toBe('Better subject Alice') // retried slice B row keeps B
+    expect(batch[2].subject).toBe('Hi Alice')             // retried slice A row keeps A
+
+    // Final-phase chunk select is NOT slice-restricted.
+    const chunkSelect = statements.find(s =>
+      s.table === 'campaign_recipients' &&
+      s.ops[0]?.method === 'select' &&
+      !s.ops[0].args[1]?.head &&
+      hasEq(s, 'status', 'queued')
+    )
+    expect(hasVariantFilter(chunkSelect)).toBe(false)
+  })
+
+  it('winner A sends the remainder with subject A', async () => {
+    const { db } = makeDb(abRouteFor({ candidates: [abRecipient('r9', null)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-9' }])
+
+    await tickCampaignSend(db, abCampaign({
+      ab_winner: 'a',
+      ab_test_started_at: new Date(Date.now() - 9 * HOUR).toISOString(),
+    }))
+
+    expect(sendBatch.mock.calls[0][0][0].subject).toBe('Hi Alice')
+  })
+
+  it('cancel mid-test still cancels immediately (even during the wait window)', async () => {
+    const { db, statements } = makeDb(abRouteFor({}))
+    sendBatch.mockResolvedValue([])
+
+    const result = await tickCampaignSend(db, abCampaign({
+      ab_test_started_at: new Date(Date.now() - 1 * HOUR).toISOString(),
+      cancel_requested_at: new Date().toISOString(),
+    }))
+
+    expect(result.phase).toBe('cancelled')
+    expect(campaignUpdates(statements)).toContainEqual(expect.objectContaining({ status: 'cancelled' }))
+    // Remaining queued recipients (slice + remainder) are parked.
+    const parked = statements.find(s =>
+      s.table === 'campaign_recipients' &&
+      s.ops[0]?.method === 'update' &&
+      s.ops[0].args[0].status === 'cancelled'
+    )
+    expect(parked).toBeTruthy()
+    expect(hasVariantFilter(parked)).toBe(false)
   })
 })

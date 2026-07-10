@@ -18,6 +18,11 @@ const CampaignCreateSchema = z.object({
   audience_filter: audienceFilterSchema,
   template_id: uuidLike.nullable().optional(),
   created_by: uuidLike.nullable().optional(),
+  // CAMPAIGN-AB (mig 398) — optional subject-line A/B test. Setting
+  // ab_subject_b turns the test on; bounds mirror the DB CHECKs.
+  ab_subject_b: z.string().min(1).max(500).nullable().optional(),
+  ab_test_pct: z.number().int().min(5).max(50).nullable().optional(),
+  ab_wait_hours: z.number().int().min(1).max(24).nullable().optional(),
 })
 
 // GET /api/campaigns — List campaigns
@@ -73,6 +78,11 @@ export async function POST(request) {
     status: 'draft',
     template_id: body.template_id || null,
     created_by: body.created_by || null,
+    // CAMPAIGN-AB — omitted fields fall back to the column defaults
+    // (pct 10, wait 4h); ab_subject_b NULL keeps A/B off.
+    ab_subject_b: body.ab_subject_b || null,
+    ...(body.ab_test_pct != null ? { ab_test_pct: body.ab_test_pct } : {}),
+    ...(body.ab_wait_hours != null ? { ab_wait_hours: body.ab_wait_hours } : {}),
   }).select().single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })

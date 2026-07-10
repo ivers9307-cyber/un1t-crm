@@ -47,10 +47,19 @@ export default async function CampaignDetailPage(props) {
     .order('sent_at', { ascending: false })
     .limit(100)
 
+  // CAMPAIGN-AB — per-variant sends/opens for the A/B panel (mig 398).
+  // Same email_sends-sourced rollup the send cron uses at decide time.
+  let abStats = null
+  if (campaign.ab_subject_b) {
+    const { data } = await db.rpc('campaign_ab_variant_stats', { p_campaign_id: params.id })
+    abStats = data || []
+  }
+
   return (
     <CampaignDetail
       campaign={campaign}
       recipients={recipients || []}
+      abStats={abStats}
       locationId={user.activeLocation?.id}
       userId={user.id}
     />

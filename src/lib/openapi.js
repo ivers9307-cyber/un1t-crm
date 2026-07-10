@@ -167,6 +167,13 @@ const CampaignCreate = z.object({
   html_content: z.string().max(1_000_000).nullable().optional(),
   audience_filter: audienceFilterSchema,
   template_id: uuidLike.nullable().optional(),
+  // CAMPAIGN-AB (mig 398) — optional subject-line A/B test.
+  ab_subject_b: z.string().min(1).max(500).nullable().optional()
+    .openapi({ description: 'Variant-B subject line; setting this enables the A/B test (subject is variant A)' }),
+  ab_test_pct: z.number().int().min(5).max(50).nullable().optional()
+    .openapi({ description: 'Percent of the audience in the test slice (default 10)' }),
+  ab_wait_hours: z.number().int().min(1).max(24).nullable().optional()
+    .openapi({ description: 'Hours to wait before auto-picking the winner by open rate (default 4)' }),
 }).openapi('CampaignCreate')
 
 const ScheduledReport = z.object({
