@@ -200,7 +200,10 @@ function fakeRowsDb({ memberships = [], suppressions = [] } = {}) {
     select: () => ({
       eq: (col, val) => {
         calls.hostFilters.push([table, col, val])
-        return { order: () => ({ range: async () => ({ data: rows, error: null }) }) }
+        // Chainable order — the real query adds a unique-id tiebreaker
+        // after created_at (stable pagination across ties).
+        const chain = { order: () => chain, range: async () => ({ data: rows, error: null }) }
+        return chain
       },
     }),
   })

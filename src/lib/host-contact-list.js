@@ -60,7 +60,7 @@ export function isEmailable(contact, suppressed) {
   if (!contact) return false
   if (!contact.email) return false
   if (contact.email_marketing !== true) return false
-  if (BLOCKED_EMAIL_STATUSES.includes(contact.email_status)) return false
+  if (BLOCKED_EMAIL_STATUSES.includes(contact.email_status ?? 'active')) return false // NULL = legacy 'active' (column default, mig 005)
   if (contact.email_suppressed_at) return false
   return true
 }
@@ -102,6 +102,7 @@ export async function addEventAttendeesToHostList(db, raceEventId) {
       .eq('race_event_id', raceEventId)
       .eq('status', 'confirmed')
       .order('registered_at', { ascending: true })
+      .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
     if (error) throw new Error(`host contact list: registrations query failed: ${error.message}`)
     for (const reg of data || []) {
@@ -154,6 +155,7 @@ export async function fetchHostContactRows(db, hostId) {
       `)
       .eq('host_id', hostId)
       .order('created_at', { ascending: false })
+      .order('id', { ascending: true })
       .range(from, from + PAGE - 1)
     if (error) throw new Error(`host contact list: contacts query failed: ${error.message}`)
     memberships.push(...(data || []))
