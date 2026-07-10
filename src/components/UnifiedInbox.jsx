@@ -1,22 +1,24 @@
 'use client'
 
-// UIX-P1b — the unified inbox. One queue for WhatsApp + Instagram
-// (docs/UNIFIED_INBOX_2026-06.md): channel filter chips, the
-// Needs-reply/Everything split from P1a, per-row channel badge +
-// unread + resolved tick. The thread pane is the EXISTING channel
-// inbox rendered in `embedded` mode — WAInbox/IGInbox keep owning
-// their composers, templates, 24h-window logic and Resolve buttons,
-// so nothing about sending changed here.
+// UIX-P1b — the unified inbox. One queue for WhatsApp + Instagram +
+// Email (docs/UNIFIED_INBOX_2026-06.md; EMAIL-INBOX.1 added email):
+// channel filter chips, the Needs-reply/Everything split from P1a,
+// per-row channel badge + unread + resolved tick. The thread pane is
+// the EXISTING channel inbox rendered in `embedded` mode —
+// WAInbox/IGInbox/EmailInbox keep owning their composers, templates,
+// 24h-window logic and Resolve buttons, so nothing about sending
+// changed here.
 
 import { useState, useEffect, useCallback } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
 import { needsReply, isAgentHandoff } from '@/lib/inbox-queues'
 import {
-  MessageCircle, Instagram, RefreshCw, Check, Inbox as InboxIcon,
+  MessageCircle, Instagram, Mail, RefreshCw, Check, Inbox as InboxIcon,
   ArrowLeft,
 } from 'lucide-react'
 import WAInbox from '@/components/WAInbox'
 import IGInbox from '@/components/IGInbox'
+import EmailInbox from '@/components/EmailInbox'
 import CommandCentre from '@/components/CommandCentre'
 
 function formatTime(dateStr) {
@@ -37,6 +39,7 @@ function rowName(conv) {
   if (conv.contacts?.name) return conv.contacts.name
   if (conv.contacts?.first_name) return conv.contacts.first_name
   if (conv._ch === 'wa') return conv.wa_profile_name || conv.wa_phone
+  if (conv._ch === 'em') return conv.counterpart_name || conv.counterpart_email || 'Email contact'
   if (conv.ig_username) return `@${conv.ig_username}`
   return 'Instagram user'
 }
@@ -45,22 +48,28 @@ const CHANNELS = [
   ['all', 'All'],
   ['wa', 'WhatsApp'],
   ['ig', 'Instagram'],
+  ['em', 'Email'],
 ]
+
+const VALID_CHANNELS = new Set(['wa', 'ig', 'em'])
 
 export default function UnifiedInbox({ locationId, userId, initialConversationId, initialChannel, canEditConsent = false }) {
   const [waConvs, setWaConvs] = useState([])
   const [igConvs, setIgConvs] = useState([])
+  const [emConvs, setEmConvs] = useState([])
   const [loading, setLoading] = useState(true)
   const [channelFilter, setChannelFilter] = useState('all')
   const [queueFilter, setQueueFilter] = useState('needs_reply')
   const [selected, setSelected] = useState(
-    initialConversationId ? { ch: initialChannel === 'ig' ? 'ig' : 'wa', id: initialConversationId } : null
+    initialConversationId
+      ? { ch: VALID_CHANNELS.has(initialChannel) ? initialChannel : 'wa', id: initialConversationId }
+      : null
   )
   const [ccTab, setCcTab] = useState('profile')
 
   const loadConversations = useCallback(async () => {
     const qs = locationId ? `?location_id=${encodeURIComponent(locationId)}` : ''
-    const [wa, ig] = await Promise.all([
+    const [wa, ig, em] = await Promise.all([
       fetch(`/api/whatsapp/conversations${qs}`).then(r => r.json()).then(
         d => (d.success ? d.conversations || [] : null),
         () => null
@@ -69,11 +78,16 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
         d => (d.success ? d.conversations || [] : null),
         () => null
       ),
+      fetch(`/api/email/conversations${qs}`).then(r => r.json()).then(
+        d => (d.success ? d.conversations || [] : null),
+        () => null
+      ),
     ])
     // Transient per-channel failures keep the prior list rather than
-    // blanking half the queue.
+    // blanking part of the queue.
     if (wa) setWaConvs(wa)
     if (ig) setIgConvs(ig)
+    if (em) setEmConvs(em)
     setLoading(false)
   }, [locationId])
 
@@ -91,6 +105,7 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
     for (const table of [
       'whatsapp_conversations', 'whatsapp_messages',
       'instagram_conversations', 'instagram_messages',
+      'email_conversations', 'email_inbox_messages',
       'agent_membership_requests',
     ]) {
       channel.on('postgres_changes', { event: '*', schema: 'public', table }, () => {
@@ -111,7 +126,9 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
   async function quickResolve(conv) {
     const url = conv._ch === 'ig'
       ? `/api/instagram/conversations/${conv.id}`
-      : `/api/whatsapp/conversations/${conv.id}`
+      : conv._ch === 'em'
+        ? `/api/email/conversations/${conv.id}`
+        : `/api/whatsapp/conversations/${conv.id}`
     try {
       const res = await fetch(url, {
         method: 'PATCH',
@@ -123,6 +140,7 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
       const stamp = new Date().toISOString()
       const apply = prev => prev.map(c => (c.id === conv.id ? { ...c, resolved_at: stamp } : c))
       if (conv._ch === 'ig') setIgConvs(apply)
+      else if (conv._ch === 'em') setEmConvs(apply)
       else setWaConvs(apply)
     } catch { /* leave state as-is */ }
   }
@@ -130,6 +148,7 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
   const merged = [
     ...waConvs.map(c => ({ ...c, _ch: 'wa' })),
     ...igConvs.map(c => ({ ...c, _ch: 'ig' })),
+    ...emConvs.map(c => ({ ...c, _ch: 'em' })),
   ].sort((a, b) => new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0))
 
   const channelMatched = channelFilter === 'all' ? merged : merged.filter(c => c._ch === channelFilter)
@@ -185,6 +204,7 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
             >
               {key === 'wa' && <MessageCircle size={11} />}
               {key === 'ig' && <Instagram size={11} />}
+              {key === 'em' && <Mail size={11} />}
               {label}
             </button>
           ))}
@@ -243,7 +263,9 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
                   <span className="flex items-center gap-1.5 min-w-0">
                     {conv._ch === 'wa'
                       ? <MessageCircle size={13} className="text-green-600 shrink-0" />
-                      : <Instagram size={13} className="text-pink-600 shrink-0" />}
+                      : conv._ch === 'em'
+                        ? <Mail size={13} className="text-blue-600 shrink-0" />
+                        : <Instagram size={13} className="text-pink-600 shrink-0" />}
                     <span className="font-medium text-sm truncate">{rowName(conv)}</span>
                     {isAgentHandoff(conv) && (
                       <span className="text-[10px] font-semibold text-amber-700 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0">
@@ -313,6 +335,12 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
                   userId={userId}
                   initialConversationId={selected.id}
                   onOpenBookTab={() => setCcTab('book')}
+                />
+              ) : selected.ch === 'em' ? (
+                <EmailInbox
+                  embedded
+                  locationId={locationId}
+                  initialConversationId={selected.id}
                 />
               ) : (
                 <IGInbox

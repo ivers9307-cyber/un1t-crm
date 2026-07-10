@@ -374,6 +374,10 @@ function BookPanel({ contactId, locationId, glofoxMemberId, eventTypes, channel,
   // rather than failing the booking.
   async function sendThreadText(text) {
     if (!dropInThread || !channel || !conversationId) return null
+    // EMAIL-INBOX.1 — no chat drop-in for email threads: the booking's
+    // own confirmation email/SMS covers the customer, and a one-line
+    // chat blurb as a standalone email would read oddly.
+    if (channel === 'em') return null
     const sendUrl = channel === 'ig'
       ? `/api/instagram/conversations/${conversationId}/send`
       : `/api/whatsapp/conversations/${conversationId}/send`

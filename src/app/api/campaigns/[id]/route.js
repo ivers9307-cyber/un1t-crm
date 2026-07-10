@@ -25,6 +25,13 @@ const CampaignUpdateSchema = z.object({
   status: z.enum(['draft', 'scheduled']).optional(),
   // API speaks email_type (marketing/utility); mapped to postmark_stream below.
   email_type: z.enum(['marketing', 'utility']).optional(),
+  // CAMPAIGN-AB (mig 398) — optional subject-line A/B test. Setting
+  // ab_subject_b turns the test on (NULL turns it off); bounds mirror
+  // the DB CHECKs. Only editable while draft/scheduled (guard below),
+  // so the send state machine's ab_* stamps can never be raced.
+  ab_subject_b: z.string().min(1).max(500).nullable().optional(),
+  ab_test_pct: z.number().int().min(5).max(50).nullable().optional(),
+  ab_wait_hours: z.number().int().min(1).max(24).nullable().optional(),
 })
 
 // GET /api/campaigns/[id] — Get campaign with metrics

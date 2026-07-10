@@ -20,6 +20,13 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   const [fromEmail, setFromEmail] = useState(campaign?.from_email || '')
   const [emailType, setEmailType] = useState(campaign?.postmark_stream === 'outbound' ? 'utility' : 'marketing')
   const [replyTo, setReplyTo] = useState(campaign?.reply_to || '')
+  // CAMPAIGN-AB — optional subject-line A/B test (mig 398). Enabled ⇔
+  // ab_subject_b is saved non-null; pct/wait are clamped client-side
+  // and CHECK-bounded in the DB (this editor writes columns directly).
+  const [abEnabled, setAbEnabled] = useState(!!campaign?.ab_subject_b)
+  const [abSubjectB, setAbSubjectB] = useState(campaign?.ab_subject_b || '')
+  const [abTestPct, setAbTestPct] = useState(campaign?.ab_test_pct ?? 10)
+  const [abWaitHours, setAbWaitHours] = useState(campaign?.ab_wait_hours ?? 4)
   const [audienceFilter, setAudienceFilter] = useState(
     // Precedence: existing draft > deep-link preset (e.g. ?segment=race_completed
     // from /communications/segments) > empty.
@@ -229,6 +236,11 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
         // stream + email_administrative gate. Direct column write (this
         // editor persists via the browser Supabase client, not the API).
         postmark_stream: emailType === 'utility' ? 'outbound' : 'broadcast',
+        // CAMPAIGN-AB — a blank/disabled variant B saves NULL (test off).
+        // Bounds mirror the DB CHECKs (pct 5-50, wait 1-24h).
+        ab_subject_b: abEnabled && abSubjectB.trim() ? abSubjectB.trim() : null,
+        ab_test_pct: Math.min(50, Math.max(5, Math.round(Number(abTestPct) || 10))),
+        ab_wait_hours: Math.min(24, Math.max(1, Math.round(Number(abWaitHours) || 4))),
       }
 
       let result
@@ -838,6 +850,76 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                   placeholder="Your subject line — use {{first_name}} for personalisation"
                   className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
                 />
+              </div>
+
+              {/* CAMPAIGN-AB — optional subject-line A/B test. The send
+                  cron mails variant A/B to a small slice, waits, then
+                  sends everyone else the better-opening subject. */}
+              <div className="border border-un1t-border rounded-md p-4 space-y-3">
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={abEnabled}
+                    onChange={e => setAbEnabled(e.target.checked)}
+                    className="accent-emerald-600"
+                  />
+                  <span className="font-medium">A/B test the subject line</span>
+                </label>
+                {abEnabled ? (
+                  <>
+                    <p className="text-xs text-un1t-muted">
+                      A test slice gets subject A (above) or subject B; after the wait,
+                      the rest of the audience automatically gets whichever subject was
+                      opened more. Ties go to subject A.
+                    </p>
+                    <div>
+                      <label className="block text-sm mb-1.5">Subject B *</label>
+                      <input
+                        type="text"
+                        value={abSubjectB}
+                        onChange={e => setAbSubjectB(e.target.value)}
+                        placeholder="The alternative subject line to test"
+                        className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                      />
+                      {!abSubjectB.trim() && (
+                        <p className="mt-1 text-xs text-amber-700">
+                          Leave this empty and the campaign sends without a test.
+                        </p>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm mb-1.5">Test slice (% of audience)</label>
+                        <input
+                          type="number"
+                          min={5}
+                          max={50}
+                          value={abTestPct}
+                          onChange={e => setAbTestPct(e.target.value)}
+                          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
+                        />
+                        <p className="mt-1 text-xs text-un1t-muted">5–50%, split half A / half B</p>
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1.5">Wait before deciding (hours)</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={24}
+                          value={abWaitHours}
+                          onChange={e => setAbWaitHours(e.target.value)}
+                          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
+                        />
+                        <p className="mt-1 text-xs text-un1t-muted">1–24h after the slice finishes</p>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-xs text-un1t-muted">
+                    Send two subject lines to a small test slice and let the rest of the
+                    audience get the one that performs better.
+                  </p>
+                )}
               </div>
 
               <div>
