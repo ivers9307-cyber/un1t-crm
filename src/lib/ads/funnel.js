@@ -3,14 +3,15 @@
 // pure and unit-tested; `loadFunnel` aggregates distinct sessions per step via
 // the funnel_step_counts RPC (cap-safe — never pulls raw events).
 
-// The five funnel stages, in order. The two path/booked variants collapse into
-// one stage each (a session only ever takes one path / one booking type).
+// The four funnel stages, in order. Every completed funnel is a class booking
+// (the consult is a post-booking upsell, not a funnel stage — see the spec), so
+// `booked` counts `booked_class` only; summing in `booked_consult` would
+// double-count a session that added a consult after its class.
 export const FUNNEL_STAGES = [
   { key: 'view', label: 'Landed on page', steps: ['view'] },
-  { key: 'path', label: 'Chose a path', steps: ['path_class', 'path_consult'] },
   { key: 'details', label: 'Entered details', steps: ['details'] },
   { key: 'slots', label: 'Saw the times', steps: ['slots_view'] },
-  { key: 'booked', label: 'Booked', steps: ['booked_class', 'booked_consult'] },
+  { key: 'booked', label: 'Booked', steps: ['booked_class'] },
 ]
 
 /**
