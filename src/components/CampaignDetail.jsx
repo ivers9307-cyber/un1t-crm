@@ -31,7 +31,40 @@ function StatCard({ icon: Icon, label, value, subValue, color }) {
   )
 }
 
-export default function CampaignDetail({ campaign, recipients = [], locationId: _locationId, userId: _userId }) {
+// CAMPAIGN-AB — human-readable test state derived from the campaign's
+// ab_* columns (mig 398); mirrors resolveAbPhase in src/lib/campaign-ab.js.
+function abStateFor(campaign) {
+  if (!campaign.ab_subject_b) return null
+  if (campaign.ab_winner) return 'decided'
+  if (campaign.ab_test_started_at) return 'waiting'
+  return 'testing'
+}
+
+function AbVariantRow({ label, subject, stats, isWinner }) {
+  const sent = Number(stats?.sent_count) || 0
+  const opened = Number(stats?.opened_count) || 0
+  const openRate = sent > 0 ? ((opened / sent) * 100).toFixed(1) : '0'
+  return (
+    <div className="flex items-center justify-between gap-4 py-2">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-un1t-subtle uppercase">{label}</span>
+          {isWinner && (
+            <span className="text-xs bg-emerald-500/10 text-emerald-700 px-2 py-0.5 rounded-full">Winner</span>
+          )}
+        </div>
+        <p className="text-sm text-un1t-text truncate">{subject || '—'}</p>
+      </div>
+      <div className="flex items-center gap-4 text-sm shrink-0 tabular-nums">
+        <span className="text-un1t-subtle">{sent} sent</span>
+        <span className="text-un1t-subtle">{opened} opened</span>
+        <span className="font-semibold">{openRate}%</span>
+      </div>
+    </div>
+  )
+}
+
+export default function CampaignDetail({ campaign, recipients = [], abStats = null, locationId: _locationId, userId: _userId }) {
   const router = useRouter()
   const [tab, setTab] = useState('overview')  // overview, recipients, preview
 
@@ -118,6 +151,55 @@ export default function CampaignDetail({ campaign, recipients = [], locationId: 
               <StatCard icon={MousePointerClick} label="Clicked"    value={totalClicked} subValue={`${clickRate}% click rate`} color="text-cyan-400" />
               <StatCard icon={AlertTriangle}     label="Bounced"    value={totalBounced} subValue={`${bounceRate}% bounce rate`} color="text-red-400" />
             </div>
+
+            {/* CAMPAIGN-AB — subject-line test panel (only when a
+                variant B exists). Per-variant numbers come from the
+                campaign_ab_variant_stats RPC via the server page. */}
+            {campaign.ab_subject_b && (() => {
+              const state = abStateFor(campaign)
+              const statsFor = (v) => (abStats || []).find(r => r.ab_variant === v)
+              return (
+                <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Subject A/B Test</h3>
+                    {state === 'decided' && (
+                      <span className="text-xs bg-emerald-500/10 text-emerald-700 px-2 py-0.5 rounded-full">
+                        Winner: Subject {campaign.ab_winner === 'b' ? 'B' : 'A'}
+                      </span>
+                    )}
+                    {state === 'waiting' && (
+                      <span className="text-xs bg-amber-500/10 text-amber-700 px-2 py-0.5 rounded-full">
+                        Waiting — winner decided {campaign.ab_wait_hours || 4}h after the test slice
+                      </span>
+                    )}
+                    {state === 'testing' && (
+                      <span className="text-xs bg-blue-500/10 text-blue-700 px-2 py-0.5 rounded-full">
+                        Test slice sending ({campaign.ab_test_pct || 10}% of audience)
+                      </span>
+                    )}
+                  </div>
+                  <div className="divide-y divide-un1t-border">
+                    <AbVariantRow
+                      label="Subject A"
+                      subject={campaign.subject}
+                      stats={statsFor('a')}
+                      isWinner={campaign.ab_winner === 'a'}
+                    />
+                    <AbVariantRow
+                      label="Subject B"
+                      subject={campaign.ab_subject_b}
+                      stats={statsFor('b')}
+                      isWinner={campaign.ab_winner === 'b'}
+                    />
+                  </div>
+                  {campaign.ab_decided_at && (
+                    <p className="mt-2 text-xs text-un1t-muted">
+                      Decided {new Date(campaign.ab_decided_at).toLocaleString('en-IE')} — the rest of the audience received the winning subject.
+                    </p>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* Campaign details */}
             <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-3">

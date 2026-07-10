@@ -32,9 +32,42 @@
 // 1-minute cron, that gives ~500/min/campaign, well under
 // Postmark's batch limits and well within the deferred-webhook
 // queue's drain rate.
+//
+// CAMPAIGN-AB (mig 398) — subject-line A/B testing. When
+// campaigns.ab_subject_b is set, the same tick function runs a
+// column-driven sub-machine (resolveAbPhase, src/lib/campaign-ab.js):
+//
+//   populate  — recipients get a deterministic ab_variant
+//               ('a'|'b' for the ab_test_pct% test slice, NULL for
+//               the remainder) stamped at populate time, so the
+//               assignment is stable across ticks.
+//   slice     — chunk selection is restricted to ab_variant IS NOT
+//               NULL; each row's subject comes from its variant
+//               (A = campaigns.subject, B = ab_subject_b). When the
+//               slice fully drains (nothing queued OR sending),
+//               ab_test_started_at is CAS-stamped (…IS NULL guard).
+//   waiting   — now < started + ab_wait_hours: the tick no-ops for
+//               the remainder (it only touches updated_at so the
+//               waiting campaign rotates to the back of the cron's
+//               pick order instead of hogging a per-tick slot).
+//   decide    — open rates per variant come from the
+//               campaign_ab_variant_stats RPC (email_sends joined
+//               via campaign_recipients.ab_variant); ties/zero-data
+//               go to A. ab_winner is CAS-stamped (…IS NULL) so
+//               exactly one overlapping tick decides; the winner
+//               falls through and starts sending the remainder.
+//   final     — the normal chunked path, each row's subject resolved
+//               via subjectForVariant (remainder → winning subject;
+//               retried slice rows keep their own variant).
+//
+// Campaigns without ab_subject_b never enter the sub-machine — the
+// default path is unchanged. Cancel (cancel_requested_at) is checked
+// before any phase work, so mid-test cancels behave exactly like
+// mid-send cancels.
 
 import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch, consentFieldForStream, isTransientSendError } from './postmark.js'
 import { injectPreheader, htmlToPlainText } from './email-content.js'
+import { resolveAbPhase, assignAbVariants, clampAbTestPct, decideAbWinner, subjectForVariant } from './campaign-ab.js'
 import { getAppUrl } from './app-url.js'
 
 const CHUNK_SIZE = 500             // recipients per cron tick per campaign
@@ -113,23 +146,47 @@ export async function tickCampaignSend(db, campaign) {
       return { phase: 'populate', sent: 0 }
     }
 
+    // CAMPAIGN-AB — assign the test slice at populate time so it's
+    // stable across ticks. Deterministic (hash-ordered) inside
+    // assignAbVariants; the DB row is the source of truth afterwards.
+    // The ab_variant key is only written for A/B campaigns so the
+    // default path's insert payload is byte-identical to today.
+    const abEnabled = !!campaign.ab_subject_b
+    const variantById = abEnabled
+      ? assignAbVariants(contacts.map(c => c.id), clampAbTestPct(campaign.ab_test_pct))
+      : null
+
     // Bulk insert recipients in chunks.
-    const recipientRows = contacts.map(c => ({
-      campaign_id: campaignId,
-      contact_id: c.id,
-      status: 'queued',
-    }))
+    const recipientRows = contacts.map(c => {
+      const row = {
+        campaign_id: campaignId,
+        contact_id: c.id,
+        status: 'queued',
+      }
+      if (abEnabled) row.ab_variant = variantById.get(c.id) || null
+      return row
+    })
     for (let i = 0; i < recipientRows.length; i += RECIPIENT_INSERT_CHUNK) {
       const chunk = recipientRows.slice(i, i + RECIPIENT_INSERT_CHUNK)
       const { error } = await db.from('campaign_recipients').insert(chunk)
       if (error) return { phase: 'populate', error: `recipient insert failed: ${error.message}` }
     }
 
-    await db.from('campaigns').update({
+    const populateUpdate = {
       status: 'sending',
       total_recipients: contacts.length,
       send_started_at: new Date().toISOString(),
-    }).eq('id', campaignId)
+    }
+    // CAMPAIGN-AB — an audience too small to test (assignAbVariants
+    // returned no slice) short-circuits straight to winner A so the
+    // campaign doesn't sit through a pointless wait window.
+    if (abEnabled && variantById.size === 0) {
+      const nowIso = new Date().toISOString()
+      populateUpdate.ab_winner = 'a'
+      populateUpdate.ab_test_started_at = nowIso
+      populateUpdate.ab_decided_at = nowIso
+    }
+    await db.from('campaigns').update(populateUpdate).eq('id', campaignId)
 
     return { phase: 'populate', sent: 0 }
   }
@@ -147,15 +204,62 @@ export async function tickCampaignSend(db, campaign) {
   // (bounded by MAX_SEND_ATTEMPTS) versus silently never delivering.
   await reclaimStuckSending(db, campaignId)
 
+  // CAMPAIGN-AB — derive the A/B phase from the campaign row (pure,
+  // so overlapping cron ticks agree; the transitions below are CAS'd).
+  const abPhase = resolveAbPhase(campaign)
+  // Set by the tick that wins the decide CAS — its local campaign row
+  // predates the ab_winner stamp, so subject resolution needs the
+  // freshly decided winner explicitly.
+  let abWinnerOverride = null
+
+  if (abPhase === 'waiting') {
+    // Inside the wait window: the remainder must not send yet. Touch
+    // updated_at so this campaign rotates to the BACK of the cron's
+    // pick order (run-campaigns orders by updated_at ascending and
+    // ticks at most MAX_CAMPAIGNS_PER_TICK campaigns) — otherwise an
+    // hours-long wait would pin one of the per-tick slots and starve
+    // other queued campaigns.
+    await db.from('campaigns')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', campaignId)
+    return { phase: 'ab_waiting', sent: 0 }
+  }
+
+  if (abPhase === 'decide') {
+    // Open rate per variant from email_sends (same source of truth as
+    // recalculate_campaign_stats), joined via campaign_recipients.ab_variant
+    // inside the campaign_ab_variant_stats RPC (mig 398).
+    const { data: statRows, error: statsErr } = await db
+      .rpc('campaign_ab_variant_stats', { p_campaign_id: campaignId })
+    if (statsErr) return { phase: 'ab_decide', error: `variant stats failed: ${statsErr.message}` }
+
+    const winner = decideAbWinner(statRows || [])
+    // CAS on ab_winner IS NULL — exactly one overlapping tick decides.
+    const { data: won } = await db.from('campaigns')
+      .update({ ab_winner: winner, ab_decided_at: new Date().toISOString() })
+      .eq('id', campaignId)
+      .is('ab_winner', null)
+      .select('id')
+    if (!won || won.length === 0) {
+      // A concurrent tick decided first; the next tick sends with its winner.
+      return { phase: 'ab_decide', sent: 0 }
+    }
+    abWinnerOverride = winner
+    // Fall through — the deciding tick starts the remainder immediately.
+  }
+
   // Phase 2 — process one CHUNK_SIZE batch of queued recipients.
   // Join contacts inline so we have email + name + preferences for
   // the merge tags + unsubscribe URL without a second round-trip.
-  const { data: candidateRows, error: queuedErr } = await db
+  // During the A/B slice phase only test-slice rows (ab_variant set)
+  // are eligible; the remainder stays queued but unclaimable.
+  let queuedQuery = db
     .from('campaign_recipients')
     .select(`
       id,
       contact_id,
       attempts,
+      ab_variant,
       contact:contacts!inner(
         id, email, first_name, last_name, name, phone, pipeline_stage_slug,
         email_status, email_marketing, email_administrative, glofox_passcode,
@@ -164,12 +268,36 @@ export async function tickCampaignSend(db, campaign) {
     `)
     .eq('campaign_id', campaignId)
     .eq('status', 'queued')
+  if (abPhase === 'slice') {
+    queuedQuery = queuedQuery.not('ab_variant', 'is', null)
+  }
+  const { data: candidateRows, error: queuedErr } = await queuedQuery
     .order('id', { ascending: true })
     .limit(CHUNK_SIZE)
 
   if (queuedErr) return { phase: 'send', error: `queued fetch failed: ${queuedErr.message}` }
 
   if (!candidateRows || candidateRows.length === 0) {
+    if (abPhase === 'slice') {
+      // Slice drained — but only start the wait clock once nothing is
+      // still in flight ('sending' within its lease). Reclaim above
+      // already returned lease-expired rows to the queue.
+      const { count: inflight } = await db
+        .from('campaign_recipients')
+        .select('id', { count: 'exact', head: true })
+        .eq('campaign_id', campaignId)
+        .eq('status', 'sending')
+        .not('ab_variant', 'is', null)
+      if ((inflight || 0) > 0) return { phase: 'ab_slice', sent: 0 }
+
+      // CAS on ab_test_started_at IS NULL — one tick starts the clock.
+      await db.from('campaigns')
+        .update({ ab_test_started_at: new Date().toISOString() })
+        .eq('id', campaignId)
+        .is('ab_test_started_at', null)
+      return { phase: 'ab_test_started', sent: 0 }
+    }
+
     // Done — no more queued. Finalize.
     await db.from('campaigns').update({
       status: 'sent',
@@ -257,9 +385,14 @@ export async function tickCampaignSend(db, campaign) {
       : null
     const finalHtml = previewText ? injectPreheader(personalizedHtml, previewText) : personalizedHtml
 
+    // CAMPAIGN-AB — per-recipient subject: variant A/B in the test
+    // slice, the winning subject for the remainder. Non-A/B campaigns
+    // always resolve to campaign.subject (identical to before).
+    const rawSubject = subjectForVariant(campaign, row.ab_variant, abWinnerOverride)
+
     return {
       to: contact.email,
-      subject: applyMergeTags(campaign.subject, contact),
+      subject: applyMergeTags(rawSubject, contact),
       htmlBody: finalHtml,
       textBody,
       from: campaign.from_name
@@ -279,6 +412,7 @@ export async function tickCampaignSend(db, campaign) {
       _recipientId: row.id,
       _contactId: contact.id,
       _attempts: row.attempts || 0,
+      _rawSubject: rawSubject,
     }
   })
 
@@ -309,7 +443,9 @@ export async function tickCampaignSend(db, campaign) {
         location_id: campaign.location_id,
         source_type: 'campaign',
         campaign_id: campaignId,
-        subject: campaign.subject,
+        // CAMPAIGN-AB — log the subject this recipient actually got
+        // (variant B / winning subject), not blindly campaign.subject.
+        subject: item._rawSubject,
         from_email: campaign.from_email || process.env.POSTMARK_FROM_EMAIL,
         to_email: item.to,
         postmark_message_id: result.MessageID,
