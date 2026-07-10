@@ -299,6 +299,69 @@ describe('applyAudienceFilter — OR logic (COMMS-AUDIT batch 6)', () => {
   })
 })
 
+// TAGFIX — contacts.tags is text[]; the scalar eq/ilike path was a
+// PostgREST 400 ("Couldn't compute recipient count") for every
+// Free-text tag filter. Array fields route through cs instead.
+describe('applyAudienceFilter — array field (contacts.tags)', () => {
+  let q
+  beforeEach(() => { q = makeMockQuery() })
+
+  it('eq on tags uses .contains (cs), not scalar .eq', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'eq', value: 'PTC' }] })
+    expect(q.calls).toEqual([['contains', 'tags', ['PTC']]])
+  })
+
+  it('contains on tags means element membership — same cs as eq', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'contains', value: 'PTC' }] })
+    expect(q.calls).toEqual([['contains', 'tags', ['PTC']]])
+  })
+
+  it('neq on tags negates cs with a quoted array literal', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'neq', value: 'PTC' }] })
+    expect(q.calls).toEqual([['not', 'tags', 'cs', '{"PTC"}']])
+  })
+
+  it('not_contains mirrors neq', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'not_contains', value: 'PTC' }] })
+    expect(q.calls).toEqual([['not', 'tags', 'cs', '{"PTC"}']])
+  })
+
+  it('escapes quotes and backslashes in the negated array literal', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'neq', value: 'a"b\\c' }] })
+    expect(q.calls).toEqual([['not', 'tags', 'cs', '{"a\\"b\\\\c"}']])
+  })
+
+  it('is_null / not_null still pass through', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'is_null', value: null }] })
+    applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'not_null', value: null }] })
+    expect(q.calls).toEqual([
+      ['is', 'tags', null],
+      ['not', 'tags', 'is', null],
+    ])
+  })
+
+  it('OR renders tags eq as a quoted cs condition', () => {
+    applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [
+        { field: 'tags', op: 'eq', value: 'PTC' },
+        { field: 'email_status', op: 'eq', value: 'active' },
+      ],
+    })
+    expect(q.calls).toEqual([
+      ['or', 'tags.cs."{\\"PTC\\"}",email_status.eq.active'],
+    ])
+  })
+
+  it('OR renders tags neq as not.cs', () => {
+    applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [{ field: 'tags', op: 'neq', value: 'PTC' }],
+    })
+    expect(q.calls).toEqual([['or', 'tags.not.cs."{\\"PTC\\"}"']])
+  })
+})
+
 describe('AUDIENCE_FIELDS allowlist', () => {
   it('is frozen so it cannot be mutated at runtime', () => {
     expect(Object.isFrozen(AUDIENCE_FIELDS)).toBe(true)
