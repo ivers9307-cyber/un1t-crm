@@ -19,17 +19,29 @@
 // zone.defaultText/label as its preview text + on drag/resize editing —
 // that editable path is untouched by the values/resolve logic below.
 //
-// TV-MOBILE.E — auto-fit: the operator's stored fontSize is the MAXIMUM
-// size; RN's adjustsFontSizeToFit shrinks text that would otherwise
-// overflow the zone box. Android only engages that behaviour when
-// numberOfLines is set, so we derive a line-count bound from the zone's
-// pixel height vs the font's line height.
+// TV-MOBILE.G — auto-fit: the operator's stored fontSize is the MAXIMUM
+// size; a measured shrink loop (mirroring web useFitText) resizes text
+// that would otherwise overflow the zone box. The old TV-MOBILE.E
+// approach (adjustsFontSizeToFit + a numberOfLines bound derived from
+// the zone height AT THE MAX SIZE) truncated any text with more hard
+// newlines than fit at full size — a 13-line workout board showed only
+// its first lines — and a fixed pixel lineHeight stopped RN's shrinker
+// reclaiming vertical space at all. Instead we seed from seedFitPx (so
+// every hard newline gets a line slot immediately, no giant first
+// paint) and converge on onTextLayout measurements via the shared
+// fitStepFromLines/nextFitPx step, identically to the web renderer.
 
 import { useRef, useState, useEffect } from 'react'
 import { View, Text, Image, PanResponder } from 'react-native'
-import { resolveZone, textSegments, FLEX_V, FLEX_H } from '../../shared/tv-template'
+import {
+  resolveZone, textSegments, seedFitPx, fitStepFromLines, MIN_FIT_PX, FLEX_V, FLEX_H,
+} from '../../shared/tv-template'
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
+
+// Same cap as web TemplateCanvas — each shrink changes wrapping, which
+// can call for another shrink; iterate but never spin forever.
+const MAX_FIT_ITERATIONS = 6
 
 // RN's flex values line up with the web FLEX_V/FLEX_H maps 1:1
 // ('flex-start'/'center'/'flex-end'), so we reuse them directly.
@@ -168,18 +180,41 @@ function ZoneBox({ zone, resolved, frame, selected, editable, onSelect, onChange
   const top = frame.top + (resolved.y / 100) * frame.h
   const w = (resolved.width / 100) * frame.w
   const h = (resolved.height / 100) * frame.h
-  const fontPx = Math.max(1, (resolved.fontSize / 100) * frame.h)
-  const lineHeightPx = fontPx * resolved.lineHeight
-
-  // TV-MOBILE.E — numberOfLines bound so adjustsFontSizeToFit actually
-  // engages on Android. A tiny zone still gets at least 1 line.
-  const maxLines = Math.max(1, Math.floor(h / lineHeightPx))
+  // resolved.fontSize is a MAXIMUM (TV-MOBILE.G) — the measure loop
+  // below shrinks the rendered size to whatever actually fits the box.
+  const maxFontPx = Math.max(1, (resolved.fontSize / 100) * frame.h)
 
   // In editable mode (template-edit screen) fall back to the zone's
   // label as placeholder preview text when there's no text at all —
   // resolveZone already folds defaultText into resolved.text, so this
   // only kicks in when defaultText is also empty.
   const resolvedText = resolved.text || (editable ? zone.label : '') || ''
+
+  // TV-MOBILE.G — measured auto-fit. Start from the newline-aware seed
+  // and shrink on each onTextLayout until the block fits the zone box
+  // (same convergence step as web useFitText). Everything that changes
+  // wrapping or measurement resets the loop.
+  const minFontPx = Math.min(MIN_FIT_PX, maxFontPx)
+  const seedPx = seedFitPx(resolvedText, h, resolved.lineHeight, maxFontPx)
+  const [fitPx, setFitPx] = useState(seedPx)
+  const fitIterations = useRef(0)
+  const fitKey = [
+    resolvedText, maxFontPx, w, h,
+    resolved.lineHeight, resolved.fontWeight, resolved.uppercase,
+  ].join(' ')
+  useEffect(() => {
+    fitIterations.current = 0
+    setFitPx(seedPx)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitKey])
+
+  const onTextLayout = (e) => {
+    if (fitIterations.current >= MAX_FIT_ITERATIONS) return
+    const { fits, nextPx } = fitStepFromLines(e.nativeEvent.lines, w, h, fitPx, minFontPx)
+    if (fits || Math.abs(nextPx - fitPx) < 0.5) return
+    fitIterations.current += 1
+    setFitPx(nextPx)
+  }
 
   return (
     <View
@@ -196,15 +231,15 @@ function ZoneBox({ zone, resolved, frame, selected, editable, onSelect, onChange
       }}
     >
       <Text
-        adjustsFontSizeToFit
-        minimumFontScale={0.2}
-        numberOfLines={maxLines}
+        onTextLayout={onTextLayout}
         style={{
           width: '100%',
-          fontSize: fontPx,
+          fontSize: fitPx,
           fontWeight: String(resolved.fontWeight),
           textAlign: resolved.align,
-          lineHeight: lineHeightPx,
+          // Scales with the fitted size — a fixed max-size lineHeight
+          // would keep full-height line boxes after the glyphs shrink.
+          lineHeight: fitPx * resolved.lineHeight,
           textTransform: resolved.uppercase ? 'uppercase' : 'none',
         }}
       >

@@ -163,6 +163,63 @@ export function textSegments(text, runs, baseColor) {
   return segs
 }
 
+// ── Auto-fit (TV-TEMPLATE.6 / TV-MOBILE.G) ──────────────────────
+//
+// A zone's fontSize is a MAXIMUM, not an exact size: both renderers
+// measure the laid-out text and shrink until it fits its zone box.
+// The measurement is platform-specific (DOM scrollHeight on web,
+// onTextLayout lines on RN) but the convergence step is shared here
+// so the TV, the web preview and the mobile preview all agree.
+
+// Floor so a giant paste still reads as "small text" rather than
+// disappearing entirely.
+export const MIN_FIT_PX = 9
+
+// Pure step of the fit loop: given the current font size and how
+// much the text block overflows its box on each axis, return the
+// next (smaller-or-equal) font size to try.
+export function nextFitPx(currentPx, scaleH, scaleW, minPx = MIN_FIT_PX) {
+  const scale = Math.min(1, scaleH, scaleW)
+  if (!Number.isFinite(scale) || scale <= 0) return minPx
+  return Math.max(minPx, currentPx * scale)
+}
+
+// Starting size for a measure loop: the operator's max, pre-capped
+// so every hard newline gets a line slot in the zone's height.
+// Wrapping-induced overflow still converges via measurement — this
+// just stops a 13-line paste from first painting (and, on RN,
+// truncating) at full size before the loop kicks in.
+export function seedFitPx(text, boxH, lineHeightRatio, maxPx, minPx = MIN_FIT_PX) {
+  const lineCount = String(text ?? '').split('\n').length
+  const cap = boxH / (lineCount * lineHeightRatio)
+  const floor = Math.min(minPx, maxPx)
+  return Math.max(floor, Math.min(maxPx, cap))
+}
+
+// RN measurement step: `lines` is onTextLayout's nativeEvent.lines
+// ([{ width, height }]). Returns whether the block fits `boxW`×`boxH`
+// and the next size to try when it doesn't.
+export function fitStepFromLines(lines, boxW, boxH, currentPx, minPx = MIN_FIT_PX) {
+  let contentH = 0
+  let contentW = 0
+  for (const l of lines || []) {
+    contentH += l?.height || 0
+    contentW = Math.max(contentW, l?.width || 0)
+  }
+  const overflowH = contentH > boxH + 0.5
+  const overflowW = contentW > boxW + 0.5
+  if (!overflowH && !overflowW) return { fits: true, nextPx: currentPx }
+  return {
+    fits: false,
+    nextPx: nextFitPx(
+      currentPx,
+      overflowH ? boxH / contentH : 1,
+      overflowW ? boxW / contentW : 1,
+      minPx,
+    ),
+  }
+}
+
 // flex mappings — shared so the cast page and the previews line up.
 export const FLEX_V = { top: 'flex-start', middle: 'center', bottom: 'flex-end' }
 export const FLEX_H = { left: 'flex-start', center: 'center', right: 'flex-end' }

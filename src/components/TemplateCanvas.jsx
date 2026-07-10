@@ -26,28 +26,19 @@
 // only as the final safety net for pathological cases.
 
 import { useEffect, useState, useRef, useLayoutEffect } from 'react'
-import { resolveZone, textSegments, FLEX_V, FLEX_H } from '@/lib/tv-template'
+import {
+  resolveZone, textSegments, FLEX_V, FLEX_H, MIN_FIT_PX, nextFitPx,
+} from '@/lib/tv-template'
 import { tvFontFamily } from '@/components/tv-font'
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n))
 
-// Floor so a giant paste still reads as "small text" rather than
-// disappearing entirely.
-const MIN_FIT_PX = 9
 // Re-measuring changes wrapping, which changes scrollHeight/Width,
 // which can call for another shrink — iterate rather than trusting
 // one shot, but cap it so a pathological layout can't spin forever.
+// The convergence step itself (nextFitPx) lives in shared/tv-template
+// so the mobile canvas shrinks identically (TV-MOBILE.G).
 const MAX_FIT_ITERATIONS = 6
-
-// Pure step of the fit loop: given the current font size and how
-// much the text block overflows its box on each axis, return the
-// next (smaller-or-equal) font size to try. Kept pure + exported so
-// the convergence logic itself is unit-testable without a DOM.
-export function nextFitPx(currentPx, scaleH, scaleW, minPx = MIN_FIT_PX) {
-  const scale = Math.min(1, scaleH, scaleW)
-  if (!Number.isFinite(scale) || scale <= 0) return minPx
-  return Math.max(minPx, currentPx * scale)
-}
 
 // Shrink `el`'s font size (starting at maxPx) until its content
 // fits within `w`×`h` px, or the min/iteration cap is hit. Returns
