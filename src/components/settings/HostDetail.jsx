@@ -99,12 +99,20 @@ export default function HostDetail({ hostId }) {
   const [openingPortal, setOpeningPortal] = useState(false)
   const [openPortalError, setOpenPortalError] = useState(null)
 
-  // Staff logins linked to this host (HOST-PORTAL.5) — an existing UN1T staff
-  // member who is also this host, accessing the portal with their normal login.
+  // Portal members linked to this host — invited member logins (HOST-PORTAL.14)
+  // and linked UN1T staff logins (HOST-PORTAL.5). GET /link-staff lists ALL
+  // host_users rows, so both kinds land in the same list.
   const [staffLinks, setStaffLinks] = useState([])
   const [staffLinkEmail, setStaffLinkEmail] = useState('')
   const [staffLinkError, setStaffLinkError] = useState(null)
   const [staffLinkBusy, setStaffLinkBusy] = useState(false)
+
+  // Invite another member (HOST-PORTAL.14) — a second (or third…) portal login
+  // for this host on a different email. Same invite route, explicit { email }.
+  const [memberEmail, setMemberEmail] = useState('')
+  const [invitingMember, setInvitingMember] = useState(false)
+  const [memberInvitedTo, setMemberInvitedTo] = useState(null)
+  const [memberError, setMemberError] = useState(null)
 
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState(null)
@@ -188,8 +196,8 @@ export default function HostDetail({ hostId }) {
     return () => { alive = false }
   }, [hostId])
 
-  // Linked staff logins load independently — a failure is non-fatal (the
-  // subsection just shows "No staff logins linked."). Keyed on hostId.
+  // Portal members load independently — a failure is non-fatal (the
+  // subsection just shows "No portal members yet."). Keyed on hostId.
   const loadStaffLinks = useCallback(async () => {
     try {
       const res = await fetch(`/api/hosts/${hostId}/link-staff`)
@@ -308,10 +316,39 @@ export default function HostDetail({ hostId }) {
       if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
       setPortalInvitedTo(j.data?.sentTo || host?.email || 'the host')
       setTimeout(() => setPortalInvitedTo(null), 5000)
+      // A fresh invite creates a host_users row — reflect it in Portal members.
+      loadStaffLinks()
     } catch (err) {
       setPortalError(err.message || 'Could not send the portal invite')
     } finally {
       setInvitingPortal(false)
+    }
+  }
+
+  // Invite an additional portal member on their own email (HOST-PORTAL.14).
+  // Same route as "Invite to portal", with an explicit { email } body.
+  async function inviteMember() {
+    const email = memberEmail.trim()
+    if (!email || invitingMember) return
+    setInvitingMember(true)
+    setMemberError(null)
+    setMemberInvitedTo(null)
+    try {
+      const res = await fetch(`/api/hosts/${hostId}/invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
+      setMemberInvitedTo(j.data?.sentTo || email)
+      setTimeout(() => setMemberInvitedTo(null), 5000)
+      setMemberEmail('')
+      await loadStaffLinks()
+    } catch (err) {
+      setMemberError(err.message || 'Could not send the invite')
+    } finally {
+      setInvitingMember(false)
     }
   }
 
@@ -709,17 +746,19 @@ export default function HostDetail({ hostId }) {
           </p>
         )}
 
-        {/* Staff logins (HOST-PORTAL.5) — link an existing UN1T staff member's
-            normal login to this host, for someone who is both staff and host. */}
+        {/* Portal members — everyone with a login to this host's portal:
+            invited member logins (HOST-PORTAL.1/.14) and linked UN1T staff
+            logins (HOST-PORTAL.5). Backed by GET/DELETE /link-staff, which
+            lists/unlinks ALL host_users rows for the host. */}
         <div className="mt-4 pt-4 border-t border-un1t-border">
-          <p className="text-sm font-medium text-un1t-text">Staff logins</p>
+          <p className="text-sm font-medium text-un1t-text">Portal members</p>
           <p className="mt-1 text-xs text-un1t-muted">
-            Give an existing UN1T staff member access to this host&apos;s portal with their normal login.
+            Everyone who can sign in to this host&apos;s portal — invited members and linked UN1T staff logins.
           </p>
 
           <div className="mt-3 space-y-2">
             {staffLinks.length === 0 ? (
-              <p className="text-xs text-un1t-muted">No staff logins linked.</p>
+              <p className="text-xs text-un1t-muted">No portal members yet.</p>
             ) : (
               staffLinks.map((link) => (
                 <div
@@ -746,7 +785,45 @@ export default function HostDetail({ hostId }) {
             )}
           </div>
 
+          {/* Invite another member (HOST-PORTAL.14) — a second (or third…)
+              login for this host on a different email, e.g. a co-organiser. */}
           <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+            <input
+              type="email"
+              value={memberEmail}
+              onChange={(e) => setMemberEmail(e.target.value)}
+              placeholder="co-organiser@example.com"
+              aria-label="Email to invite as a portal member"
+              className={INPUT_CLASS}
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              icon={Mail}
+              loading={invitingMember}
+              onClick={inviteMember}
+              className="shrink-0"
+            >
+              Invite member
+            </Button>
+          </div>
+          {memberInvitedTo && (
+            <p className="mt-2 text-xs text-green-700 inline-flex items-center gap-1">
+              <Check size={12} /> Invite sent to {memberInvitedTo}.
+            </p>
+          )}
+          {memberError && (
+            <p className="mt-2 text-xs text-stage-lost flex items-center gap-1">
+              <AlertTriangle size={12} /> {memberError}
+            </p>
+          )}
+
+          {/* Link staff (HOST-PORTAL.5) — an existing UN1T staff member who is
+              also this host, accessing the portal with their normal login. */}
+          <p className="mt-4 text-xs text-un1t-muted">
+            Or give an existing UN1T staff member access with their normal login:
+          </p>
+          <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
             <input
               type="email"
               value={staffLinkEmail}
