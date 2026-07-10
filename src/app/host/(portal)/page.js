@@ -132,12 +132,22 @@ export default async function HostDashboard() {
       <section className="mt-8">
         <div className="flex items-center justify-between gap-4 mb-3">
           <h2 className="text-xs uppercase tracking-[0.15em] text-white/45">Your events</h2>
-          <Link
-            href="/host/events/new"
-            className="shrink-0 rounded-lg bg-white text-black text-xs font-semibold px-3 py-1.5 hover:bg-white/90"
-          >
-            + Create event
-          </Link>
+          <div className="shrink-0 flex items-center gap-2">
+            {/* HOST-EMAIL.1 — the host's contact list (event participants +
+                mailing-list signups) with emailability + CSV export. */}
+            <Link
+              href="/host/contacts"
+              className="rounded-lg border border-white/15 text-white/80 text-xs font-semibold px-3 py-1.5 hover:bg-white/10 hover:text-white"
+            >
+              Contacts
+            </Link>
+            <Link
+              href="/host/events/new"
+              className="rounded-lg bg-white text-black text-xs font-semibold px-3 py-1.5 hover:bg-white/90"
+            >
+              + Create event
+            </Link>
+          </div>
         </div>
         {list.length === 0 ? (
           <p className="text-white/50 text-sm">No events yet — create your first one.</p>
