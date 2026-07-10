@@ -25,9 +25,14 @@ function timeLabel(iso) {
 }
 
 // The Flow is class-only (the PATH class/consult chooser was removed — STARTFLOW.2).
-// INIT and the catch-all open straight on the class Day screen; the consult branches
-// below stay as an unreachable-via-the-published-Flow defensive fallback. Consult is
-// offered conversationally by Mia after the Flow completes a class booking.
+// INIT opens straight on the class Day screen. The catch-all is LOAD-BEARING during
+// the deploy→republish interim: until the Meta template button + Flow JSON are
+// republished, a tap still opens the old PATH screen, whose Continue posts screen
+// 'PATH' here → funnelled to the class Day screen (a class pick works; a consult
+// pick is silently treated as class, which is the intended end state anyway). The
+// path==='consult' branches below likewise serve any in-flight session whose screen
+// data still holds path:'consult' when this deploys. Consult is otherwise offered
+// conversationally by Mia after the Flow completes a class booking.
 async function classDayScreen(db, locationId) {
   const classes = await listPublicClasses(db, locationId)
   const seen = new Map()

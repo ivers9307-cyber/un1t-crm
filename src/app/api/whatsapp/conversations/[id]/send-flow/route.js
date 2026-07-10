@@ -40,8 +40,10 @@ export async function POST(request, props) {
   }
 
   // No `screen` → data_exchange: Meta calls our INIT endpoint, which returns the
-  // class Day screen with live days (classDayScreen) — identical to what the
-  // template button opens, so both open the exact same first screen.
+  // class Day screen with live days (classDayScreen). NOTE: the paid-ads TEMPLATE
+  // FLOW button still opens via navigate→PATH until it is re-approved as a
+  // data_exchange button (see the STARTFLOW.2 republish runbook); this session-send
+  // already opens the class Day screen directly.
   let sendResult
   try {
     sendResult = await sendFlowMessage(conversation.wa_phone, {

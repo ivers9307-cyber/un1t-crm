@@ -469,37 +469,53 @@ git commit -m "STARTFLOW.2 — WA Flow JSON: drop the PATH screen, DAY is the en
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
 
-## Task 7: Republish the Flow to Meta (ops — cannot be done blind)
+## Task 7: Republish the Flow to Meta (ops — DEFERRED, cannot be done blind)
 
-**Files:**
-- Modify: `scripts/build-flow-json.mjs` (attach header image to DAY, was PATH)
+The code (`handler.js`, `screens.js`, `build-flow-json.mjs`, plus the `data_exchange`
+send mode) is **already committed in this PR**. This task is the Meta-side operation,
+done when the operator is ready to cut over. It is **gated and order-sensitive**.
 
-- [ ] **Step 1: Read the build script fully**
+> **⚠️ BLOCKER — sequencing (Fable-5 review).** The live paid-ads **template** flow
+> button (`book_first_visit`) opens the Flow via **`navigate → PATH`** — that screen is
+> baked into the Meta-**approved template**, not into any code we ship. If the Flow JSON
+> is republished with PATH deleted while the template button still navigates to PATH,
+> **every ad-lead tap navigates to a screen that no longer exists → the Flow fails to
+> open for all new leads.** So the template button MUST be switched to a `data_exchange`
+> button and re-approved **before (or together with)** the JSON republish.
+>
+> **Interim is safe:** merging/deploying this PR's *code* alone does not require the
+> republish. Until then, a tap still opens the old PATH screen; its Continue posts
+> `screen:'PATH'`, which the handler catch-all funnels to the class Day screen (a class
+> pick works; a consult pick is treated as class — the intended end state). So the code
+> can ship first; only the two Meta assets below are gated together.
 
-Run: `sed -n '1,80p' scripts/build-flow-json.mjs`
-Understand where it injects the base64 header `Image` (currently onto the PATH screen). Change that target to the DAY screen (`SCREEN.DAY`), since PATH is gone.
-
-- [ ] **Step 2: Rebuild the publishable JSON**
+- [ ] **Step 1: Rebuild the publishable JSON** (build-script change already committed)
 
 Run: `node scripts/build-flow-json.mjs --header <the-existing-header-image.jpg> --out /tmp/flow.json`
 (Use the same header asset the current live Flow uses.) Inspect `/tmp/flow.json`: DAY is first, carries the header Image, and there is no PATH screen.
 
-- [ ] **Step 3: Publish + version-bump at Meta**
+- [ ] **Step 2: Switch the TEMPLATE flow button to `data_exchange` + re-approve (DO THIS FIRST)**
 
-In WhatsApp Flow Builder (or via the Graph API `POST /{flow-id}/assets`) upload `/tmp/flow.json` to Flow `book_first_visit` (`1343015528022374`), then **publish a new version**. The data-exchange endpoint is unchanged (`/api/whatsapp/flow`).
+The paid-ads `book_first_visit` message template's FLOW button currently uses
+`flow_action: 'navigate'` + `navigate_screen: 'PATH'`. The CRM template editor
+(`WATemplateEditor.jsx`) can only emit navigate buttons, so this must be done via the
+**Graph API**: edit the template's `FLOW` button component to `flow_action: 'data_exchange'`
+(remove `navigate_screen`), then **wait for Meta to re-approve** the template. After this,
+the template button opens the Flow via our endpoint's INIT (→ class Day screen) — same as
+the staff inbox send-flow (STARTFLOW.2 `data_exchange` mode).
 
-- [ ] **Step 4: Smoke-test end to end**
+- [ ] **Step 3: Publish + version-bump the Flow JSON at Meta**
 
-Trigger the Meta-ad WhatsApp welcome to a test number (or resend the FLOW-button template), tap the button, and confirm the Flow opens **on the Day screen** (no path choice), books a class, and the confirmation fires. Verify a `whatsapp_messages` row + the booking landed.
+Only after Step 2's template is APPROVED: in WhatsApp Flow Builder (or Graph API
+`POST /{flow-id}/assets`) upload `/tmp/flow.json` to Flow `book_first_visit`
+(`1343015528022374`), then **publish a new version**. The endpoint is unchanged (`/api/whatsapp/flow`).
 
-- [ ] **Step 5: Commit the script change**
+- [ ] **Step 4: Smoke-test end to end (several cases)**
 
-```bash
-git add scripts/build-flow-json.mjs
-git commit -m "STARTFLOW.2 — build-flow-json: header image onto DAY (PATH removed)
-
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
-```
+  1. **Ad-welcome template tap** → Flow opens **on the Day screen** (no path choice) → book a class → confirmation fires; verify a `whatsapp_messages` row + the booking landed.
+  2. **Staff inbox "send booking Flow"** (`/communications/inbox`) → opens on the Day screen. Smoke this **immediately after the code deploy too** (before the republish), since it now uses `data_exchange` against whatever Flow version is live.
+  3. **Empty-class case** (Finding 2): with the timetable empty OR Glofox creds deliberately broken, tap the Flow — today the Day picker renders with **no options and an un-pressable Continue** (pre-existing dead-end, now the entry screen). Decide: accept, or add a Flow-JSON empty-state (`If`/`TextBody`) at republish. At minimum confirm the behaviour is what you expect.
+  4. **Mia consult offer** — after the Flow completes a class booking, Mia offers a free consult in the follow-up turn.
 
 ## Task 8: Mia offers the consult after a Flow class booking
 
