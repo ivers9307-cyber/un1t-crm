@@ -46,6 +46,34 @@ export function broadcastPauseReason(field, value = {}) {
   return null
 }
 
+/**
+ * WA-QUALITY.1/.5 — pause a location's in-flight drip broadcasts
+ * (status='sending', delivery_mode='drip', not already paused). The ONE
+ * implementation of the quality-collapse auto-pause, shared by the webhook
+ * path (applyNumberEvent) and the health-poll cron (refresh-whatsapp-health) —
+ * extracted rather than copied so the two paths can't drift. Idempotent at the
+ * DB via the `paused_at IS NULL` filter. Returns the rows it actually paused.
+ */
+export async function pauseLocationDrips(db, locationId) {
+  const { data } = await db.from('whatsapp_broadcasts')
+    .update({ paused_at: new Date().toISOString() })
+    .eq('location_id', locationId)
+    .eq('status', 'sending')
+    .eq('delivery_mode', 'drip')
+    .is('paused_at', null)
+    .select('id, name')
+  return data || []
+}
+
+// Operator-facing sentence describing an auto-pause, for appending to a
+// manager push. Null when nothing was paused (no misleading note). Pure.
+export function dripPauseNote(pausedBroadcasts, reason) {
+  const n = pausedBroadcasts?.length || 0
+  if (!n) return null
+  const plural = n === 1 ? '' : 's'
+  return `Auto-paused ${n} in-flight drip broadcast${plural} because ${reason} — resume from the broadcast page once the number recovers.`
+}
+
 function restrictionSummary(info) {
   if (!Array.isArray(info) || !info.length) return null
   return info
@@ -168,27 +196,14 @@ export async function applyNumberEvent(db, field, value = {}) {
   // `matched` (an unmatched event can't scope the pause to a location) and on
   // the patch actually changing something (redelivered events stay no-ops).
   const pauseReason = matched && !unchanged ? broadcastPauseReason(field, value) : null
-  let pausedBroadcasts = []
-  if (pauseReason) {
-    const { data: pausedRows } = await db.from('whatsapp_broadcasts')
-      .update({ paused_at: new Date().toISOString() })
-      .eq('location_id', matched.location_id)
-      .eq('status', 'sending')
-      .eq('delivery_mode', 'drip')
-      .is('paused_at', null)
-      .select('id, name')
-    pausedBroadcasts = pausedRows || []
-  }
+  const pausedBroadcasts = pauseReason ? await pauseLocationDrips(db, matched.location_id) : []
 
   // Idempotency: a Meta retry of a column-bearing event we already applied
   // stays silent. Notify-only events (account/capability) always notify.
   let notify = unchanged ? null : numberNotification(field, value, matched?.label)
-  if (notify && pausedBroadcasts.length) {
-    const plural = pausedBroadcasts.length === 1 ? '' : 's'
-    notify = {
-      ...notify,
-      body: `${notify.body} Auto-paused ${pausedBroadcasts.length} in-flight drip broadcast${plural} because ${pauseReason} — resume from the broadcast page once the number recovers.`,
-    }
+  const pauseNote = dripPauseNote(pausedBroadcasts, pauseReason)
+  if (notify && pauseNote) {
+    notify = { ...notify, body: `${notify.body} ${pauseNote}` }
   }
 
   const locations = matched
