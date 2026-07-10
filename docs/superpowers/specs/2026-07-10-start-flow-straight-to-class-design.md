@@ -72,9 +72,12 @@ The "Chose a path" funnel stage is meaningless once there's no choice.
 
 - `src/components/StartFunnel.jsx`: stop firing `path_class` / `path_consult`.
 - `src/lib/ads/funnel.js`: drop the `path` stage from `FUNNEL_STAGES`. New model:
-  **`view → details → slots → booked`**. `booked` still aggregates `booked_class` +
-  `booked_consult`, so a consult added via the upsell still counts as a booking (deduped
-  per session — it does not double-count over the class booking).
+  **`view → details → slots → booked`**. `booked` counts **`booked_class` only** — every
+  completed funnel is a class booking, so that is the funnel's success metric. (The old
+  model summed `booked_class + booked_consult`, which was safe when the paths were
+  mutually exclusive; now the consult fires *after* a class in the same session, so
+  summing would double-count. The consult-add is a post-funnel bonus, not a funnel stage —
+  a "% who added a consult" tile is a possible later add, out of scope.)
 - `src/lib/ads/funnel.test.js`: update expectations to the 4-stage model.
 - `src/lib/funnel-events.js`: **keep** `path_class` / `path_consult` in `VALID_STEPS`
   (historical rows + the public endpoint stay valid); we simply stop emitting them.
