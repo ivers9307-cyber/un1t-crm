@@ -6,6 +6,7 @@ import {
   rollingHeadroom, selectDripRecipients, dripOutcome,
 } from './whatsapp-drip.js'
 import { getSendBudget, blastBudgetBlockError, effectiveTickHeadroom } from './whatsapp-budget.js'
+import { sliceBlastChunk } from './whatsapp-schedule.js'
 import { getLocationBranding } from './location-branding'
 import { extractNamedVariables } from './whatsapp-template-samples.js'
 import { sendPushToRolesAtLocation } from './push'
@@ -938,8 +939,15 @@ async function pauseAgentOnThread(db, conversationId) {
  * @param {boolean} [opts.force=false]  WA-QUALITY.2 — bypass the number-quality
  *   preflight refusal (explicit operator override; the gate exists to protect
  *   the number, not to hard-lock it).
+ * @param {number} [opts.maxRecipients]  WA-SCHEDULE — per-invocation recipient
+ *   cap for cron-driven runs (mirrors the SMS engine's chunked-resume). When
+ *   the pending audience exceeds it, this pass sends the first chunk and
+ *   leaves the row 'sending'; the cron resumes the remainder next tick. The
+ *   tier-budget preflight still evaluates the FULL pending audience, so
+ *   chunking can never smuggle an over-budget blast past WA-BUDGET.1.
+ *   Omitted (the operator /send route) → whole audience, behaviour unchanged.
  */
-export async function sendBroadcast(broadcastId, { force = false } = {}) {
+export async function sendBroadcast(broadcastId, { force = false, maxRecipients } = {}) {
   const db = createServerClient()
 
   // Get broadcast with template
@@ -1017,7 +1025,7 @@ export async function sendBroadcast(broadcastId, { force = false } = {}) {
       total_recipients: 0,
       delivery_summary: deliverySummary,
     }).eq('id', broadcastId)
-    return { sent: 0, delivery_summary: deliverySummary }
+    return { status: 'sent', sent: 0, delivery_summary: deliverySummary }
   }
 
   // Resume support: skip contacts already recorded by a previous pass (a
@@ -1044,6 +1052,11 @@ export async function sendBroadcast(broadcastId, { force = false } = {}) {
     throw new Error(budgetBlock)
   }
 
+  // WA-SCHEDULE — cap this pass to the caller's chunk AFTER the budget gate
+  // (which deliberately saw the full pending set). Deferred recipients stay
+  // unclaimed; the cron's resume pass picks them up next tick.
+  const { batch, deferred } = sliceBlastChunk(pending, maxRecipients)
+
   const template = broadcast.whatsapp_templates
   const variableMapping = broadcast.variable_mapping || {}
   const branding = await getLocationBranding(db, broadcast.location_id)
@@ -1061,7 +1074,7 @@ export async function sendBroadcast(broadcastId, { force = false } = {}) {
   // she doesn't reply over the operator when the recipient responds.
   const pauseAgent = shouldPauseAgentForBroadcast(broadcast, contacts.length)
 
-  for (const contact of pending) {
+  for (const contact of batch) {
     // Claim-first: insert the recipient row (status 'pending') BEFORE the
     // Meta send. The unique (broadcast_id, contact_id) constraint (mig 331)
     // makes this the per-recipient mutex — a concurrent pass that already
@@ -1202,12 +1215,35 @@ export async function sendBroadcast(broadcastId, { force = false } = {}) {
     }
 
     return {
+      status: 'draft',
       sent: cumulativeSent || 0,
       failed: cumulativeFailed || 0,
       total: contacts.length,
       aborted: true,
       abort_reason: `stopped after ${abortedAfterFailures} consecutive send failures`,
       delivery_summary: abortPatch.delivery_summary,
+    }
+  }
+
+  // WA-SCHEDULE — chunked pass with a remainder: park the row at 'sending'
+  // with fresh cumulative metrics and let the cron's resume arm finish it
+  // next tick. paused_at untouched (it is null on this path — a breaker
+  // abort took the early return above).
+  if (deferred > 0) {
+    await db.from('whatsapp_broadcasts').update({
+      status: 'sending',
+      total_recipients: contacts.length,
+      total_sent: cumulativeSent || 0,
+      total_failed: cumulativeFailed || 0,
+      delivery_summary: deliverySummary,
+    }).eq('id', broadcastId)
+    return {
+      status: 'sending',
+      sent: cumulativeSent || 0,
+      failed: cumulativeFailed || 0,
+      total: contacts.length,
+      remaining: deferred,
+      delivery_summary: deliverySummary,
     }
   }
 
@@ -1223,7 +1259,7 @@ export async function sendBroadcast(broadcastId, { force = false } = {}) {
     delivery_summary: deliverySummary,
   }).eq('id', broadcastId)
 
-  return { sent: cumulativeSent || 0, failed: cumulativeFailed || 0, total: contacts.length, delivery_summary: deliverySummary }
+  return { status: 'sent', sent: cumulativeSent || 0, failed: cumulativeFailed || 0, total: contacts.length, delivery_summary: deliverySummary }
 }
 
 /**

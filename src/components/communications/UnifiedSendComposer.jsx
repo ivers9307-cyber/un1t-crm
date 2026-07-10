@@ -47,7 +47,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // Mia stays off the recipients' threads. (A single-recipient send does this
   // automatically; the toggle is for bulk sends.)
   const [handleReplies, setHandleReplies] = useState(false)
-  // Schedule (SMS only)
+  // Schedule (all three channels; WhatsApp joined with WA-SCHEDULE)
   const [scheduleMode, setScheduleMode] = useState('now') // 'now' | 'later'
   const [scheduledAtLocal, setScheduledAtLocal] = useState('')
   // Audience count (debounced)
@@ -128,7 +128,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
       ? !!templateId
       : subject.trim().length > 0 // email — needs a subject (design is inline)
   const audienceValid = !useExplicit || people.length > 0
-  const isSchedule = scheduleMode === 'later' && (channel === 'sms' || channel === 'email')
+  const isSchedule = scheduleMode === 'later'
   const isDrip = channel === 'whatsapp' && waMode === 'drip'
   // For WhatsApp the meaningful gate is the reachable count, not raw matches —
   // an audience of 1 with 0 reachable has nobody to send to.
@@ -164,6 +164,11 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         }
       } else if (channel === 'whatsapp') {
         const drip = waMode === 'drip'
+        const scheduled = scheduleMode === 'later'
+        // WA-SCHEDULE — like the SMS path, a scheduled broadcast is created in
+        // its final state in ONE call (status='scheduled' + scheduled_at); the
+        // run-whatsapp-broadcasts cron promotes it when due. Works for both
+        // pacing modes: a scheduled drip starts dripping at the picked time.
         const { broadcast } = await postJson('/api/whatsapp/broadcasts', {
           name: defaultLabel(), template_id: templateId, variable_mapping: variables,
           audience_filter: effectiveFilter, location_id: locationId,
@@ -175,8 +180,11 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
             send_window_start: windowStart, send_window_end: windowEnd,
             send_window_tz: 'Europe/Dublin',
           } : {}),
+          ...(scheduled ? { scheduled_at: scheduledIso, status: 'scheduled' } : {}),
         })
-        if (drip) {
+        if (scheduled) {
+          setResult({ channel, mode: 'scheduled', when: scheduledIso, drip, id: broadcast.id, detail: `/whatsapp/broadcasts/${broadcast.id}` })
+        } else if (drip) {
           // Create set status='sending'; the run-whatsapp-broadcasts cron drives
           // it during the window. No /send call for a drip.
           setResult({ channel, mode: 'drip', id: broadcast.id, detail: `/whatsapp/broadcasts/${broadcast.id}`,
@@ -248,8 +256,9 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           <>
             <h2 className="text-lg font-semibold text-un1t-text">Scheduled</h2>
             <p className="text-sm text-un1t-subtle mt-1">
-              Your {result.channel === 'sms' ? 'SMS' : 'WhatsApp'} will go out at{' '}
+              Your {result.channel === 'sms' ? 'SMS' : result.channel === 'email' ? 'email' : result.drip ? 'WhatsApp drip' : 'WhatsApp'} will {result.drip ? 'start' : 'go out'} at{' '}
               {new Date(result.when).toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })}.
+              {' '}You can cancel it from the details page any time before then.
             </p>
           </>
         ) : (
@@ -466,7 +475,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
       {channel === 'whatsapp' && (
         <Section title="Pacing" sub="Send all at once, or drip a capped number per day until everyone's been messaged — the safe way to work a large list without tripping WhatsApp's per-day limits.">
           <div className="flex gap-2 mb-3">
-            <ChannelPill active={waMode === 'blast'} onClick={() => setWaMode('blast')} icon={Send} label="Send now" small />
+            <ChannelPill active={waMode === 'blast'} onClick={() => setWaMode('blast')} icon={Send} label="All at once" small />
             <ChannelPill active={waMode === 'drip'} onClick={() => setWaMode('drip')} icon={Clock} label="Drip" small />
           </div>
           {waMode === 'drip' && (
@@ -511,21 +520,22 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         </Section>
       )}
 
-      {/* When — SMS + email support scheduling; WhatsApp sends immediately. */}
-      {(channel === 'sms' || channel === 'email') && (
-        <Section title="When">
-          <div className="flex gap-2 mb-2">
-            <ChannelPill active={scheduleMode === 'now'} onClick={() => setScheduleMode('now')} icon={Send} label="Send now" small />
-            <ChannelPill active={scheduleMode === 'later'} onClick={() => setScheduleMode('later')} icon={Clock} label="Schedule" small />
-          </div>
-          {scheduleMode === 'later' && (
-            <input type="datetime-local" className={fieldCls} value={scheduledAtLocal} onChange={e => setScheduledAtLocal(e.target.value)} />
-          )}
-          {scheduleMode === 'later' && scheduledAtLocal && !scheduleValid && (
-            <p className="text-[11px] text-rose-700 mt-1">Pick a time in the future.</p>
-          )}
-        </Section>
-      )}
+      {/* When — all three channels schedule via their broadcast cron. */}
+      <Section title="When">
+        <div className="flex gap-2 mb-2">
+          <ChannelPill active={scheduleMode === 'now'} onClick={() => setScheduleMode('now')} icon={Send} label={isDrip ? 'Start now' : 'Send now'} small />
+          <ChannelPill active={scheduleMode === 'later'} onClick={() => setScheduleMode('later')} icon={Clock} label="Schedule" small />
+        </div>
+        {scheduleMode === 'later' && (
+          <input type="datetime-local" className={fieldCls} value={scheduledAtLocal} onChange={e => setScheduledAtLocal(e.target.value)} />
+        )}
+        {scheduleMode === 'later' && scheduledAtLocal && !scheduleValid && (
+          <p className="text-[11px] text-rose-700 mt-1">Pick a time in the future.</p>
+        )}
+        {scheduleMode === 'later' && channel === 'whatsapp' && isDrip && (
+          <p className="text-[11px] text-un1t-subtle mt-1">The drip starts at this time, then paces itself inside the daily window above.</p>
+        )}
+      </Section>
 
       {error && (
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/[0.05] px-3 py-2 text-sm text-rose-700 flex items-center gap-2">

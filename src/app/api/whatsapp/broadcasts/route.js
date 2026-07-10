@@ -22,6 +22,13 @@ const BroadcastCreateSchema = z.object({
   // AGENT-TAKEOVER — operator will handle replies on a bulk send, so pause Mia
   // on each recipient thread. (A single-recipient send pauses automatically.)
   handle_replies_manually: z.boolean().optional(),
+  // WA-SCHEDULE — create directly as 'scheduled' (with scheduled_at) so the
+  // composer doesn't need a second PATCH to flip the status (the SMS create
+  // learned this the hard way: the 2-step stranded a draft if the PATCH
+  // failed). Only draft/scheduled are settable here; sending/sent are owned
+  // by the send engines + cron.
+  scheduled_at: z.string().datetime({ offset: true }).nullable().optional(),
+  status: z.enum(['draft', 'scheduled']).optional(),
 })
 
 // GET /api/whatsapp/broadcasts
@@ -67,6 +74,11 @@ export async function POST(request) {
 
   const db = createServerClient()
   const isDrip = body.delivery_mode === 'drip'
+  // WA-SCHEDULE — 'scheduled' requires a scheduled_at; otherwise it'd sit
+  // invisible to the cron (which picks up status='scheduled' AND
+  // scheduled_at <= now). A scheduled drip starts (status→'sending') when the
+  // cron promotes it; an unscheduled drip starts immediately as before.
+  const isScheduled = body.status === 'scheduled' && !!body.scheduled_at
   const { data, error } = await db.from('whatsapp_broadcasts').insert({
     name: body.name || 'Untitled Broadcast',
     template_id: body.template_id,
@@ -75,7 +87,8 @@ export async function POST(request) {
     audience_filter: body.audience_filter || { filters: [], logic: 'and' },
     // A drip starts immediately — the run-whatsapp-broadcasts cron drives it during
     // the send window. A blast stays 'draft' until the operator fires /send.
-    status: isDrip ? 'sending' : 'draft',
+    status: isScheduled ? 'scheduled' : isDrip ? 'sending' : 'draft',
+    scheduled_at: body.scheduled_at || null,
     delivery_mode: body.delivery_mode || 'blast',
     handle_replies_manually: body.handle_replies_manually === true,
     ...(isDrip ? {
