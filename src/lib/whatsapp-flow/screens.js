@@ -4,11 +4,8 @@
 // chosen `slot`) so the footer payloads can re-send them via ${data.*}. Meta only
 // posts the fields named in each footer's payload, so state must be re-declared
 // on every screen.
-export const SCREEN = { PATH: 'PATH', DAY: 'DAY', SLOT: 'SLOT', DETAILS: 'DETAILS', CONFIRM: 'CONFIRM' }
+export const SCREEN = { DAY: 'DAY', SLOT: 'SLOT', DETAILS: 'DETAILS', CONFIRM: 'CONFIRM' }
 
-export function pathScreen() {
-  return { screen: SCREEN.PATH, data: {} }
-}
 export function dayScreen(days, path) {
   return { screen: SCREEN.DAY, data: { days, path } }
 }
@@ -29,22 +26,13 @@ export function confirmScreen(summary, selection) {
 // data needs an `items` schema, prefills use Form `init-values` (not per-input
 // `init-value`), and `${data.selection.*}` needs `selection` sub-properties —
 // all v7.3 requirements Builder rejects otherwise. The published asset also
-// carries a base64 header Image on the PATH screen; that's added at publish
-// time by scripts/build-flow-json.mjs (kept out of source to stay lean).
+// carries a base64 header Image on the DAY screen (the entry screen); that's
+// added at publish time by scripts/build-flow-json.mjs (kept out of source).
 export const FLOW_JSON = {
   version: '7.3',
   data_api_version: '3.0',
-  routing_model: { PATH: ['DAY'], DAY: ['SLOT'], SLOT: ['DETAILS'], DETAILS: ['CONFIRM'], CONFIRM: [] },
+  routing_model: { DAY: ['SLOT'], SLOT: ['DETAILS'], DETAILS: ['CONFIRM'], CONFIRM: [] },
   screens: [
-    {
-      id: SCREEN.PATH, title: 'Book your first visit',
-      layout: { type: 'SingleColumnLayout', children: [{
-        type: 'Form', name: 'form', children: [
-          { type: 'RadioButtonsGroup', name: 'path', label: 'How would you like to start?', required: true,
-            'data-source': [{ id: 'class', title: 'Free class' }, { id: 'consult', title: 'Consultation' }] },
-          { type: 'Footer', label: 'Continue', 'on-click-action': { name: 'data_exchange', payload: { path: '${form.path}' } } },
-        ] }] },
-    },
     {
       id: SCREEN.DAY, title: 'Pick a day',
       data: { days: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' } } }, __example__: [{ id: '2026-07-03', title: 'Thu 3 Jul' }] }, path: { type: 'string', __example__: 'class' } },

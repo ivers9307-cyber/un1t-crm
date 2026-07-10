@@ -34,7 +34,7 @@ export async function POST(request) {
   } catch (e) {
     console.error('[wa-flow] handler error:', e.message)
     const encrypted = encryptFlowResponse(
-      { screen: 'PATH', data: { error_message: 'Something went wrong. Please try again.' } },
+      { screen: 'DAY', data: { days: [], path: 'class', error_message: 'Something went wrong. Please try again.' } },
       aesKeyBuffer, initialVectorBuffer,
     )
     return new Response(encrypted, { status: 200, headers: { 'Content-Type': 'text/plain' } })

@@ -3,9 +3,9 @@
 // The chosen slot id encodes everything the booking needs (decoded at completion):
 //   class:   `${event_id}|${starts_at}|${class_name}`
 //   consult: `${event_id}|${date}|${start}|${end}`
-import { computeAvailableDays, computeAvailableSlots } from '@/lib/booking-slots.js'
+import { computeAvailableSlots } from '@/lib/booking-slots.js'
 import { listPublicClasses } from '@/lib/public-classes.js'
-import { SCREEN, pathScreen, dayScreen, slotScreen, detailsScreen, confirmScreen } from './screens.js'
+import { SCREEN, dayScreen, slotScreen, detailsScreen, confirmScreen } from './screens.js'
 
 const PING = { data: { status: 'active' } }
 
@@ -24,26 +24,29 @@ function timeLabel(iso) {
   return new Intl.DateTimeFormat('en-IE', { timeZone: 'Europe/Dublin', hour: '2-digit', minute: '2-digit' }).format(new Date(iso))
 }
 
+// The Flow is class-only (the PATH class/consult chooser was removed — STARTFLOW.2).
+// INIT opens straight on the class Day screen. The catch-all is LOAD-BEARING during
+// the deploy→republish interim: until the Meta template button + Flow JSON are
+// republished, a tap still opens the old PATH screen, whose Continue posts screen
+// 'PATH' here → funnelled to the class Day screen (a class pick works; a consult
+// pick is silently treated as class, which is the intended end state anyway). The
+// path==='consult' branches below likewise serve any in-flight session whose screen
+// data still holds path:'consult' when this deploys. Consult is otherwise offered
+// conversationally by Mia after the Flow completes a class booking.
+async function classDayScreen(db, locationId) {
+  const classes = await listPublicClasses(db, locationId)
+  const seen = new Map()
+  for (const c of classes) {
+    const day = c.starts_at.slice(0, 10)
+    if (!seen.has(day)) seen.set(day, { id: day, title: dayLabel(day) })
+  }
+  return dayScreen([...seen.values()], 'class')
+}
+
 export async function handleDataExchange(db, { decryptedBody, contact, locationId, config }) {
   const { action, screen, data = {} } = decryptedBody
   if (action === 'ping') return PING
-  if (action === 'INIT') return pathScreen()
-
-  if (screen === SCREEN.PATH) {
-    const path = data.path
-    if (path === 'consult') {
-      const event = await resolveConsultEvent(db, locationId, config)
-      const rawDays = await computeAvailableDays(db, event, { days: 14 })
-      return dayScreen(rawDays.map((d) => ({ id: d.date, title: d.label })), path)
-    }
-    const classes = await listPublicClasses(db, locationId)
-    const seen = new Map()
-    for (const c of classes) {
-      const day = c.starts_at.slice(0, 10)
-      if (!seen.has(day)) seen.set(day, { id: day, title: dayLabel(day) })
-    }
-    return dayScreen([...seen.values()], path)
-  }
+  if (action === 'INIT') return classDayScreen(db, locationId)
 
   if (screen === SCREEN.DAY) {
     const path = data.path
@@ -68,7 +71,7 @@ export async function handleDataExchange(db, { decryptedBody, contact, locationI
     return confirmScreen(summary, selection)
   }
 
-  return pathScreen()
+  return classDayScreen(db, locationId)
 }
 
 export function parseFlowCompletion(interactive) {

@@ -1,6 +1,6 @@
 // Emit the publishable WhatsApp Flow JSON for the "Book your first visit" Flow
 // from FLOW_JSON (src/lib/whatsapp-flow/screens.js), optionally base64-embedding
-// a header image at the top of the PATH screen (Flow JSON can't reference hosted
+// a header image at the top of the DAY screen (Flow JSON can't reference hosted
 // URLs — image bytes must live inside the JSON).
 //
 // Usage:
@@ -24,8 +24,8 @@ const flow = JSON.parse(JSON.stringify(FLOW_JSON))
 
 if (headerPath) {
   const b64 = readFileSync(headerPath).toString('base64')
-  const pathScreen = flow.screens.find((s) => s.id === 'PATH')
-  pathScreen.layout.children.unshift({
+  const dayScreen = flow.screens.find((s) => s.id === 'DAY')
+  dayScreen.layout.children.unshift({
     type: 'Image',
     src: b64,
     height: 200,

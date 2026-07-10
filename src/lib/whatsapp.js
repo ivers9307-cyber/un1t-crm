@@ -139,11 +139,16 @@ export async function sendInteractiveOptions(to, text, options, opts = {}) {
 }
 
 /**
- * Interactive Flow message (24h window). Launches a published Flow at `screen`.
- * flow_token round-trips to our data-exchange endpoint so it can resolve the
- * contact + location (minted as `<contactId>.<locationId>`).
+ * Interactive Flow message (24h window). With a `screen` it `navigate`s straight
+ * there (a static first screen); without one it uses `data_exchange`, so our
+ * endpoint's INIT chooses the first screen — needed when the entry screen needs
+ * live data (the class Day list is fetched on INIT). flow_token round-trips to the
+ * endpoint so it can resolve the contact + location (`<contactId>.<locationId>`).
  */
 export function buildFlowPayload(to, { flowId, flowToken, flowCta, screen, data = {}, bodyText }) {
+  const actionParams = screen
+    ? { flow_action: 'navigate', flow_action_payload: { screen, data } }
+    : { flow_action: 'data_exchange' }
   return {
     messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'interactive',
     interactive: {
@@ -153,8 +158,7 @@ export function buildFlowPayload(to, { flowId, flowToken, flowCta, screen, data 
         name: 'flow',
         parameters: {
           mode: 'published', flow_message_version: '3', flow_token: flowToken, flow_id: flowId,
-          flow_cta: flowCta || 'Book now', flow_action: 'navigate',
-          flow_action_payload: { screen, data },
+          flow_cta: flowCta || 'Book now', ...actionParams,
         },
       },
     },
