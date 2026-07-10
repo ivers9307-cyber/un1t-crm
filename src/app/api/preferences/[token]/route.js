@@ -122,9 +122,17 @@ export async function PUT(request, props) {
 
   // Update contact email_status if email_marketing was changed
   if (typeof updates.email_marketing === 'boolean') {
+    const contactUpdate = { email_status: updates.email_marketing ? 'active' : 'unsubscribed' }
+    // EMAIL-HYGIENE.1 — explicit re-consent also clears the engagement-
+    // hygiene suppression stamp (contacts.email_suppressed_at, mig 395):
+    // a contact actively saying "send me marketing" outranks our
+    // 90-day-non-opener call. Opt-out leaves the stamp alone (the consent
+    // gate already excludes them; if they re-consent later this branch
+    // clears it then).
+    if (updates.email_marketing === true) contactUpdate.email_suppressed_at = null
     await db
       .from('contacts')
-      .update({ email_status: updates.email_marketing ? 'active' : 'unsubscribed' })
+      .update(contactUpdate)
       .eq('id', pref.contact_id)
   }
 

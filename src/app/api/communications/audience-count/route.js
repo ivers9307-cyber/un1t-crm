@@ -54,6 +54,31 @@ export async function POST(request) {
     })
     const { count, error } = await query
     if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+
+    // EMAIL-HYGIENE.1 — for the email channel, also count the matches the
+    // marketing send gate will exclude for inactivity (email_suppressed_at
+    // stamped by the email-engagement-sweep cron, mig 395) so the composer
+    // can show "N excluded for inactivity" before the send. Mirrors the
+    // WhatsApp branch's excluded breakdown above. The suppression filter
+    // matches buildAudienceQuery's marketing gate: consented AND stamped.
+    if (channel === 'email') {
+      const suppressedBase = db
+        .from('contacts')
+        .select('id', { count: 'exact', head: true })
+        .eq('location_id', location_id)
+        .eq('email_marketing', true)
+        .not('email_suppressed_at', 'is', null)
+      const { query: suppressedQuery } = await applyAudienceFilterAsync({
+        db,
+        query: suppressedBase,
+        filter: audience_filter || { logic: 'and', filters: [] },
+        locationId: location_id,
+      })
+      const { count: suppressedCount, error: suppressedErr } = await suppressedQuery
+      if (suppressedErr) return NextResponse.json({ success: false, error: suppressedErr.message }, { status: 400 })
+      return NextResponse.json({ success: true, count: count || 0, suppressed: suppressedCount || 0 })
+    }
+
     return NextResponse.json({ success: true, count: count || 0 })
   } catch (e) {
     // applyAudienceFilter throws InvalidAudienceFilterError on a non-whitelisted

@@ -87,6 +87,15 @@ export async function processPostmarkEvent(db, body) {
           .single()
 
         if (openSend) {
+          // EMAIL-HYGIENE.1 — an open is engagement: clear the hygiene
+          // suppression stamp (contacts.email_suppressed_at, mig 395) so
+          // the contact rejoins the marketing audience. Guarded on the
+          // stamp being non-null so the common case is a filtered no-op.
+          await db.from('contacts')
+            .update({ email_suppressed_at: null })
+            .eq('id', openSend.contact_id)
+            .not('email_suppressed_at', 'is', null)
+
           // Atomic open counter (best-effort) — replaces the read-modify-write.
           try { await db.rpc('increment_email_send_opens', { p_send_id: openSend.id }) } catch {}
 
@@ -122,6 +131,13 @@ export async function processPostmarkEvent(db, body) {
           .single()
 
         if (clickSend) {
+          // EMAIL-HYGIENE.1 — a click is engagement: clear the hygiene
+          // suppression stamp (same guarded no-op as the Open handler).
+          await db.from('contacts')
+            .update({ email_suppressed_at: null })
+            .eq('id', clickSend.contact_id)
+            .not('email_suppressed_at', 'is', null)
+
           await db.from('email_sends')
             .update({ status: 'clicked', clicked_at: now })
             .eq('id', clickSend.id)
