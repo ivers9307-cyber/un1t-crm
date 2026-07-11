@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 #
-# Vercel "Ignored Build Step" — skip a build when the tip commit touches ONLY
-# non-build paths (docs, changelog, memory, CI config). Cuts Build CPU Minutes,
-# the largest line on the Vercel bill, for the docs-only commits we push often.
+# Vercel "Ignored Build Step" — cuts Build CPU Minutes (the largest line on the
+# Vercel bill) two ways:
+#   1. Skips EVERY preview build (we don't use preview deployments; a preview
+#      build per push across many branches was most of the spend).
+#   2. For production, skips a build when the tip commit touches ONLY non-build
+#      paths (docs, changelog, memory, CI config).
 #
 # Wire it up (once, in the dashboard): Project → Settings → Git →
 #   Ignored Build Step → "Run my command":  bash scripts/vercel-ignore-build.sh
@@ -18,6 +21,15 @@
 # shallow clone with no parent), it builds.
 
 set -euo pipefail
+
+# Previews are not used — skip every non-production build. This is where most of
+# the Build CPU Minutes went. Only skip when Vercel EXPLICITLY says preview; an
+# unset/unknown VERCEL_ENV falls through to the production logic below, so we can
+# never accidentally skip a production build.
+if [ "${VERCEL_ENV:-}" = "preview" ]; then
+  echo "Preview deployment — skipping build (previews disabled)."
+  exit 0
+fi
 
 # No parent commit to diff against → build to be safe.
 if ! git rev-parse --verify HEAD^ >/dev/null 2>&1; then
