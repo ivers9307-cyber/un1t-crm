@@ -141,6 +141,14 @@ export default async function HostDashboard() {
             >
               Contacts
             </Link>
+            {/* HOST-EMAIL.3 — compose + send marketing email to the host's
+                own emailable contacts. */}
+            <Link
+              href="/host/emails"
+              className="rounded-lg border border-white/15 text-white/80 text-xs font-semibold px-3 py-1.5 hover:bg-white/10 hover:text-white"
+            >
+              Emails
+            </Link>
             <Link
               href="/host/events/new"
               className="rounded-lg bg-white text-black text-xs font-semibold px-3 py-1.5 hover:bg-white/90"
