@@ -24,6 +24,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { renderHostCampaignHtml } from '@/lib/host-campaign-email'
+import { isEmailable } from '@/lib/host-contact-list'
 import { signHostUnsubToken } from '@/lib/host-unsubscribe'
 import { sendEmail } from '@/lib/postmark'
 import { getAppUrl } from '@/lib/app-url'
@@ -147,11 +148,43 @@ async function tickHostCampaign(db, campaign) {
   }
 
   if (claimed.length > 0) {
+    // Send-time consent re-check (comms invariant; mirrors campaign-sender's
+    // post-claim consentOk): rows were enqueued with consent, but a contact
+    // can unsubscribe — globally OR via the per-host footer link — while the
+    // queue drains. Re-gate every claimed row against live flags before any
+    // send. Suppressed-since rows go terminal 'failed' (never sent, never
+    // retried — the status check constraint has no 'cancelled').
+    const contactIds = claimed.map((r) => r.contact_id)
+    const { data: contactRows, error: contactErr } = await db
+      .from('contacts')
+      .select('id, email, email_marketing, email_status, email_suppressed_at')
+      .in('id', contactIds)
+    if (contactErr) throw new Error(`consent re-check failed: ${contactErr.message}`)
+    const { data: suppRows, error: suppErr } = await db
+      .from('host_email_suppressions')
+      .select('contact_id')
+      .eq('host_id', campaign.host_id)
+      .in('contact_id', contactIds)
+    if (suppErr) throw new Error(`suppression re-check failed: ${suppErr.message}`)
+    const contactById = new Map((contactRows || []).map((c) => [c.id, c]))
+    const suppressedIds = new Set((suppRows || []).map((r) => r.contact_id))
+    const sendable = []
+    const revokedIds = []
+    for (const row of claimed) {
+      const ok = isEmailable(contactById.get(row.contact_id) || null, suppressedIds.has(row.contact_id))
+      if (ok) sendable.push(row)
+      else revokedIds.push(row.id)
+    }
+    if (revokedIds.length) {
+      await db.from('host_campaign_sends').update({ status: 'failed' }).in('id', revokedIds)
+      result.failed += revokedIds.length
+    }
+
     const baseUrl = getAppUrl()
     const senderName = host.sender_name || host.name || ''
     const from = `"${senderName.replace(/"/g, "'")}" <${host.sender_email}>`
 
-    for (const row of claimed) {
+    for (const row of sendable) {
       // Fresh per-contact unsubscribe token — the footer link is per-host,
       // per-contact (host_email_suppressions), injected by the renderer.
       const unsubscribeUrl =
