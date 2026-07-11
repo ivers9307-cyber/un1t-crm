@@ -5,7 +5,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { hasAdvanced } from '@/lib/presentations'
 
-const POLL_MS = 1000
+// Slide-sync poll; a few seconds of advance latency is imperceptible and 1s
+// was a standing Vercel Fluid-compute cost on always-open screens.
+const POLL_MS = 4000
 
 export default function PresentViewer({ token, initial }) {
   const [slides, setSlides] = useState(initial?.slides || [])

@@ -10,7 +10,9 @@ import { Heart, RefreshCw, Plug, Square, Users, Tv } from 'lucide-react'
 import { zoneForBpm } from '@/lib/heart-rate'
 import DetectedTab from './DetectedTab'
 
-const POLL_MS = 2000
+// Live coach view runs for the whole class; keep at a few seconds to limit
+// Vercel Fluid-compute cost (don't drop back toward 1–2s).
+const POLL_MS = 4000
 const STALE_MS = 2 * 60 * 1000  // strap silent for 2min → "stale"
 
 export default function LiveClassClient({ locationId, locationName }) {
