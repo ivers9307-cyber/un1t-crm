@@ -22,12 +22,13 @@
 
 set -euo pipefail
 
-# Previews are not used — skip every non-production build. This is where most of
-# the Build CPU Minutes went. Only skip when Vercel EXPLICITLY says preview; an
-# unset/unknown VERCEL_ENV falls through to the production logic below, so we can
-# never accidentally skip a production build.
-if [ "${VERCEL_ENV:-}" = "preview" ]; then
-  echo "Preview deployment — skipping build (previews disabled)."
+# Previews are not used — skip every non-production build, EXCEPT the dedicated
+# `staging` branch, which is our one pre-prod environment (see docs/STAGING.md).
+# This is where most of the Build CPU Minutes went. Only skip when Vercel
+# EXPLICITLY says preview; an unset/unknown VERCEL_ENV falls through to the
+# production logic below, so we can never accidentally skip a production build.
+if [ "${VERCEL_ENV:-}" = "preview" ] && [ "${VERCEL_GIT_COMMIT_REF:-}" != "staging" ]; then
+  echo "Preview deployment — skipping build (previews disabled; staging excepted)."
   exit 0
 fi
 
