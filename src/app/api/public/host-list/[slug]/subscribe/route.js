@@ -72,11 +72,17 @@ export async function POST(request, props) {
     // (dedup keeps consent + per-host suppression meaningful) rather than
     // minting a doppelgänger at the anchor location.
     const email = body.email.toLowerCase().trim()
+    // restrictToLocation — a PUBLIC write path must never globally resolve an
+    // arbitrary email to an existing contact and then write consent/tags
+    // against them (IDOR + consent resurrection). Mirrors the hardened
+    // /api/public/leads + /api/public/class-booking pattern: match/create only
+    // within the host's own anchor location.
     const contactId = await findOrCreateRaceContact({
       db,
       locationId,
       email,
       name: body.name || 'Mailing list subscriber',
+      restrictToLocation: true,
     })
     if (!contactId) {
       // Hard failure creating the contact — logged, but the public response
