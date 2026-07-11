@@ -31,7 +31,9 @@ import {
   classDidEnd,
 } from '@/lib/tv-theatre'
 
-const POLL_MS = 2000
+// Studio TVs run all day, so this cadence is a standing Vercel Fluid-compute
+// cost — keep it at a few seconds; don't drop back toward 1–2s.
+const POLL_MS = 4000
 
 // How long a toast stays on screen before auto-dismiss.
 const TOAST_MS = 6000

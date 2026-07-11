@@ -18,7 +18,9 @@ import { useEffect, useState, useRef } from 'react'
 import TemplateCanvas from '@/components/TemplateCanvas'
 import { tvFontFamily } from '@/components/tv-font'
 
-const POLL_MS = 3000
+// Content-push display (near-static); runs all day — keep the poll relaxed
+// to limit Vercel Fluid-compute cost.
+const POLL_MS = 6000
 
 export default function TVDisplay({ token, initial }) {
   // `data` is the server-rendered snapshot. It never changes in

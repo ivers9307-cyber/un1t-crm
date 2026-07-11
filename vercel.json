@@ -26,7 +26,7 @@
     },
     {
       "path": "/api/cron/process-contact-imports",
-      "schedule": "* * * * *"
+      "schedule": "*/2 * * * *"
     },
     {
       "path": "/api/cron/ac-auto-off",
@@ -74,11 +74,11 @@
     },
     {
       "path": "/api/cron/run-campaigns",
-      "schedule": "* * * * *"
+      "schedule": "*/2 * * * *"
     },
     {
       "path": "/api/cron/process-postmark-webhooks",
-      "schedule": "* * * * *"
+      "schedule": "*/2 * * * *"
     },
     {
       "path": "/api/cron/send-push-reminders",
@@ -180,7 +180,7 @@
       "path": "/api/cron/webhook-replay",
       "schedule": "*/5 * * * *"
     },
-    { "path": "/api/cron/process-class-bookings", "schedule": "* * * * *" },
+    { "path": "/api/cron/process-class-bookings", "schedule": "*/2 * * * *" },
     { "path": "/api/cron/prune-hr-samples", "schedule": "0 2 * * 0" },
     { "path": "/api/cron/ad-insights-sync", "schedule": "0 */4 * * *" },
     { "path": "/api/cron/ad-report-email", "schedule": "0 7 * * *" },
