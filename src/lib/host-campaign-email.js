@@ -4,8 +4,9 @@
 // input: body_html. Everything else (sender name, host name, subject, the
 // unsubscribe link) is escaped, and the body itself goes through
 // sanitizeCampaignHtml — a strip-list sanitizer that removes active content
-// (script/style/iframe/object/embed/form/link/meta, on* handlers,
-// javascript:/data: URLs). The footer — host name + per-host unsubscribe link
+// (script/style/iframe/object/embed/form/link/meta/svg/math, on* handlers,
+// and every URL scheme outside http/https/mailto/tel — checked after
+// entity-decoding). The footer — host name + per-host unsubscribe link
 // + the "why you're receiving this" line — is injected server-side AFTER
 // sanitization, so a host can never omit or strip it (spec: "enforced in the
 // send path, not the composer").
@@ -24,18 +25,54 @@ const PAGE = 1000 // the supabase-js 1k select cap — always .range()-paginate
 // Tags whose CONTENT is dangerous too — removed as a block.
 const CONTENT_STRIP_TAGS = /<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi
 // Remaining dangerous tags — the tags go, their inner content (plain text
-// fallback for iframe/object/form) stays. Also sweeps any stray unclosed
-// <script>/<style> open tag left after the block pass above.
-const TAG_STRIP = /<\/?(script|style|iframe|object|embed|form|link|meta)\b[^>]*>/gi
-// on* event-handler attributes: double-quoted, single-quoted, bare.
-const ON_ATTR_DQ = /\son[a-z]+\s*=\s*"[^"]*"/gi
-const ON_ATTR_SQ = /\son[a-z]+\s*=\s*'[^']*'/gi
-const ON_ATTR_BARE = /\son[a-z]+\s*=\s*[^\s>'"][^\s>]*/gi
-// javascript:/data: URLs in href/src — quoted variants consume up to the
-// closing quote; the bare variant stops at whitespace/>.
-const BAD_URL_DQ = /\s(href|src)\s*=\s*"\s*(?:javascript|data)\s*:[^"]*"/gi
-const BAD_URL_SQ = /\s(href|src)\s*=\s*'\s*(?:javascript|data)\s*:[^']*'/gi
-const BAD_URL_BARE = /\s(href|src)\s*=\s*(?:javascript|data)\s*:[^\s>]*/gi
+// fallback for iframe/object/form) stays. svg/math open foreign-content
+// parsing contexts (mXSS classics), so both are stripped. Also sweeps any
+// stray unclosed <script>/<style> open tag left after the block pass above.
+const TAG_STRIP = /<\/?(script|style|iframe|object|embed|form|link|meta|svg|math)\b[^>]*>/gi
+// on* event-handler attributes: double-quoted, single-quoted, bare. The
+// boundary before the attribute name may be whitespace, a `/` (SVG-style
+// `<img/onerror=…>`), or a quote closing the previous attribute's value
+// (`src="x"onerror=…`) — captured and put back so stripping the handler
+// never eats the closing quote.
+const ON_ATTR_DQ = /([\s/"'])on[a-z]+\s*=\s*"[^"]*"/gi
+const ON_ATTR_SQ = /([\s/"'])on[a-z]+\s*=\s*'[^']*'/gi
+const ON_ATTR_BARE = /([\s/"'])on[a-z]+\s*=\s*[^\s>'"][^\s>]*/gi
+// URL-carrying attributes (href / src / xlink:href, any boundary/quoting).
+// neutralizeUrlAttr scheme-checks the value against an ALLOWLIST after
+// entity-decoding + control-char stripping, so entity-encoded or
+// control-obfuscated schemes and any scheme outside the allowlist all
+// neutralize to "#", while https/http/mailto/tel and scheme-less relative
+// URLs pass through verbatim.
+const URL_ATTR = /([\s/"'])((?:xlink:)?(?:href|src))\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi
+const SAFE_URL_SCHEMES = new Set(['http', 'https', 'mailto', 'tel'])
+
+// Minimal entity decode for scheme sniffing: numeric (dec/hex) plus the named
+// entities usable to obfuscate a scheme. Decode-for-CHECK only — a value that
+// passes is kept byte-for-byte as authored.
+function decodeEntitiesForCheck(s) {
+  return s
+    .replace(/&#x([0-9a-f]+);?/gi, (_, hex) => fromCodePointSafe(parseInt(hex, 16)))
+    .replace(/&#(\d+);?/g, (_, dec) => fromCodePointSafe(parseInt(dec, 10)))
+    .replace(/&(colon|tab|newline);/gi, (_, name) => ({ colon: ':', tab: '\t', newline: '\n' })[name.toLowerCase()])
+}
+
+function fromCodePointSafe(code) {
+  return Number.isFinite(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : ''
+}
+
+function neutralizeUrlAttr(match, boundary, attr, rawValue) {
+  let value = rawValue
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    value = value.slice(1, -1)
+  }
+  // Browsers strip ASCII controls/whitespace anywhere in a URL before scheme
+  // detection — mirror that (after entity-decoding) before sniffing.
+  const decoded = decodeEntitiesForCheck(value).replace(/[\u0000-\u0020\u00a0]/g, '')
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(decoded)
+  if (!scheme) return match // relative / fragment / '#' — inert, keep verbatim
+  if (SAFE_URL_SCHEMES.has(scheme[1].toLowerCase())) return match
+  return `${boundary}${attr}="#"`
+}
 
 /**
  * Strip active content from host-authored campaign HTML. Deny-list, not a
@@ -55,12 +92,10 @@ export function sanitizeCampaignHtml(html) {
     out = out
       .replace(CONTENT_STRIP_TAGS, '')
       .replace(TAG_STRIP, '')
-      .replace(ON_ATTR_DQ, '')
-      .replace(ON_ATTR_SQ, '')
-      .replace(ON_ATTR_BARE, '')
-      .replace(BAD_URL_DQ, ' $1="#"')
-      .replace(BAD_URL_SQ, " $1='#'")
-      .replace(BAD_URL_BARE, ' $1="#"')
+      .replace(ON_ATTR_DQ, '$1')
+      .replace(ON_ATTR_SQ, '$1')
+      .replace(ON_ATTR_BARE, '$1')
+      .replace(URL_ATTR, neutralizeUrlAttr)
     if (out === before) break
   }
   return out

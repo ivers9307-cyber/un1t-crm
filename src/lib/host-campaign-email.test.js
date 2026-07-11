@@ -73,6 +73,40 @@ describe('sanitizeCampaignHtml', () => {
     expect(sanitizeCampaignHtml('<img src="data:image/svg+xml,<svg onload=alert(1)>">')).not.toMatch(/data:/i)
   })
 
+  it('strips on* handlers separated by / or a quote instead of whitespace', () => {
+    expect(sanitizeCampaignHtml('<img/onerror=alert(1) src="https://x.ie/a.png">')).not.toMatch(/onerror/i)
+    expect(sanitizeCampaignHtml('<svg/onload=alert(1)>')).not.toMatch(/onload/i)
+    expect(sanitizeCampaignHtml('<img src="https://x.ie/a.png"onerror="alert(1)">')).not.toMatch(/onerror/i)
+  })
+
+  it('strips svg and math tags', () => {
+    const out = sanitizeCampaignHtml(
+      '<svg><circle r="1"></circle></svg><math><mi>x</mi></math><p>keep</p>'
+    )
+    expect(out).not.toMatch(/<\/?(svg|math)\b/i)
+    expect(out).toContain('<p>keep</p>')
+  })
+
+  it('neutralizes entity-encoded / control-obfuscated / unknown schemes (allowlist)', () => {
+    // decimal + hex numeric entities
+    expect(sanitizeCampaignHtml('<a href="&#106;avascript:alert(1)">x</a>')).toContain('href="#"')
+    expect(sanitizeCampaignHtml('<a href="&#x6A;avascript:alert(1)">x</a>')).toContain('href="#"')
+    // named entity colon
+    expect(sanitizeCampaignHtml('<a href="javascript&colon;alert(1)">x</a>')).toContain('href="#"')
+    // control chars inside the scheme
+    expect(sanitizeCampaignHtml('<a href="jav\tascript:alert(1)">x</a>')).toContain('href="#"')
+    // any scheme outside http/https/mailto/tel is neutralized — allowlist, not deny-list
+    expect(sanitizeCampaignHtml('<a href="vbscript:msgbox(1)">x</a>')).toContain('href="#"')
+    // benign absolute URLs with entities, mailto/tel, and relative/fragment URLs survive untouched
+    const ok = '<a href="https://x.ie/?a=1&#38;b=2">x</a><a href="mailto:hi@x.ie">m</a><a href="tel:+3531234">t</a><a href="#section">s</a>'
+    expect(sanitizeCampaignHtml(ok)).toBe(ok)
+  })
+
+  it('neutralizes dangerous xlink:href and slash-separated URL attributes', () => {
+    expect(sanitizeCampaignHtml('<use xlink:href="javascript:alert(1)">')).not.toMatch(/javascript:/i)
+    expect(sanitizeCampaignHtml('<img/src="javascript:alert(1)">')).not.toMatch(/javascript:/i)
+  })
+
   it('keeps benign marketing markup untouched', () => {
     const html = '<h1>Sale!</h1><p>Hi <strong>there</strong>,<br>see <a href="https://acme.ie/offer">our offer</a>.</p><img src="https://acme.ie/hero.png" alt="hero">'
     expect(sanitizeCampaignHtml(html)).toBe(html)

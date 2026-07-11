@@ -26,7 +26,8 @@ create table if not exists host_campaign_sends (
 alter table host_campaign_sends enable row level security;
 create index if not exists idx_host_campaign_sends_pending on host_campaign_sends (campaign_id) where status = 'pending';
 
--- Cron runs every 2 minutes; expected interval mirrors that (NOT NULL column).
+-- Cron runs on a 2-min schedule (*/2 in vercel.json); 300s is a deliberately
+-- looser staleness allowance so one skipped/slow tick doesn't page (NOT NULL column).
 insert into cron_heartbeats (name, expected_interval_seconds) values ('send-host-campaigns', 300)
 on conflict (name) do nothing;
 
