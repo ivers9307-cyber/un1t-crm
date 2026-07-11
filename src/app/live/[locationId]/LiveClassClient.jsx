@@ -1,18 +1,18 @@
 'use client'
 
-// Coach live view client. Polls /api/live/[locationId] every 2s,
-// renders the attendee grid + available-straps panel + override
-// pairing flow + end-class button.
+// Coach live view client. Polls /api/live/[locationId] at an adaptive cadence
+// (fast while a class/straps are live, idle back-off otherwise), renders the
+// attendee grid + available-straps panel + override pairing flow + end-class
+// button.
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Heart, RefreshCw, Plug, Square, Users, Tv } from 'lucide-react'
 import { zoneForBpm } from '@/lib/heart-rate'
+import { nextPollDelay, ACTIVE_POLL_MS } from '@/lib/live-poll'
 import DetectedTab from './DetectedTab'
 
-// Live coach view runs for the whole class; keep at a few seconds to limit
-// Vercel Fluid-compute cost (don't drop back toward 1–2s).
-const POLL_MS = 4000
+// Poll cadence (active few-seconds vs idle back-off) lives in @/lib/live-poll.
 const STALE_MS = 2 * 60 * 1000  // strap silent for 2min → "stale"
 
 export default function LiveClassClient({ locationId, locationName }) {
@@ -38,18 +38,28 @@ export default function LiveClassClient({ locationId, locationName }) {
       })
       setTestModeUntil(json.test_mode_until || null)
       setError(null)
+      return json
     } catch (e) {
       setError(e.message)
+      return null
     } finally {
       setLoading(false)
       lastTickRef.current = Date.now()
     }
   }
 
+  // Self-scheduling adaptive loop: fast while a class/straps are live, idle
+  // back-off otherwise. On error, retry at the active cadence.
   useEffect(() => {
-    poll()
-    const t = setInterval(poll, POLL_MS)
-    return () => clearInterval(t)
+    let cancelled = false
+    let handle
+    async function loop() {
+      const json = await poll()
+      if (cancelled) return
+      handle = setTimeout(loop, json ? nextPollDelay(json) : ACTIVE_POLL_MS)
+    }
+    loop()
+    return () => { cancelled = true; clearTimeout(handle) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locationId])
 

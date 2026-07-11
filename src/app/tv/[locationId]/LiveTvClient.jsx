@@ -30,10 +30,9 @@ import {
   selectPodium,
   classDidEnd,
 } from '@/lib/tv-theatre'
+import { nextPollDelay, ACTIVE_POLL_MS } from '@/lib/live-poll'
 
-// Studio TVs run all day, so this cadence is a standing Vercel Fluid-compute
-// cost — keep it at a few seconds; don't drop back toward 1–2s.
-const POLL_MS = 4000
+// Poll cadence (active few-seconds vs idle back-off) lives in @/lib/live-poll.
 
 // How long a toast stays on screen before auto-dismiss.
 const TOAST_MS = 6000
@@ -61,10 +60,15 @@ export default function LiveTvClient({ locationId, endpoint }) {
   // instead. Same payload either way — the client is agnostic to which it hits.
   const dataUrl = endpoint || `/api/public/live/${locationId}`
 
-  // Poll the public endpoint.
+  // Poll the public endpoint. Self-scheduling so the cadence can adapt: fast
+  // while a class / straps / timer is live, idle back-off otherwise, so an
+  // all-day/overnight TV stops hammering the function when nothing is on.
+  // Errors retry at the active cadence (same as before).
   useEffect(() => {
     let cancelled = false
+    let handle
     async function tick() {
+      let delay = ACTIVE_POLL_MS
       try {
         const res = await fetch(dataUrl, { cache: 'no-store' })
         const json = await res.json()
@@ -73,16 +77,17 @@ export default function LiveTvClient({ locationId, endpoint }) {
         setData(json)
         setError(null)
         setFailures(0)
+        delay = nextPollDelay(json)
       } catch (e) {
         if (!cancelled) {
           setError(e.message)
           setFailures((f) => f + 1)
         }
       }
+      if (!cancelled) handle = setTimeout(tick, delay)
     }
     tick()
-    const t = setInterval(tick, POLL_MS)
-    return () => { cancelled = true; clearInterval(t) }
+    return () => { cancelled = true; clearTimeout(handle) }
   }, [dataUrl])
 
   // Screen Wake Lock (kiosk only) — prevents display sleep on the Pi.
