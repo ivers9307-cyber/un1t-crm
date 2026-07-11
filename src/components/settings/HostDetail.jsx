@@ -18,6 +18,9 @@ import {
 } from 'lucide-react'
 import { Button, Card, Field, Loading } from '@/components/ui'
 import { hostCanTakePayments, PROVIDER_STRIPE_CONNECT } from '@/lib/event-hosts'
+// Pure label sanitizer shared with the provisioning route — no server-only
+// imports in that module, so the client bundle can reuse it for the hint.
+import { sanitizeDomainLabel } from '@/lib/postmark-domains'
 
 function centsToEuroInput(cents) {
   const n = Number(cents)
@@ -66,6 +69,255 @@ function Stat({ label, value }) {
       <p className="text-[11px] uppercase tracking-wide text-un1t-muted">{label}</p>
       <p className="mt-0.5 text-lg font-semibold text-un1t-text tabular-nums">{value}</p>
     </div>
+  )
+}
+
+// One DNS value with a copy button — the operator pastes these into the
+// un1tdublin.com zone, so exact copies matter more than pretty rendering.
+function CopyValue({ label, value, copiedKey, onCopy }) {
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <span className="w-12 shrink-0 text-[11px] uppercase tracking-wide text-un1t-muted">{label}</span>
+      <code className="flex-1 truncate rounded bg-un1t-bg border border-un1t-border px-2 py-1 font-mono text-xs text-un1t-text">
+        {value}
+      </code>
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        icon={copiedKey === value ? Check : Copy}
+        onClick={() => onCopy(value)}
+        className="shrink-0"
+      >
+        {copiedKey === value ? 'Copied' : 'Copy'}
+      </Button>
+    </div>
+  )
+}
+
+// "Email sending" (HOST-EMAIL.2) — provision the host's dedicated Postmark
+// sending domain (<label>.mail.un1tdublin.com), show the DKIM/Return-Path
+// DNS records to add to the un1tdublin.com zone, re-check verification, and
+// (once verified) offer the per-host kill switch. Backed by
+// POST /api/hosts/[id]/email-domain (+ /verify) — the provision route is
+// idempotent, so a provisioned host's mount-fetch is a plain state read.
+function EmailSendingCard({ hostId, host }) {
+  const [provisioned, setProvisioned] = useState(!!host?.postmark_domain_id)
+  const [state, setState] = useState(null) // { domain, sender_email, sender_name, slug, verified, dkim_verified, return_path_verified, records }
+  const [stateLoading, setStateLoading] = useState(!!host?.postmark_domain_id)
+  const [label, setLabel] = useState(sanitizeDomainLabel(host?.name || ''))
+  const [senderName, setSenderName] = useState(host?.sender_name || host?.name || '')
+  const [provisioning, setProvisioning] = useState(false)
+  const [verifying, setVerifying] = useState(false)
+  const [disabling, setDisabling] = useState(false)
+  const [error, setError] = useState(null)
+  const [copiedKey, setCopiedKey] = useState(null)
+
+  // The idempotent provision POST doubles as the state read for an
+  // already-provisioned host — one call returns domain + records + flags.
+  const fetchState = useCallback(async () => {
+    setStateLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/hosts/${hostId}/email-domain`, { method: 'POST' })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
+      setState(j.data)
+      setProvisioned(true)
+    } catch (e) {
+      setError(e.message || 'Could not load the sending domain.')
+    } finally {
+      setStateLoading(false)
+    }
+  }, [hostId])
+
+  useEffect(() => {
+    if (host?.postmark_domain_id) fetchState()
+    // Keyed on the host row's domain id — runs once per provisioned host.
+  }, [host?.postmark_domain_id, fetchState])
+
+  async function provision() {
+    if (provisioning) return
+    setProvisioning(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/hosts/${hostId}/email-domain`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...(label.trim() ? { label: label.trim() } : {}),
+          ...(senderName.trim() ? { sender_name: senderName.trim() } : {}),
+        }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
+      setState(j.data)
+      setProvisioned(true)
+    } catch (e) {
+      setError(e.message || 'Could not provision the sending domain.')
+    } finally {
+      setProvisioning(false)
+    }
+  }
+
+  // verified: false = the kill switch; an empty body = re-check with Postmark.
+  async function postVerify(body) {
+    const res = await fetch(`/api/hosts/${hostId}/email-domain/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    })
+    const j = await res.json().catch(() => ({}))
+    if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
+    return j.data
+  }
+
+  async function verify() {
+    if (verifying) return
+    setVerifying(true)
+    setError(null)
+    try {
+      setState(await postVerify({}))
+    } catch (e) {
+      setError(e.message || 'Verification check failed.')
+    } finally {
+      setVerifying(false)
+    }
+  }
+
+  async function disableSending() {
+    if (disabling) return
+    if (!window.confirm('Disable sending for this host?\n\nTheir campaigns will be blocked until you verify the domain again. DNS records are unaffected.')) return
+    setDisabling(true)
+    setError(null)
+    try {
+      const next = await postVerify({ verified: false })
+      // The kill-switch response carries no Postmark record read — keep the
+      // records we already have on screen, just flip the flags.
+      setState((prev) => ({ ...(prev || {}), ...next, records: prev?.records?.length ? prev.records : next.records }))
+    } catch (e) {
+      setError(e.message || 'Could not disable sending.')
+    } finally {
+      setDisabling(false)
+    }
+  }
+
+  async function copyValue(value) {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopiedKey(value)
+      setTimeout(() => setCopiedKey(null), 2000)
+    } catch {
+      setError('Could not copy — select the value and copy it manually.')
+    }
+  }
+
+  const verified = !!state?.verified
+
+  return (
+    <Card title="Email sending">
+      {!provisioned ? (
+        <>
+          <p className="text-sm text-un1t-subtle">
+            Give this host their own sending domain so they can email their
+            contact list. The DNS records live in the un1tdublin.com zone —
+            you add them after provisioning.
+          </p>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <Field
+              id="host-email-label"
+              label="Subdomain label"
+              hint={`Sends from hello@${sanitizeDomainLabel(label) || 'label'}.mail.un1tdublin.com`}
+            >
+              {(p) => (
+                <input
+                  {...p}
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
+                  placeholder="acme-events"
+                  className={INPUT_CLASS}
+                />
+              )}
+            </Field>
+            <Field id="host-email-sender-name" label="Sender name" hint="The From name recipients see.">
+              {(p) => (
+                <input
+                  {...p}
+                  value={senderName}
+                  onChange={(e) => setSenderName(e.target.value)}
+                  placeholder={host?.name || 'Acme Events'}
+                  className={INPUT_CLASS}
+                />
+              )}
+            </Field>
+          </div>
+          <div className="mt-4">
+            <Button type="button" icon={Mail} loading={provisioning} onClick={provision}>
+              Provision sending domain
+            </Button>
+          </div>
+        </>
+      ) : stateLoading ? (
+        <p className="text-sm text-un1t-muted">Loading sending domain…</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <code className="rounded bg-un1t-bg border border-un1t-border px-2 py-1 font-mono text-xs text-un1t-text">
+              {state?.sender_email || state?.domain || host?.sender_email || host?.sender_domain}
+            </code>
+            {/* Light-theme chip recipe (bg-<c>-500/10 text-<c>-700) — the only one check:guardrails accepts. */}
+            <span
+              className={
+                'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ' +
+                (verified ? 'bg-green-500/10 text-green-700' : 'bg-amber-500/10 text-amber-700')
+              }
+            >
+              {verified ? <Check size={12} /> : <AlertTriangle size={12} />}
+              {verified ? 'Verified — sending enabled' : 'Not verified — sending blocked'}
+            </span>
+          </div>
+
+          {(state?.records || []).length > 0 && (
+            <div className="mt-4 space-y-3">
+              <p className="text-xs text-un1t-muted">
+                Add these records to the un1tdublin.com DNS zone, then hit Verify.
+              </p>
+              {state.records.map((r) => (
+                <div key={`${r.purpose}-${r.name}`} className="rounded-lg border border-un1t-border bg-un1t-surface p-3 space-y-2">
+                  <p className="text-xs font-medium text-un1t-text">
+                    {r.purpose} <span className="text-un1t-muted">({r.type})</span>
+                  </p>
+                  <CopyValue label="Name" value={r.name} copiedKey={copiedKey} onCopy={copyValue} />
+                  <CopyValue label="Value" value={r.value} copiedKey={copiedKey} onCopy={copyValue} />
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <Button type="button" variant="secondary" icon={RefreshCw} loading={verifying} onClick={verify}>
+              Verify
+            </Button>
+            {verified && (
+              <Button type="button" variant="danger" size="sm" loading={disabling} onClick={disableSending}>
+                Disable sending
+              </Button>
+            )}
+          </div>
+          {state?.slug && (
+            <p className="mt-3 text-xs text-un1t-muted">
+              Mailing-list signup page: <code className="font-mono">/h/{state.slug}</code>
+            </p>
+          )}
+        </>
+      )}
+
+      {error && (
+        <p className="mt-3 text-xs text-stage-lost flex items-center gap-1">
+          <AlertTriangle size={12} /> {error}
+        </p>
+      )}
+    </Card>
   )
 }
 
@@ -698,6 +950,11 @@ export default function HostDetail({ hostId }) {
           </div>
         </form>
       </Card>
+
+      {/* Email sending (HOST-EMAIL.2) — the host's dedicated Postmark sending
+          domain: provision, DNS records, verification, kill switch. Keyed on
+          the domain id so a fresh provision remounts with the new state. */}
+      <EmailSendingCard key={host.postmark_domain_id || 'unprovisioned'} hostId={hostId} host={host} />
 
       {/* Host portal access (HOST-PORTAL.1) — give the host a login to their
           own self-serve dashboard. Emails them a set-password link. */}

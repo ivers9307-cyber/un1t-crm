@@ -25,7 +25,12 @@ import { Analytics } from '@vercel/analytics/next'
 // visitor to the public studio page is bounced to /login on hydration (the
 // server renders fine; this client gate is what redirects). Mirrors the
 // brand allowlist in src/lib/brands.js — add a new studio's path in BOTH.
-const PUBLIC_PATHS = ['/login', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/deposit', '/book', '/event', '/event-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host']
+// '/h' — public host mailing-list signup pages (/h/[slug], HOST-EMAIL.2).
+// '/unsubscribe' — the unsubscribe pages (global /unsubscribe/[token] AND the
+// per-host /unsubscribe/host/[token]): anonymous email recipients arrive with
+// no session, and without this entry the null-user redirect below bounced
+// them to /login. Mirrors the proxy.js allowlist — add new paths in BOTH.
+const PUBLIC_PATHS = ['/login', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/deposit', '/book', '/event', '/event-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe']
 
 export default function AppShell({ user, children, isLinkedHost = false }) {
   const pathname = usePathname()
