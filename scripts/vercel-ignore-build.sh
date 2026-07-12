@@ -2,8 +2,9 @@
 #
 # Vercel "Ignored Build Step" — cuts Build CPU Minutes (the largest line on the
 # Vercel bill) two ways:
-#   1. Skips EVERY preview build (we don't use preview deployments; a preview
-#      build per push across many branches was most of the spend).
+#   1. Previews build ONLY for branches with an open pull request. Real PRs keep
+#      their preview (our pre-prod net); work-in-progress branch pushes — e.g.
+#      the many worktrees — don't build, which was most of the spend.
 #   2. For production, skips a build when the tip commit touches ONLY non-build
 #      paths (docs, changelog, memory, CI config).
 #
@@ -22,13 +23,15 @@
 
 set -euo pipefail
 
-# Previews are not used — skip every non-production build, EXCEPT the dedicated
-# `staging` branch, which is our one pre-prod environment (see docs/STAGING.md).
-# This is where most of the Build CPU Minutes went. Only skip when Vercel
-# EXPLICITLY says preview; an unset/unknown VERCEL_ENV falls through to the
-# production logic below, so we can never accidentally skip a production build.
-if [ "${VERCEL_ENV:-}" = "preview" ] && [ "${VERCEL_GIT_COMMIT_REF:-}" != "staging" ]; then
-  echo "Preview deployment — skipping build (previews disabled; staging excepted)."
+# Previews build ONLY for branches with an open pull request. That keeps a
+# preview (our pre-prod net) for every real PR while skipping work-in-progress
+# branch pushes (the worktrees) — which was most of the Build CPU Minutes.
+# VERCEL_GIT_PULL_REQUEST_ID is the PR number, empty until a PR is opened for the
+# branch. Only skip when Vercel EXPLICITLY says preview; an unset/unknown
+# VERCEL_ENV falls through to the production logic below, so we can never
+# accidentally skip a production build.
+if [ "${VERCEL_ENV:-}" = "preview" ] && [ -z "${VERCEL_GIT_PULL_REQUEST_ID:-}" ]; then
+  echo "Preview build for a branch with no open PR — skipping (open a PR to preview)."
   exit 0
 fi
 
