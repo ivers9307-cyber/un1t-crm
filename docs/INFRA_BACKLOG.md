@@ -5,7 +5,7 @@ account/dashboard actions (no API/MCP path) captured here as runbooks.
 
 | # | Item | State |
 |---|------|-------|
-| 1 | Staging safety net | Code merged (#897). Operator setup pending → `docs/STAGING.md` |
+| 1 | Pre-prod net (previews) | **PR-only previews** — kept previews, dropped the staging branch. Needs the Ignored Build Step enabled once. |
 | 4 | DB hygiene (FK indexes, PK, search_path) | **DONE** — mig 402, applied to prod |
 | 4b | Drop unused indexes | **Not recommended** (see below) |
 | 2 | champ-app DB isolation + Auth conn cap | Decision + runbook below |
