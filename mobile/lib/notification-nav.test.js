@@ -16,6 +16,9 @@ describe('routeForNotification', () => {
     expect(routeForNotification({ type: 'whatsapp_agent_handoff', conversation_id: 'w2' })).toBe('/whatsapp/w2')
     expect(routeForNotification({ type: 'instagram_inbound', conversation_id: 'i1' })).toBe('/instagram/i1')
     expect(routeForNotification({ type: 'instagram_agent_handoff', conversation_id: 'i2' })).toBe('/instagram/i2')
+    // AGENT-ACTIVITY.1 — "X is chatting with Mia" opens the right channel thread.
+    expect(routeForNotification({ type: 'agent_activity', conversation_id: 'w3', channel: 'whatsapp' })).toBe('/whatsapp/w3')
+    expect(routeForNotification({ type: 'agent_activity', conversation_id: 'i3', channel: 'instagram' })).toBe('/instagram/i3')
     expect(routeForNotification({ type: 'invoice_approved', invoice_id: 'inv1' })).toBe('/invoices/inv1')
     expect(routeForNotification({ type: 'invoice_declined', invoice_id: 'inv2' })).toBe('/invoices/inv2')
     expect(routeForNotification({ type: 'expense_approved', claim_id: 'e1' })).toBe('/expenses/e1')

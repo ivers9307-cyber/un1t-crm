@@ -85,6 +85,12 @@ export function routeForNotification(data) {
     case 'instagram_inbound':
     case 'instagram_agent_handoff':
       return data.conversation_id ? `/instagram/${data.conversation_id}` : '/(tabs)/whatsapp'
+    // AGENT-ACTIVITY.1 — "X is chatting with Mia"; open the right channel thread.
+    case 'agent_activity':
+      if (!data.conversation_id) return '/(tabs)/whatsapp'
+      return data.channel === 'instagram'
+        ? `/instagram/${data.conversation_id}`
+        : `/whatsapp/${data.conversation_id}`
 
     // ── WhatsApp health / template alerts (webhooks + health cron) ──
     case 'wa_quality':

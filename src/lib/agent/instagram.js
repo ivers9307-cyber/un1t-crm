@@ -197,42 +197,11 @@ export async function handleInstagramInbound(db, event) {
   // Atomic unread bump (best-effort) — replaces the read-modify-write above.
   try { await db.rpc('increment_instagram_conversation_unread', { p_conversation_id: conversationId }) } catch {}
 
-  // Push notification fan-out for inbound Instagram (MOBILE-MSG.M2) —
-  // mirrors the WhatsApp webhook: assigned user first, otherwise
-  // owners + managers + head coaches at the location. Per-user opt-in
-  // is gated by permissions.mobile.notify_instagram inside sendPush().
-  // Best-effort — never throw out of the inbound handler.
+  // Trigger the agent (shared brain) FIRST so we know whether it engaged this
+  // message before deciding the inbound push. Best-effort.
+  let agentResult = null
   try {
-    const { data: convMeta } = await db.from('instagram_conversations')
-      .select('assigned_to, customer_name, ig_username, contacts!contact_id(name, first_name)')
-      .eq('id', conversationId)
-      .single()
-    const senderLabel = convMeta?.contacts?.name
-      || convMeta?.contacts?.first_name
-      || convMeta?.customer_name
-      || (convMeta?.ig_username ? `@${convMeta.ig_username}` : null)
-      || 'an Instagram user'
-    const payload = {
-      title: `Instagram · ${senderLabel}`,
-      body: (body || '').substring(0, 140) || `[${messageType}]`,
-      category: 'instagram',
-      data: {
-        type: 'instagram_inbound',
-        conversation_id: conversationId,
-      },
-    }
-    if (convMeta?.assigned_to) {
-      await sendPush([convMeta.assigned_to], payload, { locationId })
-    } else {
-      await sendPushToRolesAtLocation(locationId, MANAGER_ROLES, payload)
-    }
-  } catch (err) {
-    console.error('[instagram inbound] push failed', err?.message)
-  }
-
-  // Trigger the agent (shared brain). Best-effort.
-  try {
-    await runChannelAgent(db, instagramAdapter, {
+    agentResult = await runChannelAgent(db, instagramAdapter, {
       conversationId,
       locationId,
       recipient: event.senderId,
@@ -243,6 +212,46 @@ export async function handleInstagramInbound(db, event) {
     })
   } catch (err) {
     console.error('[radar-agent] IG auto-reply failed', err?.message)
+  }
+
+  // Push notification fan-out for inbound Instagram (MOBILE-MSG.M2) —
+  // mirrors the WhatsApp webhook: assigned user first, otherwise
+  // owners + managers + head coaches at the location. Per-user opt-in
+  // is gated by permissions.mobile.notify_instagram inside sendPush().
+  // Best-effort — never throw out of the inbound handler.
+  // AGENT-ACTIVITY.1 — when the agent engaged (replied or handed off) it emits
+  // its own debounced "chatting with Mia" ping to inbox staff, so SKIP this
+  // generic per-message manager push to avoid double-notifying.
+  const agentEngaged = agentResult?.handled === true &&
+    ['reply', 'handoff', 'soft_handoff'].includes(agentResult.action)
+  if (!agentEngaged) {
+    try {
+      const { data: convMeta } = await db.from('instagram_conversations')
+        .select('assigned_to, customer_name, ig_username, contacts!contact_id(name, first_name)')
+        .eq('id', conversationId)
+        .single()
+      const senderLabel = convMeta?.contacts?.name
+        || convMeta?.contacts?.first_name
+        || convMeta?.customer_name
+        || (convMeta?.ig_username ? `@${convMeta.ig_username}` : null)
+        || 'an Instagram user'
+      const payload = {
+        title: `Instagram · ${senderLabel}`,
+        body: (body || '').substring(0, 140) || `[${messageType}]`,
+        category: 'instagram',
+        data: {
+          type: 'instagram_inbound',
+          conversation_id: conversationId,
+        },
+      }
+      if (convMeta?.assigned_to) {
+        await sendPush([convMeta.assigned_to], payload, { locationId })
+      } else {
+        await sendPushToRolesAtLocation(locationId, MANAGER_ROLES, payload)
+      }
+    } catch (err) {
+      console.error('[instagram inbound] push failed', err?.message)
+    }
   }
 
   return { handled: true, conversationId }
