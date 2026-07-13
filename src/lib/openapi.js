@@ -1545,6 +1545,44 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'get',
+  path: '/api/contacts/{id}/command-centre',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Contact bundle: row + recent activities + event types; scope=drawer adds notes, sequences, WhatsApp window, composer templates',
+  request: {
+    params: z.object({ id: uuidLike }),
+    query: z.object({
+      scope: z.enum(['drawer']).optional().openapi({ description: 'drawer — extend the bundle for the pipeline contact drawer' }),
+    }),
+  },
+  responses: {
+    200: {
+      description: 'Bundle',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.literal(true),
+            contact: z.object({}).passthrough(),
+            activities: z.array(z.object({}).passthrough()),
+            event_types: z.array(z.object({}).passthrough()),
+            notes: z.array(z.object({}).passthrough()).optional(),
+            sequences: z.array(z.object({}).passthrough()).optional(),
+            wa: z.object({ window_open: z.boolean(), window_expires_at: z.string().nullable() }).optional(),
+            composer_templates: z.array(z.object({
+              name: z.string(), language: z.string(), bodyText: z.string(), sendable: z.boolean(),
+            })).optional(),
+            permissions: z.object({ whatsapp: z.boolean(), sms: z.boolean(), email: z.boolean() }).optional(),
+          }).openapi('ContactCommandCentreBundle'),
+        },
+      },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Contact not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'put',
   path: '/api/contacts/{id}/consultations/{cid}',
   tags: ['Contacts'],

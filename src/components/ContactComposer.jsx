@@ -2,18 +2,25 @@
 
 // CONTACT-COMPOSER.1 — the unified "Message this customer" composer.
 //
-// One box that does the right thing per channel:
+// DRAWER.4 — channel set is now Note / WhatsApp / SMS / Email, with
+// Note FIRST and the default (Richard, 2026-07-13):
+//   Note     — staff-visible note; POSTs /api/contacts/[id]/notes so
+//              the server attributes the author and pushes the note to
+//              Glofox (the ContactActions path — NOT the /api/notes
+//              import path, which deliberately skips the push).
 //   WhatsApp — free text while the 24h customer-service window is
 //              open; a utility-template picker once it's closed.
 //   SMS      — free text, always (SMS has no window or template rule).
+//   Email    — ad-hoc one-off from the company sender
+//              (POST /api/contacts/[id]/email; `email` permission).
 //
-// Window state is computed server-side at page load; the send
-// endpoint is the source of truth, so a window_expired response
-// flips the WhatsApp view to the template picker.
+// Window state is computed server-side at load; the send endpoint is
+// the source of truth, so a window_expired response flips the WhatsApp
+// view to the template picker.
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { MessageCircle, MessageSquare, Send } from 'lucide-react'
+import { MessageCircle, MessageSquare, Send, StickyNote, Mail } from 'lucide-react'
 
 // SMS segment counter — single-segment GSM-7 fits 160 chars;
 // concatenated multi-segment messages count 153 chars per segment.
@@ -48,19 +55,29 @@ export default function ContactComposer({
   contactName,
   canWhatsApp = false,
   canSms = false,
+  canEmail = false,
   hasWaPhone = false,
   hasPhone = false,
+  hasEmail = false,
   smsBlocked = false,
+  emailBlocked = false,
   whatsappWindowOpen = false,
   whatsappWindowExpiresAt = null,
   templates = [],
+  defaultChannel = 'note',
+  onSaved = null,
 }) {
   const router = useRouter()
   const waAvailable = canWhatsApp && hasWaPhone
   const smsAvailable = canSms && hasPhone
+  const emailAvailable = canEmail && hasEmail
 
-  const [channel, setChannel] = useState(waAvailable ? 'whatsapp' : 'sms')
+  const [channel, setChannel] = useState(() => {
+    const available = { note: true, whatsapp: waAvailable, sms: smsAvailable, email: emailAvailable }
+    return available[defaultChannel] ? defaultChannel : 'note'
+  })
   const [text, setText] = useState('')
+  const [subject, setSubject] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState(null)
   const [flash, setFlash] = useState(null)
@@ -68,14 +85,19 @@ export default function ContactComposer({
   // re-checks it; a window_expired response flips this to true.
   const [windowClosed, setWindowClosed] = useState(!whatsappWindowOpen)
 
-  if (!waAvailable && !smsAvailable) return null
-
   const sendable = (templates || []).filter((t) => t.sendable)
   const seg = smsSegmentInfo(text)
 
   function showFlash(msg) {
     setFlash(msg)
     setTimeout(() => setFlash(null), 5000)
+  }
+
+  // The drawer passes onSaved (refetch its bundle); the page relies on
+  // a server-component refresh.
+  function afterSave() {
+    if (onSaved) onSaved()
+    else router.refresh()
   }
 
   async function post(urlPath, payload) {
@@ -102,35 +124,61 @@ export default function ContactComposer({
     }
   }
 
+  async function saveNote() {
+    if (!text.trim()) return
+    const ok = await post(`/api/contacts/${contactId}/notes`, { content: text.trim() })
+    if (ok) { setText(''); showFlash('Note saved'); afterSave() }
+  }
+
   async function sendWhatsAppText() {
     if (!text.trim()) return
     const ok = await post(`/api/contacts/${contactId}/whatsapp`, { text: text.trim() })
-    if (ok) { setText(''); showFlash('WhatsApp message sent'); router.refresh() }
+    if (ok) { setText(''); showFlash('WhatsApp message sent'); afterSave() }
   }
 
   async function sendTemplate(name) {
     const ok = await post(`/api/contacts/${contactId}/whatsapp`, { template_name: name })
-    if (ok) { showFlash('WhatsApp template sent'); router.refresh() }
+    if (ok) { showFlash('WhatsApp template sent'); afterSave() }
   }
 
   async function sendSms() {
     if (!text.trim()) return
     const ok = await post(`/api/contacts/${contactId}/sms`, { body: text.trim() })
-    if (ok) { setText(''); showFlash('SMS sent'); router.refresh() }
+    if (ok) { setText(''); showFlash('SMS sent'); afterSave() }
   }
+
+  async function sendEmail() {
+    if (!text.trim() || !subject.trim()) return
+    const ok = await post(`/api/contacts/${contactId}/email`, { subject: subject.trim(), body: text.trim() })
+    if (ok) { setText(''); setSubject(''); showFlash('Email sent'); afterSave() }
+  }
+
+  // Note first — Richard's call. Unavailable channels drop out rather
+  // than render disabled.
+  const pills = [
+    { id: 'note', label: 'Note', icon: StickyNote, available: true },
+    { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, available: waAvailable },
+    { id: 'sms', label: 'SMS', icon: MessageSquare, available: smsAvailable },
+    { id: 'email', label: 'Email', icon: Mail, available: emailAvailable },
+  ].filter((p) => p.available)
 
   return (
     <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 mb-5">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">
-          Message {contactName || 'contact'}
+          {channel === 'note' ? 'Add a note' : `Message ${contactName || 'contact'}`}
         </h3>
-        {waAvailable && smsAvailable && (
+        {pills.length > 1 && (
           <div className="flex gap-1">
-            <ChannelPill active={channel === 'whatsapp'} onClick={() => { setChannel('whatsapp'); setError(null) }}
-              icon={MessageCircle} label="WhatsApp" />
-            <ChannelPill active={channel === 'sms'} onClick={() => { setChannel('sms'); setError(null) }}
-              icon={MessageSquare} label="SMS" />
+            {pills.map((p) => (
+              <ChannelPill
+                key={p.id}
+                active={channel === p.id}
+                onClick={() => { setChannel(p.id); setError(null) }}
+                icon={p.icon}
+                label={p.label}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -139,6 +187,31 @@ export default function ContactComposer({
         <p className="mb-2 text-xs text-green-700 bg-green-500/10 border border-green-500/30 rounded px-2 py-1.5">
           {flash}
         </p>
+      )}
+
+      {/* Note */}
+      {channel === 'note' && (
+        <div>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={3}
+            maxLength={20000}
+            placeholder={`Add a note about ${contactName || 'this contact'}…`}
+            className="w-full bg-un1t-bg border border-un1t-border rounded p-2 text-sm text-un1t-text placeholder:text-un1t-muted resize-none focus:outline-none focus:border-un1t-muted"
+          />
+          <div className="flex items-center justify-between mt-2">
+            <span className="text-[11px] text-un1t-muted">Visible to staff only · syncs to Glofox</span>
+            <button
+              type="button"
+              disabled={sending || !text.trim()}
+              onClick={saveNote}
+              className="inline-flex items-center gap-1 text-xs px-3 py-1 bg-un1t-text text-un1t-bg rounded font-medium hover:bg-un1t-accent disabled:opacity-50"
+            >
+              <StickyNote size={12} /> {sending ? 'Saving…' : 'Save note'}
+            </button>
+          </div>
+        </div>
       )}
 
       {/* WhatsApp */}
@@ -231,6 +304,46 @@ export default function ContactComposer({
                   className="inline-flex items-center gap-1 text-xs px-3 py-1 bg-un1t-text text-un1t-bg rounded font-medium hover:bg-un1t-accent disabled:opacity-50"
                 >
                   <Send size={12} /> {sending ? 'Sending…' : 'Send SMS'}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Email */}
+      {channel === 'email' && emailAvailable && (
+        <div>
+          {emailBlocked ? (
+            <p className="text-xs text-amber-400">
+              This contact&rsquo;s email is bounced, complained or unsubscribed — sends are blocked.
+            </p>
+          ) : (
+            <>
+              <input
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                maxLength={300}
+                placeholder="Subject"
+                className="w-full mb-2 bg-un1t-bg border border-un1t-border rounded px-2 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+              />
+              <textarea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                rows={3}
+                maxLength={20000}
+                placeholder={`Email ${contactName || 'the customer'}…`}
+                className="w-full bg-un1t-bg border border-un1t-border rounded p-2 text-sm text-un1t-text placeholder:text-un1t-muted resize-none focus:outline-none focus:border-un1t-muted"
+              />
+              <div className="flex items-center justify-between mt-2">
+                <span className="text-[11px] text-un1t-muted">Sent from the company address</span>
+                <button
+                  type="button"
+                  disabled={sending || !text.trim() || !subject.trim()}
+                  onClick={sendEmail}
+                  className="inline-flex items-center gap-1 text-xs px-3 py-1 bg-un1t-text text-un1t-bg rounded font-medium hover:bg-un1t-accent disabled:opacity-50"
+                >
+                  <Send size={12} /> {sending ? 'Sending…' : 'Send email'}
                 </button>
               </div>
             </>
