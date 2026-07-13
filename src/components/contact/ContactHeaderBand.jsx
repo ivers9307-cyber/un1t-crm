@@ -87,6 +87,24 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
             />
           </PersonHeader>
 
+          {/* Contact line — phone + email at a glance, clickable, with
+              source + created for quick context. */}
+          <p className="text-xs text-un1t-subtle mt-1.5 truncate">
+            {contact.phone && (
+              <a href={`tel:${contact.phone}`} className="hover:text-un1t-text hover:underline">{contact.phone}</a>
+            )}
+            {contact.phone && contact.email && ' · '}
+            {contact.email && (
+              <a href={`mailto:${contact.email}`} className="hover:text-un1t-text hover:underline">{contact.email}</a>
+            )}
+            {(contact.lead_source || contact.source) && (
+              <span> · {contact.lead_source || contact.source}</span>
+            )}
+            {contact.created_at && (
+              <span> · added {new Date(contact.created_at).toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+            )}
+          </p>
+
           {/* Alert chips — needs-attention + funnel context. */}
           <div className="flex flex-wrap items-center gap-1.5 mt-2">
             {attention.map((a) => (
