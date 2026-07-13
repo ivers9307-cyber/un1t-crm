@@ -1,21 +1,16 @@
 'use client'
 
-// Pipeline kanban card. Click anywhere on the card body navigates to the
-// contact detail page; the kebab menu (PersonActionBar) offers the
-// shared per-contact actions — Message / Task / Sequence — without
-// leaving the kanban view.
-//
-// Implementation note: we used to wrap the entire card in a <Link>, but
-// adding a menu button inside that link would make the menu also navigate
-// on click. Switched to programmatic navigation via useRouter so the
-// menu button (PersonActionBar, which stops propagation internally) can
-// sit inside the clickable body cleanly.
+// Pipeline kanban card. DRAWER.5 — clicking the card body no longer
+// hard-navigates to /contacts/[id]; it opens the contact slide-over via
+// the onOpenContact callback KanbanBoard provides (which writes the
+// ?contact=<id> search param, so back-button and refresh restore the
+// drawer). The kebab menu (PersonActionBar) still offers the shared
+// per-contact actions without leaving the kanban view.
 //
 // PERSON-ACTIONS.1 — the bespoke 3-dots menu + "Add to sequence" modal
 // that used to live here moved into the reusable PersonActionBar so the
 // pipeline card, contact header, etc. share one consistent affordance.
 
-import { useRouter } from 'next/navigation'
 import { User } from 'lucide-react'
 import PersonActionBar from './PersonActionBar'
 
@@ -37,20 +32,19 @@ const statusColors = {
 // off-funnel stages don't (it'd be noise there).
 const BADGE_SLUGS = new Set(['new_lead', 'first_class', 'second_class', 'trial_done'])
 
-export default function DealCard({ deal, locationId }) {
-  const router = useRouter()
+export default function DealCard({ deal, locationId, onOpenContact }) {
   const contact = deal.contacts || {}
   const borderColor = statusColors[contact.pipeline_stage_slug] || 'border-l-blue-500'
 
-  function navigateToContact() {
-    if (!contact.id) return
-    router.push(`/contacts/${contact.id}`)
+  function openContact() {
+    if (!contact.id || !onOpenContact) return
+    onOpenContact(contact.id)
   }
 
   return (
     <div className="relative mb-2">
       <div
-        onClick={navigateToContact}
+        onClick={openContact}
         className={`block bg-un1t-bg border border-un1t-border ${borderColor} border-l-2 rounded-md p-3 hover:border-un1t-muted transition-colors cursor-pointer`}
       >
         <div className="flex items-start justify-between gap-2">
