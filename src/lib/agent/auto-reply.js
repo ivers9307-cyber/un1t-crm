@@ -191,6 +191,37 @@ async function hasInboundAfter(db, adapter, conversationId, sinceIso) {
   return Array.isArray(data) && data.length > 0
 }
 
+// AGENT-REARM.3 — did a human take this thread over since the turn began?
+// Two signals: (1) the conversation's agent gate was flipped off (the inbox
+// human-send route stamps a manual take-over), or (2) a HUMAN outbound landed
+// after turn start (a staff reply mid-generation, before the gate flip
+// committed). Either means Mia must stay quiet. Best-effort: a check failure
+// returns false so a genuine reply is never blocked by a transient DB error.
+export async function humanTookOverDuringTurn(db, adapter, conversationId, sinceIso) {
+  if (!conversationId) return false
+  try {
+    const { data: conv } = await db.from(adapter.conversationsTable)
+      .select('agent_active')
+      .eq('id', conversationId)
+      .single()
+    if (conv && conv.agent_active === false) return true
+
+    const { data: lastOut } = await db.from(adapter.messagesTable)
+      .select(`${adapter.humanOutboundColumns || 'source'}, created_at`)
+      .eq('conversation_id', conversationId)
+      .eq('direction', 'outbound')
+      .order('created_at', { ascending: false })
+      .limit(1)
+    const row = Array.isArray(lastOut) ? lastOut[0] : null
+    if (!row || !adapter.isHumanOutbound?.(row)) return false
+    // Only a human message from THIS turn counts — an old human message with a
+    // since-cooldown re-arm must not suppress the legitimately re-armed reply.
+    return !sinceIso || !row.created_at || row.created_at >= sinceIso
+  } catch {
+    return false
+  }
+}
+
 async function runChannelAgentInner(db, adapter, ctx) {
   const { conversationId, locationId, recipient, contactId, messageType, body, connection } = ctx
 
@@ -263,6 +294,9 @@ async function runChannelAgentInner(db, adapter, ctx) {
   // already includes the burst), so nothing is lost.
   const claimed = await claimAgentTurn(db, adapter, conversationId)
   if (!claimed) return { handled: false, reason: 'in_flight' }
+  // AGENT-REARM.3 — remember when this turn began so we can tell, just before
+  // sending, whether a human took the thread over WHILE the model was thinking.
+  const turnStartIso = new Date().toISOString()
 
   // The agent WILL run a turn now — let the channel show read + typing while
   // Claude thinks. Best-effort; never blocks or fails the turn.
@@ -527,6 +561,18 @@ async function runChannelAgentInner(db, adapter, ctx) {
 
     const parsed = parseAgentResponse(modelText)
     const common = { conversationId, locationId, recipient, contactId, connection }
+
+    // AGENT-REARM.3 — a human may have TAKEN OVER while the model was
+    // generating (Aisling Fagan 2026-07-13: Garrett's inbox takeover and Mia's
+    // reply left in the same second, so the customer saw two contradictory
+    // UN1T messages). The turn's gating ran seconds earlier, before the
+    // takeover landed. Re-check the live takeover state now and drop Mia's
+    // now-stale message — reply OR holding — rather than talking over the
+    // human. Shrinks the collision window from the whole generation time to a
+    // sub-second read; a genuine simultaneous tie is still possible but rare.
+    if (await humanTookOverDuringTurn(db, adapter, conversationId, turnStartIso)) {
+      return { handled: false, reason: 'human_took_over' }
+    }
 
     if (parsed.action === 'handoff') {
       await handoff(db, adapter, { ...common, reason: parsed.reason, settings })
