@@ -17,6 +17,8 @@ import {
   resolveRearmPatch,
   manualTakeoverPatch,
   resolveAgentEffort,
+  shouldNotifyAgentActivity,
+  AGENT_ACTIVITY_DEBOUNCE_MS,
 } from './core'
 import { HANDOFF_PREFIX, OPTIONS_PREFIX } from './prompt'
 
@@ -168,6 +170,29 @@ describe('formatHistoryForClaude', () => {
     // last 4 rows: m26(in) m27(out) m28(in) m29(out)
     expect(out[0]).toEqual({ role: 'user', content: 'm26' })
     expect(out.length).toBe(4)
+  })
+})
+
+describe('shouldNotifyAgentActivity (AGENT-ACTIVITY.1 debounce)', () => {
+  const now = new Date('2026-07-13T15:00:00Z')
+  it('notifies when never notified before', () => {
+    expect(shouldNotifyAgentActivity(null, now)).toBe(true)
+    expect(shouldNotifyAgentActivity(undefined, now)).toBe(true)
+  })
+  it('stays quiet inside the debounce window', () => {
+    const fiveMinAgo = new Date(now.getTime() - 5 * 60_000).toISOString()
+    expect(shouldNotifyAgentActivity(fiveMinAgo, now)).toBe(false)
+  })
+  it('notifies again once the window has passed', () => {
+    const sixteenMinAgo = new Date(now.getTime() - 16 * 60_000).toISOString()
+    expect(shouldNotifyAgentActivity(sixteenMinAgo, now)).toBe(true)
+    // exactly at the boundary counts as elapsed
+    const exactly = new Date(now.getTime() - AGENT_ACTIVITY_DEBOUNCE_MS).toISOString()
+    expect(shouldNotifyAgentActivity(exactly, now)).toBe(true)
+  })
+  it('accepts a Date and treats an unparseable value as "notify"', () => {
+    expect(shouldNotifyAgentActivity(new Date(now.getTime() - 60_000), now)).toBe(false)
+    expect(shouldNotifyAgentActivity('not-a-date', now)).toBe(true)
   })
 })
 

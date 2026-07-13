@@ -337,6 +337,27 @@ const OPTIONS_RE = looseSentinel(OPTIONS_PREFIX)
 // markup into the customer text or a button label.
 const SENTINEL_WRAP = /^[\s*_`~]+|[\s*_`~]+$/g
 
+// AGENT-ACTIVITY.1 — "customer is chatting with Mia" staff ping is debounced to
+// once per active chat: after we notify, stay quiet until this long has passed
+// with the conversation still live. One ping per burst, not per message.
+export const AGENT_ACTIVITY_DEBOUNCE_MS = 15 * 60_000
+
+/**
+ * Should we send the agent-activity ping for this conversation now? True when
+ * we've never pinged, or the last ping is older than the debounce window.
+ * Pure — the caller stamps agent_activity_notified_at on a true result.
+ * @param {string|Date|null} lastNotifiedAt
+ * @param {Date} [now]
+ * @param {number} [windowMs]
+ */
+export function shouldNotifyAgentActivity(lastNotifiedAt, now = new Date(), windowMs = AGENT_ACTIVITY_DEBOUNCE_MS) {
+  if (!lastNotifiedAt) return true
+  const last = lastNotifiedAt instanceof Date ? lastNotifiedAt : new Date(lastNotifiedAt)
+  const t = last.getTime()
+  if (!Number.isFinite(t)) return true
+  return now.getTime() - t >= windowMs
+}
+
 export function parseAgentResponse(raw) {
   let text = String(raw || '').trim()
   // Detect the sentinel ANYWHERE, not just at the start — if the model

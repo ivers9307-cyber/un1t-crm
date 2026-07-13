@@ -21,7 +21,7 @@
 
 import { sendTextMessage, sendInteractiveOptions, sendTypingIndicator, sendCtaUrlMessage, splitTrailingUrl } from '@/lib/whatsapp'
 import { dublinTodayStr } from '@/lib/dublin-time'
-import { sendPushToRolesAtLocation } from '@/lib/push'
+import { sendPushToRolesAtLocation, sendPushToInboxStaffAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { buildCachedSystem } from './prompt'
 import { getLocationBranding } from '@/lib/location-branding'
@@ -35,6 +35,7 @@ import {
   DEFAULT_HOLDING_MESSAGE,
   resolveAutoVerify,
   resolveActingContactId,
+  shouldNotifyAgentActivity,
 } from './core'
 import { personGroupResolver } from '@/lib/person-links'
 import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account-tools'
@@ -208,7 +209,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
   // Conversation state: kill switch + linked contact + verification.
   const nameCol = adapter.nameColumn
   const { data: conv } = await db.from(adapter.conversationsTable)
-    .select(`agent_active, agent_handed_off_at, contact_id, agent_verified_contact_id, agent_verified_at, agent_last_reply_at${nameCol ? `, ${nameCol}` : ''}`)
+    .select(`agent_active, agent_handed_off_at, contact_id, agent_verified_contact_id, agent_verified_at, agent_last_reply_at, agent_activity_notified_at${nameCol ? `, ${nameCol}` : ''}`)
     .eq('id', conversationId)
     .single()
 
@@ -535,6 +536,29 @@ async function runChannelAgentInner(db, adapter, ctx) {
 
     const sent = await sendAndLog(db, adapter, { ...common, text: parsed.text, options: parsed.options, settings })
     if (!sent) return { handled: false, reason: 'send_failed' }
+
+    // AGENT-ACTIVITY.1 — let inbox staff know a customer is chatting with Mia,
+    // so an agent-handled thread isn't invisible on their phone. Debounced to
+    // once per active chat; fire-and-forget so it never blocks the reply. The
+    // webhook suppresses its generic per-message push when the agent engages,
+    // so this REPLACES that ping (rather than doubling up) for agent chats.
+    try {
+      if (shouldNotifyAgentActivity(conv?.agent_activity_notified_at)) {
+        await db.from(adapter.conversationsTable)
+          .update({ agent_activity_notified_at: new Date().toISOString() })
+          .eq('id', conversationId)
+        const who = (nameCol && conv?.[nameCol]) || 'A customer'
+        await sendPushToInboxStaffAtLocation(locationId, {
+          title: `${adapter.label} · ${who} is chatting with Mia`,
+          body: 'The AI assistant is handling this conversation. Tap to view.',
+          category: 'agent_activity',
+          data: { type: 'agent_activity', conversation_id: conversationId, channel: adapter.name },
+        })
+      }
+    } catch (err) {
+      console.error(`[radar-agent] ${adapter.name} agent-activity push failed`, err?.message)
+    }
+
     return { handled: true, action: 'reply', lastInboundSeenIso }
   } finally {
     await releaseAgentTurn(db, adapter, conversationId)

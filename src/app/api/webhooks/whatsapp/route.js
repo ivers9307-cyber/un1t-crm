@@ -424,54 +424,18 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
     }
   }
 
-  // Push notification fan-out for inbound WhatsApp.
-  //   - If the conversation is assigned to a specific user, push to them.
-  //   - Otherwise push to owners + managers + head coaches at the location.
-  // Per-user opt-in is gated by permissions.mobile.notify_whatsapp inside
-  // sendPush(). Best-effort — never throw out of the webhook handler.
-  try {
-    const { data: conv } = await db.from('whatsapp_conversations')
-      .select('assigned_to, location_id, contacts!contact_id(name, first_name, wa_profile_name)')
-      .eq('id', conversationId)
-      .single()
-    const senderLabel = conv?.contacts?.name
-      || conv?.contacts?.first_name
-      || conv?.contacts?.wa_profile_name
-      || senderName
-      || 'a contact'
-    const preview = body?.substring(0, 140) || `[${messageType}]`
-    const payload = {
-      title: `WhatsApp · ${senderLabel}`,
-      body: preview,
-      category: 'whatsapp',
-      data: {
-        type: 'whatsapp_inbound',
-        conversation_id: conversationId,
-      },
-    }
-    if (conv?.assigned_to) {
-      await sendPush([conv.assigned_to], payload, { locationId: conv.location_id })
-    } else if (conv?.location_id) {
-      await sendPushToRolesAtLocation(
-        conv.location_id,
-        MANAGER_ROLES,
-        payload
-      )
-    }
-  } catch (err) {
-    console.error('[whatsapp webhook] push failed', err)
-  }
-
-  // RADAR-AGENT.0 — customer-agent auto-reply. Gated OFF by default
-  // (locations.settings.customer_agent) + test-mode allow-list; runs
-  // only on text messages and never throws out of the webhook.
+  // RADAR-AGENT.0 — run the customer agent FIRST so we know whether it engaged
+  // this message, then decide the inbound push. Gated OFF by default
+  // (locations.settings.customer_agent) + test-mode allow-list; runs only on
+  // text messages and never throws out of the webhook.
   // C2 — request_welcome (a chat opened without typing) must NOT reach the
-  // agent: shouldAgentReply would treat it as an unsupported type and send
-  // the soft-handoff acknowledgement to someone who hasn't said anything.
-  // The open-event gets the instant greeting below instead.
+  // agent: shouldAgentReply would treat it as an unsupported type and send the
+  // soft-handoff acknowledgement to someone who hasn't said anything. The
+  // open-event gets the instant greeting below instead.
+  let agentResult = null
   if (messageType !== 'request_welcome') {
     try {
-      await maybeAutoReply(db, {
+      agentResult = await maybeAutoReply(db, {
         conversationId,
         locationId,
         senderPhone,
@@ -482,6 +446,51 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
       })
     } catch (err) {
       console.error('[whatsapp webhook] agent auto-reply failed', err?.message)
+    }
+  }
+
+  // Push notification fan-out for inbound WhatsApp.
+  //   - If the conversation is assigned to a specific user, push to them.
+  //   - Otherwise push to owners + managers + head coaches at the location.
+  // Per-user opt-in is gated by permissions.mobile.notify_whatsapp inside
+  // sendPush(). Best-effort — never throw out of the webhook handler.
+  // AGENT-ACTIVITY.1 — when the agent engaged (replied or handed off) it emits
+  // its own debounced "chatting with Mia" ping to inbox staff, so SKIP this
+  // generic per-message manager push to avoid double-notifying.
+  const agentEngaged = agentResult?.handled === true &&
+    ['reply', 'handoff', 'soft_handoff'].includes(agentResult.action)
+  if (!agentEngaged) {
+    try {
+      const { data: conv } = await db.from('whatsapp_conversations')
+        .select('assigned_to, location_id, contacts!contact_id(name, first_name, wa_profile_name)')
+        .eq('id', conversationId)
+        .single()
+      const senderLabel = conv?.contacts?.name
+        || conv?.contacts?.first_name
+        || conv?.contacts?.wa_profile_name
+        || senderName
+        || 'a contact'
+      const preview = body?.substring(0, 140) || `[${messageType}]`
+      const payload = {
+        title: `WhatsApp · ${senderLabel}`,
+        body: preview,
+        category: 'whatsapp',
+        data: {
+          type: 'whatsapp_inbound',
+          conversation_id: conversationId,
+        },
+      }
+      if (conv?.assigned_to) {
+        await sendPush([conv.assigned_to], payload, { locationId: conv.location_id })
+      } else if (conv?.location_id) {
+        await sendPushToRolesAtLocation(
+          conv.location_id,
+          MANAGER_ROLES,
+          payload
+        )
+      }
+    } catch (err) {
+      console.error('[whatsapp webhook] push failed', err)
     }
   }
 

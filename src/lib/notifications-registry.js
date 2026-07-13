@@ -111,6 +111,15 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     fallbackEmail: false,
   },
   {
+    category: 'agent_activity',
+    label: 'Mia is handling a chat',
+    description: 'One quiet ping when the AI agent (Mia) is handling a live customer conversation, debounced to once per active chat. Also requires the WhatsApp Inbox permission. Replaces the per-message inbound ping while the agent is on the thread.',
+    trigger: { kind: 'webhook', source: 'Agent orchestrator (auto-reply.js) → WhatsApp + Instagram' },
+    recipients: { kind: 'roles_at_location', detail: 'All users with whatsapp (inbox) permission at the location' },
+    configurable: { leadTimes: false, roles: false },
+    fallbackEmail: false,
+  },
+  {
     category: 'invoice_approved',
     label: 'Invoice approved',
     description: 'Contractor invoice has been approved for payment.',

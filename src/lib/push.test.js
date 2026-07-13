@@ -140,6 +140,26 @@ describe('sendPush — permission filtering (reads profile_locations, mig 058)',
     expect(global.fetch).toHaveBeenCalledOnce()
   })
 
+  it('requireMobileKey gates on an extra capability (AGENT-ACTIVITY.1 inbox access) beyond the category', async () => {
+    // Category flag on, but no WhatsApp inbox access → no "chatting with Mia" ping.
+    fakeProfiles = [{ id: 'a', active: true }]
+    fakeLinks = [{ profile_id: 'a', location_id: 'loc1', role: 'owner', permissions: { mobile: { push_notifications: true, notify_agent_activity: true, whatsapp: false } } }]
+    fakeTokens = [{ id: 't1', user_id: 'a', expo_push_token: 'ExponentPushToken[x]' }]
+
+    const result = await sendPush(['a'], { title: 't', body: 'b', category: 'agent_activity' }, { requireMobileKey: 'whatsapp' })
+    expect(result.sent).toBe(0)
+    expect(result.skipped).toBe(1)
+  })
+
+  it('requireMobileKey allows a user who holds the capability', async () => {
+    fakeProfiles = [{ id: 'a', active: true }]
+    fakeLinks = [{ profile_id: 'a', location_id: 'loc1', role: 'owner', permissions: { mobile: { push_notifications: true, notify_agent_activity: true, whatsapp: true } } }]
+    fakeTokens = [{ id: 't1', user_id: 'a', expo_push_token: 'ExponentPushToken[x]' }]
+
+    const result = await sendPush(['a'], { title: 't', body: 'b', category: 'agent_activity' }, { requireMobileKey: 'whatsapp' })
+    expect(result.sent).toBe(1)
+  })
+
   it('missing keys resolve to the ROLE default (owner: notify_lead defaults on → send)', async () => {
     // PERM-AUDIT.3 — a SPARSE blob (no explicit keys) falls through
     // to the role code default instead of the old "missing = send".

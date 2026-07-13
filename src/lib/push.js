@@ -211,6 +211,9 @@ export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
     }
     if (gateLinks.some(l => !resolves(l, 'push_notifications'))) continue
     if (category && gateLinks.some(l => !resolves(l, `notify_${category}`))) continue
+    // Optional capability gate — e.g. only staff who actually hold the mobile
+    // WhatsApp Inbox permission should get "Mia is handling a chat" pings.
+    if (opts.requireMobileKey && gateLinks.some(l => !resolves(l, opts.requireMobileKey))) continue
     allowed.add(id)
   }
   return allowed
@@ -237,6 +240,9 @@ export async function resolvePushAllowedIds(db, ids, category, opts = {}) {
  * @param {string} [opts.locationId]  The location this notification belongs
  *                                    to — makes the per-category opt-out
  *                                    per-location (PUSH-LOC.1).
+ * @param {string} [opts.requireMobileKey]  Extra mobile-permission capability
+ *                                    the recipient must hold (e.g. 'whatsapp'
+ *                                    inbox access) on top of the category gate.
  *
  * @returns {Promise<{sent:number, skipped:number, invalidated:number, failed:number}>}
  */
@@ -252,7 +258,7 @@ export async function sendPush(userIds, payload, opts = {}) {
   // immediately be filtered out anyway.
   // Per-category opt-out lives on profile_locations.permissions (mig 058);
   // profiles.permissions is stale and must NOT be read here.
-  const allowedSet = await resolvePushAllowedIds(db, ids, payload.category, { locationId: opts.locationId })
+  const allowedSet = await resolvePushAllowedIds(db, ids, payload.category, { locationId: opts.locationId, requireMobileKey: opts.requireMobileKey })
   const allowedIds = ids.filter(id => allowedSet.has(id))
   let skipped = ids.length - allowedIds.length
 
@@ -377,4 +383,34 @@ export async function sendPushToRolesAtLocation(locationId, roles, payload) {
   // per-category opt-out is judged at THIS location, not any other
   // assignment the recipient happens to hold.
   return sendPush(ids, payload, { locationId })
+}
+
+/**
+ * Every active profile linked to a location (any role). Candidate set for a
+ * fan-out that is then narrowed by a capability gate (e.g. inbox access) +
+ * the per-category opt-out inside sendPush.
+ */
+export async function resolveLocationMemberIds(db, locationId) {
+  if (!locationId) return []
+  const { data: links } = await db
+    .from('profile_locations')
+    .select('profile_id, profiles!inner(id, active)')
+    .eq('location_id', locationId)
+  return (links || []).filter(l => l.profiles?.active).map(l => l.profile_id)
+}
+
+/**
+ * Convenience: notify everyone with WhatsApp INBOX access at a location —
+ * i.e. anyone who can actually open the thread on their phone (the mobile
+ * `whatsapp` permission), not just managers. Used for the "Mia is handling a
+ * chat" agent-activity ping. Category opt-out + master switch still apply.
+ *
+ * @param {string} locationId
+ * @param {object} payload   Same shape as sendPush() (set payload.category)
+ */
+export async function sendPushToInboxStaffAtLocation(locationId, payload) {
+  const db = createServerClient()
+  const ids = await resolveLocationMemberIds(db, locationId)
+  if (!ids.length) return { sent: 0, skipped: 0, invalidated: 0, failed: 0 }
+  return sendPush(ids, payload, { locationId, requireMobileKey: 'whatsapp' })
 }
