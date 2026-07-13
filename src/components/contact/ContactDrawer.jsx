@@ -29,6 +29,22 @@ const TONE_CHIP = {
   warn: 'bg-amber-500/10 text-amber-700',
 }
 
+// Compact label/value row for the key-details card. Rows with no value
+// drop out rather than render a dash — the drawer is a summary.
+function DetailRow({ label, value, href = null }) {
+  if (!value) return null
+  return (
+    <div className="flex justify-between gap-3 text-xs">
+      <span className="text-un1t-subtle shrink-0">{label}</span>
+      {href ? (
+        <a href={href} className="font-medium text-un1t-text truncate hover:underline">{value}</a>
+      ) : (
+        <span className="font-medium text-un1t-text truncate text-right">{value}</span>
+      )}
+    </div>
+  )
+}
+
 export default function ContactDrawer({ contactId, columnContactIds = [], locationId, onNavigate, onClose }) {
   const [bundle, setBundle] = useState(null)
   const [error, setError] = useState(null)
@@ -75,12 +91,17 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
   const timeline = bundle ? mergeTimeline(bundle.notes, activities) : []
   // next_class_at is derived (not a contacts column) — same helper the
   // pipeline page uses server-side.
+  const nextClassAt = contact ? nextBookedClass(contact.recent_bookings) : null
   const attention = contact
     ? deriveNeedsAttention({
-        contact: { ...contact, next_class_at: nextBookedClass(contact.recent_bookings) },
+        contact: { ...contact, next_class_at: nextClassAt },
         openTasks,
       })
     : []
+  // Funnel stages carry the credits / next-class chips (DealCard's set).
+  const funnel = contact
+    ? ['new_lead', 'first_class', 'second_class', 'trial_done'].includes(contact.pipeline_stage_slug)
+    : false
 
   return (
     <>
@@ -99,18 +120,31 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
         <div className="flex items-start gap-2 p-4 border-b border-un1t-border">
           <div className="flex-1 min-w-0">
             {contact ? (
-              <PersonHeader
-                name={contact.name}
-                stageSlug={contact.pipeline_stage_slug}
-                linkedCount={1}
-              >
-                <PersonActionBar
-                  contactId={contact.id}
-                  locationId={locationId}
-                  actions={['task', 'sequence', 'cold']}
-                  isCold={contact.pipeline_stage_slug === 'cold_lead'}
-                />
-              </PersonHeader>
+              <>
+                <PersonHeader
+                  name={contact.name}
+                  stageSlug={contact.pipeline_stage_slug}
+                  linkedCount={1}
+                >
+                  <PersonActionBar
+                    contactId={contact.id}
+                    locationId={locationId}
+                    actions={['task', 'sequence', 'cold']}
+                    isCold={contact.pipeline_stage_slug === 'cold_lead'}
+                  />
+                </PersonHeader>
+                {/* Contact line — phone + email at a glance, clickable. */}
+                <p className="text-xs text-un1t-subtle mt-1.5 truncate">
+                  {contact.phone && (
+                    <a href={`tel:${contact.phone}`} className="hover:text-un1t-text hover:underline">{contact.phone}</a>
+                  )}
+                  {contact.phone && contact.email && ' · '}
+                  {contact.email && (
+                    <a href={`mailto:${contact.email}`} className="hover:text-un1t-text hover:underline">{contact.email}</a>
+                  )}
+                  {!contact.phone && !contact.email && 'No contact details'}
+                </p>
+              </>
             ) : (
               <div className="h-12 flex items-center text-sm text-un1t-muted">
                 {error || 'Loading…'}
@@ -137,8 +171,8 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
 
           {contact && (
             <>
-              {/* Needs attention */}
-              {attention.length > 0 && (
+              {/* Status chips — needs-attention + funnel context. */}
+              {(attention.length > 0 || (funnel && (nextClassAt || contact.trial_credits_remaining != null))) && (
                 <div className="flex flex-wrap gap-1.5">
                   {attention.map((a) => (
                     <span
@@ -149,8 +183,32 @@ export default function ContactDrawer({ contactId, columnContactIds = [], locati
                       {a.label}
                     </span>
                   ))}
+                  {funnel && nextClassAt && (
+                    <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700">
+                      Next: {new Date(nextClassAt).toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Europe/Dublin' })}
+                    </span>
+                  )}
+                  {funnel && contact.trial_credits_remaining != null && (
+                    <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-700">
+                      {contact.trial_credits_remaining} credit{contact.trial_credits_remaining === 1 ? '' : 's'}
+                    </span>
+                  )}
                 </div>
               )}
+
+              {/* Key details — the who-is-this facts without leaving the board. */}
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-3 space-y-1">
+                <DetailRow label="Phone" value={contact.phone} href={contact.phone ? `tel:${contact.phone}` : null} />
+                <DetailRow label="Email" value={contact.email} href={contact.email ? `mailto:${contact.email}` : null} />
+                {contact.wa_phone && contact.wa_phone !== contact.phone && (
+                  <DetailRow label="WhatsApp" value={contact.wa_phone} />
+                )}
+                <DetailRow label="Source" value={contact.lead_source || contact.source} />
+                <DetailRow label="Created" value={contact.created_at ? new Date(contact.created_at).toLocaleDateString('en-IE') : null} />
+                {contact.glofox_membership_plan && (
+                  <DetailRow label="Membership" value={contact.glofox_membership_plan} />
+                )}
+              </div>
 
               <ContactComposer
                 contactId={contact.id}
