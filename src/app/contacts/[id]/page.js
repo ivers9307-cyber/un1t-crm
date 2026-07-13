@@ -2,7 +2,7 @@ import { createServerClient } from '@/lib/supabase'
 import { matchCatalogToPlan } from '@/lib/glofox-catalog'
 import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Mail, Phone, MessageSquare, CheckSquare, Clock, MessageCircle } from 'lucide-react'
+import { ArrowLeft, Mail, MessageSquare, MessageCircle } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { canViewContact } from '@/lib/contact-crossovers'
@@ -11,29 +11,24 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { classifyContact, scoreMember } from '@/lib/churn-radar'
 import { loadContactArrears } from '@/lib/churn-radar-data'
 import { loadContactJourney } from '@/lib/onboarding-journey-data'
+import { nextBookedClass } from '@/lib/pipeline-classifier'
 import ContactActions from '@/components/ContactActions'
 import ContactComposer from '@/components/ContactComposer'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import StartWhatsAppButton from '@/components/StartWhatsAppButton'
-import ContactRaceHistory from '@/components/ContactRaceHistory'
-import ContactEditDeleteActions from '@/components/ContactEditDeleteActions'
-import InviteToAppButton from '@/components/InviteToAppButton'
-import MemberPasswordOverrideButton from '@/components/MemberPasswordOverrideButton'
-import ContactDevicesCard from '@/components/ContactDevicesCard'
-import ContactMarketingPreferencesCard from '@/components/ContactMarketingPreferencesCard'
 import ContactConsentHistoryCard from '@/components/ContactConsentHistoryCard'
-import GlofoxProfileCard from '@/components/contact/GlofoxProfileCard'
-import { relativeTime, formatMoney, formatTime } from '@/components/contact/format'
 // PERSON-LINK.1 — unified person identity view (mig 270 tables).
 import { getPersonGroup } from '@/lib/person-links'
 import { aggregatePerson } from '@/lib/person-aggregate'
-import PersonHeader from '@/components/PersonHeader'
-import PersonActionBar from '@/components/PersonActionBar'
-import LinkedAccountsCard from '@/components/LinkedAccountsCard'
-import ContactDetailTabs from '@/components/ContactDetailTabs'
+// CC.2 — command-centre sections (shared with the pipeline drawer where
+// noted on each component).
+import ContactHeaderBand from '@/components/contact/ContactHeaderBand'
+import ContactWhoRail from '@/components/contact/ContactWhoRail'
+import ContactNextRail from '@/components/contact/ContactNextRail'
 import ContactTimeline from '@/components/contact/ContactTimeline'
-import { mergeTimeline } from '@/lib/contact-view'
-import { formatLastSeen } from '@/lib/person-view'
+import { PastEventsCard } from '@/components/contact/EventRegistrationsCards'
+import { relativeTime } from '@/components/contact/format'
+import { mergeTimeline, deriveNeedsAttention } from '@/lib/contact-view'
 // CONSULTATIONS SP1 — coach/web surface (mig 272 tables), permission-gated.
 import ContactGoalsCard from '@/components/ContactGoalsCard'
 import ConsultationsList from '@/components/ConsultationsList'
@@ -47,24 +42,6 @@ export const dynamic = 'force-dynamic'
 // (grouped person / single contact) moved to
 // src/components/contact/ContactTimeline.jsx, shared with the pipeline
 // contact drawer.
-
-// PULSE-90.4 — first-90-days journey status chips. Light-theme contrast
-// recipe (bg-<c>-500/10 text-<c>-700 — never the -300/-400 ramp): on_track +
-// completed emerald, behind amber, at_risk red, expired neutral grey.
-const PULSE_STATUS_CHIP = {
-  on_track:  'bg-emerald-500/10 text-emerald-700',
-  completed: 'bg-emerald-500/10 text-emerald-700',
-  behind:    'bg-amber-500/10 text-amber-700',
-  at_risk:   'bg-red-500/10 text-red-700',
-  expired:   'bg-gray-500/10 text-gray-600',
-}
-const PULSE_STATUS_LABEL = {
-  on_track:  'On track',
-  completed: 'Completed',
-  behind:    'Behind',
-  at_risk:   'At risk',
-  expired:   'Window over',
-}
 
 export default async function ContactDetailPage(props) {
   const params = await props.params;
@@ -305,17 +282,6 @@ export default async function ContactDetailPage(props) {
   // (DRAWER.1 — the merge moved to contact-view so the drawer shares it).
   const timeline = mergeTimeline(notes, activities)
 
-  // Note: the pipeline_stage_slug pill is now rendered by <PersonHeader>
-  // (its own STAGE_PILL map, on the -700 light-theme ramp) — the old
-  // local `statusColors` map this page kept was removed with the rewire.
-
-  const bookingStatusColors = {
-    confirmed: 'bg-blue-500/20 text-blue-700',
-    completed: 'bg-green-500/20 text-green-700',
-    cancelled: 'bg-red-500/20 text-red-700',
-    no_show: 'bg-yellow-500/20 text-yellow-700',
-  }
-
   // PERSON-LINK.1 — at-a-glance lifetime metrics. Prefer the unified
   // person aggregate when the contact is grouped, else fall back to the
   // single-contact figures the page already loaded.
@@ -344,508 +310,197 @@ export default async function ContactDetailPage(props) {
         .filter((v, i, arr) => arr.indexOf(v) === i)
         .map((v) => ({ value: v, sourceContactId: contact.id }))
 
-  // ── Tab content ──────────────────────────────────────────────────────────
+  // CC.2 — forward-looking derivations for the header chips + next
+  // rail. next_class_at is derived (not a contacts column) — the same
+  // helper the pipeline page uses server-side.
+  const openTasks = activities.filter(a => a.kind === 'task' && !a.done)
+  const nextClassAt = nextBookedClass(contact.recent_bookings)
+  const attention = deriveNeedsAttention({
+    contact: { ...contact, next_class_at: nextClassAt },
+    arrearsCents: metricArrearsCents || 0,
+    openTasks,
+    todayStr: today,
+  })
 
-  const overviewTab = (
-    <div className="space-y-5">
-      {/* PERSON-LINK.1 — linked accounts (or "not linked" CTA when single). */}
-      <LinkedAccountsCard person={person} contactId={contact.id} locationId={contact.location_id} />
-
-      {/* Identity — emails + phones (deduped across the group when linked). */}
-      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-1">Identity</h3>
-        <div className="space-y-1.5">
-          {identityEmails.length === 0 && identityPhones.length === 0 && (
-            <p className="text-sm text-un1t-muted">No contact details</p>
-          )}
-          {identityEmails.map((e) => (
-            <div key={`em-${e.value}`} className="flex items-center gap-2 text-sm text-un1t-text">
-              <Mail size={14} className="text-un1t-subtle shrink-0" />
-              <span className="truncate">{e.value}</span>
-              {e.contactable === false && (
-                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-700">
-                  Not contactable
-                </span>
-              )}
-            </div>
-          ))}
-          {identityPhones.map((p) => (
-            <div key={`ph-${p.value}`} className="flex items-center gap-2 text-sm text-un1t-text">
-              <Phone size={14} className="text-un1t-subtle shrink-0" />
-              <span className="truncate">{p.value}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Key metrics — lifetime value / arrears / attended (30d) / deals.
-          Uses the person aggregate when grouped, single-contact figures
-          otherwise. */}
-      <div className="grid grid-cols-2 gap-3">
-        <MetricCard label="Lifetime value" value={formatMoney(ltvCents, contact.lifetime_currency) || '—'} />
-        <MetricCard
-          label="Arrears"
-          value={metricArrearsCents != null ? (formatMoney(metricArrearsCents, contact.lifetime_currency) || '—') : '—'}
-          tone={metricArrearsCents > 0 ? 'danger' : 'default'}
-        />
-        <MetricCard label="Attended (30d)" value={metricAttended} />
-        <MetricCard label="Deals" value={metricDeals} />
-      </div>
-
-      {/* PERSON-LINK.1 (activity-aware) — combined last attended.
-          When grouped, shows the MAX last_attended_at across all accounts
-          so a ClassPass-active person with a dormant primary doesn't look
-          quiet. For ungrouped contacts falls back to the contact's own
-          field. Hidden when both are null (no attendance data at all). */}
-      {(person?.lastAttendedAt || contact.last_attended_at) && (
-        <p className="text-xs text-un1t-subtle px-1">
-          Last attended: <span className="font-medium text-un1t-text">
-            {formatLastSeen(person ? person.lastAttendedAt : contact.last_attended_at)}
-          </span>
-          {person && person.accounts.length > 1 && (
-            <span className="text-un1t-muted"> (across all accounts)</span>
-          )}
-        </p>
-      )}
-
-      {/* PULSE-90.4 — first-90-days journey. Compact block shown while a
-          member is inside their onboarding window (guarded on inWindow, so a
-          finisher's block clears once the window ends rather than reading
-          "Day 50/42"). Day X / windowDays, attended / target, and a status
-          chip on the light-theme contrast ramp (bg-<c>-500/10 text-<c>-700).
-          The full lane + "Log touch" live on /pulse. */}
-      {journey?.inWindow && (
-        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">First 90 days</h3>
-            <span className={`inline-block text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${PULSE_STATUS_CHIP[journey.status] || 'bg-gray-500/10 text-gray-600'}`}>
-              {PULSE_STATUS_LABEL[journey.status] || journey.status}
-            </span>
-          </div>
-          <div className="flex items-center gap-6 text-sm">
-            <div>
-              <div className="text-un1t-muted text-[11px] uppercase tracking-wider">Day</div>
-              <div className="text-un1t-text font-medium">{journey.dayIndex}/{journey.windowDays}</div>
-            </div>
-            <div>
-              <div className="text-un1t-muted text-[11px] uppercase tracking-wider">Classes</div>
-              <div className="text-un1t-text font-medium">{journey.attended}/{journey.target}</div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Info Card. GLOFOX2.9 — Glofox-specific fields (credits,
-          glofox_member_id) moved to the dedicated Glofox Profile
-          card below. This card now only carries CRM-native
-          identifiers. */}
-      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 space-y-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-2">Details</h3>
-        <InfoRow label="Source" value={contact.lead_source || contact.source} />
-        <InfoRow label="Label" value={contact.label || '—'} />
-        <InfoRow label="Created" value={new Date(contact.created_at).toLocaleDateString('en-IE')} />
-      </div>
-
-      {/* GLOFOX2.9 — consolidated Glofox Profile card. Always
-          rendered because every CRM contact should also exist in
-          Glofox under the bidirectional-sync model (Glofox is
-          source of truth for users). When not yet linked
-          (glofox_member_id null), the card shows a "not yet
-          synced" empty state instead of being hidden. */}
-      <GlofoxProfileCard contact={contact} />
-
-      {/* CHURN-CONTACT.1 — Active sequences: what's queued to happen
-          next. The timeline (Activity tab) shows what already happened;
-          this shows what's coming, so you can see (and not double-enrol)
-          an automation already running for this contact. */}
-      {activeSequences && activeSequences.length > 0 && (
-        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3 flex items-center gap-1.5">
-            <Clock size={12} /> Active sequences
-          </h3>
-          {activeSequences.map((s) => (
-            <div key={s.id} className="flex items-center justify-between py-2 border-b border-un1t-border last:border-0">
-              <span className="text-sm">{s.email_sequences?.name || 'Sequence'}</span>
-              <span className="text-xs text-un1t-muted whitespace-nowrap">
-                {s.next_step_at ? `next ${relativeTime(s.next_step_at)}` : 'queued'}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-
-  const activityTab = (
-    <div className="space-y-5">
-      {/* Timeline. PERSON-LINK.1 — when grouped, render the unified
-          cross-account timeline from the aggregate (tagged by source
-          account when there are multiple); otherwise the single
-          contact's notes + activities timeline the page already built. */}
-      <div className="bg-un1t-surface border border-un1t-border rounded-lg">
-        <div className="flex items-center justify-between p-4 border-b border-un1t-border">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Timeline</h3>
-          <ContactActions
-            contactId={contact.id}
-            locationId={contact.location_id}
-          />
-        </div>
-        <ContactTimeline timeline={timeline} person={person} />
-      </div>
-
-      {/* Deals */}
-      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Deals</h3>
-        {deals.length === 0 && <p className="text-sm text-un1t-muted">No deals</p>}
-        {deals.map(deal => (
-          <div key={deal.id} className="flex items-center justify-between py-2 border-b border-un1t-border last:border-0">
-            <span className="text-sm">{deal.title}</span>
-            <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: deal.pipeline_stages?.color + '30', color: deal.pipeline_stages?.color }}>
-              {deal.pipeline_stages?.name}
-            </span>
-          </div>
-        ))}
-      </div>
-
-      {/* CRM-native event registrations — workshops, masterclasses,
-          open days, races (the /events flow). Distinct from Glofox
-          class bookings which appear in the Glofox Profile card.
-          Only render when there's something to show (avoids
-          empty-state clutter for trial members). */}
-      {(upcomingBookings.length > 0 || pastBookings.length > 0) && (
-      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Upcoming event registrations</h3>
-        {upcomingBookings.length === 0 && <p className="text-sm text-un1t-muted">None</p>}
-        {upcomingBookings.map(b => (
-          <div key={b.id} className="flex items-start gap-3 py-2 border-b border-un1t-border last:border-0">
-            <div
-              className="w-1 h-8 rounded-full mt-0.5 shrink-0"
-              style={{ backgroundColor: b.event_types?.color || '#6B7280' }}
-            />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium">{b.event_types?.name || 'Event'}</p>
-              <p className="text-xs text-un1t-subtle mt-0.5">
-                {new Date(b.booking_date + 'T00:00:00').toLocaleDateString('en-IE', { weekday: 'short', day: 'numeric', month: 'short' })}
-                {' · '}
-                {formatTime(b.start_time)} — {formatTime(b.end_time)}
-              </p>
-            </div>
-            <span className={`text-xs px-2 py-0.5 rounded-full ${bookingStatusColors[b.status]}`}>
-              {b.status}
-            </span>
-          </div>
-        ))}
-      </div>
-      )}
-
-      {/* Race history (mig 086). Surfaces every race this contact
-          has competed in — captain or member — with team, wave,
-          and finish time. Always rendered; the component shows
-          a "no races yet" message when empty. */}
-      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Races</h3>
-        <ContactRaceHistory contactId={contact.id} />
-      </div>
-
-      {/* Past event registrations (CRM-native). */}
-      {pastBookings.length > 0 && (
-        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Past event registrations</h3>
-          {pastBookings.map(b => (
-            <div key={b.id} className="flex items-start gap-3 py-2 border-b border-un1t-border last:border-0 opacity-60">
-              <div
-                className="w-1 h-8 rounded-full mt-0.5 shrink-0"
-                style={{ backgroundColor: b.event_types?.color || '#6B7280' }}
-              />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm">{b.event_types?.name || 'Event'}</p>
-                <p className="text-xs text-un1t-subtle mt-0.5">
-                  {new Date(b.booking_date + 'T00:00:00').toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })}
-                  {' · '}
-                  {formatTime(b.start_time)}
-                </p>
-              </div>
-              <span className={`text-xs px-2 py-0.5 rounded-full ${bookingStatusColors[b.status]}`}>
-                {b.status}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Open tasks — manual to-dos only (mig 073).
-          Auto-logged events live on the timeline above. */}
-      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Open tasks</h3>
-        {activities.filter(a => a.kind === 'task' && !a.done).length === 0 && (
-          <p className="text-sm text-un1t-muted">No open tasks</p>
-        )}
-        {activities.filter(a => a.kind === 'task' && !a.done).map(a => (
-          <div key={a.id} className="flex items-start gap-2 py-2 border-b border-un1t-border last:border-0">
-            <CheckSquare size={14} className="text-un1t-muted mt-0.5 shrink-0" />
-            <div>
-              <p className="text-sm">{a.subject}</p>
-              {a.due_date && (
-                <p className="text-xs text-un1t-subtle flex items-center gap-1 mt-0.5">
-                  <Clock size={10} /> {a.due_date} {a.due_time ? formatTime(a.due_time) : ''}
-                </p>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-
-  const commsTab = (
-    <div className="space-y-5">
-      {/* Quick WhatsApp start action. */}
-      <div className="flex items-center gap-3">
-        <StartWhatsAppButton
-          contactId={contact.id}
-          contactPhone={contact.phone}
-          waPhone={contact.wa_phone}
-        />
-      </div>
-
-      {/* #message anchor — PersonActionBar's "Message" action deep-links
-          here (/contacts/[id]#message) so it lands on the composer. */}
-      <div id="message" className="scroll-mt-4">
-        <ContactComposer
-          contactId={contact.id}
-          contactName={contact.first_name || contact.name}
-          canWhatsApp={canWhatsApp}
-          canSms={canSms}
-          canEmail={canEmail}
-          hasWaPhone={!!(contact.wa_phone || contact.phone)}
-          hasPhone={!!contact.phone}
-          hasEmail={!!contact.email}
-          smsBlocked={!!(contact.sms_status && contact.sms_status !== 'active')}
-          emailBlocked={['bounced', 'complained', 'unsubscribed'].includes(contact.email_status)}
-          whatsappWindowOpen={whatsappWindowOpen}
-          whatsappWindowExpiresAt={latestWaConversation?.window_expires_at || null}
-          templates={composerTemplates}
-        />
-      </div>
-
-      {/* CONTACT-MSG.1 — Messages: what we've emailed / texted this
-          contact + whether it landed (delivered / opened / clicked /
-          bounced). Answers "what have we already tried?" without
-          leaving the page. */}
-      {messages.length > 0 && (
-        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3 flex items-center gap-1.5">
-            <Mail size={12} /> Messages
-          </h3>
-          {messages.map((m) => (
-            <div key={m.id} className="flex items-center justify-between gap-2 py-2 border-b border-un1t-border last:border-0">
-              <div className="flex items-center gap-2 min-w-0">
-                {m.channel === 'email'
-                  ? <Mail size={13} className="text-un1t-subtle shrink-0" />
-                  : <MessageSquare size={13} className="text-un1t-subtle shrink-0" />}
-                <span className="text-sm truncate">{m.label}</span>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span className={`px-2 py-0.5 rounded-full text-[11px] border ${m.status.cls}`}>{m.status.text}</span>
-                <span className="text-xs text-un1t-muted whitespace-nowrap">{relativeTime(m.at)}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* WhatsApp Conversations */}
-      {(waConversations.length > 0 || contact.wa_phone) && (
-        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3 flex items-center gap-1.5">
-            <MessageCircle size={12} /> WhatsApp
-          </h3>
-          {contact.wa_phone && (
-            <p className="text-xs text-un1t-muted mb-2">{contact.wa_phone}</p>
-          )}
-          {waConversations.length === 0 && <p className="text-sm text-un1t-muted">No conversations</p>}
-          {waConversations.map(conv => (
-            <Link
-              key={conv.id}
-              href="/whatsapp/inbox"
-              className="block py-2 border-b border-un1t-border last:border-0 hover:bg-un1t-border/20 -mx-1 px-1 rounded transition-colors"
-            >
-              <div className="flex items-center justify-between">
-                <p className="text-sm truncate flex-1">
-                  {conv.last_message_direction === 'outbound' && <span className="text-un1t-subtle">You: </span>}
-                  {conv.last_message_preview || 'No messages'}
-                </p>
-                {conv.unread_count > 0 && (
-                  <span className="bg-green-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center shrink-0 ml-2">
-                    {conv.unread_count}
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-un1t-muted mt-0.5">
-                {conv.last_message_at ? new Date(conv.last_message_at).toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
-              </p>
-            </Link>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-
-  const adminTab = (
-    <div className="space-y-5">
-      {/* Admin actions — edit / delete, app invite, password override.
-          Each keeps its existing permission gate. */}
-      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Actions</h3>
-        <div className="flex flex-wrap items-center gap-3">
-          {/* AUTH.1 — admin password override for members with a
-              linked CRM auth account. Master/owner only. Contacts
-              without a user_id link have no CRM login to reset, so
-              the button is hidden rather than shown disabled. */}
-          {contact.user_id && ['master', 'owner'].includes(user?.role) && (
-            <MemberPasswordOverrideButton
-              contactId={contact.id}
-              contactLabel={contact.name || contact.email || 'this contact'}
-            />
-          )}
-          <ContactEditDeleteActions
-            contact={contact}
-            canEdit={MANAGER_ROLES.includes(user?.role)}
-            // Per the Nov 2026 widening: head_coach / manager / owner /
-            // master can delete a contact (= MANAGER_ROLES). Same set
-            // as canEdit since both are equally reversible-impact —
-            // a wrongly-deleted contact is reconstructed from email
-            // + history just like a wrongly-edited one.
-            canDelete={MANAGER_ROLES.includes(user?.role)}
-          />
-          {/* Customer-facing app invite — owner/manager/master only.
-              The button copy adapts based on whether the contact is
-              already linked to an auth user (mig 110 contacts.user_id). */}
-          {(user?.isMaster || ['owner', 'manager'].includes(user?.role)) && contact.email && (
-            <InviteToAppButton
-              contactId={contact.id}
-              hasUserAccount={Boolean(contact.user_id)}
-            />
-          )}
-          {/* NB: "Create in Glofox" (CreateInGlofoxButton) is NOT duplicated
-              here — it already lives inside GlofoxProfileCard (Overview tab)
-              for unlinked contacts. Kept in one place to honour
-              "every component appears in exactly one tab". */}
-        </div>
-      </div>
-
-      {/* HR devices: chest strap MAC registry. Member or staff
-          register here; bridge auto-routes samples to bookings. */}
-      <ContactDevicesCard
-        contactId={contact.id}
-        canEdit={user?.isMaster || ['owner', 'manager', 'head_coach'].includes(user?.role)}
-      />
-
-      {/* CONSENT.1 — operator toggles for marketing email / SMS /
-          WhatsApp. Transactional sends stay on regardless. PATCH
-          path is master/owner only; everyone else sees the panel
-          read-only so they at least know the contact's status.
-          CONSENT.2 — passes glofox_membership_status so the card
-          can show the "Auto-unsubscribed (ClassPass policy)"
-          banner when relevant. */}
-      <ContactMarketingPreferencesCard
-        contactId={contact.id}
-        canEdit={user?.isMaster || ['owner'].includes(user?.role)}
-        glofoxMembershipStatus={contact.glofox_membership_status}
-      />
-
-      {/* CONSENT.3 — full-width consent history table. Collapsed by
-          default; lazy-loads on first expand so the contact page's
-          initial render isn't paying for it. The append-only
-          consent_log table is the audit source of truth — every
-          opt_in / opt_out from any path (preference centre, admin
-          panel, classpass auto-trigger, one-click unsubscribe)
-          writes a row. */}
-      <ContactConsentHistoryCard contactId={contact.id} />
-    </div>
-  )
+  // ── CC.2 — command-centre layout (tabs removed) ─────────────────────────
+  // One screen, three columns: who they are / what happened / what
+  // happens next. Consultations (permission-gated) + the consent-history
+  // audit table render full-width below the grid.
 
   return (
-    <div className="p-6 max-w-5xl">
+    <div className="p-6">
       {/* Back link */}
       <Link href="/contacts" className="inline-flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text mb-5">
         <ArrowLeft size={16} /> Contacts
       </Link>
 
-      {/* PERSON-LINK.1 — unified person header. Member photo (legacy)
-          alongside the PersonHeader strip (name + stage pill + linked
-          chip). The radar's at-risk signal rides in the actions slot.
-          linkedCount drives the "N linked accounts" chip. */}
-      <div className="flex items-start gap-4 mb-6">
-        {/* GLOFOX-PROFILE — member photo (mig 196 glofox_image_url).
-            Plain <img>: Glofox CDN URLs aren't whitelisted for
-            next/image and adding a remote pattern per third-party
-            host isn't worth it for one avatar. */}
-        {contact.glofox_image_url && (
-          <img
-            src={contact.glofox_image_url}
-            alt={contact.name || 'Member'}
-            className="w-16 h-16 rounded-full object-cover border border-un1t-border shrink-0"
+      <ContactHeaderBand
+        contact={contact}
+        person={person}
+        risk={risk}
+        journey={journey}
+        attention={attention}
+        nextClassAt={nextClassAt}
+        metrics={{
+          ltvCents,
+          arrearsCents: metricArrearsCents,
+          attended: metricAttended,
+          deals: metricDeals,
+          currency: contact.lifetime_currency,
+        }}
+      />
+
+      <div className="grid gap-5 items-start xl:grid-cols-[280px_minmax(0,1fr)_300px]">
+        {/* Who they are — stacks under the working column on small screens. */}
+        <div className="space-y-5 order-3 xl:order-1 min-w-0">
+          <ContactWhoRail
+            contact={contact}
+            person={person}
+            identityEmails={identityEmails}
+            identityPhones={identityPhones}
+            canEditPrefs={user?.isMaster || ['owner'].includes(user?.role)}
           />
-        )}
-        <div className="flex-1 min-w-0">
-          <PersonHeader
-            name={contact.name}
-            stageSlug={contact.pipeline_stage_slug}
-            linkedCount={person ? person.accounts.length : 1}
-          >
-            {/* CHURN-CONTACT.1 — the radar's at-risk signal, on the person. */}
-            {risk && (
-              <span title={risk.title} className={`px-3 py-1 rounded-full text-sm border ${risk.cls}`}>
-                {risk.label}
-              </span>
-            )}
-            {/* FUNNEL.4 — Message / Task / Sequence + the Cold toggle
-                (mark not-interested / return to pipeline). */}
-            <PersonActionBar
+        </div>
+
+        {/* What happened — composer on top of the unified timeline, so
+            reading history and acting on it live in one column. */}
+        <div className="space-y-5 order-1 xl:order-2 min-w-0">
+          {/* #message anchor — PersonActionBar's "Message" action
+              deep-links here (/contacts/[id]#message). */}
+          <div id="message" className="scroll-mt-4">
+            <ContactComposer
               contactId={contact.id}
-              locationId={contact.location_id}
-              actions={['message', 'task', 'sequence', 'cold']}
-              isCold={contact.pipeline_stage_slug === 'cold_lead'}
+              contactName={contact.first_name || contact.name}
+              canWhatsApp={canWhatsApp}
+              canSms={canSms}
+              canEmail={canEmail}
+              hasWaPhone={!!(contact.wa_phone || contact.phone)}
+              hasPhone={!!contact.phone}
+              hasEmail={!!contact.email}
+              smsBlocked={!!(contact.sms_status && contact.sms_status !== 'active')}
+              emailBlocked={['bounced', 'complained', 'unsubscribed'].includes(contact.email_status)}
+              whatsappWindowOpen={whatsappWindowOpen}
+              whatsappWindowExpiresAt={latestWaConversation?.window_expires_at || null}
+              templates={composerTemplates}
             />
-          </PersonHeader>
+          </div>
+
+          {/* Timeline. PERSON-LINK.1 — grouped contacts render the
+              cross-account aggregate, tagged by source account. */}
+          <div className="bg-un1t-surface border border-un1t-border rounded-lg">
+            <div className="flex items-center justify-between p-4 border-b border-un1t-border">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Timeline</h3>
+              <ContactActions
+                contactId={contact.id}
+                locationId={contact.location_id}
+              />
+            </div>
+            <ContactTimeline timeline={timeline} person={person} showFilters />
+          </div>
+
+          {/* CONTACT-MSG.1 — Messages: what we've emailed / texted this
+              contact + whether it landed. */}
+          {messages.length > 0 && (
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3 flex items-center gap-1.5">
+                <Mail size={12} /> Messages
+              </h3>
+              {messages.map((m) => (
+                <div key={m.id} className="flex items-center justify-between gap-2 py-2 border-b border-un1t-border last:border-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {m.channel === 'email'
+                      ? <Mail size={13} className="text-un1t-subtle shrink-0" />
+                      : <MessageSquare size={13} className="text-un1t-subtle shrink-0" />}
+                    <span className="text-sm truncate">{m.label}</span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className={`px-2 py-0.5 rounded-full text-[11px] border ${m.status.cls}`}>{m.status.text}</span>
+                    <span className="text-xs text-un1t-muted whitespace-nowrap">{relativeTime(m.at)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* WhatsApp Conversations */}
+          {(waConversations.length > 0 || contact.wa_phone) && (
+            <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle flex items-center gap-1.5">
+                  <MessageCircle size={12} /> WhatsApp
+                </h3>
+                <StartWhatsAppButton
+                  contactId={contact.id}
+                  contactPhone={contact.phone}
+                  waPhone={contact.wa_phone}
+                />
+              </div>
+              {contact.wa_phone && (
+                <p className="text-xs text-un1t-muted mb-2">{contact.wa_phone}</p>
+              )}
+              {waConversations.length === 0 && <p className="text-sm text-un1t-muted">No conversations</p>}
+              {waConversations.map(conv => (
+                <Link
+                  key={conv.id}
+                  href="/whatsapp/inbox"
+                  className="block py-2 border-b border-un1t-border last:border-0 hover:bg-un1t-border/20 -mx-1 px-1 rounded transition-colors"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm truncate flex-1">
+                      {conv.last_message_direction === 'outbound' && <span className="text-un1t-subtle">You: </span>}
+                      {conv.last_message_preview || 'No messages'}
+                    </p>
+                    {conv.unread_count > 0 && (
+                      <span className="bg-green-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center shrink-0 ml-2">
+                        {conv.unread_count}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-un1t-muted mt-0.5">
+                    {conv.last_message_at ? new Date(conv.last_message_at).toLocaleString('en-IE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
+                  </p>
+                </Link>
+              ))}
+            </div>
+          )}
+
+          {/* Past event registrations (CRM-native). */}
+          <PastEventsCard bookings={pastBookings} />
+        </div>
+
+        {/* What happens next. */}
+        <div className="space-y-5 order-2 xl:order-3 min-w-0">
+          <ContactNextRail
+            contact={contact}
+            attention={attention}
+            openTasks={openTasks}
+            sequences={activeSequences}
+            upcomingBookings={upcomingBookings}
+            deals={deals}
+            admin={{
+              canPasswordOverride: Boolean(contact.user_id) && ['master', 'owner'].includes(user?.role),
+              canEditDelete: MANAGER_ROLES.includes(user?.role),
+              canInvite: (user?.isMaster || ['owner', 'manager'].includes(user?.role)) && Boolean(contact.email),
+              hasUserAccount: Boolean(contact.user_id),
+              canEditDevices: user?.isMaster || ['owner', 'manager', 'head_coach'].includes(user?.role),
+            }}
+          />
         </div>
       </div>
 
-      <ContactDetailTabs
-        tabs={[
-          { id: 'overview', label: 'Overview', content: overviewTab },
-          { id: 'activity', label: 'Activity', content: activityTab },
-          // CONSULTATIONS SP1 — only when the caller holds the permission
-          // (consultationsTab is null otherwise; ContactDetailTabs filters
-          // out falsy entries).
-          canConsultations ? { id: 'consultations', label: 'Consultations', content: consultationsTab } : null,
-          { id: 'comms', label: 'Comms', content: commsTab },
-          { id: 'admin', label: 'Admin', content: adminTab },
-        ]}
-      />
-    </div>
-  )
-}
+      {/* CONSULTATIONS SP1 — full-width section (permission-gated). */}
+      {canConsultations && (
+        <section className="mt-8">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-4">Consultations</h2>
+          {consultationsTab}
+        </section>
+      )}
 
-// PERSON-LINK.1 — compact metric tile for the Overview key-numbers grid.
-// `tone='danger'` paints the value with the -700 ramp for arrears > 0
-// (CLAUDE.md light-theme convention); default is the primary text token.
-function MetricCard({ label, value, tone = 'default' }) {
-  const valueCls = tone === 'danger' ? 'text-red-700' : 'text-un1t-text'
-  return (
-    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-      <p className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">{label}</p>
-      <p className={`text-xl font-bold mt-1 ${valueCls}`}>{value}</p>
-    </div>
-  )
-}
-
-function InfoRow({ label, value }) {
-  return (
-    <div className="flex justify-between text-sm">
-      <span className="text-un1t-subtle">{label}</span>
-      <span className="font-medium">{value ?? '—'}</span>
+      {/* CONSENT.3 — full-width consent history table (collapsed +
+          lazy-loading, as before). */}
+      <div className="mt-8">
+        <ContactConsentHistoryCard contactId={contact.id} />
+      </div>
     </div>
   )
 }
