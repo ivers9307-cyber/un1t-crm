@@ -210,6 +210,8 @@ export default async function ContactDetailPage(props) {
   // CONTACT-COMPOSER.1 — messaging context for the unified composer.
   const canWhatsApp = hasPermission(user, 'whatsapp')
   const canSms = hasPermission(user, 'sms')
+  // DRAWER.4 — ad-hoc email channel (same gate as the /email route).
+  const canEmail = hasPermission(user, 'email')
   const latestWaConversation = waConversations[0] || null
   const whatsappWindowOpen = latestWaConversation?.window_expires_at
     ? new Date(latestWaConversation.window_expires_at) > new Date()
@@ -622,9 +624,12 @@ export default async function ContactDetailPage(props) {
           contactName={contact.first_name || contact.name}
           canWhatsApp={canWhatsApp}
           canSms={canSms}
+          canEmail={canEmail}
           hasWaPhone={!!(contact.wa_phone || contact.phone)}
           hasPhone={!!contact.phone}
+          hasEmail={!!contact.email}
           smsBlocked={!!(contact.sms_status && contact.sms_status !== 'active')}
+          emailBlocked={['bounced', 'complained', 'unsubscribed'].includes(contact.email_status)}
           whatsappWindowOpen={whatsappWindowOpen}
           whatsappWindowExpiresAt={latestWaConversation?.window_expires_at || null}
           templates={composerTemplates}
