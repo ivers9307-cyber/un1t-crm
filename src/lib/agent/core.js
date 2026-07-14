@@ -358,6 +358,20 @@ export function shouldNotifyAgentActivity(lastNotifiedAt, now = new Date(), wind
   return now.getTime() - t >= windowMs
 }
 
+// HUMANIZE.1 — em/en dashes are the tell that a message was AI-written, and
+// Richard wants them out of every customer-facing agent message. A prompt rule
+// alone isn't reliable, so we also scrub deterministically here (the single
+// parse point for both live replies and follow-up nudges). A dash flanked by a
+// space reads as a clause break → comma; a tight dash (time ranges like
+// "5:00–5:30", "pre–class") → hyphen. Studio names already use plain hyphens
+// ("BASE - STRENGTH"), so they're untouched.
+export function stripEmDashes(s) {
+  return String(s ?? '')
+    .replace(/\s*[—–]\s+/g, ', ')
+    .replace(/\s+[—–]\s*/g, ', ')
+    .replace(/[—–]/g, '-')
+}
+
 export function parseAgentResponse(raw) {
   let text = String(raw || '').trim()
   // Detect the sentinel ANYWHERE, not just at the start — if the model
@@ -379,12 +393,13 @@ export function parseAgentResponse(raw) {
     const newline = after.indexOf('\n')
     const payload = (newline === -1 ? after : after.slice(0, newline)).replace(SENTINEL_WRAP, '')
     const rest = newline === -1 ? '' : after.slice(newline + 1)
-    options = normalizeAgentOptions(payload)
+    // Scrub dashes from button labels too ("Yes — book me in" → "Yes, book me in").
+    options = normalizeAgentOptions(stripEmDashes(payload))
     text = (text.slice(0, o.index) + rest).replace(SENTINEL_WRAP, '').trim()
   }
 
   if (!text) return { action: 'handoff', text: '', reason: 'empty_model_response' }
-  const parsed = { action: 'reply', text, reason: 'ok' }
+  const parsed = { action: 'reply', text: stripEmDashes(text), reason: 'ok' }
   if (options) parsed.options = options
   return parsed
 }

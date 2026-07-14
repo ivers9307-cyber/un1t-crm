@@ -8,6 +8,7 @@ import {
   shouldAgentReply,
   formatHistoryForClaude,
   parseAgentResponse,
+  stripEmDashes,
   isVerificationFresh,
   DEFAULT_HOLDING_MESSAGE,
   autoVerifyContactId,
@@ -196,6 +197,28 @@ describe('shouldNotifyAgentActivity (AGENT-ACTIVITY.1 debounce)', () => {
   })
 })
 
+describe('stripEmDashes (HUMANIZE.1 — no AI-tell dashes to customers)', () => {
+  it('turns a spaced em dash into a comma (clause break)', () => {
+    expect(stripEmDashes("Just need a couple of details — what's your name and email?"))
+      .toBe("Just need a couple of details, what's your name and email?")
+  })
+  it('handles a dash spaced on only one side', () => {
+    expect(stripEmDashes('You are booked in —see you there')).toBe('You are booked in, see you there')
+    expect(stripEmDashes('You are booked in— see you there')).toBe('You are booked in, see you there')
+  })
+  it('turns a tight dash range into a hyphen', () => {
+    expect(stripEmDashes('5:00pm–5:45pm')).toBe('5:00pm-5:45pm')
+    expect(stripEmDashes('€99 instead of €209 — €110 off')).toBe('€99 instead of €209, €110 off')
+  })
+  it('leaves plain hyphens (studio names) untouched', () => {
+    expect(stripEmDashes('BASE - STRENGTH at 9:30am')).toBe('BASE - STRENGTH at 9:30am')
+  })
+  it('is null-safe', () => {
+    expect(stripEmDashes(null)).toBe('')
+    expect(stripEmDashes(undefined)).toBe('')
+  })
+})
+
 describe('parseAgentResponse', () => {
   it('detects a handoff sentinel and extracts the reason', () => {
     const r = parseAgentResponse(`${HANDOFF_PREFIX} wants to cancel membership`)
@@ -208,9 +231,9 @@ describe('parseAgentResponse', () => {
     expect(r.text).toBe('')
     expect(r.reason).toBe('billing question')
   })
-  it('treats normal text as a reply', () => {
+  it('treats normal text as a reply (and scrubs a tight dash range to a hyphen)', () => {
     expect(parseAgentResponse('Sure! Classes run 6am–9pm.'))
-      .toEqual({ action: 'reply', text: 'Sure! Classes run 6am–9pm.', reason: 'ok' })
+      .toEqual({ action: 'reply', text: 'Sure! Classes run 6am-9pm.', reason: 'ok' })
   })
   it('an empty model response is a handoff, not a blank send', () => {
     expect(parseAgentResponse('   ').action).toBe('handoff')
@@ -229,6 +252,11 @@ describe('parseAgentResponse', () => {
     expect(r.action).toBe('reply')
     expect(r.text).toBe('Tomorrow has 7am, 8am and 9am.')
     expect(r.options).toEqual(['7am', '8am', '9am'])
+  })
+  it('scrubs em dashes from both the reply text and the button labels', () => {
+    const r = parseAgentResponse(`Great — you're all set!\n${OPTIONS_PREFIX} Yes — book me in | Different time`)
+    expect(r.text).toBe("Great, you're all set!")
+    expect(r.options).toEqual(['Yes, book me in', 'Different time'])
   })
   it('normalizes options: trims, drops empties, dedupes, caps at 10, truncates to 20 chars', () => {
     const eleven = Array.from({ length: 11 }, (_, i) => `opt ${i}`).join(' | ')
