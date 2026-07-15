@@ -16,6 +16,13 @@ const fixtures = {
     { step_order: 3, step_type: 'email', subject: 'How was it?', html_content: null, template_id: 't9' },
     { step_order: 4, step_type: 'sms', sms_body: 'come back this week' },
   ],
+  // SEQ-TERMINAL — graph-compiled shape: terminal yes-arm ends ('end'
+  // marker) instead of falling through into the no-arm.
+  terminal_arms: [
+    { step_order: 1, step_type: 'branch', config: { predicate: { type: 'has_tag', tag: 'booked' }, then_step_order: 2, else_step_order: 3 } },
+    { step_order: 2, step_type: 'apply_tag', config: { tag: 'already_booked', next_step_order: 'end' } },
+    { step_order: 3, step_type: 'sms', sms_body: 'book your first class', config: { next_step_order: 'end' } },
+  ],
 }
 
 // Compare only the fields the runner reads (ignore defaulted nulls/empties).
@@ -30,7 +37,13 @@ function normalise(steps) {
     for (const k of ['subject', 'html_content', 'template_id', 'sms_body', 'whatsapp_template_id']) {
       if (s[k] != null) o[k] = s[k]
     }
-    if (s.config) o.config = s.config
+    // next_step_order is derived from the edges (SEQ-TERMINAL), so legacy
+    // fixtures without it recompile with the marker added — for a legacy
+    // markerless row 'next row' and the stamped successor are the same
+    // advance, so drop it from the comparison.
+    const { next_step_order, ...cfg } = s.config || {}
+    void next_step_order
+    if (Object.keys(cfg).length) o.config = cfg
     return o
   })
 }

@@ -80,6 +80,16 @@ export function compileGraphToSteps(graph) {
     } else {
       row.config = { ...(node.config || {}) }
     }
+    // SEQ-TERMINAL — stamp every non-branch step's real successor so the
+    // runner never falls back to blind step_order+1 for graph steps: a
+    // leaf node ends the enrolment ('end'), and a convergent arm jumps
+    // over the other arm's rows instead of executing them. Written AFTER
+    // the config spread so a stale authored next_step_order can't win.
+    // Branch rows carry then/else pointers instead.
+    if (node.type !== 'branch') {
+      const nextId = outEdges(graph.edges, id)[0]?.to
+      row.config = { ...(row.config || {}), next_step_order: stepOrderById.get(nextId) ?? 'end' }
+    }
     return row
   })
 }

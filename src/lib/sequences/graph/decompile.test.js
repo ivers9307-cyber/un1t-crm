@@ -46,3 +46,48 @@ describe('decompileStepsToGraph', () => {
     expect(decompileStepsToGraph([], trigger)).toEqual({ version: 1, trigger, nodes: [], edges: [] })
   })
 })
+
+// SEQ-TERMINAL — steps compiled from a graph carry config.next_step_order
+// (integer successor or 'end'). Decompile must honour the marker when
+// rebuilding edges — NOT assume linear fall-through — and strip it from
+// node config (it is derived from edges, not authored).
+describe('decompileStepsToGraph — next_step_order markers', () => {
+  it("emits no out-edge for a step marked 'end', even when later steps exist", () => {
+    const steps = [
+      { step_order: 1, step_type: 'branch', config: { predicate: { type: 'has_tag', tag: 't' }, then_step_order: 2, else_step_order: 3 } },
+      { step_order: 2, step_type: 'apply_tag', config: { tag: 'done', next_step_order: 'end' } },
+      { step_order: 3, step_type: 'sms', sms_body: 'no arm', config: { next_step_order: 'end' } },
+    ]
+    const g = decompileStepsToGraph(steps, trigger)
+    expect(g.edges.filter(e => e.from === 'n2')).toEqual([])
+    expect(g.edges.filter(e => e.from === 'n3')).toEqual([])
+  })
+
+  it('wires the out-edge to the marked successor, not to the next row (convergence)', () => {
+    const steps = [
+      { step_order: 1, step_type: 'branch', config: { predicate: { type: 'has_tag', tag: 't' }, then_step_order: 2, else_step_order: 3 } },
+      { step_order: 2, step_type: 'apply_tag', config: { tag: 'went', next_step_order: 4 } },
+      { step_order: 3, step_type: 'sms', sms_body: 'come back', config: { next_step_order: 4 } },
+      { step_order: 4, step_type: 'email', subject: 'weekly', template_id: 't1', config: { next_step_order: 'end' } },
+    ]
+    const g = decompileStepsToGraph(steps, trigger)
+    expect(g.edges).toContainEqual({ from: 'n2', to: 'n4' })
+    expect(g.edges).toContainEqual({ from: 'n3', to: 'n4' })
+    expect(g.edges.filter(e => e.from === 'n2' && e.to === 'n3')).toEqual([])
+  })
+
+  it('strips next_step_order from data-node config (it is edge information)', () => {
+    const steps = [{ step_order: 1, step_type: 'apply_tag', config: { tag: 'vip', next_step_order: 'end' } }]
+    const g = decompileStepsToGraph(steps, trigger)
+    expect(g.nodes[0].config).toEqual({ tag: 'vip' })
+  })
+
+  it('legacy steps without markers keep the linear fall-through wiring', () => {
+    const steps = [
+      { step_order: 1, step_type: 'wait', delay_days: 0, delay_hours: 1, delay_minutes: 0 },
+      { step_order: 2, step_type: 'sms', sms_body: 'hi' },
+    ]
+    const g = decompileStepsToGraph(steps, trigger)
+    expect(g.edges).toContainEqual({ from: 'n1', to: 'n2' })
+  })
+})
