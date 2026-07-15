@@ -14,9 +14,12 @@ const GraphDraftSchema = z.object({
 
 // FLOW-GRAPH Phase 2 — the graph read/draft surface the builder (and, in
 // Phase 3, the AI agent) talks to.
-//   GET  → the graph to open (draft → published → decompiled-from-steps)
-//   PUT  → save a work-in-progress draft (shape-checked, NOT fully validated;
-//          full validation is the publish gate)
+//   GET    → the graph to open (draft → published → decompiled-from-steps)
+//   PUT    → save a work-in-progress draft (shape-checked, NOT fully validated;
+//            full validation is the publish gate)
+//   DELETE → discard the draft (clear draft_graph) so the editor reopens what
+//            is actually live — without this a stale draft permanently masks
+//            the production automation
 // Trigger editing stays on the existing PUT /api/sequences/[id] route (it owns
 // the webhook-token lifecycle); publish here only ever touches steps + graph.
 
@@ -84,4 +87,23 @@ export async function PUT(request, props) {
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
   return NextResponse.json({ success: true, saved: 'draft' })
+}
+
+// DELETE /api/sequences/[id]/graph — discard the unpublished draft.
+export async function DELETE(request, props) {
+  const params = await props.params
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  const db = createServerClient()
+  const { data: existing } = await db.from('email_sequences')
+    .select('location_id').eq('id', params.id).single()
+  if (!existing) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
+  const guard = assertLocationAccessOr404(user, existing.location_id)
+  if (guard) return guard
+
+  const { error } = await db.from('email_sequences').update({ draft_graph: null }).eq('id', params.id)
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+
+  return NextResponse.json({ success: true, discarded: true })
 }

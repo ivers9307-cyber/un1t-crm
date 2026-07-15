@@ -13,6 +13,7 @@ import { TriggerCard, Connector } from './parts'
 import FlowEditor from './FlowEditor'
 import SequenceSettings from './SequenceSettings'
 import AgentPanel from './AgentPanel'
+import DraftBanner from './DraftBanner'
 
 // Node types that write data or reach external services — surfaced in the draft
 // review banner so an operator double-checks them before publishing (esp. on an
@@ -119,7 +120,7 @@ function ReadOnlyFlow({ graph }) {
   )
 }
 
-export default function SequenceFlowBuilder({ graph, sequence, isDraft }) {
+export default function SequenceFlowBuilder({ graph, sequence, isDraft, isPublished }) {
   const editable = isPureTree(graph)
   const status = sequence?.status || 'draft'
   const writeSteps = [...new Set((graph?.nodes || []).map(n => WRITE_STEP_LABELS[n.type]).filter(Boolean))]
@@ -157,14 +158,7 @@ export default function SequenceFlowBuilder({ graph, sequence, isDraft }) {
       <AgentPanel sequenceId={sequence?.id} />
       <SequenceSettings key={settingsKey} sequence={sequence} />
 
-      {isDraft && (
-        <div className="max-w-md mx-auto mb-4 rounded-lg border border-amber-500/30 bg-amber-500/[0.05] px-3 py-2 text-xs text-amber-700">
-          <p className="font-semibold">Unpublished draft — review, then Publish to make it live.</p>
-          {writeSteps.length > 0 && (
-            <p className="mt-1">Heads up: this draft will also {writeSteps.join(', ')}. Double-check those steps are right.</p>
-          )}
-        </div>
-      )}
+      <DraftBanner sequenceId={sequence?.id} isDraft={isDraft} isPublished={isPublished} writeSteps={writeSteps} />
 
       {editable
         ? <FlowEditor key={graphKey} initialGraph={graph} sequence={sequence} />

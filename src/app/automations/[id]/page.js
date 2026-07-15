@@ -31,7 +31,12 @@ export default async function SequenceBuilderPage(props) {
 
   return (
     <>
-      <SequenceFlowBuilder graph={graph} sequence={sequence} isDraft={sequence.draft_graph != null} />
+      <SequenceFlowBuilder
+        graph={graph}
+        sequence={sequence}
+        isDraft={sequence.draft_graph != null}
+        isPublished={sequence.graph != null}
+      />
       <AutomationPerformance sequenceId={sequence.id} steps={sequence.sequence_steps || []} />
     </>
   )
