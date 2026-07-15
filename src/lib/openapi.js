@@ -2233,6 +2233,23 @@ registry.registerPath({
   },
 })
 
+registry.registerPath({
+  method: 'delete',
+  path: '/api/sequences/{id}/graph',
+  tags: ['Automations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Discard the unpublished flow-graph draft (clears draft_graph; the editor reopens the published graph)',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: {
+      description: 'Draft discarded',
+      content: { 'application/json': { schema: z.object({ success: z.literal(true), discarded: z.literal(true) }).openapi('SequenceDraftDiscarded') } },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Sequence not found (or no access)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Tapo devices (TAPO-T1) — staff registry/config/toggle, gated by the
 // device_control permission. Lives under the Automations tag: the UI
 // surface is /automations/devices. Note: these routes return
