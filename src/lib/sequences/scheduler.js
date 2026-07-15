@@ -325,6 +325,19 @@ export async function runSequences({ now = new Date() } = {}) {
         continue
       }
 
+      // SEQ-TERMINAL — graph-compiled steps carry their real successor in
+      // config.next_step_order ('end' | integer step_order); legacy
+      // linear-editor rows have no marker. Validate a corrupt self-pointer
+      // BEFORE dispatching so it can never repeat a send: the compiler
+      // can't emit one (the graph is validated acyclic), so honouring it
+      // would re-run this step on every retry forever.
+      const configuredNext = step.config?.next_step_order
+      if (step.step_type !== 'branch' && configuredNext === step.step_order) {
+        throw new Error(
+          `Step ${step.step_order}: config.next_step_order points at itself — refusing to loop`,
+        )
+      }
+
       // Branch by step type.
       let sendId = null
       // Mig 091: a branch step jumps the cursor instead of advancing
@@ -392,15 +405,31 @@ export async function runSequences({ now = new Date() } = {}) {
       }
 
       // Compute the next fire time based on the FOLLOWING step's delay.
-      // For a branch, "following" = the chosen branch target. For all
-      // other step types, "following" = step_order + 1.
-      const followingOrder = branchTargetOrder ?? step.step_order + 1
-      const followingStep = await db
-        .from('sequence_steps')
-        .select('delay_days, delay_hours, delay_minutes')
-        .eq('sequence_id', sequence.id)
-        .eq('step_order', followingOrder)
-        .maybeSingle()
+      // For a branch, "following" = the chosen branch target. For other
+      // step types the next_step_order marker (validated above) decides:
+      // 'end' completes the enrolment (a terminal branch arm must NOT
+      // fall through into the other arm — SEQ-TERMINAL, the seq-21983d6c
+      // already-booked-leads-got-the-nudge bug), an integer jumps (e.g. a
+      // convergent arm skipping the other arm's rows). Markerless legacy
+      // rows keep the historical step_order + 1 advance.
+      let followingOrder
+      if (branchTargetOrder != null) {
+        followingOrder = branchTargetOrder
+      } else if (configuredNext === 'end') {
+        followingOrder = null
+      } else if (Number.isInteger(configuredNext)) {
+        followingOrder = configuredNext
+      } else {
+        followingOrder = step.step_order + 1
+      }
+      const followingStep = followingOrder == null
+        ? { data: null }
+        : await db
+            .from('sequence_steps')
+            .select('delay_days, delay_hours, delay_minutes')
+            .eq('sequence_id', sequence.id)
+            .eq('step_order', followingOrder)
+            .maybeSingle()
       // Mig 088: test mode — accelerate delays to a fixed N seconds.
       // metadata.test=true on the enrolment is the marker.
       const isTest = enrollment.metadata?.test === true
@@ -423,12 +452,14 @@ export async function runSequences({ now = new Date() } = {}) {
       const newStatus = followingStep.data ? 'active' : 'completed'
 
       // Mig 091: cursor lands on (followingOrder - 1) so the next
-      // tick picks up step at followingOrder. For non-branch steps
+      // tick picks up step at followingOrder. For markerless steps
       // followingOrder == step.step_order + 1, so this is identical
-      // to the previous behaviour. For a branch it implements the
-      // jump.
+      // to the previous behaviour. For a branch (or an integer marker)
+      // it implements the jump. A terminal step (followingOrder null)
+      // parks the cursor on the step just executed — never past it, so
+      // a stray reactivation can't land on another arm's row.
       const { error: advanceErr } = await db.from('sequence_enrollments').update({
-        current_step_order: followingOrder - 1,
+        current_step_order: followingOrder != null ? followingOrder - 1 : step.step_order,
         next_step_at: nextFireAt,
         status: newStatus,
         last_processed_at: now.toISOString(),

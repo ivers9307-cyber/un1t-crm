@@ -21,8 +21,12 @@ function nodeConfigFromStep(step) {
       void then_step_order; void else_step_order
       return rest
     }
-    default:
-      return { ...(step.config || {}) }
+    default: {
+      // strip the successor marker — it becomes an edge (or its absence)
+      const { next_step_order, ...rest } = step.config || {}
+      void next_step_order
+      return rest
+    }
   }
 }
 
@@ -48,8 +52,19 @@ export function decompileStepsToGraph(steps, trigger) {
         edges.push({ from: idOf(s.step_order), to: idOf(c.else_step_order), label: 'no' })
       }
     } else {
-      const next = sorted[i + 1]
-      if (next) edges.push({ from: idOf(s.step_order), to: idOf(next.step_order) })
+      // SEQ-TERMINAL — graph-compiled steps carry their real successor in
+      // config.next_step_order ('end' | step_order). Honour it: 'end' means
+      // no out-edge (a terminal arm), an integer means the edge may jump
+      // over another arm's rows. Only legacy rows without the marker keep
+      // the linear next-row wiring.
+      const marker = (s.config || {}).next_step_order
+      if (marker === 'end') continue
+      if (Number.isInteger(marker) && orders.has(marker)) {
+        edges.push({ from: idOf(s.step_order), to: idOf(marker) })
+      } else {
+        const next = sorted[i + 1]
+        if (next) edges.push({ from: idOf(s.step_order), to: idOf(next.step_order) })
+      }
     }
   }
   return { version: 1, trigger: trigger || { type: 'manual', config: {} }, nodes, edges }
