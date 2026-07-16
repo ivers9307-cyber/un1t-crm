@@ -620,8 +620,20 @@ async function handleStatusUpdate(db, status) {
 // unknown ids are dropped, mirroring the messages path.
 async function handleCoexistenceEvent(db, field, value) {
   const phoneNumberId = value?.metadata?.phone_number_id
-  const owner = phoneNumberId ? await resolveWhatsAppNumberByPhoneNumberId(phoneNumberId).catch(() => null) : null
-  const routing = classifyInboundOwner(owner)
+  // Mirror handleIncomingMessage: a resolver THROW means "owner undetermined"
+  // (transient DB error) → keep the first-location fallback, NOT drop. Dropping
+  // here is permanent (we 200 + dedup, Meta never retries). Only a genuine
+  // null (unknown number) reaches classifyInboundOwner → { action: 'drop' }.
+  let owner = null
+  let routing = { action: 'first_location' }
+  if (phoneNumberId) {
+    try {
+      owner = await resolveWhatsAppNumberByPhoneNumberId(phoneNumberId)
+      routing = classifyInboundOwner(owner)
+    } catch (e) {
+      console.warn('[wa-webhook] coexistence phone_number_id resolution failed (falling back):', e?.message)
+    }
+  }
   if (routing.action === 'drop') {
     console.warn(`[wa-webhook] dropping coexistence ${field} for unregistered phone_number_id ${phoneNumberId}`)
     return
