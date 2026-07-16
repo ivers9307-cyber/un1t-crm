@@ -27,6 +27,9 @@ const PairSchema = z.object({
   contact_id: z.string().optional(),
   bridge_id: z.string().optional(),
   booking_id: z.string().nullable().optional(),
+  // Default true: persist the pairing to contact_devices so it auto-attributes
+  // future classes. Pass false for a genuine one-off lent strap.
+  persist: z.boolean().optional(),
 })
 
 export const runtime = 'nodejs'
@@ -64,8 +67,9 @@ export async function POST(request, props) {
     }, { status: 400 })
   }
 
+  const persist = body?.persist !== false // default: persist the registration
   const db = createServerClient()
-  const out = await pairOverride(db, { locationId, bridgeId, contactId, deviceKey, bookingId })
+  const out = await pairOverride(db, { locationId, bridgeId, contactId, deviceKey, bookingId, persist, actorUserId: user.id })
   if (!out.ok) {
     return NextResponse.json({ ok: false, error: out.error }, { status: 400 })
   }

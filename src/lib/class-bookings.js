@@ -15,20 +15,31 @@ import { logWarn } from '@/lib/log'
  * upsert row. Returns null when it lacks the bits we need (booking id, event
  * id, or location). `ctx` carries the resolved contact linkage.
  *
- * @param {object} booking  a /2.0/bookings item ({ _id, event_id, event_name, time_start, status, attended })
+ * The Glofox Booking is POLYMORPHIC: the class reference is `model_id` (with
+ * discriminator model:'events'), NOT a top-level `event_id`, and the booking id
+ * is `_id` on the /2.0/bookings GET item but `id` on the webhook payload. The
+ * old mapper hard-required `event_id`, so it returned null for EVERY real
+ * booking and class_bookings stayed empty all-time. We now read model_id/id
+ * with event_id/_id kept only as a defensive fallback.
+ *
+ * @param {object} booking  a Glofox Booking ({ _id|id, model:'events', model_id, event_name|model_name, time_start, status, attended })
  * @param {{ locationId: string, contactId?: string|null, glofoxMemberId?: string|null, memberName?: string|null }} ctx
  */
 export function mapBookingToRosterRow(booking, ctx = {}) {
-  if (!booking || !booking._id || !booking.event_id || !ctx.locationId) return null
+  if (!booking || !ctx.locationId) return null
+  const bookingId = booking._id ?? booking.id
+  const eventId = booking.model_id ?? booking.event_id
+  if (!bookingId || !eventId) return null
   const startMs = toMillis(booking.time_start)
+  const className = booking.event_name ?? booking.model_name
   return {
     location_id: ctx.locationId,
-    glofox_event_id: String(booking.event_id),
-    glofox_booking_id: String(booking._id),
+    glofox_event_id: String(eventId),
+    glofox_booking_id: String(bookingId),
     glofox_member_id: ctx.glofoxMemberId ?? null,
     contact_id: ctx.contactId ?? null,
     member_name: ctx.memberName ? String(ctx.memberName).slice(0, 200) : null,
-    class_name: booking.event_name ? String(booking.event_name).slice(0, 200) : null,
+    class_name: className ? String(className).slice(0, 200) : null,
     starts_at: startMs == null ? null : new Date(startMs).toISOString(),
     status: typeof booking.status === 'string' ? booking.status.toUpperCase() : null,
     attended: booking.attended === true,

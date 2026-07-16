@@ -52,6 +52,7 @@ describe('getLiveSessions', () => {
             })),
           }
         }
+        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
         throw new Error(`unexpected ${table}`)
       }),
     }
@@ -151,6 +152,7 @@ describe('getAvailableStraps', () => {
             })),
           }
         }
+        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
         throw new Error(`unexpected ${table}`)
       }),
     }
@@ -281,6 +283,7 @@ describe('pairOverride', () => {
             }),
           }
         }
+        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
         throw new Error(`unexpected ${table}`)
       }),
     }
@@ -295,6 +298,52 @@ describe('pairOverride', () => {
       strap_identifier: 'ble:AA:BB:CC:DD:EE:FF',
       heart_rate_session_id: 'sess-existing',
     })
+  })
+
+  it('persists the pairing to contact_devices so it auto-attributes future classes', async () => {
+    const cd = { upserted: null, opts: null }
+    const mk = () => ({
+      from: vi.fn((table) => {
+        if (table === 'contacts') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({
+            maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'c-1', max_hr_override: null, dob: '1990-05-08', location_id: 'loc-1' }, error: null })),
+          })) })) })) }
+        }
+        if (table === 'heart_rate_sessions') {
+          return {
+            select: vi.fn(() => ({ eq: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => ({ order: vi.fn(() => ({ limit: vi.fn(() => ({
+              maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'sess-1', device_identifier: 'ble:AA:BB:CC:DD:EE:FF' }, error: null })),
+            })) })) })) })) })) })),
+            update: vi.fn(() => ({ eq: vi.fn(() => Promise.resolve({ error: null })) })),
+          }
+        }
+        if (table === 'class_occurrences') {
+          return { select: vi.fn(() => ({ eq: vi.fn(() => ({ gte: vi.fn(() => ({ lte: vi.fn(() => ({ is: vi.fn(() => ({ order: vi.fn(() => Promise.resolve({ data: [], error: null })) })) })) })) })) })) }
+        }
+        if (table === 'strap_assignments') {
+          return { insert: vi.fn(() => Promise.resolve({ error: null })) }
+        }
+        if (table === 'contact_devices') {
+          return { upsert: vi.fn((row, opts) => { cd.upserted = row; cd.opts = opts; return Promise.resolve({ error: null }) }) }
+        }
+        throw new Error(`unexpected ${table}`)
+      }),
+    })
+
+    // Default persist: writes a durable chest_strap registration for the member.
+    const out = await pairOverride(mk(), { locationId: 'loc-1', bridgeId: 'b-1', contactId: 'c-1', deviceKey: 'ble:AA:BB:CC:DD:EE:FF', actorUserId: 'u-1' })
+    expect(out.ok).toBe(true)
+    expect(cd.upserted).toMatchObject({
+      contact_id: 'c-1', device_type: 'chest_strap', identifier: 'ble:AA:BB:CC:DD:EE:FF',
+      is_active: true, added_by_contact: false, added_by_user_id: 'u-1',
+    })
+    expect(cd.opts).toEqual({ onConflict: 'contact_id,device_type,identifier', ignoreDuplicates: true })
+
+    // persist:false (a genuine one-off lent strap) skips the durable registration.
+    cd.upserted = null
+    const out2 = await pairOverride(mk(), { locationId: 'loc-1', bridgeId: 'b-1', contactId: 'c-1', deviceKey: 'ble:AA:BB:CC:DD:EE:FF', persist: false })
+    expect(out2.ok).toBe(true)
+    expect(cd.upserted).toBeNull()
   })
 
   it('stamps class_link_source=booked when the member is booked into the live class', async () => {
@@ -335,6 +384,7 @@ describe('pairOverride', () => {
         if (table === 'strap_assignments') {
           return { insert: vi.fn(() => Promise.resolve({ error: null })) }
         }
+        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
         throw new Error(`unexpected ${table}`)
       }),
     }
@@ -391,6 +441,7 @@ describe('pairOverride', () => {
         if (table === 'strap_assignments') {
           return { insert: vi.fn(() => Promise.resolve({ error: null })) }
         }
+        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
         throw new Error(`unexpected ${table}`)
       }),
     }
@@ -427,6 +478,7 @@ describe('endSession', () => {
         if (table === 'strap_assignments') {
           return { update: vi.fn(() => ({ eq: vi.fn(() => ({ is: vi.fn(() => Promise.resolve({ error: null })) })) })) }
         }
+        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
         throw new Error(`unexpected ${table}`)
       }),
     }
@@ -507,6 +559,7 @@ describe('endSession', () => {
             }),
           }
         }
+        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
         throw new Error(`unexpected ${table}`)
       }),
     }
@@ -760,6 +813,7 @@ describe('finalizeSessionRewards', () => {
         if (table === 'locations') {
           return { select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'loc-1', settings: {} }, error: null })) })) })) }
         }
+        if (table === 'contact_devices') return { upsert: vi.fn(() => Promise.resolve({ error: null })) }
         throw new Error(`unexpected ${table}`)
       }),
     }
