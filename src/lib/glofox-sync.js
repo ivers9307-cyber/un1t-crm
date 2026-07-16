@@ -1502,6 +1502,13 @@ const GLOFOX_DETAIL_KEYS = [
   'gender', 'emergency_contact', 'glofox_signup_answers', 'glofox_roaming_enabled',
 ]
 
+// Detail keys the MEMBER owns via the champ-app profile wizard
+// (/api/me/body-metrics writes contacts.gender). Glofox may carry the
+// same field but frequently has it blank/'not_specified' — the sync must
+// never NULL out a value the member set. Fill-when-empty and genuine value
+// updates still flow; only null-clobber is suppressed.
+const MEMBER_OWNED_DETAIL_KEYS = new Set(['gender'])
+
 export async function previewMemberSync(db, locationId, member, opts = {}) {
   // GLOFOX2.1.11 — build the Plan A context (credits + parent
   // memberships) when creds are provided. Without creds, we degrade
@@ -1743,6 +1750,9 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     if (!(k in mapped)) continue
     const before = existing[k] ?? null
     const after = mapped[k] ?? null
+    // MEMBER-OWNED — never overwrite a value the member set in the app
+    // with a Glofox null (Glofox often has gender blank/'not_specified').
+    if (MEMBER_OWNED_DETAIL_KEYS.has(k) && after === null && before !== null) continue
     if (JSON.stringify(before) !== JSON.stringify(after)) {
       changes[k] = { from: before, to: after }
     }
