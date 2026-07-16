@@ -1874,6 +1874,76 @@ registry.registerPath({
   },
 })
 
+// WhatsApp Embedded Signup v4 — "Connect with WhatsApp" launcher (WA-TECHPROV.3, location-scoped)
+const WaEmbeddedSignupConfig = z.object({
+  configured: z.boolean(),
+  app_id: z.string().nullable(),
+  config_id: z.string().nullable(),
+}).openapi('WaEmbeddedSignupConfig')
+
+const WaNumberPublic = z.object({
+  id: uuidLike,
+  location_id: uuidLike,
+  label: z.string(),
+  phone_number_id: z.string(),
+  business_account_id: z.string().nullable(),
+  app_id: z.string().nullable(),
+  display_phone: z.string().nullable(),
+  source: z.string(),
+  token_type: z.string().nullable(),
+  connected_via: z.string().nullable(),
+  is_default: z.boolean(),
+  is_active: z.boolean(),
+  access_token_redacted: z.string().nullable(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+}).openapi('WaNumberPublic')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/whatsapp/embedded-signup',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Embedded Signup launch config (app_id, config_id, configured)',
+  description: 'Launch config for the "Connect with WhatsApp" button. Reports configured:false instead of throwing when WHATSAPP_APP_ID / WHATSAPP_ES_CONFIG_ID are unset — the button renders a not-configured state.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Launch config for this location', content: { 'application/json': { schema: SuccessResponse(WaEmbeddedSignupConfig) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — location not in your assignments', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/locations/{id}/whatsapp/embedded-signup',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Exchange an Embedded Signup code and connect the WABA/number to this location',
+  description: "Orchestrates code→business-token exchange, an ownership check against whatsapp_numbers (a number already connected to a different location 409s BEFORE any Meta-side mutation), WABA webhook subscription, conditional number registration, then upsert into whatsapp_numbers. Nothing persists unless every Meta call succeeded — safe to re-run with a fresh code. Master-or-owner gated, matching the numbers CRUD route.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            code: z.string().min(1),
+            waba_id: z.string().regex(/^\d+$/, 'waba_id must be a numeric Meta id'),
+            phone_number_id: z.string().regex(/^\d+$/, 'phone_number_id must be a numeric Meta id'),
+          }).openapi('WaEmbeddedSignupExchange'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'WABA/number connected to this location', content: { 'application/json': { schema: SuccessResponse(WaNumberPublic) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — location not in your assignments, or master/owner role required', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Number already connected to a different location, or a concurrent connect/label collision', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'A Meta call failed (code exchange, WABA subscription, or number registration)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Staff (cookie auth — owner-only)
 registry.registerPath({
   method: 'post',

@@ -17,6 +17,7 @@ WHATSAPP_PHONE_NUMBER_ID=
 WHATSAPP_BUSINESS_ACCOUNT_ID=    # optional
 WHATSAPP_WEBHOOK_VERIFY_TOKEN=   # for Meta GET subscription handshake
 WHATSAPP_APP_SECRET=             # for X-Hub-Signature-256 verification on POST
+WHATSAPP_ES_CONFIG_ID=           # Facebook Login for Business configuration id driving Embedded Signup v4 ("Connect with WhatsApp" in Settings → Locations → Integrations). Unset = the connect button renders a not-configured state; the exchange route 500s.
 ANTHROPIC_API_KEY=               # for the in-app assistant chat
 CRM_API_KEY=                     # Bearer token for n8n / external integrations
 NEXT_PUBLIC_APP_URL=https://crm.un1tdublin.com

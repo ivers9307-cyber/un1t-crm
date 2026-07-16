@@ -196,10 +196,10 @@ export async function POST(request, props) {
     .single()
   if (insertError) {
     if (/duplicate key|unique constraint/i.test(insertError.message)) {
-      return NextResponse.json(
-        { success: false, error: 'This phone number was connected by a concurrent request — reload the numbers list.' },
-        { status: 409 },
-      )
+      const msg = /phone_number_id/i.test(insertError.message)
+        ? 'This phone number was connected by a concurrent request — reload the numbers list.'
+        : 'A WhatsApp number with this label already exists for this location — rename or remove it, then retry.'
+      return NextResponse.json({ success: false, error: msg }, { status: 409 })
     }
     return NextResponse.json({ success: false, error: insertError.message }, { status: 500 })
   }
