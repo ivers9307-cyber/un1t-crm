@@ -33,6 +33,7 @@ import {
 } from '@expo-google-fonts/poppins'
 import { AuthProvider, useAuth } from '../lib/auth-context'
 import { routeForNotification } from '../lib/notification-nav'
+import { ForegroundOtaUpdater } from '../lib/foreground-ota'
 import { BiometricLockProvider } from '../lib/biometric-lock'
 import { StudioPinProvider } from '../lib/studio-pin'
 import RootErrorBoundary from '../components/RootErrorBoundary'
@@ -117,6 +118,7 @@ export default function RootLayout() {
             <StatusBar style="dark" />
             <SplashGate />
             <NotificationRouter />
+            <ForegroundOtaUpdater />
             <Stack screenOptions={{ headerShown: false }}>
               <Stack.Screen name="(auth)" options={{ headerShown: false }} />
               <Stack.Screen name="(tabs)" options={{ headerShown: false }} />

@@ -193,6 +193,9 @@ export default ({ config }) => ({
   updates: {
     url: 'https://u.expo.dev/6256a4d8-03ff-4898-9d47-b4de6c9c20e1',
     enabled: true,
+    // ON_LOAD only fires on a COLD start; staff rarely force-quit, so
+    // lib/foreground-ota.jsx additionally checks on foreground (throttled).
+    // Keep ON_LOAD — it's still what serves fresh installs and force-quits.
     checkAutomatically: 'ON_LOAD',
     fallbackToCacheTimeout: 0,
     // MOBILE-AUDIT.2 — OTA code signing was wired here (#446) and then
