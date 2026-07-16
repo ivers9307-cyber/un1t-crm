@@ -1761,6 +1761,65 @@ describe('previewMemberSync', () => {
     expect(out.conflicts.contact_matched_by_glofox_id.id).toBe('cA')
     expect(out.conflicts.contact_matched_by_email.id).toBe('cB')
   })
+
+  // GLOFOX-DETAIL null-clobber guard — the champ-app profile wizard writes
+  // contacts.gender (via /api/me/body-metrics). Glofox frequently has gender
+  // blank/'not_specified', so the single-member sync must never NULL out a
+  // gender the member set. Fill-when-empty and genuine value updates still
+  // flow; only null-over-existing is suppressed, and ONLY for member-owned
+  // keys (gender) — other detail keys keep their prior nulling behaviour.
+  const detailMember = (overrides = {}) => ({
+    ...member,
+    membership: { type: 'payg' }, // presence flips on the GLOFOX-DETAIL path
+    ...overrides,
+  })
+
+  it('does NOT null-clobber a member-set gender when Glofox has none', async () => {
+    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', gender: 'female' }
+    const out = await previewMemberSync(
+      fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing] }),
+      'loc',
+      detailMember({ gender: 'not_specified' }), // Glofox blank → mapped.gender = null
+    )
+    expect(out.action).toBe('update')
+    // Protected: no change flagged, so the apply loop never writes gender.
+    expect(out.changes.gender).toBeUndefined()
+  })
+
+  it('still FILLS gender when the CRM value is empty', async () => {
+    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', gender: null }
+    const out = await previewMemberSync(
+      fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing] }),
+      'loc',
+      detailMember({ gender: 'male' }),
+    )
+    expect(out.action).toBe('update')
+    expect(out.changes.gender).toEqual({ from: null, to: 'male' })
+  })
+
+  it('still flags a genuine Glofox gender value update', async () => {
+    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', gender: 'female' }
+    const out = await previewMemberSync(
+      fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing] }),
+      'loc',
+      detailMember({ gender: 'male' }),
+    )
+    expect(out.action).toBe('update')
+    expect(out.changes.gender).toEqual({ from: 'female', to: 'male' })
+  })
+
+  it('does NOT protect other detail keys — emergency_contact null still flags', async () => {
+    // Only gender is member-owned; emergency_contact remains Glofox-sourced,
+    // so its prior null-clobber behaviour must be unchanged.
+    const existing = { id: 'c1', email: 'me@x.com', glofox_member_id: 'g1', emergency_contact: 'ICE: next of kin' }
+    const out = await previewMemberSync(
+      fakeDb({ rowsByGlofoxId: [existing], rowsByEmail: [existing] }),
+      'loc',
+      detailMember({ emergency_contact: '' }), // Glofox blank → mapped.emergency_contact = null
+    )
+    expect(out.action).toBe('update')
+    expect(out.changes.emergency_contact).toEqual({ from: 'ICE: next of kin', to: null })
+  })
 })
 
 describe('targetDealStageForSync (GLOFOX2.1.5 transitions)', () => {
