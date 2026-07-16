@@ -141,13 +141,13 @@ const WEB_ONLY_OK = {
   // W2 (parity inversion): the invoice approver inbox (review + approve /
   // decline, PDF opens in the browser) now ships on mobile via the
   // `invoices_inbox` MOBILE_PERMISSIONS entry (webEquivalent: 'invoices_inbox'),
-  // so it's matched, not exempted. The bookkeeper analyse + send-to-Xero
-  // step stays desktop-only (that's the separate `bookkeeper` key below).
-  // INVOICES-QUEUE.1 — bookkeeper flag. Gates the analyse + send-
-  // to-Xero actions inside /invoices and the Bookkeeper queue tab
-  // in /approvals. Both surfaces are desktop-only (PDF preview +
-  // bulk analyse + multi-row review), so the permission is too.
-  bookkeeper: 'Bookkeeper sign-off flag (INVOICES-QUEUE.1) — gates the analyse + send-to-Xero actions inside /invoices and the Bookkeeper queue tab inside /approvals. Both surfaces are desktop-only by design.',
+  // so it's matched, not exempted.
+  // INV-M.1 (parity inversion): `bookkeeper` is no longer web-only — the
+  // mobile bookkeeper queue (app/invoices/queue.jsx: multi-select bulk
+  // extract + the Not-in-Xero supplier flag) reads the same top-level key
+  // via CROSS_PLATFORM_KEYS, so it's matched, not exempted. Field edits +
+  // the send-to-Xero step stay desktop-only, but they're sub-features of
+  // the same key, not a separate permission.
   // W1 (parity inversion): issues_inbox is no longer web-only — the
   // handler inbox (claim / resolve / close, with photos) now ships on
   // mobile via the `issue_triage` MOBILE_PERMISSIONS entry
