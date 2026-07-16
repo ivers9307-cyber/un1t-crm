@@ -27,16 +27,19 @@ import { publicShape } from '@/lib/whatsapp-numbers-shape'
 import {
   exchangeCodeForBusinessToken, subscribeAppToWaba, probeNumber,
   needsRegistration, generatePin, registerNumber, planPersistence,
-  buildSignupMeta,
+  buildSignupMeta, getWabaPhoneNumber, initialHistorySyncState,
 } from '@/lib/whatsapp-embedded-signup'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const ExchangeSchema = z.object({
+  mode: z.enum(['cloud_api', 'coexistence']).default('cloud_api'),
   code: z.string().min(1),
   waba_id: z.string().regex(/^\d+$/, 'waba_id must be a numeric Meta id'),
-  phone_number_id: z.string().regex(/^\d+$/, 'phone_number_id must be a numeric Meta id'),
+  // Cloud API supplies phone_number_id from the ES session; coexistence
+  // resolves it server-side from the WABA, so it's optional here.
+  phone_number_id: z.string().regex(/^\d+$/, 'phone_number_id must be a numeric Meta id').optional(),
 })
 
 export async function GET(_request, props) {
@@ -65,7 +68,7 @@ export async function POST(request, props) {
 
   const result = await validateBody(request, ExchangeSchema)
   if (!result.ok) return result.response
-  const { code, waba_id, phone_number_id } = result.data
+  const { mode, code, waba_id, phone_number_id: bodyPhoneNumberId } = result.data
 
   const appId = process.env.WHATSAPP_APP_ID
   const appSecret = process.env.WHATSAPP_APP_SECRET
@@ -83,6 +86,22 @@ export async function POST(request, props) {
     token = await exchangeCodeForBusinessToken({ code, appId, appSecret })
   } catch (e) {
     return NextResponse.json({ success: false, error: `Code exchange failed: ${e.message}` }, { status: 502 })
+  }
+
+  // Coexistence resolves the phone_number_id from the WABA (the number is
+  // already registered on the Business app); Cloud API takes it from the body.
+  let phone_number_id = bodyPhoneNumberId
+  let coexistenceNumber = null
+  if (mode === 'coexistence') {
+    try {
+      coexistenceNumber = await getWabaPhoneNumber({ wabaId: waba_id, token })
+      phone_number_id = coexistenceNumber.phoneNumberId
+    } catch (e) {
+      return NextResponse.json({ success: false, error: `Coexistence phone-number lookup failed: ${e.message}` }, { status: 502 })
+    }
+  }
+  if (!phone_number_id) {
+    return NextResponse.json({ success: false, error: 'phone_number_id is required for Cloud API onboarding.' }, { status: 400 })
   }
 
   // Ownership check BEFORE any Meta-side mutation: a number already
@@ -119,19 +138,23 @@ export async function POST(request, props) {
   // 3. Register only when needed (register is limited to 10/number/72h).
   //    Reuse the stored PIN when this number registered through us
   //    before — Meta requires the matching two-step PIN on /register.
-  let probe
-  try {
-    probe = await probeNumber({ phoneNumberId: phone_number_id, token })
-  } catch (e) {
-    return NextResponse.json({ success: false, error: `Number probe failed: ${e.message}` }, { status: 502 })
-  }
+  //    Coexistence numbers are already registered on the Business app —
+  //    probing + /register is a Cloud-API-only concern and would be wrong here.
+  let probe = null
   let pin = null
-  if (needsRegistration(probe)) {
-    pin = existingRow?.signup_meta?.pin || generatePin()
+  if (mode === 'cloud_api') {
     try {
-      await registerNumber({ phoneNumberId: phone_number_id, token, pin })
+      probe = await probeNumber({ phoneNumberId: phone_number_id, token })
     } catch (e) {
-      return NextResponse.json({ success: false, error: `Number registration failed: ${e.message}` }, { status: 502 })
+      return NextResponse.json({ success: false, error: `Number probe failed: ${e.message}` }, { status: 502 })
+    }
+    if (needsRegistration(probe)) {
+      pin = existingRow?.signup_meta?.pin || generatePin()
+      try {
+        await registerNumber({ phoneNumberId: phone_number_id, token, pin })
+      } catch (e) {
+        return NextResponse.json({ success: false, error: `Number registration failed: ${e.message}` }, { status: 502 })
+      }
     }
   }
 
@@ -146,6 +169,12 @@ export async function POST(request, props) {
     connectedAt: new Date().toISOString(),
   })
 
+  if (mode === 'coexistence') {
+    signupMeta.coexistence = true
+    signupMeta.history_sync = existingRow?.signup_meta?.history_sync || initialHistorySyncState(new Date().toISOString())
+  }
+  const numberSource = mode === 'coexistence' ? 'coexistence' : 'cloud_api'
+
   if (plan.action === 'update') {
     const { data: updated, error } = await db
       .from('whatsapp_numbers')
@@ -155,6 +184,7 @@ export async function POST(request, props) {
         connected_via: 'embedded_signup',
         signup_meta: signupMeta,
         business_account_id: waba_id,
+        source: numberSource,
         is_active: true,
         updated_at: new Date().toISOString(),
       })
@@ -179,13 +209,13 @@ export async function POST(request, props) {
     .from('whatsapp_numbers')
     .insert({
       location_id: params.id,
-      label: probe.verified_name || `WhatsApp ${probe.display_phone_number || phone_number_id}`,
+      label: (probe?.verified_name) || coexistenceNumber?.verifiedName || `WhatsApp ${probe?.display_phone_number || coexistenceNumber?.displayPhone || phone_number_id}`,
       phone_number_id,
       business_account_id: waba_id,
       app_id: appId,
       access_token: token,
-      display_phone: probe.display_phone_number || null,
-      source: 'cloud_api',
+      display_phone: probe?.display_phone_number || coexistenceNumber?.displayPhone || null,
+      source: numberSource,
       token_type: 'business',
       connected_via: 'embedded_signup',
       signup_meta: signupMeta,
