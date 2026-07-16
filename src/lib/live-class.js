@@ -182,7 +182,7 @@ export async function getAvailableStraps(db, locationId) {
  * a parallel one (member swapped straps mid-class — keep their stats
  * cumulative).
  */
-export async function pairOverride(db, { locationId, bridgeId, contactId, deviceKey, bookingId = null, nowMs = Date.now() }) {
+export async function pairOverride(db, { locationId, bridgeId, contactId, deviceKey, bookingId = null, nowMs = Date.now(), persist = true, actorUserId = null }) {
   if (!deviceKey) return { ok: false, error: 'A strap device_key is required' }
 
   // Snapshot max HR for the session row. IDOR guard: the contact must
@@ -311,6 +311,30 @@ export async function pairOverride(db, { locationId, bridgeId, contactId, device
   if (saErr) {
     logWarn('live-class', 'pairOverride strap_assignments insert failed', { err: saErr })
     return { ok: false, error: saErr.message }
+  }
+
+  // Persist the pairing so it auto-attributes this member's FUTURE classes via
+  // the contact_devices auto-association path (mig 112). A strap_assignments row
+  // alone dies at class end (ended_at) — which is why 53/56 bridge sessions were
+  // orphaned: only one member in the whole gym had ever registered a strap.
+  // Turning the coach's per-class pairing into a durable registration fixes
+  // attribution going forward with no new UI. Best-effort (never fail the pair);
+  // pass persist:false for a genuine one-off lent strap.
+  if (persist) {
+    const { error: cdErr } = await db
+      .from('contact_devices')
+      .upsert(
+        {
+          contact_id: contactId,
+          device_type: 'chest_strap',
+          identifier: deviceKey,
+          is_active: true,
+          added_by_contact: false,
+          added_by_user_id: actorUserId,
+        },
+        { onConflict: 'contact_id,device_type,identifier', ignoreDuplicates: true },
+      )
+    if (cdErr) logWarn('live-class', 'pairOverride contact_devices persist failed', { err: cdErr })
   }
 
   return { ok: true, sessionId }

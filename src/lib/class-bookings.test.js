@@ -2,8 +2,11 @@ import { describe, it, expect, vi } from 'vitest'
 import { mapBookingToRosterRow, upsertClassBookings, resolveClassLinkSource, lookupBookedMember, mergeRosterWithSessions, pickNearestBookedOccurrence } from './class-bookings'
 
 describe('class-bookings: mapBookingToRosterRow', () => {
+  // Real /2.0/bookings item is polymorphic: model:'events' + model_id (the
+  // class id), NOT a top-level event_id. The old fixtures mocked event_id,
+  // which is exactly why the empty-class_bookings bug shipped green.
   const base = {
-    _id: 'bk1', event_id: 'ev1', event_name: 'DR1VE',
+    _id: 'bk1', model: 'events', model_id: 'ev1', event_name: 'DR1VE',
     time_start: 1_750_000_000, status: 'booked', attended: false,
   }
   it('shapes a Glofox booking into a roster row', () => {
@@ -19,6 +22,17 @@ describe('class-bookings: mapBookingToRosterRow', () => {
     const row = mapBookingToRosterRow({ ...base, status: 'attended', attended: true }, { locationId: 'loc1' })
     expect(row.status).toBe('ATTENDED')
     expect(row.attended).toBe(true)
+  })
+  it('maps a raw webhook-shape booking (id + model_id, not _id/event_id)', () => {
+    const row = mapBookingToRosterRow(
+      { id: 'bk9', model: 'events', model_id: 'mev9', model_name: 'ZONE', time_start: 1_750_000_000, status: 'BOOKED' },
+      { locationId: 'loc1' },
+    )
+    expect(row).toMatchObject({ glofox_booking_id: 'bk9', glofox_event_id: 'mev9', class_name: 'ZONE' })
+  })
+  it('falls back to legacy _id / event_id when the model fields are absent', () => {
+    const row = mapBookingToRosterRow({ _id: 'bkf', event_id: 'evf' }, { locationId: 'loc1' })
+    expect(row).toMatchObject({ glofox_booking_id: 'bkf', glofox_event_id: 'evf' })
   })
   it('returns null without a booking id, event id, or location', () => {
     expect(mapBookingToRosterRow({ event_id: 'ev1' }, { locationId: 'loc1' })).toBeNull()
