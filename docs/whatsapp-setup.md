@@ -204,7 +204,7 @@ Notes:
 | Inbound returns 500 | `WHATSAPP_APP_SECRET` unset (handler fails closed; Meta retries ~24h — just set the var) |
 | Sends fail with auth error | Token missing permissions or system user lacks WABA asset assignment |
 | Template submit fails for media headers | `WHATSAPP_APP_ID` / `app_id` not set (Resumable Upload API needs it) |
-| Messages land in wrong location's inbox | `phone_number_id` not registered in `whatsapp_numbers` → falls back to first location |
+| Inbound not appearing anywhere | Unrecognised `phone_number_id` is dropped (cross-tenant hardening, WA-TECHPROV.4) — check Vercel logs for `[wa-webhook] dropping inbound for unregistered phone_number_id …`. Only the env-config number still falls back to first location |
 
 ---
 

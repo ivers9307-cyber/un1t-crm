@@ -26,9 +26,10 @@ subscribed to the WABA → number live in the existing send/receive machinery.
   clients/week) — not urgent.
 
 **Non-negotiable constraint:** the live Stillorgan integration is untouched.
-It keeps riding the env-var System User token (`WHATSAPP_ACCESS_TOKEN` path in
-`src/lib/whatsapp-config.js`); nothing in this work modifies that number's
-registration, tokens, or webhook subscription.
+The live Stillorgan number's `whatsapp_numbers` row and the env-var fallback
+path (`WHATSAPP_ACCESS_TOKEN` in `src/lib/whatsapp-config.js`) are both
+untouched by this work; its routing behaviour is unchanged in every path
+(verified in final review).
 
 ## 2. Persistence decision (approved)
 
@@ -87,9 +88,9 @@ page it lives in):
   callback. Exact `extras`/session-info-version fields are confirmed against
   Meta's current ES v4 docs at implementation time (they drift; the behaviour
   contract here is fixed).
-- POSTs `{ code, waba_id, phone_number_id, location_id }` to the exchange
-  endpoint below; renders success (row appears in the existing numbers list) or
-  the surfaced error.
+- POSTs `{ code, waba_id, phone_number_id }` to the exchange endpoint below
+  (location travels in the route path); renders success (row appears in the
+  existing numbers list) or the surfaced error.
 - Abandoned dialog (no code) = no-op, no partial state.
 
 ### 4.2 API — `POST /api/locations/[id]/whatsapp/embedded-signup`
@@ -114,9 +115,9 @@ Server-side steps, in order:
 4. **Persist** to `whatsapp_numbers` keyed on the unique `phone_number_id`:
    - New number → insert row: `access_token` = business token,
      `token_type='business'`, `connected_via='embedded_signup'`,
-     `signup_meta` (raw ES payload, granted scopes, generated PIN),
-     `source='cloud_api'`, `is_active=true`, `is_default=true` only if the
-     location has no default.
+     `signup_meta` = `{ waba_id, pin, connected_by, connected_at, probe:
+     { status, platform_type } }`, `source='cloud_api'`, `is_active=true`,
+     `is_default=true` only if the location has no default.
    - Existing row, **same location** → refresh token/`signup_meta`/flags
      (re-connect flow), never a duplicate.
    - Existing row, **different location** → 409; surfaced, never silently
@@ -133,7 +134,7 @@ Add to `whatsapp_numbers`:
 |---|---|---|---|
 | `token_type` | TEXT CHECK (`system_user` \| `business`) | `system_user` | existing rows keep meaning |
 | `connected_via` | TEXT CHECK (`manual` \| `embedded_signup`) | `manual` | provenance |
-| `signup_meta` | JSONB | `NULL` | raw ES payload, scopes, 2FA PIN |
+| `signup_meta` | JSONB | `NULL` | `{ waba_id, pin, connected_by, connected_at, probe: { status, platform_type } }` |
 
 No changes to existing rows. `get_advisors` (security) after DDL, per invariant.
 
@@ -201,8 +202,9 @@ existing `getWhatsAppConfig` tiers; inbound rides
 ## 8. Risks & mitigations
 
 - **Live-app blast radius:** all changes are additive (new ES config on the
-  app, new columns with defaults, new route). The Stillorgan row in
-  `whatsapp_numbers` stays inactive-by-design; env path untouched.
+  app, new columns with defaults, new route). The live Stillorgan number's
+  row and the env fallback path are both untouched by this work; its
+  routing behaviour is unchanged in every path (verified in final review).
 - **ES v2 deprecation 2026-10-15:** build v4 from the start; nothing to
   migrate later.
 - **Temp-token trap (historical):** business tokens from ES are long-lived and
