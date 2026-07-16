@@ -19,7 +19,8 @@ import { useHeaderHeight } from '@react-navigation/elements'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth-context'
 import {
-  getThread, sendText, resolveConversation, rateAgentMessage, igDisplayName,
+  getThread, sendText, resolveConversation, rateAgentMessage,
+  setAgentActive, igDisplayName,
 } from '../../lib/instagram-api'
 import { listConversationApprovals } from '../../lib/inbox-approvals-api'
 import { needsReply, isAgentHandoff } from '../../lib/inbox'
@@ -41,6 +42,7 @@ export default function InstagramConversation() {
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
   const [resolving, setResolving] = useState(false)
+  const [togglingAgent, setTogglingAgent] = useState(false)
   const [feedback, setFeedback] = useState({})
   const scrollRef = useRef(null)
 
@@ -81,6 +83,20 @@ export default function InstagramConversation() {
       return
     }
     setText('')
+    refresh()
+  }
+
+  // AGENT-TAKEOVER visibility — hand the thread to staff (silence Mia)
+  // or back to her, mirroring the web IG inbox header toggle.
+  async function toggleAgent(active) {
+    if (togglingAgent) return
+    setTogglingAgent(true)
+    const res = await setAgentActive(conversationId, active, activeLocation?.id)
+    setTogglingAgent(false)
+    if (!res.success) {
+      Alert.alert('Couldn’t update agent state', res.error || 'Unknown error')
+      return
+    }
     refresh()
   }
 
@@ -162,6 +178,36 @@ export default function InstagramConversation() {
         </View>
       ) : (
         <>
+          {/* AGENT-TAKEOVER visibility — who's driving this thread.
+              Mirrors the web IG inbox: agent_active !== false means Mia
+              replies; staff can take over (or a manual send does it),
+              and hand back re-arms her. */}
+          {conv && (
+            <View className="bg-un1t-bg border-b border-un1t-border px-4 py-2 flex-row items-center">
+              {conv.agent_active !== false ? (
+                <>
+                  <Ionicons name="sparkles" size={13} color="#64748B" />
+                  <Text className="text-xs text-un1t-subtle flex-1 ml-1.5">Agent active</Text>
+                  <Pressable onPress={() => toggleAgent(false)} disabled={togglingAgent} hitSlop={8}>
+                    {togglingAgent
+                      ? <ActivityIndicator size="small" />
+                      : <Text className="text-xs text-amber-700 font-semibold">Take over</Text>}
+                  </Pressable>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="person-outline" size={13} color="#B45309" />
+                  <Text className="text-xs text-amber-700 flex-1 ml-1.5">You’re handling this</Text>
+                  <Pressable onPress={() => toggleAgent(true)} disabled={togglingAgent} hitSlop={8}>
+                    {togglingAgent
+                      ? <ActivityIndicator size="small" />
+                      : <Text className="text-xs text-blue-600 font-semibold">Hand back to agent</Text>}
+                  </Pressable>
+                </>
+              )}
+            </View>
+          )}
+
           {isAgentHandoff(conv) && (
             <View className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2.5 flex-row items-center">
               <Ionicons name="hand-left-outline" size={16} color="#B45309" />

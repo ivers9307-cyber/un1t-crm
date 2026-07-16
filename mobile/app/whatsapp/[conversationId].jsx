@@ -5,8 +5,10 @@
 // either a text (when within the 24h window) or a template (anytime,
 // chosen from a sheet).
 //
-// On focus we mark the conversation read (unread_count -> 0), which
-// matches the web behaviour in /api/whatsapp/conversations/[id] GET.
+// The thread loads via the web /api/whatsapp/conversations/[id] GET
+// (getThread) — one call for conversation + messages + booking-Flow
+// availability, and it resets unread_count server-side (THREAD-M.1;
+// previously three direct Supabase reads + a mark-read update).
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import {
@@ -34,9 +36,9 @@ function BackHeaderLeft({ router, label = 'Inbox' }) {
 }
 import { useAuth } from '../../lib/auth-context'
 import {
-  getConversation, listMessages, markConversationRead,
-  isWindowOpen, sendText, sendTemplate, listTemplates,
-  resolveConversation, rateAgentMessage,
+  getThread, isWindowOpen, sendText, sendTemplate, listTemplates,
+  resolveConversation, rateAgentMessage, setBlocked,
+  reactToInboundMessage, listCardSets, sendCardSet, sendBookingFlow,
 } from '../../lib/whatsapp-api'
 import { listConversationApprovals } from '../../lib/inbox-approvals-api'
 import { needsReply, isAgentHandoff } from '../../lib/inbox'
@@ -60,23 +62,40 @@ export default function Conversation() {
   const [templates, setTemplates] = useState([])
   const [resolving, setResolving] = useState(false)
   const [feedback, setFeedback] = useState({})
+  // FLOW-SEND — whether this location has the booking Flow configured
+  // (comes back on the thread GET, same as web).
+  const [flowAvailable, setFlowAvailable] = useState(false)
+  const [sendingFlow, setSendingFlow] = useState(false)
+  // C4 — operator-curated card sets. null = not fetched yet (lazy —
+  // loaded the first time an open-window composer renders, then cached;
+  // [] on load failure hides the control, mirroring web).
+  const [cardSets, setCardSets] = useState(null)
+  const [showCardSets, setShowCardSets] = useState(false)
+  const [sendingCardSet, setSendingCardSet] = useState(false)
+  // WA-BLOCK + C6 action state.
+  const [blocking, setBlocking] = useState(false)
+  const [reactingId, setReactingId] = useState(null)
   const scrollRef = useRef(null)
 
+  // One call for conversation + messages + flow availability; the GET
+  // also resets unread_count server-side (no separate mark-read).
   const refresh = useCallback(async () => {
-    const [convRes, msgRes, approvalsRes] = await Promise.all([
-      getConversation(conversationId),
-      listMessages(conversationId),
+    const [threadRes, approvalsRes] = await Promise.all([
+      getThread(conversationId, activeLocation?.id),
       listConversationApprovals(conversationId),
     ])
-    if (convRes.success) setConv(convRes.data)
-    if (msgRes.success) setMessages(msgRes.data || [])
+    if (threadRes.success) {
+      setConv(threadRes.conversation)
+      setMessages(threadRes.messages || [])
+      setFlowAvailable(threadRes.flowAvailable)
+    }
     if (approvalsRes.success) setApprovals(approvalsRes.requests || [])
-  }, [conversationId])
+  }, [conversationId, activeLocation])
 
   useEffect(() => {
     setLoading(true)
     setApprovals([])
-    refresh().then(() => markConversationRead(conversationId)).finally(() => setLoading(false))
+    refresh().finally(() => setLoading(false))
   }, [conversationId, refresh])
 
   useEffect(() => {
@@ -87,6 +106,18 @@ export default function Conversation() {
   }, [messages.length])
 
   const windowOpen = isWindowOpen(conv)
+
+  // C4 — lazy card-set fetch: the first time the thread renders with an
+  // open 24h window, load the location's card sets once and cache them
+  // for the screen. [] (loaded-but-empty or failure) hides the control.
+  useEffect(() => {
+    if (cardSets !== null || !activeLocation?.id || !windowOpen) return
+    let cancelled = false
+    listCardSets(activeLocation.id).then(res => {
+      if (!cancelled) setCardSets(res.success ? res.data : [])
+    })
+    return () => { cancelled = true }
+  }, [cardSets, activeLocation, windowOpen])
 
   async function send() {
     if (!text.trim() || !windowOpen) return
@@ -134,6 +165,77 @@ export default function Conversation() {
     setResolving(false)
     if (!res.success) {
       Alert.alert('Couldn’t resolve', res.error || 'Unknown error')
+      return
+    }
+    refresh()
+  }
+
+  // WA-BLOCK — block/unblock the sender at Meta (spam/abuse; protects the
+  // number's quality rating). Confirmed action, mirroring the web copy.
+  function toggleBlocked() {
+    if (!conv || blocking) return
+    const next = !conv.is_blocked
+    Alert.alert(
+      next ? 'Block this sender?' : 'Unblock this sender?',
+      next
+        ? 'They will no longer be able to message this number (and it cannot message them).'
+        : undefined,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: next ? 'Block' : 'Unblock',
+          style: next ? 'destructive' : 'default',
+          onPress: async () => {
+            setBlocking(true)
+            const res = await setBlocked(conversationId, next, activeLocation?.id)
+            setBlocking(false)
+            if (!res.success) {
+              Alert.alert('Couldn’t update block state', res.error || 'Unknown error')
+              return
+            }
+            setConv(prev => (prev ? { ...prev, is_blocked: next } : prev))
+          },
+        },
+      ]
+    )
+  }
+
+  // C6 — react to a customer message. The route logs the thread row; web
+  // relies on realtime to surface it, mobile refreshes explicitly.
+  async function react(msg, emoji) {
+    if (!msg.wa_message_id || reactingId) return
+    setReactingId(msg.id)
+    const res = await reactToInboundMessage(conversationId, msg.wa_message_id, emoji, activeLocation?.id)
+    setReactingId(null)
+    if (!res.success) {
+      Alert.alert('Couldn’t react', res.error || 'Unknown error')
+      return
+    }
+    refresh()
+  }
+
+  // C4 — send the chosen card set as an in-session media carousel.
+  async function sendChosenCardSet(set) {
+    setShowCardSets(false)
+    setSendingCardSet(true)
+    const res = await sendCardSet(conversationId, set.id, activeLocation?.id)
+    setSendingCardSet(false)
+    if (!res.success) {
+      Alert.alert('Couldn’t send card set', res.error || 'Unknown error')
+      return
+    }
+    refresh()
+  }
+
+  // FLOW-SEND — drop the booking Flow into the chat (in-session; the
+  // route enforces linked-contact + configured-Flow).
+  async function sendFlow() {
+    if (sendingFlow) return
+    setSendingFlow(true)
+    const res = await sendBookingFlow(conversationId, activeLocation?.id)
+    setSendingFlow(false)
+    if (!res.success) {
+      Alert.alert('Couldn’t send booking Flow', res.error || 'Unknown error')
       return
     }
     refresh()
@@ -191,13 +293,29 @@ export default function Conversation() {
         options={{
           title: name,
           headerLeft: () => <BackHeaderLeft router={router} label="Inbox" />,
-          headerRight: conv && !conv.resolved_at && (needsReply(conv) || isAgentHandoff(conv))
+          headerRight: conv
             ? () => (
-                <Pressable onPress={resolve} disabled={resolving} hitSlop={10}>
-                  {resolving
-                    ? <ActivityIndicator size="small" />
-                    : <Ionicons name="checkmark-circle-outline" size={26} color="#16A34A" />}
-                </Pressable>
+                <View className="flex-row items-center">
+                  {/* WA-BLOCK — red when blocked (tap to unblock) */}
+                  <Pressable onPress={toggleBlocked} disabled={blocking} hitSlop={10} className="mr-3">
+                    {blocking
+                      ? <ActivityIndicator size="small" />
+                      : (
+                        <Ionicons
+                          name={conv.is_blocked ? 'ban' : 'ban-outline'}
+                          size={22}
+                          color={conv.is_blocked ? '#DC2626' : '#94A3B8'}
+                        />
+                      )}
+                  </Pressable>
+                  {!conv.resolved_at && (needsReply(conv) || isAgentHandoff(conv)) && (
+                    <Pressable onPress={resolve} disabled={resolving} hitSlop={10}>
+                      {resolving
+                        ? <ActivityIndicator size="small" />
+                        : <Ionicons name="checkmark-circle-outline" size={26} color="#16A34A" />}
+                    </Pressable>
+                  )}
+                </View>
               )
             : undefined,
         }}
@@ -229,6 +347,17 @@ export default function Conversation() {
             </View>
           )}
 
+          {/* WA-BLOCK state chip — the sender is blocked at Meta; no
+              messages can be exchanged until unblocked (header ban icon). */}
+          {conv?.is_blocked && (
+            <View className="bg-red-500/10 border-b border-red-500/30 px-4 py-2 flex-row items-center">
+              <Ionicons name="ban" size={14} color="#B91C1C" />
+              <Text className="text-xs text-red-700 ml-2">
+                Sender blocked — messages can’t be exchanged with this number.
+              </Text>
+            </View>
+          )}
+
           {/* Window status banner */}
           {!windowOpen && (
             <View className="bg-amber-500/15 border-b border-amber-500/30 px-4 py-2">
@@ -254,7 +383,15 @@ export default function Conversation() {
                   onPrefillComposer={t => setText(t)}
                 />
               ) : (
-                <MessageBubble key={item.key} msg={item.message} myRating={feedback[item.message.id] || null} onRate={rate} channel="whatsapp" />
+                <MessageBubble
+                  key={item.key}
+                  msg={item.message}
+                  myRating={feedback[item.message.id] || null}
+                  onRate={rate}
+                  onReact={react}
+                  reactingId={reactingId}
+                  channel="whatsapp"
+                />
               )
             ))}
           </ScrollView>
@@ -264,38 +401,72 @@ export default function Conversation() {
               when the keyboard is open (KeyboardAvoidingView replaces
               the inset). */}
           <View
-            className="border-t border-un1t-border bg-un1t-bg px-3 pt-2 flex-row items-end"
+            className="border-t border-un1t-border bg-un1t-bg px-3 pt-2"
             style={{ paddingBottom: Math.max(insets.bottom, 8) }}
           >
-            <Pressable
-              onPress={pickTemplate}
-              className="w-10 h-10 rounded-full bg-un1t-surface border border-un1t-border items-center justify-center mr-2 active:opacity-70"
-            >
-              <Ionicons name="document-text-outline" size={18} color="#111827" />
-            </Pressable>
-            <TextInput
-              value={text}
-              onChangeText={setText}
-              multiline
-              placeholder={windowOpen ? 'Message…' : 'Send a template instead'}
-              placeholderTextColor="#94A3B8"
-              editable={windowOpen}
-              className="flex-1 bg-un1t-surface border border-un1t-border rounded-2xl px-4 py-2.5 text-base text-un1t-text max-h-32"
-              textAlignVertical="top"
-            />
-            <Pressable
-              onPress={send}
-              disabled={!text.trim() || !windowOpen || sending}
-              className={`w-10 h-10 rounded-full ml-2 items-center justify-center ${
-                text.trim() && windowOpen && !sending ? 'bg-blue-500' : 'bg-un1t-border'
-              }`}
-            >
-              {sending ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <Ionicons name="arrow-up" size={20} color="#FFFFFF" />
-              )}
-            </Pressable>
+            {/* Composer extras — same gating as web: card sets show when
+                the location has any configured (C4), the booking Flow
+                when it's configured AND the sender is a linked contact
+                (FLOW-SEND). Both are in-session sends → window-open only. */}
+            {windowOpen && ((Array.isArray(cardSets) && cardSets.length > 0) || (flowAvailable && conv?.contact_id)) && (
+              <View className="flex-row items-center mb-2">
+                {Array.isArray(cardSets) && cardSets.length > 0 && (
+                  <Pressable
+                    onPress={() => setShowCardSets(true)}
+                    disabled={sendingCardSet}
+                    className="flex-row items-center bg-un1t-surface border border-un1t-border rounded-full px-3 py-1.5 mr-2 active:opacity-70"
+                  >
+                    <Ionicons name="images-outline" size={14} color="#111827" />
+                    <Text className="text-xs text-un1t-text ml-1.5">
+                      {sendingCardSet ? 'Sending cards…' : 'Send cards'}
+                    </Text>
+                  </Pressable>
+                )}
+                {flowAvailable && conv?.contact_id && (
+                  <Pressable
+                    onPress={sendFlow}
+                    disabled={sendingFlow}
+                    className="flex-row items-center bg-un1t-surface border border-un1t-border rounded-full px-3 py-1.5 active:opacity-70"
+                  >
+                    <Ionicons name="calendar-outline" size={14} color="#111827" />
+                    <Text className="text-xs text-un1t-text ml-1.5">
+                      {sendingFlow ? 'Sending…' : 'Send booking Flow'}
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
+            )}
+            <View className="flex-row items-end">
+              <Pressable
+                onPress={pickTemplate}
+                className="w-10 h-10 rounded-full bg-un1t-surface border border-un1t-border items-center justify-center mr-2 active:opacity-70"
+              >
+                <Ionicons name="document-text-outline" size={18} color="#111827" />
+              </Pressable>
+              <TextInput
+                value={text}
+                onChangeText={setText}
+                multiline
+                placeholder={windowOpen ? 'Message…' : 'Send a template instead'}
+                placeholderTextColor="#94A3B8"
+                editable={windowOpen}
+                className="flex-1 bg-un1t-surface border border-un1t-border rounded-2xl px-4 py-2.5 text-base text-un1t-text max-h-32"
+                textAlignVertical="top"
+              />
+              <Pressable
+                onPress={send}
+                disabled={!text.trim() || !windowOpen || sending}
+                className={`w-10 h-10 rounded-full ml-2 items-center justify-center ${
+                  text.trim() && windowOpen && !sending ? 'bg-blue-500' : 'bg-un1t-border'
+                }`}
+              >
+                {sending ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Ionicons name="arrow-up" size={20} color="#FFFFFF" />
+                )}
+              </Pressable>
+            </View>
           </View>
 
           {/* Templates picker (modal-ish overlay) */}
@@ -332,6 +503,41 @@ export default function Conversation() {
                           {t.body_text}
                         </Text>
                       )}
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </Pressable>
+            </Pressable>
+          )}
+
+          {/* C4 — card-set picker (same sheet pattern as templates);
+              tapping a set sends it as an in-session media carousel. */}
+          {showCardSets && (
+            <Pressable
+              className="absolute inset-0 bg-black/40 items-end"
+              onPress={() => setShowCardSets(false)}
+            >
+              <Pressable
+                className="bg-un1t-bg border-t border-un1t-border rounded-t-3xl mt-auto w-full max-h-[60%] p-4"
+                onPress={() => {}}
+              >
+                <View className="flex-row items-center justify-between mb-3">
+                  <Text className="text-base font-semibold text-un1t-text">Send card set</Text>
+                  <Pressable onPress={() => setShowCardSets(false)} hitSlop={10}>
+                    <Ionicons name="close" size={22} color="#111827" />
+                  </Pressable>
+                </View>
+                <ScrollView>
+                  {(cardSets || []).map(s => (
+                    <Pressable
+                      key={s.id}
+                      onPress={() => sendChosenCardSet(s)}
+                      className="bg-un1t-surface border border-un1t-border rounded-xl p-3 mb-2 active:opacity-70"
+                    >
+                      <Text className="text-sm font-semibold text-un1t-text">{s.name}</Text>
+                      <Text className="text-xs text-un1t-subtle mt-1" numberOfLines={2}>
+                        {s.cards?.length || 0} cards{s.body_text ? ` · ${s.body_text}` : ''}
+                      </Text>
                     </Pressable>
                   ))}
                 </ScrollView>
