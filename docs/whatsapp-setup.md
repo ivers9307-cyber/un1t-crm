@@ -205,3 +205,73 @@ Notes:
 | Sends fail with auth error | Token missing permissions or system user lacks WABA asset assignment |
 | Template submit fails for media headers | `WHATSAPP_APP_ID` / `app_id` not set (Resumable Upload API needs it) |
 | Messages land in wrong location's inbox | `phone_number_id` not registered in `whatsapp_numbers` → falls back to first location |
+
+---
+
+## 4. Tech Provider — Embedded Signup v4 (WA-TECHPROV, 2026-07)
+
+Design: `docs/WHATSAPP_TECH_PROVIDER_DESIGN_2026-07.md`. Meta approved the
+testing/configuring phase 2026-07-16. Everything below is additive to the
+live app — the Stillorgan number, env token, and webhook are untouched.
+
+### 4.1 App preflight (App Review blocks without these)
+App Dashboard → Settings → Basic: confirm privacy policy URL, app icon
+(1024×1024), category, and that the app is connected to the verified UN1T
+business portfolio. Record anything missing and fix before review.
+
+### 4.2 Create the Embedded Signup configuration
+1. App Dashboard → Facebook Login for Business → Configurations → Create.
+2. Choose the WhatsApp Embedded Signup (v4) template; login variation "General".
+3. Assets: WhatsApp Business accounts; permissions: whatsapp_business_management,
+   whatsapp_business_messaging.
+4. Save → copy the **Configuration ID** → set `WHATSAPP_ES_CONFIG_ID` in Vercel
+   (Production) and redeploy.
+5. Facebook Login for Business → Settings: add `https://crm.un1tdublin.com` to
+   Allowed Domains for the JavaScript SDK; enable "Login with the JavaScript SDK".
+
+### 4.3 In-house E2E (standard access)
+Standard access onboards businesses the app's own portfolio admins — i.e. UN1T.
+Settings → Locations → (Hatch or a test location) → Integrations → WhatsApp →
+the **Connect with WhatsApp** card → click **Connect** → complete the dialog
+with a spare/test number. Verify: row appears with
+`connected_via=embedded_signup`; send + receive works; inbound lands in THAT
+location's inbox; Stillorgan traffic unaffected. Record the screen during this
+run — it becomes the App Review screencast.
+
+### 4.4 App Review submission
+App Review → Permissions and Features → request **Advanced Access** for:
+- `whatsapp_business_messaging` — screencast: a message sent from the CRM
+  arriving in a WhatsApp client (from 4.3).
+- `whatsapp_business_management` — screencast: template creation via the CRM's
+  template builder (or WhatsApp Manager as fallback).
+
+Draft justifications (edit to taste before submitting):
+
+> **whatsapp_business_messaging:** UN1T CRM is a gym-management platform
+> (crm.un1tdublin.com). Businesses onboard their own WhatsApp Business
+> accounts via Embedded Signup and use the platform to reply to member
+> conversations from a shared inbox, send class reminders and booking
+> confirmations (utility templates), and run opt-in marketing sends. Messages
+> are sent exclusively on behalf of the onboarded business to its own
+> customers, who have opted in via the business's booking/consent flows.
+>
+> **whatsapp_business_management:** The platform manages onboarded customers'
+> WABA assets on their behalf: creating and submitting message templates,
+> reading template status/quality webhooks, monitoring phone-number quality
+> ratings and messaging limits, and subscribing the app to the WABA's
+> webhooks at onboarding. All management is scoped to WABAs connected through
+> Embedded Signup by the business itself.
+
+### 4.5 After approval
+- Access Verification (Business Settings prompt) — lifts the onboarding cap
+  from 10 to 200 clients/week. Defer until external clients are imminent.
+- Onboarded clients must add a payment method to their own WABA (they pay
+  Meta directly) — surface this in onboarding copy when SaaS clients arrive.
+
+### 4.6 Traps
+- **Build v4 only** — ES v2 is deprecated 2026-10-15.
+- ES business tokens are long-lived — NOT the API-Setup 24h temp tokens that
+  killed agent sends before (docs/LESSONS.md). Health polling still covers
+  revocation.
+- `/register` is limited to 10 calls/number/72h (err 133016) — the exchange
+  route probes before registering; don't hand-retry in the console.
