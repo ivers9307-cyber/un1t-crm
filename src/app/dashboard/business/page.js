@@ -9,14 +9,10 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
-import {
-  fetchRevenueMTD, fetchArrearsSummary, fetchFunnelCounts, fetchAdsSummary, fetchTodayOps,
-} from '@shared/dashboard-data'
-import { buildBusinessBriefing } from '@shared/business-briefing'
+import { fetchFunnelCounts, fetchAdsSummary, fetchTodayOps } from '@shared/dashboard-data'
 import { buildNeedsYouRail } from '@/lib/dashboard/business-rail'
-import { getPendingApprovalsCount } from '@/lib/approvals/registry'
+import { buildBusinessKpis } from '@/lib/dashboard/business-kpis'
 import { computeMembershipCounts, fetchMembershipTrend } from '@/lib/membership-snapshot'
-import { loadRadar } from '@/lib/churn-radar-data'
 import { KpiCard, KpiRow, formatCurrency } from '@/components/dashboard/Cards'
 import { MembershipPanel } from '@/components/dashboard/MembershipPanel'
 import {
@@ -31,66 +27,11 @@ export const dynamic = 'force-dynamic'
 // null on failure); the JSX is built after the try, outside its scope.
 async function KpiBriefingBlock({ user, locationId }) {
   const db = createServerClient()
-  let vm = null
-  try {
-    // DASH-REBUILD.6b — derive the briefing's attention labels locally
-    // from data this block already holds (approvals count + arrears +
-    // churn). The full rail is built once, in RailBlock — calling
-    // buildNeedsYouRail here too would double the 8-provider approvals
-    // fan-out + leads/failed queries every page load.
-    // Comparator snapshot for the churn week-over-week delta: the most
-    // recent snapshot at least ~a week old. Guarded so any failure
-    // yields null (quiet) rather than rejecting the whole fan-out.
-    const sixDaysAgoIso = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString()
-    const churnSnapshot = db.from('churn_radar_snapshots')
-      .select('high_risk, captured_at')
-      .eq('location_id', locationId)
-      .lte('captured_at', sixDaysAgoIso)
-      .order('captured_at', { ascending: false }).limit(1)
-      .then(({ data }) => data?.[0] ?? null, () => null)
-    const [revenue, arrears, membershipLive, radar, approvalsCount, churnPrev] = await Promise.all([
-      fetchRevenueMTD(db, locationId),
-      fetchArrearsSummary(db, locationId),
-      // Guarded like radar/approvals — any of its internal count
-      // queries throwing must not reject the whole Promise.all and
-      // discard four healthy data points.
-      computeMembershipCounts(db, locationId).catch(() => null),
-      loadRadar(db, locationId).catch(() => null),
-      getPendingApprovalsCount(db, user).catch(() => 0),
-      churnSnapshot,
-    ])
-    if (!revenue.success) throw new Error(revenue.error)
-    // null (not a fake {0,0}) when arrears failed — the card shows '—',
-    // not a dishonest "€0 · 0 members" (DASH-REBUILD.6c pattern).
-    const arrearsData = arrears.success ? arrears.data : null
-    // null (not 0) when membership failed — the card shows '—', not a
-    // fake zero; the briefing's own `|| 0` handles its degradation.
-    const memberCount = membershipLive
-      ? (membershipLive.active_recurring ?? membershipLive.monthly_recurring ?? 0)
-      : null
-    const churnCount = radar?.summary?.highRisk ?? null
-    // Week-over-week churn delta vs the comparator snapshot. Only shown
-    // when both sides are known and the trend is up (quiet otherwise).
-    const snapshotHigh = churnPrev?.high_risk ?? null
-    const churnDelta = (churnCount != null && snapshotHigh != null) ? churnCount - snapshotHigh : null
-
-    // Priority order, non-zero only, max 3. Rail text uses compact euro
-    // strings; the KPI cards below use formatCurrency — intentionally
-    // different registers, not a bug.
-    const labels = []
-    if (approvalsCount > 0) labels.push(`${approvalsCount} pending approval${approvalsCount === 1 ? '' : 's'}`)
-    if (arrearsData?.memberCount > 0) labels.push(`${arrearsData.memberCount} in arrears (€${Math.round(arrearsData.totalCents / 100).toLocaleString('en-IE')})`)
-    if (churnCount > 0) labels.push(`${churnCount} at churn risk`)
-
-    const briefing = buildBusinessBriefing({
-      revenue: { totalCents: revenue.data.totalCents, deltaPct: revenue.data.deltaPct },
-      members: { count: memberCount, netChange: null },
-      attention: labels.slice(0, 3).map(l => ({ label: l })),
-    })
-    vm = { revenue: revenue.data, arrearsData, memberCount, churnCount, churnDelta, briefing }
-  } catch {
-    vm = null
-  }
+  // DASH-M.1 — the awaits + shaping moved verbatim to
+  // src/lib/dashboard/business-kpis.js so /api/dashboard/business (the
+  // mobile Business dashboard's data route) computes the SAME numbers.
+  // Returns null on failure (its internal try/catch), per the header.
+  const vm = await buildBusinessKpis(db, user, locationId)
   if (!vm) return <BlockError label="Headline numbers" />
 
   const { revenue, arrearsData, memberCount, churnCount, churnDelta, briefing } = vm

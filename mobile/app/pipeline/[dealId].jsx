@@ -37,7 +37,7 @@ function BackHeaderLeft({ router, label = 'Back' }) {
 }
 import { useAuth } from '../../lib/auth-context'
 import {
-  getDeal, setDealStatus,
+  getDeal, setDealStatus, setPipelineCold,
   listActivitiesForContact, listNotesForContact,
   logActivity, createNote,
 } from '../../lib/pipeline-api'
@@ -91,6 +91,7 @@ export default function DealDetail() {
   const [logText, setLogText] = useState('')
   const [logKind, setLogKind] = useState('note')   // 'note' | 'call' | 'email' | 'meeting'
   const [submittingLog, setSubmittingLog] = useState(false)
+  const [coldSaving, setColdSaving] = useState(false)
 
   const refresh = useCallback(async () => {
     const dealRes = await getDeal(dealId)
@@ -124,6 +125,41 @@ export default function DealDetail() {
             const res = await setDealStatus(dealId, status)
             if (!res.success) Alert.alert('Couldn’t update', res.error)
             else router.back()
+          },
+        },
+      ]
+    )
+  }
+
+  // FUNNEL.4 Cold toggle (FUNNEL-M.1) — mirrors the web PersonActionBar
+  // semantics: POST /api/contacts/[id]/pipeline-status. cold=true takes
+  // the lead off the funnel; cold=false returns them. The route re-runs
+  // the classifier server-side so the deal's stage moves immediately —
+  // refresh() picks the new placement up. A cold lead also auto-rejoins
+  // the moment they attend a class after the dismissal, so "Return to
+  // pipeline" is only needed when they haven't trained yet.
+  function toggleCold(isCold) {
+    if (coldSaving || !deal?.contact_id) return
+    const marking = !isCold
+    Alert.alert(
+      marking ? 'Mark as Cold?' : 'Return to pipeline?',
+      marking
+        ? 'Takes this lead off the funnel. They rejoin automatically if they attend a class.'
+        : 'Puts this lead back on the funnel now.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: marking ? 'Mark as Cold' : 'Return to pipeline',
+          style: marking ? 'destructive' : 'default',
+          onPress: async () => {
+            setColdSaving(true)
+            const res = await setPipelineCold(deal.contact_id, marking)
+            setColdSaving(false)
+            if (!res.success) {
+              Alert.alert('Couldn’t update', res.error || 'Could not update pipeline status')
+              return
+            }
+            refresh()
           },
         },
       ]
@@ -191,6 +227,10 @@ export default function DealDetail() {
   const name = contact?.name
     || [contact?.first_name, contact?.last_name].filter(Boolean).join(' ')
     || 'Unknown'
+  // Same signal the web DealCard uses for the toggle label: the
+  // classifier-maintained slug, not pipeline_dismissed_at (a stale
+  // dismissal is auto-revoked once the lead trains again).
+  const isCold = contact?.pipeline_stage_slug === 'cold_lead'
 
   // Merge & sort activities + notes for the timeline.
   const timeline = [
@@ -252,9 +292,11 @@ export default function DealDetail() {
         {/* Stage — read-only. FUNNEL.1: stage is classifier-derived
             (webhook + nightly cron); a manual move is silently
             reverted by the next sync, so the tap-to-move selector
-            was removed. */}
-        {deal.pipeline_stages && (
-          <Section title="Stage">
+            was removed. The ONE allowed stage action is the FUNNEL.4
+            Cold toggle below — it goes through the pipeline-status
+            route, which persists the dismissal and re-classifies. */}
+        <Section title="Stage">
+          {deal.pipeline_stages && (
             <View className="bg-un1t-surface border border-un1t-border rounded-2xl p-4 flex-row items-center">
               <View
                 className="w-2 h-2 rounded-full mr-2"
@@ -267,8 +309,35 @@ export default function DealDetail() {
                 Set automatically from activity
               </Text>
             </View>
-          </Section>
-        )}
+          )}
+          <Pressable
+            onPress={() => toggleCold(isCold)}
+            disabled={coldSaving}
+            className={`mt-2 py-3 rounded-xl border flex-row items-center justify-center active:opacity-70 ${
+              coldSaving ? 'opacity-50 ' : ''
+            }${isCold
+              ? 'bg-un1t-surface border-un1t-border'
+              : 'bg-sky-500/10 border-sky-500/30'
+            }`}
+          >
+            {coldSaving ? (
+              <ActivityIndicator size="small" />
+            ) : (
+              <>
+                <Ionicons
+                  name={isCold ? 'refresh-outline' : 'snow-outline'}
+                  size={15}
+                  color={isCold ? '#111827' : '#0369A1'}
+                />
+                <Text className={`text-sm font-semibold ml-1.5 ${
+                  isCold ? 'text-un1t-text' : 'text-sky-700'
+                }`}>
+                  {isCold ? 'Return to pipeline' : 'Mark as Cold'}
+                </Text>
+              </>
+            )}
+          </Pressable>
+        </Section>
 
         {/* Close actions */}
         <Section title="Close">
