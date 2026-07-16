@@ -30,7 +30,14 @@ import { Analytics } from '@vercel/analytics/next'
 // per-host /unsubscribe/host/[token]): anonymous email recipients arrive with
 // no session, and without this entry the null-user redirect below bounced
 // them to /login. Mirrors the proxy.js allowlist — add new paths in BOTH.
-const PUBLIC_PATHS = ['/login', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/deposit', '/book', '/event', '/event-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe']
+// '/privacy' — public legal pages (/privacy, /privacy/members,
+// /privacy/authority-requests) and '/terms' — the Terms of Service. These
+// are server-rendered public policy pages (App Store + Meta App Review link
+// to them). They were missing here, so a logged-out visitor on the marketing
+// host was bounced to /login → which that host rewrites to /welcome, i.e. the
+// server-rendered policy flashed then vanished into the studio chooser.
+// Mirrors the proxy.js + brands.js allowlists — add new paths in ALL THREE.
+const PUBLIC_PATHS = ['/login', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/deposit', '/book', '/event', '/event-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/privacy', '/terms']
 
 export default function AppShell({ user, children, isLinkedHost = false }) {
   const pathname = usePathname()
