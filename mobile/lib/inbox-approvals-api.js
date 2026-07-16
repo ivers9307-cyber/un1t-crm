@@ -8,6 +8,7 @@
 // /approvals screen — that's a different surface, out of scope here.
 
 import { authHeaders } from './api'
+import { supabase } from './supabase'
 
 const API_BASE =
   process.env.EXPO_PUBLIC_API_BASE_URL ||
@@ -26,6 +27,34 @@ export async function listConversationApprovals(conversationId) {
     return { success: false, error: 'Network error' }
   }
   return res.json().catch(() => ({ success: false, error: `Bad response (${res.status})` }))
+}
+
+/**
+ * Conversation ids (WA + IG — the fk is per-channel but ids are uuids,
+ * one set covers both) with a PENDING agent request at this location,
+ * so the Messages list can badge rows the same way the web queue does
+ * (INBOX-EMAIL-M.1). Direct Supabase read: mig 363 grants staff-wide
+ * authenticated SELECT on agent_membership_requests (that's also what
+ * the web's RLS-bound realtime rides), and mig 363's partial index
+ * covers exactly this status='pending' lookup. No profiles embed.
+ *
+ * The /api/whatsapp/conversations route annotates `pending_approval`
+ * server-side, but mobile WhatsApp reads go direct to Supabase, so the
+ * flag has to be re-derived here. IG rows arrive pre-annotated from
+ * /api/instagram/conversations; email threads never have approvals.
+ *
+ * Failure degrades to an empty set — the list renders without approval
+ * pills rather than erroring.
+ */
+export async function listPendingApprovalConversationIds(locationId) {
+  let q = supabase.from('agent_membership_requests')
+    .select('conversation_id')
+    .eq('status', 'pending')
+    .limit(500)
+  if (locationId) q = q.eq('location_id', locationId)
+  const { data, error } = await q
+  if (error) return new Set()
+  return new Set((data || []).map(r => r.conversation_id).filter(Boolean))
 }
 
 /**
