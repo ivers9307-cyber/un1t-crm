@@ -28,8 +28,12 @@ export default function WhatsAppIntegrationTab({ location, canEdit }) {
   const [adding, setAdding] = useState(false)
   const [expandedId, setExpandedId] = useState(null)
 
-  async function load() {
-    setLoading(true); setError(null)
+  // silent: refresh the numbers in place without the loading flip — the
+  // Connect card lives inside the `loading ?` conditional, so a non-silent
+  // reload would unmount it and its success chip mid-celebration.
+  async function load({ silent = false } = {}) {
+    if (!silent) setLoading(true)
+    setError(null)
     try {
       const res = await fetch(`/api/locations/${location.id}/whatsapp/numbers`)
       const j = await res.json()
@@ -122,7 +126,7 @@ export default function WhatsAppIntegrationTab({ location, canEdit }) {
             )
           )}
 
-          <ConnectWhatsAppCard location={location} canEdit={canEdit} onConnected={load} />
+          <ConnectWhatsAppCard location={location} canEdit={canEdit} onConnected={() => load({ silent: true })} />
 
           <ChatOpenersCard location={location} canEdit={canEdit} />
 
@@ -174,14 +178,26 @@ function ConnectWhatsAppCard({ location, canEdit, onConnected }) {
     let cancelled = false
     fetch(`/api/locations/${location.id}/whatsapp/embedded-signup`)
       .then((r) => r.json())
-      .then((j) => { if (!cancelled && j.success) setLaunch(j.data) })
-      .catch(() => { /* card renders the not-configured state */ })
+      .then((j) => { if (!cancelled) setLaunch(j.success ? j.data : { configured: false }) })
+      .catch(() => { if (!cancelled) setLaunch({ configured: false }) }) // fetch failed → amber not-configured chip
     return () => { cancelled = true }
   }, [location.id])
 
+  // Preload the FB SDK once we know we're launchable, so connect()'s await
+  // resolves instantly (loadFacebookSdk is idempotent via the window.FB
+  // check) and FB.login's popup opens inside the click's user-activation
+  // window — otherwise popup blockers can eat the dialog.
+  useEffect(() => {
+    if (launch?.configured) loadFacebookSdk(launch.app_id).catch(() => { /* surfaced on click */ })
+  }, [launch])
+
   useEffect(() => {
     function onMessage(event) {
-      if (typeof event.origin !== 'string' || !event.origin.endsWith('facebook.com')) return
+      // Hostname check, not a substring one — endsWith('facebook.com') on the
+      // raw origin would also pass https://evilfacebook.com.
+      let host
+      try { host = new URL(event.origin).hostname } catch { return }
+      if (host !== 'facebook.com' && !host.endsWith('.facebook.com')) return
       try {
         const data = JSON.parse(event.data)
         if (data?.type === 'WA_EMBEDDED_SIGNUP') {
