@@ -7,13 +7,17 @@
 //        instead of throwing (deliberate: the button renders a
 //        "not configured" state; the no-silent-fallback rule applies
 //        to the mutation path below, which DOES throw).
-// POST → body { code, waba_id, phone_number_id } from the ES dialog.
-//        Orchestrates: code→business-token exchange, ownership check
-//        against whatsapp_numbers (a number owned by another location
-//        409s BEFORE any Meta-side mutation), WABA webhook
-//        subscription, conditional number registration, then upsert
-//        into whatsapp_numbers. Nothing persists unless every Meta
-//        call succeeded — safe to re-run with a fresh code.
+// POST → body { mode?, code, waba_id, phone_number_id? } from the ES
+//        dialog. mode = 'cloud_api' (default) | 'coexistence'. Cloud API
+//        supplies phone_number_id from the session; coexistence omits it
+//        and the route resolves it server-side from the WABA, skips
+//        /register (the number is already live on the Business app), and
+//        stores source='coexistence'. Orchestrates: code→business-token
+//        exchange, ownership check against whatsapp_numbers (a number owned
+//        by another location 409s BEFORE any Meta-side mutation), WABA
+//        webhook subscription, conditional number registration (cloud_api
+//        only), then upsert into whatsapp_numbers. Nothing persists unless
+//        every Meta call succeeded — safe to re-run with a fresh code.
 //
 // Master-or-owner gated, matching the numbers CRUD route.
 // Design: docs/WHATSAPP_TECH_PROVIDER_DESIGN_2026-07.md §4.2.
