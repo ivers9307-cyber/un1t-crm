@@ -141,12 +141,19 @@ export default function PrivacyPolicy() {
             Access is gated by Supabase Row-Level Security policies and per-location permission checks. Staff sign in with email and password; we do not store passwords ourselves — they live inside Supabase&rsquo;s authentication service. Master account actions are logged and reviewable in our internal audit log. Backups are encrypted at rest in the EU.
           </p>
 
-          <h2 className="text-xl font-semibold mt-8 mb-3">11. Changes to this policy</h2>
+          <h2 className="text-xl font-semibold mt-8 mb-3">11. Government and public-authority requests</h2>
+          <p>
+            When a public authority (such as a police force, court, regulator, or government body) asks us to disclose personal data, we review the legality of the request, disclose only the minimum necessary, challenge requests we consider unlawful, and document each one. Our full{' '}
+            <a className="underline" href="/privacy/authority-requests">Government &amp; public authority data request policy</a>{' '}
+            explains this process.
+          </p>
+
+          <h2 className="text-xl font-semibold mt-8 mb-3">12. Changes to this policy</h2>
           <p>
             If we change this policy in a way that materially affects how we use your data, we&rsquo;ll update the &ldquo;Last updated&rdquo; date at the top and, where appropriate, notify staff or contacts directly. Older versions are available on request.
           </p>
 
-          <h2 className="text-xl font-semibold mt-8 mb-3">12. Contact</h2>
+          <h2 className="text-xl font-semibold mt-8 mb-3">13. Contact</h2>
           <p>
             For privacy questions or to exercise any of the rights above:
           </p>
