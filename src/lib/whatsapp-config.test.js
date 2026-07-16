@@ -21,6 +21,7 @@ const {
   getWhatsAppConfig,
   getWhatsAppConfigById,
   resolveWhatsAppNumberByPhoneNumberId,
+  classifyInboundOwner,
 } = await import('./whatsapp-config.js')
 
 // Build a mock Supabase client whose .from('whatsapp_numbers')
@@ -188,4 +189,22 @@ describe('resolveWhatsAppNumberByPhoneNumberId — inbound webhook routing', () 
 // Restore env after the suite to avoid leaking into other tests.
 afterAll(() => {
   process.env = { ...ORIGINAL_ENV }
+})
+
+describe('classifyInboundOwner — WA-TECHPROV.4 webhook hardening', () => {
+  it('unknown phone_number_id (resolver returned null) → drop', () => {
+    expect(classifyInboundOwner(null)).toEqual({ action: 'drop' })
+  })
+  it('env config (Stillorgan path) → first-location fallback, unchanged', () => {
+    expect(classifyInboundOwner({ source: 'env', phoneNumberId: '1233588839827698' }))
+      .toEqual({ action: 'first_location' })
+  })
+  it('db row with a location → route to that location', () => {
+    expect(classifyInboundOwner({ source: 'db', locationId: 'L9' }))
+      .toEqual({ action: 'location', locationId: 'L9' })
+  })
+  it('db row somehow missing locationId → first-location, never drop', () => {
+    expect(classifyInboundOwner({ source: 'db', locationId: null }))
+      .toEqual({ action: 'first_location' })
+  })
 })

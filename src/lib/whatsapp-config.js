@@ -173,3 +173,18 @@ export async function resolveWhatsAppNumberByPhoneNumberId(phoneNumberId) {
 
   return null
 }
+
+/**
+ * WA-TECHPROV.4 — inbound routing decision for the webhook.
+ *
+ * Once Tech Provider clients exist, an unknown phone_number_id must
+ * NOT fall back to first-location (cross-tenant leak: a client's
+ * customer messages landing in UN1T's inbox). The env config keeps
+ * the historical first-location fallback — that's the live
+ * Stillorgan path and its behaviour is unchanged.
+ */
+export function classifyInboundOwner(owningNumber) {
+  if (!owningNumber) return { action: 'drop' }
+  if (owningNumber.source === 'env' || !owningNumber.locationId) return { action: 'first_location' }
+  return { action: 'location', locationId: owningNumber.locationId }
+}
