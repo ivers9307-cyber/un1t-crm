@@ -1,13 +1,25 @@
-// Pipeline tab — stage selector + deals list per stage.
+// Pipeline tab — Funnel | Off funnel views (FUNNEL-M.1, web parity).
 //
-// Web equivalent is the kanban (KanbanBoard.jsx). On mobile we render
-// a horizontal scrollable stage strip ("New" → "Trial" → "Member" etc.)
-// with deal counts as badges, and the list of open deals for the
+// Web equivalent is the tabbed kanban (src/app/pipeline/page.js +
+// PipelineViewSwitcher). On mobile the two views map to a segmented
+// Tabs switcher; within a view we render a horizontal stage strip with
+// open-deal counts as badges, and the list of open deals for the
 // selected stage below it.
+//
+//   Funnel      — the 5 journey stages in order (new_lead → first_class
+//                 → second_class → trial_done → converted).
+//   Off funnel  — the parked piles, grouped exactly like web columns:
+//                 Member / Class Pack (a first-class group, FUNNEL.3) /
+//                 ClassPass / Cold / Dormant.
+//
+// The split comes from shared/pipeline-classifier's splitStagesByFunnel
+// (is_dormant on the non-archived stage rows) — same source of truth as
+// the web board. Stage placement stays read-only on mobile (classifier-
+// derived); the only pipeline action is the Cold toggle on deal detail.
 //
 // Tapping a deal opens its detail screen. Pull-to-refresh re-fetches.
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   View, Text, ScrollView, Pressable, RefreshControl,
   ActivityIndicator,
@@ -15,7 +27,9 @@ import {
 import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
-import { listStages, listDealsByStage } from '../../lib/pipeline-api'
+import { listStages, listDealsByStage, countOpenDealsForStage } from '../../lib/pipeline-api'
+import { splitStagesByFunnel } from '../../../shared/pipeline-classifier'
+import { Tabs } from '../../components/ui'
 import TabletConstrained from '../../components/TabletConstrained'
 
 function StagePill({ stage, count, selected, onPress }) {
@@ -74,14 +88,33 @@ export default function Pipeline() {
   const router = useRouter()
   const [stages, setStages] = useState([])
   const [counts, setCounts] = useState({})
+  const [view, setView] = useState('funnel')          // 'funnel' | 'off_funnel'
   const [selectedId, setSelectedId] = useState(null)
   const [deals, setDeals] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
 
-  // Load stages + counts (one round-trip per stage's count is fine for
-  // a typical 5–7 stage pipeline; we batch with Promise.all).
+  // Same split the web board renders as its two tabs.
+  const { funnel, offFunnel } = useMemo(() => splitStagesByFunnel(stages), [stages])
+  const viewStages = view === 'off_funnel' ? offFunnel : funnel
+
+  // Keep the selected stage inside the active view — on first load and
+  // whenever the view flips, fall back to the view's first stage.
+  useEffect(() => {
+    if (viewStages.length === 0) {
+      if (selectedId !== null) setSelectedId(null)
+      return
+    }
+    if (!viewStages.some((s) => s.id === selectedId)) {
+      setSelectedId(viewStages[0].id)
+    }
+  }, [viewStages, selectedId])
+
+  // Load stages + per-stage open-deal counts. Counts are HEAD count
+  // queries (no rows) — the off-funnel piles hold thousands of deals
+  // and a full select is silently capped at 1,000, so fetching lists
+  // just to .length them was both heavy and wrong.
   const fetchStages = useCallback(async () => {
     if (!activeLocation) return
     setError(null)
@@ -90,21 +123,24 @@ export default function Pipeline() {
       setError(res.error || 'Failed to load stages')
       return
     }
-    setStages(res.data || [])
-    if (!selectedId && res.data?.length) setSelectedId(res.data[0].id)
+    const all = res.data || []
+    setStages(all)
 
     const countResults = await Promise.all(
-      (res.data || []).map(s => listDealsByStage(s.id, activeLocation.id))
+      all.map((s) => countOpenDealsForStage(s.id, activeLocation.id))
     )
     const cMap = {}
     countResults.forEach((r, i) => {
-      cMap[res.data[i].id] = r.success ? (r.data?.length || 0) : 0
+      cMap[all[i].id] = r.success ? r.count : 0
     })
     setCounts(cMap)
-  }, [activeLocation, selectedId])
+  }, [activeLocation])
 
   const fetchDealsForStage = useCallback(async () => {
-    if (!selectedId || !activeLocation) return
+    if (!selectedId || !activeLocation) {
+      setDeals([])
+      return
+    }
     const res = await listDealsByStage(selectedId, activeLocation.id)
     setDeals(res.success ? res.data || [] : [])
   }, [selectedId, activeLocation])
@@ -115,8 +151,8 @@ export default function Pipeline() {
   }, [fetchStages])
 
   useEffect(() => {
-    if (selectedId) fetchDealsForStage()
-  }, [selectedId, fetchDealsForStage])
+    fetchDealsForStage()
+  }, [fetchDealsForStage])
 
   // Re-fetch on tab focus so stage counts + the open-deal list reflect
   // changes made elsewhere (web kanban, or a "View as user" switch) without
@@ -131,6 +167,13 @@ export default function Pipeline() {
     await Promise.all([fetchStages(), fetchDealsForStage()])
     setRefreshing(false)
   }
+
+  // View badges mirror the web tab counts: total open deals per pile.
+  const sumCounts = (list) => list.reduce((n, s) => n + (counts[s.id] || 0), 0)
+  const viewTabs = [
+    { key: 'funnel', label: `Funnel (${sumCounts(funnel).toLocaleString()})` },
+    { key: 'off_funnel', label: `Off funnel (${sumCounts(offFunnel).toLocaleString()})` },
+  ]
 
   if (loading) {
     return (
@@ -152,13 +195,18 @@ export default function Pipeline() {
           </View>
         ) : null}
 
-        {/* Stage strip */}
+        {/* Funnel | Off funnel switcher (web PipelineViewSwitcher parity) */}
+        <View className="mb-3">
+          <Tabs tabs={viewTabs} value={view} onChange={setView} />
+        </View>
+
+        {/* Stage strip — only the active view's stages */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerClassName="pb-3 pr-4"
         >
-          {stages.map(s => (
+          {viewStages.map(s => (
             <StagePill
               key={s.id}
               stage={s}
@@ -169,11 +217,18 @@ export default function Pipeline() {
           ))}
         </ScrollView>
 
-        {deals.length === 0 ? (
+        {viewStages.length === 0 ? (
           <View className="py-12 items-center">
             <Ionicons name="folder-open-outline" size={28} color="#94A3B8" />
             <Text className="text-sm text-un1t-subtle mt-2">
-              No open deals in this stage.
+              No {view === 'off_funnel' ? 'off-funnel' : 'funnel'} stages for this location.
+            </Text>
+          </View>
+        ) : deals.length === 0 ? (
+          <View className="py-12 items-center">
+            <Ionicons name="folder-open-outline" size={28} color="#94A3B8" />
+            <Text className="text-sm text-un1t-subtle mt-2">
+              No open deals in this {view === 'off_funnel' ? 'group' : 'stage'}.
             </Text>
           </View>
         ) : (
