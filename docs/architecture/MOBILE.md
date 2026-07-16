@@ -33,7 +33,7 @@ The Supabase URL + anon key are the same values used by the web app (in `un1t-cr
 | `app/(tabs)/index.jsx` | Home — greeting, active-location header, navigation cards based on enabled mobile features. |
 | `app/(tabs)/schedule.jsx` | Week strip + day picker + shifts list, time-off banner, long-press to post for swap, floating Request Time Off button. |
 | `app/(tabs)/pipeline.jsx` | Stage strip with deal counts + open-deal list. Tap a deal to open `app/pipeline/[dealId].jsx` — contact card, stage move, log activity, mark won/lost, timeline. |
-| `app/(tabs)/whatsapp.jsx` | Inbox: conversations sorted by last message, unread badges, 24h window indicator. Tap to open `app/whatsapp/[conversationId].jsx` — iMessage-style bubbles, text composer, template picker for closed-window sends. |
+| `app/(tabs)/whatsapp.jsx` | Messages inbox — unified WhatsApp + Instagram + Email queue (client-side merge, channel glyphs, queue chips mirroring the web unified inbox incl. the Approval pill; route + permission key stay `whatsapp`). Tap to open the per-channel thread: `app/whatsapp/[conversationId].jsx` (iMessage-style bubbles, text composer, template picker for closed-window sends), `app/instagram/[conversationId].jsx`, or `app/email/[conversationId].jsx` (subject strip, text-only bubbles, Postmark reply composer — rides `/api/email/*`, same posture as IG). The tab badge polls `/api/whatsapp/unread-count` (SIDEBAR-BADGES.2 needs-action semantics). |
 | `app/schedule/time-off-new.jsx` | Modal — type segmented control, date stepper, reason field. |
 | `app/(tabs)/more.jsx` | iOS-style settings list — account, location switcher, sign out. |
 

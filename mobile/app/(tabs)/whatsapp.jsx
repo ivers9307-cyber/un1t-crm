@@ -1,12 +1,20 @@
-// Messages tab — unified WhatsApp + Instagram inbox (MOBILE-MSG.M2/M3).
+// Messages tab — unified WhatsApp + Instagram + Email inbox
+// (MOBILE-MSG.M2/M3; INBOX-EMAIL-M.1 added email as the third channel).
 //
-// Merges both channels into one list (client-side, like the web
+// Merges all three channels into one list (client-side, like the web
 // unified inbox), newest message first, with unread-count badges and a
 // channel glyph on each avatar. Queue chips (All / Needs reply / Agent
-// handoff) mirror the web queues so a coach on their phone can triage
-// exactly what the desk sees — especially threads Mia escalated.
+// handoff / Approval) mirror the web queues so a coach on their phone
+// can triage exactly what the desk sees — especially threads Mia
+// escalated or requests she's holding for a human decision.
 // Tapping opens the per-channel conversation thread.
 // Pull-to-refresh re-fetches.
+//
+// pending_approval: the web /api/whatsapp/conversations route annotates
+// it server-side, but mobile WA reads go direct to Supabase — so we
+// re-derive it here from one batched pending-requests read. IG rows
+// arrive pre-annotated from /api/instagram/conversations; email threads
+// never have approvals (no customer agent on email).
 
 import { useState, useEffect, useCallback } from 'react'
 import {
@@ -18,17 +26,28 @@ import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { listConversations, isWindowOpen } from '../../lib/whatsapp-api'
 import { listConversations as listInstagram, igDisplayName } from '../../lib/instagram-api'
-import { isAgentHandoff, queueCounts, filterByQueue, QUEUES } from '../../lib/inbox'
+import { listConversations as listEmail, emailDisplayName } from '../../lib/email-api'
+import { listPendingApprovalConversationIds } from '../../lib/inbox-approvals-api'
+import { isAgentHandoff, hasPendingApproval, queueCounts, filterByQueue, QUEUES } from '../../lib/inbox'
+
+const CHANNEL_GLYPHS = {
+  whatsapp: { icon: 'logo-whatsapp', color: '#25D366' },
+  instagram: { icon: 'logo-instagram', color: '#E1306C' },
+  email: { icon: 'mail', color: '#2563EB' },
+}
 
 function ConversationRow({ conv, onPress }) {
   const ig = conv.channel === 'instagram'
+  const em = conv.channel === 'email'
   const c = conv.contacts
   const name = ig
     ? igDisplayName(conv)
-    : (c?.name
-      || [c?.first_name, c?.last_name].filter(Boolean).join(' ')
-      || conv.wa_profile_name
-      || conv.wa_phone)
+    : em
+      ? emailDisplayName(conv)
+      : (c?.name
+        || [c?.first_name, c?.last_name].filter(Boolean).join(' ')
+        || conv.wa_profile_name
+        || conv.wa_phone)
   const isInbound = conv.last_message_direction === 'inbound'
   const time = conv.last_message_at
     ? new Date(conv.last_message_at).toLocaleString(undefined, {
@@ -37,7 +56,10 @@ function ConversationRow({ conv, onPress }) {
         ...(isToday(conv.last_message_at) ? {} : { month: 'short', day: 'numeric' }),
       })
     : ''
-  const windowOpen = ig || isWindowOpen(conv)
+  // The 24h send window only exists on WhatsApp — IG and email rows
+  // never show the Closed chip.
+  const windowOpen = ig || em || isWindowOpen(conv)
+  const glyph = CHANNEL_GLYPHS[conv.channel] || CHANNEL_GLYPHS.whatsapp
   return (
     <Pressable
       onPress={onPress}
@@ -48,11 +70,7 @@ function ConversationRow({ conv, onPress }) {
           {(name?.[0] || '?').toUpperCase()}
         </Text>
         <View className="absolute -bottom-0.5 -right-0.5 w-[18px] h-[18px] rounded-full bg-un1t-bg items-center justify-center">
-          <Ionicons
-            name={ig ? 'logo-instagram' : 'logo-whatsapp'}
-            size={12}
-            color={ig ? '#E1306C' : '#25D366'}
-          />
+          <Ionicons name={glyph.icon} size={12} color={glyph.color} />
         </View>
       </View>
       <View className="flex-1">
@@ -73,6 +91,11 @@ function ConversationRow({ conv, onPress }) {
             <View className="ml-2 px-1.5 py-0.5 rounded bg-amber-500/20 flex-row items-center">
               <Ionicons name="hand-left-outline" size={10} color="#B45309" style={{ marginRight: 3 }} />
               <Text className="text-[10px] uppercase text-amber-700 font-semibold">Needs human</Text>
+            </View>
+          )}
+          {hasPendingApproval(conv) && (
+            <View className="ml-2 px-1.5 py-0.5 rounded bg-purple-500/10">
+              <Text className="text-[10px] uppercase text-purple-700 font-semibold">Approval</Text>
             </View>
           )}
           {!windowOpen && !isAgentHandoff(conv) && (
@@ -99,6 +122,18 @@ function isToday(iso) {
     && d.getDate() === now.getDate()
 }
 
+const CHIP_BADGE_COLORS = {
+  needs_reply: 'bg-green-500',
+  handoff: 'bg-amber-500',
+  pending_approval: 'bg-purple-500',
+}
+
+function routeForConversation(c) {
+  if (c.channel === 'instagram') return `/instagram/${c.id}`
+  if (c.channel === 'email') return `/email/${c.id}`
+  return `/whatsapp/${c.id}`
+}
+
 export default function WhatsApp() {
   const { activeLocation } = useAuth()
   const router = useRouter()
@@ -108,24 +143,32 @@ export default function WhatsApp() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
   const [igError, setIgError] = useState(null)
+  const [emError, setEmError] = useState(null)
 
   const load = useCallback(async () => {
     if (!activeLocation) return
     setError(null)
-    const [wa, ig] = await Promise.all([
+    const [wa, ig, em, pendingIds] = await Promise.all([
       listConversations(activeLocation.id),
       listInstagram(activeLocation.id),
+      listEmail(activeLocation.id),
+      listPendingApprovalConversationIds(activeLocation.id),
     ])
     if (!wa.success) setError(wa.error || 'Failed to load conversations')
-    // An Instagram failure must never blank WhatsApp — degrade to a
-    // WA-only list with a soft note.
+    // An Instagram or Email failure must never blank the other
+    // channels — degrade to what loaded, with a soft note.
     setIgError(ig.success ? null : ig.error || 'Instagram couldn’t load')
+    setEmError(em.success ? null : em.error || 'Email couldn’t load')
     const waRows = (wa.success ? wa.data || [] : []).map(c => ({ ...c, channel: 'whatsapp' }))
     const igRows = (ig.success ? ig.data || [] : []).map(c => ({ ...c, channel: 'instagram' }))
+    const emRows = (em.success ? em.data || [] : []).map(c => ({ ...c, channel: 'email' }))
     setConversations(
-      [...waRows, ...igRows].sort(
-        (a, b) => new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0)
-      )
+      [...waRows, ...igRows, ...emRows]
+        // WA rows come direct from Supabase without the route's
+        // pending_approval annotation — backfill it from the batched
+        // pending-requests read (IG rows keep their server flag).
+        .map(c => ({ ...c, pending_approval: c.pending_approval ?? pendingIds.has(c.id) }))
+        .sort((a, b) => new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0))
     )
   }, [activeLocation])
 
@@ -172,12 +215,23 @@ export default function WhatsApp() {
       )}
       {igError && (
         <View className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 mb-3">
-          <Text className="text-amber-700 text-sm">Instagram unavailable — showing WhatsApp only. {igError}</Text>
+          <Text className="text-amber-700 text-sm">Instagram unavailable — showing other channels only. {igError}</Text>
+        </View>
+      )}
+      {emError && (
+        <View className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 mb-3">
+          <Text className="text-amber-700 text-sm">Email unavailable — showing other channels only. {emError}</Text>
         </View>
       )}
 
-      {/* Queue chips — same triage queues as the web unified inbox. */}
-      <View className="flex-row mb-3">
+      {/* Queue chips — same triage queues as the web unified inbox.
+          Horizontal scroll: four chips + counts overflow narrow phones. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        className="mb-3 -mx-4"
+        contentContainerClassName="flex-row px-4"
+      >
         {QUEUES.map(q => {
           const count = counts[q.key]
           const active = queue === q.key
@@ -194,7 +248,7 @@ export default function WhatsApp() {
               </Text>
               {q.key !== 'all' && count > 0 && (
                 <View className={`ml-1.5 min-w-[18px] px-1 h-[18px] rounded-full items-center justify-center ${
-                  q.key === 'handoff' ? 'bg-amber-500' : 'bg-green-500'
+                  CHIP_BADGE_COLORS[q.key] || 'bg-green-500'
                 }`}>
                   <Text className="text-[10px] text-white font-bold">{count}</Text>
                 </View>
@@ -202,7 +256,7 @@ export default function WhatsApp() {
             </Pressable>
           )
         })}
-      </View>
+      </ScrollView>
 
       {visible.length === 0 ? (
         <View className="py-16 items-center">
@@ -214,6 +268,7 @@ export default function WhatsApp() {
           <Text className="text-sm text-un1t-subtle mt-2">
             {queue === 'all' ? 'No conversations yet.'
               : queue === 'handoff' ? 'No conversations waiting on a human.'
+              : queue === 'pending_approval' ? 'No requests waiting for approval.'
               : 'Queue clear — nothing needs a reply.'}
           </Text>
         </View>
@@ -222,7 +277,7 @@ export default function WhatsApp() {
           <ConversationRow
             key={`${c.channel}:${c.id}`}
             conv={c}
-            onPress={() => router.push(c.channel === 'instagram' ? `/instagram/${c.id}` : `/whatsapp/${c.id}`)}
+            onPress={() => router.push(routeForConversation(c))}
           />
         ))
       )}

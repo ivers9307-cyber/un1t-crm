@@ -109,6 +109,16 @@ export function rateAgentMessage({ messageId, rating, note, locationId }) {
   })
 }
 
+// Needs-action badge count for the Messages tab (INBOX-EMAIL-M.1).
+// Rides the same endpoint as the web sidebar badge (SIDEBAR-BADGES.2):
+// conversations needing a human across all three channels (WhatsApp +
+// Instagram + Email) at the active location, via the shared needsAction
+// predicate — so the phone badge and the web badge can never disagree.
+// Returns { success, data: { count } }.
+export function getNeedsActionCount(locationId) {
+  return api('/api/whatsapp/unread-count', { locationId })
+}
+
 export async function listTemplates(locationId) {
   let q = supabase.from('whatsapp_templates')
     .select('id, name, status, category, language, body_text, header_text')
