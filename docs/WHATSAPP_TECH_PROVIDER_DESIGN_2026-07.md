@@ -94,10 +94,10 @@ page it lives in):
 
 ### 4.2 API — `POST /api/locations/[id]/whatsapp/embedded-signup`
 
-Standard mutation-route skeleton (`getCurrentUser()` → master-or-owner gate,
-matching the numbers CRUD route → `validateBody` (Zod, `uuidLike` for
-location) → `assertLocationAccess` → `createServerClient()`), registered in
-`src/lib/openapi.js`. Server-side steps, in order:
+Standard mutation-route skeleton (`getCurrentUser()` → `assertLocationAccess`
+→ master-or-owner gate, matching the numbers CRUD route → `validateBody`
+(Zod) → `createServerClient()`), registered in `src/lib/openapi.js` (Task 6).
+Server-side steps, in order:
 
 1. **Exchange** `code` → **business token**: `GET {graph}/oauth/access_token`
    with `client_id` (`WHATSAPP_APP_ID`), `client_secret` (`WHATSAPP_APP_SECRET`),

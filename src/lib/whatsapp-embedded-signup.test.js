@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import {
   exchangeCodeForBusinessToken, subscribeAppToWaba, probeNumber,
   needsRegistration, generatePin, registerNumber, planPersistence,
+  buildSignupMeta,
 } from './whatsapp-embedded-signup.js'
 
 const realFetch = globalThis.fetch
@@ -95,5 +96,32 @@ describe('planPersistence', () => {
   it('existing row owned by ANOTHER location → conflict, never reassign', () => {
     expect(planPersistence({ existingRow: { id: 'row1', location_id: 'L2' }, locationId: 'L1' }))
       .toEqual({ action: 'conflict', owningLocationId: 'L2' })
+  })
+})
+
+describe('buildSignupMeta', () => {
+  const base = {
+    wabaId: '555', userId: 'u1', connectedAt: '2026-07-16T00:00:00.000Z',
+    probe: { status: 'CONNECTED', platform_type: 'CLOUD_API' },
+  }
+  it('fresh connect with a pin → meta.pin is the new pin', () => {
+    const meta = buildSignupMeta({ ...base, pin: '111111', existingMeta: null })
+    expect(meta.pin).toBe('111111')
+    expect(meta.waba_id).toBe('555')
+    expect(meta.connected_by).toBe('u1')
+    expect(meta.connected_at).toBe('2026-07-16T00:00:00.000Z')
+    expect(meta.probe).toEqual({ status: 'CONNECTED', platform_type: 'CLOUD_API' })
+  })
+  it('token-refresh reconnect (pin=null) preserves the previously-stored pin', () => {
+    const meta = buildSignupMeta({ ...base, pin: null, existingMeta: { pin: '654321' } })
+    expect(meta.pin).toBe('654321')
+  })
+  it('no pin anywhere → null', () => {
+    expect(buildSignupMeta({ ...base, pin: null, existingMeta: null }).pin).toBe(null)
+    expect(buildSignupMeta({ ...base, pin: null, existingMeta: {} }).pin).toBe(null)
+  })
+  it('tolerates a missing probe (defensive nulls)', () => {
+    const meta = buildSignupMeta({ ...base, probe: undefined, pin: null, existingMeta: null })
+    expect(meta.probe).toEqual({ status: null, platform_type: null })
   })
 })

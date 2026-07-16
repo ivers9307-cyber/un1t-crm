@@ -87,3 +87,18 @@ export function planPersistence({ existingRow, locationId }) {
   if (existingRow.location_id === locationId) return { action: 'update', id: existingRow.id }
   return { action: 'conflict', owningLocationId: existingRow.location_id }
 }
+
+/**
+ * signup_meta for the row: preserves a previously-stored 2FA PIN when
+ * this connect didn't register (pin=null), since Meta requires the
+ * matching PIN on any future /register.
+ */
+export function buildSignupMeta({ wabaId, pin, existingMeta, userId, probe, connectedAt }) {
+  return {
+    waba_id: wabaId,
+    pin: pin ?? existingMeta?.pin ?? null,
+    connected_by: userId,
+    connected_at: connectedAt,
+    probe: { status: probe?.status ?? null, platform_type: probe?.platform_type ?? null },
+  }
+}

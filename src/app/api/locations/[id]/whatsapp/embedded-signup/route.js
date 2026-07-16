@@ -8,7 +8,9 @@
 //        "not configured" state; the no-silent-fallback rule applies
 //        to the mutation path below, which DOES throw).
 // POST → body { code, waba_id, phone_number_id } from the ES dialog.
-//        Orchestrates: code→business-token exchange, WABA webhook
+//        Orchestrates: code→business-token exchange, ownership check
+//        against whatsapp_numbers (a number owned by another location
+//        409s BEFORE any Meta-side mutation), WABA webhook
 //        subscription, conditional number registration, then upsert
 //        into whatsapp_numbers. Nothing persists unless every Meta
 //        call succeeded — safe to re-run with a fresh code.
@@ -18,24 +20,18 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { publicShape } from '@/lib/whatsapp-numbers-shape'
 import {
   exchangeCodeForBusinessToken, subscribeAppToWaba, probeNumber,
   needsRegistration, generatePin, registerNumber, planPersistence,
+  buildSignupMeta,
 } from '@/lib/whatsapp-embedded-signup'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-
-function guardMasterOrOwner(user, locationId) {
-  if (user.profileRole === 'master') return null
-  const role = user.rolesByLocation?.[locationId]
-  if (role === 'owner') return null
-  return NextResponse.json({ success: false, error: 'Master or owner role required.' }, { status: 403 })
-}
 
 const ExchangeSchema = z.object({
   code: z.string().min(1),
@@ -89,31 +85,12 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: `Code exchange failed: ${e.message}` }, { status: 502 })
   }
 
-  // 2. Route the client WABA's webhooks to us.
-  try {
-    await subscribeAppToWaba({ wabaId: waba_id, token })
-  } catch (e) {
-    return NextResponse.json({ success: false, error: `WABA subscription failed: ${e.message}` }, { status: 502 })
-  }
-
-  // 3. Register only when needed (register is limited to 10/number/72h).
-  let probe
-  try {
-    probe = await probeNumber({ phoneNumberId: phone_number_id, token })
-  } catch (e) {
-    return NextResponse.json({ success: false, error: `Number probe failed: ${e.message}` }, { status: 502 })
-  }
-  let pin = null
-  if (needsRegistration(probe)) {
-    pin = generatePin()
-    try {
-      await registerNumber({ phoneNumberId: phone_number_id, token, pin })
-    } catch (e) {
-      return NextResponse.json({ success: false, error: `Number registration failed: ${e.message}` }, { status: 502 })
-    }
-  }
-
-  // 4. Persist. phone_number_id is globally unique (mig 176).
+  // Ownership check BEFORE any Meta-side mutation: a number already
+  // connected to a different location must not have its webhooks
+  // re-routed or get re-registered. Sits behind the successful code
+  // exchange (proof the caller ran the ES dialog) so this route can't
+  // be used to enumerate which phone_number_ids exist in the DB.
+  // phone_number_id is globally unique (mig 176).
   const db = createServerClient()
   const { data: existingRow, error: lookupError } = await db
     .from('whatsapp_numbers')
@@ -132,13 +109,42 @@ export async function POST(request, props) {
     )
   }
 
-  const signupMeta = {
-    waba_id,
-    pin,
-    connected_by: user.id,
-    connected_at: new Date().toISOString(),
-    probe: { status: probe.status ?? null, platform_type: probe.platform_type ?? null },
+  // 2. Route the client WABA's webhooks to us.
+  try {
+    await subscribeAppToWaba({ wabaId: waba_id, token })
+  } catch (e) {
+    return NextResponse.json({ success: false, error: `WABA subscription failed: ${e.message}` }, { status: 502 })
   }
+
+  // 3. Register only when needed (register is limited to 10/number/72h).
+  //    Reuse the stored PIN when this number registered through us
+  //    before — Meta requires the matching two-step PIN on /register.
+  let probe
+  try {
+    probe = await probeNumber({ phoneNumberId: phone_number_id, token })
+  } catch (e) {
+    return NextResponse.json({ success: false, error: `Number probe failed: ${e.message}` }, { status: 502 })
+  }
+  let pin = null
+  if (needsRegistration(probe)) {
+    pin = existingRow?.signup_meta?.pin || generatePin()
+    try {
+      await registerNumber({ phoneNumberId: phone_number_id, token, pin })
+    } catch (e) {
+      return NextResponse.json({ success: false, error: `Number registration failed: ${e.message}` }, { status: 502 })
+    }
+  }
+
+  // 4. Persist. buildSignupMeta preserves a previously-stored PIN when
+  //    this connect didn't register (pin=null).
+  const signupMeta = buildSignupMeta({
+    wabaId: waba_id,
+    pin,
+    existingMeta: existingRow?.signup_meta,
+    userId: user.id,
+    probe,
+    connectedAt: new Date().toISOString(),
+  })
 
   if (plan.action === 'update') {
     const { data: updated, error } = await db
@@ -159,12 +165,15 @@ export async function POST(request, props) {
     return NextResponse.json({ success: true, data: publicShape(updated) })
   }
 
-  const { data: defaults } = await db
+  const { data: defaults, error: defaultsError } = await db
     .from('whatsapp_numbers')
     .select('id')
     .eq('location_id', params.id)
     .eq('is_default', true)
     .limit(1)
+  if (defaultsError) {
+    return NextResponse.json({ success: false, error: defaultsError.message }, { status: 500 })
+  }
 
   const { data: inserted, error: insertError } = await db
     .from('whatsapp_numbers')
@@ -185,7 +194,15 @@ export async function POST(request, props) {
     })
     .select('*')
     .single()
-  if (insertError) return NextResponse.json({ success: false, error: insertError.message }, { status: 500 })
+  if (insertError) {
+    if (/duplicate key|unique constraint/i.test(insertError.message)) {
+      return NextResponse.json(
+        { success: false, error: 'This phone number was connected by a concurrent request — reload the numbers list.' },
+        { status: 409 },
+      )
+    }
+    return NextResponse.json({ success: false, error: insertError.message }, { status: 500 })
+  }
 
   return NextResponse.json({ success: true, data: publicShape(inserted) })
 }
