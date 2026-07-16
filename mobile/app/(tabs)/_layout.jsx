@@ -13,17 +13,24 @@
 import { Tabs, Redirect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { View } from 'react-native'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
 import { registerForPushNotifications } from '../../lib/push-register'
 import { resolveLayoutForUser } from '../../lib/mobile-layout'
+import { getNeedsActionCount } from '../../lib/whatsapp-api'
 import ImpersonateBanner from '../../components/ImpersonateBanner'
 import PendingContractsBanner from '../../components/PendingContractsBanner'
 
 export default function TabsLayout() {
   const { session, profile, activeLocation, loading } = useAuth()
   const pushRegistered = useRef(false)
+  // INBOX-EMAIL-M.1 — Messages tab badge. Same endpoint as the web
+  // sidebar badge (SIDEBAR-BADGES.2): conversations needing a human
+  // (needs-reply or agent handoff) across WhatsApp + Instagram + Email
+  // at the active location. 60s poll, mirroring the web's cadence;
+  // failures leave the last-known count rather than flashing it away.
+  const [needsActionCount, setNeedsActionCount] = useState(0)
 
   useEffect(() => {
     if (
@@ -36,6 +43,24 @@ export default function TabsLayout() {
         // Best-effort — never block the UI on push registration.
       })
     }
+  }, [profile, activeLocation])
+
+  useEffect(() => {
+    if (!profile || !activeLocation) return
+    // Only poll when the Messages surface is reachable for this user.
+    const { bar: barKeys, more: moreKeys } = resolveLayoutForUser(profile, activeLocation)
+    if (!barKeys.includes('whatsapp') && !moreKeys.includes('whatsapp')) {
+      setNeedsActionCount(0)
+      return
+    }
+    let cancelled = false
+    async function poll() {
+      const res = await getNeedsActionCount(activeLocation.id)
+      if (!cancelled && res?.success) setNeedsActionCount(res.data?.count || 0)
+    }
+    poll()
+    const t = setInterval(poll, 60000)
+    return () => { cancelled = true; clearInterval(t) }
   }, [profile, activeLocation])
 
   if (loading) return null
@@ -101,6 +126,14 @@ export default function TabsLayout() {
             options={{
               title: TAB_META[key].title,
               href: `/(tabs)/${key}`,
+              // Needs-action count (SIDEBAR-BADGES.2 semantics) on the
+              // Messages tab; display caps at 99+ like the web badge.
+              ...(key === 'whatsapp' && needsActionCount > 0
+                ? {
+                    tabBarBadge: needsActionCount > 99 ? '99+' : needsActionCount,
+                    tabBarBadgeStyle: { backgroundColor: '#16A34A', color: '#FFFFFF', fontSize: 11 },
+                  }
+                : {}),
               tabBarIcon: ({ color, size }) => (<Ionicons name={TAB_META[key].icon} size={size} color={color} />),
             }}
           />
