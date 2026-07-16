@@ -640,3 +640,30 @@ export function assertLocationAccessOr404(user, locationId) {
   }
   return null
 }
+
+/**
+ * Gate a route to masters, or owners of the given location.
+ *
+ * Stricter than the usual MANAGER_ROLES check — used by config surfaces
+ * that hold live credentials (e.g. whatsapp_numbers CRUD + the Embedded
+ * Signup exchange), where managers/head coaches have no business.
+ *
+ * Behaviour:
+ *   - profileRole is 'master'           → null (request continues)
+ *   - per-location role is 'owner'      → null (request continues)
+ *   - anything else                     → 403
+ *
+ * Usage (after assertLocationAccess):
+ *   const guard = guardMasterOrOwner(user, params.id)
+ *   if (guard) return guard
+ *
+ * @param {{ profileRole?: string, rolesByLocation?: Record<string,string> }} user
+ * @param {string} locationId
+ * @returns {NextResponse | null}
+ */
+export function guardMasterOrOwner(user, locationId) {
+  if (user.profileRole === 'master') return null
+  const role = user.rolesByLocation?.[locationId]
+  if (role === 'owner') return null
+  return NextResponse.json({ success: false, error: 'Master or owner role required.' }, { status: 403 })
+}

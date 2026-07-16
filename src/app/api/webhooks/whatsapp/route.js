@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import { refreshWindow, parseConsentKeyword, pickInboundContact, markUndeliverableIfPermanent } from '@/lib/whatsapp'
 import { applyWhatsappConsentKeyword, applyMetaUserPreference } from '@/lib/whatsapp-consent'
 import { handleFlowCompletion } from '@/lib/whatsapp-flow/completion.js'
-import { resolveWhatsAppNumberByPhoneNumberId } from '@/lib/whatsapp-config'
+import { resolveWhatsAppNumberByPhoneNumberId, classifyInboundOwner } from '@/lib/whatsapp-config'
 import { verifyMetaSignature, safeEqual } from '@/lib/webhook-auth'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -167,25 +167,25 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
   const metaContact = contacts?.find(c => c.wa_id === senderPhone)
   const senderName = metaContact?.profile?.name || null
 
-  // WA-MULTI.1 — route inbound to the location that owns the
-  // recipient phone_number_id. Falls back to first-location if
-  // the phone_number_id isn't registered (env-var-only setups +
-  // any genuine misroutes both land somewhere sensible).
-  let phoneOwnerLocationId = null
+  // WA-MULTI.1 / WA-TECHPROV.4 — route inbound to the location that
+  // owns the recipient phone_number_id. Unknown ids are DROPPED
+  // (cross-tenant protection); the env-config number and resolver
+  // errors keep the historical first-location fallback.
+  let routing = { action: 'first_location' }   // no phone_number_id in payload = legacy behaviour
   if (phoneNumberId) {
     try {
       const owningNumber = await resolveWhatsAppNumberByPhoneNumberId(phoneNumberId)
-      if (owningNumber?.locationId) {
-        phoneOwnerLocationId = owningNumber.locationId
-      }
+      routing = classifyInboundOwner(owningNumber)
     } catch (e) {
-      console.warn('[wa-webhook] phone_number_id resolution failed:', e.message)
+      console.warn('[wa-webhook] phone_number_id resolution failed (falling back):', e.message)
     }
   }
+  if (routing.action === 'drop') {
+    console.warn(`[wa-webhook] dropping inbound for unregistered phone_number_id ${phoneNumberId}`)
+    return
+  }
 
-  // Final fallback — first location (matches the historical
-  // single-number behaviour).
-  let defaultLocationId = phoneOwnerLocationId
+  let defaultLocationId = routing.action === 'location' ? routing.locationId : null
   if (!defaultLocationId) {
     const { data: locations } = await db.from('locations').select('id').limit(1)
     if (locations?.length) defaultLocationId = locations[0].id

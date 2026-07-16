@@ -146,9 +146,13 @@ export async function getWhatsAppConfigById(numberId) {
  * to the owning location + config so the inbox knows where to drop
  * the message.
  *
- * Returns null when the phone_number_id is unknown (the global env
- * config is checked too — if a webhook arrives for the env-config
- * number we return a synthetic location-less config).
+ * Returns null ONLY when the phone_number_id is authoritatively
+ * unknown (the global env config is checked too — if a webhook
+ * arrives for the env-config number we return a synthetic
+ * location-less config). Throws when the lookup itself fails
+ * (transient DB error) and the id doesn't match the env config —
+ * callers must treat a throw as "owner undetermined" (keep their
+ * legacy fallback), never as "unknown number".
  */
 export async function resolveWhatsAppNumberByPhoneNumberId(phoneNumberId) {
   if (!phoneNumberId) return null
@@ -161,8 +165,16 @@ export async function resolveWhatsAppNumberByPhoneNumberId(phoneNumberId) {
     .eq('is_active', true)
     .maybeSingle()
   if (error) {
+    // WA-TECHPROV.4b — a transient lookup error must NEVER be
+    // reported as "unknown number" (null): the webhook drops
+    // unknowns, and a dropped message is permanently lost (we 200
+    // + dedup, so Meta never retries). If the id matches the env
+    // config we can still answer authoritatively; otherwise throw
+    // so the webhook's catch keeps the first-location fallback.
     console.warn('[wa-config] phone_number_id lookup failed:', error.message)
-    return null
+    const env = envConfig()
+    if (env && env.phoneNumberId === phoneNumberId) return env  // live number survives a DB blip
+    throw new Error(`whatsapp_numbers lookup failed: ${error.message}`)  // webhook catch → first-location
   }
   if (row) return rowToConfig(row)
 
@@ -172,4 +184,19 @@ export async function resolveWhatsAppNumberByPhoneNumberId(phoneNumberId) {
   if (env && env.phoneNumberId === phoneNumberId) return env
 
   return null
+}
+
+/**
+ * WA-TECHPROV.4 — inbound routing decision for the webhook.
+ *
+ * Once Tech Provider clients exist, an unknown phone_number_id must
+ * NOT fall back to first-location (cross-tenant leak: a client's
+ * customer messages landing in UN1T's inbox). The env config keeps
+ * the historical first-location fallback — that's the live
+ * Stillorgan path and its behaviour is unchanged.
+ */
+export function classifyInboundOwner(owningNumber) {
+  if (!owningNumber) return { action: 'drop' }
+  if (owningNumber.source === 'env' || !owningNumber.locationId) return { action: 'first_location' }
+  return { action: 'location', locationId: owningNumber.locationId }
 }

@@ -12,42 +12,12 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, guardMasterOrOwner } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { publicShape } from '@/lib/whatsapp-numbers-shape'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-
-function redactToken(token) {
-  if (!token || typeof token !== 'string') return null
-  if (token.length <= 8) return '••••'
-  return `••••${token.slice(-6)}`
-}
-
-function publicShape(row) {
-  return {
-    id: row.id,
-    location_id: row.location_id,
-    label: row.label,
-    phone_number_id: row.phone_number_id,
-    business_account_id: row.business_account_id,
-    app_id: row.app_id,
-    display_phone: row.display_phone,
-    source: row.source,
-    is_default: row.is_default,
-    is_active: row.is_active,
-    access_token_redacted: redactToken(row.access_token),
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  }
-}
-
-function guardMasterOrOwner(user, locationId) {
-  if (user.profileRole === 'master') return null
-  const role = user.rolesByLocation?.[locationId]
-  if (role === 'owner') return null
-  return NextResponse.json({ success: false, error: 'Master or owner role required.' }, { status: 403 })
-}
 
 const PatchBody = z.object({
   label: z.string().min(1).max(120).optional(),
