@@ -2838,6 +2838,24 @@ registry.registerPath({
 })
 
 // ============================================================================
+// Dashboard — command-centre block data (web + mobile Business segment)
+// ============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/dashboard/business',
+  tags: ['Dashboard'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Business dashboard blocks as JSON',
+  description: 'Every block of the /dashboard/business command centre in one payload — KPI briefing, acquisition funnel, ads-7d, membership live + 12-month trend, today-ops strip, and the "Needs you" rail. Per-block failure isolation: a failed block returns null under its key (rail: null = failed, [] = nothing waiting). Session cookie (web) or Supabase JWT Bearer + x-active-location (mobile app). Requires the dashboard_business permission.',
+  responses: {
+    200: { description: 'Dashboard blocks', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BusinessDashboardResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing dashboard_business permission', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
 // Customer (champ-app member) self-service
 // ============================================================================
 
