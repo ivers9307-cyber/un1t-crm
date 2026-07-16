@@ -125,3 +125,38 @@ describe('buildSignupMeta', () => {
     expect(meta.probe).toEqual({ status: null, platform_type: null })
   })
 })
+
+import {
+  getWabaPhoneNumber, initialHistorySyncState,
+} from './whatsapp-embedded-signup.js'
+
+describe('getWabaPhoneNumber', () => {
+  const realFetch = globalThis.fetch
+  afterEach(() => { globalThis.fetch = realFetch })
+  function mockFetch(json) {
+    const calls = []
+    globalThis.fetch = async (url, opts) => { calls.push({ url, opts }); return { json: async () => json } }
+    return calls
+  }
+  it('returns the first phone number id + display number for the WABA', async () => {
+    const calls = mockFetch({ data: [{ id: '109998', display_phone_number: '+353 1 555 0000', verified_name: 'UN1T Hatch' }] })
+    const out = await getWabaPhoneNumber({ wabaId: '555', token: 'T' })
+    expect(out).toEqual({ phoneNumberId: '109998', displayPhone: '+353 1 555 0000', verifiedName: 'UN1T Hatch' })
+    expect(calls[0].url).toContain('/555/phone_numbers')
+    expect(calls[0].opts.headers.Authorization).toBe('Bearer T')
+  })
+  it('throws with meta metadata on error', async () => {
+    mockFetch({ error: { message: 'no access', code: 10, type: 'OAuthException' } })
+    await expect(getWabaPhoneNumber({ wabaId: '5', token: 'T' })).rejects.toMatchObject({ message: 'no access', metaCode: 10 })
+  })
+  it('throws when the WABA has no phone numbers', async () => {
+    mockFetch({ data: [] })
+    await expect(getWabaPhoneNumber({ wabaId: '5', token: 'T' })).rejects.toThrow(/no phone number/i)
+  })
+})
+
+describe('initialHistorySyncState', () => {
+  it('returns a pending state stamped with the given time', () => {
+    expect(initialHistorySyncState('2026-07-16T10:00:00.000Z')).toEqual({ status: 'pending', started_at: '2026-07-16T10:00:00.000Z' })
+  })
+})

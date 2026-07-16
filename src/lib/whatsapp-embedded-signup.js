@@ -102,3 +102,26 @@ export function buildSignupMeta({ wabaId, pin, existingMeta, userId, probe, conn
     probe: { status: probe?.status ?? null, platform_type: probe?.platform_type ?? null },
   }
 }
+
+/**
+ * Coexistence: read the phone number already registered on the client's
+ * WABA. Unlike Cloud API onboarding, the phone_number_id isn't minted by us
+ * — the number is already live on the WhatsApp Business app, so we read it
+ * off the WABA rather than registering a new one.
+ */
+export async function getWabaPhoneNumber({ wabaId, token }) {
+  const res = await fetch(
+    `${META_API_URL}/${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  )
+  const json = await res.json()
+  if (json.error) throw metaError(json, 'WABA phone-number lookup failed')
+  const first = json.data?.[0]
+  if (!first?.id) throw new Error('WABA returned no phone number (is coexistence linking complete?)')
+  return { phoneNumberId: first.id, displayPhone: first.display_phone_number || null, verifiedName: first.verified_name || null }
+}
+
+/** Initial history-sync state stamped into signup_meta at coexistence onboarding. */
+export function initialHistorySyncState(nowIso) {
+  return { status: 'pending', started_at: nowIso }
+}
