@@ -75,6 +75,7 @@ export const BRANDS = [
       '/free-class',    // Stillorgan paid-traffic campaign landing page (src/app/free-class)
       '/start',         // Meta-ad booking wizard (src/app/start)
       '/privacy',       // GDPR privacy policy (waitlist consent link + App Store URL)
+      '/terms',         // Terms of Service (Meta App Review + site footer)
       '/book/',         // public Calendly-style booking pages
       '/event/',        // public race / workshop / etc. signup pages
       '/race/',         // race kiosk + signup
