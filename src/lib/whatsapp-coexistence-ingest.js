@@ -37,6 +37,7 @@ export async function syncContactMatchOnly(db, { phone }) {
 export async function ingestCoexistenceMessage(db, { locationId, descriptor }) {
   const { waMessageId, peerPhone, direction, messageType, body, tsSeconds } = descriptor
   if (!waMessageId) return { inserted: false, reason: 'no_id' }
+  if (direction !== 'inbound' && direction !== 'outbound') return { inserted: false, reason: 'bad_direction' }
 
   // Dedup: our own Cloud API sends already store their wa_message_id.
   const { data: dupe } = await db
@@ -58,19 +59,28 @@ export async function ingestCoexistenceMessage(db, { locationId, descriptor }) {
     .from('whatsapp_conversations').select('id').eq('location_id', locationId).eq('wa_phone', waPhone).limit(1).maybeSingle()
   let conversationId = existingConv?.id
   if (!conversationId) {
-    const { data: newConv } = await db
+    const { data: newConv, error: convErr } = await db
       .from('whatsapp_conversations')
       .insert({ location_id: locationId, contact_id: contactId, wa_phone: waPhone, status: 'active' })
       .select('id').single()
-    conversationId = newConv?.id
+    if (convErr) {
+      // Lost the (location_id, wa_phone) unique race — re-read the winner.
+      const { data: raced } = await db
+        .from('whatsapp_conversations').select('id')
+        .eq('location_id', locationId).eq('wa_phone', waPhone).limit(1).maybeSingle()
+      conversationId = raced?.id
+    } else {
+      conversationId = newConv?.id
+    }
   }
   if (!conversationId) return { inserted: false, reason: 'no_conversation' }
 
   const sentAt = tsSeconds ? new Date(tsSeconds * 1000).toISOString() : new Date().toISOString()
-  await db.from('whatsapp_messages').insert({
+  const { error: msgErr } = await db.from('whatsapp_messages').insert({
     conversation_id: conversationId, contact_id: contactId, location_id: locationId,
     wa_message_id: waMessageId, direction, message_type: messageType, body,
     status: direction === 'outbound' ? 'sent' : 'delivered', sent_at: sentAt,
   })
+  if (msgErr) return { inserted: false, reason: msgErr.message }
   return { inserted: true, conversationId, contactId }
 }

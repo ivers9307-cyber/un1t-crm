@@ -61,4 +61,60 @@ describe('ingestCoexistenceMessage', () => {
     expect(r).toEqual({ inserted: false, reason: 'duplicate' })
     expect(inserts).toEqual([]) // no conversation, no message
   })
+
+  it('recovers from a conversation-insert unique-race and still stores the message', async () => {
+    const inserts = []
+    let convSelects = 0
+    const db = makeDb((ctx) => {
+      if (ctx.table === 'whatsapp_messages') {
+        if (ctx.op === 'insert') { inserts.push('msg'); return { data: { id: 'm1' }, error: null } }
+        return { data: null, error: null } // dedup: not a dupe
+      }
+      if (ctx.table === 'contacts') return { data: null, error: null } // unknown peer
+      if (ctx.table === 'whatsapp_conversations') {
+        if (ctx.op === 'insert') return { data: null, error: { message: 'duplicate key' } } // lost the race
+        convSelects += 1
+        // 1st select = existing-conv lookup (none); 2nd = re-read the winner
+        return convSelects === 1 ? { data: null, error: null } : { data: { id: 'raced1' }, error: null }
+      }
+      return { data: null, error: null }
+    })
+    const r = await ingestCoexistenceMessage(db, {
+      locationId: 'L1', descriptor: { waMessageId: 'wamid.RACE', peerPhone: '353999', direction: 'inbound', messageType: 'text', body: 'hi', tsSeconds: 1700000000 },
+    })
+    expect(r).toEqual({ inserted: true, conversationId: 'raced1', contactId: null })
+    expect(inserts).toEqual(['msg']) // still inserted despite losing the conversation race
+  })
+
+  it('reports failure when the final message insert errors', async () => {
+    const db = makeDb((ctx) => {
+      if (ctx.table === 'whatsapp_messages') {
+        if (ctx.op === 'insert') return { data: null, error: { message: 'boom' } }
+        return { data: null, error: null } // dedup: not a dupe
+      }
+      if (ctx.table === 'contacts') return { data: null, error: null } // unknown peer
+      if (ctx.table === 'whatsapp_conversations') {
+        if (ctx.op === 'insert') return { data: { id: 'conv1' }, error: null }
+        return { data: null, error: null } // no existing conv
+      }
+      return { data: null, error: null }
+    })
+    const r = await ingestCoexistenceMessage(db, {
+      locationId: 'L1', descriptor: { waMessageId: 'wamid.BOOM', peerPhone: '353888', direction: 'outbound', messageType: 'text', body: 'x', tsSeconds: 1700000000 },
+    })
+    expect(r).toEqual({ inserted: false, reason: 'boom' })
+  })
+
+  it('rejects a malformed descriptor with no valid direction before touching the db', async () => {
+    const inserts = []
+    const db = makeDb((ctx) => {
+      if (ctx.op === 'insert') { inserts.push(ctx.table); return { data: { id: 'n' }, error: null } }
+      return { data: null, error: null }
+    })
+    const r = await ingestCoexistenceMessage(db, {
+      locationId: 'L1', descriptor: { waMessageId: 'wamid.BAD', peerPhone: '353777', direction: undefined, messageType: 'text', body: 'x', tsSeconds: 1700000000 },
+    })
+    expect(r).toEqual({ inserted: false, reason: 'bad_direction' })
+    expect(inserts).toEqual([]) // guarded before any write
+  })
 })

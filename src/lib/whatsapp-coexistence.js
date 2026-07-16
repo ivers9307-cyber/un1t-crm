@@ -55,6 +55,8 @@ export function parseHistoryMessages(value, ownPhone) {
         if (!m?.id) continue
         const from = normalizeWaPhone(m.from)?.without || null
         const to = normalizeWaPhone(m.to)?.without || null
+        // Fail-safe: when `own` is null (ownPhone unknown/unparseable) every
+        // message defaults to inbound rather than being mislabelled outbound.
         const direction = from && own && from === own ? 'outbound' : 'inbound'
         const peerPhone = direction === 'outbound' ? to : from
         out.push({
