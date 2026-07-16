@@ -23,6 +23,9 @@ describe('accountingLanding', () => {
     // EVENTS-HUB.2 — orders moved under Accounting (revenue is money)
     expect(accountingLanding({ canOrders: true })).toBe('orders')
     expect(accountingLanding({ canInbox: true, canOrders: true })).toBe('chooser')
+    // INV-M.1 — bookkeeper queue surface
+    expect(accountingLanding({ canQueue: true })).toBe('queue')
+    expect(accountingLanding({ canInbox: true, canQueue: true })).toBe('chooser')
   })
 
   it('returns null when the user has no accounting surface', () => {
@@ -39,5 +42,6 @@ describe('accountingLanding', () => {
     expect(ACCOUNTING_ROUTES.chooser).toBe('/accounting')
     expect(ACCOUNTING_ROUTES.card_receipts).toBe('/card-receipts')
     expect(ACCOUNTING_ROUTES.orders).toBe('/orders')
+    expect(ACCOUNTING_ROUTES.queue).toBe('/invoices/queue')
   })
 })

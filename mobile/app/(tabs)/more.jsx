@@ -197,6 +197,8 @@ export default function More() {
     // EVENTS-HUB.2 — Orders (revenue ledger) lives under Accounting now
     // (it's money, not an event surface), so it folds into this hub.
     canOrders: canMobile(profile, 'orders', activeLocation),
+    // INV-M.1 — bookkeeper queue (cross-platform `bookkeeper` key).
+    canQueue: canMobile(profile, 'bookkeeper', activeLocation),
   })
   if (accLanding) {
     tiles.push({ key: 'accounting', icon: 'calculator-outline', label: 'Accounting', badge: outstandingInvoices > 0 ? String(outstandingInvoices) : null, onPress: () => router.push(ACCOUNTING_ROUTES[accLanding]) })

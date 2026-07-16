@@ -62,7 +62,11 @@ export default function AccountingHub() {
   const canCardReceipts = canMobile(profile, 'card_receipts', activeLocation)
   // EVENTS-HUB.2 — Orders (revenue ledger) reads its own `orders` gate.
   const canOrders = canMobile(profile, 'orders', activeLocation)
-  const landing = accountingLanding({ canExpenses, canInvoices, canInbox, canCardReceipts, canOrders })
+  // INV-M.1 — bookkeeper queue (bulk extract + Not-in-Xero flag).
+  // `bookkeeper` is cross-platform: the same top-level toggle the web
+  // bulk routes enforce (master by default).
+  const canQueue = canMobile(profile, 'bookkeeper', activeLocation)
+  const landing = accountingLanding({ canExpenses, canInvoices, canInbox, canCardReceipts, canOrders, canQueue })
 
   // Awaiting-approval count for the Invoices inbox card badge (approvers
   // only). listInvoices() is role-aware — for an approver it returns the
@@ -127,6 +131,14 @@ export default function AccountingHub() {
             subtitle="Review & approve supplier invoices"
             badge={awaiting > 0 ? String(awaiting) : null}
             onPress={() => router.push('/invoices/inbox')}
+          />
+        )}
+        {canQueue && (
+          <ChoiceCard
+            icon="scan-outline"
+            title="Bookkeeper queue"
+            subtitle="Run extraction on queued supplier invoices"
+            onPress={() => router.push('/invoices/queue')}
           />
         )}
         {canOrders && (
