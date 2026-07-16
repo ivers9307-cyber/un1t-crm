@@ -915,6 +915,12 @@ export const CROSS_PLATFORM_DASHBOARD_KEYS = Object.freeze([
 export const CROSS_PLATFORM_KEYS = Object.freeze([
   ...CROSS_PLATFORM_DASHBOARD_KEYS,
   'studio_management',
+  // INV-M.1 — the mobile bookkeeper queue (app/invoices/queue.jsx:
+  // bulk extract + the Not-in-Xero supplier flag) reads the SAME
+  // top-level key the /api/invoices-inbox bulk routes enforce, so
+  // one admin toggle governs both platforms. Field edits + the
+  // send-to-Xero step stay web-only.
+  'bookkeeper',
 ])
 
 // ============================================================
