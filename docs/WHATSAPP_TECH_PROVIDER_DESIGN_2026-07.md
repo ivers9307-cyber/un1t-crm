@@ -92,12 +92,12 @@ page it lives in):
   the surfaced error.
 - Abandoned dialog (no code) = no-op, no partial state.
 
-### 4.2 API — `POST /api/whatsapp/embedded-signup/exchange`
+### 4.2 API — `POST /api/locations/[id]/whatsapp/embedded-signup`
 
-Standard mutation-route skeleton (`getCurrentUser()` → MANAGER_ROLES check →
-`validateBody` (Zod, `uuidLike` for location) → `assertLocationAccess` →
-`createServerClient()`), registered in `src/lib/openapi.js`. Server-side steps,
-in order:
+Standard mutation-route skeleton (`getCurrentUser()` → master-or-owner gate,
+matching the numbers CRUD route → `validateBody` (Zod, `uuidLike` for
+location) → `assertLocationAccess` → `createServerClient()`), registered in
+`src/lib/openapi.js`. Server-side steps, in order:
 
 1. **Exchange** `code` → **business token**: `GET {graph}/oauth/access_token`
    with `client_id` (`WHATSAPP_APP_ID`), `client_secret` (`WHATSAPP_APP_SECRET`),

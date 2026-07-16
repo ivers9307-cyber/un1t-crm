@@ -1,0 +1,30 @@
+// src/lib/whatsapp-numbers-shape.test.js
+import { describe, it, expect } from 'vitest'
+import { redactToken, publicShape } from './whatsapp-numbers-shape.js'
+
+describe('redactToken', () => {
+  it('shows only the last 6 chars', () => {
+    expect(redactToken('EAAG1234567890abcdef')).toBe('••••abcdef')
+  })
+  it('fully masks short/absent tokens', () => {
+    expect(redactToken('short')).toBe('••••')
+    expect(redactToken(null)).toBe(null)
+  })
+})
+
+describe('publicShape', () => {
+  it('never leaks access_token or signup_meta (holds the 2FA PIN)', () => {
+    const shaped = publicShape({
+      id: 'r1', location_id: 'L1', label: 'x', phone_number_id: '1',
+      access_token: 'EAAGtechprovSECRETzz',           // 20 chars → redacts to last 6
+      signup_meta: { pin: '123456' }, token_type: 'business', connected_via: 'embedded_signup',
+      business_account_id: 'w', app_id: 'a', display_phone: 'd', source: 'cloud_api',
+      is_default: true, is_active: true, created_at: 'c', updated_at: 'u',
+    })
+    expect(JSON.stringify(shaped)).not.toContain('EAAGtechprovSECRETzz')
+    expect(JSON.stringify(shaped)).not.toContain('123456')
+    expect(shaped.access_token_redacted).toBe('••••CRETzz')
+    expect(shaped.token_type).toBe('business')
+    expect(shaped.connected_via).toBe('embedded_signup')
+  })
+})
