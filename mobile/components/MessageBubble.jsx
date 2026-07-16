@@ -1,8 +1,9 @@
 // Shared chat bubble for the mobile messaging threads (WhatsApp +
 // Instagram). Channel-agnostic: renders direction, the Mia tag on
 // agent-sourced replies, template labels (WhatsApp only — IG rows just
-// never carry template_name), media-type chips, delivery ticks, and
-// the 👍👎 quality row on agent replies (AGENT-QA.1).
+// never carry template_name), media-type chips, delivery ticks, the
+// 👍❤️🔥 react row on inbound WhatsApp messages (C6 — pass onReact),
+// and the 👍👎 quality row on agent replies (AGENT-QA.1).
 
 import { View, Text, Pressable } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
@@ -10,13 +11,22 @@ import { mediaLabel } from '../lib/inbox'
 import { isServableMedia } from '../../shared/whatsapp-media'
 import WAMediaThumb from './WAMediaThumb'
 
-export default function MessageBubble({ msg, myRating, onRate, channel }) {
+// C6 — same three emoji the web inbox offers.
+const REACTION_EMOJI = ['👍', '❤️', '🔥']
+
+export default function MessageBubble({ msg, myRating, onRate, onReact, reactingId, channel }) {
   const out = msg.direction === 'outbound'
   const isAgent = msg.source === 'agent'
   // WhatsApp inbound media re-hosts through /api/whatsapp/media and renders
   // inline; Instagram (separate table/route) stays a chip for now.
   const showMedia = channel === 'whatsapp' && isServableMedia(msg)
   const media = !showMedia && mediaLabel(msg.message_type)
+  // 'played' (voice note listened to) is the strongest read signal there
+  // is — the webhook stamps read_at for it, but honour the status too so
+  // the ticks read correctly even before/without that stamp.
+  const isRead = Boolean(msg.read_at) || msg.status === 'read' || msg.status === 'played'
+  // C6 — react to a customer message (WhatsApp only; needs the Meta id).
+  const canReact = channel === 'whatsapp' && !out && !!msg.wa_message_id && !!onReact
   const time = msg.created_at
     ? new Date(msg.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
     : ''
@@ -62,13 +72,32 @@ export default function MessageBubble({ msg, myRating, onRate, channel }) {
             <Text className={`text-base ${out ? 'text-white' : 'text-un1t-text'}`}>—</Text>
           ) : null}
           <View className="flex-row items-center justify-end mt-1">
+            {/* C6 — react to a customer message (👍 ❤️ 🔥); the route logs
+                a thread row that shows on the next refresh, like web. */}
+            {canReact && (
+              <View className="flex-row items-center flex-1">
+                {REACTION_EMOJI.map(emoji => (
+                  <Pressable
+                    key={emoji}
+                    onPress={() => onReact(msg, emoji)}
+                    disabled={reactingId === msg.id}
+                    hitSlop={6}
+                    className="mr-3"
+                  >
+                    <Text className={`text-[13px] ${reactingId === msg.id ? 'opacity-20' : 'opacity-40'}`}>
+                      {emoji}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
             <Text className={`text-[10px] ${out ? 'text-white/60' : 'text-un1t-subtle'}`}>
               {time}
             </Text>
             {out && (
               <Ionicons
                 name={
-                  msg.read_at ? 'checkmark-done'
+                  isRead ? 'checkmark-done'
                   : msg.delivered_at ? 'checkmark-done'
                   : msg.status === 'sent' ? 'checkmark'
                   : msg.status === 'failed' ? 'alert-circle'
@@ -76,7 +105,7 @@ export default function MessageBubble({ msg, myRating, onRate, channel }) {
                   : 'time-outline'
                 }
                 size={12}
-                color={msg.read_at ? '#FFFFFF' : 'rgba(255,255,255,0.6)'}
+                color={isRead ? '#FFFFFF' : 'rgba(255,255,255,0.6)'}
                 style={{ marginLeft: 4 }}
               />
             )}

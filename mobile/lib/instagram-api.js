@@ -35,6 +35,18 @@ export function sendText(conversationId, text, locationId) {
   })
 }
 
+// AGENT-TAKEOVER visibility — toggle the auto-responder for this thread,
+// same PATCH the web IG inbox uses. active:false silences Mia (staff
+// take over; stamps agent_handed_off_at on the first hand-off);
+// active:true hands the thread back to her.
+export function setAgentActive(conversationId, active, locationId) {
+  return api(`/api/instagram/conversations/${conversationId}/agent`, {
+    method: 'PATCH',
+    locationId,
+    body: { active: !!active },
+  })
+}
+
 // Resolve (or un-resolve). Same PATCH semantics as WhatsApp — resolving
 // a handed-off thread re-arms the agent server-side (AGENT-REARM.1).
 export function resolveConversation(conversationId, resolved, locationId) {
