@@ -181,7 +181,7 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
     }
   }
   if (routing.action === 'drop') {
-    console.warn(`[wa-webhook] dropping inbound for unknown phone_number_id ${phoneNumberId}`)
+    console.warn(`[wa-webhook] dropping inbound for unregistered phone_number_id ${phoneNumberId}`)
     return
   }
 

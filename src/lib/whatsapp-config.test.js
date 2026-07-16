@@ -186,9 +186,37 @@ describe('resolveWhatsAppNumberByPhoneNumberId — inbound webhook routing', () 
   })
 })
 
-// Restore env after the suite to avoid leaking into other tests.
-afterAll(() => {
-  process.env = { ...ORIGINAL_ENV }
+// WA-TECHPROV.4b — transient lookup errors must never look like
+// "unknown number" (which the webhook now DROPS). supabase-js never
+// throws; errors come back as { error }, so returning null here would
+// silently turn a 30s DB blip into permanently lost messages (the
+// webhook 200s + dedups, Meta never retries).
+describe('resolveWhatsAppNumberByPhoneNumberId — lookup errors (WA-TECHPROV.4b)', () => {
+  it('lookup error + phone_number_id matches env → returns env config (live number survives a DB blip)', async () => {
+    createServerClient.mockReturnValue(mockDb({ error: { message: 'boom' } }))
+    process.env.WHATSAPP_ACCESS_TOKEN = 'env-token'
+    process.env.WHATSAPP_PHONE_NUMBER_ID = 'env-pni-live'
+
+    const cfg = await resolveWhatsAppNumberByPhoneNumberId('env-pni-live')
+    expect(cfg?.source).toBe('env')
+    expect(cfg?.phoneNumberId).toBe('env-pni-live')
+  })
+
+  it('lookup error + phone_number_id does NOT match env → THROWS (webhook catch → first-location fallback)', async () => {
+    createServerClient.mockReturnValue(mockDb({ error: { message: 'boom' } }))
+    process.env.WHATSAPP_ACCESS_TOKEN = 'env-token'
+    process.env.WHATSAPP_PHONE_NUMBER_ID = 'env-pni-other'
+
+    await expect(resolveWhatsAppNumberByPhoneNumberId('client-pni-123'))
+      .rejects.toThrow(/lookup failed/)
+  })
+
+  it('lookup error + no env config at all → THROWS, never returns null', async () => {
+    createServerClient.mockReturnValue(mockDb({ error: { message: 'boom' } }))
+
+    await expect(resolveWhatsAppNumberByPhoneNumberId('any-pni'))
+      .rejects.toThrow(/lookup failed/)
+  })
 })
 
 describe('classifyInboundOwner — WA-TECHPROV.4 webhook hardening', () => {
@@ -207,4 +235,9 @@ describe('classifyInboundOwner — WA-TECHPROV.4 webhook hardening', () => {
     expect(classifyInboundOwner({ source: 'db', locationId: null }))
       .toEqual({ action: 'first_location' })
   })
+})
+
+// Restore env after the suite to avoid leaking into other tests.
+afterAll(() => {
+  process.env = { ...ORIGINAL_ENV }
 })
