@@ -30,6 +30,7 @@ import { createServerClient } from '@/lib/supabase'
 import { verifySharedSecret } from '@/lib/webhook-auth'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
+import { publishQueuePush, POSTMARK_WORKER_PATH } from '@/lib/qstash'
 
 // Force Node.js runtime so node:crypto is available for the timing-safe compare.
 export const runtime = 'nodejs'
@@ -113,7 +114,11 @@ export async function POST(request) {
   // Park the raw payload. Cron drains. Returning 200 fast keeps
   // Vercel's request rate happy under bursts and prevents
   // Postmark from retrying on a flaky outage.
-  const { error } = await db.from('postmark_webhook_queue').insert({ payload: body })
+  const { data: queued, error } = await db
+    .from('postmark_webhook_queue')
+    .insert({ payload: body })
+    .select('id')
+    .single()
   if (error) {
     console.error('[postmark webhook] queue insert failed:', error.message)
     await deadLetterWebhook(db, {
@@ -125,6 +130,23 @@ export async function POST(request) {
     // Return 200 so Postmark does not retry-storm us while the queue table is
     // unavailable — the dead-letter row keeps the event visible for ops.
     return NextResponse.json({ success: true, status: 'queue_failed_dead_lettered' })
+  }
+
+  // QSTASH.1 — push delivery. Nudge QStash to deliver this row to the
+  // worker route now instead of waiting for the next cron tick. Fire-
+  // and-forget: env-gated (no QSTASH_TOKEN → skipped), and any failure
+  // leaves the row for the cron — the queue table is the delivery
+  // guarantee, QStash is the latency optimisation.
+  if (queued?.id) {
+    try {
+      await publishQueuePush({
+        path: POSTMARK_WORKER_PATH,
+        body: { id: queued.id },
+        deduplicationId: `postmark-queue:${queued.id}`,
+      })
+    } catch {
+      // publishQueuePush swallows its own errors; belt-and-braces only.
+    }
   }
 
   return NextResponse.json({ success: true, queued: true })

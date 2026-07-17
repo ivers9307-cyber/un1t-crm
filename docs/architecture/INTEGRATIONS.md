@@ -18,6 +18,9 @@ WHATSAPP_BUSINESS_ACCOUNT_ID=    # optional
 WHATSAPP_WEBHOOK_VERIFY_TOKEN=   # for Meta GET subscription handshake
 WHATSAPP_APP_SECRET=             # for X-Hub-Signature-256 verification on POST
 WHATSAPP_ES_CONFIG_ID=           # Facebook Login for Business configuration id driving Embedded Signup v4 ("Connect with WhatsApp" in Settings → Locations → Integrations). Unset = the connect button renders a not-configured state; the exchange route 500s.
+QSTASH_TOKEN=                    # Upstash QStash publish token. UNSET = QStash disabled entirely (deliberate kill switch): webhook routes skip the push publish and the drain crons remain the only queue consumers. See "QStash push delivery".
+QSTASH_CURRENT_SIGNING_KEY=      # Upstash-Signature verification (worker routes 503 without it)
+QSTASH_NEXT_SIGNING_KEY=         # second accepted key so Upstash-side key rotation never drops deliveries
 ANTHROPIC_API_KEY=               # for the in-app assistant chat
 CRM_API_KEY=                     # Bearer token for n8n / external integrations
 NEXT_PUBLIC_APP_URL=https://crm.un1tdublin.com
@@ -140,6 +143,10 @@ The earlier Files API path (`src/lib/xero/files.js`) is retained as a deprecatio
 **Meta WhatsApp.** Strict HMAC verification via `verifyMetaSignature()` against `WHATSAPP_APP_SECRET`. Missing env var or bad signature → 403.
 
 When adding a new webhook handler, read the body with `await request.text()` first (verify HMAC), then `JSON.parse()` — calling `request.json()` consumes the body and the re-serialised JSON won't byte-match the signed payload. Mirror the Postmark pattern of exporting the pure auth predicate from the route module so the test can exercise it without mocking Supabase (see `verifyTwilioSignature` in the Twilio status webhook for another example).
+
+### QStash push delivery (pilot: Postmark webhook queue)
+
+QSTASH.1 adds push-based delivery for `postmark_webhook_queue` alongside the drain cron. Flow: `/api/webhooks/postmark` inserts the queue row (unchanged), then fire-and-forget publishes `{ id }` to QStash, which POSTs `/api/webhooks/qstash/postmark` — signature-verified (`Upstash-Signature` HS256 JWT, both signing keys accepted for rotation) and processed through the **same claim CAS** as the cron (`src/lib/postmark-queue.js`), so the two consumers race safely. Worker returns 200 for processed/skipped, 500 to make QStash retry; rows QStash gives up on stay pending and the cron sweeps them. **Setup (operator):** create an Upstash account → QStash → copy the token + current/next signing keys into Vercel env. **Rollback / kill switch:** unset `QSTASH_TOKEN` — publishing stops, the cron carries everything again; no code change, no data loss (the queue table is the source of truth throughout). Publish dedup key `postmark-queue:<row id>` guards double-publish on webhook-route retries.
 
 ### Rate limiting
 
