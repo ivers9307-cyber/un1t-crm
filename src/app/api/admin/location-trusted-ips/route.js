@@ -86,7 +86,7 @@ export async function POST(request) {
     category: 'business',
     action: 'location_trusted_ip.added',
     actor: { id: user.id, full_name: user.full_name, email: user.email },
-    target: { id: row.id, resource: `location_trusted_ips/${row.id}`, label: label || ip_cidr },
+    target: { resource: `location_trusted_ips/${row.id}`, label: label || ip_cidr },
     locationId: location_id,
     details: { ip_cidr, label: label || null },
     request,

@@ -66,7 +66,6 @@ export const POST = withAuth(
       action: 'issue.resolved',
       actor: { id: user.id, full_name: user.full_name, email: user.email },
       target: {
-        id: existing.id,
         label: existing.description.slice(0, 80),
         resource: `issue/${existing.id}`,
       },

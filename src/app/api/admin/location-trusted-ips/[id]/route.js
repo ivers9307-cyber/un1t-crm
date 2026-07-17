@@ -42,7 +42,7 @@ export async function DELETE(request, props) {
     category: 'business',
     action: 'location_trusted_ip.removed',
     actor: { id: user.id, full_name: user.full_name, email: user.email },
-    target: { id: existing.id, resource: `location_trusted_ips/${existing.id}`, label: existing.label || existing.ip_cidr },
+    target: { resource: `location_trusted_ips/${existing.id}`, label: existing.label || existing.ip_cidr },
     locationId: existing.location_id,
     details: { ip_cidr: existing.ip_cidr, label: existing.label || null },
     request,

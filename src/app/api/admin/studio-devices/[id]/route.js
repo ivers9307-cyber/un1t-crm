@@ -46,7 +46,7 @@ export async function DELETE(request, props) {
     category: 'business',
     action: 'studio_device.revoked',
     actor: { id: user.id, full_name: user.full_name, email: user.email },
-    target: { id: existing.id, resource: `studio_devices/${existing.id}`, label: existing.label },
+    target: { resource: `studio_devices/${existing.id}`, label: existing.label },
     locationId: existing.location_id,
     details: { device_kind: existing.device_kind, label: existing.label },
     request,

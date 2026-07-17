@@ -88,7 +88,7 @@ export async function POST(request) {
     category: 'business',
     action: 'studio_device.paired',
     actor: { id: user.id, full_name: user.full_name, email: user.email },
-    target: { id: row.id, resource: `studio_devices/${row.id}`, label },
+    target: { resource: `studio_devices/${row.id}`, label },
     locationId: location_id,
     details: { device_kind, label, location_name: loc.name },
     request,
