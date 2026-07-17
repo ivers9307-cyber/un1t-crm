@@ -16,7 +16,13 @@
 //                  email has no actor.
 //   - target      { id?, label?, resource? } — the user / resource
 //                  the action is about. resource is a stable
-//                  '<type>/<id>' string.
+//                  '<type>/<id>' string. target.id MUST be a
+//                  profiles id — it is written to
+//                  audit_events.target_profile_id (FK → profiles),
+//                  so any other UUID makes the insert fail and the
+//                  row is silently dropped. For non-profile targets
+//                  (devices, checklists, …) omit id and carry the
+//                  identity in resource.
 //   - locationId  optional location scope
 //   - details     JSONB payload — action-specific shape.
 //   - request     optional Request object — we pull IP + UA off it.

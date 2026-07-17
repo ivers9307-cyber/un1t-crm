@@ -304,9 +304,14 @@ describe('turnOn', () => {
       category: 'business',
       action: 'ac.turn_on',
       actor: expect.objectContaining({ id: 'u-master' }),
-      target: expect.objectContaining({ id: 'dev-sensibo', label: 'Studio Floor' }),
+      target: expect.objectContaining({ label: 'Studio Floor', resource: 'ac_device/dev-sensibo' }),
       locationId: 'loc-1',
     }))
+    // Device ids are NOT profiles ids — a target.id here lands in
+    // audit_events.target_profile_id, violates its FK to profiles and the
+    // whole audit row is silently dropped. Device identity rides in
+    // target.resource only.
+    expect(logAuditEvent.mock.calls.at(-1)[0].target.id).toBeUndefined()
   })
 
   it('thinq device: dispatches to thinq adapter and leaves sensibo_pod_id NULL', async () => {
@@ -428,7 +433,9 @@ describe('turnOff', () => {
     expect(vendorAdapters.sensibo.turnOff).toHaveBeenCalledWith('pod-aaa', { apiKey: 'sens-k' })
     expect(logAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
       action: 'ac.turn_off',
+      target: expect.objectContaining({ label: 'Studio Floor', resource: 'ac_device/dev-sensibo' }),
     }))
+    expect(logAuditEvent.mock.calls.at(-1)[0].target.id).toBeUndefined()
   })
 
   it('returns 502 when vendor refuses (no session updates either)', async () => {
@@ -487,7 +494,9 @@ describe('extendSession', () => {
 
     expect(logAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
       action: 'ac.extend',
+      target: expect.objectContaining({ label: 'Bathroom M', resource: 'ac_device/dev-thinq' }),
     }))
+    expect(logAuditEvent.mock.calls.at(-1)[0].target.id).toBeUndefined()
   })
 })
 
