@@ -24,6 +24,7 @@ vi.mock('@/lib/glofox', () => ({
 
 import { runClassClimateForLocation } from './class-climate-runner.js'
 import { syncOccurrencesForLocation } from './class-occurrences.js'
+import { logAuditEvent } from '@/lib/audit'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 const NOW = Date.parse('2026-06-18T05:40:00.000Z') // 10 min before a 05:50 class start
@@ -109,6 +110,7 @@ beforeEach(() => {
   vendorTurnOn.mockReset()
   loadDeviceWithLocation.mockReset()
   fetchUpcomingEvents.mockReset()
+  logAuditEvent.mockClear()
   loadDeviceWithLocation.mockResolvedValue({
     ok: true,
     device: { id: 'dev1', label: 'Studio AC', provider: 'sensibo', provider_device_id: 'pod1' },
@@ -127,6 +129,20 @@ describe('runClassClimateForLocation', () => {
     expect(vendorTurnOn).toHaveBeenCalledTimes(1)
     // an ac_sessions row was written for the fire
     expect(db._store.ac_sessions).toHaveLength(1)
+  })
+
+  it('audits the fire with a device resource target and no target.id (system action → target_profile_id NULL)', async () => {
+    const db = makeDb({ class_occurrences: [occ('evt1')] })
+    await runClassClimateForLocation(db, { location_id: LOC, config: CONFIG }, { nowMs: NOW })
+    expect(logAuditEvent).toHaveBeenCalledTimes(1)
+    const audit = logAuditEvent.mock.calls[0][0]
+    expect(audit.action).toBe('ac.class_auto_on')
+    expect(audit.target.label).toBe('Studio AC')
+    expect(audit.target.resource).toBe('ac_device/dev1')
+    // Device ids are NOT profiles ids — a target.id here lands in
+    // audit_events.target_profile_id, violates its FK to profiles and the
+    // whole audit row is silently dropped (every automated fire was lost).
+    expect(audit.target.id).toBeUndefined()
   })
 
   it('does NOT fire on a cancelled_at-flagged occurrence (P0-8 core fix)', async () => {

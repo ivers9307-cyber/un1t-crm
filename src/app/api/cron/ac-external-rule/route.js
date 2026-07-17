@@ -155,8 +155,9 @@ export async function GET(request) {
       await logAuditEvent({
         category: 'business',
         action: 'ac.external_auto_off',
+        // No target.id: it maps to audit_events.target_profile_id
+        // (FK → profiles), so a device UUID there kills the insert.
         target: {
-          id: device.id,
           label: device.label,
           resource: `ac_device/${device.id}`,
         },

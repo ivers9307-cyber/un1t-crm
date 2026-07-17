@@ -148,7 +148,10 @@ async function fireOn(db, { locationId, deviceId, occurrence, config, nowMs }) {
   await logAuditEvent({
     category: 'business',
     action: 'ac.class_auto_on',
-    target: { id: deviceId, label: device.label, resource: `ac_device/${deviceId}` },
+    // No target.id: it maps to audit_events.target_profile_id (FK →
+    // profiles), so a device UUID there kills the insert. The device
+    // identity rides in target.resource.
+    target: { label: device.label, resource: `ac_device/${deviceId}` },
     locationId,
     details: { automation: AUTOMATION_KEY, glofox_event_id: eventId, class_name: occurrence.name, auto_off_at: autoOffAt },
   }).catch(() => {})
