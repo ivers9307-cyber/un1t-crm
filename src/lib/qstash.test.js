@@ -151,12 +151,43 @@ describe('publishQueuePush', () => {
     vi.stubEnv('QSTASH_TOKEN', 'tok_123')
     vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.example.com')
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 429 }))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 429, text: async () => '' }))
 
     const result = await publishQueuePush({ path: POSTMARK_WORKER_PATH, body: {} })
 
     expect(result.ok).toBe(false)
     expect(result.error).toBe('qstash_429')
+  })
+
+  it('logs the QStash error response body so a 4xx is diagnosable from prod logs', async () => {
+    vi.stubEnv('QSTASH_TOKEN', 'tok_123')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.example.com')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => '{"error":"invalid deduplication id"}',
+    }))
+
+    await publishQueuePush({ path: POSTMARK_WORKER_PATH, body: {} })
+
+    const logged = errorSpy.mock.calls.map((c) => c.join(' ')).join('\n')
+    expect(logged).toContain('invalid deduplication id')
+  })
+
+  it('still reports the status when reading the error body itself fails', async () => {
+    vi.stubEnv('QSTASH_TOKEN', 'tok_123')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.example.com')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => { throw new Error('stream gone') },
+    }))
+
+    const result = await publishQueuePush({ path: POSTMARK_WORKER_PATH, body: {} })
+
+    expect(result).toEqual({ ok: false, error: 'qstash_400' })
   })
 
   it('returns ok:false (never throws) when fetch rejects', async () => {
