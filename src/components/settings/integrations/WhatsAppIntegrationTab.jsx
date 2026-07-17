@@ -790,8 +790,18 @@ function CardImageField({ locationId, value, onChange, onError }) {
   )
 }
 
+const HISTORY_SYNC_NOTES = {
+  pending: 'History: importing recent chats…',
+  importing: 'History: importing recent chats…',
+  imported: 'History imported',
+  complete: 'History imported',
+  expired: 'History import window expired',
+}
+
 function NumberRow({ location, number, canEdit, expanded, onExpand, onReload, onError }) {
   const [busy, setBusy] = useState(false)
+  const isCoexistence = number.source === 'coexistence'
+  const historySyncNote = isCoexistence ? HISTORY_SYNC_NOTES[number.history_sync_status] : null
 
   async function setDefault() {
     if (!canEdit || number.is_default) return
@@ -845,6 +855,14 @@ function NumberRow({ location, number, canEdit, expanded, onExpand, onReload, on
               <span className="mx-1.5 text-un1t-muted">·</span>
               <span className="text-un1t-muted">PhoneNumberID:</span> {number.phone_number_id}
             </div>
+            {isCoexistence && historySyncNote && (
+              <div className="text-[11px] text-un1t-subtle truncate">{historySyncNote}</div>
+            )}
+            {isCoexistence && (
+              <div className="text-[11px] text-un1t-subtle truncate">
+                Coexistence numbers send at up to 5 messages/second, and WhatsApp hides the display name unless the business is Meta-Verified.
+              </div>
+            )}
           </div>
         </button>
         <div className="flex items-center gap-1 shrink-0">
