@@ -275,3 +275,61 @@ Draft justifications (edit to taste before submitting):
   revocation.
 - `/register` is limited to 10 calls/number/72h (err 133016) — the exchange
   route probes before registering; don't hand-retry in the console.
+
+---
+
+## 5. Coexistence — link a WhatsApp Business app number
+
+**WA-COEX, 2026-07. Held for App Review approval before enabling** — code is
+merged and deployed but not yet in front of clients; see §4.4 for the
+review this rides on.
+
+Coexistence links a client's existing **WhatsApp Business app** number
+(the phone-based app, not the Cloud API) to the platform **without
+migrating it off the phone** — unlike the full-migration path in §0, the
+owner keeps sending/receiving from the app on their handset while the CRM
+also gets a copy of the conversation. It uses the same two permissions as
+Embedded Signup (`whatsapp_business_messaging`, `whatsapp_business_management`)
+and needs **no separate App Review** — it rides the same Advanced Access
+grant from §4.4.
+
+### 5.1 Console step (required before it works)
+App Dashboard → **WhatsApp → Configuration** → subscribe the WABA to:
+- `history`
+- `smb_app_state_sync`
+- `smb_message_echoes`
+
+...in addition to the existing `messages` field. Harmless to subscribe
+anytime — the fields just sit unhandled until the coexistence code path is
+enabled for a client.
+
+### 5.2 Client eligibility (Meta-gated, per number)
+Meta decides eligibility **per number**, not per app. Requirements:
+- The number's WhatsApp Business app account is established with **good
+  messaging quality**.
+- App version **≥ 2.24.17**.
+- The account is **linked to a Facebook Page**.
+
+New or low-quality accounts get refused by Meta at the linking step — this
+isn't something the platform can override or predict in advance.
+
+### 5.3 Operator flow
+Settings → Locations → [location] → Integrations → WhatsApp → the
+**"Connect existing number"** button → complete Meta's dialog. A pairing
+code is sent to the number's WhatsApp Business app for the owner to enter
+there. Once linked, the number appears in the list with a **"Coexistence"**
+chip (as opposed to "Cloud API" for a fully-migrated number).
+
+### 5.4 History import
+The ~6-month message backfill is **one-shot within 24 hours** of linking —
+Meta doesn't allow re-requesting it later. If it doesn't land in that
+window, the client's WhatsApp history before the link point is gone from
+the CRM's perspective (still on their phone, just not synced).
+
+### 5.5 Caveats
+- Coexistence numbers send at up to **5 messages/second** (lower than the
+  Cloud API's standard throughput) — expect broadcasts/drips off a
+  coexistence number to be slower.
+- **WhatsApp hides the business display name** on coexistence numbers
+  unless the business is **Meta-Verified** — customers may see the raw
+  phone number instead of the configured name.

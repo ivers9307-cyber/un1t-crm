@@ -1920,16 +1920,17 @@ registry.registerPath({
   tags: ['WhatsApp'],
   security: [{ CookieAuth: [] }],
   summary: 'Exchange an Embedded Signup code and connect the WABA/number to this location',
-  description: "Orchestrates code→business-token exchange, an ownership check against whatsapp_numbers (a number already connected to a different location 409s BEFORE any Meta-side mutation), WABA webhook subscription, conditional number registration, then upsert into whatsapp_numbers. Nothing persists unless every Meta call succeeded — safe to re-run with a fresh code. Master-or-owner gated, matching the numbers CRUD route.",
+  description: "Orchestrates code→business-token exchange, an ownership check against whatsapp_numbers (a number already connected to a different location 409s BEFORE any Meta-side mutation), WABA webhook subscription, conditional number registration, then upsert into whatsapp_numbers. Nothing persists unless every Meta call succeeded — safe to re-run with a fresh code. mode='cloud_api' (default) supplies phone_number_id from the ES session and registers the number; mode='coexistence' omits phone_number_id (resolved server-side from the WABA) and skips registration — the number is already live on the WhatsApp Business app. Master-or-owner gated, matching the numbers CRUD route.",
   request: {
     params: z.object({ id: uuidLike }),
     body: {
       content: {
         'application/json': {
           schema: z.object({
+            mode: z.enum(['cloud_api', 'coexistence']).default('cloud_api'),
             code: z.string().min(1),
             waba_id: z.string().regex(/^\d+$/, 'waba_id must be a numeric Meta id'),
-            phone_number_id: z.string().regex(/^\d+$/, 'phone_number_id must be a numeric Meta id'),
+            phone_number_id: z.string().regex(/^\d+$/, 'phone_number_id must be a numeric Meta id').optional(),
           }).openapi('WaEmbeddedSignupExchange'),
         },
       },
