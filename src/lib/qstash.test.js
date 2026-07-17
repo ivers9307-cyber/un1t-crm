@@ -132,6 +132,21 @@ describe('publishQueuePush', () => {
     expect('Upstash-Deduplication-Id' in opts.headers).toBe(false)
   })
 
+  it('passes an abort signal so a hung QStash cannot hold the webhook lambda', async () => {
+    vi.stubEnv('QSTASH_TOKEN', 'tok_123')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.example.com')
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ messageId: 'msg_3' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await publishQueuePush({ path: POSTMARK_WORKER_PATH, body: {} })
+
+    const [, opts] = fetchMock.mock.calls[0]
+    expect(opts.signal).toBeInstanceOf(AbortSignal)
+  })
+
   it('returns ok:false (never throws) on a non-2xx QStash response', async () => {
     vi.stubEnv('QSTASH_TOKEN', 'tok_123')
     vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.example.com')

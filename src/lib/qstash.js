@@ -62,6 +62,11 @@ export async function publishQueuePush({ path, body, deduplicationId }) {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
+      // Hard cap on publish time. This runs INSIDE the Postmark webhook
+      // handler — a hung QStash connection must degrade to "cron delivers
+      // this row", never to a slow webhook response (the CAMPAIGN.13
+      // burst incident was exactly that failure mode).
+      signal: AbortSignal.timeout(3000),
     })
     if (!resp.ok) {
       console.error(`[qstash] publish to ${path} failed: HTTP ${resp.status}`)
