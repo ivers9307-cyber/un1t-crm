@@ -17,7 +17,7 @@ describe('publicShape', () => {
     const shaped = publicShape({
       id: 'r1', location_id: 'L1', label: 'x', phone_number_id: '1',
       access_token: 'EAAGtechprovSECRETzz',           // 20 chars → redacts to last 6
-      signup_meta: { pin: '123456', history_sync: { status: 'importing', started_at: 'x' } },
+      signup_meta: { pin: '123456', history_sync: { status: 'importing', started_at: '2026-07-16T10:00:00.000Z' } },
       token_type: 'business', connected_via: 'embedded_signup',
       business_account_id: 'w', app_id: 'a', display_phone: 'd', source: 'cloud_api',
       is_default: true, is_active: true, created_at: 'c', updated_at: 'u',
@@ -28,6 +28,7 @@ describe('publicShape', () => {
     expect(shaped.token_type).toBe('business')
     expect(shaped.connected_via).toBe('embedded_signup')
     expect(shaped.history_sync_status).toBe('importing')
+    expect(shaped.history_sync_started_at).toBe('2026-07-16T10:00:00.000Z')
   })
 
   it('defaults history_sync_status to null when there is no signup_meta', () => {

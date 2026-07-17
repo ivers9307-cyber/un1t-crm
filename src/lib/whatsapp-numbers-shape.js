@@ -24,6 +24,7 @@ export function publicShape(row) {
     is_active: row.is_active,
     access_token_redacted: redactToken(row.access_token),
     history_sync_status: row.signup_meta?.history_sync?.status || null,
+    history_sync_started_at: row.signup_meta?.history_sync?.started_at || null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   }
