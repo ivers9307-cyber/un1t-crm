@@ -69,7 +69,15 @@ export async function publishQueuePush({ path, body, deduplicationId }) {
       signal: AbortSignal.timeout(3000),
     })
     if (!resp.ok) {
-      console.error(`[qstash] publish to ${path} failed: HTTP ${resp.status}`)
+      // Surface QStash's own error body — a bare status is undiagnosable
+      // from prod logs (the 2026-07-17 HTTP 400 taught us that).
+      let detail = ''
+      try {
+        detail = (await resp.text()).slice(0, 300)
+      } catch {
+        // body unreadable — the status alone will have to do
+      }
+      console.error(`[qstash] publish to ${path} failed: HTTP ${resp.status}${detail ? ` — ${detail}` : ''}`)
       return { ok: false, error: `qstash_${resp.status}` }
     }
     const data = await resp.json()

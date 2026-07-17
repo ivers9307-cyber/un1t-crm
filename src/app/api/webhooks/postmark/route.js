@@ -142,7 +142,10 @@ export async function POST(request) {
       await publishQueuePush({
         path: POSTMARK_WORKER_PATH,
         body: { id: queued.id },
-        deduplicationId: `postmark-queue:${queued.id}`,
+        // Dash-separated, not colon — QStash's docs never show punctuation
+        // beyond dashes in dedup ids, and the first live publish 400'd
+        // with a colon in this header (root cause TBC via the body log).
+        deduplicationId: `postmark-queue-${queued.id}`,
       })
     } catch {
       // publishQueuePush swallows its own errors; belt-and-braces only.
