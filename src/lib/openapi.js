@@ -584,7 +584,7 @@ registry.registerPath({
     'QStash → CRM. Delivers `{ id }` of a postmark_webhook_queue row published by /api/webhooks/postmark; ' +
     'verified via the Upstash-Signature HS256 JWT (current + next signing keys). Processes through the same ' +
     'claim CAS as the drain cron — 200 processed/skipped, 500 asks QStash to retry.',
-  request: { body: { content: { 'application/json': { schema: z.object({ id: z.string() }).openapi('QstashPostmarkQueueMessage') } } } },
+  request: { body: { content: { 'application/json': { schema: z.object({ id: z.number().int() }).openapi('QstashPostmarkQueueMessage') } } } },
   responses: {
     200: { description: 'Processed, or skipped (row already handled)' },
     401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
