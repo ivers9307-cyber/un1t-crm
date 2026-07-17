@@ -16,6 +16,8 @@ import { recordCtwaTouch } from '@/lib/meta-capi'
 import { pricingColumnsFromStatus } from '@/lib/whatsapp-pricing'
 import { ensureMediaRehosted } from '@/lib/whatsapp-media-server'
 import { captureInboundBsuid } from '@/lib/whatsapp-bsuid'
+import { parseEchoMessages, parseSyncContacts, parseHistoryMessages } from '@/lib/whatsapp-coexistence'
+import { syncContactMatchOnly, ingestCoexistenceMessage } from '@/lib/whatsapp-coexistence-ingest'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
 export const runtime = 'nodejs'
@@ -86,6 +88,7 @@ export async function POST(request) {
         'message_template_quality_update',
         'template_category_update',
       ])
+      const COEXISTENCE_EVENT_FIELDS = new Set(['smb_message_echoes', 'smb_app_state_sync', 'history'])
 
       for (const change of changes) {
         if (TEMPLATE_FIELDS.has(change.field)) {
@@ -107,6 +110,11 @@ export async function POST(request) {
             try { await applyMetaUserPreference(db, pref) }
             catch (e) { console.error('[wa-webhook] user_preferences failed:', e?.message) }
           }
+          continue
+        }
+        if (COEXISTENCE_EVENT_FIELDS.has(change.field)) {
+          try { await handleCoexistenceEvent(db, change.field, change.value) }
+          catch (e) { console.error(`[wa-webhook] coexistence ${change.field} failed:`, e?.message) }
           continue
         }
         if (change.field !== 'messages') continue
@@ -603,6 +611,58 @@ async function handleStatusUpdate(db, status) {
         } catch {}
       }
     }
+  }
+}
+
+// WA-COEX.2 — coexistence webhook fields. Echoes = owner's phone-side sends
+// (outbound, deduped). state_sync = contacts (match existing only). history =
+// backfill (deduped). The number's owning location comes from phone_number_id;
+// unknown ids are dropped, mirroring the messages path.
+async function handleCoexistenceEvent(db, field, value) {
+  const phoneNumberId = value?.metadata?.phone_number_id
+  // Mirror handleIncomingMessage: a resolver THROW means "owner undetermined"
+  // (transient DB error) → keep the first-location fallback, NOT drop. Dropping
+  // here is permanent (we 200 + dedup, Meta never retries). Only a genuine
+  // null (unknown number) reaches classifyInboundOwner → { action: 'drop' }.
+  let owner = null
+  let routing = { action: 'first_location' }
+  if (phoneNumberId) {
+    try {
+      owner = await resolveWhatsAppNumberByPhoneNumberId(phoneNumberId)
+      routing = classifyInboundOwner(owner)
+    } catch (e) {
+      console.warn('[wa-webhook] coexistence phone_number_id resolution failed (falling back):', e?.message)
+    }
+  }
+  if (routing.action === 'drop') {
+    console.warn(`[wa-webhook] dropping coexistence ${field} for unregistered phone_number_id ${phoneNumberId}`)
+    return
+  }
+  let locationId = routing.action === 'location' ? routing.locationId : null
+  if (!locationId) {
+    const { data: locations } = await db.from('locations').select('id').limit(1)
+    locationId = locations?.[0]?.id || null
+  }
+  if (!locationId) return
+
+  if (field === 'smb_app_state_sync') {
+    for (const c of parseSyncContacts(value)) {
+      try { await syncContactMatchOnly(db, c) } catch (e) { console.error('[wa-webhook] sync contact failed:', e?.message) }
+    }
+    return
+  }
+
+  // echoes + history are both message descriptors; each deduped per wa_message_id.
+  const ownPhone = owner?.displayPhone || null
+  const descriptors = field === 'smb_message_echoes'
+    ? parseEchoMessages(value)
+    : parseHistoryMessages(value, ownPhone)
+  for (const d of descriptors) {
+    if (!d.waMessageId) continue
+    const dedup = await recordWebhookEvent({ db, provider: WEBHOOK_PROVIDERS.WHATSAPP, eventId: `coex:${d.waMessageId}` })
+    if (dedup.seen) continue
+    try { await ingestCoexistenceMessage(db, { locationId, descriptor: d }) }
+    catch (e) { console.error('[wa-webhook] coexistence ingest failed:', e?.message) }
   }
 }
 

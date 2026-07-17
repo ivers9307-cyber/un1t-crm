@@ -13,11 +13,12 @@ describe('redactToken', () => {
 })
 
 describe('publicShape', () => {
-  it('never leaks access_token or signup_meta (holds the 2FA PIN)', () => {
+  it('never leaks access_token or signup_meta (holds the 2FA PIN), but exposes a coarse history_sync_status', () => {
     const shaped = publicShape({
       id: 'r1', location_id: 'L1', label: 'x', phone_number_id: '1',
       access_token: 'EAAGtechprovSECRETzz',           // 20 chars → redacts to last 6
-      signup_meta: { pin: '123456' }, token_type: 'business', connected_via: 'embedded_signup',
+      signup_meta: { pin: '123456', history_sync: { status: 'importing', started_at: 'x' } },
+      token_type: 'business', connected_via: 'embedded_signup',
       business_account_id: 'w', app_id: 'a', display_phone: 'd', source: 'cloud_api',
       is_default: true, is_active: true, created_at: 'c', updated_at: 'u',
     })
@@ -26,5 +27,16 @@ describe('publicShape', () => {
     expect(shaped.access_token_redacted).toBe('••••CRETzz')
     expect(shaped.token_type).toBe('business')
     expect(shaped.connected_via).toBe('embedded_signup')
+    expect(shaped.history_sync_status).toBe('importing')
+  })
+
+  it('defaults history_sync_status to null when there is no signup_meta', () => {
+    const shaped = publicShape({
+      id: 'r2', location_id: 'L1', label: 'x', phone_number_id: '1',
+      access_token: null, token_type: 'business', connected_via: 'coexistence',
+      business_account_id: 'w', app_id: 'a', display_phone: 'd', source: 'coexistence',
+      is_default: false, is_active: true, created_at: 'c', updated_at: 'u',
+    })
+    expect(shaped.history_sync_status).toBe(null)
   })
 })
