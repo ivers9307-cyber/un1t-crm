@@ -576,6 +576,24 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/webhooks/qstash/postmark',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker for the Postmark webhook queue',
+  description:
+    'QStash → CRM. Delivers `{ id }` of a postmark_webhook_queue row published by /api/webhooks/postmark; ' +
+    'verified via the Upstash-Signature HS256 JWT (current + next signing keys). Processes through the same ' +
+    'claim CAS as the drain cron — 200 processed/skipped, 500 asks QStash to retry.',
+  request: { body: { content: { 'application/json': { schema: z.object({ id: z.string() }).openapi('QstashPostmarkQueueMessage') } } } },
+  responses: {
+    200: { description: 'Processed, or skipped (row already handled)' },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Processing failed — QStash should retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/webhooks/inbody',
   tags: ['Webhooks (Inbound)'],
   security: [{ WebhookToken: [] }],
