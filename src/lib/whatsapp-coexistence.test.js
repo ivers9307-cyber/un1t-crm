@@ -1,6 +1,6 @@
 // src/lib/whatsapp-coexistence.test.js
 import { describe, it, expect } from 'vitest'
-import { normalizeWaPhone, parseEchoMessages, parseSyncContacts, parseHistoryMessages } from './whatsapp-coexistence.js'
+import { normalizeWaPhone, parseEchoMessages, parseSyncContacts, parseHistoryMessages, nextHistorySyncState, effectiveHistorySyncStatus } from './whatsapp-coexistence.js'
 
 describe('normalizeWaPhone', () => {
   it('yields both + and no-+ forms, stripping non-digits', () => {
@@ -53,5 +53,55 @@ describe('parseHistoryMessages', () => {
       { waMessageId: 'wamid.H1', peerPhone: '353222', direction: 'inbound', messageType: 'text', body: 'old inbound', tsSeconds: 1699000000 },
       { waMessageId: 'wamid.H2', peerPhone: '353222', direction: 'outbound', messageType: 'text', body: 'old outbound', tsSeconds: 1699000100 },
     ])
+  })
+})
+
+describe('nextHistorySyncState', () => {
+  const NOW = '2026-07-16T12:00:00.000Z'
+  it('preserves started_at and marks importing while progress < 100', () => {
+    const cur = { status: 'pending', started_at: '2026-07-16T10:00:00.000Z' }
+    const val = { history: [{ metadata: { progress: '40' } }] }
+    expect(nextHistorySyncState(cur, val, NOW)).toEqual({
+      status: 'importing', progress: 40, started_at: '2026-07-16T10:00:00.000Z', updated_at: NOW,
+    })
+  })
+  it('marks imported when progress reaches 100 (takes the max across chunks)', () => {
+    const cur = { status: 'importing', started_at: '2026-07-16T10:00:00.000Z', progress: 40 }
+    const val = { history: [{ metadata: { progress: 80 } }, { metadata: { progress: 100 } }] }
+    expect(nextHistorySyncState(cur, val, NOW)).toEqual({
+      status: 'imported', progress: 100, started_at: '2026-07-16T10:00:00.000Z', updated_at: NOW,
+    })
+  })
+  it('marks declined when a history item carries a non-empty errors array', () => {
+    const cur = { status: 'pending', started_at: '2026-07-16T10:00:00.000Z' }
+    const val = { history: [{ errors: [{ code: 100, title: 'declined' }] }] }
+    const out = nextHistorySyncState(cur, val, NOW)
+    expect(out.status).toBe('declined')
+    expect(out.started_at).toBe('2026-07-16T10:00:00.000Z')
+    expect(out.updated_at).toBe(NOW)
+  })
+  it('uses now as started_at when there was no prior state', () => {
+    expect(nextHistorySyncState(null, { history: [{ metadata: { progress: 10 } }] }, NOW).started_at).toBe(NOW)
+  })
+})
+
+describe('effectiveHistorySyncStatus', () => {
+  const start = '2026-07-16T00:00:00.000Z'
+  const within = Date.parse('2026-07-16T10:00:00.000Z')      // 10h later
+  const past = Date.parse('2026-07-17T06:00:00.000Z')        // 30h later
+  it('returns the status unchanged when not pending/importing', () => {
+    expect(effectiveHistorySyncStatus('imported', start, past)).toBe('imported')
+    expect(effectiveHistorySyncStatus('declined', start, past)).toBe('declined')
+  })
+  it('keeps pending/importing within 24h', () => {
+    expect(effectiveHistorySyncStatus('importing', start, within)).toBe('importing')
+  })
+  it('flips pending/importing to expired past 24h', () => {
+    expect(effectiveHistorySyncStatus('importing', start, past)).toBe('expired')
+    expect(effectiveHistorySyncStatus('pending', start, past)).toBe('expired')
+  })
+  it('is null-safe', () => {
+    expect(effectiveHistorySyncStatus(null, start, past)).toBeNull()
+    expect(effectiveHistorySyncStatus('importing', null, past)).toBe('importing')
   })
 })

@@ -69,3 +69,40 @@ export function parseHistoryMessages(value, ownPhone) {
   }
   return out
 }
+
+/**
+ * Advance the history-sync state from a `history` webhook payload.
+ * Pure — pass the current now as ISO. Completion is progress >= 100 (Meta's
+ * exact terminal value is loosely documented; this is the single place to
+ * tune once seen live). A non-empty errors array = the business declined.
+ */
+export function nextHistorySyncState(current, historyValue, nowIso) {
+  const startedAt = current?.started_at || nowIso
+  const items = historyValue?.history || []
+  const declined = items.some((h) => Array.isArray(h?.errors) && h.errors.length > 0)
+  if (declined) {
+    return { status: 'declined', progress: current?.progress ?? null, started_at: startedAt, updated_at: nowIso }
+  }
+  let progress = current?.progress ?? null
+  for (const h of items) {
+    const raw = h?.metadata?.progress
+    const n = raw == null ? null : Number(raw)
+    if (n != null && !Number.isNaN(n) && (progress == null || n > progress)) progress = n
+  }
+  const status = progress != null && progress >= 100 ? 'imported' : 'importing'
+  return { status, progress, started_at: startedAt, updated_at: nowIso }
+}
+
+/**
+ * The status to DISPLAY: a pending/importing sync older than 24h is shown as
+ * 'expired' (the one-shot window is gone) — a read-time backstop so the badge
+ * can never stay stuck even if the completion signal was missed. `nowMs` is
+ * Date.now() from the caller.
+ */
+export function effectiveHistorySyncStatus(status, startedAtIso, nowMs) {
+  if (status !== 'pending' && status !== 'importing') return status || null
+  if (!startedAtIso) return status
+  const startedMs = Date.parse(startedAtIso)
+  if (Number.isNaN(startedMs)) return status
+  return nowMs - startedMs > 24 * 60 * 60 * 1000 ? 'expired' : status
+}

@@ -16,7 +16,7 @@ import { recordCtwaTouch } from '@/lib/meta-capi'
 import { pricingColumnsFromStatus } from '@/lib/whatsapp-pricing'
 import { ensureMediaRehosted } from '@/lib/whatsapp-media-server'
 import { captureInboundBsuid } from '@/lib/whatsapp-bsuid'
-import { parseEchoMessages, parseSyncContacts, parseHistoryMessages } from '@/lib/whatsapp-coexistence'
+import { parseEchoMessages, parseSyncContacts, parseHistoryMessages, nextHistorySyncState } from '@/lib/whatsapp-coexistence'
 import { syncContactMatchOnly, ingestCoexistenceMessage } from '@/lib/whatsapp-coexistence-ingest'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
@@ -663,6 +663,15 @@ async function handleCoexistenceEvent(db, field, value) {
     if (dedup.seen) continue
     try { await ingestCoexistenceMessage(db, { locationId, descriptor: d }) }
     catch (e) { console.error('[wa-webhook] coexistence ingest failed:', e?.message) }
+  }
+
+  if (field === 'history' && owner?.id) {
+    try {
+      const { data: row } = await db.from('whatsapp_numbers').select('signup_meta').eq('id', owner.id).maybeSingle()
+      const meta = row?.signup_meta || {}
+      const nextSync = nextHistorySyncState(meta.history_sync, value, new Date().toISOString())
+      await db.from('whatsapp_numbers').update({ signup_meta: { ...meta, history_sync: nextSync } }).eq('id', owner.id)
+    } catch (e) { console.error('[wa-webhook] history-sync status update failed:', e?.message) }
   }
 }
 

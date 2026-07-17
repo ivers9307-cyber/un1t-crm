@@ -20,6 +20,7 @@ import {
 import { createBrowserClient } from '@/lib/supabase'
 import { validateTemplateMedia } from '@/lib/template-media'
 import { normalizeUrlish } from '@/lib/urlish'
+import { effectiveHistorySyncStatus } from '@/lib/whatsapp-coexistence'
 
 export default function WhatsAppIntegrationTab({ location, canEdit }) {
   const [numbers, setNumbers] = useState([])
@@ -795,13 +796,17 @@ const HISTORY_SYNC_NOTES = {
   importing: 'History: importing recent chats…',
   imported: 'History imported',
   complete: 'History imported',
+  declined: 'History sharing was declined',
   expired: 'History import window expired',
 }
 
 function NumberRow({ location, number, canEdit, expanded, onExpand, onReload, onError }) {
   const [busy, setBusy] = useState(false)
   const isCoexistence = number.source === 'coexistence'
-  const historySyncNote = isCoexistence ? HISTORY_SYNC_NOTES[number.history_sync_status] : null
+  const effectiveHistoryStatus = isCoexistence
+    ? effectiveHistorySyncStatus(number.history_sync_status, number.history_sync_started_at, Date.now())
+    : null
+  const historySyncNote = effectiveHistoryStatus ? HISTORY_SYNC_NOTES[effectiveHistoryStatus] : null
 
   async function setDefault() {
     if (!canEdit || number.is_default) return
