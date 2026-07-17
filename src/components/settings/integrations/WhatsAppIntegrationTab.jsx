@@ -212,7 +212,7 @@ function ConnectWhatsAppCard({ location, canEdit, onConnected }) {
     return () => window.removeEventListener('message', onMessage)
   }, [])
 
-  async function connect() {
+  async function connect(mode = 'cloud_api') {
     setError(null)
     setBusy(true)
     try {
@@ -224,21 +224,26 @@ function ConnectWhatsAppCard({ location, canEdit, onConnected }) {
             config_id: launch.config_id,
             response_type: 'code',
             override_default_response_type: true,
-            extras: { setup: {} },
+            extras: mode === 'coexistence'
+              ? { setup: {}, featureType: 'whatsapp_business_app_onboarding' }
+              : { setup: {} },
           },
         )
       })
       if (!authCode) { setBusy(false); return }   // dialog abandoned = no-op
 
       const { waba_id, phone_number_id } = sessionInfo.current
-      if (!waba_id || !phone_number_id) {
-        throw new Error('Signup finished but no WABA/number details arrived — close the dialog and retry.')
+      if (!waba_id) {
+        throw new Error('Signup finished but no WhatsApp Business account details arrived — close the dialog and retry.')
+      }
+      if (mode === 'cloud_api' && !phone_number_id) {
+        throw new Error('Signup finished but no number details arrived — close the dialog and retry.')
       }
 
       const res = await fetch(`/api/locations/${location.id}/whatsapp/embedded-signup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: authCode, waba_id, phone_number_id }),
+        body: JSON.stringify({ mode, code: authCode, waba_id, phone_number_id }),
       })
       const json = await res.json()
       if (!json.success) throw new Error(json.error || 'Connection failed')
@@ -279,15 +284,29 @@ function ConnectWhatsAppCard({ location, canEdit, onConnected }) {
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={connect}
-        disabled={!canEdit || busy || !launch?.configured}
-        className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg font-semibold hover:bg-un1t-accent disabled:opacity-50"
-      >
-        {busy ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
-        {busy ? 'Connecting…' : 'Connect'}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => connect('cloud_api')}
+          disabled={!canEdit || busy || !launch?.configured}
+          className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-un1t-text text-un1t-bg font-semibold hover:bg-un1t-accent disabled:opacity-50"
+        >
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+          {busy ? 'Connecting…' : 'Connect'}
+        </button>
+        <button
+          type="button"
+          onClick={() => connect('coexistence')}
+          disabled={!canEdit || busy || !launch?.configured}
+          className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-un1t-bg border border-un1t-border text-un1t-text hover:bg-un1t-surface disabled:opacity-50"
+        >
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+          {busy ? 'Connecting…' : 'Connect existing number'}
+        </button>
+      </div>
+      <p className="text-xs text-un1t-subtle">
+        Already using the WhatsApp Business app on this number? Use “Connect existing number” to link it without moving off your phone.
+      </p>
     </div>
   )
 }
