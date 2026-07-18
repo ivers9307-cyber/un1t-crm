@@ -80,6 +80,13 @@ export function buildConnectionPatch(body, opts = {}) {
   for (const f of SECRET_FIELDS) {
     if (isFreshSecret(body[f])) patch[f] = String(body[f]).trim()
   }
+  // A freshly pasted access token is a NEW token — the stored lifecycle
+  // stamps (mig 408) describe the old one. Null them so nothing reads a
+  // stale expiry as current; the weekly refresh cron repopulates them.
+  if (patch.access_token) {
+    patch.token_expires_at = null
+    patch.token_refreshed_at = null
+  }
   return patch
 }
 

@@ -45,7 +45,12 @@ export async function GET(request) {
         console.error(`[instagram-token-refresh] connection ${conn.id}: ${json?.error?.message || `HTTP ${res.status}`}`)
         continue
       }
-      await db.from('channel_connections').update(patch).eq('id', conn.id)
+      const { error } = await db.from('channel_connections').update(patch).eq('id', conn.id)
+      if (error) {
+        failed += 1
+        console.error(`[instagram-token-refresh] connection ${conn.id}: persist failed — ${error.message}`)
+        continue
+      }
       refreshed += 1
     } catch (e) {
       failed += 1
@@ -53,6 +58,11 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('instagram-token-refresh')
+  // Stamp ONLY on a fully clean run: persistent refresh failure must
+  // surface as heartbeat staleness (the runbook's alarm) rather than
+  // burn the 60-day runway behind a fresh stamp. A run with zero
+  // token-bearing connections is clean — nothing to refresh is not a
+  // failure, and skipping the stamp there would false-alarm forever.
+  if (failed === 0) await stampHeartbeat('instagram-token-refresh', { refreshed, failed })
   return NextResponse.json({ success: true, refreshed, failed })
 }

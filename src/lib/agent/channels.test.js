@@ -72,6 +72,17 @@ describe('buildConnectionPatch', () => {
     const p = buildConnectionPatch({ agent_enabled: true })
     expect(p.agent_enabled).toBe(true)
   })
+  it('fresh access token nulls the mig-408 lifecycle stamps', () => {
+    const p = buildConnectionPatch({ access_token: 'IGAA-fresh' })
+    expect(p.access_token).toBe('IGAA-fresh')
+    expect(p.token_expires_at).toBe(null)
+    expect(p.token_refreshed_at).toBe(null)
+  })
+  it('no fresh token → lifecycle stamps untouched', () => {
+    const p = buildConnectionPatch({ label: 'x', access_token: '••••••567890' })
+    expect('token_expires_at' in p).toBe(false)
+    expect('token_refreshed_at' in p).toBe(false)
+  })
 })
 
 describe('SUPPORTED_PLATFORMS', () => {
