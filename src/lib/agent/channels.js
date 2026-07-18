@@ -15,6 +15,13 @@ import { createServerClient } from '@/lib/supabase'
 export const META_GRAPH_VERSION = 'v21.0'
 export const META_GRAPH_URL = `https://graph.facebook.com/${META_GRAPH_VERSION}`
 
+// Instagram API with Instagram Login (IG-LOGIN) lives on its own Graph
+// host with Instagram User tokens — NOT graph.facebook.com page tokens.
+// All instagram-platform calls (DM send, profile fetch, feed sync) use
+// this. META_GRAPH_URL stays for future Messenger (page-token) channels.
+export const IG_GRAPH_VERSION = 'v25.0'
+export const IG_GRAPH_URL = `https://graph.instagram.com/${IG_GRAPH_VERSION}`
+
 export const SUPPORTED_PLATFORMS = Object.freeze(['instagram', 'messenger'])
 
 // Fields that are secrets — masked on read, only overwritten on write

@@ -1,7 +1,9 @@
 // Instagram feed for the public events-page strip (EVENTS-IG.1).
 // Graph media → cache rows, thumbnail re-host, per-location sync.
 
-const GRAPH = 'https://graph.facebook.com/v21.0'
+// Instagram Login API host (IG-LOGIN) — connections hold Instagram User
+// tokens, which only work on graph.instagram.com (media reads included).
+const GRAPH = 'https://graph.instagram.com/v25.0'
 const CAPTION_MAX = 140
 
 /**
