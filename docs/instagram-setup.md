@@ -1,53 +1,94 @@
-# Instagram DM setup — operator runbook
+# Instagram DM setup — operator runbook (Instagram Login API)
 
-For the design rationale, alternatives considered, and the code-side change (per-channel `agent_enabled` gate), see `docs/superpowers/specs/2026-07-18-instagram-dm-golive-design.md`.
+Design rationale: `docs/superpowers/specs/2026-07-18-instagram-dm-golive-design.md` + the
+`2026-07-18-instagram-login-flavor-addendum.md` beside it. **This runbook is for the
+Instagram API with Instagram Login** — chosen because UN1T is a franchise: the gym's IG
+account cannot live in the business portfolio, which rules out the Facebook-login/page-token
+flavor entirely. All CRM Graph calls go to `graph.instagram.com` with an Instagram User
+token; tokens are ~60-day and the weekly `instagram-token-refresh` cron rolls them.
 
-## Meta wiring (operator runbook — done in Richard's browser)
+## Meta wiring
 
-**Prereqs to confirm first:**
-1. The gym's IG account is a **Professional (business)** account and is **linked to the UN1T Stillorgan Facebook Page** (`110221594760397`). Business Suite → Settings → Linked accounts.
-2. In the Instagram app on the phone: Settings → Messages and story replies → Message controls → **"Connected tools" → Allow access to messages = ON**. Without this, webhooks silently never deliver (classic silent killer; exact menu path varies by app version).
+Console: developers.facebook.com → app **UN1T communications platform** → Instagram use case
+→ **API setup with Instagram login**. The Instagram app inside it is
+**"UN1T communications platform-IG", app ID `26910072478619447`**.
 
-**App configuration** (Meta app "UN1T communications platform", `1650634536237918`):
-3. Webhooks product → object **`instagram`** → subscribe field **`messages`** → callback `https://crm.un1tdublin.com/api/webhooks/instagram`, verify token = existing `WHATSAPP_WEBHOOK_VERIFY_TOKEN` (the route falls back to it; same for the app secret — same Meta app, so no new env vars strictly required).
-4. Instagram messaging uses the same app secret already set in Vercel (`WHATSAPP_APP_SECRET`); optionally set `INSTAGRAM_APP_SECRET`/`INSTAGRAM_WEBHOOK_VERIFY_TOKEN` explicitly for clarity.
+1. **Add the account** (already done for `un1t_stillorgan`, ID `17841449661114656`): under
+   "2. Generate access tokens" → Add account → log in as the gym's IG account. Requires the
+   IG account to be Professional; no Facebook Page or Business-portfolio ownership needed.
+2. **Webhook Subscription toggle ON** for the account row (already on).
+3. **Phone step — allow message access**: IG app → Settings → Messages and story replies →
+   Message controls → **Connected tools → Allow access to messages: ON**. Without this,
+   webhooks silently never deliver.
+4. **Configure webhooks** (section "3. Configure webhooks" on the same page): callback URL
+   `https://crm.un1tdublin.com/api/webhooks/instagram`, verify token = the value of
+   **`INSTAGRAM_WEBHOOK_VERIFY_TOKEN`** (set it in Vercel first — any random string, e.g.
+   `openssl rand -hex 16`; don't mark it Sensitive so it stays readable). Subscribe the
+   **`messages`** field.
+5. **Env vars in Vercel (Production) + redeploy**:
+   - `INSTAGRAM_WEBHOOK_VERIFY_TOKEN` — from step 4.
+   - `INSTAGRAM_APP_SECRET` — the **Instagram app secret** shown on the API-setup page
+     (Show → copy). This signs IG webhook payloads; the WhatsApp app secret does NOT —
+     without this env var every IG webhook is rejected with an invalid signature.
+6. **Generate the token**: "Generate token" next to the account row → log in as the IG
+   account → copy the Instagram User token (long-lived, ~60 days). No never-expire option
+   exists on this flavor — the weekly cron keeps it rolled from here on.
 
-**Token + assets** (Business settings, portfolio `2048578058564800`):
-5. System user: assign the UN1T Stillorgan Page + Instagram asset with full control.
-6. Generate a system-user token, **expiry = Never** (Meta defaults to 60 days — always pick Never), scopes: `instagram_basic`, `instagram_manage_messages`, `pages_messaging`, `pages_manage_metadata`.
-7. **Derive the Page access token** from the system-user token: `GET /{page-id}?fields=access_token` (or `GET /me/accounts`). The send path calls `/me/messages`, which requires a *Page* token — the raw system-user token will not work there. A Page token derived from a never-expiring system-user token does not expire.
-8. Subscribe the Page to the app: `POST /{page-id}/subscribed_apps` (verify the exact `subscribed_fields` value for IG messaging routing against current Meta docs at execution time).
-9. Fetch the IG business account id: `GET /{page-id}?fields=instagram_business_account`.
+## Connect in the CRM
 
-**Connect in the CRM:**
-10. ConnectionsSection → add connection: platform `instagram`, `external_account_id` = IG business account id, `page_id` = `110221594760397`, `access_token` = the **derived Page token** (step 7), label/display name = the IG handle. Leave the new agent toggle OFF.
+7. crm.un1tdublin.com → Customer Agent settings → **Connections** → Instagram: handle
+   `@un1t_stillorgan`, Instagram professional account ID `17841449661114656`, Instagram app
+   ID `26910072478619447`, access token from step 6 (leave Page ID blank — not used by this
+   flavor). **Leave "Mia auto-replies on Instagram" OFF.** Save → badge shows Connected.
 
-## Verification (E2E, standard access)
+## Verification (E2E)
 
-Standard access delivers messages only from accounts with a role on the app — that IS the soft launch. Steps:
+Until App Review grants advanced access, only Instagram accounts with a role on the app can
+message in — that IS the soft launch.
 
 1. From an app-role Instagram account, DM the gym's IG.
-2. Confirm: thread appears in `/communications/inbox` with the IG channel chip; needs-action badge increments; staff push arrives.
+2. Confirm: thread appears in `/communications/inbox` with the IG channel chip; needs-action
+   badge increments; staff push arrives.
 3. Reply from the inbox → confirm delivery on the phone; needs-reply chip clears.
-4. Confirm Mia stayed silent — no agent message in the thread (the gate skips silently; the thread itself is the signal).
-5. Trigger `/api/cron/instagram-feed-sync` manually (CRON_SECRET) → confirm `instagram_feed_posts` populates and the public events page strip renders (closes the EVENTS-IG.1 prereq).
-6. Mobile: confirm the IG thread renders in the mobile inbox (parity shipped but never device-verified with real IG data).
+4. Confirm Mia stayed silent — no agent message in the thread (the gate skips silently; the
+   thread itself is the signal).
+5. Trigger `/api/cron/instagram-feed-sync` manually (CRON_SECRET) → confirm
+   `instagram_feed_posts` populates and the public events page strip renders (closes the
+   EVENTS-IG.1 prereq). Note: feed reads need the account's media permission granted during
+   business login.
+6. Mobile: confirm the IG thread renders in the mobile inbox (parity shipped but never
+   device-verified with real IG data).
+7. **Token roll check** (any time ≥24h after pasting the token): run the
+   `instagram-token-refresh` cron manually with CRON_SECRET → expect
+   `{"success":true,"refreshed":1,"failed":0}` and `token_expires_at` ~60 days out.
 
-When done, flip Mia on for IG (if desired) via the "Mia auto-replies on Instagram" toggle in Customer Agent settings → Connections — it is OFF by default.
+When done, flip Mia on for IG (if desired) via the "Mia auto-replies on Instagram" toggle in
+Customer Agent settings → Connections — it is OFF by default.
 
 ## After the WA Tech Provider review decision
 
-1. Submit App Review for `instagram_manage_messages` advanced access (+ `instagram_basic` if flagged): screencast of DM → inbox → reply, usage justification (reuse the tight style from the WA submission), data-handling answers already backed by the public authority-requests policy.
+1. Submit App Review for **`instagram_business_manage_messages`** (+
+   `instagram_business_basic` if flagged) advanced access: screencast of DM → inbox → reply,
+   usage justification (reuse the tight style from the WA submission), data-handling answers
+   already backed by the public authority-requests policy.
 2. On approval: general-public DMs flow. Announce internally; watch the first week's volume.
-3. Optional later flip: `agent_enabled = true` on the IG connection → Mia goes live on IG.
+3. Optional later flip: the Mia toggle → she goes live on IG.
+4. SaaS onboarding (franchise locations / future clients self-connecting via embedded
+   Instagram business login — section 4 of the API-setup page) is deliberately deferred
+   until after App Review.
 
 ## Known limitations (accepted)
 
-- Replies only work inside Instagram's **24-hour messaging window**; outside it Meta rejects the send and the inbox surfaces the error. The `HUMAN_AGENT` tag (7-day window) is a separately-reviewed permission — future work if the window bites.
+- Replies only work inside Instagram's **24-hour messaging window**; outside it Meta rejects
+  the send and the inbox surfaces the error. The `HUMAN_AGENT` tag (7-day window) is a
+  separately-reviewed permission — future work if the window bites.
 - No comment handling, story mentions, or IG ads lead capture in this round.
-- No OAuth connect card — future SaaS clients need it, own-account go-live does not.
+- Tokens are ~60-day: if the refresh cron heartbeat goes stale for more than a couple of
+  weeks, treat it as urgent — an expired token cannot be refreshed, only re-generated in the
+  console (step 6).
 
 ## Rollback
 
-- Kill switch: deactivate the connection row (`is_active=false`) in ConnectionsSection — webhook drops events for unknown/inactive accounts; feed strip stops at next cron prune.
-- The migration is additive with a safe default; no rollback needed.
+- Kill switch: deactivate the connection row (`is_active=false`) in Connections — the
+  webhook drops events for unknown/inactive accounts; feed strip stops at next cron prune.
+- Migrations 407/408 are additive with safe defaults; no rollback needed.
