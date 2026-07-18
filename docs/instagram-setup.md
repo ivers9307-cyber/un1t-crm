@@ -29,7 +29,7 @@ Standard access delivers messages only from accounts with a role on the app — 
 1. From an app-role Instagram account, DM the gym's IG.
 2. Confirm: thread appears in `/communications/inbox` with the IG channel chip; needs-action badge increments; staff push arrives.
 3. Reply from the inbox → confirm delivery on the phone; needs-reply chip clears.
-4. Confirm Mia stayed silent (no agent message in the thread; webhook logs show the gate skip).
+4. Confirm Mia stayed silent — no agent message in the thread (the gate skips silently; the thread itself is the signal).
 5. Trigger `/api/cron/instagram-feed-sync` manually (CRON_SECRET) → confirm `instagram_feed_posts` populates and the public events page strip renders (closes the EVENTS-IG.1 prereq).
 6. Mobile: confirm the IG thread renders in the mobile inbox (parity shipped but never device-verified with real IG data).
 
