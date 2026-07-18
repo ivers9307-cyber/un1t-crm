@@ -13,6 +13,7 @@ const ChannelPatchSchema = z.object({
   app_id: z.string().nullable().optional(),
   display_name: z.string().nullable().optional(),
   is_active: z.boolean().optional(),
+  agent_enabled: z.boolean().optional(),
 }).passthrough()
 
 // PATCH /api/locations/[id]/channels/[connId] — update a connection.
@@ -41,7 +42,7 @@ export async function PATCH(request, props) {
   if (!existing) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
 
   const patch = buildConnectionPatch(body, {
-    fields: ['label', 'external_account_id', 'page_id', 'app_id', 'display_name', 'is_active'],
+    fields: ['label', 'external_account_id', 'page_id', 'app_id', 'display_name', 'is_active', 'agent_enabled'],
   })
   patch.updated_at = new Date().toISOString()
   patch.updated_by = user.id

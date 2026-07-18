@@ -57,6 +57,7 @@ export default function ConnectionsSection({ locationId, locationName }) {
           payload[f.key] = v
         }
       }
+      payload.agent_enabled = !!draft.agent_enabled
       const url = igConn
         ? `/api/locations/${locationId}/channels/${igConn.id}`
         : `/api/locations/${locationId}/channels`
@@ -133,6 +134,18 @@ export default function ConnectionsSection({ locationId, locationName }) {
             </div>
           ))}
         </div>
+
+        <label className="flex items-center gap-2 mt-4 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={!!draft.agent_enabled}
+            onChange={e => setField('agent_enabled', e.target.checked)}
+          />
+          <span className="text-sm text-un1t-text">Mia auto-replies on Instagram</span>
+        </label>
+        <p className="text-xs text-un1t-muted mt-1">
+          Off by default. Inbound DMs still land in the inbox and notify staff — Mia only answers when this is on.
+        </p>
 
         {error && <div className="text-sm text-red-600 mt-3">{error}</div>}
         <div className="mt-4">
