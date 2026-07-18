@@ -6,6 +6,7 @@ import {
   maskConnectionRow,
   buildConnectionPatch,
   SUPPORTED_PLATFORMS,
+  isAgentEnabledForConnection,
 } from './channels'
 
 describe('maskSecret', () => {
@@ -66,11 +67,29 @@ describe('buildConnectionPatch', () => {
     expect(p.hacker).toBeUndefined()
     expect(p.is_active).toBe(false)
   })
+  it('passes agent_enabled through the default fields', () => {
+    const p = buildConnectionPatch({ agent_enabled: true })
+    expect(p.agent_enabled).toBe(true)
+  })
 })
 
 describe('SUPPORTED_PLATFORMS', () => {
   it('covers instagram + messenger', () => {
     expect(SUPPORTED_PLATFORMS).toContain('instagram')
     expect(SUPPORTED_PLATFORMS).toContain('messenger')
+  })
+})
+
+describe('isAgentEnabledForConnection', () => {
+  it('null/undefined connection → false (default closed)', () => {
+    expect(isAgentEnabledForConnection(null)).toBe(false)
+    expect(isAgentEnabledForConnection(undefined)).toBe(false)
+  })
+  it('agent_enabled false or missing → false', () => {
+    expect(isAgentEnabledForConnection({})).toBe(false)
+    expect(isAgentEnabledForConnection({ agent_enabled: false })).toBe(false)
+  })
+  it('agent_enabled true → true', () => {
+    expect(isAgentEnabledForConnection({ agent_enabled: true })).toBe(true)
   })
 })

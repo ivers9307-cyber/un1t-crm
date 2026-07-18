@@ -65,7 +65,7 @@ export function maskConnectionRow(row) {
  * @param {object} [opts] { fields } allowed non-secret fields
  */
 export function buildConnectionPatch(body, opts = {}) {
-  const fields = opts.fields || ['platform', 'label', 'external_account_id', 'page_id', 'app_id', 'display_name', 'is_active']
+  const fields = opts.fields || ['platform', 'label', 'external_account_id', 'page_id', 'app_id', 'display_name', 'is_active', 'agent_enabled']
   const patch = {}
   for (const k of fields) {
     if (body[k] !== undefined) patch[k] = body[k]
@@ -74,6 +74,16 @@ export function buildConnectionPatch(body, opts = {}) {
     if (isFreshSecret(body[f])) patch[f] = String(body[f]).trim()
   }
   return patch
+}
+
+/**
+ * Should the customer agent auto-reply on this connection's channel?
+ * Default CLOSED: a missing row or unset flag means staff-only — the
+ * agent only runs when an operator has explicitly opted the channel in
+ * (mig 407). Staff inbox flows are unaffected either way. Pure.
+ */
+export function isAgentEnabledForConnection(connection) {
+  return !!connection?.agent_enabled
 }
 
 /**
