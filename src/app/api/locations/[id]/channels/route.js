@@ -14,6 +14,7 @@ const ChannelConnectionSchema = z.object({
   app_id: z.string().max(200).optional(),
   display_name: z.string().max(200).optional(),
   is_active: z.boolean().optional(),
+  agent_enabled: z.boolean().optional(),
   access_token: z.string().max(2000).optional(),
   app_secret: z.string().max(500).optional(),
 })

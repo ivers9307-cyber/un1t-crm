@@ -10,7 +10,7 @@
 // handleInstagramInbound() persists the message + resolves the location
 // by the IG business account id Meta posted to, then triggers the agent.
 
-import { resolveLocationByExternalAccount, META_GRAPH_URL } from './channels'
+import { resolveLocationByExternalAccount, isAgentEnabledForConnection, META_GRAPH_URL } from './channels'
 import { runChannelAgent } from './auto-reply'
 import { AGENT_MESSAGE_SOURCE } from './core'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
@@ -198,20 +198,30 @@ export async function handleInstagramInbound(db, event) {
   try { await db.rpc('increment_instagram_conversation_unread', { p_conversation_id: conversationId }) } catch {}
 
   // Trigger the agent (shared brain) FIRST so we know whether it engaged this
-  // message before deciding the inbound push. Best-effort.
+  // message before deciding the inbound push. Best-effort. IG-DM.3 — gated
+  // per-connection: Mia only auto-replies on channels an operator has
+  // explicitly opted in (agent_enabled, mig 407). Persistence and the
+  // unread bump already ran above, and the push fan-out below still
+  // fires when gated off (a null agentResult reads as not-engaged), so a
+  // gated-off channel is a fully working staff-only inbox. The shared settings
+  // blob can't express this: enabled/test_mode is per-location across
+  // channels, and test_mode's allowlist is phone-based (IG senders have
+  // IGSIDs), so the connection row is the right per-channel switch.
   let agentResult = null
-  try {
-    agentResult = await runChannelAgent(db, instagramAdapter, {
-      conversationId,
-      locationId,
-      recipient: event.senderId,
-      contactId,
-      messageType,
-      body,
-      connection,
-    })
-  } catch (err) {
-    console.error('[radar-agent] IG auto-reply failed', err?.message)
+  if (isAgentEnabledForConnection(connection)) {
+    try {
+      agentResult = await runChannelAgent(db, instagramAdapter, {
+        conversationId,
+        locationId,
+        recipient: event.senderId,
+        contactId,
+        messageType,
+        body,
+        connection,
+      })
+    } catch (err) {
+      console.error('[radar-agent] IG auto-reply failed', err?.message)
+    }
   }
 
   // Push notification fan-out for inbound Instagram (MOBILE-MSG.M2) —
