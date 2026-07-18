@@ -94,6 +94,26 @@ export function isAgentEnabledForConnection(connection) {
 }
 
 /**
+ * Shape the channel_connections patch for a successful Instagram Login
+ * token refresh ({access_token, expires_in seconds} from
+ * refresh_access_token). Returns null unless the response actually
+ * contains a token — a failed refresh must never clobber the stored
+ * (still-valid) token; the ~60-day runway absorbs missed weeks. Pure.
+ */
+export function buildTokenRefreshPatch(refreshJson, now = new Date()) {
+  const token = refreshJson?.access_token
+  if (!token || typeof token !== 'string') return null
+  const expiresIn = Number(refreshJson.expires_in)
+  return {
+    access_token: token,
+    token_refreshed_at: now.toISOString(),
+    token_expires_at: Number.isFinite(expiresIn) && expiresIn > 0
+      ? new Date(now.getTime() + expiresIn * 1000).toISOString()
+      : null,
+  }
+}
+
+/**
  * Resolve the active connection for a location + platform. Returns the
  * raw row (secrets intact — server-side use only) or null.
  *
