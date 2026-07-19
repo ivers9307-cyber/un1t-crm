@@ -95,6 +95,25 @@ describe('GET /api/contract-templates — list scoping', () => {
     expect(calls.in).toContainEqual(['organization_id', [ORG_A]])
   })
 
+  it('org admin (SAAS-4) is scoped to their admin orgs — even with a non-owner active role', async () => {
+    // An org admin holding an explicit staff assignment at their
+    // active location resolves role 'staff' for the request, but the
+    // org_admin grant must still let them manage THEIR org's templates
+    // (and only theirs — getOwnerOrganizationIds bounds the query).
+    getCurrentUser.mockResolvedValue({
+      id: 'org-admin-a', isMaster: false, role: 'staff',
+      rolesByLocation: { [LOC_A1]: 'staff' },
+      locations: [{ id: LOC_A1, organization_id: ORG_A }],
+      orgAdminOrgIds: [ORG_A],
+    })
+    const { db, calls } = mockDb({ data: [] })
+    createServerClient.mockReturnValue(db)
+
+    const res = await GET()
+    expect(res.status).toBe(200)
+    expect(calls.in).toContainEqual(['organization_id', [ORG_A]])
+  })
+
   it('owner of NO org gets an empty result set (no unscoped query)', async () => {
     getCurrentUser.mockResolvedValue({
       id: 'mgr-1', isMaster: false, role: 'owner',

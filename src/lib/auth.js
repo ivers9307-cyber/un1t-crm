@@ -38,6 +38,53 @@ export function buildRolesByLocation(locationLinks) {
 }
 
 /**
+ * SAAS-4 (mig 411) — expand an org admin's access maps with their
+ * organizations' locations.
+ *
+ * Org-bounded mirror of the master expansion in getCurrentUser():
+ * `locations` becomes the union of the explicit assignments and every
+ * location in `orgLocations` (the active locations of the caller's
+ * admin orgs, fetched by getCurrentUser); `rolesByLocation` gains a
+ * synthetic 'owner' entry for each org location that has NO explicit
+ * profile_locations assignment — explicit assignments always keep
+ * their role. `syntheticLocationIds` lists the locations that got the
+ * synthetic owner role so getCurrentUser can mirror them into
+ * assignmentsByLocation (empty per-user permission overrides there).
+ *
+ * With `orgLocations` empty/null the inputs pass through by value
+ * unchanged — a user with zero profile_organizations rows is
+ * behaviourally identical to before the org-admin tier existed
+ * (rollout-safety property, pinned in tests).
+ *
+ * Pure helper — exported for testability of the expansion logic
+ * separately from the IO-heavy getCurrentUser() pipeline.
+ *
+ * @param {object} args
+ * @param {Array<object>} args.locations                 user.locations so far (explicit assignments)
+ * @param {Record<string,string>} args.rolesByLocation   explicit per-location roles
+ * @param {Array<object>|null|undefined} args.orgLocations  active locations of the caller's admin orgs
+ * @returns {{ locations: Array<object>, rolesByLocation: Record<string,string>, syntheticLocationIds: string[] }}
+ */
+export function expandOrgAdminAccess({ locations, rolesByLocation, orgLocations }) {
+  const nextLocations = [...(locations || [])]
+  const nextRoles = { ...(rolesByLocation || {}) }
+  const have = new Set(nextLocations.map(l => l?.id).filter(Boolean))
+  const syntheticLocationIds = []
+  for (const loc of (orgLocations || [])) {
+    if (!loc?.id) continue
+    if (!have.has(loc.id)) {
+      nextLocations.push(loc)
+      have.add(loc.id)
+    }
+    if (!nextRoles[loc.id]) {
+      nextRoles[loc.id] = 'owner'
+      syntheticLocationIds.push(loc.id)
+    }
+  }
+  return { locations: nextLocations, rolesByLocation: nextRoles, syntheticLocationIds }
+}
+
+/**
  * Resolve the effective role for the current request.
  *
  *   - master users:  always 'master'
@@ -310,11 +357,19 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   const allOrgsPromise = profile.role === 'master'
     ? db.from('organizations').select('*').eq('active', true).order('name')
     : Promise.resolve({ data: null })
+  // SAAS-4 — org-admin grants (mig 411). A SaaS org owner manages every
+  // location in THEIR org without needing per-location rows. Master
+  // skips the fetch entirely — the platform-wide bypass supersedes org
+  // admin, and skipping keeps the master path free of extra queries.
+  const orgAdminLinksPromise = profile.role === 'master'
+    ? Promise.resolve({ data: null })
+    : db.from('profile_organizations').select('*').eq('profile_id', effectiveProfileId)
 
-  const [{ data: locationLinks }, { data: allLocs }, { data: allOrgs }] = await Promise.all([
+  const [{ data: locationLinks }, { data: allLocs }, { data: allOrgs }, { data: orgAdminLinks }] = await Promise.all([
     linksPromise,
     allLocsPromise,
     allOrgsPromise,
+    orgAdminLinksPromise,
   ])
 
   let locations = (locationLinks || []).map(pl => pl.locations).filter(Boolean)
@@ -323,7 +378,7 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // straight from the profile_locations rows. master is platform-wide
   // and lives separately on profiles.role (CHECK constraint blocks it
   // from appearing as a per-location role).
-  const rolesByLocation = buildRolesByLocation(locationLinks)
+  let rolesByLocation = buildRolesByLocation(locationLinks)
 
   // Master role bypasses profile_locations — they see every active
   // location automatically. RLS already short-circuits via
@@ -331,6 +386,36 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   // object reflect the same reality.
   if (profile.role === 'master' && allLocs) {
     locations = allLocs
+  }
+
+  // SAAS-4 — org-admin expansion (mig 411). Org-bounded mirror of the
+  // master expansion above: the user's reachable set becomes the union
+  // of their explicit assignments and every ACTIVE location of the
+  // orgs they hold an org_admin grant on, acting as 'owner' anywhere
+  // there is no explicit assignment (explicit rows keep their role, so
+  // an org admin deliberately assigned 'staff' at one studio stays
+  // staff there). Zero profile_organizations rows → orgAdminOrgIds is
+  // empty and this whole block is a no-op, so every existing user's
+  // object is byte-identical (rollout-safety property, pinned in
+  // auth.getCurrentUser.test.js). Master never reaches here
+  // (orgAdminLinks is null — fetch skipped above).
+  const orgAdminOrgIds = Array.from(new Set(
+    (orgAdminLinks || [])
+      .filter(l => l?.organization_id && l.role === 'org_admin')
+      .map(l => l.organization_id)
+  ))
+  let orgAdminSyntheticLocationIds = []
+  if (orgAdminOrgIds.length > 0) {
+    const { data: orgLocs } = await db
+      .from('locations')
+      .select('*')
+      .in('organization_id', orgAdminOrgIds)
+      .eq('active', true)
+      .order('name')
+    const expanded = expandOrgAdminAccess({ locations, rolesByLocation, orgLocations: orgLocs })
+    locations = expanded.locations
+    rolesByLocation = expanded.rolesByLocation
+    orgAdminSyntheticLocationIds = expanded.syntheticLocationIds
   }
 
   // Organizations (mig 079). Surface as a {org_id → row} map so
@@ -347,8 +432,14 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     // Non-master: fetch orgs referenced by any of their locations.
     // We need the full org row (name, slug) for the UI; the locations
     // only carry organization_id. Single query, indexed lookup.
+    // SAAS-4: admin orgs are unioned in explicitly so an org_admin
+    // grant on an org with zero active locations still surfaces the
+    // org row (the location-derived set would miss it).
     const orgIds = Array.from(
-      new Set(locations.map(l => l?.organization_id).filter(Boolean))
+      new Set([
+        ...locations.map(l => l?.organization_id),
+        ...orgAdminOrgIds,
+      ].filter(Boolean))
     )
     if (orgIds.length > 0) {
       const { data: memberOrgs } = await db
@@ -421,6 +512,23 @@ export const getCurrentUser = cache(async function getCurrentUser() {
       permissions: link.permissions || {},
       is_default: !!link.is_default,
       unifi_door_access: !!link.unifi_door_access,
+    }
+  }
+  // SAAS-4 — synthetic assignments for org-admin locations that have
+  // no explicit profile_locations row, so hasPermission() /
+  // hasPermissionForLocation() resolve role 'owner' with no per-user
+  // overrides there (owner code defaults + the location's owner role
+  // template apply). Explicit assignments are already in the map and
+  // always win — the guard is belt-and-braces (syntheticLocationIds
+  // only ever contains locations without an explicit row).
+  for (const locId of orgAdminSyntheticLocationIds) {
+    if (!assignmentsByLocation[locId]) {
+      assignmentsByLocation[locId] = {
+        role: 'owner',
+        permissions: {},
+        is_default: false,
+        unifi_door_access: false,
+      }
     }
   }
   const activeAssignment = activeLocation?.id
@@ -499,7 +607,15 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     // orgs whose locations they're a member of.
     organizationsById,
     activeOrganization,
-    // { [location_id]: role } — never includes 'master' (CHECK constraint).
+    // SAAS-4 (mig 411) — org ids the user holds an org_admin grant on.
+    // Empty for everyone else (including master, whose platform-wide
+    // bypass supersedes the tier — the fetch is skipped for masters).
+    // Guards read this via assertOrganizationAdmin(); org-scoped
+    // resource helpers via getOwnerOrganizationIds().
+    orgAdminOrgIds,
+    // { [location_id]: role } — never includes 'master' (CHECK
+    // constraint); MAY include synthetic 'owner' entries for org-admin
+    // locations without an explicit assignment (SAAS-4).
     rolesByLocation,
     // Full per-location assignment data including the per-location
     // permissions blob (mig 058). Server resolution helpers read
@@ -551,7 +667,13 @@ export function getUserLocationIds(user) {
  * are handled separately by the caller (they see everything); this returns
  * only the explicit owner-org set, so a non-owner gets `[]`.
  *
- * @param {{ rolesByLocation?: Record<string,string>, locations?: Array<{id: string, organization_id?: string}> } | null} user
+ * SAAS-4: org-admin orgs (user.orgAdminOrgIds, mig 411) are included —
+ * an org admin acts as owner across their whole org, so org-scoped
+ * resources gated on this helper (contracts, contract templates, org
+ * branding) are manageable by them too. Users without grants are
+ * unaffected (empty array unions to nothing).
+ *
+ * @param {{ rolesByLocation?: Record<string,string>, locations?: Array<{id: string, organization_id?: string}>, orgAdminOrgIds?: string[] } | null} user
  * @returns {string[]}
  */
 export function getOwnerOrganizationIds(user) {
@@ -563,7 +685,7 @@ export function getOwnerOrganizationIds(user) {
     .filter(l => l && ownerLocationIds.includes(l.id))
     .map(l => l.organization_id)
     .filter(Boolean)
-  return Array.from(new Set(orgIds))
+  return Array.from(new Set([...orgIds, ...(user.orgAdminOrgIds || [])]))
 }
 
 /**
@@ -644,6 +766,136 @@ export function assertLocationAccessOr404(user, locationId) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
   return null
+}
+
+// ─── Organization guards (SAAS-4, mig 411) ──────────────────────────
+// Org-level mirrors of assertLocationAccess / assertLocationAccessOr404,
+// for routes that take an organization_id instead of a location_id.
+//
+// Two tiers of semantics, decided deliberately:
+//   • assertOrganizationAccess / Or404 = MEMBERSHIP (read tier).
+//     Passes when the org is reachable by the caller at all — master,
+//     org admin, or member of any of the org's locations. This mirrors
+//     private.auth_is_in_organization() so app-layer checks on
+//     service-role routes match what RLS would answer.
+//   • assertOrganizationAdmin = MANAGEMENT (write tier). Master or
+//     org_admin only — location membership (even owner-at-a-location)
+//     is NOT enough; per-location owners manage org-scoped resources
+//     via getOwnerOrganizationIds() where a surface opts them in.
+//
+// Membership is read from user.organizationsById — getCurrentUser
+// builds it as exactly the reachable set (member orgs ∪ admin orgs for
+// non-masters; every active org for masters) — with orgAdminOrgIds as
+// a belt-and-braces union for the zero-location-org edge. Master
+// short-circuits explicitly so an inactive org can't lock a master out.
+
+/**
+ * Check that `orgId` is an organization the caller belongs to (any
+ * location membership or an org_admin grant). Use at the top of any
+ * session-auth route that takes an organization_id from user input
+ * (query string or request body) — same IDOR rationale as
+ * assertLocationAccess.
+ *
+ * Behaviour:
+ *   - user is null           → 401
+ *   - orgId is null/undef    → null (caller said "no specific org")
+ *   - master                 → null (request continues)
+ *   - org reachable          → null (request continues)
+ *   - org is foreign         → 403
+ *
+ * Usage:
+ *   const guard = assertOrganizationAccess(user, requestedOrgId)
+ *   if (guard) return guard
+ *
+ * @param {{ isMaster?: boolean, organizationsById?: Record<string, object>, orgAdminOrgIds?: string[] } | null} user
+ * @param {string | null | undefined} orgId
+ * @returns {NextResponse | null}
+ */
+export function assertOrganizationAccess(user, orgId) {
+  if (!user) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!orgId) return null
+  if (user.isMaster) return null
+  const allowed = !!user.organizationsById?.[orgId]
+    || (user.orgAdminOrgIds || []).includes(orgId)
+  if (!allowed) {
+    return NextResponse.json(
+      { success: false, error: 'Forbidden — organization not in your memberships' },
+      { status: 403 }
+    )
+  }
+  return null
+}
+
+/**
+ * Like `assertOrganizationAccess`, but a forbidden organization returns
+ * **404** instead of 403. Use on DETAIL routes where the
+ * organization_id comes from the *fetched row* — a cross-tenant org id
+ * must be indistinguishable from a missing one (same
+ * existence/info-disclosure rationale as assertLocationAccessOr404).
+ *
+ * Behaviour:
+ *   - user is null           → 401
+ *   - orgId is null/undef    → null (request continues)
+ *   - master                 → null (request continues)
+ *   - org reachable          → null (request continues)
+ *   - org is foreign         → 404 (identical to not-found)
+ *
+ * @param {{ isMaster?: boolean, organizationsById?: Record<string, object>, orgAdminOrgIds?: string[] } | null} user
+ * @param {string | null | undefined} orgId
+ * @returns {NextResponse | null}
+ */
+export function assertOrganizationAccessOr404(user, orgId) {
+  if (!user) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!orgId) return null
+  if (user.isMaster) return null
+  const allowed = !!user.organizationsById?.[orgId]
+    || (user.orgAdminOrgIds || []).includes(orgId)
+  if (!allowed) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  return null
+}
+
+/**
+ * Gate a route to masters, or org admins of the given organization —
+ * the MANAGEMENT tier for org-scoped surfaces (grants management,
+ * future org settings). Location membership, including owner-at-a-
+ * location, does NOT pass; a mere member gets the same 403 as an
+ * outsider (this is a role check, not an existence probe — no 404
+ * variant needed).
+ *
+ * NOTE unlike the access guards, a null orgId does NOT pass for
+ * non-masters: an org-less resource is master-only, and passing null
+ * through here is treated as "no claim".
+ *
+ * Behaviour:
+ *   - user is null                     → 401
+ *   - master                           → null (request continues)
+ *   - org_admin grant on orgId         → null (request continues)
+ *   - anything else (incl. null orgId) → 403
+ *
+ * Usage:
+ *   const guard = assertOrganizationAdmin(user, orgId)
+ *   if (guard) return guard
+ *
+ * @param {{ isMaster?: boolean, orgAdminOrgIds?: string[] } | null} user
+ * @param {string | null | undefined} orgId
+ * @returns {NextResponse | null}
+ */
+export function assertOrganizationAdmin(user, orgId) {
+  if (!user) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  }
+  if (user.isMaster) return null
+  if (orgId && (user.orgAdminOrgIds || []).includes(orgId)) return null
+  return NextResponse.json(
+    { success: false, error: 'Master or organization admin role required.' },
+    { status: 403 }
+  )
 }
 
 /**

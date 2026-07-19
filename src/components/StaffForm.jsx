@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Plus, Trash2, Crown, KeyRound, AlertCircle, Loader2, UserX, UserCheck, Skull, ShieldAlert } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, Crown, KeyRound, AlertCircle, Loader2, UserX, UserCheck, Skull, ShieldAlert, Building2 } from 'lucide-react'
 import PasswordOverrideModal from './PasswordOverrideModal'
 import TestPushButton from './settings/TestPushButton'
 import LeadTimeOverrideRow from './settings/LeadTimeOverrideRow'
@@ -57,6 +57,11 @@ export default function StaffForm({
   // the role-default baseline both honour the template so toggles
   // show the TRUE effective state at each location.
   roleTemplates = {},
+  // SAAS-4 (mig 411) — org list + this staff member's current
+  // org-admin grants for the master-only Organisation Admin card.
+  // Only the edit page passes these (and only for master callers).
+  organizations = [],
+  orgAdminOrgIds = [],
 }) {
   const isEdit = !!staff
   const router = useRouter()
@@ -550,6 +555,18 @@ export default function StaffForm({
             </button>
           </div>
         </div>
+      )}
+
+      {/* Organisation Admin grants (SAAS-4, mig 411) — master callers
+          only, edit-only. Saves independently of the main form via
+          PUT /api/staff/[id]/org-admin (grants are a diff-synced
+          desired-state list, not part of the profile payload). */}
+      {callerIsMaster && isEdit && staff?.id && organizations.length > 0 && (
+        <OrgAdminCard
+          staffId={staff.id}
+          organizations={organizations}
+          initialOrgIds={orgAdminOrgIds}
+        />
       )}
 
       {/* Studio Assignments — the wizard */}
@@ -1377,6 +1394,103 @@ function PermanentDeleteButton({ staffId, staffName }) {
 // user gets an extra email they can ignore). Useful for: re-sending
 // a missed invite, helping a user who forgot their password, or
 // rotating credentials after suspected compromise.
+// SAAS-4 (mig 411) — Organisation Admin grants card. Master-only (the
+// parent gates rendering on callerIsMaster). One checkbox per active
+// organisation; Save PUTs the desired-state list to
+// /api/staff/[id]/org-admin, which diffs grants/revokes server-side.
+// Separate from the main form save on purpose: the grant is a
+// tenant-shaping act like the master flag, and keeping it off the
+// profile payload means an unrelated profile edit can never
+// accidentally rewrite org grants.
+function OrgAdminCard({ staffId, organizations, initialOrgIds }) {
+  const [selected, setSelected] = useState(() => new Set(initialOrgIds))
+  const [saved, setSaved] = useState(() => new Set(initialOrgIds))
+  const [state, setState] = useState('idle')   // 'idle' | 'saving' | 'error'
+  const [error, setError] = useState(null)
+
+  const dirty = selected.size !== saved.size || [...selected].some(id => !saved.has(id))
+
+  function toggle(orgId) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(orgId)) next.delete(orgId)
+      else next.add(orgId)
+      return next
+    })
+  }
+
+  async function save() {
+    setState('saving')
+    setError(null)
+    try {
+      const res = await fetch(`/api/staff/${staffId}/org-admin`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ organization_ids: [...selected] }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.success === false) {
+        throw new Error(data.error || `Save failed (${res.status})`)
+      }
+      setSaved(new Set(selected))
+      setState('idle')
+    } catch (e) {
+      setState('error')
+      setError(e.message || 'Save failed')
+    }
+  }
+
+  return (
+    <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-3">
+      <div>
+        <div className="flex items-center gap-2">
+          <Building2 size={14} className="text-un1t-subtle" />
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle">Organisation Admin</h3>
+        </div>
+        <p className="text-xs text-un1t-subtle mt-1">
+          Org-level admin: acts as owner at EVERY studio in the ticked organisations —
+          including studios added later — without needing per-studio assignments below.
+          Explicit studio assignments keep their own role. Master-only grant.
+        </p>
+      </div>
+
+      <div className="space-y-1.5">
+        {organizations.map(org => (
+          <label key={org.id} className="flex items-center gap-2 text-sm text-un1t-text cursor-pointer">
+            <input
+              type="checkbox"
+              checked={selected.has(org.id)}
+              onChange={() => toggle(org.id)}
+              className="rounded border-un1t-border"
+            />
+            <span>{org.name}</span>
+            <span className="text-xs text-un1t-subtle">{org.slug}</span>
+          </label>
+        ))}
+      </div>
+
+      {error && (
+        <div className="text-xs text-red-700 bg-red-500/10 border border-red-500/30 rounded-md p-2 inline-flex items-center gap-2">
+          <AlertCircle size={12} />
+          {error}
+        </div>
+      )}
+
+      {dirty && (
+        <button
+          type="button"
+          onClick={save}
+          disabled={state === 'saving'}
+          className="text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium inline-flex items-center gap-1.5 disabled:opacity-60"
+        >
+          {state === 'saving' && <Loader2 size={11} className="animate-spin" />}
+          {state === 'saving' ? 'Saving…' : 'Save organisation grants'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 function SendPasswordResetButton({ staffId, email }) {
   const [state, setState] = useState('idle')   // 'idle' | 'confirming' | 'sending' | 'sent' | 'error'
   const [error, setError] = useState(null)

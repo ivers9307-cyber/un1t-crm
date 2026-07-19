@@ -2144,6 +2144,41 @@ registry.registerPath({
   },
 })
 
+// Org-admin grants (SAAS-4, mig 411)
+registry.registerPath({
+  method: 'get',
+  path: '/api/staff/{id}/org-admin',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Org-admin grants for a staff member (master only)',
+  description: 'Returns { organization_ids } — the organizations this profile holds an org_admin grant on (profile_organizations, mig 411). An org admin acts as owner at every active location of those orgs.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Current grants' },
+    403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Profile not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/staff/{id}/org-admin',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Set org-admin grants for a staff member (master only)',
+  description: 'Body: { organization_ids } — the FULL desired set of orgs the profile should be org_admin of. The server diffs against existing grants (added orgs granted, missing orgs revoked); resubmitting the same list is a no-op. Grants/revokes are audit-logged (org_admin.granted / org_admin.revoked).',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ organization_ids: z.array(uuidLike).max(100) }).openapi('OrgAdminGrantsSave') } } },
+  },
+  responses: {
+    200: { description: 'Grants synced to the desired set' },
+    400: { description: 'Invalid body or unknown organization id', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Profile not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Role permission templates (PERM-AUDIT.2, mig 364)
 registry.registerPath({
   method: 'get',
