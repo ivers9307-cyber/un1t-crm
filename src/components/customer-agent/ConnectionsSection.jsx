@@ -2,12 +2,13 @@
 
 import { useState, useEffect, useCallback } from 'react'
 
-// RADAR-AGENT.0b — per-location channel connections, shown at the top of
-// the Customer Agent settings page. WhatsApp is shown as linked (managed
-// under Integrations — it already has its own numbers tab). Instagram is
-// entered here per location: paste the IG business account id, linked
-// Page id, app id, page access token, and app secret. Secrets come back
-// masked from the API and are only overwritten when re-typed.
+// RADAR-AGENT.0b / IG-HOME.1 — per-location channel connections.
+// Home is now the per-location Integrations tab strip (Settings →
+// Locations → <name> → Integrations → Instagram), rendered with
+// `embedded` so only the Instagram card shows. The full standalone
+// section (heading + WhatsApp pointer card) remains for any other
+// callers. Secrets come back masked from the API and are only
+// overwritten when re-typed; docs/instagram-setup.md is the runbook.
 
 const IG_FIELDS = [
   { key: 'display_name', label: 'Instagram handle / name', placeholder: '@un1t_stillorgan', secret: false, full: true },
@@ -18,7 +19,7 @@ const IG_FIELDS = [
   { key: 'app_secret', label: 'Instagram app secret (also set as INSTAGRAM_APP_SECRET env)', placeholder: 'paste to set', secret: true },
 ]
 
-export default function ConnectionsSection({ locationId, locationName }) {
+export default function ConnectionsSection({ locationId, locationName, embedded = false }) {
   const [connections, setConnections] = useState([])
   const [draft, setDraft] = useState({})
   const [loading, setLoading] = useState(true)
@@ -83,25 +84,8 @@ export default function ConnectionsSection({ locationId, locationName }) {
   const inputCls = 'w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text'
   const igLive = !!(igConn && igConn.has_access_token)
 
-  return (
-    <section className="border border-un1t-border rounded-lg p-5 mb-6">
-      <h2 className="text-base font-semibold text-un1t-text mb-1">Connections</h2>
-      <p className="text-sm text-un1t-muted mb-4">
-        The channels this studio&apos;s agent answers on{locationName ? ` — ${locationName}` : ''}. Each location
-        connects its own accounts.
-      </p>
-
-      {/* WhatsApp — managed under Integrations */}
-      <div className="flex items-center justify-between border border-un1t-border rounded-md px-4 py-3 mb-4">
-        <div>
-          <div className="text-sm font-medium text-un1t-text">WhatsApp</div>
-          <div className="text-xs text-un1t-muted">Managed under Settings → Integrations → WhatsApp numbers.</div>
-        </div>
-        <a href="/settings/integrations" className="text-xs text-un1t-text underline">Manage</a>
-      </div>
-
-      {/* Instagram */}
-      <div className="border border-un1t-border rounded-md px-4 py-4">
+  const instagramCard = (
+    <div className="border border-un1t-border rounded-md px-4 py-4">
         <div className="flex items-center justify-between mb-3">
           <div className="text-sm font-medium text-un1t-text">
             Instagram
@@ -157,7 +141,29 @@ export default function ConnectionsSection({ locationId, locationName }) {
           </button>
           {savedAt && <span className="ml-3 text-sm text-green-600">Saved ✓</span>}
         </div>
+    </div>
+  )
+
+  if (embedded) return instagramCard
+
+  return (
+    <section className="border border-un1t-border rounded-lg p-5 mb-6">
+      <h2 className="text-base font-semibold text-un1t-text mb-1">Connections</h2>
+      <p className="text-sm text-un1t-muted mb-4">
+        The channels this studio&apos;s agent answers on{locationName ? ` — ${locationName}` : ''}. Each location
+        connects its own accounts.
+      </p>
+
+      {/* WhatsApp — managed under Integrations */}
+      <div className="flex items-center justify-between border border-un1t-border rounded-md px-4 py-3 mb-4">
+        <div>
+          <div className="text-sm font-medium text-un1t-text">WhatsApp</div>
+          <div className="text-xs text-un1t-muted">Managed under Settings → Integrations → WhatsApp numbers.</div>
+        </div>
+        <a href="/settings/integrations" className="text-xs text-un1t-text underline">Manage</a>
       </div>
+
+      {instagramCard}
     </section>
   )
 }

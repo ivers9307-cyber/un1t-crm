@@ -36,7 +36,7 @@ Console: developers.facebook.com → app **UN1T communications platform** → In
 
 ## Connect in the CRM
 
-7. crm.un1tdublin.com → Customer Agent settings → **Connections** → Instagram: handle
+7. crm.un1tdublin.com → Settings → Locations → your location → **Integrations → Instagram** tab: handle
    `@un1t_stillorgan`, Instagram professional account ID `17841449661114656`, Instagram app
    ID `26910072478619447`, access token from step 6 (leave Page ID blank — not used by this
    flavor). **Leave "Mia auto-replies on Instagram" OFF.** Save → badge shows Connected.
@@ -62,8 +62,8 @@ message in — that IS the soft launch.
    `instagram-token-refresh` cron manually with CRON_SECRET → expect
    `{"success":true,"refreshed":1,"failed":0}` and `token_expires_at` ~60 days out.
 
-When done, flip Mia on for IG (if desired) via the "Mia auto-replies on Instagram" toggle in
-Customer Agent settings → Connections — it is OFF by default.
+When done, flip Mia on for IG (if desired) via the "Mia auto-replies on Instagram" toggle on
+the same Integrations → Instagram tab — it is OFF by default.
 
 ## After the WA Tech Provider review decision
 

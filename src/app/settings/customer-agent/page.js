@@ -1,14 +1,14 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
 import Link from 'next/link'
 import { BarChart3 } from 'lucide-react'
 
 // RADAR-AGENT.0 — operator settings for the customer-facing WhatsApp /
-// Instagram agent. Manager+ only. Three parts: (1) per-location channel
-// Connections, (2) behaviour settings, (3) the knowledge editor the
-// agent answers from. Ships OFF by default.
+// Instagram agent. Manager+ only. Two parts: behaviour settings + the
+// knowledge editor the agent answers from (channel connections moved to
+// the per-location Integrations tab strip — IG-HOME.1; a pointer card
+// keeps the old path discoverable). Ships OFF by default.
 
 const CATEGORIES = ['sales', 'account', 'pause', 'cancellation', 'hours', 'general', 'faq']
 
@@ -194,7 +194,22 @@ export default function CustomerAgentSettingsPage() {
         <span className="text-un1t-muted">— replies, escalations, what customers asked</span>
       </Link>
 
-      {location?.id && <ConnectionsSection locationId={location.id} locationName={location.name} />}
+      {/* IG-HOME.1 — channel connections moved to the Integrations tab
+          strip; this pointer keeps the old path discoverable. */}
+      {location?.id && (
+        <Link
+          href={`/settings/locations/${location.id}?tab=instagram`}
+          className="flex items-center justify-between border border-un1t-border rounded-lg px-4 py-3 mb-6 hover:border-un1t-subtle transition-colors"
+        >
+          <div>
+            <div className="text-sm font-medium text-un1t-text">Channel connections</div>
+            <div className="text-xs text-un1t-muted">
+              WhatsApp and Instagram are managed under Settings → Locations → {location.name} → Integrations.
+            </div>
+          </div>
+          <span className="text-xs text-un1t-text underline">Manage</span>
+        </Link>
+      )}
 
       {/* ── Behaviour ─────────────────────────────────────── */}
       <section className="space-y-5 border border-un1t-border rounded-lg p-5 mb-6">
