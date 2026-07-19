@@ -35,8 +35,23 @@ export const WEBHOOK_REPLAY_WORKER_PATH = '/api/webhooks/qstash/webhook-replay'
 // async path of /api/contacts/import/commit, swept by
 // /api/cron/process-contact-imports).
 export const CONTACT_IMPORTS_WORKER_PATH = '/api/webhooks/qstash/contact-imports'
+// QSTASH.6 — worker for invoices_queue bulk-analysis pushes (published
+// per row by /api/invoices-inbox/bulk-queue-analysis, swept by
+// /api/cron/process-invoice-analysis). Unlike the previous jobs these
+// go through a named QStash QUEUE with parallelism 2: Claude Vision OCR
+// must stay rate-limit-bounded, so a 50-invoice bulk queue must never
+// become 50 concurrent worker invocations.
+export const INVOICE_ANALYSIS_WORKER_PATH = '/api/webhooks/qstash/invoice-analysis'
+export const INVOICE_ANALYSIS_QUEUE_NAME = 'invoice-analysis'
+export const INVOICE_ANALYSIS_QUEUE_PARALLELISM = 2
 
 const QSTASH_PUBLISH_BASE = 'https://qstash.upstash.io/v2/publish/'
+// Enqueue onto a named FIFO queue: /v2/enqueue/<queueName>/<destination>.
+// Same headers/body as publish; delivery concurrency is the queue's
+// parallelism. (Endpoint verified against @upstash/qstash 2.11.2 source.)
+const QSTASH_ENQUEUE_BASE = 'https://qstash.upstash.io/v2/enqueue/'
+// Queue upsert: POST { queueName, parallelism } — create or update.
+const QSTASH_QUEUES_URL = 'https://qstash.upstash.io/v2/queues'
 
 /** Allowance for clock drift between Upstash and Vercel, in seconds. */
 const CLOCK_TOLERANCE_SEC = 30
@@ -55,9 +70,16 @@ export function qstashEnabled() {
  *   QStash 400s on colons in this header (undocumented; bitten 2026-07-17).
  * @param {number} [opts.delaySeconds] — QStash-side delivery delay
  *   (`Upstash-Delay` header). Ignored unless a finite number > 0.
+ * @param {string} [opts.queueName] — QSTASH.6: when set, the message is
+ *   ENQUEUED onto this named FIFO queue (`/v2/enqueue/…`) instead of
+ *   plain-published — QStash then bounds delivery concurrency to the
+ *   queue's parallelism. Lazy upsert: only a 404 (queue missing)
+ *   triggers an `ensureQueue` followed by exactly ONE retry.
+ * @param {number} [opts.queueParallelism] — parallelism used if the lazy
+ *   upsert fires (defaults to 1, the QStash queue default).
  * @returns {Promise<{ok: true, messageId: string} | {ok: false, skipped?: true, error?: string}>}
  */
-export async function publishQueuePush({ path, body, deduplicationId, delaySeconds }) {
+export async function publishQueuePush({ path, body, deduplicationId, delaySeconds, queueName, queueParallelism }) {
   if (!qstashEnabled()) return { ok: false, skipped: true }
 
   try {
@@ -71,16 +93,31 @@ export async function publishQueuePush({ path, body, deduplicationId, delaySecon
       headers['Upstash-Delay'] = `${delaySeconds}s`
     }
 
-    const resp = await fetch(`${QSTASH_PUBLISH_BASE}${destination}`, {
+    const endpoint = queueName
+      ? `${QSTASH_ENQUEUE_BASE}${queueName}/${destination}`
+      : `${QSTASH_PUBLISH_BASE}${destination}`
+    const attempt = () => fetch(endpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
       // Hard cap on publish time. This runs INSIDE the Postmark webhook
       // handler — a hung QStash connection must degrade to "cron delivers
       // this row", never to a slow webhook response (the CAMPAIGN.13
-      // burst incident was exactly that failure mode).
+      // burst incident was exactly that failure mode). Fresh signal per
+      // attempt so the lazy-upsert retry gets its own full budget.
       signal: AbortSignal.timeout(3000),
     })
+
+    let resp = await attempt()
+    if (queueName && resp.status === 404) {
+      // Queue missing (first publish since the account/queue was
+      // created or deleted). Upsert it with the intended parallelism,
+      // then retry the enqueue ONCE. If the upsert fails we fall
+      // through to the normal error path with the original 404 — the
+      // cron sweeps the row either way.
+      const upserted = await ensureQueue(queueName, queueParallelism ?? 1)
+      if (upserted.ok) resp = await attempt()
+    }
     if (!resp.ok) {
       // Surface QStash's own error body — a bare status is undiagnosable
       // from prod logs (the 2026-07-17 HTTP 400 taught us that).
@@ -98,6 +135,47 @@ export async function publishQueuePush({ path, body, deduplicationId, delaySecon
   } catch (err) {
     console.error(`[qstash] publish to ${path} failed:`, err?.message || err)
     return { ok: false, error: err?.message || 'publish_failed' }
+  }
+}
+
+/**
+ * Create or update a QStash queue (QSTASH.6). `POST /v2/queues` with
+ * `{ queueName, parallelism }` is an upsert — safe to call repeatedly.
+ * Same contract as publishQueuePush: env-gated on QSTASH_TOKEN, NEVER
+ * throws, hard 3s cap. Used lazily by publishQueuePush when an enqueue
+ * 404s, and callable directly to pin a queue's parallelism up front.
+ *
+ * @param {string} queueName
+ * @param {number} parallelism — max concurrent deliveries for the queue
+ * @returns {Promise<{ok: true} | {ok: false, skipped?: true, error?: string}>}
+ */
+export async function ensureQueue(queueName, parallelism) {
+  if (!qstashEnabled()) return { ok: false, skipped: true }
+
+  try {
+    const resp = await fetch(QSTASH_QUEUES_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.QSTASH_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ queueName, parallelism }),
+      signal: AbortSignal.timeout(3000),
+    })
+    if (!resp.ok) {
+      let detail = ''
+      try {
+        detail = (await resp.text()).slice(0, 300)
+      } catch {
+        // body unreadable — the status alone will have to do
+      }
+      console.error(`[qstash] queue upsert ${queueName} failed: HTTP ${resp.status}${detail ? ` — ${detail}` : ''}`)
+      return { ok: false, error: `qstash_${resp.status}` }
+    }
+    return { ok: true }
+  } catch (err) {
+    console.error(`[qstash] queue upsert ${queueName} failed:`, err?.message || err)
+    return { ok: false, error: err?.message || 'upsert_failed' }
   }
 }
 

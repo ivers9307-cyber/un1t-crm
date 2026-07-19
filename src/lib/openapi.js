@@ -631,6 +631,27 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/webhooks/qstash/invoice-analysis',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker for the bulk invoice-analysis queue',
+  description:
+    'QStash → CRM. Delivers `{ id }` of an invoices_queue row published by /api/invoices-inbox/bulk-queue-analysis ' +
+    'onto the `invoice-analysis` QStash queue (parallelism 2 — bounded Claude Vision OCR concurrency); verified via ' +
+    'the Upstash-Signature HS256 JWT (current + next signing keys). Claims by id with the same semantics as the ' +
+    '/api/cron/process-invoice-analysis sweeper — 200 processed/skipped INCLUDING deterministic extraction failures ' +
+    '(row stamped with its extraction_error and de-queued; the operator retries from the UI), 500 only for ' +
+    'infrastructure errors where a QStash retry helps.',
+  request: { body: { content: { 'application/json': { schema: z.object({ id: uuidLike }).openapi('QstashInvoiceAnalysisMessage') } } } },
+  responses: {
+    200: { description: 'Extraction ran (success or recorded failure), or skipped (row already claimed / handled)' },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Infrastructure error — QStash should retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/webhooks/inbody',
   tags: ['Webhooks (Inbound)'],
   security: [{ WebhookToken: [] }],
