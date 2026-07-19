@@ -31,6 +31,7 @@ import { hasPermission } from '@/lib/permissions'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { getAppUrl } from '@/lib/app-url'
+import { overlayConnections } from '@/lib/connection-registry'
 
 export const runtime = 'nodejs'
 
@@ -73,6 +74,11 @@ export async function POST(_request, props) {
   const allowed = getUserLocationIds(user) // null = master (all locations)
   if (allowed !== null && !allowed.includes(locationId)) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+
+  // INTEG-A2 dual-read: registry twilio_sender row first.
+  if (reg.race_events.locations) {
+    reg.race_events.locations = await overlayConnections(db, reg.race_events.locations, ['twilio_sender'])
   }
 
   // Latest payment for this registration (newest first — same ordering

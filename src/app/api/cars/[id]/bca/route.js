@@ -23,6 +23,7 @@ import { createServerClient } from '@/lib/supabase'
 import { hasPermission } from '@/lib/permissions'
 import { getBcaConfig, BCA_STORAGE, buildBcaDownloadUrl } from '@/lib/bca'
 import { getBcaBaseUrl } from '@/lib/app-url'
+import { overlayConnections } from '@/lib/connection-registry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -45,11 +46,14 @@ export async function GET(_request, props) {
   const guard = assertLocationAccessOr404(user, car.location_id)
   if (guard) return guard
 
-  const { data: location } = await db
+  const { data: locationRow } = await db
     .from('locations')
     .select('id, features, bca_config')
     .eq('id', car.location_id)
     .single()
+  // INTEG-A2 dual-read: registry `bca` row replaces legacy bca_config
+  // when present (features.bca_submit gate stays on locations).
+  const location = await overlayConnections(db, locationRow, ['bca'])
   const config = getBcaConfig(location)
   if (!config) {
     // Feature off at this location — short-circuit. The UI uses this

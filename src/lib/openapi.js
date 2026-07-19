@@ -2309,6 +2309,22 @@ registry.registerPath({
   },
 })
 
+// Connections-registry legacy re-sync (INTEG-A2)
+registry.registerPath({
+  method: 'post',
+  path: '/api/locations/{id}/connections/refresh',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Re-sync channel_connections registry rows from the location\'s legacy config (admin)',
+  description: 'INTEG-A2 dual-write bridge: re-reads the location\'s legacy integration fields (settings.glofox, settings.unifi, sensibo/thinq columns, twilio_alpha_sender_id, bca_config) and upserts/deactivates the matching active channel_connections rows using the mig 412 mapping. Fired by the integration settings tabs after a legacy save. Idempotent. Returns { results: { platform: action } }.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Per-platform sync results' },
+    403: { description: 'Forbidden — admin role at this location required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Location create (SAAS4-W0.1) — server-side so per-location defaults
 // (FUNNEL.1 pipeline stages) are seeded atomically with the row.
 registry.registerPath({
@@ -3263,6 +3279,156 @@ registry.registerPath({
       },
     },
     401: { description: 'Invalid or missing member JWT', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// Plans & pricing — master-only plan catalogue (INTEG-C1, mig 413)
+// ============================================================================
+// Numbers (prices, allowances, overage rates) are DB-backed and
+// versioned: they change ONLY by creating a new plan version with an
+// effective_from date — never edited in place. Allowance / rate /
+// feature keys come from shared/plans.js.
+
+const PlanRow = z.object({
+  id: uuidLike,
+  slug: z.string(),
+  name: z.string(),
+  kind: z.enum(['tier', 'addon']),
+  active: z.boolean(),
+  sort: z.number().int(),
+  created_at: z.string(),
+}).openapi('PlanRow')
+
+const PlanVersionRow = z.object({
+  id: uuidLike,
+  plan_id: uuidLike,
+  effective_from: z.string().openapi({ example: '2026-07-19' }),
+  price_cents: z.number().int(),
+  currency: z.literal('EUR'),
+  allowances: z.object({}).passthrough()
+    .openapi({ description: 'Monthly included quantities keyed by billing meter: wa_template_send, email_send, ai_message (shared/plans.js METERS — aligned with the mig 411 usage rollup meters).' }),
+  unit_rates_cents: z.object({}).passthrough()
+    .openapi({ description: 'Overage rates in EUR cents: wa_marketing (/msg), wa_utility (/msg), email_per_1k (/1,000 emails), ai_message (/msg).' }),
+  features: z.object({}).passthrough()
+    .openapi({ description: 'Boolean feature flags keyed by shared/plans.js FEATURE_KEYS (ai_agent, custom_email_domain).' }),
+  notes: z.string().nullable(),
+  created_at: z.string(),
+  created_by: uuidLike.nullable(),
+}).openapi('PlanVersionRow')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/admin/plans',
+  tags: ['Platform Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List SaaS plans with full version history (master only)',
+  description: 'The plan catalogue — tier plans (Core/Growth/Scale) and add-ons, each with every pricing version newest-first. Feeds the /admin/plans editor.',
+  responses: {
+    200: {
+      description: 'Plans with versions',
+      content: { 'application/json': { schema: SuccessResponse(z.array(PlanRow.extend({ versions: z.array(PlanVersionRow) }))).openapi('PlansListResponse') } },
+    },
+    403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/plans',
+  tags: ['Platform Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a plan shell (master only)',
+  description: 'Creates the plan row only — no numbers. Pricing is added as versions via POST /api/admin/plans/{id}/versions. Slug is permanent (snake_case; addon slugs should match shared/plans.js ADDON_KEYS so provisioning code can key off them).',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      slug: z.string().regex(/^[a-z0-9]+(_[a-z0-9]+)*$/),
+      name: z.string().min(1).max(100),
+      kind: z.enum(['tier', 'addon']),
+      sort: z.number().int().min(0).optional(),
+    }).openapi('PlanCreateBody') } } },
+  },
+  responses: {
+    200: { description: 'Plan created', content: { 'application/json': { schema: SuccessResponse(PlanRow) } } },
+    403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Duplicate slug', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/admin/plans/{id}',
+  tags: ['Platform Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Update plan metadata (master only)',
+  description: 'Name / active / sort ONLY. Slug and kind are immutable; prices and allowances live on immutable versions — change them by creating a new version, never in place.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      name: z.string().min(1).max(100).optional(),
+      active: z.boolean().optional(),
+      sort: z.number().int().min(0).optional(),
+    }).openapi('PlanPatchBody') } } },
+  },
+  responses: {
+    200: { description: 'Plan updated', content: { 'application/json': { schema: SuccessResponse(PlanRow) } } },
+    403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Plan not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/plans/{id}/versions',
+  tags: ['Platform Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a new pricing version for a plan (master only)',
+  description: 'THE write path for plan numbers. Versions are immutable once created (no PATCH/DELETE), so locations pinned to a version keep their grandfathered pricing; the active version on a date is the latest effective_from <= date. 409 if a version with the same effective_from exists.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      effective_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      price_cents: z.number().int().min(0),
+      currency: z.literal('EUR').optional(),
+      allowances: z.object({}).passthrough().optional(),
+      unit_rates_cents: z.object({}).passthrough().optional(),
+      features: z.object({}).passthrough().optional(),
+      notes: z.string().max(2000).nullable().optional(),
+    }).openapi('PlanVersionCreateBody') } } },
+  },
+  responses: {
+    200: { description: 'Version created', content: { 'application/json': { schema: SuccessResponse(PlanVersionRow) } } },
+    403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Plan not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Duplicate effective_from for this plan', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// Integrations hub (INTEG-B2) — master-only card states
+// ============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/integrations/hub',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Integrations hub card states (master-only)',
+  description:
+    'Assembled connection state for every location, powering /settings/integrations-hub: ' +
+    'channel_connections registry rows (glofox/unifi/sensibo/thinq/twilio_sender/bca/instagram, ' +
+    'with legacy location-field fallback), xero_connections, whatsapp_numbers (read-only), ' +
+    'ad_accounts presence, the customer-agent live signal, and a derived "needs attention" list ' +
+    '(errors first, then tokens expiring within 10 days, then incomplete setups). ' +
+    'Secrets are never returned — no token columns are selected. ' +
+    'Master-only (profileRole) while the hub is behind the phase-B rollout flag.',
+  responses: {
+    200: {
+      description: 'Hub payload — per-provider card states keyed by location, plus the attention strip',
+      content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('IntegrationsHubResponse') } },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a master account', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

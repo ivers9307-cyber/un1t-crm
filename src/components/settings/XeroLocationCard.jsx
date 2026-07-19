@@ -1,6 +1,7 @@
 'use client'
 
-// One row per location on /settings/integrations. Shows the current
+// The Xero connection card on the per-location Integrations tab
+// (/settings/locations/[id]?tab=xero). Shows the current
 // connection state and offers a Connect / Disconnect / Reconnect
 // action depending on the row's state. Also captures the per-org
 // Xero "Email to Bills" address so the document → draft bill

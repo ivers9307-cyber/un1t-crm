@@ -33,6 +33,7 @@ import {
 import { applyMemberSync } from './glofox-sync.js'
 import { glofoxFetch } from './glofox.js'
 import { writeContactTag } from './contact-tags.js'
+import { getGlofoxConfig } from './connection-registry.js'
 
 // Per-location trial config — what membership + plan to attach
 // to a freshly-created Glofox account. Operator picks via the
@@ -201,12 +202,10 @@ export async function findOrCreateGlofoxMember({
   // config; if not set, skip with a warning.
   let trialPurchaseError = null
   if (attachTrial) {
-    const { data: location } = await db
-      .from('locations')
-      .select('settings')
-      .eq('id', locationId)
-      .maybeSingle()
-    const trial = getLocationTrialConfig(location)
+    // INTEG-A2 dual-read: registry row first, legacy settings.glofox
+    // otherwise — same settings-shaped object either way.
+    const glofoxCfg = await getGlofoxConfig(db, locationId)
+    const trial = getLocationTrialConfig({ settings: { glofox: glofoxCfg } })
     if (!trial.membershipId || !trial.planCode) {
       trialPurchaseError = 'Trial membership not configured for this location (Settings → Locations → Glofox Integration → Trial membership picker)'
     } else {

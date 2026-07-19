@@ -199,7 +199,9 @@ describe('reviews block type', () => {
     expect(b.type).toBe('reviews')
     expect(typeof b.id).toBe('string')
     expect(b.min_rating).toBe(4)
-    expect(b.show_aggregate).toBe(true)
+    // show_aggregate is gone — the aggregate header was retired with the
+    // Google Business Profile sync (mig 410).
+    expect(b.show_aggregate).toBeUndefined()
     expect(b.speed).toBe('normal')
     expect(b.title).toBe('What our members say')
   })

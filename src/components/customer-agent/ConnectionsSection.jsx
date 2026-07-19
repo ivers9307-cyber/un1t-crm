@@ -154,13 +154,13 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
         connects its own accounts.
       </p>
 
-      {/* WhatsApp — managed under Integrations */}
+      {/* WhatsApp — managed under the per-location Integrations tab */}
       <div className="flex items-center justify-between border border-un1t-border rounded-md px-4 py-3 mb-4">
         <div>
           <div className="text-sm font-medium text-un1t-text">WhatsApp</div>
-          <div className="text-xs text-un1t-muted">Managed under Settings → Integrations → WhatsApp numbers.</div>
+          <div className="text-xs text-un1t-muted">Managed under Settings → Locations → this location → Integrations → WhatsApp.</div>
         </div>
-        <a href="/settings/integrations" className="text-xs text-un1t-text underline">Manage</a>
+        <a href={locationId ? `/settings/locations/${locationId}?tab=whatsapp` : '/settings'} className="text-xs text-un1t-text underline">Manage</a>
       </div>
 
       {instagramCard}

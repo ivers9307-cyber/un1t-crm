@@ -22,6 +22,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { canEditLocationFeatures } from '@/lib/staff-access'
 import { getBcaConfig, validateBcaConfig, isBcaSubmitEnabled } from '@/lib/bca'
+import { overlayConnections, syncConnectionFromLegacy } from '@/lib/connection-registry'
 import { validateBody } from '@/lib/validate'
 
 // Permissive shape — domain validation is done by validateBcaConfig().
@@ -42,16 +43,20 @@ export async function GET(_request, props) {
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   const db = createServerClient()
-  const { data: location, error } = await db
+  const { data: locationRow, error } = await db
     .from('locations')
     .select('id, slug, features, bca_config')
     .eq('id', params.id)
     .single()
-  if (error || !location) {
+  if (error || !locationRow) {
     return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
   }
-  const guard = assertLocationAccess(user, location.id)
+  const guard = assertLocationAccess(user, locationRow.id)
   if (guard) return guard
+
+  // INTEG-A2 dual-read: registry `bca` row replaces legacy bca_config
+  // when present (features.bca_submit gate stays on locations).
+  const location = await overlayConnections(db, locationRow, ['bca'])
 
   return NextResponse.json({
     success: true,
@@ -106,6 +111,15 @@ export async function PUT(request, props) {
     .single()
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  }
+
+  // INTEG-A2 dual-write: re-sync the registry `bca` row so registry-
+  // first reads never see a stale config after a legacy save. Non-
+  // fatal — legacy remains the written source of truth this phase.
+  try {
+    await syncConnectionFromLegacy(db, params.id, 'bca', data)
+  } catch (e) {
+    console.error('[bca-config] registry sync failed:', e?.message || e)
   }
 
   return NextResponse.json({

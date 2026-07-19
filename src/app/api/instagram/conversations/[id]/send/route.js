@@ -56,7 +56,10 @@ export async function POST(request, props) {
 
   let result
   try {
-    result = await sendInstagramMessage(conversation.ig_user_id, text, { connection: { access_token: token } })
+    // Pass the full connection row (not just the token) so sendInstagramMessage
+    // sends via the explicit account id and can stamp connection health
+    // (last_ok_at / auth-error status, INTEG-A3) on the row.
+    result = await sendInstagramMessage(conversation.ig_user_id, text, { connection: conn })
   } catch (err) {
     return NextResponse.json({ success: false, error: err.message }, { status: 400 })
   }

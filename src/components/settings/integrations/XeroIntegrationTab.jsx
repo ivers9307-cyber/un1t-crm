@@ -1,8 +1,8 @@
 // Xero integration tab. Wraps the existing XeroLocationCard which
 // already handles the OAuth start + status display + reconnect /
-// disconnect. The cross-location overview at /settings/integrations
-// stays as-is (kept per the SETTINGS.1 spec) — this tab is the
-// single-location surface.
+// disconnect. This tab (/settings/locations/[id]?tab=xero) is the
+// only Xero settings surface — the old cross-location overview at
+// /settings/integrations was retired (INTEG-A4).
 //
 // RSC-AUDIT.2: no own state / events / browser APIs — every
 // interactive bit lives in XeroLocationCard. Parent

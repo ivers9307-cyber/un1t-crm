@@ -36,6 +36,7 @@ import { emitEvent, applyTagRules, EVENT_TYPES } from './contact-events'
 import { triggerSequencesForOrderStatus } from './sequences'
 import { addEventAttendeesToHostList } from './host-contact-list'
 import { logWarn, logError } from './log'
+import { overlayConnections } from '@/lib/connection-registry'
 
 /**
  * Resolve which Revolut credentials to use for race payments. For
@@ -275,6 +276,10 @@ export async function resolveRacePaymentByProviderRef(db, providerRef) {
     `)
     .eq('payment_provider_ref', providerRef)
     .maybeSingle()
+  // INTEG-A2 dual-read: registry twilio_sender row first.
+  if (data?.race?.locations) {
+    data.race.locations = await overlayConnections(db, data.race.locations, ['twilio_sender'])
+  }
   return data || null
 }
 

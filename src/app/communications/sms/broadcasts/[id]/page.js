@@ -8,6 +8,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import SMSBroadcastEditor from '@/components/SMSBroadcastEditor'
+import { overlayConnections } from '@/lib/connection-registry'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,6 +26,12 @@ export default async function SmsBroadcastDetailPage(props) {
     .single()
 
   if (!broadcast) notFound()
+
+  // INTEG-A2 dual-read: registry twilio_sender row first (sender
+  // preview matches what sendBroadcast will actually use).
+  if (broadcast.locations) {
+    broadcast.locations = await overlayConnections(db, broadcast.locations, ['twilio_sender'])
+  }
 
   // IDOR — same pattern as the API. The page-level RLS would also
   // block this but we surface a friendly 403 instead of an empty

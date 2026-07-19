@@ -26,6 +26,7 @@
 
 import { logAuditEvent } from '@/lib/audit'
 import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
+import { overlayConnections } from '@/lib/connection-registry'
 import * as sensibo from '@/lib/sensibo'
 import * as thinq from '@/lib/thinq'
 import { resolveAcAllowlist, isAcDeviceAllowed } from '@shared/permissions'
@@ -78,7 +79,11 @@ export async function loadDeviceForUser(deviceId, { user, db } = {}) {
       .eq('location_id', device.location_id)
       .maybeSingle(),
   ])
-  const location = locRes.data || null
+  // INTEG-A2 dual-read: registry rows (sensibo/thinq) replace the
+  // legacy location columns when present; no row → legacy unchanged.
+  const location = locRes.data
+    ? await overlayConnections(db, locRes.data, ['sensibo', 'thinq'])
+    : null
   const assignment = plRes.data || null
   if (!location) {
     return { ok: false, status: 404, error: 'Location for AC device not found.', code: 'location_not_found' }
@@ -389,12 +394,14 @@ export async function loadDeviceWithLocation(deviceId, db) {
     .single()
   if (!device) return { ok: false, status: 404, error: 'AC device not found.', code: 'device_not_found' }
 
-  const { data: location } = await db
+  const { data: locationRow } = await db
     .from('locations')
     .select('id, name, sensibo_api_key, sensibo_pod_id, thinq_pat, thinq_client_id, thinq_country_code')
     .eq('id', device.location_id)
     .single()
-  if (!location) return { ok: false, status: 404, error: 'Location for AC device not found.', code: 'location_not_found' }
+  if (!locationRow) return { ok: false, status: 404, error: 'Location for AC device not found.', code: 'location_not_found' }
+  // INTEG-A2 dual-read overlay (see loadDeviceForUser).
+  const location = await overlayConnections(db, locationRow, ['sensibo', 'thinq'])
 
   return { ok: true, device, location }
 }
