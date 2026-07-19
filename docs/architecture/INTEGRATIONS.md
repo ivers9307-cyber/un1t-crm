@@ -29,9 +29,6 @@ XERO_CLIENT_ID=                  # Xero OAuth 2.0 web app — see "Xero integrat
 XERO_CLIENT_SECRET=
 XERO_REDIRECT_URI=https://crm.un1tdublin.com/api/xero/callback
 XERO_SALES_ACCOUNT_CODE=         # optional, defaults to 200 (Sales). Set if your chart uses a different code.
-GOOGLE_OAUTH_CLIENT_ID=          # Google Cloud OAuth 2.0 web client — Business Profile reviews
-GOOGLE_OAUTH_CLIENT_SECRET=
-GOOGLE_OAUTH_REDIRECT_URI=https://crm.un1tdublin.com/api/google-business/callback
 
 # Revolut Merchant — see "Revolut Merchant integration"
 REVOLUT_API_KEY=                 # Secret API key (sk_live_... or sk_sandbox_...)
@@ -181,9 +178,11 @@ The limiter is fail-open (DB error → request allowed, warning logged) so a Sup
 
 Add a new public endpoint? Wire the limiter at the top of the handler with a unique bucket prefix (`book:`, `unsubscribe:`, etc.) and `export const runtime = 'nodejs'` so `node:crypto` is available transitively.
 
-### Google reviews carousel
+### Reviews carousel
 
-Per-location Google Business Profile connection (`google_business_connections`, mirrors `xero_connections`) powers a `reviews` landing-page block — a pure-CSS marquee of synced Google reviews on `/welcome/[location]`. OAuth scope `business.manage`; reviews come from the **legacy `mybusiness.googleapis.com/v4` endpoint** (the newer split APIs host accounts + locations only). A daily `/api/cron/sync-google-reviews` cron upserts into `google_reviews` (mig 249) preserving the per-review `hidden` operator toggle, and snapshots the average rating + total count onto the connection. Operators connect + pick the listing + sync + hide reviews at Settings → Locations → [name] → Integrations → Google Reviews; they configure the carousel (heading, min rating, marquee speed, aggregate header) in the landing-page editor. **Prerequisite:** Google Business Profile API access approval (new GCP projects start at 0 QPM; approval takes days–weeks) plus the three `GOOGLE_OAUTH_*` env vars. Design: `docs/REVIEW_CAROUSEL_DESIGN.md`. No new permission key — block editing uses `landing_page`, connecting uses the owner/master role gate.
+A `reviews` landing-page block renders a pure-CSS marquee ("wall of love") of reviews on `/welcome/[location]`, read from the `google_reviews` table (mig 249). Auto-filtered to a configurable minimum rating (default 4★), newest first, with a per-review `hidden` toggle. Config (heading, min rating, marquee speed, aggregate header) lives in the landing-page editor; block editing uses the `landing_page` permission.
+
+**Reviews are populated manually.** The Google Business Profile API sync (OAuth + `/api/cron/sync-google-reviews` + `google_business_connections`) was retired in **mig 410** — the API's access-approval gate (days–weeks, 0→300 QPM) wasn't worth it for our volume. To load/refresh reviews, insert rows into `google_reviews` (`location_id`, `google_review_id` unique per location, `rating`, `comment`, `author_name`, `review_time`, `hidden=false`); `scripts/seed-google-reviews.mjs` is a starting point. The aggregate header + JSON-LD `aggregateRating` are dormant (they read the removed connection); wire an operator-editable aggregate onto the reviews block if the "X★ · N reviews" headline is wanted. Historical design: `docs/REVIEW_CAROUSEL_DESIGN.md`.
 
 
 ## Twilio integration

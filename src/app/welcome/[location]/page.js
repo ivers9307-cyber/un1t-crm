@@ -95,24 +95,21 @@ export default async function StudioLandingPage(props) {
   if (reviewsBlock && row.location_id) {
     const db = createServerClient()
     const minRating = Number.isFinite(reviewsBlock.min_rating) ? reviewsBlock.min_rating : 4
-    const [{ data: reviews }, { data: conn }] = await Promise.all([
-      db.from('google_reviews')
-        .select('id, google_review_id, rating, comment, author_name, author_photo_url, review_time, hidden')
-        .eq('location_id', row.location_id)
-        .eq('hidden', false)
-        .gte('rating', minRating)
-        .not('comment', 'is', null)
-        .order('review_time', { ascending: false })
-        .limit(30),
-      db.from('google_business_connections')
-        .select('average_rating, total_review_count')
-        .eq('location_id', row.location_id)
-        .maybeSingle(),
-    ])
+    const { data: reviews } = await db.from('google_reviews')
+      .select('id, google_review_id, rating, comment, author_name, author_photo_url, review_time, hidden')
+      .eq('location_id', row.location_id)
+      .eq('hidden', false)
+      .gte('rating', minRating)
+      .not('comment', 'is', null)
+      .order('review_time', { ascending: false })
+      .limit(30)
     reviewsData = {
       reviews: reviews || [],
-      averageRating: conn?.average_rating ?? null,
-      totalCount: conn?.total_review_count ?? null,
+      // Aggregate header + JSON-LD aggregateRating were sourced from the synced
+      // Google Business connection, retired with that API. Reviews are populated
+      // manually now; wire an operator-editable aggregate here if ever wanted.
+      averageRating: null,
+      totalCount: null,
     }
   }
 

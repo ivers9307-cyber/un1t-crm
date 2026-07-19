@@ -53,10 +53,9 @@ export default async function EditLocationPage(props) {
   // defaults shown above the per-location branding (mig 317).
   const org = (organizations || []).find((o) => o.id === location.organization_id) || null
 
-  // Pull the Xero connection row (if any), the Google Business connection
-  // row (if any), and a sample car for the BCA template preview.
-  // All three feed into LocationIntegrations.
-  const [{ data: xeroConnection }, { data: gbpConnection }, { data: sampleBcaCar }] = await Promise.all([
+  // Pull the Xero connection row (if any) and a sample car for the BCA
+  // template preview. Both feed into LocationIntegrations.
+  const [{ data: xeroConnection }, { data: sampleBcaCar }] = await Promise.all([
     db.from('xero_connections')
       .select(`
         location_id, tenant_id, tenant_name, tenant_type,
@@ -66,18 +65,6 @@ export default async function EditLocationPage(props) {
         tax_rates_last_synced_at,
         accounts_sync_error, contacts_sync_error, tax_rates_sync_error,
         car_sales_account_code
-      `)
-      .eq('location_id', location.id)
-      .maybeSingle(),
-    db.from('google_business_connections')
-      // Safe column list — NEVER select('*') here: this row is passed as a
-      // prop into the GoogleReviewsCard client component, which serializes it
-      // into the browser RSC payload. access_token / refresh_token must not
-      // leave the server (mirrors the Xero query above).
-      .select(`
-        location_id, account_resource, location_resource, location_title,
-        average_rating, total_review_count, last_synced_at, sync_error,
-        connected_at
       `)
       .eq('location_id', location.id)
       .maybeSingle(),
@@ -258,7 +245,6 @@ export default async function EditLocationPage(props) {
         <LocationIntegrations
           location={location}
           xeroConnection={xeroConnection || null}
-          gbpConnection={gbpConnection || null}
           user={user}
           sampleBcaCar={sampleBcaCar || null}
         />
