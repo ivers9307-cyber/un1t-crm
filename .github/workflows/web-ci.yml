@@ -33,6 +33,10 @@ on:
       # a1e57a8 — the attendance_reports allow-list addition didn't
       # trigger CI because scripts/** wasn't watched).
       - 'scripts/**'
+      # check-location-scoping derives its tenant-table set from the
+      # migrations — a migration adding location_id to a table must re-run
+      # CI so newly-tenanted tables get their routes checked.
+      - 'supabase/migrations/**'
       - '.github/workflows/web-ci.yml'
   # Also run on every PR targeting main — without this, branches
   # were never CI-checked and we only found out about failures after
@@ -55,6 +59,7 @@ on:
       - 'vitest.config.js'
       - 'jsconfig.json'
       - 'scripts/**'
+      - 'supabase/migrations/**'
       - '.github/workflows/web-ci.yml'
 
 concurrency:
@@ -99,6 +104,14 @@ jobs:
       # authorize the caller itself. See scripts/check-route-guards.mjs.
       - name: Route guard presence
         run: npm run check:route-guards
+
+      # Catches the SAAS-1..5 class of bug — an authenticated route querying
+      # a location_id-bearing table with NO tenant scoping (service role
+      # bypasses RLS, so an unscoped .from('contacts') serves any tenant's
+      # rows). The tenant-table set is derived from supabase/migrations at
+      # runtime. See scripts/check-location-scoping.mjs.
+      - name: Location scoping presence
+        run: npm run check:location-scoping
 
       # Catches the audit's recurring silent-data-loss classes — a .catch on a
       # supabase thenable (throws, query never runs) and a .limit(>=1000) without
