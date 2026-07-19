@@ -3307,6 +3307,34 @@ registry.registerPath({
 })
 
 // ============================================================================
+// Integrations hub (INTEG-B2) — master-only card states
+// ============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/integrations/hub',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Integrations hub card states (master-only)',
+  description:
+    'Assembled connection state for every location, powering /settings/integrations-hub: ' +
+    'channel_connections registry rows (glofox/unifi/sensibo/thinq/twilio_sender/bca/instagram, ' +
+    'with legacy location-field fallback), xero_connections, whatsapp_numbers (read-only), ' +
+    'ad_accounts presence, the customer-agent live signal, and a derived "needs attention" list ' +
+    '(errors first, then tokens expiring within 10 days, then incomplete setups). ' +
+    'Secrets are never returned — no token columns are selected. ' +
+    'Master-only (profileRole) while the hub is behind the phase-B rollout flag.',
+  responses: {
+    200: {
+      description: 'Hub payload — per-provider card states keyed by location, plus the attention strip',
+      content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('IntegrationsHubResponse') } },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not a master account', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
 //
