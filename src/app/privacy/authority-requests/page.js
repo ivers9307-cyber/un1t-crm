@@ -18,7 +18,7 @@ export const runtime = 'nodejs'
 export const metadata = {
   title: 'Government & public authority data requests · UN1T Dublin',
   description:
-    'How UN1T Dublin Ltd handles requests from police, courts, regulators, and other public authorities for the personal data it holds — legality review, challenging unlawful requests, data minimisation, and documentation.',
+    'How Champ Fitness Ltd (trading as UN1T Dublin) handles requests from police, courts, regulators, and other public authorities for the personal data it holds — legality review, challenging unlawful requests, data minimisation, and documentation.',
 }
 
 export default function AuthorityRequestsPolicy() {
@@ -34,7 +34,8 @@ export default function AuthorityRequestsPolicy() {
 
         <section className="prose prose-gray max-w-none">
           <p>
-            This policy explains how UN1T Dublin Ltd (&ldquo;we&rdquo;,
+            This policy explains how Champ Fitness Ltd, trading as UN1T
+            Dublin (&ldquo;we&rdquo;,
             &ldquo;us&rdquo;) responds when a public authority &mdash; such as
             a police force, court, regulator, tax authority, or other
             government body &mdash; asks us to disclose personal data we hold.
@@ -148,11 +149,12 @@ export default function AuthorityRequestsPolicy() {
             relevant legal basis and any required order or authorisation, to:
           </p>
           <p>
-            <strong>UN1T Dublin Ltd</strong> &mdash; Data Protection Contact
+            <strong>Champ Fitness Ltd</strong> (trading as UN1T Dublin) &mdash; Data Protection Contact
+            <br />
+            First Floor Unit, Stillorgan Village Centre,
+            Lower Kilmacud Road, Dublin, A94 AC67
             <br />
             Email: <a className="underline" href="mailto:privacy@un1tdublin.com">privacy@un1tdublin.com</a>
-            <br />
-            Postal address available on request.
           </p>
           <p className="mt-4 text-sm text-gray-500">
             This policy sits alongside our main{' '}
