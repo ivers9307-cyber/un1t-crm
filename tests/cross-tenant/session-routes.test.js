@@ -12,11 +12,13 @@
 // owner-gated org resources), the SAAS-4 org-admin of A (reaches A1+A2,
 // never B), and master (reaches everything).
 //
-// KNOWN LEAKS are pinned with it.fails + a 'KNOWN LEAK' title: the
-// assertion states the CORRECT boundary, vitest expects it to fail
-// against current code. When someone fixes the route, the pin flips to
-// "expected to fail but passed" — flip it.fails to it and delete the
-// leak note. Do NOT weaken the assertion to make it pass.
+// Every boundary here HOLDS against current code. A case may carry a
+// `leak: '<why>'` note, which flips its runner to it.fails — used to pin
+// a KNOWN-still-open leak (the assertion states the CORRECT boundary and
+// is expected to fail until the route is fixed, at which point you delete
+// the `leak` note to promote it to a live `it`). None are open right now:
+// the SAAS-1..12 remediation closed the batch this harness first found.
+// Do NOT weaken an assertion to make it pass.
 //
 // ADDING A ROUTE: one spec entry (call + cases) in SESSION_SPECS.
 
@@ -51,6 +53,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import {
   makeWorld, makeTenantDb, makeReq, jsonOf, propsOf, idsOf, users,
+  ORG_A, ORG_B,
   LOC_A1, LOC_A2, LOC_B1,
   C_A1, C_A2, C_B1,
   STG_A1, STG_A2, STG_B1, STG_B2,
@@ -129,7 +132,6 @@ const SESSION_SPECS = [
       {
         title: 'owner of B fetching an org-A template must get 404',
         persona: 'ownerB1', id: TPL_A, expectStatus: 404,
-        leak: 'detail route has NO org check — any owner reads any org’s template incl. comp/body copy; only the list route is scoped',
         verify: ({ json }) => expect(JSON.stringify(json)).not.toContain('ORG A SALARY TERMS'),
       },
     ],
@@ -141,7 +143,6 @@ const SESSION_SPECS = [
       {
         title: 'owner of B patching an org-A template must get 404 and the row must be untouched',
         persona: 'ownerB1', id: TPL_A, expectStatus: 404,
-        leak: 'PATCH has NO org check — any owner rewrites any org’s template by id',
         verify: ({ world: w }) => expect(w.contract_templates.find((t) => t.id === TPL_A).name).toBe('Org A Contract'),
       },
     ],
@@ -153,7 +154,6 @@ const SESSION_SPECS = [
       {
         title: 'owner of B soft-deleting an org-A template must get 404 and the template must stay active',
         persona: 'ownerB1', id: TPL_A, expectStatus: 404,
-        leak: 'DELETE has NO org check — any owner deactivates any org’s template by id',
         verify: ({ world: w }) => expect(w.contract_templates.find((t) => t.id === TPL_A).active).toBe(true),
       },
     ],
@@ -166,7 +166,6 @@ const SESSION_SPECS = [
       {
         title: 'a manager’s session must not see another tenant’s pipeline stages',
         persona: 'managerA1',
-        leak: 'cookie path is unscoped — orgScopeLocationIds no-ops for sessions and nothing filters by the caller’s locations',
         verify: ({ json }) => {
           const ids = idsOf(json?.data)
           expect(ids).not.toContain(STG_B1)
@@ -221,7 +220,6 @@ const SESSION_SPECS = [
       {
         title: 'a manager’s session fetching another tenant’s event type must get 404',
         persona: 'managerA1', id: ET_B1, expectStatus: 404,
-        leak: 'assertRowInOrg no-ops for cookie callers and no user-location guard follows — any manager reads any tenant’s event type by id',
       },
     ],
   },
@@ -232,20 +230,25 @@ const SESSION_SPECS = [
       {
         title: 'a manager’s session updating another tenant’s event type must get 404 and the row must be untouched',
         persona: 'managerA1', id: ET_B1, expectStatus: 404,
-        leak: 'same missing cookie-path guard as the GET — any manager rewrites any tenant’s event type by id',
         verify: ({ world: w }) => expect(w.event_types.find((r) => r.id === ET_B1).name).toBe('Consult B1'),
       },
     ],
   },
   {
-    name: 'GET /api/chooser-settings (global singleton — role gate only)',
-    call: () => chooserSettingsRoute.GET(),
+    name: 'GET /api/chooser-settings (per-org — SAAS-6)',
+    // SAAS-6 (mig 414) made the chooser per-ORGANIZATION: read = org
+    // membership, and an explicit ?organization_id for a FOREIGN org is
+    // 404. A caller with no param resolves their own activeOrganization.
+    call: (c) => chooserSettingsRoute.GET(
+      makeReq('/api/chooser-settings' + (c.orgParam ? `?organization_id=${c.orgParam}` : '')),
+    ),
     cases: [
-      { title: 'staff is refused (403)', persona: 'staffA1', expectStatus: 403 },
-      // The chooser is a deliberately GLOBAL page (one public front page
-      // across brands) — any owner may read it. Pinned so a future
-      // per-org split is a conscious change.
-      { title: 'owner of B may read the global chooser (BY DESIGN, pinned)', persona: 'ownerB1' },
+      // Read tier is org membership, so staff read their OWN org's
+      // chooser (pre-SAAS-6 this route was role-gated and 403'd staff).
+      { title: 'staff at A1 reads their own org’s chooser', persona: 'staffA1', verify: ({ json }) => expect(json.data.chooser.organization_id).toBe(ORG_A) },
+      // The per-org boundary SAAS-6 added: owner of B may not read org A's.
+      { title: 'owner of B targeting org A’s chooser gets 404', persona: 'ownerB1', orgParam: ORG_A, expectStatus: 404 },
+      { title: 'master may read any org’s chooser', persona: 'master', orgParam: ORG_B, verify: ({ json }) => expect(json.data.chooser.organization_id).toBe(ORG_B) },
     ],
   },
   {
@@ -259,7 +262,6 @@ const SESSION_SPECS = [
         title: 'owner of B must not be able to rewrite an org-A location’s tile',
         persona: 'ownerB1',
         expectStatus: null, // status is not the boundary here — the write is
-        leak: 'PUT updates landing_page_settings by caller-supplied location_id with no location/org access check — any owner rewrites any tenant’s public tile copy',
         verify: ({ world: w }) => expect(
           w.landing_page_settings.find((t) => t.location_id === LOC_A1).chooser_label
         ).toBe('A One Original'),
