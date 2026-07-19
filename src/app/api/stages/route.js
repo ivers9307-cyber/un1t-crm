@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKeyOrManager, orgScopeLocationIds } from '@/lib/api-auth'
+import { assertLocationAccess, getUserLocationIds } from '@/lib/auth'
 
 // GET /api/stages — List pipeline stages.
 //
@@ -15,9 +16,25 @@ export async function GET(request) {
 
   const db = createServerClient()
   const { searchParams } = new URL(request.url)
-  let query = db.from('pipeline_stages').select('*').order('display_order')
   const locationId = searchParams.get('location_id')
+  let query = db.from('pipeline_stages').select('*').order('display_order')
   if (locationId) query = query.eq('location_id', locationId)
+  // SAAS-12 — cookie/session callers: orgScopeLocationIds no-ops for
+  // them (auth.orgId is null), so without an explicit filter a manager
+  // could read every tenant's stages. Constrain to the caller's own
+  // locations (master's set is every active location, so they still see
+  // all), and reject a foreign ?location_id up front (403 — this is a
+  // list route with a caller-supplied param, not a detail lookup). The
+  // per-org-key path (auth.orgId set) and the legacy global-key path
+  // (auth.user + auth.orgId both null) are unchanged — auth.user is null
+  // for both, so this block is skipped.
+  if (auth.user) {
+    if (locationId) {
+      const guard = assertLocationAccess(auth.user, locationId)
+      if (guard) return guard
+    }
+    query = query.in('location_id', getUserLocationIds(auth.user))
+  }
   // APIKEYS.3 — per-org key: restrict to the org's locations (no-op for
   // cookie callers + legacy shared key).
   const orgLocs = await orgScopeLocationIds(db, auth.orgId)

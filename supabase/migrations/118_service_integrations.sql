@@ -8,6 +8,13 @@
 --                                 /admin/integrations once. Empty
 --                                 row = "we haven't set Strava up
 --                                 yet" — UI hides the connect button.
+--                                 SAAS-6 DECISION (comment-only, DDL
+--                                 untouched): stays PLATFORM-WIDE —
+--                                 one OAuth app per provider for the
+--                                 whole SaaS; per-tenant would mean
+--                                 each gym registering its own
+--                                 developer apps (wrong model; Strava
+--                                 ToS also bars SaaS resale).
 --
 --   contact_external_integrations the member's per-provider tokens
 --                                 + auto-export toggle. Created on

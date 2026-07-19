@@ -5,8 +5,24 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { requireApiKeyOrManager, assertRowInOrg } from '@/lib/api-auth'
+import { assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { hexColor, url } from '@/lib/schemas'
+
+// SAAS-12 — cookie/session location guard for this detail route.
+// assertRowInOrg only scopes per-org API keys (it no-ops when orgId is
+// null — the legacy-key and cookie paths), so without this a manager
+// cookie session could read/edit/soft-delete ANY tenant's event type by
+// id. Scope the session caller to their own locations; master (whose
+// user.locations is every active location) is exempt. Returns a 404
+// NextResponse (not 403) so a cross-tenant probe can't confirm an id
+// exists — same convention as assertRowInOrg. No-op for the API-key
+// paths (user is null). Mirrors the cookie guard in /api/contacts/[id].
+async function assertEventTypeSessionAccess(db, user, id) {
+  if (!user || user.role === 'master') return null
+  const { data: row } = await db.from('event_types').select('location_id').eq('id', id).maybeSingle()
+  return assertLocationAccessOr404(user, row?.location_id)
+}
 
 const EventUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -42,6 +58,8 @@ export async function GET(request, props) {
   const db = createServerClient()
   const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'event_types', id: params.id })
   if (scopeErr) return scopeErr
+  const sessionErr = await assertEventTypeSessionAccess(db, auth.user, params.id)
+  if (sessionErr) return sessionErr
   const { data, error } = await db.from('event_types').select('*').eq('id', params.id).single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 404 })
 
@@ -60,6 +78,8 @@ export async function PUT(request, props) {
   const db = createServerClient()
   const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'event_types', id: params.id })
   if (scopeErr) return scopeErr
+  const sessionErr = await assertEventTypeSessionAccess(db, auth.user, params.id)
+  if (sessionErr) return sessionErr
 
   const updates = { ...body }
 
@@ -83,6 +103,8 @@ export async function DELETE(request, props) {
   const db = createServerClient()
   const scopeErr = await assertRowInOrg({ db, orgId: auth.orgId, table: 'event_types', id: params.id })
   if (scopeErr) return scopeErr
+  const sessionErr = await assertEventTypeSessionAccess(db, auth.user, params.id)
+  if (sessionErr) return sessionErr
   const { data, error } = await db.from('event_types').update({ active: false }).eq('id', params.id).select().single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
 

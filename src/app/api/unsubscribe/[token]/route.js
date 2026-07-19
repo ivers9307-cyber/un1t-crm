@@ -8,6 +8,8 @@ export const runtime = 'nodejs'
 // 10 attempts per IP per 15 minutes. The token is a UUID (122 bits of
 // entropy), so brute force is hopeless even without a limiter — this mainly
 // slows down a misconfigured email client looping on the unsubscribe URL.
+// SAAS-6: deliberately tenant-UNSCOPED — the tenant is only knowable AFTER
+// resolving the token, so an anti-enumeration limiter must key on IP alone.
 const RL = { max: 10, windowMs: 15 * 60_000 }
 
 // Channels accepted by the unified unsubscribe POST. Any subset can

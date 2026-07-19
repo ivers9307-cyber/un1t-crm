@@ -15,16 +15,20 @@ export const runtime = 'nodejs'
 export async function POST(request) {
   const db = createServerClient()
   const ip = getClientIp(request)
+  const body = await request.json().catch(() => ({}))
+  const publicPath = typeof body.location_path === 'string' ? body.location_path.slice(0, 64) : 'stillorgan'
+
   // A full funnel is ~6 events; allow bursts + refreshes without abuse.
-  const limit = await checkRateLimit(db, `funnelevt:${ip}`, { max: 60, windowMs: 10 * 60_000 })
+  // SAAS-6: tenant-keyed (the landing public_path, resolved to a studio
+  // below) — one tenant's funnel telemetry can never consume another
+  // tenant's window for the same IP. Body parse is pure so it can run
+  // first to expose the path.
+  const limit = await checkRateLimit(db, `funnelevt:${publicPath}:${ip}`, { max: 60, windowMs: 10 * 60_000 })
   if (!limit.allowed) return rateLimitResponse(limit, 'Too many events.')
 
-  const body = await request.json().catch(() => ({}))
   const event = parseFunnelEvent(body)
   // Unknown/invalid step → silently ignore (200) rather than error the client.
   if (!event) return NextResponse.json({ success: true, data: { ignored: true } })
-
-  const publicPath = typeof body.location_path === 'string' ? body.location_path.slice(0, 64) : 'stillorgan'
   const { data: page } = await db.from('landing_page_settings')
     .select('location_id').eq('public_path', publicPath).maybeSingle()
   if (!page?.location_id) return NextResponse.json({ success: true, data: { ignored: true } })

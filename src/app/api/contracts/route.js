@@ -107,6 +107,23 @@ export async function POST(request) {
     .maybeSingle()
   if (tErr) return NextResponse.json({ success: false, error: tErr.message }, { status: 500 })
   if (!template) return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
+
+  // 1a. SAAS-5 — org-scope the template pick. The service-role read
+  //     above bypasses RLS, so without this any owner could issue from
+  //     another org's template — rendering its body (comp copy) AND
+  //     anchoring the new contract to that org via
+  //     template.organization_id in step 3. Non-master issuers may
+  //     only use templates in an org they own; a NULL organization_id
+  //     template is master-only. Same 404 as a missing template so
+  //     foreign ids can't be probed (this must precede the `active`
+  //     check for the same reason).
+  if (!user.isMaster) {
+    const ownerOrgIds = getOwnerOrganizationIds(user)
+    if (!template.organization_id || !ownerOrgIds.includes(template.organization_id)) {
+      return NextResponse.json({ success: false, error: 'Template not found' }, { status: 404 })
+    }
+  }
+
   if (!template.active) return NextResponse.json({ success: false, error: 'Template is inactive' }, { status: 400 })
 
   // 2. Recipient — pull their compensation fields and primary

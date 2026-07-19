@@ -22,16 +22,21 @@ export async function POST(request) {
   const db = createServerClient()
   const ip = getClientIp(request)
 
-  const limit = await checkRateLimit(db, `lead:${ip}`, { max: 8, windowMs: 15 * 60_000 })
-  if (!limit.allowed) {
-    return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes and try again.')
-  }
-
   const validation = await validateBody(request, LeadSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
 
   const { firstName, email, phone, publicPath, campaign } = normaliseLead(body)
+
+  // SAAS-6: tenant-keyed (the landing public_path, resolved to a studio
+  // just below) — one tenant's lead traffic can never consume another
+  // tenant's window for the same IP. Runs after body validation (pure,
+  // no DB) so the path is known; malformed bodies 400 without touching
+  // the limiter.
+  const limit = await checkRateLimit(db, `lead:${publicPath}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
+  if (!limit.allowed) {
+    return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes and try again.')
+  }
 
   // Resolve the studio + its lead-form config from public_path. The
   // client never sends a location_id or the tag/source, so a caller

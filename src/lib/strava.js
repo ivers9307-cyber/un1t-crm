@@ -8,6 +8,12 @@
 // so admins can rotate without redeploying. The provider must be
 // is_enabled — callers should check that before invoking.
 //
+// SAAS-6 DECISION: service_integrations (mig 118) is deliberately
+// PLATFORM-WIDE, not per-organization — Strava is one OAuth app for
+// the whole deployment (per-tenant would require each gym to register
+// its own Strava developer app, and Strava's ToS excludes the API
+// from SaaS resale regardless). Don't add a tenant dimension here.
+//
 // All functions throw on non-2xx responses; the worker catches
 // errors and writes them to external_export_jobs.last_error.
 
