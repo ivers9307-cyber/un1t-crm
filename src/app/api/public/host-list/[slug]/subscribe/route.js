@@ -43,8 +43,10 @@ export async function POST(request, props) {
   const db = createServerClient()
 
   // Same limiter class as the public register route (5 per IP / 15 min).
+  // SAAS-6: tenant-keyed (the host slug) — one host's signup traffic
+  // can never consume another host's window for the same IP.
   const ip = getClientIp(request)
-  const limit = await checkRateLimit(db, `host-list:${ip}`, { max: 5, windowMs: 15 * 60_000 })
+  const limit = await checkRateLimit(db, `host-list:${params.slug}:${ip}`, { max: 5, windowMs: 15 * 60_000 })
   if (!limit.allowed) {
     return rateLimitResponse(limit, 'Too many signup attempts. Please wait a few minutes and try again.')
   }

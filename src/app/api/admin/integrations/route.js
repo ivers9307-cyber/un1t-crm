@@ -1,5 +1,14 @@
 // GET /api/admin/integrations         master-only list of provider rows
 // PATCH /api/admin/integrations/[id]   update credentials / enabled flag
+//
+// SAAS-6 DECISION: service_integrations stays PLATFORM-WIDE (one row
+// per provider, no organization_id). Strava / Garmin / Apple are
+// platform OAuth apps — one client id/secret per provider for the
+// whole SaaS. Per-tenant rows would mean every gym registering its own
+// developer app with each provider, which is the wrong model (and
+// Strava's API ToS excludes it from SaaS resale anyway — the Strava
+// integration is personal-use only, see fitness-hub notes). Master
+// remains the only editor. Do NOT de-singleton this table.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'

@@ -3,12 +3,16 @@
 // form, stores in the 'branding' bucket, writes chooser_image_url on the
 // studio's landing_page_settings row, returns the public URL.
 //
-// Auth: master OR owner (front-page edit). location_id identifies which
-// studio's tile this cover belongs to.
+// Auth (SAAS-6): the front-page edit tier — master, org_admin of the
+// tile's org, or an owner WITHIN that org (assertChooserEdit, shared
+// with /api/chooser-settings). The pre-SAAS-6 master-or-ANY-owner gate
+// let one tenant's owner overwrite another tenant's tile cover; the
+// tile's location resolves to its organization and the gate binds there.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { assertChooserEdit } from '@/lib/chooser-access'
 import { uuidLike } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
@@ -18,14 +22,10 @@ const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const MAX_BYTES = 8 * 1024 * 1024 // 8MB — full-screen covers run large
 const EXT_BY_TYPE = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }
 
-function canEdit(user) {
-  return !!user && (user.profileRole === 'master' || user.role === 'master' || user.role === 'owner')
-}
-
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!canEdit(user)) {
-    return NextResponse.json({ success: false, error: 'Master or owner required' }, { status: 403 })
+  if (!user) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   }
 
   const form = await request.formData()
@@ -45,6 +45,18 @@ export async function POST(request) {
   }
 
   const db = createServerClient()
+
+  // Resolve the tile's org and bind the edit gate to it. A location the
+  // caller's orgs can't reach answers 404 — indistinguishable from a
+  // location that doesn't exist.
+  const { data: loc } = await db
+    .from('locations').select('organization_id').eq('id', locationId).maybeSingle()
+  if (!loc?.organization_id) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  const guard = assertChooserEdit(user, loc.organization_id)
+  if (guard) return guard
+
   const ext = EXT_BY_TYPE[file.type]
   const path = `landing-page/${locationId}/chooser.${ext}`
   const buffer = Buffer.from(await file.arrayBuffer())

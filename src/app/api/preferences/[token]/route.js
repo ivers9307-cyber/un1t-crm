@@ -20,6 +20,9 @@ export const runtime = 'nodejs'
 // sends a few requests per session (load + toggle a few channels), so this
 // is more lenient than the unsubscribe endpoint while still blunting any
 // brute-force enumeration.
+// SAAS-6: deliberately tenant-UNSCOPED — this limiter blunts token
+// enumeration from one IP; the tenant is only knowable AFTER resolving the
+// token, and keying on caller-supplied input would mint a fresh window per guess.
 const RL = { max: 20, windowMs: 15 * 60_000 }
 
 // GET /api/preferences/[token] — fetch current preferences

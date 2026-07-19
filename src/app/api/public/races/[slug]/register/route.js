@@ -64,7 +64,10 @@ export async function POST(request, props) {
   const db = createServerClient()
 
   const ip = getClientIp(request)
-  const limit = await checkRateLimit(db, `race-register:${ip}`, { max: 5, windowMs: 15 * 60_000 })
+  // SAAS-6: tenant-keyed (the race slug; shared prefix with the events
+  // register route) — one tenant's registrations can never consume
+  // another tenant's window for the same IP.
+  const limit = await checkRateLimit(db, `race-register:${params.slug}:${ip}`, { max: 5, windowMs: 15 * 60_000 })
   if (!limit.allowed) {
     return rateLimitResponse(limit, 'Too many registration attempts. Please wait a few minutes and try again.')
   }

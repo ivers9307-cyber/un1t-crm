@@ -8,7 +8,8 @@
 //
 // The chooser is operator-editable from /settings/landing-page
 // (?page=chooser → ChooserEditorForm → PUT /api/chooser-settings):
-//   - page-level headline + intro (chooser_settings, singleton row)
+//   - page-level headline + intro (chooser_settings — per-org row
+//     since SAAS-6 / mig 414)
 //   - per-tile label / CTA text / cover image / order
 //     (landing_page_settings.chooser_* + chooser_settings.tile_order)
 // This render reads ALL of those so the editor round-trips end-to-end.
@@ -26,12 +27,9 @@ import Link from 'next/link'
 import { createServerClient } from '@/lib/supabase'
 import { blocksOrDefault } from '@/lib/landing-page-blocks'
 import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
-import { tileModeFor } from '@/lib/landing-page-visibility'
+import { loadFrontPage } from '@/lib/welcome-front-page'
 
 export const dynamic = 'force-dynamic'
-
-// Default left→right order when the operator hasn't set tile_order.
-const TILE_ORDER = ['stillorgan', 'hatch-street']
 
 // Edit-mode seed (unchanged behaviour): most-recently-edited row.
 // The overlay is postMessage-driven so the seed is just the initial
@@ -51,60 +49,11 @@ async function loadEditSeed() {
   }
 }
 
-// Load the whole front page: the singleton chooser row (headline /
-// intro / tile_order) plus every studio tile (label, CTA, cover,
-// hero-image fallback). Tiles are returned in the operator's saved
-// order, falling back to TILE_ORDER.
-async function loadFrontPage() {
-  try {
-    const db = createServerClient()
-    const [chooserRes, tilesRes] = await Promise.all([
-      db.from('chooser_settings')
-        .select('headline, intro, tile_order')
-        .eq('id', 'default')
-        .maybeSingle(),
-      db.from('landing_page_settings')
-        .select('public_path, chooser_label, chooser_cta_text, chooser_image_url, blocks, publish_state, locations:location_id ( name )')
-        .not('public_path', 'is', null),
-    ])
-
-    const chooser = chooserRes.data || {}
-    const order = Array.isArray(chooser.tile_order) && chooser.tile_order.length
-      ? chooser.tile_order
-      : TILE_ORDER
-
-    const byPath = new Map((tilesRes.data || []).map((r) => [r.public_path, r]))
-    const tiles = order
-      .map((path) => byPath.get(path))
-      .filter(Boolean)
-      .map((r) => {
-        const hero = blocksOrDefault(r.blocks).find((b) => b.type === 'hero')
-        const mode = tileModeFor(r.publish_state)   // 'active' | 'coming_soon' | 'hidden'
-        return {
-          path: r.public_path,
-          // Operator label wins over the location name; fall back to path.
-          name: (r.chooser_label && r.chooser_label.trim())
-            || r.locations?.name
-            || r.public_path,
-          cta: (r.chooser_cta_text && r.chooser_cta_text.trim()) || 'Enter',
-          cover: r.chooser_image_url || hero?.image_url || null,
-          mode,
-          // coming_soon tiles render dimmed + non-clickable (the old
-          // DISABLED_TILE_PATHS behaviour); hidden tiles are removed below.
-          disabled: mode === 'coming_soon',
-        }
-      })
-      .filter((t) => t.mode !== 'hidden')
-
-    return {
-      headline: (chooser.headline && chooser.headline.trim()) || null,
-      intro: (chooser.intro && chooser.intro.trim()) || null,
-      tiles,
-    }
-  } catch {
-    return { headline: null, intro: null, tiles: [] }
-  }
-}
+// Front-page data (org chooser row + the org's studio tiles) now lives
+// in src/lib/welcome-front-page.js — SAAS-6 made chooser_settings
+// per-organization (mig 414) and the loader resolves WHICH org's front
+// page this hostname renders (UN1T Group by slug until SAAS-8's
+// tenant_domains maps hostname → org; see the loader's handoff note).
 
 export const metadata = {
   title: 'UN1T Dublin — Choose your studio',

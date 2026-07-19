@@ -43,14 +43,7 @@ const BookingSchema = z.object({
 export async function POST(request) {
   const db = createServerClient()
 
-  // 5 booking attempts per IP per 15 minutes — generous enough that a real
-  // user retrying after a typo or a lost slot won't hit it, tight enough
-  // that scripted booking spam is throttled.
   const ip = getClientIp(request)
-  const limit = await checkRateLimit(db, `book:${ip}`, { max: 5, windowMs: 15 * 60_000 })
-  if (!limit.allowed) {
-    return rateLimitResponse(limit, 'Too many booking attempts. Please wait a few minutes and try again.')
-  }
 
   const validation = await validateBody(request, BookingSchema)
   if (!validation.ok) return validation.response
@@ -69,6 +62,19 @@ export async function POST(request) {
 
   if (!event) {
     return NextResponse.json({ success: false, error: 'Event type not found' }, { status: 404 })
+  }
+
+  // 5 booking attempts per IP per 15 minutes — generous enough that a real
+  // user retrying after a typo or a lost slot won't hit it, tight enough
+  // that scripted booking spam is throttled.
+  // SAAS-6: tenant-keyed (the event's location) — one tenant's booking
+  // traffic can never consume another tenant's window for the same IP.
+  // Runs after the event lookup (a single indexed read, the same cost
+  // class as the limiter RPC itself); malformed/unknown submissions
+  // 400/404 above without consuming the window.
+  const limit = await checkRateLimit(db, `book:${event.location_id}:${ip}`, { max: 5, windowMs: 15 * 60_000 })
+  if (!limit.allowed) {
+    return rateLimitResponse(limit, 'Too many booking attempts. Please wait a few minutes and try again.')
   }
 
   // Validate custom_responses against the event's custom_fields:

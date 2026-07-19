@@ -92,6 +92,8 @@ export async function POST(request) {
   // generous while capping a compromised-owner credential-spray. Fail-
   // open inside checkRateLimit, so a limiter outage never blocks a real
   // lockout-recovery.
+  // SAAS-6: deliberately tenant-UNSCOPED — already keyed per caller
+  // identity (a platform-admin action), so tenants can't contend anyway.
   const rl = await checkRateLimit(db, `pw-override:${user.id}`, { max: 20, windowMs: 15 * 60_000 })
   if (!rl.allowed) return rateLimitResponse(rl)
 

@@ -1,29 +1,34 @@
 // /api/chooser-settings — GET + PUT for the public front-page split
 // chooser at un1tdublin.com (the /welcome chooser).
 //
-// Singleton row (id='default'): page-level headline/intro + tile order.
-// Per-tile label / CTA / cover live on landing_page_settings and are
-// edited together here in one PUT so the operator saves the whole front
-// page at once.
+// SAAS-6: per-ORGANIZATION rows (mig 414; was a singleton from mig
+// 228). Each tenant brand gets its own front page — one
+// chooser_settings row per org holding the page-level headline/intro +
+// tile order; per-tile label / CTA / cover live on
+// landing_page_settings (the ORG's locations only) and are edited
+// together here in one PUT so the operator saves the whole front page
+// at once.
 //
-// Auth: master OR owner (the chooser is a single global page, not per
-// location). The table RLS write policy mirrors this as defence in
-// depth; this route is the primary gate.
+// Org resolution: explicit ?organization_id wins, else the caller's
+// activeOrganization (src/lib/chooser-access.js). Reads need org
+// membership; writes need master, an org_admin grant, or an owner
+// WITHIN the org — the pre-SAAS-6 gate was master-or-ANY-owner, which
+// let one tenant's owner edit another tenant's front page, and that
+// hole is closed here. A foreign org answers 404 (indistinguishable
+// from missing). Table RLS (mig 414) mirrors this as defence in depth;
+// this route is the primary gate.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
+import { chooserRowId, resolveChooserOrgId, assertChooserRead, assertChooserEdit } from '@/lib/chooser-access'
 import { uuidLike } from '@/lib/schemas'
 import { PUBLISH_STATES } from '@/lib/landing-page-visibility'
 import { validateBody } from '@/lib/validate'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-
-function canEdit(user) {
-  return !!user && (user.profileRole === 'master' || user.role === 'master' || user.role === 'owner')
-}
 
 export const TileSchema = z.object({
   location_id:      uuidLike,
@@ -42,59 +47,97 @@ const PutSchema = z.object({
   tiles:      z.array(TileSchema).max(20),
 }).strict()
 
-export async function GET() {
+export async function GET(request) {
   const user = await getCurrentUser()
-  if (!canEdit(user)) {
-    return NextResponse.json({ success: false, error: 'Master or owner required' }, { status: 403 })
-  }
+  const orgId = user ? resolveChooserOrgId(user, request) : null
+  const guard = assertChooserRead(user, orgId)
+  if (guard) return guard
+
   const db = createServerClient()
   const [chooserRes, tilesRes] = await Promise.all([
-    db.from('chooser_settings').select('*').eq('id', 'default').maybeSingle(),
+    db.from('chooser_settings').select('*').eq('organization_id', orgId).maybeSingle(),
     db.from('landing_page_settings')
-      .select('location_id, public_path, chooser_label, chooser_cta_text, chooser_image_url, publish_state, locations:location_id ( name )')
+      .select('location_id, public_path, chooser_label, chooser_cta_text, chooser_image_url, publish_state, locations:location_id ( name, organization_id )')
       .not('public_path', 'is', null),
   ])
   return NextResponse.json({
     success: true,
     data: {
-      chooser: chooserRes.data || { id: 'default', headline: null, intro: null, tile_order: [] },
-      tiles: (tilesRes.data || []).map((t) => ({
-        location_id: t.location_id,
-        public_path: t.public_path,
-        name: t.locations?.name || t.public_path,
-        chooser_label: t.chooser_label,
-        chooser_cta_text: t.chooser_cta_text,
-        chooser_image_url: t.chooser_image_url,
-        publish_state: t.publish_state,
-      })),
+      // No row yet = this org hasn't edited its front page; PUT creates
+      // it (upsert-on-first-edit below).
+      chooser: chooserRes.data
+        || { id: chooserRowId(orgId), organization_id: orgId, headline: null, intro: null, tile_order: [] },
+      // Tiles are the ORG's locations only — another tenant's studios
+      // must never surface (or become editable) in this org's chooser.
+      tiles: (tilesRes.data || [])
+        .filter((t) => t.locations?.organization_id === orgId)
+        .map((t) => ({
+          location_id: t.location_id,
+          public_path: t.public_path,
+          name: t.locations?.name || t.public_path,
+          chooser_label: t.chooser_label,
+          chooser_cta_text: t.chooser_cta_text,
+          chooser_image_url: t.chooser_image_url,
+          publish_state: t.publish_state,
+        })),
     },
   })
 }
 
 export async function PUT(request) {
   const user = await getCurrentUser()
-  if (!canEdit(user)) {
-    return NextResponse.json({ success: false, error: 'Master or owner required' }, { status: 403 })
-  }
+  const orgId = user ? resolveChooserOrgId(user, request) : null
+  const guard = assertChooserEdit(user, orgId)
+  if (guard) return guard
+
   const v = await validateBody(request, PutSchema)
   if (!v.ok) return v.response
   const body = v.data
 
   const db = createServerClient()
 
-  // 1. Upsert the singleton chooser row.
-  const { error: chErr } = await db.from('chooser_settings').upsert({
-    id: 'default',
+  // Tile writes must stay inside the org: resolve the org's location
+  // set once and refuse any tile targeting a foreign location — 404,
+  // indistinguishable from a location that doesn't exist.
+  const { data: orgLocs, error: locErr } = await db
+    .from('locations').select('id').eq('organization_id', orgId)
+  if (locErr) return NextResponse.json({ success: false, error: locErr.message }, { status: 400 })
+  const orgLocationIds = new Set((orgLocs || []).map((l) => l.id))
+  for (const t of body.tiles) {
+    if (!orgLocationIds.has(t.location_id)) {
+      return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+    }
+  }
+
+  // 1. Write THIS org's chooser row. Select-then-write rather than a
+  //    single ON CONFLICT upsert: the legacy UN1T row keeps id
+  //    'default' while new orgs derive theirs from the org id, so one
+  //    upsert payload can't express both shapes.
+  const patch = {
     headline: body.headline ?? null,
     intro: body.intro ?? null,
     tile_order: body.tile_order,
     updated_at: new Date().toISOString(),
     updated_by: user.id || null,
-  }, { onConflict: 'id' })
-  if (chErr) return NextResponse.json({ success: false, error: chErr.message }, { status: 400 })
+  }
+  const { data: existing, error: exErr } = await db
+    .from('chooser_settings').select('id').eq('organization_id', orgId).maybeSingle()
+  if (exErr) return NextResponse.json({ success: false, error: exErr.message }, { status: 400 })
+  if (existing) {
+    const { error } = await db.from('chooser_settings').update(patch).eq('id', existing.id)
+    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  } else {
+    // First edit for this org — create its row (upsert-on-first-edit;
+    // the UNIQUE index on organization_id backstops a racing double
+    // create with an error rather than a second row).
+    const { error } = await db.from('chooser_settings')
+      .insert({ id: chooserRowId(orgId), organization_id: orgId, ...patch })
+    if (error) return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  }
 
-  // 2. Per-tile label/CTA overrides. Only touch rows the caller sent;
-  //    each is scoped by location_id so we never clobber a sibling.
+  // 2. Per-tile label/CTA overrides (org-checked above). Only touch
+  //    rows the caller sent; each is scoped by location_id so we never
+  //    clobber a sibling.
   for (const t of body.tiles) {
     const tilePatch = { chooser_label: t.chooser_label ?? null, chooser_cta_text: t.chooser_cta_text ?? null }
     if (t.publish_state) tilePatch.publish_state = t.publish_state
