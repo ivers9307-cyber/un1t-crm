@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { requireApiKeyOrManager, scopeQueryToOrg } from '@/lib/api-auth'
+import { requireApiKeyOrManager, orgScopeLocationIds } from '@/lib/api-auth'
 
 // GET /api/stages — List pipeline stages.
 //
@@ -20,7 +20,8 @@ export async function GET(request) {
   if (locationId) query = query.eq('location_id', locationId)
   // APIKEYS.3 — per-org key: restrict to the org's locations (no-op for
   // cookie callers + legacy shared key).
-  query = await scopeQueryToOrg(query, db, auth.orgId)
+  const orgLocs = await orgScopeLocationIds(db, auth.orgId)
+  if (orgLocs) query = query.in('location_id', orgLocs)
   const { data, error } = await query
 
   if (error) {

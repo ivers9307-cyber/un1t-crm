@@ -195,7 +195,11 @@ const ScheduledReport = z.object({
 registry.registerComponent('securitySchemes', 'BearerAuth', {
   type: 'http',
   scheme: 'bearer',
-  description: 'CRM_API_KEY for n8n / external integrations. Sent as `Authorization: Bearer <token>`.',
+  description:
+    'API key for n8n / external integrations, sent as `Authorization: Bearer <token>`. ' +
+    'Two kinds are accepted (SAAS-3): a per-organization key (`unitk_…`, issued at ' +
+    '/settings/api-keys) whose queries are scoped to the key\'s organization, or the ' +
+    'legacy shared CRM_API_KEY (unscoped, system-admin behaviour).',
 })
 registry.registerComponent('securitySchemes', 'CookieAuth', {
   type: 'apiKey',
@@ -3119,8 +3123,9 @@ function buildSpec() {
       version: '1.1.0',
       description:
         'HTTP API for the UN1T gym CRM. Most endpoints accept either a Supabase ' +
-        'session cookie (browser) or a Bearer token (CRM_API_KEY for n8n / external ' +
-        'integrations). Mutating endpoints validate request bodies via Zod schemas; ' +
+        'session cookie (browser) or a Bearer token for n8n / external integrations — ' +
+        'a per-organization `unitk_…` API key (org-scoped) or the legacy shared ' +
+        'CRM_API_KEY (unscoped). Mutating endpoints validate request bodies via Zod schemas; ' +
         'invalid input returns 400 with structured `issues` array.' +
         ' Covers the public, inbound-webhook, bridge and mobile integration surface; planned outbound events appear under webhooks.',
     },

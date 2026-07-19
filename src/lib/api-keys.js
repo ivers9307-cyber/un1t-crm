@@ -10,19 +10,19 @@
 // unit-test under the Node env. The DB lookup lives in api-auth.js.
 
 import { createHash, randomBytes } from 'node:crypto'
+// SAAS-3 — token-format helpers live in api-keys-edge.js (Edge-safe, no
+// node:crypto) so src/proxy.js can share them; re-exported here so
+// existing Node-side imports keep working unchanged.
+import { API_KEY_PREFIX, isApiKeyToken } from './api-keys-edge'
 
-export const API_KEY_PREFIX = 'unitk_'
+export { API_KEY_PREFIX, isApiKeyToken }
 // Display prefix = 'unitk_' + 8 chars of the secret.
 export const API_KEY_DISPLAY_LEN = API_KEY_PREFIX.length + 8
 
-/** SHA-256 hex of the full raw key. Deterministic. */
+/** SHA-256 hex of the full raw key. Deterministic. Byte-identical to
+ * sha256HexEdge() in api-keys-edge.js (the proxy's Web Crypto twin). */
 export function hashApiKey(raw) {
   return createHash('sha256').update(String(raw)).digest('hex')
-}
-
-/** Does this bearer token look like a per-org API key (vs the legacy shared secret)? */
-export function isApiKeyToken(token) {
-  return typeof token === 'string' && token.startsWith(API_KEY_PREFIX)
 }
 
 /** The display/identification prefix for a full key (safe to store + show). */

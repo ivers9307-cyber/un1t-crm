@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse } from 'next/server'
 import { resolveBrand, isFrameworkAsset } from '@/lib/brands'
+import { isApiKeyToken, sha256HexEdge } from '@/lib/api-keys-edge'
 
 // Constant-time string compare. Implemented inline because the proxy runs
 // in the Edge runtime which doesn't expose node:crypto.timingSafeEqual. The
@@ -108,20 +109,28 @@ export async function proxy(request) {
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
   if (isPublic) return NextResponse.next()
 
-  // Allow API requests authenticated with a valid Bearer token. Two paths:
-  //   1. CRM_API_KEY — used by n8n and similar external integrations. Fixed
-  //      64-char hex, compared constant-time.
-  //   2. Supabase JWT — used by the iOS mobile app. The JWT is the
+  // Allow API requests authenticated with a valid Bearer token. Three paths:
+  //   1. CRM_API_KEY — the legacy shared key used by n8n and similar
+  //      external integrations. Fixed 64-char hex, compared constant-time.
+  //      Unchanged — live n8n workflows depend on it.
+  //   2. Per-org API key (SAAS-3) — `unitk_…` keys from mig 217, issued at
+  //      /settings/api-keys. REAL validation here (SHA-256 via Web Crypto +
+  //      an active-row lookup in api_keys), not just a format sniff: a few
+  //      routes behind this gate (e.g. /api/openapi.json) have no in-route
+  //      auth of their own, so format-only admission would open them to
+  //      any `unitk_`-shaped string. Routes that carry data re-resolve the
+  //      key via authenticateApiKey()/requireApiKeyOrManager() and scope
+  //      every query to the key's organization — defense in depth, same
+  //      double-validation shape as the CRM_API_KEY path.
+  //   3. Supabase JWT — used by the iOS mobile app. The JWT is the
   //      `access_token` from a successful Supabase auth session on the
   //      device. We validate it via `supabase.auth.getUser(token)`, which
   //      verifies the signature against the project's JWT secret over the
   //      network (no node:crypto needed — Edge-runtime safe).
   //
-  // The CRM_API_KEY path is validated constant-time here AND a second time
-  // in routes that call requireApiKey() — defense in depth. Routes without
-  // requireApiKey() will still see the request as authenticated and can
-  // call getCurrentUser() — which itself tries the Bearer header (mobile)
-  // before falling back to cookies (web).
+  // Routes without their own key check will still see the request as
+  // authenticated and can call getCurrentUser() — which itself tries the
+  // Bearer header (mobile) before falling back to cookies (web).
   if (request.nextUrl.pathname.startsWith('/api/')) {
     const auth = request.headers.get('authorization') || ''
     const token = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length) : ''
@@ -133,20 +142,49 @@ export async function proxy(request) {
         return NextResponse.next()
       }
 
-      // Path 2: Supabase JWT (mobile app). Use a stripped client (no
-      // cookies) since the JWT is the source of truth. If the token is
-      // malformed or expired, getUser() returns { user: null } and we
-      // fall through to the cookie-session check below.
-      try {
-        const supabaseJwt = createServerClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL,
-          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-          { cookies: { getAll: () => [], setAll: () => {} } }
-        )
-        const { data: { user: jwtUser } } = await supabaseJwt.auth.getUser(token)
-        if (jwtUser) return NextResponse.next()
-      } catch {
-        // Network blip or malformed token — fall through.
+      if (isApiKeyToken(token)) {
+        // Path 2: per-org API key (SAAS-3). One PostgREST lookup by hash
+        // (unique partial index on active key_hash) — comparable edge cost
+        // to the JWT path's auth.getUser() network call, and only paid by
+        // `unitk_` traffic. No last_used_at stamp here: middleware stays
+        // read-only; authenticateApiKey() stamps it in-route.
+        if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+          try {
+            const admin = createServerClient(
+              process.env.NEXT_PUBLIC_SUPABASE_URL,
+              process.env.SUPABASE_SERVICE_ROLE_KEY,
+              { cookies: { getAll: () => [], setAll: () => {} } }
+            )
+            const { data: keyRow } = await admin
+              .from('api_keys')
+              .select('id')
+              .eq('key_hash', await sha256HexEdge(token))
+              .is('revoked_at', null)
+              .maybeSingle()
+            if (keyRow) return NextResponse.next()
+          } catch {
+            // Lookup failure — fail closed, fall through to the cookie gate.
+          }
+        }
+        // Unknown/revoked per-org key. A `unitk_` token is never a valid
+        // Supabase JWT — skip Path 3's network round-trip and fall through
+        // to the cookie gate below (which rejects keyless callers).
+      } else {
+        // Path 3: Supabase JWT (mobile app). Use a stripped client (no
+        // cookies) since the JWT is the source of truth. If the token is
+        // malformed or expired, getUser() returns { user: null } and we
+        // fall through to the cookie-session check below.
+        try {
+          const supabaseJwt = createServerClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL,
+            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+            { cookies: { getAll: () => [], setAll: () => {} } }
+          )
+          const { data: { user: jwtUser } } = await supabaseJwt.auth.getUser(token)
+          if (jwtUser) return NextResponse.next()
+        } catch {
+          // Network blip or malformed token — fall through.
+        }
       }
     }
   }

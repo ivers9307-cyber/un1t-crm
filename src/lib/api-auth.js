@@ -45,15 +45,27 @@ export async function orgLocationIds(db, orgId) {
 const NO_MATCH_UUID = '00000000-0000-0000-0000-000000000000'
 
 /**
- * APIKEYS.3 — scope a list/select query to an org's locations (for
- * tables with a `location_id` column). No-op when orgId is falsy
- * (legacy shared key / cookie callers), so existing behaviour is kept.
- * @returns the (possibly) filtered query builder.
+ * SAAS-3 — org location filter for list queries on `location_id`-bearing
+ * tables. Returns null when the caller is unscoped (legacy shared key /
+ * cookie session — keep today's behaviour), else the org's location ids;
+ * an org with zero locations gets [NO_MATCH_UUID] so it matches NOTHING
+ * rather than falling through unfiltered. Apply at the call site:
+ *
+ *   const orgLocs = await orgScopeLocationIds(db, auth.orgId)
+ *   if (orgLocs) query = query.in('location_id', orgLocs)
+ *
+ * Replaces scopeQueryToOrg(query, db, orgId), which was an async function
+ * RETURNING the builder — and supabase-js builders are thenables, so the
+ * `await` at every call site assimilated the builder and executed the
+ * query mid-chain. Routes that chained `.limit()`/`.eq()`/`.ilike()`
+ * after it (campaigns, tasks, contacts/search GET) then threw a
+ * TypeError on the plain response object for every API-key caller.
+ * Returning ids instead of a builder makes that class of bug impossible.
  */
-export async function scopeQueryToOrg(query, db, orgId) {
-  if (!orgId) return query
+export async function orgScopeLocationIds(db, orgId) {
+  if (!orgId) return null
   const locIds = await orgLocationIds(db, orgId)
-  return query.in('location_id', locIds.length ? locIds : [NO_MATCH_UUID])
+  return locIds.length ? locIds : [NO_MATCH_UUID]
 }
 
 /**
