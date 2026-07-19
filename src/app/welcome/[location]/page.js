@@ -103,14 +103,7 @@ export default async function StudioLandingPage(props) {
       .not('comment', 'is', null)
       .order('review_time', { ascending: false })
       .limit(30)
-    reviewsData = {
-      reviews: reviews || [],
-      // Aggregate header + JSON-LD aggregateRating were sourced from the synced
-      // Google Business connection, retired with that API. Reviews are populated
-      // manually now; wire an operator-editable aggregate here if ever wanted.
-      averageRating: null,
-      totalCount: null,
-    }
+    reviewsData = { reviews: reviews || [] }
   }
 
   const logoUrl     = row.logo_url || null
@@ -136,8 +129,9 @@ export default async function StudioLandingPage(props) {
   const studioName = row.locations?.name || 'UN1T Dublin'
   const hero = blocks.find((b) => b.type === 'hero')
 
-  // Gym structured data — name, url, hero image; aggregate rating only
-  // when a synced Google Business connection has one (never invented).
+  // Gym structured data — name, url, hero image. No aggregateRating:
+  // it was sourced from the Google Business Profile sync, retired in
+  // mig 410 (reviews are populated manually now; never invent one).
   const jsonLd = {
     '@context': 'https://schema.org',
     '@type': 'Gym',
@@ -145,15 +139,6 @@ export default async function StudioLandingPage(props) {
     url: `https://un1tdublin.com/${params.location}`,
     ...(hero?.image_url ? { image: hero.image_url } : {}),
     ...(logoUrl ? { logo: logoUrl } : {}),
-    ...(reviewsData?.averageRating != null && reviewsData?.totalCount
-      ? {
-          aggregateRating: {
-            '@type': 'AggregateRating',
-            ratingValue: Number(reviewsData.averageRating).toFixed(1),
-            reviewCount: reviewsData.totalCount,
-          },
-        }
-      : {}),
   }
 
   return (
