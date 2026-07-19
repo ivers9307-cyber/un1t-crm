@@ -18,7 +18,7 @@
 
 import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
-import { getLocationUnifiConfig, listDoors, UnifiError } from '@/lib/unifi-access'
+import { getUnifiConfig, listDoors, UnifiError } from '@/lib/unifi-access'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -35,7 +35,8 @@ export const GET = withAuth(
       return NextResponse.json({ success: false, error: 'Location not found.' }, { status: 404 })
     }
 
-    const cfg = getLocationUnifiConfig(location)
+    // INTEG-A2 dual-read: registry row first, legacy settings.unifi otherwise.
+    const cfg = await getUnifiConfig(db, location)
     if (!cfg.configured) {
       return NextResponse.json({
         success: false,

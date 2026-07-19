@@ -19,6 +19,7 @@ import { formatWeekdayLongDateInTZ } from './dates'
 import { getAppUrl } from './app-url'
 import { signCheckinToken } from './event-checkin-tokens'
 import { buildEventEmailShell, resolveEventEmail } from './event-email'
+import { overlayConnections } from '@/lib/connection-registry'
 
 function fmtRaceDate(dateStr) {
   if (!dateStr) return ''
@@ -84,6 +85,11 @@ export async function sendRaceConfirmations({ db, paymentId }) {
   if (payment.status !== 'completed') {
     result.skipped.push(`status=${payment.status}`)
     return result
+  }
+
+  // INTEG-A2 dual-read: registry twilio_sender row first.
+  if (payment.race?.locations) {
+    payment.race.locations = await overlayConnections(db, payment.race.locations, ['twilio_sender'])
   }
 
   const race = payment.race

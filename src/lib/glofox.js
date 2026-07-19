@@ -17,6 +17,7 @@
 //                             a one-line change here.
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
+import { getGlofoxConfig, findGlofoxConfigByBranchId } from '@/lib/connection-registry'
 
 // ─────────────────────────────────────────────────────────────
 // Signature verification (HMAC-SHA256 hex)
@@ -316,12 +317,9 @@ export async function glofoxCredentialsForLocation(db, locationId) {
   if (!db || !locationId) {
     return { branchId: null, apiKey: null, apiToken: null, namespace: null, webhookSecret: null }
   }
-  const { data } = await db
-    .from('locations')
-    .select('settings')
-    .eq('id', locationId)
-    .maybeSingle()
-  const cfg = data?.settings?.glofox || {}
+  // INTEG-A2 dual-read: active channel_connections row first, legacy
+  // locations.settings.glofox otherwise (same shape either way).
+  const cfg = await getGlofoxConfig(db, locationId)
   return {
     branchId:      cfg.branch_id      || null,
     apiKey:        cfg.api_key        || null,
@@ -350,9 +348,22 @@ export async function glofoxCredentialsForLocation(db, locationId) {
  */
 export async function glofoxCredentialsByBranchId(db, branchId) {
   if (!db || !branchId) return null
-  // settings is JSONB; the @> operator finds rows where the
-  // settings tree contains the given subtree. Index on settings
-  // (mig 004 GIN if present) keeps this fast even at scale.
+  // INTEG-A2 dual-read: the registry indexes (platform,
+  // external_account_id), so an active glofox row resolves directly.
+  const fromRegistry = await findGlofoxConfigByBranchId(db, branchId)
+  if (fromRegistry) {
+    const cfg = fromRegistry.cfg
+    return {
+      locationId:    fromRegistry.locationId,
+      branchId:      cfg.branch_id      || null,
+      apiKey:        cfg.api_key        || null,
+      apiToken:      cfg.api_token      || null,
+      webhookSecret: cfg.webhook_secret || null,
+    }
+  }
+  // Legacy fallback. settings is JSONB; the @> operator finds rows
+  // where the settings tree contains the given subtree. Index on
+  // settings (mig 004 GIN if present) keeps this fast even at scale.
   const { data } = await db
     .from('locations')
     .select('id, settings')

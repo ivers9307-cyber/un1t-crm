@@ -39,6 +39,7 @@ import {
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { getLocationBranding } from '@/lib/location-branding'
 import { isFrequencyCapped, frequencyCapDeferUntil, FrequencyCapDeferral, stampMarketingTouch } from '@/lib/frequency-cap'
+import { overlayConnections } from '@/lib/connection-registry'
 
 // ── FREQ-CAP.1 — cross-channel marketing frequency cap ──────────
 //
@@ -346,7 +347,7 @@ export async function sendSmsStep(db, { step, sequence, contact }) {
   // Resolve the sequence's location so we get the right alpha
   // sender ID (mig 059). Sequences are pinned to one location, so
   // every enrolment in this sequence sends from the same sender.
-  const { data: location } = await db
+  let { data: location } = await db
     .from('locations')
     .select('id, name, twilio_alpha_sender_id')
     .eq('id', sequence.location_id)
@@ -354,6 +355,8 @@ export async function sendSmsStep(db, { step, sequence, contact }) {
   if (!location) {
     throw new Error('Sequence location not found — cannot resolve SMS sender.')
   }
+  // INTEG-A2 dual-read: registry twilio_sender row first.
+  location = await overlayConnections(db, location, ['twilio_sender'])
 
   // Apply merge tags. Same set as email + ad-hoc SMS (first_name,
   // name, location_name, etc.).

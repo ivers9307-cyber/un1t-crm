@@ -1,5 +1,7 @@
 -- SAAS4-M2 — usage rollup machinery + optional per-org hard caps
 -- (SaaS machinery plan §3; decisions settled 2026-07-19).
+-- Renumbered 413→415 pre-merge: main independently shipped 413_plans_
+-- and_pricing + 414_wallets (INTEG-C1/C2a) — the mig-350 precedent.
 --
 -- 1. org_settings gains two OPTIONAL hard-cap knobs (NULL = no cap =
 --    zero behaviour change). The plan allowance is the SOFT band

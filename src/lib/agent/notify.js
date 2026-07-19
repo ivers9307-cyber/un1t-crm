@@ -78,8 +78,10 @@ export async function sendAgentThreadMessage(db, { channel, conversationId, text
       if (!conn?.access_token) return { sent: false, reason: 'no_connection' }
 
       const { sendInstagramMessage } = await import('./instagram')
+      // Full row (not just the token) so the send uses the explicit account
+      // id and stamps connection health (INTEG-A3).
       const result = await sendInstagramMessage(conversation.ig_user_id, text, {
-        connection: { access_token: conn.access_token },
+        connection: conn,
       })
       const { error: insertError } = await db.from('instagram_messages').insert({
         conversation_id: conversationId,

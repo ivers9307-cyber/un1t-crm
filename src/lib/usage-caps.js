@@ -10,7 +10,7 @@
 // this changes nothing until a cap is set. Plan allowances/overage
 // pricing layer on top in the billing build (B1).
 //
-// Spend is computed LIVE from usage_events via SQL functions (mig 413)
+// Spend is computed LIVE from usage_events via SQL functions (mig 415)
 // — the daily rollups feed the usage page, not the cap check, so there
 // is no rollup-lag drift. Month boundaries are Dublin calendar months.
 //

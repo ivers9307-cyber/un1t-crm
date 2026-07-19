@@ -11,6 +11,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { listPods, SensiboError } from '@/lib/sensibo'
+import { overlayConnections } from '@/lib/connection-registry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -31,11 +32,13 @@ export async function GET(request) {
     const locationId = user.activeLocation?.id
     if (locationId) {
       const db = createServerClient()
-      const { data: loc } = await db
+      const { data: locRow } = await db
         .from('locations')
-        .select('sensibo_api_key')
+        .select('id, sensibo_api_key')
         .eq('id', locationId)
         .single()
+      // INTEG-A2 dual-read: registry `sensibo` row first.
+      const loc = await overlayConnections(db, locRow, ['sensibo'])
       apiKey = loc?.sensibo_api_key || null
     }
   }

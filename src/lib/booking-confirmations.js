@@ -18,6 +18,7 @@
 import { sendTransactionalEmail, applyMergeTags } from './postmark'
 import { sendLocationSms, TwilioError } from './twilio'
 import { logWarn } from './log'
+import { overlayConnections } from '@/lib/connection-registry'
 
 // BOOKING.2 — booking_date (YYYY-MM-DD) and start_time (HH:MM:SS) are
 // stored as Dublin-local wall-clock values without timezone semantics.
@@ -212,7 +213,7 @@ async function sendSmsConfirmation(db, booking, ctx) {
   const phone = booking.contacts?.phone || booking.customer_phone
   if (!phone) return { status: 'skipped', reason: 'no_phone_number' }
 
-  const { data: location } = await db
+  let { data: location } = await db
     .from('locations')
     .select('id, name, twilio_alpha_sender_id')
     .eq('id', ctx.locationId)
@@ -220,6 +221,8 @@ async function sendSmsConfirmation(db, booking, ctx) {
   if (!location) {
     throw new Error('Event location not found — cannot resolve SMS sender.')
   }
+  // INTEG-A2 dual-read: registry twilio_sender row first.
+  location = await overlayConnections(db, location, ['twilio_sender'])
 
   const mergeContact = booking.contacts || {
     name: booking.customer_name,

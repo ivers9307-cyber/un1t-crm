@@ -8,7 +8,7 @@ import {
   assignmentSchema,
 } from '@/lib/schemas'
 import {
-  getLocationUnifiConfig, revokeUnifiUserPolicies, UnifiError,
+  getUnifiConfig, revokeUnifiUserPolicies, UnifiError,
 } from '@/lib/unifi-access'
 import { canEditStaffMember } from '@/lib/staff-access'
 import { applyStaffProfileWrite, assertOwnerAssignmentScope, computeDesiredAssignments, computeProfileRole, sparsifyAssignmentPermissions, syncStaffAssignments } from '@/lib/staff-write'
@@ -348,7 +348,8 @@ export async function DELETE(request, props) {
   // makes it clear the deactivation did not happen.
   for (const link of profile?.profile_locations || []) {
     if (!link.unifi_door_access || !link.unifi_user_id || !link.locations) continue
-    const cfg = getLocationUnifiConfig(link.locations)
+    // INTEG-A2 dual-read: registry row first, legacy settings.unifi otherwise.
+    const cfg = await getUnifiConfig(db, link.locations)
     if (!cfg.configured) continue
     try {
       await revokeUnifiUserPolicies(cfg, link.unifi_user_id)

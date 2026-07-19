@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server'
 import { withAuth } from '@/lib/with-auth'
 import { getPodState, SensiboError } from '@/lib/sensibo'
 import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
+import { overlayConnections } from '@/lib/connection-registry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -20,14 +21,17 @@ export const dynamic = 'force-dynamic'
 export const GET = withAuth(
   { permission: 'studio_management' },
   async ({ db, locationId }) => {
-  const { data: loc } = await db
+  const { data: locRow } = await db
     .from('locations')
     .select('id, name, sensibo_api_key, sensibo_pod_id, ac_default_mode, ac_default_temp, ac_default_fan, ac_session_minutes')
     .eq('id', locationId)
     .single()
-  if (!loc) {
+  if (!locRow) {
     return NextResponse.json({ success: false, error: 'Location not found.' }, { status: 404 })
   }
+  // INTEG-A2 dual-read: registry `sensibo` row replaces the legacy
+  // columns when present; no row → legacy unchanged.
+  const loc = await overlayConnections(db, locRow, ['sensibo'])
 
   const configured = !!(loc.sensibo_api_key && loc.sensibo_pod_id)
   if (!configured) {

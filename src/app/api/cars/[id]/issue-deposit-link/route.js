@@ -26,6 +26,7 @@ import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { logWarn } from '@/lib/log'
 import { buildDepositSmsBody } from '@/lib/deposit-receipts'
 import { validateBody } from '@/lib/validate'
+import { overlayConnections } from '@/lib/connection-registry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -55,6 +56,11 @@ export async function POST(request, props) {
   if (!car) return NextResponse.json({ success: false, error: 'Car not found' }, { status: 404 })
   const guard = assertLocationAccessOr404(user, car.location_id)
   if (guard) return guard
+
+  // INTEG-A2 dual-read: registry twilio_sender row first.
+  if (car.locations) {
+    car.locations = await overlayConnections(db, car.locations, ['twilio_sender'])
+  }
 
   // Hard requirement — SMS is the only channel now. No fallback to
   // email because the operator chose to standardise on one channel

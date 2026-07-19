@@ -2,7 +2,7 @@
 // and before the morning briefing).
 //
 // Re-aggregates BOTH yesterday and today (Dublin) on every run via the
-// mig 413 SQL function — the upsert is idempotent recompute-in-full,
+// mig 415 SQL function — the upsert is idempotent recompute-in-full,
 // so late-arriving events (a Mia turn at 23:59, a slow webhook) are
 // folded in by the next tick and a missed run self-heals. Aggregation
 // lives in SQL because usage_events can exceed the PostgREST 1k-row
