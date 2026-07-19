@@ -1,7 +1,9 @@
 // Instagram feed for the public events-page strip (EVENTS-IG.1).
 // Graph media → cache rows, thumbnail re-host, per-location sync.
 
-const GRAPH = 'https://graph.facebook.com/v21.0'
+// Instagram Login API host (IG-LOGIN) — connections hold Instagram User
+// tokens, which only work on graph.instagram.com (media reads included).
+const GRAPH = 'https://graph.instagram.com/v25.0'
 const CAPTION_MAX = 140
 
 /**
@@ -43,8 +45,8 @@ export async function fetchIgMedia(connection, { limit = 12, fetchImpl = fetch }
   const igId = connection?.external_account_id
   const token = connection?.access_token
   if (!igId || !token) throw new Error('instagram-feed: connection missing external_account_id/access_token')
-  const url = `${GRAPH}/${igId}/media?fields=${MEDIA_FIELDS}&limit=${limit}&access_token=${encodeURIComponent(token)}`
-  const res = await fetchImpl(url)
+  const url = `${GRAPH}/${igId}/media?fields=${MEDIA_FIELDS}&limit=${limit}`
+  const res = await fetchImpl(url, { headers: { Authorization: `Bearer ${token}` } })
   const json = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(`instagram-feed graph ${res.status}: ${json?.error?.message || 'unknown'}`)
   return normalizeIgMedia(json?.data || [])
@@ -59,7 +61,7 @@ export async function fetchIgUsername(connection, { fetchImpl = fetch } = {}) {
   const token = connection?.access_token
   if (!igId || !token) return null
   try {
-    const res = await fetchImpl(`${GRAPH}/${igId}?fields=username&access_token=${encodeURIComponent(token)}`)
+    const res = await fetchImpl(`${GRAPH}/${igId}?fields=username`, { headers: { Authorization: `Bearer ${token}` } })
     const json = await res.json().catch(() => ({}))
     if (!res.ok) return null
     return json?.username || null

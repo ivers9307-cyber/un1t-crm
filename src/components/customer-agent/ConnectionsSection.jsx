@@ -10,12 +10,12 @@ import { useState, useEffect, useCallback } from 'react'
 // masked from the API and are only overwritten when re-typed.
 
 const IG_FIELDS = [
-  { key: 'display_name', label: 'Instagram handle / name', placeholder: '@un1t.stillorgan', secret: false, full: true },
-  { key: 'external_account_id', label: 'Instagram business account ID', placeholder: '178414...', secret: false },
-  { key: 'page_id', label: 'Linked Facebook Page ID', placeholder: '1024567...', secret: false },
-  { key: 'app_id', label: 'Meta App ID', placeholder: '7789...', secret: false },
-  { key: 'access_token', label: 'Page access token', placeholder: 'EAAB...', secret: true },
-  { key: 'app_secret', label: 'App secret (for inbound verification)', placeholder: 'paste to set', secret: true },
+  { key: 'display_name', label: 'Instagram handle / name', placeholder: '@un1t_stillorgan', secret: false, full: true },
+  { key: 'external_account_id', label: 'Instagram professional account ID', placeholder: '17841...', secret: false },
+  { key: 'app_id', label: 'Instagram app ID', placeholder: '2691...', secret: false },
+  { key: 'page_id', label: 'Facebook Page ID (not used by Instagram Login — leave blank)', placeholder: '', secret: false },
+  { key: 'access_token', label: 'Instagram access token (from the app dashboard / business login)', placeholder: 'IGAA...', secret: true },
+  { key: 'app_secret', label: 'Instagram app secret (also set as INSTAGRAM_APP_SECRET env)', placeholder: 'paste to set', secret: true },
 ]
 
 export default function ConnectionsSection({ locationId, locationName }) {
@@ -115,8 +115,10 @@ export default function ConnectionsSection({ locationId, locationName }) {
         </div>
 
         <p className="text-xs text-un1t-muted mb-3">
-          Connect this studio&apos;s Instagram by pasting the credentials from your Meta app. (A one-click
-          Meta login can be added later — for now these are entered manually.)
+          Connect this studio&apos;s Instagram via the Instagram Login API: add the account under the
+          Instagram app&apos;s API setup page and paste its token here (docs/instagram-setup.md has the
+          full runbook). Tokens refresh automatically each week. (A one-click business login can be
+          added later — for now these are entered manually.)
         </p>
 
         <div className="grid sm:grid-cols-2 gap-3">

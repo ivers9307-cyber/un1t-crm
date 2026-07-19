@@ -10,7 +10,7 @@
 // handleInstagramInbound() persists the message + resolves the location
 // by the IG business account id Meta posted to, then triggers the agent.
 
-import { resolveLocationByExternalAccount, isAgentEnabledForConnection, META_GRAPH_URL } from './channels'
+import { resolveLocationByExternalAccount, isAgentEnabledForConnection, IG_GRAPH_URL } from './channels'
 import { runChannelAgent } from './auto-reply'
 import { AGENT_MESSAGE_SOURCE } from './core'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
@@ -52,19 +52,23 @@ export function parseInstagramEvents(body) {
 }
 
 /**
- * Send an Instagram DM via the Graph API using a connection's page token.
+ * Send an Instagram DM via the Instagram Login API (graph.instagram.com)
+ * using the connection's Instagram User token. The explicit account id in
+ * the path (not /me/) avoids any ambiguity about what the token resolves
+ * to; token travels in the Authorization header, never the URL.
  * @param {string} recipientIgsid  the customer's IGSID
  * @param {string} text
- * @param {object} opts { connection }  channel_connections row (access_token)
+ * @param {object} opts { connection }  channel_connections row (access_token, external_account_id)
  */
 export async function sendInstagramMessage(recipientIgsid, text, opts = {}) {
   const conn = opts.connection
   const token = conn?.access_token
   if (!token) throw new Error('No Instagram access token for this location')
 
-  const res = await fetch(`${META_GRAPH_URL}/me/messages?access_token=${encodeURIComponent(token)}`, {
+  const igId = conn?.external_account_id || 'me'
+  const res = await fetch(`${IG_GRAPH_URL}/${encodeURIComponent(igId)}/messages`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({
       recipient: { id: recipientIgsid },
       message: { text },
@@ -81,7 +85,9 @@ export async function sendInstagramMessage(recipientIgsid, text, opts = {}) {
 
 /**
  * Best-effort fetch of a customer's IG display name + handle via the
- * Graph API, using the location's page token. Captured once when a
+ * Instagram Login API, using the connection's Instagram User token
+ * (messaging user-profile lookup — the IGSID must have messaged the
+ * account). Captured once when a
  * conversation is created so the agent can use the surname (if shown) as
  * the second identity factor on the email-verification path. Returns null
  * on any failure — verification just falls back to asking for the surname.
@@ -91,7 +97,8 @@ export async function fetchInstagramProfile(igsid, connection) {
   if (!token || !igsid) return null
   try {
     const res = await fetch(
-      `${META_GRAPH_URL}/${encodeURIComponent(igsid)}?fields=name,username&access_token=${encodeURIComponent(token)}`
+      `${IG_GRAPH_URL}/${encodeURIComponent(igsid)}?fields=name,username`,
+      { headers: { Authorization: `Bearer ${token}` } }
     )
     const data = await res.json().catch(() => ({}))
     if (!res.ok || data.error) return null

@@ -15,6 +15,13 @@ import { createServerClient } from '@/lib/supabase'
 export const META_GRAPH_VERSION = 'v21.0'
 export const META_GRAPH_URL = `https://graph.facebook.com/${META_GRAPH_VERSION}`
 
+// Instagram API with Instagram Login (IG-LOGIN) lives on its own Graph
+// host with Instagram User tokens — NOT graph.facebook.com page tokens.
+// All instagram-platform calls (DM send, profile fetch, feed sync) use
+// this. META_GRAPH_URL stays for future Messenger (page-token) channels.
+export const IG_GRAPH_VERSION = 'v25.0'
+export const IG_GRAPH_URL = `https://graph.instagram.com/${IG_GRAPH_VERSION}`
+
 export const SUPPORTED_PLATFORMS = Object.freeze(['instagram', 'messenger'])
 
 // Fields that are secrets — masked on read, only overwritten on write
@@ -73,6 +80,13 @@ export function buildConnectionPatch(body, opts = {}) {
   for (const f of SECRET_FIELDS) {
     if (isFreshSecret(body[f])) patch[f] = String(body[f]).trim()
   }
+  // A freshly pasted access token is a NEW token — the stored lifecycle
+  // stamps (mig 408) describe the old one. Null them so nothing reads a
+  // stale expiry as current; the weekly refresh cron repopulates them.
+  if (patch.access_token) {
+    patch.token_expires_at = null
+    patch.token_refreshed_at = null
+  }
   return patch
 }
 
@@ -84,6 +98,26 @@ export function buildConnectionPatch(body, opts = {}) {
  */
 export function isAgentEnabledForConnection(connection) {
   return !!connection?.agent_enabled
+}
+
+/**
+ * Shape the channel_connections patch for a successful Instagram Login
+ * token refresh ({access_token, expires_in seconds} from
+ * refresh_access_token). Returns null unless the response actually
+ * contains a token — a failed refresh must never clobber the stored
+ * (still-valid) token; the ~60-day runway absorbs missed weeks. Pure.
+ */
+export function buildTokenRefreshPatch(refreshJson, now = new Date()) {
+  const token = refreshJson?.access_token
+  if (!token || typeof token !== 'string') return null
+  const expiresIn = Number(refreshJson.expires_in)
+  return {
+    access_token: token,
+    token_refreshed_at: now.toISOString(),
+    token_expires_at: Number.isFinite(expiresIn) && expiresIn > 0
+      ? new Date(now.getTime() + expiresIn * 1000).toISOString()
+      : null,
+  }
 }
 
 /**

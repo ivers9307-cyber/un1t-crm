@@ -7,6 +7,7 @@ import {
   buildConnectionPatch,
   SUPPORTED_PLATFORMS,
   isAgentEnabledForConnection,
+  buildTokenRefreshPatch,
 } from './channels'
 
 describe('maskSecret', () => {
@@ -71,6 +72,17 @@ describe('buildConnectionPatch', () => {
     const p = buildConnectionPatch({ agent_enabled: true })
     expect(p.agent_enabled).toBe(true)
   })
+  it('fresh access token nulls the mig-408 lifecycle stamps', () => {
+    const p = buildConnectionPatch({ access_token: 'IGAA-fresh' })
+    expect(p.access_token).toBe('IGAA-fresh')
+    expect(p.token_expires_at).toBe(null)
+    expect(p.token_refreshed_at).toBe(null)
+  })
+  it('no fresh token → lifecycle stamps untouched', () => {
+    const p = buildConnectionPatch({ label: 'x', access_token: '••••••567890' })
+    expect('token_expires_at' in p).toBe(false)
+    expect('token_refreshed_at' in p).toBe(false)
+  })
 })
 
 describe('SUPPORTED_PLATFORMS', () => {
@@ -91,5 +103,26 @@ describe('isAgentEnabledForConnection', () => {
   })
   it('agent_enabled true → true', () => {
     expect(isAgentEnabledForConnection({ agent_enabled: true })).toBe(true)
+  })
+})
+
+describe('buildTokenRefreshPatch', () => {
+  const NOW = new Date('2026-07-18T12:00:00Z')
+  it('valid refresh response → token + refreshed_at + expires_at', () => {
+    const p = buildTokenRefreshPatch({ access_token: 'IGAAX-new', token_type: 'bearer', expires_in: 5184000 }, NOW)
+    expect(p.access_token).toBe('IGAAX-new')
+    expect(p.token_refreshed_at).toBe('2026-07-18T12:00:00.000Z')
+    expect(p.token_expires_at).toBe(new Date(NOW.getTime() + 5184000 * 1000).toISOString())
+  })
+  it('missing/empty token → null (never clobber a stored token)', () => {
+    expect(buildTokenRefreshPatch(null, NOW)).toBe(null)
+    expect(buildTokenRefreshPatch({}, NOW)).toBe(null)
+    expect(buildTokenRefreshPatch({ access_token: '' }, NOW)).toBe(null)
+    expect(buildTokenRefreshPatch({ error: { message: 'expired' } }, NOW)).toBe(null)
+  })
+  it('unparseable expires_in → token saved, expires_at null', () => {
+    const p = buildTokenRefreshPatch({ access_token: 'IGAAX-new', expires_in: 'soon' }, NOW)
+    expect(p.access_token).toBe('IGAAX-new')
+    expect(p.token_expires_at).toBe(null)
   })
 })

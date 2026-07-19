@@ -188,6 +188,7 @@
     { "path": "/api/cron/receipt-coverage-weekly", "schedule": "0 8 * * 5" },
     { "path": "/api/cron/process-receipt-hunts", "schedule": "*/5 * * * *" },
     { "path": "/api/cron/instagram-feed-sync", "schedule": "0 */6 * * *" },
+    { "path": "/api/cron/instagram-token-refresh", "schedule": "0 5 * * 1" },
     { "path": "/api/cron/event-reminders", "schedule": "0 9 * * *" },
     { "path": "/api/cron/send-host-campaigns", "schedule": "*/2 * * * *" }
   ]

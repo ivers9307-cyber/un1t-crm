@@ -31,12 +31,14 @@ describe('normalizeIgMedia', () => {
 
 describe('fetchIgMedia', () => {
   const conn = { external_account_id: 'ig123', access_token: 'tok' }
-  it('calls the media edge with fields+token and normalizes the result', async () => {
+  it('calls the media edge with a Bearer header (token never in the URL) and normalizes the result', async () => {
     const calls = []
-    const fetchImpl = async (url) => { calls.push(url); return { ok: true, json: async () => ({ data: [{ id: '1', media_type: 'IMAGE', media_url: 'https://cdn/i.jpg', permalink: 'https://instagram.com/p/1' }] }) } }
+    const fetchImpl = async (url, opts) => { calls.push({ url, opts }); return { ok: true, json: async () => ({ data: [{ id: '1', media_type: 'IMAGE', media_url: 'https://cdn/i.jpg', permalink: 'https://instagram.com/p/1' }] }) } }
     const rows = await fetchIgMedia(conn, { fetchImpl, limit: 5 })
-    expect(calls[0]).toContain('/ig123/media')
-    expect(calls[0]).toContain('access_token=tok')
+    expect(calls[0].url).toContain('graph.instagram.com')
+    expect(calls[0].url).toContain('/ig123/media')
+    expect(calls[0].url).not.toContain('access_token')
+    expect(calls[0].opts.headers.Authorization).toBe('Bearer tok')
     expect(rows).toHaveLength(1)
   })
   it('throws on a Graph error (so the caller keeps last-good)', async () => {
