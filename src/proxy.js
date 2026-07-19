@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse } from 'next/server'
 import { resolveBrand, isFrameworkAsset } from '@/lib/brands'
+import { resolveTenantDomainBrand } from '@/lib/tenant-domains-edge'
 import { isApiKeyToken, sha256HexEdge } from '@/lib/api-keys-edge'
 
 // Constant-time string compare. Implemented inline because the proxy runs
@@ -46,7 +47,23 @@ export async function proxy(request) {
   //
   // Adding a third brand is one entry in src/lib/brands.js — no
   // edit to this file required.
-  const brand = resolveBrand(hostname)
+  let brand = resolveBrand(hostname)
+
+  // ── DB tier (SAAS-8, tenant_domains — mig 415) ───────────────────
+  // Consulted ONLY when the in-code registry misses, so the live
+  // hostnames above never pay the lookup and behave identically even
+  // with the DB slow/down/empty. The module holds a ~5-min in-memory
+  // cache of the active rows (failures cached too), so per-request
+  // cost here is an in-memory scan; any error resolves null and the
+  // request falls through to the CRM auth gate below exactly as an
+  // unknown hostname does today. A DB brand returns the same shape as
+  // resolveBrand (+ organizationId) and rides the identical handler
+  // block — including the in-proxy root "/" rewrite, which DB brands
+  // depend on outright (the next.config host rewrites are build-baked
+  // and only cover un1tdublin.com).
+  if (!brand) {
+    brand = await resolveTenantDomainBrand(hostname)
+  }
   if (brand) {
     const path = request.nextUrl.pathname
     // Framework assets pass through unconditionally — the brand
