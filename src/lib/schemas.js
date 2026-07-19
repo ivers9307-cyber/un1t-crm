@@ -40,6 +40,35 @@ export const phone = z.string().min(3).max(50)
 // HTTP(S) URL.
 export const url = z.string().url().max(2000)
 
+// Bare hostname like pay.example.com — no scheme, no port, no path.
+// Requires at least one dot (a public tenant domain, not a bare
+// label) and normalises to lowercase, matching the tenant_domains
+// CHECK constraint (mig 415). Case-insensitive validation THEN the
+// lowercase transform so "Pay.Example.COM" is accepted and stored
+// canonically.
+export const tenantHostname = z.string().trim().min(1).max(253)
+  .regex(
+    /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i,
+    'Must be a bare hostname like pay.example.com (no scheme, port, or path)'
+  )
+  .transform((s) => s.toLowerCase())
+
+// tenant_domains.brand config (SAAS-8, mig 415) — mirrors the BRANDS
+// entry shape in src/lib/brands.js. All keys optional: missing ones
+// default to the marketing shape (rewrite "/" + strays to /welcome;
+// see DB_BRAND_DEFAULTS in tenant-domains-edge.js). .strict() so a
+// typo'd key is a 400 at write time, not a silently-ignored config.
+export const tenantDomainBrandConfigSchema = z.object({
+  description: z.string().trim().max(200).optional(),
+  allowedPaths: z.array(
+    z.string().max(200).regex(/^\//, 'Paths must start with /')
+  ).max(100).optional(),
+  rootHandler: z.enum(['reject', 'rewrite']).optional(),
+  rootRewriteTo: z.string().max(200).regex(/^\//, 'Must start with /').optional(),
+  fallbackHandler: z.enum(['reject', 'rewrite']).optional(),
+  fallbackRewriteTo: z.string().max(200).regex(/^\//, 'Must start with /').optional(),
+}).strict()
+
 // Money / hours / leave-day bounds matching the DB schema.
 //   annual_salary  NUMERIC(10,2)  → up to 99,999,999.99
 //   hourly_rate    NUMERIC(8,2)   → up to 999,999.99

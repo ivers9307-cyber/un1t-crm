@@ -11,9 +11,9 @@ import { hashApiKey } from './api-keys.js'
 /**
  * Minimal chainable supabase-js double over in-memory tables.
  * Supports the subset the API-key routes use: select/eq/neq/is/in/
- * gte/lte/ilike/order/limit/range/update/insert + maybeSingle/single
- * and thenable awaiting. Updates mutate the fixture rows in place so
- * tests can assert on (non-)mutation.
+ * gte/lte/ilike/order/limit/range/update/insert/delete +
+ * maybeSingle/single and thenable awaiting. Updates/deletes mutate
+ * the fixture rows in place so tests can assert on (non-)mutation.
  *
  * @param {Record<string, object[]>} tables — mutated by insert/update
  */
@@ -22,8 +22,15 @@ export function makeFakeDb(tables) {
     const source = tables[table] || (tables[table] = [])
     let matched = [...source]
     let patch = null
+    let deleting = false
     const apply = () => {
       if (patch) for (const row of matched) Object.assign(row, patch)
+      if (deleting) {
+        for (const row of matched) {
+          const i = source.indexOf(row)
+          if (i >= 0) source.splice(i, 1)
+        }
+      }
       return matched
     }
     const b = {}
@@ -43,6 +50,7 @@ export function makeFakeDb(tables) {
       matched = matched.filter((r) => String(r[col] ?? '').toLowerCase().includes(needle))
     })
     b.update = chain((p) => { patch = p })
+    b.delete = chain(() => { deleting = true })
     b.insert = chain((rows) => {
       const arr = Array.isArray(rows) ? rows : [rows]
       source.push(...arr)

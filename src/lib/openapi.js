@@ -21,7 +21,7 @@ import {
   timeOffTypeSchema, timeOffStatusSchema, swapStatusSchema,
   reportFrequencySchema, reportTypeSchema,
   permissionsSchema, audienceFilterSchema,
-  passwordSchema,
+  passwordSchema, tenantDomainBrandConfigSchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
 
@@ -2176,6 +2176,104 @@ registry.registerPath({
     400: { description: 'Invalid body or unknown organization id', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Profile not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// Tenant domains (SAAS-8, mig 415) — DB tier of the multi-brand
+// hostname registry. Master-only platform surface.
+// Re-derive via .extend({}) so the .openapi() decorator is present
+// (same trick as LeadSchema above — the source schema is built before
+// extendZodWithOpenApi runs).
+const TenantDomainBrandConfig = tenantDomainBrandConfigSchema.extend({}).openapi('TenantDomainBrandConfig', {
+  description: 'Brand config mirroring the in-code BRANDS entry shape (src/lib/brands.js). All keys optional; missing ones default to the marketing shape — root "/" and disallowed paths rewrite to /welcome, allowedPaths default to the public marketing set.',
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/admin/tenant-domains',
+  tags: ['Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List tenant domain mappings (master only)',
+  description: 'Rows from tenant_domains (mig 415): custom domains routed as tenant brands by the proxy, each linked to an organization. Includes the organization name/slug for display.',
+  responses: {
+    200: { description: 'Mappings, ordered by hostname' },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/tenant-domains',
+  tags: ['Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a tenant domain mapping (master only)',
+  description: 'The hostname (stored lowercase, bare — no scheme/port/path) goes live within the proxy cache TTL (~5 min), no deploy. Hostnames handled by the in-code brand registry, and the CRM\'s own hostname, are refused (400). Duplicate hostnames return 409.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            hostname: z.string().max(253).openapi({ example: 'members.acmegym.ie' }),
+            organization_id: uuidLike,
+            brand: TenantDomainBrandConfig.optional(),
+            active: z.boolean().optional(),
+          }).openapi('TenantDomainCreate'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Created mapping' },
+    400: { description: 'Invalid hostname/brand config, reserved hostname, or unknown organization', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Hostname already mapped', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/admin/tenant-domains/{id}',
+  tags: ['Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Update a tenant domain mapping (master only)',
+  description: 'Any of hostname / organization_id / brand / active. active=false is the soft kill switch — the hostname falls through to the CRM auth gate within the proxy cache TTL, config kept.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            hostname: z.string().max(253).optional(),
+            organization_id: uuidLike.optional(),
+            brand: TenantDomainBrandConfig.optional(),
+            active: z.boolean().optional(),
+          }).openapi('TenantDomainPatch'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Updated mapping' },
+    400: { description: 'Invalid or empty patch, or reserved hostname', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Mapping not found', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Hostname already mapped', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/admin/tenant-domains/{id}',
+  tags: ['Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Delete a tenant domain mapping (master only)',
+  description: 'The hostname falls back to the CRM auth gate within the proxy cache TTL.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Mapping removed' },
+    403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Mapping not found', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
