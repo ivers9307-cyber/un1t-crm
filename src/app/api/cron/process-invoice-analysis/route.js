@@ -1,25 +1,33 @@
-// INV-BULK.1 — background drainer for the bulk invoice-analysis queue.
+// INV-BULK.1 — SWEEPER for the bulk invoice-analysis queue (QSTASH.6:
+// no longer the only consumer).
 //
 // Operators bulk-upload invoices and hit "Send for analysis", which sets
-// analysis_queued_at on the chosen rows (see bulk-queue-analysis). Claude
-// Vision OCR is rate-limited and best run one invoice at a time, so we
-// don't extract in-request — this cron drains the queue sequentially.
+// analysis_queued_at on the chosen rows AND fire-and-forget publishes
+// each id onto the QStash `invoice-analysis` queue (parallelism 2 —
+// bounded OCR concurrency); the QStash worker
+// (/api/webhooks/qstash/invoice-analysis) normally processes rows
+// within seconds. This cron remains the delivery guarantee: it sweeps
+// whatever QStash missed (publish failure, QSTASH_TOKEN unset, worker
+// crash — stale claims re-sweep via the RPC's 10-minute arm).
 //
 // Each tick:
 //   1. Atomically claim up to BATCH queued rows (claim_invoice_analysis_batch,
-//      FOR UPDATE SKIP LOCKED — overlapping ticks never grab the same row).
-//   2. Extract each sequentially. On success → 'extracted' + fields +
+//      FOR UPDATE SKIP LOCKED — overlapping ticks never grab the same row,
+//      and rows the QStash worker holds mid-claim are skipped).
+//   2. Extract each sequentially via the shared per-row processor
+//      (src/lib/invoice-analysis-queue.js — the SAME implementation the
+//      QStash worker runs). On success → 'extracted' + fields +
 //      confidence, and clear the queue flags. On failure → record the
 //      error and DE-QUEUE (clear analysis_queued_at) so a bad file isn't
 //      retried forever; the UI surfaces the error + a manual retry.
 //
 // BATCH is sized so a worst-case tick (10 × ~15s) stays well under the
 // 300s function cap. 100 queued invoices drain in ~10 ticks (~10 min at
-// the */2 schedule).
+// the */2 schedule) even with QStash entirely absent.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { extractInvoiceFieldsFromBytes, scoreExtractionConfidence } from '@/lib/invoice-extraction'
+import { processInvoiceAnalysisRow } from '@/lib/invoice-analysis-queue'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
@@ -47,56 +55,9 @@ export async function GET(request) {
   let failed = 0
 
   for (const row of rows) {
-    const fail = async (msg) => {
-      await db.from('invoices_queue').update({
-        extraction_error: msg,
-        extracted_at: new Date().toISOString(),
-        analysis_queued_at: null,   // de-queue — surface the error, don't loop
-        analysis_claimed_at: null,
-      }).eq('id', row.id)
-      failed++
-    }
-
-    if (!row.attachment_path || !row.attachment_bucket) {
-      await fail('no_attachment')
-      continue
-    }
-
-    const { data: blob, error: dlErr } = await db.storage
-      .from(row.attachment_bucket)
-      .download(row.attachment_path)
-    if (dlErr || !blob) {
-      await fail(`download: ${dlErr?.message || 'unknown'}`)
-      continue
-    }
-
-    const bytes = Buffer.from(await blob.arrayBuffer())
-    const result = await extractInvoiceFieldsFromBytes(bytes, row.attachment_mime_type)
-    if (!result.ok) {
-      await fail(result.error || 'extraction_failed')
-      continue
-    }
-
-    // Only flip rows that are still 'quality_approved' (guards against a
-    // racing manual /extract or reject between claim and write).
-    const { error: updErr } = await db
-      .from('invoices_queue')
-      .update({
-        status: 'extracted',
-        extracted_at: new Date().toISOString(),
-        extracted_fields: result.fields,
-        extraction_confidence: scoreExtractionConfidence(result.fields),
-        extraction_error: null,
-        analysis_queued_at: null,
-        analysis_claimed_at: null,
-      })
-      .eq('id', row.id)
-      .eq('status', 'quality_approved')
-    if (updErr) {
-      await fail(updErr.message)
-      continue
-    }
-    ok++
+    const outcome = await processInvoiceAnalysisRow(db, row)
+    if (outcome.extractionError) failed++
+    else ok++
   }
 
   await stampHeartbeat('process-invoice-analysis').catch(() => {})
