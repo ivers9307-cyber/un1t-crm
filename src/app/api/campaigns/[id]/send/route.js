@@ -8,6 +8,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getEmailCapStatus } from '@/lib/usage-caps'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,6 +37,20 @@ export async function POST(_request, props) {
       success: false,
       error: `Campaign is '${campaign.status}', cannot send`,
     }, { status: 400 })
+  }
+
+  // SAAS4-M2 — optional per-org HARD email-send cap. Mirrors the
+  // WhatsApp blast preflight (blastBudgetBlockError): refuse to START
+  // at cap, with a message that says exactly how to proceed. Sequences
+  // and transactional sends are never capped. Fails OPEN inside the
+  // helper — a metering failure must never block a campaign.
+  const emailCap = await getEmailCapStatus({ locationId: campaign.location_id }, { db })
+  if (emailCap.capped) {
+    return NextResponse.json({
+      success: false,
+      error: `Monthly email hard cap reached (${emailCap.monthSends.toLocaleString()} of ${emailCap.capSends.toLocaleString()} sends this month). Raise or clear the cap in org settings to send this campaign.`,
+      code: 'email_hard_cap',
+    }, { status: 422 })
   }
 
   // Flip to 'queued' — the run-campaigns cron will pick it up on
