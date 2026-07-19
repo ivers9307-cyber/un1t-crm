@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import * as capsModule from './usage-caps.js'
 import { dublinMonthStartStr, getAiCapStatus, getEmailCapStatus } from './usage-caps.js'
 
 function stubDb({ orgId = 'org-1', aiCap = 5000, emailCap = 10000, spend = 0, sends = 0 } = {}) {
@@ -87,6 +88,22 @@ describe('getAiCapStatus', () => {
     const { db } = stubDb({ orgId: null })
     const status = await getAiCapStatus({ locationId: 'loc-1' }, { db })
     expect(status).toMatchObject({ capped: false })
+  })
+})
+
+describe('capNoticeDecision (SAAS4-M3 — 80% notice, once per Dublin month)', () => {
+  const { capNoticeDecision } = capsModule
+
+  it('sends at 80% of the cap when no notice has gone out this month', () => {
+    expect(capNoticeDecision({ cap: 1000, current: 800, noticeMonth: null, month: '2026-07' })).toBe('send')
+    expect(capNoticeDecision({ cap: 1000, current: 999, noticeMonth: '2026-06', month: '2026-07' })).toBe('send')
+  })
+
+  it('skips under 80%, when already noticed this month, or with no cap', () => {
+    expect(capNoticeDecision({ cap: 1000, current: 799, noticeMonth: null, month: '2026-07' })).toBe('skip')
+    expect(capNoticeDecision({ cap: 1000, current: 900, noticeMonth: '2026-07', month: '2026-07' })).toBe('skip')
+    expect(capNoticeDecision({ cap: null, current: 900, noticeMonth: null, month: '2026-07' })).toBe('skip')
+    expect(capNoticeDecision({ cap: 0, current: 0, noticeMonth: null, month: '2026-07' })).toBe('skip')
   })
 })
 

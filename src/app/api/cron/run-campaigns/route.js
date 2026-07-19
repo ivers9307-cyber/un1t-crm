@@ -22,6 +22,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { tickCampaignSend } from '@/lib/campaign-sender'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { getEmailCapStatus } from '@/lib/usage-caps'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -46,16 +47,44 @@ export async function GET(request) {
   const summary = { promoted: 0, ticks: 0, sent: 0, bounced: 0, errors: [] }
 
   // STEP 1 — promote scheduled-due campaigns.
-  const { data: promoted, error: promoteErr } = await db
+  // SAAS4-M3 — per-campaign email hard-cap gate on the promotion (the
+  // manual send route has the same preflight). A capped org's campaign
+  // STAYS scheduled — deferred, not cancelled — and promotes on the
+  // next tick after the cap is raised/cleared. Cap status is cached
+  // per org for the tick; the check fails OPEN inside the helper.
+  const { data: due, error: dueErr } = await db
     .from('campaigns')
-    .update({ status: 'queued' })
+    .select('id, location_id')
     .eq('status', 'scheduled')
     .lte('scheduled_at', nowIso)
-    .select('id')
-  if (promoteErr) {
-    console.error('[cron run-campaigns] promote failed:', promoteErr.message)
-  } else {
-    summary.promoted = promoted?.length || 0
+  if (dueErr) {
+    console.error('[cron run-campaigns] promote fetch failed:', dueErr.message)
+  } else if (due && due.length > 0) {
+    const capByLocation = new Map()
+    const promotable = []
+    for (const c of due) {
+      if (!capByLocation.has(c.location_id)) {
+        capByLocation.set(c.location_id, await getEmailCapStatus({ locationId: c.location_id }, { db }))
+      }
+      if (capByLocation.get(c.location_id).capped) {
+        console.warn(`[cron run-campaigns] campaign ${c.id} held at email hard cap (stays scheduled)`)
+      } else {
+        promotable.push(c.id)
+      }
+    }
+    if (promotable.length > 0) {
+      const { data: promoted, error: promoteErr } = await db
+        .from('campaigns')
+        .update({ status: 'queued' })
+        .in('id', promotable)
+        .eq('status', 'scheduled')
+        .select('id')
+      if (promoteErr) {
+        console.error('[cron run-campaigns] promote failed:', promoteErr.message)
+      } else {
+        summary.promoted = promoted?.length || 0
+      }
+    }
   }
 
   // STEP 2 — pick campaigns to tick this run.
