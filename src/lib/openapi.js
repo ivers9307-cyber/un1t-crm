@@ -3303,6 +3303,10 @@ registry.registerPath({
     403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Plan not found', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Duplicate effective_from for this plan', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
 // Integrations hub (INTEG-B2) — master-only card states
 // ============================================================================
 
