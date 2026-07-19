@@ -17,6 +17,11 @@ on:
       - 'src/**'
       - 'shared/**'
       - 'mobile/**'
+      # tests/** holds the top-level vitest suites (cross-tenant
+      # harness, guardrails, agent evals) — npm test already collects
+      # them via vitest.config.js; watching the dir makes a tests-only
+      # change re-run CI too (SAAS-10).
+      - 'tests/**'
       - 'package.json'
       - 'package-lock.json'
       - '.eslintrc.json'
@@ -49,6 +54,7 @@ on:
       - 'src/**'
       - 'shared/**'
       - 'mobile/**'
+      - 'tests/**' # see push paths note (SAAS-10)
       - 'package.json'
       - 'package-lock.json'
       - '.eslintrc.json'

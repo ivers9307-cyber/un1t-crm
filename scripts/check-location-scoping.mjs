@@ -244,13 +244,10 @@ export const EXEMPT = {
     cars: 'Signature-verified webhook resolves the car by xero_invoice_id — the provider\'s invoice id IS the row identity (per-location Xero connections mint the ids).',
   },
 
-  // ——— REAL FINDINGS (do not fix in the SAAS-9 PR; escalate) ———
-  'src/app/api/schedule/templates/[id]/route.js': {
-    shift_templates:
-      'TODO-LEAK: PUT/DELETE update shift_templates by bare id with only a MANAGER_ROLES gate — a manager at tenant A can read (via .select() on the update), edit, or deactivate ANY tenant\'s shift template by id. Needs fetch → assertLocationAccessOr404(user, row.location_id) before writing.',
-    shift_blocks:
-      'TODO-LEAK: the same PUT also updates/deletes shift_blocks by template_id with no location check — cross-tenant roster mutation rides on the unscoped template id above. Same fix: guard the template\'s location first.',
-  },
+  // The schedule/templates/[id] TODO-LEAK entries were removed once
+  // SAAS-11 landed the fix (assertLocationAccessOr404 + .eq('location_id')
+  // on every write) — the route now shows scoping evidence and no longer
+  // needs an exemption. Future real findings go here as 'TODO-LEAK:' rows.
 }
 
 // ---------------------------------------------------------------------------
