@@ -95,73 +95,79 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
       return
     }
 
-    const payload = {
-      name,
-      slug,
-      address: address || null,
-      phone: phone || null,
-      email: email || null,
-      timezone,
-      country,
-      active,
-      // mig 079 — every location belongs to an organization. For edits
-      // we preserve the existing org (read-only in the UI); for creates
-      // we use the picker value (required, validated above).
-      organization_id: isEditing ? location.organization_id : organizationId,
-      // SETTINGS.1 follow-up — twilio_alpha_sender_id is owned by
-      // TwilioIntegrationTab now. Omitted from this payload so the
-      // column is left untouched when LocationForm saves.
-      // mig 071 — null = not configured (summary panel shows total
-      // spend without an over/under chip). 0 IS valid and means
-      // "no contractor labour allowed", which the panel will treat
-      // as "always over budget".
-      monthly_contractor_budget_eur: contractorBudget.trim() === ''
-        ? null
-        : (Number.isFinite(Number(contractorBudget)) ? Number(contractorBudget) : null),
-      // INVOICES.1 — null = inbound invoice ingest disabled. The DB
-      // CHECK accepts only the slug regex; we already block bad
-      // inputs at submit time, but trim defensively just in case.
-      invoices_inbound_slug: invoicesInboundSlug.trim() === '' ? null : invoicesInboundSlug.trim(),
-      // EMAIL-INBOX.1 — null = email inbox channel off for this location
-      // (campaign/marketing sends carry no Reply-To default and inbound
-      // recipient-matching skips this studio).
-      email_inbox_reply_to: emailInboxReplyTo.trim() === '' ? null : emailInboxReplyTo.trim().toLowerCase(),
-      // SETTINGS.1 — sensibo_api_key / sensibo_pod_id / ac_default_*,
-      // settings.glofox, and settings.unifi are deliberately NOT
-      // included in this payload. Postgres leaves untouched columns
-      // alone, so the per-tab Integrations save endpoints own those
-      // slices independently. Don't add them back here.
-      updated_at: new Date().toISOString(),
-    }
+    // Shared field normalisation (create + edit).
+    // mig 071 — null = not configured (summary panel shows total spend
+    // without an over/under chip). 0 IS valid and means "no contractor
+    // labour allowed", which the panel treats as "always over budget".
+    const contractorBudgetValue = contractorBudget.trim() === ''
+      ? null
+      : (Number.isFinite(Number(contractorBudget)) ? Number(contractorBudget) : null)
+    // INVOICES.1 — null = inbound invoice ingest disabled.
+    const invoicesSlugValue = invoicesInboundSlug.trim() === '' ? null : invoicesInboundSlug.trim()
+    // EMAIL-INBOX.1 — null = email inbox channel off for this location.
+    const replyToValue = emailInboxReplyTo.trim() === '' ? null : emailInboxReplyTo.trim().toLowerCase()
 
-    let result
     if (isEditing) {
-      result = await db.from('locations').update(payload).eq('id', location.id).select().single()
+      // Edits stay browser-side (RLS-checked). SETTINGS.1 —
+      // sensibo/glofox/unifi/twilio slices are owned by the per-tab
+      // Integrations save endpoints; untouched columns are left alone.
+      const payload = {
+        name,
+        slug,
+        address: address || null,
+        phone: phone || null,
+        email: email || null,
+        timezone,
+        country,
+        active,
+        // mig 079 — org is read-only when editing (cross-org moves are
+        // rare and risky; do them via SQL with intent).
+        organization_id: location.organization_id,
+        monthly_contractor_budget_eur: contractorBudgetValue,
+        invoices_inbound_slug: invoicesSlugValue,
+        email_inbox_reply_to: replyToValue,
+        updated_at: new Date().toISOString(),
+      }
+      const result = await db.from('locations').update(payload).eq('id', location.id).select().single()
+      if (result.error) {
+        setError(result.error.message)
+        setSaving(false)
+        return
+      }
     } else {
-      result = await db.from('locations').insert(payload).select().single()
-    }
-
-    if (result.error) {
-      setError(result.error.message)
-      setSaving(false)
-      return
-    }
-
-    // Seed default pipeline stages for new locations
-    if (!isEditing && result.data?.id) {
-      const defaultStages = [
-        { name: 'New Lead',           slug: 'new_lead',          display_order: 1, color: '#3B82F6' },
-        { name: 'New Lead — Social',  slug: 'new_lead_social',   display_order: 2, color: '#8B5CF6' },
-        { name: 'Trial Active',       slug: 'trial_active',      display_order: 3, color: '#10B981' },
-        { name: 'Conversion Ready',   slug: 'conversion_ready',  display_order: 4, color: '#F59E0B' },
-        { name: 'Follow-up Needed',   slug: 'follow_up_needed',  display_order: 5, color: '#EF4444' },
-        { name: 'Member',             slug: 'member',            display_order: 6, color: '#059669' },
-        { name: 'Cold — Email Only',  slug: 'cold_email_only',   display_order: 7, color: '#9CA3AF' },
-        { name: 'Lost Member',        slug: 'lost_member',       display_order: 8, color: '#DC2626' },
-        { name: 'Returning Member',   slug: 'returning_member',  display_order: 9, color: '#6366F1' },
-      ].map(s => ({ ...s, location_id: result.data.id }))
-
-      await db.from('pipeline_stages').insert(defaultStages)
+      // SAAS4-W0.1 — creation goes through POST /api/locations so the
+      // server seeds the per-location defaults (FUNNEL.1 pipeline
+      // stages from the classifier SSOT). The old browser-side insert
+      // seeded a stale pre-FUNNEL taxonomy that broke classification
+      // for any location created after mig 350.
+      let json
+      try {
+        const res = await fetch('/api/locations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name,
+            organization_id: organizationId,
+            address: address || null,
+            phone: phone || null,
+            email: email || null,
+            timezone,
+            country,
+            active,
+            monthly_contractor_budget_eur: contractorBudgetValue,
+            invoices_inbound_slug: invoicesSlugValue,
+            email_inbox_reply_to: replyToValue,
+          }),
+        })
+        json = await res.json()
+      } catch {
+        json = { success: false, error: 'Network error creating the location. Try again.' }
+      }
+      if (!json.success) {
+        setError(json.error || 'Failed to create the location.')
+        setSaving(false)
+        return
+      }
     }
 
     router.push('/settings')

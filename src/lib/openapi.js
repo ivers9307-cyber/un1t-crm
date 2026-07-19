@@ -2172,6 +2172,44 @@ registry.registerPath({
   },
 })
 
+// Location create (SAAS4-W0.1) — server-side so per-location defaults
+// (FUNNEL.1 pipeline stages) are seeded atomically with the row.
+registry.registerPath({
+  method: 'post',
+  path: '/api/locations',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a location and seed its defaults (master only)',
+  description: 'Creates the locations row (slug derived from name) and seeds the FUNNEL.1 pipeline_stages set from the classifier taxonomy. Seeding is idempotent on (location_id, slug). Replaces the legacy browser-side insert in LocationForm.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            name: z.string().min(1).max(100),
+            organization_id: uuidLike,
+            address: z.string().max(300).nullish(),
+            phone: z.string().max(50).nullish(),
+            email: z.string().email().nullish(),
+            timezone: z.string().max(64).optional(),
+            country: z.string().length(2).optional(),
+            active: z.boolean().optional(),
+            monthly_contractor_budget_eur: z.number().min(0).nullish(),
+            invoices_inbound_slug: z.string().nullish(),
+            email_inbox_reply_to: z.string().email().nullish(),
+          }).openapi('LocationCreate'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Location created and seeded' },
+    403: { description: 'Forbidden — master only', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Slug already exists', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Location created but seeding failed (safe to re-run)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Marketing frequency cap (FREQ-CAP.1, mig 399)
 registry.registerPath({
   method: 'get',
