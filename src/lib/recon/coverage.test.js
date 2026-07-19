@@ -92,6 +92,36 @@ describe('syncBankLines', () => {
     expect(covered.in).toHaveBeenCalledWith('id', ['row-gone'])
   })
 
+  it('covered flip clears the hunt-queue bookkeeping (a queued line reconciled in Xero must leave the queue)', async () => {
+    // Without this, a line seeded for hunting and then reconciled
+    // Xero-side keeps hunt_queued_at forever — unclaimable by the
+    // status-filtered claim paths, and a lying "queued" marker on the
+    // board.
+    const existing = chainable({
+      data: [{ id: 'row-gone', xero_line_key: 'key-gone', status: 'uncovered' }],
+      error: null,
+    }, 'range')
+    const covered = chainable({ data: null, error: null }, 'in')
+    mockDb.from
+      .mockReturnValueOnce(existing)
+      .mockReturnValueOnce(covered)
+
+    await coverage.syncBankLines(mockDb, {
+      locationId: 'loc-1',
+      bankAccountId: 'acct-1',
+      bankAccountName: 'Current',
+      windowFrom: '2026-04-01',
+      windowTo: '2026-07-04',
+      lines: [],
+    })
+
+    expect(covered.update).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'covered',
+      hunt_queued_at: null,
+      hunt_claimed_at: null,
+    }))
+  })
+
   it('excludes terminal statuses from the vanish check at query level', async () => {
     const existing = chainable({ data: [], error: null }, 'range')
     mockDb.from.mockReturnValueOnce(existing)

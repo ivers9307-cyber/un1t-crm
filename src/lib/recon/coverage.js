@@ -133,7 +133,11 @@ export async function syncBankLines(db, {
   for (let i = 0; i < vanished.length; i += CHUNK) {
     const { error } = await db
       .from('recon_bank_lines')
-      .update({ status: 'covered', covered_at: nowIso, updated_at: nowIso })
+      // hunt fields cleared: covered is terminal — a line reconciled
+      // in Xero while queued for hunting must leave the queue (the
+      // status-filtered claim paths already skip it; the cleared
+      // marker keeps board state truthful).
+      .update({ status: 'covered', covered_at: nowIso, updated_at: nowIso, hunt_queued_at: null, hunt_claimed_at: null })
       .in('id', vanished.slice(i, i + CHUNK))
     if (error) throw new Error(`recon cover-update failed: ${error.message}`)
   }
