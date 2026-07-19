@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { authenticateApiKey } from '@/lib/api-auth'
+import { overlayConnections, syncConnectionFromLegacy } from '@/lib/connection-registry'
 import { validateBody } from '@/lib/validate'
 
 const IntegrationsUpdateSchema = z.object({
@@ -31,15 +32,19 @@ export async function GET(request, props) {
     return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
   }
 
+  // INTEG-A2 dual-read: registry glofox row replaces settings.glofox
+  // when present, so n8n sees the same config the app reads.
+  const overlaid = await overlayConnections(db, data, ['glofox'])
+
   // Return integration settings (glofox, etc.)
   return NextResponse.json({
     success: true,
     data: {
-      location_id: data.id,
-      location_name: data.name,
-      location_slug: data.slug,
-      glofox: data.settings?.glofox || null,
-      webhooks: data.settings?.webhooks || null,
+      location_id: overlaid.id,
+      location_name: overlaid.name,
+      location_slug: overlaid.slug,
+      glofox: overlaid.settings?.glofox || null,
+      webhooks: overlaid.settings?.webhooks || null,
     },
   })
 }
@@ -86,6 +91,17 @@ export async function PUT(request, props) {
 
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  }
+
+  // INTEG-A2 dual-write: re-sync the registry glofox row after a
+  // legacy settings.glofox write. Non-fatal — legacy remains the
+  // written source of truth this phase.
+  if (body.glofox !== undefined) {
+    try {
+      await syncConnectionFromLegacy(db, params.id, 'glofox', data)
+    } catch (e) {
+      console.error('[locations/integrations] registry sync failed:', e?.message || e)
+    }
   }
 
   return NextResponse.json({ success: true, data })

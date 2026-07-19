@@ -194,8 +194,9 @@ export async function PATCH(request, { params }) {
       if (details?.reason === 'needs_credit_grant') {
         try {
           const { purchaseGlofoxMembership } = await import('@/lib/glofox')
-          const { data: loc } = await db.from('locations').select('settings').eq('id', row.location_id).maybeSingle()
-          const g = loc?.settings?.glofox || {}
+          const { getGlofoxConfig } = await import('@/lib/connection-registry')
+          // INTEG-A2 dual-read: registry config first, legacy settings.glofox otherwise.
+          const g = await getGlofoxConfig(db, row.location_id)
           if (g.trial_membership_id && g.trial_plan_code) {
             await purchaseGlofoxMembership(creds, contact.glofox_member_id, g.trial_membership_id, g.trial_plan_code)
           }

@@ -49,6 +49,7 @@ import { createServerClient } from '@/lib/supabase'
 import { verifySharedSecret } from '@/lib/webhook-auth'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { resolveUnifiLocation, unifiControllerId } from '@/lib/unifi-webhook'
+import { overlayConnectionsMany } from '@/lib/connection-registry'
 import {
   resolveScheduledAt,
   matchArrivalToShift,
@@ -164,8 +165,13 @@ export async function POST(request) {
   const { data: locs } = await db
     .from('locations')
     .select('id, name, timezone, settings')
-    .not('settings->unifi', 'is', null)
-  const candidateLocations = (locs || []).filter((l) => l.settings?.unifi?.host)
+  // INTEG-A2 dual-read: overlay each location's active `unifi`
+  // registry row onto settings.unifi (batched — one query), then the
+  // same host filter + controller resolution as before. Fetch ALL
+  // locations (not just settings->unifi non-null) so a registry-only
+  // connection still qualifies.
+  const overlaid = await overlayConnectionsMany(db, locs || [], ['unifi'])
+  const candidateLocations = overlaid.filter((l) => l.settings?.unifi?.host)
   const location = resolveUnifiLocation(candidateLocations, unifiControllerId(payload))
   if (!location) {
     logWarn('webhook-unifi-access', 'cannot resolve location (multi-tenant deploy needs controller mapping)', {

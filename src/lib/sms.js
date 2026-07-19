@@ -20,6 +20,7 @@ import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { applyMergeTags } from '@/lib/postmark'
 import { getAppUrl } from '@/lib/app-url'
 import { selectAll } from '@/lib/select-all'
+import { overlayConnections } from '@/lib/connection-registry'
 
 // Build the URL Twilio will POST status updates to. Includes broadcast
 // + recipient identifiers as query params so the webhook can locate
@@ -163,6 +164,9 @@ export async function sendBroadcast(broadcastId, { maxRecipients = Infinity } = 
     throw new Error(`Broadcast is in '${broadcast.status}' state — only draft / scheduled / sending can be sent`)
   }
   if (!broadcast.locations) throw new Error('Broadcast location is missing')
+  // INTEG-A2 dual-read: registry twilio_sender row replaces the legacy
+  // per-location alpha sender when present.
+  broadcast.locations = await overlayConnections(db, broadcast.locations, ['twilio_sender'])
 
   // Move to 'sending' before iterating so a duplicate "Send now" (or a
   // racing cron tick) can't kick off two parallel first-passes. Use a

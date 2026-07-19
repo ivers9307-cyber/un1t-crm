@@ -17,6 +17,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { listDevices, ThinqError } from '@/lib/thinq'
+import { overlayConnections } from '@/lib/connection-registry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -38,11 +39,13 @@ export async function GET(request) {
     const locationId = user.activeLocation?.id
     if (locationId) {
       const db = createServerClient()
-      const { data: loc } = await db
+      const { data: locRow } = await db
         .from('locations')
-        .select('thinq_pat, thinq_client_id, thinq_country_code')
+        .select('id, thinq_pat, thinq_client_id, thinq_country_code')
         .eq('id', locationId)
         .single()
+      // INTEG-A2 dual-read: registry `thinq` row first.
+      const loc = await overlayConnections(db, locRow, ['thinq'])
       pat         = pat         || loc?.thinq_pat         || null
       clientId    = clientId    || loc?.thinq_client_id   || null
       countryCode = countryCode || loc?.thinq_country_code || null

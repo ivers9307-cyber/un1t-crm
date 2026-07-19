@@ -23,6 +23,7 @@
 //   §3.6 Assign Access Policy to User, §5.6 Fetch All Access Policies.
 
 import { Agent, fetch as undiciFetch } from 'undici'
+import { overlayConnections } from '@/lib/connection-registry'
 
 const DEFAULT_TIMEOUT_MS = 10_000
 
@@ -56,6 +57,19 @@ export function getLocationUnifiConfig(location) {
     host, apiToken, staffPolicyId, managerPolicyId,
     allowSelfSigned: u.allow_self_signed === true,
   }
+}
+
+/**
+ * INTEG-A2 dual-read form of getLocationUnifiConfig: overlays the
+ * location's active `unifi` channel_connections row (registry) onto
+ * the legacy settings.unifi fields, then runs the SAME pure config
+ * derivation. No registry row / no db / registry error → identical
+ * to getLocationUnifiConfig(location). Server-side (service client)
+ * only.
+ */
+export async function getUnifiConfig(db, location) {
+  const overlaid = db ? await overlayConnections(db, location, ['unifi']) : location
+  return getLocationUnifiConfig(overlaid)
 }
 
 /**

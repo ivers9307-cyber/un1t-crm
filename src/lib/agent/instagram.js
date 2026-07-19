@@ -15,6 +15,7 @@ import { runChannelAgent } from './auto-reply'
 import { AGENT_MESSAGE_SOURCE } from './core'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
+import { stampConnectionOk, stampConnectionError, isMetaAuthError } from '@/lib/connection-health'
 
 /**
  * Normalise a Meta Instagram webhook body into a flat list of inbound
@@ -78,8 +79,17 @@ export async function sendInstagramMessage(recipientIgsid, text, opts = {}) {
   if (!res.ok || result.error) {
     const msg = result?.error?.message || `Instagram send failed (${res.status})`
     console.error('[radar-agent] IG send error', msg)
+    // INTEG-A3 — an auth-shaped failure means the stored token is bad:
+    // surface it on the connection row. Transient failures don't stamp.
+    // Best-effort (the helper swallows its own errors); needs a full
+    // connection row (id) — synthetic { access_token } callers just skip.
+    if (conn?.id && isMetaAuthError(result?.error, res.status)) {
+      await stampConnectionError(null, conn.id, msg)
+    }
     throw new Error(msg)
   }
+  // INTEG-A3 — a delivered send proves the connection works right now.
+  if (conn?.id) await stampConnectionOk(null, conn.id)
   return { messageId: result.message_id || null }
 }
 
@@ -193,6 +203,10 @@ export async function handleInstagramInbound(db, event) {
     status: 'delivered',
     sent_at: ts,
   })
+
+  // INTEG-A3 — a delivered inbound proves the connection is alive.
+  // Best-effort; never blocks the inbound path.
+  await stampConnectionOk(db, connection?.id)
 
   // Bump conversation summary + unread.
   await db.from('instagram_conversations').update({

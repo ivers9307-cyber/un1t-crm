@@ -117,12 +117,14 @@ const TESTIMONIAL_DEFAULT = () => ({
 })
 
 const REVIEWS_DEFAULT = () => ({
-  id:             newBlockId(),
-  type:           'reviews',
-  title:          'What our members say',
-  min_rating:     4,        // 1–5; reviews below this are hidden
-  show_aggregate: true,     // "4.9 ★ · 127 Google reviews" header
-  speed:          'normal', // 'slow' | 'normal' | 'fast' marquee speed
+  id:         newBlockId(),
+  type:       'reviews',
+  title:      'What our members say',
+  min_rating: 4,        // 1–5; reviews below this are hidden
+  speed:      'normal', // 'slow' | 'normal' | 'fast' marquee speed
+  // `show_aggregate` (the "4.9 ★ · N Google reviews" header) was removed
+  // with the Google Business Profile sync (mig 410); saved blocks may
+  // still carry the key harmlessly (BlockBaseSchema is passthrough).
 })
 
 const VIDEO_TESTIMONIALS_DEFAULT = () => ({

@@ -31,6 +31,7 @@ import { hasPermission, hasMobilePermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
 import { applyMergeTags } from '@/lib/postmark'
+import { overlayConnections } from '@/lib/connection-registry'
 
 export const runtime = 'nodejs'
 
@@ -77,6 +78,11 @@ export async function POST(request, props) {
   // IDOR guard — caller must be assigned to the contact's location.
   const guard = assertLocationAccessOr404(user, contact.location_id)
   if (guard) return guard
+
+  // INTEG-A2 dual-read: registry twilio_sender row first.
+  if (contact.locations) {
+    contact.locations = await overlayConnections(db, contact.locations, ['twilio_sender'])
+  }
 
   if (!contact.phone) {
     return NextResponse.json({ success: false, error: 'Contact has no phone number on file' }, { status: 400 })

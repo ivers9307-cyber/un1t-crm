@@ -262,9 +262,14 @@ import { syncStaffAssignments } from './staff-write.js'
 
 vi.mock('@/lib/unifi-access', () => {
   class UnifiError extends Error {}
+  const getLocationUnifiConfig = vi.fn()
   return {
     UnifiError,
-    getLocationUnifiConfig: vi.fn(),
+    getLocationUnifiConfig,
+    // INTEG-A2 dual-read wrapper — in tests it just runs the pure
+    // legacy derivation, so the existing mockReturnValue calls on
+    // getLocationUnifiConfig keep driving every scenario.
+    getUnifiConfig: vi.fn(async (_db, location) => getLocationUnifiConfig(location)),
     findOrCreateUnifiUser: vi.fn(),
     syncUnifiUserPolicyForRole: vi.fn(),
     revokeUnifiUserPolicies: vi.fn(),

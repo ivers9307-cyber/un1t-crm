@@ -30,6 +30,7 @@ import { syncOrderFromCarDeposit } from '@/lib/orders'
 import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { triggerSequencesForOrderStatus } from '@/lib/sequences'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
+import { overlayConnections } from '@/lib/connection-registry'
 
 export const runtime = 'nodejs'
 
@@ -119,6 +120,11 @@ export async function POST(request) {
     // Revolut moves on.
     console.warn(`[revolut-webhook] no car for order ${orderId} (event ${event})`)
     return NextResponse.json({ success: true, skipped: 'unknown_order' })
+  }
+
+  // INTEG-A2 dual-read: registry twilio_sender row first.
+  if (car.locations) {
+    car.locations = await overlayConnections(db, car.locations, ['twilio_sender'])
   }
 
   // Fetch the live order — gives us authoritative state + actual
