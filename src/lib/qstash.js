@@ -31,6 +31,10 @@ export const POSTMARK_WORKER_PATH = '/api/webhooks/qstash/postmark'
 // QSTASH.3 — worker for webhook_dead_letter replay pushes (published by
 // deadLetterWebhook, swept by /api/cron/webhook-replay).
 export const WEBHOOK_REPLAY_WORKER_PATH = '/api/webhooks/qstash/webhook-replay'
+// QSTASH.4 — worker for contact_imports queue pushes (published by the
+// async path of /api/contacts/import/commit, swept by
+// /api/cron/process-contact-imports).
+export const CONTACT_IMPORTS_WORKER_PATH = '/api/webhooks/qstash/contact-imports'
 
 const QSTASH_PUBLISH_BASE = 'https://qstash.upstash.io/v2/publish/'
 

@@ -8,12 +8,14 @@
 //     jumps straight to the "Done" step.
 //
 //   > SYNC_LIMIT (up to ASYNC_LIMIT = 50_000) — enqueue: insert
-//     contact_imports row with status='pending' + payload, return
-//     immediately with import_id. The wizard polls
-//     /api/contacts/imports/[id] until status flips to
-//     'completed' / 'failed'. The cron worker at
-//     /api/cron/process-contact-imports drains the queue every
-//     minute.
+//     contact_imports row with status='pending' + payload, publish a
+//     QStash push (QSTASH.4 — the worker at
+//     /api/webhooks/qstash/contact-imports usually starts the job in
+//     ~seconds), and return immediately with import_id. The wizard
+//     polls /api/contacts/imports/[id] until status flips to
+//     'completed' / 'failed'. The cron sweeper at
+//     /api/cron/process-contact-imports remains the delivery
+//     guarantee (publish failures, QStash outages, stuck-recovery).
 //
 // Body: { mapping, rows, batch_tag, source_filename, location_id?, resolutions? }
 
@@ -24,6 +26,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { runImportCommit } from '@/lib/contact-import-runner'
+import { publishQueuePush, CONTACT_IMPORTS_WORKER_PATH } from '@/lib/qstash'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -86,8 +89,24 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: `Could not start import: ${batchErr.message}` }, { status: 500 })
   }
 
-  // Async path: return now, cron worker will fill in counts.
+  // Async path: return now, a queue consumer will fill in counts.
   if (isAsync) {
+    // QSTASH.4 — push delivery. Nudge QStash to deliver this job to the
+    // worker route now instead of waiting for the next cron tick. Fire-
+    // and-forget: env-gated (no QSTASH_TOKEN → skipped), and any failure
+    // leaves the row for the cron — the queue table is the delivery
+    // guarantee, QStash is the latency optimisation. Dedup id is
+    // DASH-ONLY (QStash 400s on colons — the QSTASH.2 lesson).
+    try {
+      await publishQueuePush({
+        path: CONTACT_IMPORTS_WORKER_PATH,
+        body: { id: batch.id },
+        deduplicationId: `contact-import-${batch.id}`,
+      })
+    } catch {
+      // publishQueuePush swallows its own errors; belt-and-braces only.
+    }
+
     return NextResponse.json({
       success: true,
       data: {

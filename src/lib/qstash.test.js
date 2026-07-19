@@ -9,6 +9,7 @@ import crypto from 'node:crypto'
 import {
   POSTMARK_WORKER_PATH,
   WEBHOOK_REPLAY_WORKER_PATH,
+  CONTACT_IMPORTS_WORKER_PATH,
   qstashEnabled,
   publishQueuePush,
   verifyQStashSignature,
@@ -208,6 +209,12 @@ describe('publishQueuePush', () => {
   // minimum backoff instead of replaying instantly.
   it('exports the webhook-replay worker path', () => {
     expect(WEBHOOK_REPLAY_WORKER_PATH).toBe('/api/webhooks/qstash/webhook-replay')
+  })
+
+  // QSTASH.4 — contact-imports worker path (published by the commit
+  // route's async path, swept by /api/cron/process-contact-imports).
+  it('exports the contact-imports worker path', () => {
+    expect(CONTACT_IMPORTS_WORKER_PATH).toBe('/api/webhooks/qstash/contact-imports')
   })
 
   it('sets the Upstash-Delay header when delaySeconds is given', async () => {

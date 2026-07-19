@@ -1,32 +1,37 @@
 // Cron — drain the contact_imports queue (mig 096).
 //
-// Picks the oldest pending batch, marks it processing, runs the
-// shared runImportCommit() against its stored payload, then marks
-// completed (or failed, with the error message stamped on the
-// row). One pass per cron tick — even at 50k rows / 60s the
-// runner finishes well within the 5-minute Vercel maxDuration
+// Picks the oldest pending batch and runs it through the shared
+// claim/process/stamp implementation in src/lib/contact-import-queue.js
+// (runImportCommit against the stored payload, then completed/failed
+// stamped on the row). One pass per cron tick — even at 50k rows / 60s
+// the runner finishes well within the 5-minute Vercel maxDuration
 // budget.
 //
-// Stuck-job recovery: a row in 'processing' for >5 minutes is
-// considered crashed (function timeout, deploy mid-run, etc.) and
-// reset to 'pending' on the next pass, so the next worker run
-// retries it. A second crash isn't auto-retried — operator picks
-// it up via the import history page where the status reads
-// 'failed' with the error_message.
+// QSTASH.4: this cron is now the SWEEPER, not the only consumer — the
+// commit route's async path also publishes each queued job to QStash,
+// whose worker (/api/webhooks/qstash/contact-imports) starts it within
+// ~seconds via the same claim CAS. With QStash healthy this loop mostly
+// finds no pending work; it remains the delivery guarantee for publish
+// failures, QStash outages, and crashed runs (stuck-recovery below).
+//
+// Stuck-job recovery (CRON-ONLY — the QStash worker never does this):
+// a row in 'processing' for >STUCK_AFTER_MINUTES is considered crashed
+// (function timeout, deploy mid-run, etc.) and reset to 'pending' on
+// the next pass, so the next worker run retries it. A second crash
+// isn't auto-retried — operator picks it up via the import history
+// page where the status reads 'failed' with the error_message.
 //
 // Auth: same bearer-token pattern as other crons — pg_cron sets
 // the Authorization header to Bearer <CRON_SECRET>.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { runImportCommit } from '@/lib/contact-import-runner'
+import { claimAndProcessImportJob, STUCK_AFTER_MINUTES } from '@/lib/contact-import-queue'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300 // 5 min — biggest 50k batch fits
-
-const STUCK_AFTER_MINUTES = 5
 
 export async function GET(request) {
   const auth = request.headers.get('authorization') || ''
@@ -35,7 +40,7 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  const stats = { processed: 0, recovered: 0, failed: 0, skipped_no_work: 0 }
+  const stats = { processed: 0, recovered: 0, failed: 0, skipped: 0, skipped_no_work: 0 }
 
   // 1. Stuck-job recovery — reset anything in 'processing' for too
   // long. One UPDATE handles it.
@@ -52,63 +57,38 @@ export async function GET(request) {
     .select('id')
   stats.recovered = (recovered || []).length
 
-  // 2. Claim the oldest pending job. We update-with-returning to
-  // avoid a TOCTOU race between two cron workers (Vercel doesn't
-  // run two simultaneously, but pg_cron + manual pings could).
-  const { data: claimed } = await db
+  // 2. Fetch the oldest pending job. The claim itself is the shared
+  // CAS in src/lib/contact-import-queue.js — the QStash push consumer
+  // races this pass by design (and pg_cron + manual pings could race
+  // each other); exactly one claimant processes each job, everyone
+  // else sees `skipped`.
+  const { data: pending } = await db
     .from('contact_imports')
-    .update({
-      status: 'processing',
-      started_processing_at: new Date().toISOString(),
-    })
+    .select('*')
     .eq('status', 'pending')
     .order('created_at', { ascending: true })
     .limit(1)
-    .select('*')
 
-  const job = (claimed || [])[0]
+  const job = (pending || [])[0]
   if (!job) {
     stats.skipped_no_work = 1
     await stampHeartbeat('process-contact-imports', stats).catch(() => {})
     return NextResponse.json({ success: true, data: stats })
   }
 
-  if (!job.payload) {
-    // Shouldn't happen — the commit route always writes payload
-    // when status='pending'. Fail loudly so we notice.
-    await db.from('contact_imports').update({
-      status: 'failed',
-      error_message: 'Pending job had no payload.',
-    }).eq('id', job.id)
+  const outcome = await claimAndProcessImportJob(db, job)
+  if (outcome.missingPayload) {
+    // Shouldn't happen — fail loudly so we notice (row already
+    // stamped 'failed' by the shared lib).
     stats.failed = 1
     return NextResponse.json({ success: false, error: 'Job missing payload', data: stats }, { status: 500 })
   }
-
-  const { mapping, rows, batchTag, resolutions } = job.payload
-
-  try {
-    const { counts } = await runImportCommit(db, {
-      importId: job.id,
-      locationId: job.location_id,
-      mapping, rows, batchTag, resolutions,
-    })
-    await db.from('contact_imports').update({
-      status: 'completed',
-      created_count: counts.created,
-      updated_count: counts.updated,
-      skipped_count: counts.skipped,
-      errored_count: counts.errored,
-      // Drop the payload — it's served its purpose, no point
-      // hanging onto a copy of every imported CSV forever.
-      payload: null,
-    }).eq('id', job.id)
+  if (outcome.status === 'processed') {
     stats.processed = 1
-  } catch (e) {
-    await db.from('contact_imports').update({
-      status: 'failed',
-      error_message: (e?.message || String(e)).slice(0, 2000),
-    }).eq('id', job.id)
+  } else if (outcome.status === 'failed') {
     stats.failed = 1
+  } else {
+    stats.skipped = 1 // lost the claim race to the QStash worker
   }
 
   await stampHeartbeat('process-contact-imports', stats).catch(() => {})
