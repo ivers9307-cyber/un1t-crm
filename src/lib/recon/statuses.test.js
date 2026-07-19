@@ -8,18 +8,31 @@
 //     operator resolves). The healing side (queue row FORWARDED) is a
 //     no-op — the Xero-side vanish covers it via syncBankLines instead.
 //   seedHunts — queue every uncovered/not_found line for the drain
-//     cron (idempotent: only rows not already queued get hunt_queued_at).
+//     cron (idempotent: only rows not already queued get hunt_queued_at),
+//     then (QSTASH.10) fire-and-forget publish a QStash push per seeded
+//     row onto the `receipt-hunts` queue (parallelism 1 — hunts must
+//     stay sequential), capped at HUNT_PUBLISH_CAP so a pathological
+//     backlog seed can't blow the QStash free-tier daily request
+//     budget; overflow rows drain via the cron sweep exactly as before.
 //
 // Mock style matches coverage.test.js: a chainable mock whose FINAL
 // method resolves; intermediate steps return `this`.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// No @/lib/supabase mock needed: statuses.js takes `db` as a parameter
-// and has no imports of its own (cf. pull.test.js's identical note).
+// No @/lib/supabase mock needed: statuses.js takes `db` as a parameter.
+// Its only import is @/lib/qstash (QSTASH.10's publish hook), mocked here.
+vi.mock('@/lib/qstash', () => ({
+  publishQueuePush: vi.fn().mockResolvedValue({ ok: true, messageId: 'msg-1' }),
+  RECEIPT_HUNTS_WORKER_PATH: '/api/webhooks/qstash/receipt-hunts',
+  RECEIPT_HUNTS_QUEUE_NAME: 'receipt-hunts',
+  RECEIPT_HUNTS_QUEUE_PARALLELISM: 1,
+}))
+
 const mockDb = { from: vi.fn() }
 
 let statuses
+let qstash
 
 // Chain whose FINAL method resolves; intermediate steps return this.
 function chainable(finalValue, terminal) {
@@ -35,6 +48,9 @@ beforeEach(async () => {
   vi.resetModules()
   mockDb.from.mockReset()
   statuses = await import('./statuses')
+  qstash = await import('@/lib/qstash')
+  qstash.publishQueuePush.mockClear()
+  qstash.publishQueuePush.mockResolvedValue({ ok: true, messageId: 'msg-1' })
 })
 
 describe('sweepSubmittedLines', () => {
@@ -113,5 +129,77 @@ describe('seedHunts', () => {
     expect(seedUpdate.eq).toHaveBeenCalledWith('location_id', 'loc-1')
     expect(seedUpdate.in).toHaveBeenCalledWith('status', ['uncovered', 'not_found'])
     expect(seedUpdate.is).toHaveBeenCalledWith('hunt_queued_at', null)
+  })
+
+  // ── QSTASH.10 publish hook ──────────────────────────────────────────────────
+
+  it('publishes one QStash push per seeded row onto the receipt-hunts queue (parallelism 1, dash-only dedup id)', async () => {
+    const seedUpdate = chainable({
+      data: [{ id: 'line-1' }, { id: 'line-2' }],
+      error: null,
+    }, 'select')
+    mockDb.from.mockReturnValueOnce(seedUpdate)
+
+    const result = await statuses.seedHunts(mockDb, 'loc-1')
+
+    expect(result).toEqual({ seeded: 2 })
+    expect(qstash.publishQueuePush).toHaveBeenCalledTimes(2)
+    expect(qstash.publishQueuePush).toHaveBeenCalledWith({
+      path: '/api/webhooks/qstash/receipt-hunts',
+      body: { id: 'line-1' },
+      deduplicationId: 'receipt-hunt-line-1',
+      queueName: 'receipt-hunts',
+      queueParallelism: 1,
+    })
+    expect(qstash.publishQueuePush).toHaveBeenCalledWith({
+      path: '/api/webhooks/qstash/receipt-hunts',
+      body: { id: 'line-2' },
+      deduplicationId: 'receipt-hunt-line-2',
+      queueName: 'receipt-hunts',
+      queueParallelism: 1,
+    })
+  })
+
+  it('publishes nothing when the seed queued zero rows', async () => {
+    const seedUpdate = chainable({ data: [], error: null }, 'select')
+    mockDb.from.mockReturnValueOnce(seedUpdate)
+
+    const result = await statuses.seedHunts(mockDb, 'loc-1')
+
+    expect(result).toEqual({ seeded: 0 })
+    expect(qstash.publishQueuePush).not.toHaveBeenCalled()
+  })
+
+  it('caps publishes at HUNT_PUBLISH_CAP; overflow rows are left to the cron sweep', async () => {
+    const ids = Array.from({ length: statuses.HUNT_PUBLISH_CAP + 1 }, (_, i) => ({ id: `line-${i}` }))
+    const seedUpdate = chainable({ data: ids, error: null }, 'select')
+    mockDb.from.mockReturnValueOnce(seedUpdate)
+
+    const result = await statuses.seedHunts(mockDb, 'loc-1')
+
+    expect(result).toEqual({ seeded: statuses.HUNT_PUBLISH_CAP + 1 })
+    expect(qstash.publishQueuePush).toHaveBeenCalledTimes(statuses.HUNT_PUBLISH_CAP)
+    // First HUNT_PUBLISH_CAP ids in order — the overflow row is the one skipped.
+    const publishedIds = qstash.publishQueuePush.mock.calls.map((c) => c[0].body.id)
+    expect(publishedIds[0]).toBe('line-0')
+    expect(publishedIds).toHaveLength(statuses.HUNT_PUBLISH_CAP)
+    expect(publishedIds).not.toContain(`line-${statuses.HUNT_PUBLISH_CAP}`)
+  })
+
+  it('exports HUNT_PUBLISH_CAP = 200 (QStash free tier caps 1000 requests/day; a Friday seed must stay well inside it)', () => {
+    expect(statuses.HUNT_PUBLISH_CAP).toBe(200)
+  })
+
+  it('still returns the seed result when every publish rejects (belt-and-braces — a publish problem must never affect seeding)', async () => {
+    const seedUpdate = chainable({
+      data: [{ id: 'line-1' }],
+      error: null,
+    }, 'select')
+    mockDb.from.mockReturnValueOnce(seedUpdate)
+    qstash.publishQueuePush.mockRejectedValue(new Error('qstash down'))
+
+    const result = await statuses.seedHunts(mockDb, 'loc-1')
+
+    expect(result).toEqual({ seeded: 1 })
   })
 })

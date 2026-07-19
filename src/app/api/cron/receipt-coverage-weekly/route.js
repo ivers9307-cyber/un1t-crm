@@ -10,7 +10,10 @@
 // RE-SEQUENCED for P1's hunt engine: this cron now only pulls, sweeps,
 // and seeds — per location, runCoveragePull() → sweepSubmittedLines()
 // (flip rejected-backed submitted lines to needs_attention) →
-// seedHunts() (queue uncovered/not_found lines for the drain cron).
+// seedHunts() (queue uncovered/not_found lines for the drain cron;
+// since QSTASH.10 seedHunts also fire-and-forget publishes a QStash
+// push per seeded row — capped — onto the parallelism-1 `receipt-hunts`
+// queue, so hunting starts within seconds of the seed).
 // The weekly report + heartbeat stamp used to happen here, right
 // after the pull; they now happen in process-receipt-hunts' finalizer
 // once the seeded hunt queue actually drains, so the report reflects
