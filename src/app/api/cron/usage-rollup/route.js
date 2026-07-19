@@ -17,6 +17,10 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { dublinTodayStr } from '@/lib/dublin-time'
+import { capNoticeDecision, dublinMonthStartStr } from '@/lib/usage-caps'
+import { sendPushToRolesAtLocation } from '@/lib/push'
+import { ADMIN_ROLES } from '@/lib/schemas'
+import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -47,6 +51,87 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('usage-rollup', { days })
-  return NextResponse.json({ success: true, days })
+  // SAAS4-M3 — 80%-of-hard-cap notices, once per meter per Dublin
+  // month. Best-effort: a notice failure never fails the rollup.
+  let notices = 0
+  try {
+    notices = await sendCapNotices(db, today)
+  } catch (e) {
+    logWarn('usage-rollup', 'cap-notice pass threw', { err: e?.message || e })
+  }
+
+  await stampHeartbeat('usage-rollup', { days, notices })
+  return NextResponse.json({ success: true, days, notices })
+}
+
+async function sendCapNotices(db, todayStr) {
+  const month = todayStr.slice(0, 7)
+  const monthStart = dublinMonthStartStr(todayStr)
+
+  const { data: orgs } = await db
+    .from('org_settings')
+    .select('organization_id, ai_hard_cap_cents, email_hard_cap_sends, ai_cap_notice_month, email_cap_notice_month')
+    .or('ai_hard_cap_cents.not.is.null,email_hard_cap_sends.not.is.null')
+  if (!orgs || orgs.length === 0) return 0
+
+  let sent = 0
+  for (const org of orgs) {
+    const { data: locs } = await db
+      .from('locations')
+      .select('id')
+      .eq('organization_id', org.organization_id)
+      .eq('active', true)
+    const locationIds = (locs || []).map((l) => l.id)
+    if (locationIds.length === 0) continue
+
+    const checks = []
+    if (org.ai_hard_cap_cents != null) {
+      const { data: spend } = await db.rpc('org_ai_spend_month_cents', {
+        p_org: org.organization_id, p_month_start: monthStart,
+      })
+      checks.push({
+        column: 'ai_cap_notice_month',
+        decision: capNoticeDecision({
+          cap: Number(org.ai_hard_cap_cents), current: Number(spend) || 0,
+          noticeMonth: org.ai_cap_notice_month, month,
+        }),
+        title: 'AI spend at 80% of the hard cap',
+        body: `This month's AI spend is at 80%+ of the org hard cap (est. $${((Number(spend) || 0) / 100).toFixed(2)} of $${(Number(org.ai_hard_cap_cents) / 100).toFixed(2)}). At the cap, Mia pauses with a human handoff. Raise the cap in Settings → Usage if that's not intended.`,
+      })
+    }
+    if (org.email_hard_cap_sends != null) {
+      const { data: sends } = await db.rpc('org_email_sends_month', {
+        p_org: org.organization_id, p_month_start: monthStart,
+      })
+      checks.push({
+        column: 'email_cap_notice_month',
+        decision: capNoticeDecision({
+          cap: Number(org.email_hard_cap_sends), current: Number(sends) || 0,
+          noticeMonth: org.email_cap_notice_month, month,
+        }),
+        title: 'Email volume at 80% of the hard cap',
+        body: `This month's email sends are at 80%+ of the org hard cap (${(Number(sends) || 0).toLocaleString()} of ${Number(org.email_hard_cap_sends).toLocaleString()}). At the cap, new campaigns are refused. Raise the cap in Settings → Usage if that's not intended.`,
+      })
+    }
+
+    for (const check of checks) {
+      if (check.decision !== 'send') continue
+      for (const locationId of locationIds) {
+        try {
+          // No notify_* category fits an ops/billing notice — omitting
+          // the category routes to master only (push.js contract),
+          // which is the right recipient until O2's ops_alerts routing.
+          await sendPushToRolesAtLocation(locationId, ADMIN_ROLES, {
+            title: check.title, body: check.body,
+          })
+        } catch { /* per-location push failure never blocks the sweep */ }
+      }
+      await db
+        .from('org_settings')
+        .update({ [check.column]: month })
+        .eq('organization_id', org.organization_id)
+      sent++
+    }
+  }
+  return sent
 }

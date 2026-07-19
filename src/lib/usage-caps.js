@@ -25,6 +25,20 @@ export function dublinMonthStartStr(todayStr = dublinTodayStr()) {
   return `${todayStr.slice(0, 7)}-01`
 }
 
+/**
+ * SAAS4-M3 — should the 80%-of-hard-cap notice go out?
+ * One notice per meter per Dublin month; nothing without a cap.
+ *
+ * @param {{ cap: number|null, current: number, noticeMonth: string|null, month: string }} p
+ *   month/noticeMonth are 'YYYY-MM' strings.
+ * @returns {'send'|'skip'}
+ */
+export function capNoticeDecision({ cap, current, noticeMonth, month }) {
+  if (!cap || cap <= 0) return 'skip'
+  if (noticeMonth === month) return 'skip'
+  return current >= cap * 0.8 ? 'send' : 'skip'
+}
+
 async function resolveOrgId(client, { organizationId, locationId }) {
   if (organizationId) return organizationId
   if (!locationId) return null

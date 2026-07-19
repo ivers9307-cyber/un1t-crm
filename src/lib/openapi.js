@@ -2325,6 +2325,46 @@ registry.registerPath({
   },
 })
 
+// Org usage summary + hard caps (SAAS4-M3)
+registry.registerPath({
+  method: 'get',
+  path: '/api/settings/org-usage',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Org month-to-date usage + hard caps (admin roles)',
+  description: 'Live AI spend and email sends (cap-relevant, mig 415 RPCs) plus nightly per-meter and per-location rollup totals for the active organisation. ?organization_id targets another org (master only).',
+  responses: {
+    200: { description: 'Usage summary' },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/settings/org-usage',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Set/clear the org hard caps (owner-of-org or master)',
+  description: 'ai_hard_cap_cents (Mia pauses at cap) and email_hard_cap_sends (campaign starts refused at cap). null clears a cap; both default to no cap.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            organization_id: uuidLike.optional(),
+            ai_hard_cap_cents: z.number().positive().nullable().optional(),
+            email_hard_cap_sends: z.number().int().positive().nullable().optional(),
+          }).openapi('OrgUsageCaps'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Caps saved' },
+    403: { description: 'Forbidden — owner of the org or master', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Location create (SAAS4-W0.1) — server-side so per-location defaults
 // (FUNNEL.1 pipeline stages) are seeded atomically with the row.
 registry.registerPath({
