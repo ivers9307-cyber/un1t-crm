@@ -17,7 +17,7 @@ export const runtime = 'nodejs'
 export const metadata = {
   title: 'Privacy policy · UN1T Dublin',
   description:
-    'How UN1T Dublin Ltd collects, uses, and protects personal data in the UN1T CRM web application and the CF Studio iOS app.',
+    'How Champ Fitness Ltd (trading as UN1T Dublin) collects, uses, and protects personal data in the UN1T CRM web application and the CF Studio iOS app.',
 }
 
 export default function PrivacyPolicy() {
@@ -27,13 +27,14 @@ export default function PrivacyPolicy() {
         <header className="mb-10">
           <h1 className="text-3xl font-bold tracking-tight">Privacy policy</h1>
           <p className="mt-2 text-sm text-gray-500">
-            Last updated 19 May 2026
+            Last updated 19 July 2026
           </p>
         </header>
 
         <section className="prose prose-gray max-w-none">
           <p>
-            This policy explains how UN1T Dublin Ltd (&ldquo;we&rdquo;,
+            This policy explains how Champ Fitness Ltd, trading as UN1T
+            Dublin (&ldquo;we&rdquo;,
             &ldquo;us&rdquo;) handles personal data when you use the UN1T CRM
             web application at <strong>crm.un1tdublin.com</strong> and the
             <strong> CF Studio</strong> iOS application (collectively, the
@@ -95,8 +96,12 @@ export default function PrivacyPolicy() {
             <li><strong>Supabase</strong> — primary database, file storage, and authentication. Region: EU (Ireland).</li>
             <li><strong>Vercel</strong> — hosts the web application. Region: EU.</li>
             <li><strong>Postmark</strong> — transactional and marketing email delivery.</li>
-            <li><strong>Twilio</strong> — SMS and WhatsApp message delivery.</li>
+            <li><strong>Meta Platforms</strong> — WhatsApp Cloud API and Instagram messaging; delivers WhatsApp and Instagram conversations with contacts.</li>
+            <li><strong>Twilio</strong> — SMS delivery.</li>
+            <li><strong>Glofox</strong> — gym membership and booking platform; member records, bookings, and attendance sync between Glofox and the CRM.</li>
             <li><strong>Revolut Business</strong> — payment processing for deposits and race entries.</li>
+            <li><strong>Stripe</strong> — payment processing for event tickets.</li>
+            <li><strong>Upstash</strong> — message-queue infrastructure; briefly carries webhook and job payloads between our systems.</li>
             <li><strong>Xero</strong> — accounting; contractor invoices are forwarded to a unique Xero bills-by-email address after approval.</li>
             <li><strong>Sensibo</strong> — controls in-studio AC units; receives a location identifier and the requested set-point.</li>
             <li><strong>Apple Push Notification Service</strong> and <strong>Expo</strong> — deliver push notifications to staff iPhones.</li>
@@ -106,7 +111,7 @@ export default function PrivacyPolicy() {
 
           <h2 className="text-xl font-semibold mt-8 mb-3">6. International transfers</h2>
           <p>
-            Most processing happens within the EU. Some sub-processors (Postmark, Twilio, Anthropic, Apple, Expo) are based in the United States and may process data there. Where this happens we rely on the European Commission&rsquo;s Standard Contractual Clauses or, where applicable, the EU-US Data Privacy Framework.
+            Most processing happens within the EU. Some sub-processors (Postmark, Meta, Twilio, Stripe, Upstash, Anthropic, Apple, Expo) are based in the United States and may process data there. Where this happens we rely on the European Commission&rsquo;s Standard Contractual Clauses or, where applicable, the EU-US Data Privacy Framework.
           </p>
 
           <h2 className="text-xl font-semibold mt-8 mb-3">7. How long we keep it</h2>
@@ -158,9 +163,10 @@ export default function PrivacyPolicy() {
             For privacy questions or to exercise any of the rights above:
           </p>
           <p>
-            <strong>UN1T Dublin Ltd</strong><br />
-            Email: <a className="underline" href="mailto:privacy@un1tdublin.com">privacy@un1tdublin.com</a><br />
-            Postal address available on request.
+            <strong>Champ Fitness Ltd</strong> (trading as UN1T Dublin)<br />
+            First Floor Unit, Stillorgan Village Centre,<br />
+            Lower Kilmacud Road, Dublin, A94 AC67<br />
+            Email: <a className="underline" href="mailto:privacy@un1tdublin.com">privacy@un1tdublin.com</a>
           </p>
         </section>
       </div>

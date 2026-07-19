@@ -17,7 +17,7 @@ export const runtime = 'nodejs'
 export const metadata = {
   title: 'Terms of Service · UN1T Dublin',
   description:
-    'The terms on which UN1T Dublin Ltd provides its website, booking pages, member communications, and CRM platform.',
+    'The terms on which Champ Fitness Ltd (trading as UN1T Dublin) provides its website, booking pages, member communications, and CRM platform.',
 }
 
 export default function TermsOfService() {
@@ -32,7 +32,8 @@ export default function TermsOfService() {
         <section className="prose prose-gray max-w-none">
           <p>
             These terms govern your use of the websites, booking pages, member
-            communications, and software platform provided by UN1T Dublin Ltd
+            communications, and software platform provided by Champ Fitness
+            Ltd, trading as UN1T Dublin
             (&ldquo;UN1T&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;),
             including <strong>un1tdublin.com</strong> and{' '}
             <strong>crm.un1tdublin.com</strong> (together, the
@@ -42,7 +43,8 @@ export default function TermsOfService() {
 
           <h2 className="text-xl font-semibold mt-8 mb-3">1. Who we are</h2>
           <p>
-            UN1T Dublin Ltd is a company registered in Ireland. We operate the
+            Champ Fitness Ltd, trading as UN1T Dublin, is a company
+            registered in Ireland. We operate the
             UN1T fitness studios and the software platform used to run them,
             including class bookings, member communications, and related
             business tools. You can contact us at{' '}
@@ -158,13 +160,14 @@ export default function TermsOfService() {
 
           <h2 className="text-xl font-semibold mt-8 mb-3">13. Contact</h2>
           <p>
-            <strong>UN1T Dublin Ltd</strong>
+            <strong>Champ Fitness Ltd</strong> (trading as UN1T Dublin)
+            <br />
+            First Floor Unit, Stillorgan Village Centre,
+            Lower Kilmacud Road, Dublin, A94 AC67
             <br />
             Email: <a className="underline" href="mailto:hello@un1tdublin.com">hello@un1tdublin.com</a>
             <br />
             For privacy questions: <a className="underline" href="mailto:privacy@un1tdublin.com">privacy@un1tdublin.com</a>
-            <br />
-            Postal address available on request.
           </p>
         </section>
       </div>
