@@ -30,6 +30,7 @@ import {
 } from '@/lib/bca'
 import { mergeAndCompressBcaPack } from '@/lib/bca-merge'
 import { getBcaBaseUrl } from '@/lib/app-url'
+import { overlayConnections } from '@/lib/connection-registry'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -57,11 +58,14 @@ export async function POST(_request, props) {
   const guard = assertLocationAccessOr404(user, car.location_id)
   if (guard) return guard
 
-  const { data: location } = await db
+  const { data: locationRow } = await db
     .from('locations')
     .select('id, features, bca_config')
     .eq('id', car.location_id)
     .single()
+  // INTEG-A2 dual-read: registry `bca` row replaces legacy bca_config
+  // when present (features.bca_submit gate stays on locations).
+  const location = await overlayConnections(db, locationRow, ['bca'])
   const config = getBcaConfig(location)
   if (!config) {
     return NextResponse.json({ success: false, error: 'BCA Submit is not enabled at this location' }, { status: 404 })

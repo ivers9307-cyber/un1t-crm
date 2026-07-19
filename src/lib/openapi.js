@@ -2211,6 +2211,22 @@ registry.registerPath({
   },
 })
 
+// Connections-registry legacy re-sync (INTEG-A2)
+registry.registerPath({
+  method: 'post',
+  path: '/api/locations/{id}/connections/refresh',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Re-sync channel_connections registry rows from the location\'s legacy config (admin)',
+  description: 'INTEG-A2 dual-write bridge: re-reads the location\'s legacy integration fields (settings.glofox, settings.unifi, sensibo/thinq columns, twilio_alpha_sender_id, bca_config) and upserts/deactivates the matching active channel_connections rows using the mig 412 mapping. Fired by the integration settings tabs after a legacy save. Idempotent. Returns { results: { platform: action } }.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Per-platform sync results' },
+    403: { description: 'Forbidden — admin role at this location required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Location create (SAAS4-W0.1) — server-side so per-location defaults
 // (FUNNEL.1 pipeline stages) are seeded atomically with the row.
 registry.registerPath({

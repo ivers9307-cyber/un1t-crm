@@ -17,7 +17,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import {
-  getLocationUnifiConfig,
+  getUnifiConfig,
   listDoors,
   UnifiError,
 } from '@/lib/unifi-access'
@@ -57,7 +57,8 @@ export async function GET(_request, { params }) {
     return NextResponse.json({ success: false, error: 'location_not_found' }, { status: 404 })
   }
 
-  const cfg = getLocationUnifiConfig(location)
+  // INTEG-A2 dual-read: registry row first, legacy settings.unifi otherwise.
+  const cfg = await getUnifiConfig(db, location)
   if (!cfg.configured) {
     // Same shape as /unifi-users so the staff-form code can treat
     // both endpoints with one error-handling branch.

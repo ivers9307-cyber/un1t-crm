@@ -28,6 +28,7 @@ import { z } from 'zod'
 import { withAuth } from '@/lib/with-auth'
 import { validateBody } from '@/lib/validate'
 import { resolveAcAllowlist, filterAcDevices } from '@shared/permissions'
+import { overlayConnections } from '@/lib/connection-registry'
 
 const AcDeviceCreateSchema = z.object({
   provider: z.string().optional(),
@@ -118,11 +119,13 @@ export const POST = withAuth(
 
     // Confirm the relevant vendor credentials exist on the location.
     // A device row with no path to the vendor is useless.
-    const { data: loc } = await db
+    const { data: locRow } = await db
       .from('locations')
-      .select('sensibo_api_key, thinq_pat, thinq_client_id')
+      .select('id, sensibo_api_key, thinq_pat, thinq_client_id')
       .eq('id', locationId)
       .single()
+    // INTEG-A2 dual-read: registry sensibo/thinq rows first.
+    const loc = await overlayConnections(db, locRow, ['sensibo', 'thinq'])
     if (provider === 'sensibo' && !loc?.sensibo_api_key) {
       return NextResponse.json({
         success: false,

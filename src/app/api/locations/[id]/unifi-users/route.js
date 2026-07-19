@@ -18,7 +18,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import {
-  getLocationUnifiConfig,
+  getUnifiConfig,
   listUnifiUsers,
   UnifiError,
 } from '@/lib/unifi-access'
@@ -58,7 +58,8 @@ export async function GET(_request, { params }) {
     return NextResponse.json({ success: false, error: 'location_not_found' }, { status: 404 })
   }
 
-  const cfg = getLocationUnifiConfig(location)
+  // INTEG-A2 dual-read: registry row first, legacy settings.unifi otherwise.
+  const cfg = await getUnifiConfig(db, location)
   if (!cfg.configured) {
     // Distinct error so the picker UI can show a clear "configure
     // UniFi for this location first" message rather than a network
