@@ -7,6 +7,7 @@
 import { parseFlowCompletion } from './handler.js'
 import { applyFormMarketingConsent } from '@/lib/marketing-consent.js'
 import { createEventBooking } from '@/lib/bookings-write.js'
+import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash.js'
 import { sendCtwaConversion } from '@/lib/meta-capi'
 
 export async function handleFlowCompletion(db, { interactive, contact, locationId }) {
@@ -25,14 +26,30 @@ export async function handleFlowCompletion(db, { interactive, contact, locationI
   if (path === 'class') {
     const [glofoxEventId, startsAt, ...nameParts] = String(selection.slot || '').split('|')
     const className = nameParts.join('|')
-    const { error } = await db.from('class_booking_requests').insert({
+    const { data: queuedRow, error } = await db.from('class_booking_requests').insert({
       location_id: locationId, contact_id: contact.id,
       glofox_event_id: glofoxEventId, class_name: className, starts_at: startsAt,
       customer_name: person.name, customer_email: person.email, customer_phone: person.phone,
       status: 'queued',
-    })
+    }).select('id').maybeSingle()
     // 23505 = a concurrent request already queued this (contact, class) — a successful dedupe.
     if (error && error.code !== '23505') { console.error('[wa-flow] class enqueue failed:', error.message); return { handled: false } }
+    // QSTASH.7 — push delivery. Fire-and-forget: env-gated (no QSTASH_TOKEN →
+    // skipped), any failure leaves the row for the process-class-bookings cron
+    // — the queue table is the delivery guarantee. Dedup id is DASH-ONLY
+    // (QStash 400s on colons). The 23505 dedupe path has no id → no publish;
+    // the original submit's publish / the cron covers that row.
+    if (queuedRow?.id) {
+      try {
+        await publishQueuePush({
+          path: CLASS_BOOKINGS_WORKER_PATH,
+          body: { id: queuedRow.id },
+          deduplicationId: `class-booking-${queuedRow.id}`,
+        })
+      } catch {
+        // publishQueuePush swallows its own errors; belt-and-braces only.
+      }
+    }
     return { handled: true, kind: 'class' }
   }
 

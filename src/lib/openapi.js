@@ -652,6 +652,27 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/webhooks/qstash/class-bookings',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker for the class-booking queue',
+  description:
+    'QStash → CRM. Delivers `{ id }` of a class_booking_requests row published by /api/public/class-booking or the ' +
+    'WhatsApp Flow completion handler; verified via the Upstash-Signature HS256 JWT (current + next signing keys). ' +
+    'Runs the row through the same claim CAS as the /api/cron/process-class-bookings sweeper — 200 for every ' +
+    'decision-tree outcome (booked / routed to review / terminally failed: the processor stamps the row itself, a ' +
+    'retry cannot improve it) and for skips; 500 only when the processor throws (row re-queued under the attempt ' +
+    'cap, so the QStash retry re-runs it).',
+  request: { body: { content: { 'application/json': { schema: z.object({ id: uuidLike }).openapi('QstashClassBookingsMessage') } } } },
+  responses: {
+    200: { description: 'Booking request processed (row stamped by the decision tree), or skipped (row already claimed / handled)' },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Processor threw — row re-queued under the attempt cap; QStash should retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/webhooks/inbody',
   tags: ['Webhooks (Inbound)'],
   security: [{ WebhookToken: [] }],
