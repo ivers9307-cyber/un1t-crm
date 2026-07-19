@@ -67,15 +67,28 @@ the same Integrations → Instagram tab — it is OFF by default.
 
 ## After the WA Tech Provider review decision
 
-1. Submit App Review for **`instagram_business_manage_messages`** (+
-   `instagram_business_basic` if flagged) advanced access: screencast of DM → inbox → reply,
-   usage justification (reuse the tight style from the WA submission), data-handling answers
-   already backed by the public authority-requests policy.
-2. On approval: general-public DMs flow. Announce internally; watch the first week's volume.
-3. Optional later flip: the Mia toggle → she goes live on IG.
-4. SaaS onboarding (franchise locations / future clients self-connecting via embedded
-   Instagram business login — section 4 of the API-setup page) is deliberately deferred
-   until after App Review.
+**HOLD (2026-07-19): nothing below happens until Meta rules on the WhatsApp Tech Provider
+submission** — App Review is per parent app and the WA request is in flight on the same app.
+
+Console prep already parked (Business login settings saved 2026-07-19, endpoints NOT yet
+implemented):
+- OAuth redirect: `https://crm.un1tdublin.com/api/instagram/business-login/callback`
+- Deauthorize: `https://crm.un1tdublin.com/api/instagram/business-login/deauthorize`
+- Data deletion: `https://crm.un1tdublin.com/api/instagram/business-login/data-deletion`
+
+1. **Build the business-login flow FIRST — it is an App Review prerequisite, not a
+   post-review item** (the console's step-5 flow expects reviewers to exercise a working
+   business login, and they probe the data-deletion URL). One PR: OAuth start route +
+   the three parked endpoints above (signed-request verification via `INSTAGRAM_APP_SECRET`;
+   deauthorize flips the connection `is_active=false`; data deletion answers Meta's
+   confirmation-code protocol, backed by the public `/privacy` pages). This is the same
+   code the franchise/SaaS onboarding needs — nothing wasted.
+2. Submit App Review for **`instagram_business_manage_messages`** (+
+   `instagram_business_basic` if flagged) advanced access: screencast of business login →
+   DM → inbox → reply, usage justification (reuse the tight style from the WA submission),
+   data-handling answers already backed by the public authority-requests policy.
+3. On approval: general-public DMs flow. Announce internally; watch the first week's volume.
+4. Optional later flip: the Mia toggle → she goes live on IG.
 
 ## Known limitations (accepted)
 
