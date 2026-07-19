@@ -7,20 +7,28 @@
 // window (min(60 * 2^attempts, 3600) seconds). Processes oldest first, capped
 // at BATCH_SIZE. Calls stampHeartbeat on completion.
 //
-// Provider eligibility: inbody + postmark only (idempotency-verified).
-// Glofox is excluded from the REPLAYABLE_PROVIDERS list because action-replay
-// is not safe (partial-completion risk).
+// QSTASH.3: this cron is now the SWEEPER, not the only consumer — the
+// dead-letter capture (deadLetterWebhook) also publishes each replayable
+// row to QStash, whose worker (/api/webhooks/qstash/webhook-replay)
+// replays it ~60s after capture via the same claim CAS in
+// src/lib/webhook-replay-queue.js. With QStash healthy this loop mostly
+// finds an empty batch; it remains the delivery guarantee for publish
+// failures, QStash outages, and rows whose QStash retries were exhausted.
+//
+// Provider eligibility: inbody + postmark only (idempotency-verified) —
+// REPLAYABLE_PROVIDERS derives from the re-driver registry in
+// src/lib/webhook-replay.js. Glofox is intentionally absent because
+// action-replay is not safe (partial-completion risk).
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { isReplayable, replayDeadLetter } from '@/lib/webhook-replay'
+import { claimAndReplayDeadLetterRow, REPLAYABLE_PROVIDERS } from '@/lib/webhook-replay-queue'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const BATCH_SIZE = 100
-const REPLAYABLE_PROVIDERS = ['inbody', 'postmark']
 
 function unauthorized() {
   return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
@@ -83,17 +91,21 @@ export async function GET(request) {
       }
     }
 
-    // Safety: verify the provider is still in the registry (belt + suspenders).
-    if (!isReplayable(row.provider)) {
-      summary.skipped += 1
-      continue
-    }
-
-    const result = await replayDeadLetter(db, row)
-    if (result.ok) {
+    // Claim-before-replay CAS, shared with the QStash worker route
+    // (src/lib/webhook-replay-queue.js). Vercel cron does not skip an
+    // overlapping invocation, and the QStash push consumer races this
+    // loop by design — the CAS means exactly one claimant replays each
+    // row; everyone else sees `skipped` (which also covers the old
+    // belt-and-suspenders isReplayable check — the lib skips
+    // non-replayable rows without touching them).
+    const outcome = await claimAndReplayDeadLetterRow(db, row)
+    if (outcome.status === 'processed') {
       summary.replayed += 1
+    } else if (outcome.status === 'skipped') {
+      summary.skipped += 1
     } else {
       summary.failed += 1
+      console.warn(`[cron webhook-replay] row ${row.id} (${row.provider}) failed (attempt ${(row.attempts || 1) + 1}): ${outcome.error}`)
     }
   }
 

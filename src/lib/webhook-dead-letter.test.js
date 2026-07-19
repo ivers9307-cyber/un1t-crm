@@ -1,25 +1,48 @@
 // Tests for the webhook dead-letter capture helper.
 // Pure unit tests — no DB. The Supabase client is mocked.
+//
+// QSTASH.3: capture now also fire-and-forget publishes a replay push to
+// QStash for REPLAYABLE providers (dedup id `webhook-replay-<id>` —
+// dash-only, QStash 400s on colons; 60s delay so the first replay
+// respects the original minimum backoff). The publish must never affect
+// the capture's own never-throws contract.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
+vi.mock('@/lib/qstash', () => ({
+  publishQueuePush: vi.fn().mockResolvedValue({ ok: true, messageId: 'msg-test' }),
+  WEBHOOK_REPLAY_WORKER_PATH: '/api/webhooks/qstash/webhook-replay',
+}))
+vi.mock('@/lib/webhook-replay', () => ({
+  isReplayable: vi.fn((p) => p === 'inbody' || p === 'postmark'),
+}))
 
 import { deadLetterWebhook } from './webhook-dead-letter.js'
 import { logWarn } from '@/lib/log'
+import { publishQueuePush, WEBHOOK_REPLAY_WORKER_PATH } from '@/lib/qstash'
 
 // ── db mock factory ────────────────────────────────────────────────────────────
 
-function makeDb({ insertError = null, insertThrows = false } = {}) {
-  const insertMock = vi.fn()
+/**
+ * The capture insert chains .select('id').single() so the new row's id is
+ * available for the replay push publish.
+ */
+function makeDb({ insertError = null, insertThrows = false, insertedId = 101 } = {}) {
+  const singleMock = vi.fn()
   if (insertThrows) {
-    insertMock.mockRejectedValue(new Error('DB exploded'))
+    singleMock.mockRejectedValue(new Error('DB exploded'))
   } else {
-    insertMock.mockResolvedValue({ error: insertError })
+    singleMock.mockResolvedValue(
+      insertError ? { data: null, error: insertError } : { data: { id: insertedId }, error: null }
+    )
   }
+  const selectMock = vi.fn().mockReturnValue({ single: singleMock })
+  const insertMock = vi.fn().mockReturnValue({ select: selectMock })
   return {
     from: vi.fn().mockReturnValue({ insert: insertMock }),
     _insertMock: insertMock,
+    _selectMock: selectMock,
   }
 }
 
@@ -85,6 +108,50 @@ describe('deadLetterWebhook', () => {
     await deadLetterWebhook(db, { provider: 'glofox', payload: null })
     const [row] = db._insertMock.mock.calls[0]
     expect(row.payload).toEqual({})
+  })
+
+  // ── QSTASH.3 replay push ────────────────────────────────────────────────────
+
+  it('publishes a delayed replay push for a replayable provider after a successful insert', async () => {
+    const db = makeDb({ insertedId: 42 })
+    await deadLetterWebhook(db, { provider: 'postmark', payload: { x: 1 } })
+
+    expect(publishQueuePush).toHaveBeenCalledTimes(1)
+    expect(publishQueuePush).toHaveBeenCalledWith({
+      path: WEBHOOK_REPLAY_WORKER_PATH,
+      body: { id: 42 },
+      deduplicationId: 'webhook-replay-42',
+      delaySeconds: 60,
+    })
+  })
+
+  it('uses a dash-only dedup id (QStash 400s on colons)', async () => {
+    const db = makeDb({ insertedId: 7 })
+    await deadLetterWebhook(db, { provider: 'inbody', payload: {} })
+
+    const [{ deduplicationId }] = publishQueuePush.mock.calls[0]
+    expect(deduplicationId).toBe('webhook-replay-7')
+    expect(deduplicationId).not.toContain(':')
+  })
+
+  it('does NOT publish for a non-replayable provider (glofox)', async () => {
+    const db = makeDb()
+    await deadLetterWebhook(db, { provider: 'glofox', payload: {} })
+    expect(publishQueuePush).not.toHaveBeenCalled()
+  })
+
+  it('does NOT publish when the insert fails', async () => {
+    const db = makeDb({ insertError: { message: 'insert failed', code: '23000' } })
+    await deadLetterWebhook(db, { provider: 'postmark', payload: {} })
+    expect(publishQueuePush).not.toHaveBeenCalled()
+  })
+
+  it('does NOT throw when the publish rejects (belt-and-braces around a never-throws helper)', async () => {
+    publishQueuePush.mockRejectedValueOnce(new Error('qstash exploded'))
+    const db = makeDb()
+    await expect(
+      deadLetterWebhook(db, { provider: 'postmark', payload: {} })
+    ).resolves.toBeUndefined()
   })
 
   // ── never throws ────────────────────────────────────────────────────────────

@@ -144,9 +144,18 @@ The earlier Files API path (`src/lib/xero/files.js`) is retained as a deprecatio
 
 When adding a new webhook handler, read the body with `await request.text()` first (verify HMAC), then `JSON.parse()` — calling `request.json()` consumes the body and the re-serialised JSON won't byte-match the signed payload. Mirror the Postmark pattern of exporting the pure auth predicate from the route module so the test can exercise it without mocking Supabase (see `verifyTwilioSignature` in the Twilio status webhook for another example).
 
-### QStash push delivery (pilot: Postmark webhook queue)
+### QStash push delivery
 
-QSTASH.1 adds push-based delivery for `postmark_webhook_queue` alongside the drain cron. Flow: `/api/webhooks/postmark` inserts the queue row (unchanged), then fire-and-forget publishes `{ id }` to QStash, which POSTs `/api/webhooks/qstash/postmark` — signature-verified (`Upstash-Signature` HS256 JWT, both signing keys accepted for rotation) and processed through the **same claim CAS** as the cron (`src/lib/postmark-queue.js`), so the two consumers race safely. Worker returns 200 for processed/skipped, 500 to make QStash retry; rows QStash gives up on stay pending and the cron sweeps them. **Setup (operator):** create an Upstash account → QStash → copy the token + current/next signing keys into Vercel env. **Rollback / kill switch:** unset `QSTASH_TOKEN` — publishing stops, the cron carries everything again; no code change, no data loss (the queue table is the source of truth throughout). Publish dedup key `postmark-queue:<row id>` guards double-publish on webhook-route retries.
+QSTASH.1 (pilot) added push-based delivery for `postmark_webhook_queue` alongside its drain cron; QSTASH.3 extended the pattern to webhook dead-letter replays. Common shape: the enqueue site inserts its queue/dead-letter row (unchanged), then fire-and-forget publishes `{ id }` to QStash via `publishQueuePush` (`src/lib/qstash.js` — env-gated on `QSTASH_TOKEN`, never throws), which POSTs the worker route — signature-verified (`Upstash-Signature` HS256 JWT, both signing keys accepted for rotation) and processed through the **same claim CAS** as the sweeper cron, so the two consumers race safely. Workers return 200 for processed/skipped, 500 to make QStash retry; rows QStash gives up on stay pending and the cron sweeps them.
+
+Migrated jobs:
+
+| Job | Enqueue site (publish) | Worker route | Shared claim lib | Sweeper cron |
+|---|---|---|---|---|
+| Postmark webhook queue | `/api/webhooks/postmark` (dedup `postmark-queue-<id>`) | `/api/webhooks/qstash/postmark` | `src/lib/postmark-queue.js` (CAS on `processed_at` NULL→now) | `/api/cron/process-postmark-webhooks` (`*/2`) |
+| Webhook dead-letter replay | `deadLetterWebhook()` in `src/lib/webhook-dead-letter.js`, replayable providers only (dedup `webhook-replay-<id>`, 60s `Upstash-Delay` so the first replay respects the minimum backoff) | `/api/webhooks/qstash/webhook-replay` | `src/lib/webhook-replay-queue.js` (CAS on `last_attempt_at` unchanged-since-read; no status flip — the table has no 'replaying' status) | `/api/cron/webhook-replay` (`*/5`, keeps the exponential backoff for swept rows; QStash's own retry schedule covers pushed rows) |
+
+**Setup (operator):** create an Upstash account → QStash → copy the token + current/next signing keys into Vercel env. **Rollback / kill switch:** unset `QSTASH_TOKEN` — publishing stops, the crons carry everything again; no code change, no data loss (the tables are the source of truth throughout). **Dedup keys are DASH-ONLY** — QStash 400s on colons in `Upstash-Deduplication-Id` (undocumented; the first live publish proved it).
 
 ### Rate limiting
 

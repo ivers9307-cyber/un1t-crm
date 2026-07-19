@@ -8,6 +8,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import crypto from 'node:crypto'
 import {
   POSTMARK_WORKER_PATH,
+  WEBHOOK_REPLAY_WORKER_PATH,
   qstashEnabled,
   publishQueuePush,
   verifyQStashSignature,
@@ -200,6 +201,62 @@ describe('publishQueuePush', () => {
 
     expect(result.ok).toBe(false)
     expect(result.error).toBe('boom')
+  })
+
+  // QSTASH.3 — delaySeconds → Upstash-Delay header. Used by the
+  // webhook-replay publish so the first push respects the dead-letter
+  // minimum backoff instead of replaying instantly.
+  it('exports the webhook-replay worker path', () => {
+    expect(WEBHOOK_REPLAY_WORKER_PATH).toBe('/api/webhooks/qstash/webhook-replay')
+  })
+
+  it('sets the Upstash-Delay header when delaySeconds is given', async () => {
+    vi.stubEnv('QSTASH_TOKEN', 'tok_123')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.example.com')
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ messageId: 'msg_4' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await publishQueuePush({
+      path: WEBHOOK_REPLAY_WORKER_PATH,
+      body: { id: 1 },
+      delaySeconds: 60,
+    })
+
+    const [, opts] = fetchMock.mock.calls[0]
+    expect(opts.headers['Upstash-Delay']).toBe('60s')
+  })
+
+  it('omits the Upstash-Delay header when delaySeconds is not given (existing callers unchanged)', async () => {
+    vi.stubEnv('QSTASH_TOKEN', 'tok_123')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.example.com')
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ messageId: 'msg_5' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await publishQueuePush({ path: POSTMARK_WORKER_PATH, body: {} })
+
+    const [, opts] = fetchMock.mock.calls[0]
+    expect('Upstash-Delay' in opts.headers).toBe(false)
+  })
+
+  it.each([0, -5, NaN, 'sixty'])('omits the Upstash-Delay header for invalid delaySeconds %s', async (delaySeconds) => {
+    vi.stubEnv('QSTASH_TOKEN', 'tok_123')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://crm.example.com')
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ messageId: 'msg_6' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await publishQueuePush({ path: WEBHOOK_REPLAY_WORKER_PATH, body: {}, delaySeconds })
+
+    const [, opts] = fetchMock.mock.calls[0]
+    expect('Upstash-Delay' in opts.headers).toBe(false)
   })
 
   it('returns ok:false (never throws) when NEXT_PUBLIC_APP_URL is unset', async () => {

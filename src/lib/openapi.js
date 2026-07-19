@@ -594,6 +594,24 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/webhooks/qstash/webhook-replay',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker for webhook dead-letter replays',
+  description:
+    'QStash → CRM. Delivers `{ id }` of a webhook_dead_letter row published by deadLetterWebhook() (60s delay); ' +
+    'verified via the Upstash-Signature HS256 JWT (current + next signing keys). Replays through the same ' +
+    'claim CAS as the /api/cron/webhook-replay sweeper — 200 processed/skipped, 500 asks QStash to retry.',
+  request: { body: { content: { 'application/json': { schema: z.object({ id: z.number().int() }).openapi('QstashWebhookReplayMessage') } } } },
+  responses: {
+    200: { description: 'Replayed, or skipped (row already handled / not eligible)' },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Replay failed — QStash should retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/webhooks/inbody',
   tags: ['Webhooks (Inbound)'],
   security: [{ WebhookToken: [] }],

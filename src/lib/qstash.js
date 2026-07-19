@@ -28,6 +28,9 @@ import crypto from 'node:crypto'
 import { getAppUrl } from './app-url.js'
 
 export const POSTMARK_WORKER_PATH = '/api/webhooks/qstash/postmark'
+// QSTASH.3 — worker for webhook_dead_letter replay pushes (published by
+// deadLetterWebhook, swept by /api/cron/webhook-replay).
+export const WEBHOOK_REPLAY_WORKER_PATH = '/api/webhooks/qstash/webhook-replay'
 
 const QSTASH_PUBLISH_BASE = 'https://qstash.upstash.io/v2/publish/'
 
@@ -44,10 +47,13 @@ export function qstashEnabled() {
  * @param {object} opts
  * @param {string} opts.path — worker route path (e.g. POSTMARK_WORKER_PATH)
  * @param {object} opts.body — JSON payload delivered to the worker
- * @param {string} [opts.deduplicationId] — QStash-side dedup key
+ * @param {string} [opts.deduplicationId] — QStash-side dedup key. DASH-ONLY:
+ *   QStash 400s on colons in this header (undocumented; bitten 2026-07-17).
+ * @param {number} [opts.delaySeconds] — QStash-side delivery delay
+ *   (`Upstash-Delay` header). Ignored unless a finite number > 0.
  * @returns {Promise<{ok: true, messageId: string} | {ok: false, skipped?: true, error?: string}>}
  */
-export async function publishQueuePush({ path, body, deduplicationId }) {
+export async function publishQueuePush({ path, body, deduplicationId, delaySeconds }) {
   if (!qstashEnabled()) return { ok: false, skipped: true }
 
   try {
@@ -57,6 +63,9 @@ export async function publishQueuePush({ path, body, deduplicationId }) {
       'Content-Type': 'application/json',
     }
     if (deduplicationId) headers['Upstash-Deduplication-Id'] = deduplicationId
+    if (Number.isFinite(delaySeconds) && delaySeconds > 0) {
+      headers['Upstash-Delay'] = `${delaySeconds}s`
+    }
 
     const resp = await fetch(`${QSTASH_PUBLISH_BASE}${destination}`, {
       method: 'POST',

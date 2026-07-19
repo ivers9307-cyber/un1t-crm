@@ -71,6 +71,13 @@ const REPLAYERS = {
 }
 
 /**
+ * The registry keys, exported for query filters (`.in('provider', …)`) so
+ * the cron, the QStash worker and the dead-letter publish gate all share
+ * ONE source of truth for which providers are auto-replayable (QSTASH.3).
+ */
+export const REPLAYABLE_PROVIDERS = Object.freeze(Object.keys(REPLAYERS))
+
+/**
  * Returns true when a provider has a registered idempotent re-driver.
  * Glofox and any unknown provider returns false.
  */
@@ -122,17 +129,20 @@ export async function replayDeadLetter(db, row, { maxAttempts = DEFAULT_MAX_ATTE
   } catch (e) {
     // Failure — bump attempts, maybe promote to 'failed'.
     const nextStatus = newAttempts >= maxAttempts ? 'failed' : 'pending'
+    const errMsg = String(e?.message || e).slice(0, 2000)
 
     await db
       .from('webhook_dead_letter')
       .update({
         attempts:        newAttempts,
-        error:           String(e?.message || e).slice(0, 2000),
+        error:           errMsg,
         last_attempt_at: now,
         status:          nextStatus,
       })
       .eq('id', row.id)
 
-    return { ok: false, status: nextStatus }
+    // error surfaced (QSTASH.3) so the queue lib / worker 500 body is
+    // diagnosable from QStash + Vercel logs, not just the table row.
+    return { ok: false, status: nextStatus, error: errMsg }
   }
 }
