@@ -187,10 +187,10 @@ describe('resolveWhatsAppNumberByPhoneNumberId — inbound webhook routing', () 
 })
 
 // WA-TECHPROV.4b — transient lookup errors must never look like
-// "unknown number" (which the webhook now DROPS). supabase-js never
-// throws; errors come back as { error }, so returning null here would
-// silently turn a 30s DB blip into permanently lost messages (the
-// webhook 200s + dedups, Meta never retries).
+// "unknown number". supabase-js never throws; errors come back as
+// { error }, so returning null here would be indistinguishable from a
+// genuinely unregistered number. The webhook drops BOTH (SAAS-2), but
+// the throw keeps the two cases separately loggable.
 describe('resolveWhatsAppNumberByPhoneNumberId — lookup errors (WA-TECHPROV.4b)', () => {
   it('lookup error + phone_number_id matches env → returns env config (live number survives a DB blip)', async () => {
     createServerClient.mockReturnValue(mockDb({ error: { message: 'boom' } }))
@@ -202,7 +202,7 @@ describe('resolveWhatsAppNumberByPhoneNumberId — lookup errors (WA-TECHPROV.4b
     expect(cfg?.phoneNumberId).toBe('env-pni-live')
   })
 
-  it('lookup error + phone_number_id does NOT match env → THROWS (webhook catch → first-location fallback)', async () => {
+  it('lookup error + phone_number_id does NOT match env → THROWS (webhook catch → drop + structured log)', async () => {
     createServerClient.mockReturnValue(mockDb({ error: { message: 'boom' } }))
     process.env.WHATSAPP_ACCESS_TOKEN = 'env-token'
     process.env.WHATSAPP_PHONE_NUMBER_ID = 'env-pni-other'
@@ -219,21 +219,24 @@ describe('resolveWhatsAppNumberByPhoneNumberId — lookup errors (WA-TECHPROV.4b
   })
 })
 
-describe('classifyInboundOwner — WA-TECHPROV.4 webhook hardening', () => {
+// SAAS-2 — only an active whatsapp_numbers row may own inbound traffic.
+// The first_location action is gone: routing a message we can't
+// attribute into the first locations row was a cross-tenant leak.
+describe('classifyInboundOwner — SAAS-2 strict tenant routing', () => {
   it('unknown phone_number_id (resolver returned null) → drop', () => {
     expect(classifyInboundOwner(null)).toEqual({ action: 'drop' })
   })
-  it('env config (Stillorgan path) → first-location fallback, unchanged', () => {
+  it('env config → drop (an env config carries no tenant to route into)', () => {
     expect(classifyInboundOwner({ source: 'env', phoneNumberId: '1233588839827698' }))
-      .toEqual({ action: 'first_location' })
+      .toEqual({ action: 'drop' })
   })
   it('db row with a location → route to that location', () => {
     expect(classifyInboundOwner({ source: 'db', locationId: 'L9' }))
       .toEqual({ action: 'location', locationId: 'L9' })
   })
-  it('db row somehow missing locationId → first-location, never drop', () => {
+  it('db row somehow missing locationId → drop, never a guessed tenant', () => {
     expect(classifyInboundOwner({ source: 'db', locationId: null }))
-      .toEqual({ action: 'first_location' })
+      .toEqual({ action: 'drop' })
   })
 })
 
