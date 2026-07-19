@@ -12,7 +12,7 @@ export default async function EditStaffPage(props) {
   if (!user || (!user.isMaster && user.role !== 'owner')) redirect('/')
 
   const db = createServerClient()
-  const [profileRes, locationsRes, templatesRes] = await Promise.all([
+  const [profileRes, locationsRes, templatesRes, orgsRes, orgGrantsRes] = await Promise.all([
     // CRITICAL: select profile_locations(*) — EVERY column — so
     // mapProfileLocationToAssignment() always receives the full row.
     // History: a narrowed explicit column list silently dropped a
@@ -33,6 +33,15 @@ export default async function EditStaffPage(props) {
     // PERM-AUDIT.3 — role templates (mig 364) so the form hydrates
     // toggles against the role's EFFECTIVE defaults at each location.
     db.from('location_role_permissions').select('location_id, role, employment_type, permissions'),
+    // SAAS-4 (mig 411) — org list + current org-admin grants for the
+    // master-only Organisation Admin card. Owners never see the card,
+    // so both fetches are skipped for them.
+    user.isMaster
+      ? db.from('organizations').select('id, name, slug').eq('active', true).order('name')
+      : Promise.resolve({ data: null }),
+    user.isMaster
+      ? db.from('profile_organizations').select('organization_id').eq('profile_id', params.id)
+      : Promise.resolve({ data: null }),
   ])
 
   if (!profileRes.data) notFound()
@@ -88,6 +97,8 @@ export default async function EditStaffPage(props) {
         callerIsMaster={!!user.isMaster}
         callerOwnerLocationIds={callerOwnerLocationIds}
         roleTemplates={roleTemplates}
+        organizations={orgsRes?.data || []}
+        orgAdminOrgIds={(orgGrantsRes?.data || []).map(g => g.organization_id)}
       />
     </div>
   )
