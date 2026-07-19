@@ -43,6 +43,7 @@ import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
 import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
 import { CARD_TOOLS, CARD_TOOL_NAMES, executeCardTool } from './card-tools'
 import { anthropicMessages } from '@/lib/anthropic'
+import { getAiCapStatus } from '@/lib/usage-caps'
 
 export const AGENT_MODEL = 'claude-sonnet-4-6'
 
@@ -287,6 +288,24 @@ async function runChannelAgentInner(db, adapter, ctx) {
       return await softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, lastReplyAt: conv?.agent_last_reply_at })
     }
     return { handled: false, reason: decision.reason }
+  }
+
+  // SAAS4-M2 — optional per-org HARD AI-spend cap (Richard 2026-07-19:
+  // overage billing is the default soft band; only an operator-set hard
+  // cap interrupts service). At cap: soft-handoff — holding message +
+  // manager push, debounced, agent stays armed so raising the cap
+  // re-engages it on the next inbound. Fails OPEN inside the helper.
+  const aiCap = await getAiCapStatus({ locationId })
+  if (aiCap.capped) {
+    return await softHandoff(db, adapter, {
+      conversationId, locationId, recipient, contactId, connection, settings,
+      lastReplyAt: conv?.agent_last_reply_at,
+      reason: 'ai_cap',
+      notify: {
+        title: `${adapter.label} · agent paused (AI cap)`,
+        body: `The org's monthly AI hard cap is reached (est. $${(aiCap.spendCents / 100).toFixed(2)} of $${(aiCap.capCents / 100).toFixed(2)}). The customer got the holding message — needs a human. Raise or clear the cap to resume Mia.`,
+      },
+    })
   }
 
   // Concurrency claim — stop two near-simultaneous inbound messages from
