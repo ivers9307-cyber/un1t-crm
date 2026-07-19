@@ -1,0 +1,617 @@
+'use client'
+
+// INTEG-B1 — the Integrations hub (master-only rollout, phase B).
+//
+// Faithful product-code reproduction of the approved hub mockup
+// (2026-07-19): page header with a location scope switcher, the
+// status-model legend, a "Needs attention" strip, and a card grid in
+// three tiers — Your integrations / Managed by the platform / Master
+// view. Data comes pre-assembled from src/lib/integrations-hub.js
+// (registry + xero_connections + whatsapp_numbers + ad_accounts);
+// this component only filters by scope and renders.
+//
+// Deliberately OMITTED from this phase (they ship later):
+//   - plan & usage strip + wallet (phase C)
+//   - the Postmark email-domain DNS wizard (B3)
+//   - TikTok stays a static coming-soon card
+//
+// Every action is a DEEP LINK into the existing per-location
+// integrations tab (/settings/locations/<id>?tab=<key>) — no new
+// mutation surface in this PR, and the old tabs are untouched.
+
+import { useState } from 'react'
+import Link from 'next/link'
+import {
+  Zap, MessageCircle, Instagram as InstagramIcon, Landmark, Megaphone,
+  Music2, Bot, Mail, MessageSquare, Bell, DoorOpen, Snowflake,
+  CreditCard, FileCheck, Activity,
+} from 'lucide-react'
+import { buttonClasses } from '@/components/ui'
+
+// ── status chips — the light-theme contrast recipe (bg-*-500/10 + text-*-700,
+// lint-enforced via check:guardrails no-low-contrast-chip) ──
+const CHIP_STYLES = {
+  connected: 'bg-green-500/10 text-green-700',
+  action_needed: 'bg-amber-500/10 text-amber-700',
+  error: 'bg-red-500/10 text-red-700',
+  not_connected: 'bg-zinc-500/10 text-zinc-700',
+  platform: 'bg-blue-500/10 text-blue-700',
+  coming_soon: 'border border-dashed border-un1t-border text-un1t-subtle',
+}
+
+const CHIP_LABELS = {
+  connected: 'Connected',
+  action_needed: 'Action needed',
+  error: 'Error',
+  not_connected: 'Not connected',
+  platform: 'Platform-managed',
+  coming_soon: 'Coming soon',
+}
+
+function StatusChip({ status, label }) {
+  const style = CHIP_STYLES[status] || CHIP_STYLES.not_connected
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold whitespace-nowrap ${style}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
+      {label || CHIP_LABELS[status] || status}
+    </span>
+  )
+}
+
+// Card-level aggregation of visible row statuses (scope-aware, so it
+// lives client-side). Mirrors worstStatus() in src/lib/integrations-hub.js —
+// kept local so this client bundle doesn't pull in server-side libs.
+const STATUS_RANK = { error: 3, action_needed: 2, connected: 1, not_connected: 0 }
+function worstOf(statuses) {
+  let best = null
+  for (const s of statuses) {
+    if (!(s in STATUS_RANK)) continue
+    if (best === null || STATUS_RANK[s] > STATUS_RANK[best]) best = s
+  }
+  return best === null ? 'not_connected' : best
+}
+
+function fmtDate(iso) {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function Meter({ label, value, max, warn }) {
+  const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0
+  return (
+    <div className="space-y-1">
+      <div className="flex items-baseline justify-between text-xs text-un1t-subtle tabular-nums">
+        <span>{label}</span>
+        <span>{value.toLocaleString()} / {max.toLocaleString()}</span>
+      </div>
+      <div className="h-1.5 rounded-full bg-un1t-border/60 overflow-hidden">
+        <div
+          className={`h-full rounded-full ${warn ? 'bg-amber-600' : 'bg-un1t-accent'}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
+const linkBtn = (primary = false) =>
+  buttonClasses({ variant: primary ? 'primary' : 'secondary', size: 'sm' })
+
+function HubCard({ icon: Icon, title, locTag, provider, chip, dashed, muted, children }) {
+  return (
+    <div className={`rounded-xl border p-4 flex flex-col gap-3 transition-colors ${
+      dashed
+        ? 'border-dashed border-un1t-border bg-transparent'
+        : muted
+          ? 'border-un1t-border bg-un1t-surface'
+          : 'border-un1t-border bg-white hover:border-un1t-muted/60'
+    }`}>
+      <div className="flex items-start gap-3">
+        <div className={`h-9 w-9 rounded-lg grid place-items-center shrink-0 ${
+          dashed ? 'border border-dashed border-un1t-border text-un1t-muted' : 'bg-un1t-surface text-un1t-text border border-un1t-border'
+        }`} aria-hidden="true">
+          <Icon size={16} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-semibold text-un1t-text flex items-center gap-2 flex-wrap">
+            {title}
+            {locTag && (
+              <span className="text-[10px] font-semibold text-un1t-subtle bg-un1t-surface border border-un1t-border rounded px-1.5 py-px">
+                {locTag}
+              </span>
+            )}
+          </h3>
+          {provider && <p className="text-xs text-un1t-muted mt-0.5">{provider}</p>}
+        </div>
+        {chip}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function SectionHead({ title, sub, hidden }) {
+  return (
+    <div className="mt-10 mb-3">
+      <h2 className={`text-xs font-bold uppercase tracking-wider flex items-center gap-2 ${hidden ? 'text-un1t-muted' : 'text-un1t-subtle'}`}>
+        {title}
+        {hidden && (
+          <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border border-dashed border-un1t-border text-un1t-subtle normal-case tracking-normal">
+            Only you see this section
+          </span>
+        )}
+      </h2>
+      {sub && <p className="text-xs text-un1t-muted mt-1 max-w-3xl">{sub}</p>}
+    </div>
+  )
+}
+
+const DOT = {
+  error: 'bg-red-600',
+  warning: 'bg-amber-600',
+  info: 'bg-blue-600',
+}
+
+export default function IntegrationsHub({ data }) {
+  const [scope, setScope] = useState('all')
+  const locations = data.locations || []
+  const nameById = Object.fromEntries(locations.map((l) => [l.id, l.name]))
+  const inScope = (locationId) => scope === 'all' || locationId === scope
+
+  const glofox = (data.glofox || []).filter((r) => inScope(r.locationId))
+  const whatsapp = (data.whatsapp || []).filter((r) => inScope(r.locationId))
+  const instagram = (data.instagram || []).filter((r) => inScope(r.locationId))
+  const xero = (data.xero || []).filter((r) => inScope(r.locationId))
+  const ads = (data.ads || []).filter((r) => inScope(r.locationId))
+  const sms = (data.sms || []).filter((r) => inScope(r.locationId))
+  const agent = (data.agent || []).filter((r) => inScope(r.locationId))
+  const unifi = (data.unifi || []).filter((r) => inScope(r.locationId))
+  const climate = (data.climate || []).filter((r) => inScope(r.locationId))
+  const bca = (data.bca || []).filter((r) => inScope(r.locationId))
+  const attention = (data.attention || []).filter((r) => inScope(r.locationId))
+
+  const scopeTag = scope === 'all'
+    ? (arr) => (arr.length > 1 ? `${arr.length} locations` : (arr[0] ? nameById[arr[0].locationId] : null))
+    : () => nameById[scope]
+
+  return (
+    <div className="p-8 max-w-6xl">
+      {/* ── Header ── */}
+      <div className="text-xs text-un1t-muted mb-1">Settings <span className="text-un1t-subtle font-medium">/ Integrations</span></div>
+      <div className="flex flex-wrap items-end justify-between gap-4 mb-2">
+        <div>
+          <h2 className="text-2xl font-bold">Integrations</h2>
+          <p className="text-sm text-un1t-subtle mt-0.5 max-w-xl">
+            Connect the tools your gym runs on. Connections belong to a location, so each site can run its own accounts.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] uppercase tracking-wider text-un1t-muted">Location</span>
+          <div className="inline-flex gap-0.5 rounded-lg border border-un1t-border bg-white p-0.5" role="group" aria-label="Location scope">
+            <button
+              type="button"
+              aria-pressed={scope === 'all'}
+              onClick={() => setScope('all')}
+              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+                scope === 'all' ? 'bg-un1t-accent text-white' : 'text-un1t-subtle hover:text-un1t-text'
+              }`}
+            >
+              All locations
+            </button>
+            {locations.map((l) => (
+              <button
+                key={l.id}
+                type="button"
+                aria-pressed={scope === l.id}
+                onClick={() => setScope(l.id)}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  scope === l.id ? 'bg-un1t-accent text-white' : 'text-un1t-subtle hover:text-un1t-text'
+                }`}
+              >
+                {l.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Status-model legend ── */}
+      <div className="flex flex-wrap items-center gap-2 mt-3 mb-6" aria-label="Status legend">
+        <span className="text-[10px] uppercase tracking-wider text-un1t-muted mr-1">Status model</span>
+        <StatusChip status="connected" />
+        <StatusChip status="action_needed" />
+        <StatusChip status="error" />
+        <StatusChip status="not_connected" />
+        <StatusChip status="coming_soon" />
+        <StatusChip status="platform" />
+      </div>
+
+      {/* ── Needs attention ── */}
+      <div className="rounded-xl border border-un1t-border bg-white mb-6">
+        <div className="px-4 pt-3 pb-2 text-xs font-bold uppercase tracking-wide text-un1t-subtle">
+          Needs attention · {attention.length}
+        </div>
+        {attention.length === 0 ? (
+          <div className="border-t border-un1t-border px-4 py-3 text-sm text-un1t-subtle">
+            All connections healthy — nothing needs you right now.
+          </div>
+        ) : attention.map((a, i) => (
+          <div key={`${a.cardKey}-${a.locationId}-${i}`} className="flex flex-wrap items-center gap-3 border-t border-un1t-border px-4 py-2.5 text-sm">
+            <span className={`h-2 w-2 rounded-full shrink-0 ${DOT[a.severity] || DOT.info}`} aria-hidden="true" />
+            <span className="flex-1 min-w-[200px] text-un1t-text">
+              <span className="font-semibold">{a.label}</span>
+              {scope === 'all' && a.locationName ? <span className="text-un1t-subtle"> · {a.locationName}</span> : null}
+              <span className="text-un1t-subtle">: {a.message}</span>
+            </span>
+            <Link href={a.href} className={linkBtn()}>Open</Link>
+          </div>
+        ))}
+      </div>
+
+      {/* ══ Tier 1 — Your integrations ══ */}
+      <SectionHead
+        title="Your integrations"
+        sub="Connect, test and disconnect these yourself. Connecting is owner-only; other staff see read-only health. Anything that needs you shows up in the strip above."
+      />
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+
+        {/* Glofox — per-location rows */}
+        <HubCard
+          icon={Zap}
+          title="Glofox"
+          locTag={scopeTag(glofox)}
+          provider="Bookings, members & payments sync"
+          chip={<StatusChip status={worstOf(glofox.map((r) => r.status))} />}
+        >
+          <div className="divide-y divide-un1t-border border-t border-un1t-border text-sm">
+            {glofox.map((r) => (
+              <div key={r.locationId} className="flex items-center gap-3 py-2">
+                <span className="font-semibold min-w-[88px]">{nameById[r.locationId]}</span>
+                <span className="flex-1 text-xs text-un1t-subtle truncate">
+                  {r.status === 'not_connected'
+                    ? 'Not connected'
+                    : <>Branch {r.branchId ? `${String(r.branchId).slice(0, 6)}…${String(r.branchId).slice(-4)}` : '—'}{r.lastOkAt ? ` · last OK ${fmtDate(r.lastOkAt)}` : ''}</>}
+                </span>
+                <Link href={r.href} className={linkBtn(r.status === 'not_connected')}>
+                  {r.status === 'not_connected' ? 'Connect' : 'Manage'}
+                </Link>
+              </div>
+            ))}
+          </div>
+        </HubCard>
+
+        {/* WhatsApp — per-location numbers + tier budget meter */}
+        <HubCard
+          icon={MessageCircle}
+          title="WhatsApp"
+          locTag={scopeTag(whatsapp)}
+          provider="Meta Cloud API · Embedded Signup"
+          chip={<StatusChip status={worstOf(whatsapp.map((r) => r.status))} />}
+        >
+          <div className="divide-y divide-un1t-border border-t border-un1t-border text-sm">
+            {whatsapp.map((r) => (
+              <div key={r.locationId} className="py-2 space-y-1.5">
+                <div className="flex items-center gap-3">
+                  <span className="font-semibold min-w-[88px]">{nameById[r.locationId]}</span>
+                  <span className="flex-1 text-xs text-un1t-subtle truncate">
+                    {r.numbers.length === 0
+                      ? 'No number yet'
+                      : r.numbers.map((n) => (n.displayPhone ? `${n.displayPhone} “${n.label}”` : n.label)).join(' · ')}
+                  </span>
+                  <Link href={r.href} className={linkBtn(r.numbers.length === 0)}>
+                    {r.numbers.length === 0 ? 'Connect' : 'Manage numbers'}
+                  </Link>
+                </div>
+                {r.numbers.filter((n) => n.message).map((n) => (
+                  <p key={n.id} className="text-xs text-red-700 bg-red-500/10 rounded px-2 py-1">{n.message}</p>
+                ))}
+                {r.budget && (
+                  <Meter
+                    label={`Business-initiated conversations · rolling 24h (${(r.budget.tier || '').replace('TIER_', 'Tier ')})`}
+                    value={r.budget.used}
+                    max={r.budget.limit}
+                    warn={r.budget.remaining / Math.max(1, r.budget.limit) < 0.2}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        </HubCard>
+
+        {/* Instagram */}
+        <HubCard
+          icon={InstagramIcon}
+          title="Instagram"
+          locTag={instagram.length ? nameById[instagram[0].locationId] : scopeTag(instagram)}
+          provider={instagram[0]?.displayName ? `${instagram[0].displayName} · Instagram DMs` : 'Instagram DMs'}
+          chip={<StatusChip status={worstOf(instagram.map((r) => r.status))} />}
+        >
+          {instagram.length === 0 ? (
+            <p className="text-xs text-un1t-subtle">No Instagram connection{scope === 'all' ? '' : ' at this location'} yet.</p>
+          ) : instagram.map((r) => (
+            <div key={r.locationId} className="space-y-2">
+              <div className="text-xs text-un1t-subtle space-y-0.5">
+                {r.lastOkAt && <p>· Last activity {fmtDate(r.lastOkAt)}</p>}
+                {r.lastError && <p className="text-red-700">· {r.lastError}</p>}
+              </div>
+              {r.tokenDaysLeft != null && (
+                <Meter
+                  label="Token lifetime (60 days)"
+                  value={Math.max(0, 60 - Math.max(0, r.tokenDaysLeft))}
+                  max={60}
+                  warn={r.tokenDaysLeft <= data.expirySoonDays}
+                />
+              )}
+              <div className="flex gap-2 pt-1">
+                <Link href={r.href} className={linkBtn(r.status !== 'connected')}>
+                  {r.status === 'connected' ? 'Manage' : 'Reconnect'}
+                </Link>
+              </div>
+            </div>
+          ))}
+        </HubCard>
+
+        {/* Xero */}
+        <HubCard
+          icon={Landmark}
+          title="Xero"
+          locTag={xero.length ? nameById[xero[0].locationId] : scopeTag(xero)}
+          provider="Accounting — invoices & bills"
+          chip={<StatusChip status={worstOf(xero.map((r) => r.status))} />}
+        >
+          {xero.length === 0 ? (
+            <>
+              <p className="text-xs text-un1t-subtle">No Xero organisation connected{scope === 'all' ? '' : ' at this location'}.</p>
+              <div className="flex gap-2 pt-1 mt-auto">
+                {(scope === 'all' ? locations : locations.filter((l) => l.id === scope)).slice(0, 1).map((l) => (
+                  <Link key={l.id} href={`/settings/locations/${l.id}?tab=xero`} className={linkBtn(true)}>Connect</Link>
+                ))}
+              </div>
+            </>
+          ) : xero.map((r) => (
+            <div key={r.locationId} className="space-y-2">
+              <div className="text-xs text-un1t-subtle space-y-0.5">
+                <p>· Connected to <span className="text-un1t-text font-medium">{r.tenantName}</span></p>
+                {r.connectedAt && <p>· Linked {fmtDate(r.connectedAt)}{r.lastRefreshedAt ? ` · refreshed ${fmtDate(r.lastRefreshedAt)}` : ''}</p>}
+                {r.scopes?.length > 0 && <p title={r.scopes.join(' ')}>· {r.scopes.length} scopes granted</p>}
+              </div>
+              {r.message && (
+                <p className="text-xs text-red-700 bg-red-500/10 rounded px-2 py-1.5">{r.message}</p>
+              )}
+              <div className="flex gap-2 pt-1">
+                <Link href={r.href} className={linkBtn(r.status === 'error')}>
+                  {r.status === 'error' ? 'Reconnect' : 'Manage'}
+                </Link>
+              </div>
+            </div>
+          ))}
+        </HubCard>
+
+        {/* Meta Ads */}
+        <HubCard
+          icon={Megaphone}
+          title="Meta Ads"
+          locTag={ads.length ? nameById[ads[0].locationId] : scopeTag(ads)}
+          provider={ads[0]?.externalAccountId ? `Ad account ${ads[0].externalAccountId}` : 'Spend & attribution reporting'}
+          chip={<StatusChip status={worstOf(ads.map((r) => r.status))} />}
+        >
+          {ads.length === 0 ? (
+            <p className="text-xs text-un1t-subtle">No ad account connected{scope === 'all' ? '' : ' at this location'} yet.</p>
+          ) : (
+            <div className="text-xs text-un1t-subtle space-y-0.5">
+              {ads.map((r) => (
+                <p key={`${r.locationId}-${r.externalAccountId}`}>
+                  · {nameById[r.locationId]}: {r.displayName || r.externalAccountId}
+                </p>
+              ))}
+              <p>· Spend & attribution sync nightly</p>
+            </div>
+          )}
+          <div className="flex gap-2 pt-1 mt-auto">
+            {(ads[0]
+              ? [{ id: ads[0].locationId }]
+              : (scope === 'all' ? locations : locations.filter((l) => l.id === scope)).slice(0, 1)
+            ).map((l) => (
+              <Link key={l.id} href={`/settings/locations/${l.id}?tab=ads`} className={linkBtn(ads.length === 0)}>
+                {ads.length === 0 ? 'Connect' : 'Manage'}
+              </Link>
+            ))}
+          </div>
+        </HubCard>
+
+        {/* TikTok Ads — static coming soon */}
+        <HubCard
+          icon={Music2}
+          title="TikTok Ads"
+          provider="Spend & attribution reporting"
+          chip={<StatusChip status="coming_soon" />}
+          muted
+        >
+          <p className="text-xs text-un1t-subtle">On the roadmap. Tell us if you need it sooner.</p>
+        </HubCard>
+      </div>
+
+      {/* ══ Tier 2 — Managed by the platform ══ */}
+      <SectionHead
+        title="Managed by the platform"
+        sub="These run for every gym out of the box. Nothing to connect; shown here so you can see health at a glance."
+      />
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+
+        {/* AI agent */}
+        <HubCard
+          icon={Bot}
+          title="AI agent"
+          provider="Answers WhatsApp & Instagram, books classes"
+          chip={<StatusChip status="platform" />}
+          muted
+        >
+          <div className="text-xs text-un1t-subtle space-y-0.5">
+            {agent.map((r) => (
+              <p key={r.locationId}>
+                · {nameById[r.locationId]}:{' '}
+                {r.mode === 'live' && <span className="font-medium text-green-700">live{r.agentName ? ` as ${r.agentName}` : ''}</span>}
+                {r.mode === 'test' && <span className="font-medium text-amber-700">test mode (allow-list only)</span>}
+                {r.mode === 'off' && 'off'}
+              </p>
+            ))}
+          </div>
+          <div className="flex gap-2 pt-1 mt-auto">
+            <Link href="/settings/customer-agent" className={linkBtn()}>Agent settings</Link>
+            <Link href="/communications/inbox" className={linkBtn()}>Conversations</Link>
+          </div>
+        </HubCard>
+
+        {/* Email delivery */}
+        <HubCard
+          icon={Mail}
+          title="Email delivery"
+          provider="Receipts, confirmations, campaigns"
+          chip={<StatusChip status="platform" />}
+          muted
+        >
+          <div className="text-xs text-un1t-subtle space-y-0.5">
+            <p>· Sending via the platform&apos;s email account</p>
+            <p>· Custom sending domains arrive with the domain wizard (next phase)</p>
+          </div>
+        </HubCard>
+
+        {/* SMS */}
+        <HubCard
+          icon={MessageSquare}
+          title="SMS"
+          provider="One-way utility texts"
+          chip={<StatusChip status="platform" />}
+          muted
+        >
+          <div className="text-xs text-un1t-subtle space-y-0.5">
+            {sms.map((r) => (
+              <p key={r.locationId}>
+                · {nameById[r.locationId]}: sender ID{' '}
+                {r.senderId ? <span className="font-medium text-un1t-text">{r.senderId}</span> : <span>platform default</span>}
+              </p>
+            ))}
+            <p>· Delivery via the platform account</p>
+          </div>
+          <div className="flex gap-2 pt-1 mt-auto">
+            {sms.slice(0, 1).map((r) => (
+              <Link key={r.locationId} href={r.href} className={linkBtn()}>Edit sender ID</Link>
+            ))}
+          </div>
+        </HubCard>
+
+        {/* Push notifications */}
+        <HubCard
+          icon={Bell}
+          title="Push notifications"
+          provider="Staff app & member app"
+          chip={<StatusChip status="platform" />}
+          muted
+        >
+          <p className="text-xs text-un1t-subtle">· Delivered via the platform&apos;s push service</p>
+        </HubCard>
+      </div>
+
+      {/* ══ Tier 3 — Master view (hidden from tenants) ══ */}
+      <SectionHead
+        title="Master view · hidden from tenants"
+        hidden
+        sub="Org-gated, excluded, or UN1T studio customisation. Tenants never see these cards; platform OAuth apps (Garmin, Apple Health) stay in /admin/integrations."
+      />
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+
+        {/* UniFi Access */}
+        <HubCard
+          icon={DoorOpen}
+          title="UniFi Access"
+          locTag={unifi.length ? nameById[unifi[0].locationId] : null}
+          provider="Door access · gym entry"
+          chip={<StatusChip status={worstOf(unifi.map((r) => r.status))} />}
+          dashed
+        >
+          <div className="text-xs text-un1t-subtle space-y-0.5">
+            <p>· UN1T studio customisation · not offered to tenants</p>
+            {unifi.map((r) => r.lastError && <p key={r.locationId} className="text-red-700">· {r.lastError}</p>)}
+          </div>
+          <div className="flex gap-2 pt-1 mt-auto">
+            {unifi.slice(0, 1).map((r) => (
+              <Link key={r.locationId} href={r.href} className={linkBtn()}>Manage</Link>
+            ))}
+          </div>
+        </HubCard>
+
+        {/* Climate devices */}
+        <HubCard
+          icon={Snowflake}
+          title="Climate devices"
+          locTag={climate.length ? nameById[climate[0].locationId] : null}
+          provider={climate[0]?.vendors?.map((v) => (v.vendor === 'thinq' ? 'LG ThinQ' : 'Sensibo')).join(' + ') || 'Sensibo · LG ThinQ'}
+          chip={<StatusChip status={worstOf(climate.map((r) => r.status))} />}
+          dashed
+        >
+          <div className="text-xs text-un1t-subtle space-y-0.5">
+            <p>· UN1T studio customisation · not offered to tenants</p>
+            {climate.flatMap((r) => r.vendors.filter((v) => v.lastError).map((v) => (
+              <p key={`${r.locationId}-${v.vendor}`} className="text-red-700">· {v.lastError}</p>
+            )))}
+          </div>
+          <div className="flex gap-2 pt-1 mt-auto">
+            {climate.slice(0, 1).map((r) => (
+              <Link key={r.locationId} href={r.href} className={linkBtn()}>Manage devices</Link>
+            ))}
+          </div>
+        </HubCard>
+
+        {/* Revolut Merchant — org-gated, static */}
+        <HubCard
+          icon={CreditCard}
+          title="Revolut Merchant"
+          provider="Car deposits · pay.ccfautos.com"
+          chip={<StatusChip status="not_connected" label="CCF Autos only" />}
+          dashed
+        >
+          <p className="text-xs text-un1t-subtle">· Org-gated to CCF Autos. Not offered to gym tenants.</p>
+        </HubCard>
+
+        {/* BCA Submit */}
+        <HubCard
+          icon={FileCheck}
+          title="BCA Submit"
+          provider="Vehicle auction submissions"
+          chip={bca.length
+            ? <StatusChip status={worstOf(bca.map((r) => r.status))} />
+            : <StatusChip status="not_connected" label="CCF Autos only" />}
+          dashed
+        >
+          <p className="text-xs text-un1t-subtle">· Org-gated to CCF Autos. Not offered to gym tenants.</p>
+          {bca.length > 0 && (
+            <div className="flex gap-2 pt-1 mt-auto">
+              <Link href={bca[0].href} className={linkBtn()}>Manage</Link>
+            </div>
+          )}
+        </HubCard>
+
+        {/* Strava — excluded from SaaS, static */}
+        <HubCard
+          icon={Activity}
+          title="Strava"
+          provider="Workout export for members"
+          chip={<StatusChip status="not_connected" label="Excluded from SaaS" />}
+          dashed
+        >
+          <p className="text-xs text-un1t-subtle">
+            · Strava&apos;s API terms are personal-scope only; can&apos;t be resold to tenants. Stays on for UN1T&apos;s own members.
+          </p>
+        </HubCard>
+      </div>
+
+      <p className="mt-10 pt-4 border-t border-un1t-border text-xs text-un1t-muted max-w-3xl">
+        Master-only preview (phase B rollout flag): operators keep the per-location Integrations tabs — every
+        action here deep-links into them. The plan &amp; usage strip, wallet and the email-domain wizard ship in
+        the next phases.
+      </p>
+    </div>
+  )
+}
