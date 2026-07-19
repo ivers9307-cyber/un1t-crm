@@ -19,11 +19,14 @@ import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page
 import RevealManager from '@/components/landing-page/RevealManager'
 import { RevealArmScript } from '@/components/landing-page/reveal-arm'
 import StartFunnel from '@/components/StartFunnel'
+import { getLandingLogo, STILLORGAN_LANDING_LOGO } from '@/lib/landing-logo'
 
 export const dynamic = 'force-dynamic'
 
-const STILLORGAN_LOGO =
-  'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/landing-page/a0000000-0000-0000-0000-000000000001/de12ffbe-22db-4c34-b307-8983488ffd96.png'
+// SAAS-7 — the header logo resolves from Stillorgan's
+// landing_page_settings row (the operator-editable source /stillorgan
+// itself renders) with the old hardcoded URL as fallback; live value is
+// identical today, so paid traffic sees no change.
 
 const HERO_IMAGE =
   'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/landing-page/28c78d6b-f7b3-4edf-8c7c-840bd047b3f4/3c80aac2-7007-43c5-81f4-be44f180ef99.jpg'
@@ -55,13 +58,16 @@ async function loadContentBlocks() {
 }
 
 export default async function StartPage() {
-  const blocks = await loadContentBlocks()
+  const [blocks, logoUrl] = await Promise.all([
+    loadContentBlocks(),
+    getLandingLogo('stillorgan', STILLORGAN_LANDING_LOGO),
+  ])
   return (
     <div className="min-h-screen bg-black text-white antialiased">
       <RevealArmScript />
       <RevealManager />
       <SiteHeader
-        logoUrl={STILLORGAN_LOGO}
+        logoUrl={logoUrl}
         logoAlt="UN1T Stillorgan"
         logoWidthPx={150}
         sticky

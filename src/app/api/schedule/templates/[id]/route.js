@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { validateBody } from '@/lib/validate'
 import { timeOfDay, hexColor , MANAGER_ROLES} from '@/lib/schemas'
@@ -50,18 +50,32 @@ export async function PUT(request, props) {
   const updates = { ...validation.data }
   const db = createServerClient()
 
-  // Pre-fetch the OLD template so we can diff days_of_week and
-  // know which days to delete (if any were removed).
+  // Fetch the template by id FIRST — this route runs the service-role
+  // client (RLS bypassed), so this app-layer check is the ONLY thing
+  // stopping a manager at tenant A from editing tenant B's template by
+  // id. The same fetch doubles as the OLD-template read we need to diff
+  // days_of_week (which days were removed), so one scoped read serves
+  // both. Absent row → 404; foreign-tenant row → 404 too (detail route,
+  // so a cross-tenant id is indistinguishable from a missing one).
   const { data: priorTemplate } = await db
     .from('shift_templates')
-    .select('days_of_week')
+    .select('location_id, days_of_week')
     .eq('id', params.id)
-    .single()
-  const priorDays = new Set(priorTemplate?.days_of_week || [])
+    .maybeSingle()
+  if (!priorTemplate) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  const guard = assertLocationAccessOr404(user, priorTemplate.location_id)
+  if (guard) return guard
+  const locationId = priorTemplate.location_id
+  const priorDays = new Set(priorTemplate.days_of_week || [])
 
+  // Scope the UPDATE to the verified location too (not just id) so even
+  // a racing re-point of the row can't cross tenants.
   const { data: template, error } = await db.from('shift_templates')
     .update(updates)
     .eq('id', params.id)
+    .eq('location_id', locationId)
     .select()
     .single()
 
@@ -94,6 +108,7 @@ export async function PUT(request, props) {
       .from('shift_blocks')
       .update(futureFieldUpdates)
       .eq('template_id', params.id)
+      .eq('location_id', locationId)
       .gte('block_date', today)
       .select('id')
     if (updErr) {
@@ -122,6 +137,7 @@ export async function PUT(request, props) {
         .from('shift_blocks')
         .select('id, block_date')
         .eq('template_id', params.id)
+        .eq('location_id', locationId)
         .gte('block_date', today)
       const toDelete = (futureBlocks || []).filter((b) => {
         const code = WEEKDAY_CODES[(new Date(b.block_date + 'T00:00:00Z').getUTCDay() + 6) % 7]
@@ -132,6 +148,7 @@ export async function PUT(request, props) {
           .from('shift_blocks')
           .delete()
           .in('id', toDelete.map((b) => b.id))
+          .eq('location_id', locationId)
         if (delErr) {
           return NextResponse.json({
             success: true,
@@ -180,10 +197,29 @@ export async function DELETE(request, props) {
 
   const db = createServerClient()
 
-  // Soft-delete by deactivating (can't delete if shifts reference it)
+  // Fetch the template's location FIRST so we can gate cross-tenant
+  // access before mutating anything — the service-role client bypasses
+  // RLS, so this is the only guard. Absent → 404; foreign-tenant row →
+  // 404 too (detail route: a cross-tenant id must look identical to a
+  // missing one).
+  const { data: template } = await db
+    .from('shift_templates')
+    .select('location_id')
+    .eq('id', params.id)
+    .maybeSingle()
+  if (!template) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  const guard = assertLocationAccessOr404(user, template.location_id)
+  if (guard) return guard
+
+  // Soft-delete by deactivating (can't delete if shifts reference it).
+  // Scope the write to the verified location too, so even a racing
+  // re-point of the row can't cross tenants.
   const { data, error } = await db.from('shift_templates')
     .update({ active: false })
     .eq('id', params.id)
+    .eq('location_id', template.location_id)
     .select()
     .single()
 

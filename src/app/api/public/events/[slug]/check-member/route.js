@@ -37,7 +37,9 @@ export async function POST(request, props) {
   const db = createServerClient()
 
   const ip = getClientIp(request)
-  const limit = await checkRateLimit(db, `race-check-member:${ip}`, {
+  // SAAS-6: tenant-keyed (the event slug) — one tenant's lookups can
+  // never consume another tenant's window for the same IP.
+  const limit = await checkRateLimit(db, `race-check-member:${params.slug}:${ip}`, {
     max: 60,
     windowMs: 60_000,
   })

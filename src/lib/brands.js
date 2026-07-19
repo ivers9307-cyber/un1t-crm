@@ -32,6 +32,15 @@
 // **CRM hostname is NOT in this registry.** When `resolveBrand`
 // returns null, the middleware falls through to the existing CRM
 // auth-gate path. That's the default and doesn't need a brand row.
+//
+// **SAAS-8 — this registry is the FIRST of two tiers.** When it
+// misses, the proxy consults the tenant_domains table (mig 415) via
+// src/lib/tenant-domains-edge.js, so a NEW tenant's domain needs no
+// code deploy — a row is enough. The entries below stay in-code on
+// purpose: they are the guaranteed fallback for the live hostnames
+// (byte-identical behaviour even with the DB down) and must NOT be
+// duplicated as tenant_domains rows (dual-source drift; the admin
+// API refuses such rows).
 
 // ─────────────────────────────────────────────────────────────────
 // Registry
@@ -115,8 +124,12 @@ export const BRANDS = [
     fallbackHandler: 'reject',
   },
 
-  // ─── Add another brand here ────────────────────────────────────
-  // Copy any entry above: one { id, hostnames, allowedPaths, rootHandler,
+  // ─── Adding another brand ──────────────────────────────────────
+  // Prefer a tenant_domains row (SAAS-8, /admin/tenant-domains) —
+  // live without a deploy, and it carries the organization linkage.
+  // Add an in-code entry here only when the hostname must keep
+  // working with the DB down (deployment-critical, like the ones
+  // above): one { id, hostnames, allowedPaths, rootHandler,
   // fallbackHandler } object — no edit to proxy.js needed.
 ]
 

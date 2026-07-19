@@ -1,0 +1,181 @@
+// SAAS-8 — DB tier of the multi-brand hostname registry (mig 415).
+//
+// src/lib/brands.js is the in-code FIRST tier and the guaranteed
+// fallback: the three live hostnames resolve there and never reach
+// this module. This module answers for everything the registry
+// misses — the proxy consults it so a NEW tenant's domain needs no
+// code deploy: point DNS at the deployment, insert a tenant_domains
+// row, done.
+//
+// Fail-safe contract (load-bearing — the proxy runs on EVERY
+// request): any miss, error, or slow/down/empty DB resolves to null,
+// which the proxy treats exactly like an unknown hostname today —
+// fall through to the CRM auth gate. A DB outage therefore cannot
+// change the behaviour of any hostname that worked before this tier
+// existed.
+//
+// Caching: a module-level TTL cache (~5 min, same pattern as
+// default-favicon.js from SAAS-7) holds ALL active rows; per-request
+// cost is an in-memory scan and the fetch happens at most once per
+// TTL window per isolate. Failures are cached too — a down DB costs
+// one attempt per window, not one per request.
+//
+// Runtime: imported by src/proxy.js (Edge). Only @supabase/ssr may
+// be imported here — its client is fetch-based and Edge-safe (same
+// shape as the proxy's SAAS-3 api_keys lookup). No node: imports,
+// no zod (write-time validation lives in the admin routes; this
+// read side re-normalises defensively instead).
+//
+// SAAS-6/7 HANDOFF SEAM: welcome-front-page.js (org chooser) and
+// default-favicon.js resolve "whose front page / whose favicon" —
+// they should thread the request host in and call
+// resolveTenantOrgId(host): a mapped host renders that org's
+// surface; null keeps their existing slug / first-row fallback
+// byte-identical (un1tdublin.com has no row here by design).
+
+import { createServerClient } from '@supabase/ssr'
+
+export const TENANT_DOMAINS_CACHE_TTL_MS = 5 * 60 * 1000 // domain churn is rare
+
+// Defaults for a row whose brand config is {} (the column default):
+// the "marketing chooser domain" shape. Root "/" and disallowed
+// paths rewrite to /welcome IN THE PROXY — DB brands cannot rely on
+// the build-baked next.config host rewrites, and the proxy's brand
+// block already rewrites in-proxy for in-code brands, so DB brands
+// ride the same code path. The allowlist mirrors un1t-marketing
+// minus its UN1T-specific pretty paths; every entry is already
+// public on the CRM hostname, so the default exposes nothing new.
+export const DB_BRAND_DEFAULTS = Object.freeze({
+  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/api/public/', '/api/webhooks/']),
+  rootHandler: 'rewrite',
+  rootRewriteTo: '/welcome',
+  fallbackHandler: 'rewrite',
+  fallbackRewriteTo: '/welcome',
+})
+
+let cache = { rows: null, at: 0 }
+
+// Test hook — the module-level cache would otherwise leak between tests.
+export function _resetTenantDomainsCache() {
+  cache = { rows: null, at: 0 }
+}
+
+// The CRM's own hostname (from NEXT_PUBLIC_APP_URL) never has a row
+// by design — skip even the cache consult for it so the primary
+// hostname provably never pays this tier, and a mistakenly-created
+// row for it can never brand-gate the staff CRM. Resilient to an
+// unset/malformed env (dev, tests): we just don't skip.
+function isCrmHostname(hostKey) {
+  try {
+    return new URL(process.env.NEXT_PUBLIC_APP_URL).hostname.toLowerCase() === hostKey
+  } catch {
+    return false
+  }
+}
+
+function makeEdgeClient() {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return null
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY,
+    { cookies: { getAll: () => [], setAll: () => {} } }
+  )
+}
+
+/**
+ * Load (or serve from cache) the active tenant_domains rows.
+ * Never throws; every failure path caches [] so the outcome — and
+ * the cost — of a bad window is settled by one attempt.
+ */
+async function loadRows(db, nowMs) {
+  if (cache.rows && nowMs - cache.at < TENANT_DOMAINS_CACHE_TTL_MS) return cache.rows
+  let rows = []
+  try {
+    const client = db || makeEdgeClient()
+    if (client) {
+      const { data, error } = await client
+        .from('tenant_domains')
+        .select('id, hostname, organization_id, brand')
+        .eq('active', true)
+      if (!error && Array.isArray(data)) rows = data
+    }
+  } catch {
+    // Fail-safe: cache the empty set — unknown hosts fall through to
+    // the CRM auth gate exactly as they did before this tier existed.
+  }
+  cache = { rows, at: nowMs }
+  return rows
+}
+
+// Read-side normalisation of the brand jsonb. The admin routes
+// validate on write (tenantDomainBrandConfigSchema), but rows can
+// predate schema changes or be written by hand — never let a bad
+// value produce a brand the proxy's handler switch doesn't cover.
+function normalizeHandler(value, fallback) {
+  return value === 'reject' || value === 'rewrite' ? value : fallback
+}
+
+function normalizePath(value, fallback) {
+  return typeof value === 'string' && value.startsWith('/') ? value : fallback
+}
+
+function brandFromRow(row) {
+  const cfg = row.brand && typeof row.brand === 'object' && !Array.isArray(row.brand) ? row.brand : {}
+  // An explicitly-present allowedPaths array is honoured even when
+  // empty (a deliberate lock-down); an absent key gets the defaults.
+  const allowedPaths = Array.isArray(cfg.allowedPaths)
+    ? cfg.allowedPaths.filter((p) => typeof p === 'string' && p.startsWith('/'))
+    : [...DB_BRAND_DEFAULTS.allowedPaths]
+  return {
+    // Same shape resolveBrand() returns, PLUS organizationId — the
+    // tenant linkage the in-code registry never had.
+    id: `tenant:${row.hostname}`,
+    description: typeof cfg.description === 'string' && cfg.description
+      ? cfg.description
+      : `Tenant domain (${row.hostname})`,
+    hostnames: [row.hostname],
+    allowedPaths,
+    rootHandler: normalizeHandler(cfg.rootHandler, DB_BRAND_DEFAULTS.rootHandler),
+    rootRewriteTo: normalizePath(cfg.rootRewriteTo, DB_BRAND_DEFAULTS.rootRewriteTo),
+    fallbackHandler: normalizeHandler(cfg.fallbackHandler, DB_BRAND_DEFAULTS.fallbackHandler),
+    fallbackRewriteTo: normalizePath(cfg.fallbackRewriteTo, DB_BRAND_DEFAULTS.fallbackRewriteTo),
+    organizationId: row.organization_id,
+  }
+}
+
+/**
+ * Match a hostname against the active tenant_domains rows. Call
+ * ONLY after resolveBrand() returned null — the in-code registry is
+ * the authoritative first tier.
+ *
+ * Port suffixes are stripped and the host is lowercased before
+ * matching (rows store lowercase; the in-code tier's case-sensitive
+ * contract is unchanged because it runs first).
+ *
+ * @param {string} hostname  Raw value of the `Host` request header.
+ * @param {{ db?: object, nowMs?: number }} [opts]  Injectable for tests.
+ * @returns {Promise<object | null>}  Brand (resolveBrand shape + organizationId), or null.
+ */
+export async function resolveTenantDomainBrand(hostname, { db = null, nowMs = Date.now() } = {}) {
+  if (!hostname || typeof hostname !== 'string') return null
+  const hostKey = hostname.split(':')[0].toLowerCase()
+  if (!hostKey || isCrmHostname(hostKey)) return null
+  const rows = await loadRows(db, nowMs)
+  const row = rows.find((r) => r.hostname === hostKey)
+  return row ? brandFromRow(row) : null
+}
+
+/**
+ * Hostname → organization_id, or null when unmapped. The SAAS-6/7
+ * handoff seam (see header): welcome-front-page.js renders a mapped
+ * host's org chooser and keeps its slug fallback on null;
+ * default-favicon.js likewise. Shares the row cache above.
+ *
+ * @param {string} hostname
+ * @param {{ db?: object, nowMs?: number }} [opts]
+ * @returns {Promise<string | null>}
+ */
+export async function resolveTenantOrgId(hostname, opts = {}) {
+  const brand = await resolveTenantDomainBrand(hostname, opts)
+  return brand ? brand.organizationId : null
+}

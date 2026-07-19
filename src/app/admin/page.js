@@ -12,7 +12,7 @@ import { redirect } from 'next/navigation'
 import {
   FileSignature, Tv, Download, BookOpen, ChevronRight,
   Award, ScrollText, Plug, LayoutGrid, Radio, Smartphone,
-  CheckSquare, BadgeEuro,
+  CheckSquare, Globe, BadgeEuro,
 } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
@@ -83,6 +83,7 @@ export default async function AdminHubPage() {
     { href: '/admin/plans',         icon: BadgeEuro,   title: 'Plans & pricing',  desc: 'SaaS tiers, add-ons, allowances and overage rates — versioned, per location.' },
     { href: '/admin/bridges',       icon: Radio,       title: 'HR Bridges',       desc: 'Register studio heart-rate bridges (Raspberry Pi) and manage tokens.' },
     { href: '/admin/studio-devices', icon: Smartphone, title: 'Studio devices',   desc: 'Pair Macs + iPads for studio PIN-login and manage trusted IPs.' },
+    { href: '/admin/tenant-domains', icon: Globe,       title: 'Tenant domains',   desc: 'Map custom domains to tenant organizations — live without a deploy.' },
   ] : []
 
   return (

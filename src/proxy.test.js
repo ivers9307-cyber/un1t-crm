@@ -19,6 +19,11 @@ const ssrClient = {
 const createServerClient = vi.fn(() => ssrClient)
 vi.mock('@supabase/ssr', () => ({ createServerClient: (...a) => createServerClient(...a) }))
 vi.mock('@/lib/brands', () => ({ resolveBrand: () => null, isFrameworkAsset: () => false }))
+// SAAS-8 — the DB brand tier is mocked to a miss here, same as the
+// in-code tier above: this file pins the Bearer gate, and a null keeps
+// the CRM-hostname flow identical. The DB tier's own behaviour is
+// covered in proxy.tenant-domains.test.js + tenant-domains-edge.test.js.
+vi.mock('@/lib/tenant-domains-edge', () => ({ resolveTenantDomainBrand: async () => null }))
 
 import { proxy } from './proxy.js'
 

@@ -187,6 +187,8 @@
     { "path": "/api/cron/instagram-token-refresh", "schedule": "0 5 * * 1" },
     { "path": "/api/cron/event-reminders", "schedule": "0 9 * * *" },
     { "path": "/api/cron/send-host-campaigns", "schedule": "*/2 * * * *" },
-    { "path": "/api/cron/connection-health", "schedule": "40 4 * * *" }
+    { "path": "/api/cron/connection-health", "schedule": "40 4 * * *" },
+    { "path": "/api/cron/wallet-monthly-reset", "schedule": "10 5 * * *" },
+    { "path": "/api/cron/usage-rollup", "schedule": "40 2 * * *" }
   ]
 }

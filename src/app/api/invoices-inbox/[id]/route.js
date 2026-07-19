@@ -11,6 +11,15 @@ export const dynamic = 'force-dynamic'
 
 const STORAGE_BUCKET = 'inbound-invoices'
 
+// SAAS-7 — remove from the row's OWN bucket. mig 185 widened the queue
+// beyond supplier emails (contractor/FTE/card/car rows live in their own
+// buckets — see the attachment route's bucket map); removing from the
+// hardcoded inbound-invoices bucket orphaned the real object for those
+// sources. Fallback covers legacy pre-mig-185 rows.
+export function removalBucket(row) {
+  return row?.attachment_bucket || STORAGE_BUCKET
+}
+
 export async function GET(_request, { params }) {
   const { id } = await params
   const ctx = await loadInvoiceForUser(id)
@@ -35,7 +44,7 @@ export async function DELETE(_request, { params }) {
 
   // Best-effort storage cleanup before the row goes.
   if (row.attachment_path) {
-    try { await db.storage.from(STORAGE_BUCKET).remove([row.attachment_path]) } catch { /* ignore */ }
+    try { await db.storage.from(removalBucket(row)).remove([row.attachment_path]) } catch { /* ignore */ }
   }
 
   const { error: delErr } = await db
