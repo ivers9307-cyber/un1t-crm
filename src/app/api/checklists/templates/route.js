@@ -89,7 +89,7 @@ export const POST = withAuth(
       category: 'mutation',
       action: 'checklist_template.created',
       actor: { id: user.id, full_name: user.full_name, email: user.email },
-      target: { id: out.data.id, label: out.data.name, resource: `checklist_template/${out.data.id}` },
+      target: { label: out.data.name, resource: `checklist_template/${out.data.id}` },
       locationId,
       details: { role: out.data.role, day_of_week: out.data.day_of_week, item_count: out.data.items?.length || 0 },
       request,

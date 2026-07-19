@@ -151,12 +151,17 @@ export async function GET(request) {
     // 4. Audit-log the transition. Detail includes the missed
     //    count + the total so the audit-log UI can render a
     //    one-line summary without re-loading the instance.
+    // System action (no actor) — the coach who missed the checklist
+    // is the target, and their profile id is what target.id must be
+    // (audit_events.target_profile_id FK → profiles; the instance
+    // UUID there killed the insert). Instance identity rides in
+    // resource.
     await logAuditEvent({
       category: 'business',
       action: 'checklist.incomplete',
       target: {
-        id: row.id,
-        label: 'Checklist',
+        id: row.profile_id,
+        label: row.profiles?.full_name || 'Checklist',
         resource: `checklist_instance/${row.id}`,
       },
       locationId: row.location_id,

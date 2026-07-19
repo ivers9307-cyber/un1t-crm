@@ -158,7 +158,6 @@ export const POST = withAuth(
       action: 'issue.submitted',
       actor: { id: user.id, full_name: user.full_name, email: user.email },
       target: {
-        id: out.issue.id,
         label: out.issue.description.slice(0, 80),
         resource: `issue/${out.issue.id}`,
       },

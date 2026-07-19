@@ -66,7 +66,6 @@ async function applyTick(request, params, checkedDefault) {
         : 'checklist.item_ticked',
       actor: { id: user.id, full_name: user.full_name, email: user.email },
       target: {
-        id: out.data.id,
         label: 'Checklist',
         resource: `checklist_instance/${out.data.id}`,
       },

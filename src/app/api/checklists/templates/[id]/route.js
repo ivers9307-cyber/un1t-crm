@@ -102,7 +102,7 @@ export const PATCH = withAuth(
       category: 'mutation',
       action: 'checklist_template.updated',
       actor: { id: user.id, full_name: user.full_name, email: user.email },
-      target: { id: out.data.id, label: out.data.name, resource: `checklist_template/${out.data.id}` },
+      target: { label: out.data.name, resource: `checklist_template/${out.data.id}` },
       locationId: existing.location_id,
       details: {
         // Audit only what actually changed, not the full payload.
@@ -152,7 +152,7 @@ export const DELETE = withAuth(
       category: 'mutation',
       action: 'checklist_template.disabled',
       actor: { id: user.id, full_name: user.full_name, email: user.email },
-      target: { id: existing.id, label: existing.name, resource: `checklist_template/${existing.id}` },
+      target: { label: existing.name, resource: `checklist_template/${existing.id}` },
       locationId: existing.location_id,
       details: { role: existing.role, day_of_week: existing.day_of_week },
       request,
