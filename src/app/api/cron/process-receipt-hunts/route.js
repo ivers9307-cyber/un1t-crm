@@ -1,14 +1,26 @@
-// RCOV.P1 — background drainer for the receipt-hunt queue.
+// RCOV.P1 — SWEEPER for the receipt-hunt queue (QSTASH.10 downgraded
+// this cron from sole drainer to sweeper + finalizer host; behavior
+// unchanged).
 //
 // seedHunts (statuses.js, run by receipt-coverage-weekly) queues every
-// uncovered/not_found recon_bank_lines row by setting hunt_queued_at.
-// IMAP search + Claude Vision scoring is slow and best run one line at
-// a time, so we don't hunt in-request — this cron drains the queue
-// sequentially, mirroring process-invoice-analysis's claim/drain shape.
+// uncovered/not_found recon_bank_lines row by setting hunt_queued_at —
+// and now also publishes a QStash push per seeded row (capped at
+// HUNT_PUBLISH_CAP) onto the parallelism-1 `receipt-hunts` queue, so
+// the queue usually drains continuously via
+// /api/webhooks/qstash/receipt-hunts between this cron's ticks. This
+// cron remains the delivery guarantee: it sweeps rows QStash missed
+// (publish failures, the seed-time publish cap overflow, QStash
+// disabled) and re-sweeps crashed consumers' stale claims. IMAP search
+// + Claude Vision scoring is slow and deliberately run one line at a
+// time — the QStash queue's parallelism 1 preserves the same strict
+// sequentiality.
 //
 // Each tick:
 //   1. Atomically claim up to BATCH queued rows (claim_recon_hunt_batch,
-//      FOR UPDATE SKIP LOCKED — overlapping ticks never grab the same row).
+//      FOR UPDATE SKIP LOCKED — overlapping ticks never grab the same
+//      row, and the worker's by-id CAS in src/lib/recon/hunt-queue.js
+//      mirrors the same predicate so cron and worker race safely; the
+//      RPC's stale-claim arm >10 min IS the crash recovery, CRON-ONLY).
 //   2. Hunt each sequentially via huntLine (never throws — always
 //      resolves {outcome: 'found'|'not_found'|'error', ...}); tally by
 //      outcome.
@@ -16,9 +28,16 @@
 //      weekly cycle is done (hunt queue empty + this week's cron pull
 //      exists + no report sent yet) — if so it compiles + emails
 //      report v2 and stamps the WEEKLY heartbeat itself.
+//      ── FINALIZER IS CRON-ONLY ── the QStash worker must NEVER call
+//      maybeFinalizeWeekly: it sends an email and stamps another
+//      cron's heartbeat, and its "no report sent yet" guard is
+//      check-then-act (not race-proof) — this cron is its single
+//      caller. Worst case with QStash draining the queue between
+//      ticks, the weekly report waits ≤5 min for the next tick here.
 //   4. Stamp THIS cron's own liveness heartbeat every healthy tick —
 //      distinct from the weekly heartbeat, which the finalizer owns
 //      (see receipt-coverage-weekly/route.js's file-header comment).
+//      The worker stamps neither.
 //
 // BATCH is small (hunts do IMAP round-trips + an LLM call per
 // candidate) so a worst-case tick stays well under the 300s function cap.

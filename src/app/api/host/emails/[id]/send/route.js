@@ -11,14 +11,17 @@
 //      already claimed it) → 409. recipient_count stamps in the same update.
 //
 // Then the fan-out is ENQUEUED — chunked insert into host_campaign_sends
-// (pending) — and drained by /api/cron/send-host-campaigns, never the request
-// thread. The UNIQUE(campaign_id, contact_id) pair + ignoreDuplicates makes
-// the enqueue idempotent if this request retries after a partial insert.
+// (pending) — and drained by the QStash host-campaigns worker (kicked
+// below, QSTASH.8) with /api/cron/send-host-campaigns as the sweeper,
+// never the request thread. The UNIQUE(campaign_id, contact_id) pair +
+// ignoreDuplicates makes the enqueue idempotent if this request retries
+// after a partial insert.
 
 import { NextResponse } from 'next/server'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { resolveHostRecipients } from '@/lib/host-campaign-email'
+import { publishQueuePush, HOST_CAMPAIGNS_WORKER_PATH } from '@/lib/qstash'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -116,6 +119,28 @@ export async function POST(_request, props) {
       // whatever landed; surface the error so the host/operator knows.
       return NextResponse.json({ success: false, error: `Queueing failed: ${error.message}` }, { status: 500 })
     }
+  }
+
+  // QSTASH.8 — kick the QStash worker so the first chunk goes out in
+  // ~seconds instead of waiting for the next cron tick. ONE campaign-level
+  // message — the worker self-chains one ≤50-row chunk at a time (a
+  // per-recipient publish would burn the QStash request budget and lose
+  // pacing). Ordering is load-bearing: published only AFTER every fan-out
+  // chunk landed — a kick delivered before the pending rows exist would
+  // look "drained" to the worker and mis-finalise the campaign (the
+  // partial-enqueue 500 above deliberately publishes nothing; the sweeper
+  // cron drains whatever landed). Fire-and-forget: env-gated inside
+  // publishQueuePush, never throws, own try/catch — a QStash outage
+  // degrades to cron-cadence delivery, never a failed send request.
+  // Dedup id is DASH-ONLY (QStash 400s on colons — the QSTASH.2 lesson).
+  try {
+    await publishQueuePush({
+      path: HOST_CAMPAIGNS_WORKER_PATH,
+      body: { campaignId: campaign.id },
+      deduplicationId: `host-campaign-${campaign.id}-kick`,
+    })
+  } catch {
+    // publishQueuePush swallows its own errors; belt-and-braces only.
   }
 
   return NextResponse.json({ success: true, data: { recipient_count: recipients.length } })

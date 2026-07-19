@@ -594,6 +594,153 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/webhooks/qstash/webhook-replay',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker for webhook dead-letter replays',
+  description:
+    'QStash → CRM. Delivers `{ id }` of a webhook_dead_letter row published by deadLetterWebhook() (60s delay); ' +
+    'verified via the Upstash-Signature HS256 JWT (current + next signing keys). Replays through the same ' +
+    'claim CAS as the /api/cron/webhook-replay sweeper — 200 processed/skipped, 500 asks QStash to retry.',
+  request: { body: { content: { 'application/json': { schema: z.object({ id: z.number().int() }).openapi('QstashWebhookReplayMessage') } } } },
+  responses: {
+    200: { description: 'Replayed, or skipped (row already handled / not eligible)' },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Replay failed — QStash should retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/qstash/contact-imports',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker for the contact-imports queue',
+  description:
+    'QStash → CRM. Delivers `{ id }` of a contact_imports row published by the async path of /api/contacts/import/commit; ' +
+    'verified via the Upstash-Signature HS256 JWT (current + next signing keys). Runs the import through the same ' +
+    'claim CAS as the /api/cron/process-contact-imports sweeper — 200 processed/skipped, 500 = the import failed ' +
+    '(row stamped failed for the operator; retries re-fetch and skip).',
+  request: { body: { content: { 'application/json': { schema: z.object({ id: uuidLike }).openapi('QstashContactImportsMessage') } } } },
+  responses: {
+    200: { description: 'Import processed, or skipped (row already claimed / handled)' },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Import failed — row stamped failed with its error_message', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/qstash/invoice-analysis',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker for the bulk invoice-analysis queue',
+  description:
+    'QStash → CRM. Delivers `{ id }` of an invoices_queue row published by /api/invoices-inbox/bulk-queue-analysis ' +
+    'onto the `invoice-analysis` QStash queue (parallelism 2 — bounded Claude Vision OCR concurrency); verified via ' +
+    'the Upstash-Signature HS256 JWT (current + next signing keys). Claims by id with the same semantics as the ' +
+    '/api/cron/process-invoice-analysis sweeper — 200 processed/skipped INCLUDING deterministic extraction failures ' +
+    '(row stamped with its extraction_error and de-queued; the operator retries from the UI), 500 only for ' +
+    'infrastructure errors where a QStash retry helps.',
+  request: { body: { content: { 'application/json': { schema: z.object({ id: uuidLike }).openapi('QstashInvoiceAnalysisMessage') } } } },
+  responses: {
+    200: { description: 'Extraction ran (success or recorded failure), or skipped (row already claimed / handled)' },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Infrastructure error — QStash should retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/qstash/class-bookings',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker for the class-booking queue',
+  description:
+    'QStash → CRM. Delivers `{ id }` of a class_booking_requests row published by /api/public/class-booking or the ' +
+    'WhatsApp Flow completion handler; verified via the Upstash-Signature HS256 JWT (current + next signing keys). ' +
+    'Runs the row through the same claim CAS as the /api/cron/process-class-bookings sweeper — 200 for every ' +
+    'decision-tree outcome (booked / routed to review / terminally failed: the processor stamps the row itself, a ' +
+    'retry cannot improve it) and for skips; 500 only when the processor throws (row re-queued under the attempt ' +
+    'cap, so the QStash retry re-runs it).',
+  request: { body: { content: { 'application/json': { schema: z.object({ id: uuidLike }).openapi('QstashClassBookingsMessage') } } } },
+  responses: {
+    200: { description: 'Booking request processed (row stamped by the decision tree), or skipped (row already claimed / handled)' },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Processor threw — row re-queued under the attempt cap; QStash should retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/qstash/host-campaigns',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker for host campaign sends (campaign-level kick + chunk chaining)',
+  description:
+    'QStash → CRM. The first BULK job on the push pattern: delivers a campaign-level `{ campaignId, link }` — NOT a ' +
+    'per-recipient `{ id }` — published once by POST /api/host/emails/[id]/send after the fan-out rows are enqueued; ' +
+    'verified via the Upstash-Signature HS256 JWT (current + next signing keys). Each delivery processes ONE ≤50-row ' +
+    'chunk through the same claim-before-send CAS as the /api/cron/send-host-campaigns sweeper, then self-chains the ' +
+    'next kick (2s delay, no dedup id, ≤40 links per lineage) while pending rows remain. 200 for chunk_sent / drained / ' +
+    'halted (kill switch — the campaign stays sending and resumes via the cron when re-verified) / skipped; 500 only ' +
+    'for infrastructure errors (retry-safe: rows claimed by a crashed attempt are swept terminal by the cron, never re-sent).',
+  request: { body: { content: { 'application/json': { schema: z.object({ campaignId: uuidLike, link: z.number().int().min(1).optional() }).openapi('QstashHostCampaignsMessage') } } } },
+  responses: {
+    200: { description: 'Chunk sent (chained or handed to the cron), campaign drained/halted, or skipped (campaign already terminal)' },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Infrastructure error — QStash should retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/qstash/strava-exports',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker for external export jobs (Strava uploads)',
+  description:
+    'QStash → CRM. Delivers `{ id }` of an external_export_jobs row published per freshly-inserted job by ' +
+    'enqueueExportsForSession (live-class endSession) onto the `strava-exports` QUEUE (parallelism 2 — each export ' +
+    'burns 2–4 Strava API calls against the 100-req/15-min budget); verified via the Upstash-Signature HS256 JWT ' +
+    '(current + next signing keys). Runs the row through the same per-job unit as the /api/cron/run-strava-exports ' +
+    'sweeper. 200 for EVERY processed outcome INCLUDING failures — the bookkeeping already re-queued the job on the ' +
+    "queue's own backoff (or went terminal at the attempt cap), and the claim is not a CAS, so retries belong to the " +
+    'cron; 500 only for infrastructure errors (row fetch).',
+  request: { body: { content: { 'application/json': { schema: z.object({ id: uuidLike }).openapi('QstashStravaExportsMessage') } } } },
+  responses: {
+    200: { description: 'Export uploaded, job terminally skipped, delivery skipped (row not queued/due), or failed with bookkeeping done (cron owns the retry)' },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Infrastructure error — QStash should retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/webhooks/qstash/receipt-hunts',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker for the receipt-hunt queue',
+  description:
+    'QStash → CRM. Delivers `{ id }` of a recon_bank_lines row published per seeded row by seedHunts (the Friday ' +
+    'receipt-coverage-weekly cron, capped per seed) onto the `receipt-hunts` QUEUE (**parallelism 1** — a hunt opens ' +
+    'IMAP sessions + burns a Claude Vision call per candidate, and hunting is deliberately strictly sequential); ' +
+    'verified via the Upstash-Signature HS256 JWT (current + next signing keys). Claims via a by-id CAS mirroring the ' +
+    'claim_recon_hunt_batch RPC predicate, then runs the same huntLine unit as the /api/cron/process-receipt-hunts ' +
+    'sweeper. 200 for EVERY hunt outcome INCLUDING errors — huntLine never throws and its errorFinish already recorded ' +
+    'a terminal audit row and de-queued the line (the cron never retries these either); 500 only for infrastructure ' +
+    'errors (row fetch). The weekly finalizer (report email + weekly heartbeat) stays CRON-ONLY — this worker never ' +
+    'calls it and stamps no heartbeat.',
+  request: { body: { content: { 'application/json': { schema: z.object({ id: uuidLike }).openapi('QstashReceiptHuntsMessage') } } } },
+  responses: {
+    200: { description: 'Line hunted (found / not_found / terminal error, all with bookkeeping done) or delivery skipped (row not queued, or another consumer owns the claim)' },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Infrastructure error — QStash should retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/webhooks/inbody',
   tags: ['Webhooks (Inbound)'],
   security: [{ WebhookToken: [] }],

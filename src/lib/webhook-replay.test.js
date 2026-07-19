@@ -21,6 +21,7 @@ import {
   replayDeadLetter,
   replayInbody,
   replayPostmark,
+  REPLAYABLE_PROVIDERS,
 } from './webhook-replay.js'
 import { parseInbodyNotification } from '@/lib/inbody-webhook'
 
@@ -77,6 +78,11 @@ describe('isReplayable', () => {
   it('returns false for unknown provider', () => expect(isReplayable('stripe')).toBe(false))
   it('returns false for empty string', () => expect(isReplayable('')).toBe(false))
   it('returns false for prototype properties', () => expect(isReplayable('toString')).toBe(false))
+
+  it('REPLAYABLE_PROVIDERS mirrors the registry keys (single source of truth)', () => {
+    expect(REPLAYABLE_PROVIDERS).toEqual(['inbody', 'postmark'])
+    expect(REPLAYABLE_PROVIDERS.every(isReplayable)).toBe(true)
+  })
 })
 
 // ── replayInbody re-driver ────────────────────────────────────────────────────
@@ -209,17 +215,18 @@ describe('replayDeadLetter', () => {
     expect(typeof patch.last_attempt_at).toBe('string')
   })
 
-  it('returns { ok: false, status: "pending" } when replayer fails below maxAttempts', async () => {
+  it('returns { ok: false, status: "pending", error } when replayer fails below maxAttempts', async () => {
     const db = makeDb({ upsertResult: { error: { message: 'transient error' } } })
     const result = await replayDeadLetter(db, pendingInbodyRow, { maxAttempts: 5 })
-    expect(result).toEqual({ ok: false, status: 'pending' })
+    // error surfaced (QSTASH.3) so the queue lib / worker 500 body is diagnosable.
+    expect(result).toEqual({ ok: false, status: 'pending', error: 'transient error' })
   })
 
   it('promotes to "failed" when attempts >= maxAttempts', async () => {
     const db = makeDb({ upsertResult: { error: { message: 'persistent error' } } })
     // row.attempts=1, newAttempts=2, maxAttempts=2 → "failed"
     const result = await replayDeadLetter(db, pendingInbodyRow, { maxAttempts: 2 })
-    expect(result).toEqual({ ok: false, status: 'failed' })
+    expect(result).toEqual({ ok: false, status: 'failed', error: 'persistent error' })
 
     expect(db._updateMock).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'failed', attempts: 2 })

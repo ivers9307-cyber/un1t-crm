@@ -16,9 +16,31 @@
 // transitions.
 //
 // seedHunts — queue every uncovered/not_found line for the drain cron
-// (idempotent: only rows not already queued).
+// (idempotent: only rows not already queued), then (QSTASH.10)
+// fire-and-forget publish a QStash push per seeded row so the
+// parallelism-1 `receipt-hunts` queue starts draining immediately
+// instead of waiting for the */5 cron poll.
+import {
+  publishQueuePush,
+  RECEIPT_HUNTS_WORKER_PATH,
+  RECEIPT_HUNTS_QUEUE_NAME,
+  RECEIPT_HUNTS_QUEUE_PARALLELISM,
+} from '@/lib/qstash'
+
 const PAGE = 1000
 const CHUNK = 300
+
+// QSTASH.10 — per-seed publish cap. The Friday seed is BULK (every
+// uncovered/not_found line at once) and QStash's free tier caps 1000
+// requests/day; a normal week seeds a handful of lines (see hunt.js's
+// volume note and seedHunts' own under-1000 note below), but a
+// pathological backlog — a first statement import, a mailbox outage
+// week — could seed hundreds. Cap the published subset per seedHunts
+// call (per location; ~2 Xero-connected locations today → ≤400
+// publishes worst-case); overflow rows drain via the cron sweep
+// exactly as they did pre-QStash, and the queue's continuous drain
+// still clears them far faster than */5 polling alone.
+export const HUNT_PUBLISH_CAP = 200
 
 export async function sweepSubmittedLines(db, locationId) {
   // 1. all submitted lines with a linked queue row (paginated)
@@ -79,5 +101,29 @@ export async function seedHunts(db, locationId) {
     .is('hunt_queued_at', null)
     .select('id')
   if (error) throw new Error(`seed failed: ${error.message}`)
-  return { seeded: (data || []).length }
+  const seededIds = (data || []).map((r) => r?.id).filter(Boolean)
+
+  // QSTASH.10 — fire-and-forget push per seeded row (capped, see
+  // HUNT_PUBLISH_CAP above). The hunt_queued_at write above is the
+  // delivery guarantee (the cron sweeps); the push is the latency
+  // optimisation. Publishes go onto the bounded `receipt-hunts` QStash
+  // queue (parallelism 1 — hunts stay strictly sequential: IMAP
+  // sessions to one location's mailboxes + an LLM call per candidate).
+  // Dedup id is DASH-ONLY (QStash 400s on colons). allSettled +
+  // never-throwing publishQueuePush + belt-and-braces try/catch: a
+  // publish problem must never affect the seed result.
+  if (seededIds.length > 0) {
+    try {
+      await Promise.allSettled(seededIds.slice(0, HUNT_PUBLISH_CAP).map((id) => publishQueuePush({
+        path: RECEIPT_HUNTS_WORKER_PATH,
+        body: { id },
+        deduplicationId: `receipt-hunt-${id}`,
+        queueName: RECEIPT_HUNTS_QUEUE_NAME,
+        queueParallelism: RECEIPT_HUNTS_QUEUE_PARALLELISM,
+      })))
+    } catch {
+      // publishQueuePush swallows its own errors; belt-and-braces only.
+    }
+  }
+  return { seeded: seededIds.length }
 }

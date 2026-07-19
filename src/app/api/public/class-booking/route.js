@@ -11,6 +11,7 @@ import { validateBody } from '@/lib/validate'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
+import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -113,19 +114,37 @@ export async function POST(request) {
   } catch (e) { logWarn('classbook', 'dedupe check failed', { err: e }) }
 
   // class_name + starts_at come from the SERVER-validated class, not the client.
-  const { error: insErr } = await db.from('class_booking_requests').insert({
+  const { data: queuedRow, error: insErr } = await db.from('class_booking_requests').insert({
     location_id: locationId, contact_id: contactId,
     glofox_event_id: b.event_id, class_name: chosen.name,
     starts_at: chosen.starts_at,
     customer_name: name, customer_email: b.email.toLowerCase(), customer_phone: b.phone,
     status: 'queued',
-  })
+  }).select('id').maybeSingle()
   if (insErr) {
     // A unique-violation (23505) means a concurrent request won the race for the
     // same (contact, class) — that's a successful dedupe, not an error.
     if (insErr.code === '23505') return NextResponse.json({ success: true, data: { queued: true, deduped: true } })
     logWarn('classbook', 'enqueue failed', { err: insErr })
     return NextResponse.json({ success: false, error: 'Could not start your booking. Please try again.' }, { status: 500 })
+  }
+
+  // QSTASH.7 — push delivery. Nudge QStash to deliver this row to the
+  // worker route now instead of waiting for the next cron tick. Fire-
+  // and-forget: env-gated (no QSTASH_TOKEN → skipped), and any failure
+  // leaves the row for the cron — the queue table is the delivery
+  // guarantee, QStash is the latency optimisation. Dedup id is
+  // DASH-ONLY (QStash 400s on colons — the QSTASH.2 lesson).
+  if (queuedRow?.id) {
+    try {
+      await publishQueuePush({
+        path: CLASS_BOOKINGS_WORKER_PATH,
+        body: { id: queuedRow.id },
+        deduplicationId: `class-booking-${queuedRow.id}`,
+      })
+    } catch {
+      // publishQueuePush swallows its own errors; belt-and-braces only.
+    }
   }
 
   // CAPI: a captured /start class lead is a website Lead event. The contact+
