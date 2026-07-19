@@ -13,7 +13,10 @@ export const dynamic = 'force-dynamic'
 export async function GET(request) {
   const db = createServerClient()
   const ip = getClientIp(request)
-  const limit = await checkRateLimit(db, `pubclasses:${ip}`, { max: 30, windowMs: 5 * 60_000 })
+  // SAAS-6: tenant-keyed. This route is hard-scoped to the 'stillorgan'
+  // public_path (see header), so the tenant identifier is that constant
+  // — already the right shape for when the route grows a location param.
+  const limit = await checkRateLimit(db, `pubclasses:stillorgan:${ip}`, { max: 30, windowMs: 5 * 60_000 })
   if (!limit.allowed) return rateLimitResponse(limit, 'Too many requests. Please wait a moment.')
 
   try {

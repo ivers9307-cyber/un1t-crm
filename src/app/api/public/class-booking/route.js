@@ -40,7 +40,10 @@ const Schema = z.object({
 export async function POST(request) {
   const db = createServerClient()
   const ip = getClientIp(request)
-  const limit = await checkRateLimit(db, `classbook:${ip}`, { max: 8, windowMs: 15 * 60_000 })
+  // SAAS-6: tenant-keyed. This route is hard-scoped to the 'stillorgan'
+  // public_path (resolved below), so the tenant identifier is that
+  // constant — the right shape for when the wizard goes multi-location.
+  const limit = await checkRateLimit(db, `classbook:stillorgan:${ip}`, { max: 8, windowMs: 15 * 60_000 })
   if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
 
   const validation = await validateBody(request, Schema)

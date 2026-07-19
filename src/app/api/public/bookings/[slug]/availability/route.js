@@ -16,7 +16,9 @@ export async function GET(request, props) {
   const params = await props.params
   const db = createServerClient()
   const ip = getClientIp(request)
-  const limit = await checkRateLimit(db, `pubavail:${ip}`, { max: 30, windowMs: 5 * 60_000 })
+  // SAAS-6: tenant-keyed (the booking-page slug) — one tenant's traffic
+  // can never consume another tenant's window for the same IP.
+  const limit = await checkRateLimit(db, `pubavail:${params.slug}:${ip}`, { max: 30, windowMs: 5 * 60_000 })
   if (!limit.allowed) return rateLimitResponse(limit, 'Too many requests. Please wait a moment.')
 
   const { searchParams } = new URL(request.url)
