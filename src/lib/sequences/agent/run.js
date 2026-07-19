@@ -8,26 +8,27 @@
 // real quality gate, so Opus-tier reasoning isn't worth the ~2x token cost here.
 import { parseGraphShape, validateGraph, isPureTree } from '../graph/index.js'
 import { EMIT_TOOL, buildAgentSystemPrompt, buildAgentUserMessage, buildFixMessage } from './prompt.js'
+import { anthropicMessages } from '@/lib/anthropic'
 
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const AGENT_MODEL = 'claude-sonnet-4-6'
 const MAX_ATTEMPTS = 3
 
-async function callClaude(apiKey, system, messages) {
-  const res = await fetch(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({
+async function callClaude(apiKey, system, messages, locationId) {
+  // SAAS4-M1 — metered via the shared wrapper (source: flow_agent).
+  const { res, data } = await anthropicMessages(
+    {
       model: AGENT_MODEL,
       max_tokens: 8192,
       system,
       messages,
       tools: [EMIT_TOOL],
       tool_choice: { type: 'tool', name: EMIT_TOOL.name },
-    }),
-  })
+    },
+    { apiKey, locationId, source: 'flow_agent' }
+  )
   if (!res.ok) throw new Error(`Claude API ${res.status}: ${(await res.text()).slice(0, 500)}`)
-  return res.json()
+  if (!data) throw new Error('Claude API returned a non-JSON response body.')
+  return data
 }
 
 /**
@@ -35,7 +36,7 @@ async function callClaude(apiKey, system, messages) {
  * ok:true + validation.ok → a clean, valid draft. ok:true + exhausted → a
  * shape-valid draft the operator can finish in the builder. ok:false → hard fail.
  */
-export async function runFlowAgent({ apiKey, prompt, trigger }) {
+export async function runFlowAgent({ apiKey, prompt, trigger, locationId = null }) {
   if (!apiKey) return { ok: false, error: 'AI is not configured (no API key).' }
   if (!prompt || !String(prompt).trim()) return { ok: false, error: 'Describe the sequence you want.' }
 
@@ -48,7 +49,7 @@ export async function runFlowAgent({ apiKey, prompt, trigger }) {
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     let data
     try {
-      data = await callClaude(apiKey, system, messages)
+      data = await callClaude(apiKey, system, messages, locationId)
     } catch (e) {
       return { ok: false, error: e?.message || 'AI request failed.' }
     }

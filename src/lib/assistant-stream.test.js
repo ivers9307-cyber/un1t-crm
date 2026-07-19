@@ -114,6 +114,34 @@ describe('applyAnthropicEvent — tool_use turn', () => {
   })
 })
 
+describe('applyAnthropicEvent — usage capture (SAAS4-M1)', () => {
+  it('captures input tokens from message_start and output tokens from message_delta', () => {
+    let turn = initTurn()
+    applyAnthropicEvent(turn, {
+      data: {
+        type: 'message_start',
+        message: { usage: { input_tokens: 900, cache_read_input_tokens: 4000, output_tokens: 1 } },
+      },
+    })
+    applyAnthropicEvent(turn, {
+      data: { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 210 } },
+    })
+    const { usage, stopReason } = finalizeTurn(turn)
+    expect(stopReason).toBe('end_turn')
+    expect(usage).toMatchObject({
+      input_tokens: 900,
+      cache_read_input_tokens: 4000,
+      output_tokens: 210,
+    })
+  })
+
+  it('returns null usage when the stream never carried usage (older wire shapes)', () => {
+    let turn = initTurn()
+    applyAnthropicEvent(turn, { data: { type: 'message_delta', delta: { stop_reason: 'end_turn' } } })
+    expect(finalizeTurn(turn).usage).toBeNull()
+  })
+})
+
 describe('encodeClientEvent', () => {
   it('produces a valid SSE data frame', () => {
     expect(encodeClientEvent({ type: 'text', delta: 'hi' })).toBe('data: {"type":"text","delta":"hi"}\n\n')
