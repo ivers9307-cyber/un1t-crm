@@ -1,33 +1,39 @@
 // HOST-EMAIL.3 — host campaign send cron (every 2 minutes, vercel.json).
+// QSTASH.8: now the SWEEPER — the QStash host-campaigns worker
+// (/api/webhooks/qstash/host-campaigns, kicked by the send route and
+// self-chained one chunk at a time) is the primary consumer; this cron
+// guarantees delivery when QStash is unconfigured, a kick/chain publish
+// fails, a chain link crashes, the MAX_CHAIN lineage cap is hit, or a
+// halted (kill-switch) campaign is re-verified and must resume.
 //
-// Drains host_campaign_sends with the claim-before-send pattern
-// (campaign-sender.js is the model): for each 'sending' campaign (oldest
-// first, ≤5 per tick), CAS-claim ≤50 pending rows (pending→claimed,
-// .select() returns only the rows THIS tick won — an overlapping invocation
-// matches 0 of the same ids), send each via the Postmark BROADCAST stream
-// from the host's verified sender, mark sent/failed per row, then refresh the
-// campaign's sent_count and finalise (status 'sent' / 'failed') once nothing
-// is pending or claimed.
+// The per-campaign chunk logic lives in src/lib/host-campaign-queue.js
+// (processHostCampaignChunk) — the SAME claim-before-send CAS for both
+// consumers: pending→claimed conditioned on status still 'pending', so
+// an overlapping worker/cron pair claims disjoint rows and can never
+// double-send. Per tick: ≤5 'sending' campaigns oldest-first, one
+// ≤50-row chunk each.
 //
-// Safety posture:
-//   - The host's sender_domain_verified is re-checked EVERY tick — the UN1T
-//     kill switch stops an in-flight campaign, not just new ones. Unverified
-//     campaigns stay 'sending' (resume if re-verified) rather than failing.
-//   - Stale claims (a tick that died between claim and result) are swept to
-//     'failed' after CLAIM_STALE_MS. host_campaign_sends has no attempts
-//     column, so terminal-fail is the safe choice: it can never double-send
-//     and can never loop; the trade is that a crashed tick's batch (≤50 rows)
-//     is not retried. sent_count/recipient_count expose the gap to the host.
-//   - Per-row errors are logged and the row marked failed; the cron itself
-//     never throws — the heartbeat stamps at the end of every run.
+// CRON-ONLY responsibilities (the worker deliberately has none of these):
+//   - Stale-claim sweep: claimed rows a crashed consumer left behind go
+//     terminal 'failed' after CLAIM_STALE_MS. host_campaign_sends has no
+//     attempts column, so terminal-fail is the safe choice: it can never
+//     double-send and can never loop; the trade is that a crashed
+//     consumer's batch (≤50 rows) is not retried. sent_count/
+//     recipient_count expose the gap to the host. Swept BEFORE the chunk
+//     call so an otherwise-drained campaign finalises in the same tick.
+//   - The ≤5-campaigns-per-tick outer loop and run summary.
+//   - The heartbeat — stamps at the end of every run; a failed campaign
+//     chunk lands in `errors` and never blocks the others.
+//
+// Safety posture (unchanged, now enforced inside the shared lib): the
+// host's sender_domain_verified is re-checked EVERY chunk — the UN1T
+// kill switch stops an in-flight campaign, not just new ones; unverified
+// campaigns stay 'sending' ('halted', resume here if re-verified) rather
+// than failing.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { renderHostCampaignHtml } from '@/lib/host-campaign-email'
-import { isEmailable } from '@/lib/host-contact-list'
-import { signHostUnsubToken } from '@/lib/host-unsubscribe'
-import { sendEmail } from '@/lib/postmark'
-import { getAppUrl } from '@/lib/app-url'
+import { processHostCampaignChunk } from '@/lib/host-campaign-queue'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { logError } from '@/lib/log'
 
@@ -35,7 +41,6 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const MAX_CAMPAIGNS_PER_TICK = 5
-const BATCH_SIZE = 50               // send rows claimed per campaign per tick
 const CLAIM_STALE_MS = 15 * 60_000  // claimed-but-unresolved rows older than this → failed
 
 function unauthorized() {
@@ -56,7 +61,7 @@ export async function GET(request) {
 
   const { data: campaigns, error: pickErr } = await db
     .from('host_campaigns')
-    .select('id, host_id, subject, body_html, status, recipient_count, sent_count')
+    .select('id, host_id, status')
     .eq('status', 'sending')
     .order('created_at', { ascending: true })
     .limit(MAX_CAMPAIGNS_PER_TICK)
@@ -68,12 +73,19 @@ export async function GET(request) {
 
   for (const campaign of campaigns || []) {
     try {
-      const result = await tickHostCampaign(db, campaign)
+      await sweepStaleClaims(db, campaign.id)
+      const result = await processHostCampaignChunk(db, campaign.id)
+      if (result.status === 'failed') {
+        summary.errors.push({ campaign_id: campaign.id, error: result.error })
+        logError('host-campaigns', 'campaign tick threw', { campaign_id: campaign.id, error: result.error })
+        continue
+      }
       summary.campaigns += 1
-      summary.sent += result.sent
-      summary.failed += result.failed
-      if (result.finalised) summary.finalised += 1
+      summary.sent += result.sent || 0
+      summary.failed += result.failed || 0
+      if (result.status === 'drained') summary.finalised += 1
     } catch (err) {
+      // Belt-and-braces — the lib returns 'failed' rather than throwing.
       const msg = err?.message || String(err)
       summary.errors.push({ campaign_id: campaign.id, error: msg })
       logError('host-campaigns', 'campaign tick threw', { campaign_id: campaign.id, error: msg })
@@ -84,185 +96,22 @@ export async function GET(request) {
   return NextResponse.json({ ok: true, ...summary })
 }
 
-async function tickHostCampaign(db, campaign) {
-  const result = { sent: 0, failed: 0, finalised: false }
-
-  // Sender identity + kill switch — re-checked every tick.
-  const { data: host, error: hostErr } = await db
-    .from('event_hosts')
-    .select('id, name, email, sender_email, sender_name, sender_domain_verified')
-    .eq('id', campaign.host_id)
-    .maybeSingle()
-  if (hostErr) throw new Error(`host load failed: ${hostErr.message}`)
-  if (!host) {
-    // Orphaned campaign (host row gone) — terminal.
-    await db.from('host_campaigns').update({ status: 'failed' }).eq('id', campaign.id).eq('status', 'sending')
-    logError('host-campaigns', 'campaign host missing — marked failed', { campaign_id: campaign.id })
-    return result
-  }
-  if (!host.sender_domain_verified || !host.sender_email) {
-    // Kill switch: leave the campaign 'sending' but send nothing. It resumes
-    // if UN1T re-verifies the domain.
-    logError('host-campaigns', 'sender not verified — campaign paused', {
-      campaign_id: campaign.id, host_id: host.id,
-    })
-    return result
-  }
-
-  // Sweep stale claims (see header) so a crashed tick can't block finalisation.
+// Sweep stale claims (see header) so a crashed consumer — cron tick OR
+// QStash chain link — can't block finalisation. Runs regardless of the
+// campaign's verify state (a stale claim is crash debris either way and
+// can never be sent — only 'pending' rows are claimable).
+async function sweepStaleClaims(db, campaignId) {
   const staleCutoff = new Date(Date.now() - CLAIM_STALE_MS).toISOString()
   const { data: swept } = await db
     .from('host_campaign_sends')
     .update({ status: 'failed' })
-    .eq('campaign_id', campaign.id)
+    .eq('campaign_id', campaignId)
     .eq('status', 'claimed')
     .lt('claimed_at', staleCutoff)
     .select('id')
   if (swept?.length) {
     logError('host-campaigns', 'stale claimed rows swept to failed', {
-      campaign_id: campaign.id, count: swept.length,
+      campaign_id: campaignId, count: swept.length,
     })
   }
-
-  // Claim a batch: select candidate ids, then CAS pending→claimed. Only the
-  // rows the update RETURNS are ours — a concurrent tick claims disjoint rows.
-  const { data: candidates, error: candErr } = await db
-    .from('host_campaign_sends')
-    .select('id')
-    .eq('campaign_id', campaign.id)
-    .eq('status', 'pending')
-    .order('id', { ascending: true })
-    .limit(BATCH_SIZE)
-  if (candErr) throw new Error(`pending fetch failed: ${candErr.message}`)
-
-  let claimed = []
-  if (candidates?.length) {
-    const { data: rows, error: claimErr } = await db
-      .from('host_campaign_sends')
-      .update({ status: 'claimed', claimed_at: new Date().toISOString() })
-      .in('id', candidates.map((r) => r.id))
-      .eq('status', 'pending')
-      .select('id, contact_id, email')
-    if (claimErr) throw new Error(`claim failed: ${claimErr.message}`)
-    claimed = rows || []
-  }
-
-  if (claimed.length > 0) {
-    // Send-time consent re-check (comms invariant; mirrors campaign-sender's
-    // post-claim consentOk): rows were enqueued with consent, but a contact
-    // can unsubscribe — globally OR via the per-host footer link — while the
-    // queue drains. Re-gate every claimed row against live flags before any
-    // send. Suppressed-since rows go terminal 'failed' (never sent, never
-    // retried — the status check constraint has no 'cancelled').
-    const contactIds = claimed.map((r) => r.contact_id)
-    const { data: contactRows, error: contactErr } = await db
-      .from('contacts')
-      .select('id, email, email_marketing, email_status, email_suppressed_at')
-      .in('id', contactIds)
-    if (contactErr) throw new Error(`consent re-check failed: ${contactErr.message}`)
-    const { data: suppRows, error: suppErr } = await db
-      .from('host_email_suppressions')
-      .select('contact_id')
-      .eq('host_id', campaign.host_id)
-      .in('contact_id', contactIds)
-    if (suppErr) throw new Error(`suppression re-check failed: ${suppErr.message}`)
-    const contactById = new Map((contactRows || []).map((c) => [c.id, c]))
-    const suppressedIds = new Set((suppRows || []).map((r) => r.contact_id))
-    const sendable = []
-    const revokedIds = []
-    for (const row of claimed) {
-      const ok = isEmailable(contactById.get(row.contact_id) || null, suppressedIds.has(row.contact_id))
-      if (ok) sendable.push(row)
-      else revokedIds.push(row.id)
-    }
-    if (revokedIds.length) {
-      await db.from('host_campaign_sends').update({ status: 'failed' }).in('id', revokedIds)
-      result.failed += revokedIds.length
-    }
-
-    const baseUrl = getAppUrl()
-    const senderName = host.sender_name || host.name || ''
-    const from = `"${senderName.replace(/"/g, "'")}" <${host.sender_email}>`
-
-    for (const row of sendable) {
-      // Fresh per-contact unsubscribe token — the footer link is per-host,
-      // per-contact (host_email_suppressions), injected by the renderer.
-      const unsubscribeUrl =
-        `${baseUrl}/unsubscribe/host/${signHostUnsubToken({ hostId: campaign.host_id, contactId: row.contact_id })}`
-      const htmlBody = renderHostCampaignHtml({
-        host,
-        subject: campaign.subject,
-        bodyHtml: campaign.body_html,
-        unsubscribeUrl,
-      })
-      try {
-        await sendEmail({
-          to: row.email,
-          from,
-          replyTo: host.email || undefined,
-          subject: campaign.subject,
-          htmlBody,
-          stream: 'broadcast',
-          tag: 'host-campaign',
-          metadata: { host_campaign_id: campaign.id, host_id: host.id, contact_id: row.contact_id },
-        })
-        result.sent += 1
-        await db.from('host_campaign_sends')
-          .update({ status: 'sent', sent_at: new Date().toISOString() })
-          .eq('id', row.id)
-      } catch (err) {
-        result.failed += 1
-        logError('host-campaigns', 'send failed', {
-          campaign_id: campaign.id, send_id: row.id, error: err?.message || String(err),
-        })
-        await db.from('host_campaign_sends').update({ status: 'failed' }).eq('id', row.id)
-      }
-    }
-
-    // One campaign update per batch. sent_count is RE-DERIVED from the queue
-    // (not read-modify-write incremented) so overlapping ticks that processed
-    // disjoint batches can't clobber each other's increment.
-    const { count: sentTotal } = await db
-      .from('host_campaign_sends')
-      .select('id', { count: 'exact', head: true })
-      .eq('campaign_id', campaign.id)
-      .eq('status', 'sent')
-    await db.from('host_campaigns')
-      .update({ sent_count: sentTotal || 0 })
-      .eq('id', campaign.id)
-  }
-
-  // Finalise once nothing is pending AND nothing is claimed (in flight).
-  const { count: pendingLeft } = await db
-    .from('host_campaign_sends')
-    .select('id', { count: 'exact', head: true })
-    .eq('campaign_id', campaign.id)
-    .eq('status', 'pending')
-  if ((pendingLeft || 0) === 0) {
-    const { count: claimedLeft } = await db
-      .from('host_campaign_sends')
-      .select('id', { count: 'exact', head: true })
-      .eq('campaign_id', campaign.id)
-      .eq('status', 'claimed')
-    if ((claimedLeft || 0) === 0) {
-      const { count: sentTotal } = await db
-        .from('host_campaign_sends')
-        .select('id', { count: 'exact', head: true })
-        .eq('campaign_id', campaign.id)
-        .eq('status', 'sent')
-      // Every row failed → 'failed'; anything delivered → 'sent'.
-      const finalStatus = (sentTotal || 0) === 0 ? 'failed' : 'sent'
-      await db.from('host_campaigns')
-        .update({
-          status: finalStatus,
-          sent_count: sentTotal || 0,
-          ...(finalStatus === 'sent' ? { sent_at: new Date().toISOString() } : {}),
-        })
-        .eq('id', campaign.id)
-        .eq('status', 'sending')
-      result.finalised = true
-    }
-  }
-
-  return result
 }

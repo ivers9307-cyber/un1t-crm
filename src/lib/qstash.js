@@ -49,6 +49,16 @@ export const INVOICE_ANALYSIS_QUEUE_PARALLELISM = 2
 // swept by /api/cron/process-class-bookings). Plain publish — bookings
 // arrive one at a time, no parallelism bound needed.
 export const CLASS_BOOKINGS_WORKER_PATH = '/api/webhooks/qstash/class-bookings'
+// QSTASH.8 — worker for host campaign sends (swept by
+// /api/cron/send-host-campaigns). First BULK job on the pattern: the
+// message is a campaign-level { campaignId, link }, NOT a per-row { id }
+// — a per-recipient publish would burn the free-tier request budget and
+// lose pacing. POST /api/host/emails/[id]/send publishes ONE kick after
+// the fan-out rows are enqueued; the worker then processes one ≤50-row
+// chunk per delivery and SELF-CHAINS the next kick (2s delay, no dedup
+// id — an identical-body dedup id would be swallowed inside QStash's
+// dedup window and break the chain).
+export const HOST_CAMPAIGNS_WORKER_PATH = '/api/webhooks/qstash/host-campaigns'
 
 const QSTASH_PUBLISH_BASE = 'https://qstash.upstash.io/v2/publish/'
 // Enqueue onto a named FIFO queue: /v2/enqueue/<queueName>/<destination>.

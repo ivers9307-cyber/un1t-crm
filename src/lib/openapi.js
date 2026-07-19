@@ -673,6 +673,28 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/webhooks/qstash/host-campaigns',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker for host campaign sends (campaign-level kick + chunk chaining)',
+  description:
+    'QStash → CRM. The first BULK job on the push pattern: delivers a campaign-level `{ campaignId, link }` — NOT a ' +
+    'per-recipient `{ id }` — published once by POST /api/host/emails/[id]/send after the fan-out rows are enqueued; ' +
+    'verified via the Upstash-Signature HS256 JWT (current + next signing keys). Each delivery processes ONE ≤50-row ' +
+    'chunk through the same claim-before-send CAS as the /api/cron/send-host-campaigns sweeper, then self-chains the ' +
+    'next kick (2s delay, no dedup id, ≤40 links per lineage) while pending rows remain. 200 for chunk_sent / drained / ' +
+    'halted (kill switch — the campaign stays sending and resumes via the cron when re-verified) / skipped; 500 only ' +
+    'for infrastructure errors (retry-safe: rows claimed by a crashed attempt are swept terminal by the cron, never re-sent).',
+  request: { body: { content: { 'application/json': { schema: z.object({ campaignId: uuidLike, link: z.number().int().min(1).optional() }).openapi('QstashHostCampaignsMessage') } } } },
+  responses: {
+    200: { description: 'Chunk sent (chained or handed to the cron), campaign drained/halted, or skipped (campaign already terminal)' },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Infrastructure error — QStash should retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/webhooks/inbody',
   tags: ['Webhooks (Inbound)'],
   security: [{ WebhookToken: [] }],
