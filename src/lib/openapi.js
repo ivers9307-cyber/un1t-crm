@@ -717,6 +717,30 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/webhooks/qstash/receipt-hunts',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker for the receipt-hunt queue',
+  description:
+    'QStash → CRM. Delivers `{ id }` of a recon_bank_lines row published per seeded row by seedHunts (the Friday ' +
+    'receipt-coverage-weekly cron, capped per seed) onto the `receipt-hunts` QUEUE (**parallelism 1** — a hunt opens ' +
+    'IMAP sessions + burns a Claude Vision call per candidate, and hunting is deliberately strictly sequential); ' +
+    'verified via the Upstash-Signature HS256 JWT (current + next signing keys). Claims via a by-id CAS mirroring the ' +
+    'claim_recon_hunt_batch RPC predicate, then runs the same huntLine unit as the /api/cron/process-receipt-hunts ' +
+    'sweeper. 200 for EVERY hunt outcome INCLUDING errors — huntLine never throws and its errorFinish already recorded ' +
+    'a terminal audit row and de-queued the line (the cron never retries these either); 500 only for infrastructure ' +
+    'errors (row fetch). The weekly finalizer (report email + weekly heartbeat) stays CRON-ONLY — this worker never ' +
+    'calls it and stamps no heartbeat.',
+  request: { body: { content: { 'application/json': { schema: z.object({ id: uuidLike }).openapi('QstashReceiptHuntsMessage') } } } },
+  responses: {
+    200: { description: 'Line hunted (found / not_found / terminal error, all with bookkeeping done) or delivery skipped (row not queued, or another consumer owns the claim)' },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Infrastructure error — QStash should retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/webhooks/inbody',
   tags: ['Webhooks (Inbound)'],
   security: [{ WebhookToken: [] }],

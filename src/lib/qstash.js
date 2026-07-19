@@ -72,6 +72,17 @@ export const HOST_CAMPAIGNS_WORKER_PATH = '/api/webhooks/qstash/host-campaigns'
 export const STRAVA_EXPORTS_WORKER_PATH = '/api/webhooks/qstash/strava-exports'
 export const STRAVA_EXPORTS_QUEUE_NAME = 'strava-exports'
 export const STRAVA_EXPORTS_QUEUE_PARALLELISM = 2
+// QSTASH.10 — worker for the recon_bank_lines receipt-hunt queue
+// (published per seeded row by seedHunts in src/lib/recon/statuses.js,
+// swept by /api/cron/process-receipt-hunts). Third job on a bounded
+// QStash QUEUE, and the first at **parallelism 1**: a hunt opens IMAP
+// sessions against the location's operator mailboxes and burns a
+// Claude Vision call per candidate — the cron has always drained this
+// queue strictly sequentially, and the queue bound preserves exactly
+// that while replacing the */5-polling latency with continuous drain.
+export const RECEIPT_HUNTS_WORKER_PATH = '/api/webhooks/qstash/receipt-hunts'
+export const RECEIPT_HUNTS_QUEUE_NAME = 'receipt-hunts'
+export const RECEIPT_HUNTS_QUEUE_PARALLELISM = 1
 
 const QSTASH_PUBLISH_BASE = 'https://qstash.upstash.io/v2/publish/'
 // Enqueue onto a named FIFO queue: /v2/enqueue/<queueName>/<destination>.
