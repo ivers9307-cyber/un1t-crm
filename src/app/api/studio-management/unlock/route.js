@@ -17,7 +17,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { getLocationUnifiConfig, remoteUnlockDoor, UnifiError } from '@/lib/unifi-access'
+import { getUnifiConfig, remoteUnlockDoor, UnifiError } from '@/lib/unifi-access'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -82,7 +82,8 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Location not found.' }, { status: 404 })
   }
 
-  const cfg = getLocationUnifiConfig(location)
+  // INTEG-A2 dual-read: registry row first, legacy settings.unifi otherwise.
+  const cfg = await getUnifiConfig(db, location)
   if (!cfg.configured) {
     return NextResponse.json({
       success: false,

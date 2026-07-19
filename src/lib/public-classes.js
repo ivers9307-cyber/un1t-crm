@@ -3,6 +3,7 @@
 // Europe/Dublin) + HH:MM time so the UI can group by day. No auth — display-
 // safe class data only (name/time/spots), same as the agent's class list.
 import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, fetchUpcomingEvents } from '@/lib/glofox'
+import { getGlofoxConfig } from '@/lib/connection-registry'
 
 const DUBLIN = 'Europe/Dublin'
 const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: DUBLIN, year: 'numeric', month: '2-digit', day: '2-digit' })
@@ -49,8 +50,9 @@ export async function listPublicClasses(db, locationId, days = 7) {
   if (missingGlofoxCredentialsForLocation(creds).length) return []
   let hidden = []
   try {
-    const { data: loc } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
-    hidden = parseHiddenKeywords(loc?.settings?.glofox?.hidden_class_keywords)
+    // INTEG-A2 dual-read: registry config first, legacy settings.glofox otherwise.
+    const glofoxCfg = await getGlofoxConfig(db, locationId)
+    hidden = parseHiddenKeywords(glofoxCfg?.hidden_class_keywords)
   } catch { /* no-op: a read failure just means no deny-list applied */ }
   const start = Math.floor(Date.now() / 1000)
   const end = start + Math.min(14, Math.max(1, days)) * 86400

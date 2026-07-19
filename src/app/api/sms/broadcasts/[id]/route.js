@@ -11,6 +11,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { audienceFilterSchema } from '@/lib/schemas'
+import { overlayConnections } from '@/lib/connection-registry'
 
 export const runtime = 'nodejs'
 
@@ -31,6 +32,11 @@ async function loadBroadcast(db, id) {
     .select('*, locations:location_id(id, name, twilio_alpha_sender_id)')
     .eq('id', id)
     .single()
+  // INTEG-A2 dual-read: registry twilio_sender row first (keeps the
+  // editor's sender preview consistent with what sendBroadcast uses).
+  if (data?.locations) {
+    data.locations = await overlayConnections(db, data.locations, ['twilio_sender'])
+  }
   return { broadcast: data, error }
 }
 

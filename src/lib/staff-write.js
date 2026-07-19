@@ -9,7 +9,7 @@ import { OWNER_ASSIGNABLE_ROLES, MASTER_ASSIGNABLE_ROLES } from '@/lib/schemas'
 import { diffPermissionsBlob, hydratePermissions, mergeTemplates } from '@shared/permissions'
 import { splitCompFromProfilePatch, upsertCompensationForProfile } from '@/lib/profile-compensation'
 import {
-  getLocationUnifiConfig, findOrCreateUnifiUser,
+  getUnifiConfig, findOrCreateUnifiUser,
   syncUnifiUserPolicyForRole, revokeUnifiUserPolicies, UnifiError,
 } from '@/lib/unifi-access'
 
@@ -244,7 +244,8 @@ export async function syncStaffAssignments({ db, id, targetBefore, desired, desi
   for (const link of (targetBefore.profile_locations || [])) {
     if (desiredIds.has(link.location_id)) continue
     if (link.unifi_door_access && link.unifi_user_id && link.locations) {
-      const cfg = getLocationUnifiConfig(link.locations)
+      // INTEG-A2 dual-read: registry row first, legacy settings.unifi otherwise.
+      const cfg = await getUnifiConfig(db, link.locations)
       if (cfg.configured) {
         try {
           await revokeUnifiUserPolicies(cfg, link.unifi_user_id)
@@ -291,6 +292,7 @@ export async function syncStaffAssignments({ db, id, targetBefore, desired, desi
     if (locationRow) {
       try {
         unifiUserId = await applyDoorAccessChange({
+          db,
           profile: targetBefore,
           location: locationRow,
           enable: wantsDoor,
@@ -344,8 +346,11 @@ export async function syncStaffAssignments({ db, id, targetBefore, desired, desi
 // Throws UnifiError on failure — the caller surfaces the message to
 // the API consumer without persisting the toggle change in
 // profile_locations, so the UI state stays consistent with reality.
-export async function applyDoorAccessChange({ profile, location, enable, role, existingUnifiUserId, skipFindOrCreate = false }) {
-  const cfg = getLocationUnifiConfig(location)
+export async function applyDoorAccessChange({ db, profile, location, enable, role, existingUnifiUserId, skipFindOrCreate = false }) {
+  // INTEG-A2 dual-read: registry row first, legacy settings.unifi
+  // otherwise. `db` is optional — without it (older callers / tests)
+  // this is exactly the legacy read.
+  const cfg = await getUnifiConfig(db, location)
 
   if (!enable) {
     if (cfg.configured && existingUnifiUserId) {

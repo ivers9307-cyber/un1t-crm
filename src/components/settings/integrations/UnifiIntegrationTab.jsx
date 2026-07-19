@@ -53,6 +53,10 @@ export default function UnifiIntegrationTab({ location, canEdit }) {
     setSaving(false)
     if (upErr) { setError(upErr.message); return }
     setSavedAt(new Date())
+    // INTEG-A2: re-sync this location's channel_connections registry
+    // rows from the legacy fields just saved (fire-and-forget — the
+    // registry write needs the service role, which lives server-side).
+    fetch(`/api/locations/${location.id}/connections/refresh`, { method: 'POST' }).catch(() => {})
     router.refresh()
   }
 
