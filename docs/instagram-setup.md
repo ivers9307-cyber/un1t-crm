@@ -36,7 +36,7 @@ Console: developers.facebook.com → app **UN1T communications platform** → In
 
 ## Connect in the CRM
 
-7. crm.un1tdublin.com → Customer Agent settings → **Connections** → Instagram: handle
+7. crm.un1tdublin.com → Settings → Locations → your location → **Integrations → Instagram** tab: handle
    `@un1t_stillorgan`, Instagram professional account ID `17841449661114656`, Instagram app
    ID `26910072478619447`, access token from step 6 (leave Page ID blank — not used by this
    flavor). **Leave "Mia auto-replies on Instagram" OFF.** Save → badge shows Connected.
@@ -62,20 +62,33 @@ message in — that IS the soft launch.
    `instagram-token-refresh` cron manually with CRON_SECRET → expect
    `{"success":true,"refreshed":1,"failed":0}` and `token_expires_at` ~60 days out.
 
-When done, flip Mia on for IG (if desired) via the "Mia auto-replies on Instagram" toggle in
-Customer Agent settings → Connections — it is OFF by default.
+When done, flip Mia on for IG (if desired) via the "Mia auto-replies on Instagram" toggle on
+the same Integrations → Instagram tab — it is OFF by default.
 
 ## After the WA Tech Provider review decision
 
-1. Submit App Review for **`instagram_business_manage_messages`** (+
-   `instagram_business_basic` if flagged) advanced access: screencast of DM → inbox → reply,
-   usage justification (reuse the tight style from the WA submission), data-handling answers
-   already backed by the public authority-requests policy.
-2. On approval: general-public DMs flow. Announce internally; watch the first week's volume.
-3. Optional later flip: the Mia toggle → she goes live on IG.
-4. SaaS onboarding (franchise locations / future clients self-connecting via embedded
-   Instagram business login — section 4 of the API-setup page) is deliberately deferred
-   until after App Review.
+**HOLD (2026-07-19): nothing below happens until Meta rules on the WhatsApp Tech Provider
+submission** — App Review is per parent app and the WA request is in flight on the same app.
+
+Console prep already parked (Business login settings saved 2026-07-19, endpoints NOT yet
+implemented):
+- OAuth redirect: `https://crm.un1tdublin.com/api/instagram/business-login/callback`
+- Deauthorize: `https://crm.un1tdublin.com/api/instagram/business-login/deauthorize`
+- Data deletion: `https://crm.un1tdublin.com/api/instagram/business-login/data-deletion`
+
+1. **Build the business-login flow FIRST — it is an App Review prerequisite, not a
+   post-review item** (the console's step-5 flow expects reviewers to exercise a working
+   business login, and they probe the data-deletion URL). One PR: OAuth start route +
+   the three parked endpoints above (signed-request verification via `INSTAGRAM_APP_SECRET`;
+   deauthorize flips the connection `is_active=false`; data deletion answers Meta's
+   confirmation-code protocol, backed by the public `/privacy` pages). This is the same
+   code the franchise/SaaS onboarding needs — nothing wasted.
+2. Submit App Review for **`instagram_business_manage_messages`** (+
+   `instagram_business_basic` if flagged) advanced access: screencast of business login →
+   DM → inbox → reply, usage justification (reuse the tight style from the WA submission),
+   data-handling answers already backed by the public authority-requests policy.
+3. On approval: general-public DMs flow. Announce internally; watch the first week's volume.
+4. Optional later flip: the Mia toggle → she goes live on IG.
 
 ## Known limitations (accepted)
 

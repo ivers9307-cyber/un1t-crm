@@ -19,8 +19,9 @@
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
   Plug, Zap, DoorOpen, Snowflake, FileCheck, MessageSquare, MessageCircle,
-  AlertCircle, CheckCircle2, Megaphone,
+  AlertCircle, CheckCircle2, Megaphone, Instagram,
 } from 'lucide-react'
+import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 
 import XeroIntegrationTab from './integrations/XeroIntegrationTab'
@@ -97,6 +98,18 @@ export default function LocationIntegrations({ location, xeroConnection, gbpConn
       key: 'whatsapp',
       label: 'WhatsApp',
       Icon: MessageCircle,
+      status: 'not-configured', // populated lazily by the tab component
+    })
+  }
+  // IG-HOME.1 — Instagram DM connection (Instagram Login API). Lives
+  // here with the other channels; the card itself is the shared
+  // ConnectionsSection (customer-agent settings now just points here).
+  // Gated owner-or-master like Ads/Xero — no feature flag yet.
+  if (isOwnerOrMaster) {
+    tabs.push({
+      key: 'instagram',
+      label: 'Instagram',
+      Icon: Instagram,
       status: 'not-configured', // populated lazily by the tab component
     })
   }
@@ -215,6 +228,9 @@ export default function LocationIntegrations({ location, xeroConnection, gbpConn
           )}
           {activeKey === 'whatsapp' && (
             <WhatsAppIntegrationTab location={location} canEdit={isOwnerOrMaster} />
+          )}
+          {activeKey === 'instagram' && (
+            <ConnectionsSection locationId={location.id} locationName={location.name} embedded />
           )}
         </div>
       </div>
