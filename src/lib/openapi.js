@@ -3091,6 +3091,24 @@ registry.registerPath({
   },
 })
 
+registry.registerPath({
+  method: 'post',
+  path: '/api/dashboard/ads/refresh',
+  tags: ['Dashboard'],
+  security: [{ CookieAuth: [] }],
+  summary: 'On-demand ads sync for one location',
+  description: 'Runs the ad-insights sync for every active ad account at the location (yesterday + today, Dublin time) — the /dashboard/ads "Refresh" button. Per-account failure isolation: each entry in results is { id, ok } or { id, error }. Requires the dashboard_ads permission.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({ locationId: uuidLike }).openapi('AdsRefreshBody') } } },
+  },
+  responses: {
+    200: { description: 'Sync results per ad account', content: { 'application/json': { schema: z.object({}).passthrough().openapi('AdsRefreshResponse') } } },
+    400: { description: 'locationId required', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing dashboard_ads permission', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Customer (champ-app member) self-service
 // ============================================================================
