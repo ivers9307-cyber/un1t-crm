@@ -17,6 +17,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { stampTenantHeartbeat } from '@/lib/tenant-heartbeat'
 import { logWarn } from '@/lib/log'
 import { isPackCreditDataStale, PACK_CREDIT_MAX_AGE_DAYS } from '@/lib/glofox-data-quality'
 
@@ -31,30 +32,55 @@ export async function GET(request) {
 
   const db = createServerClient()
 
-  // Most-recent sync across the whole class-pack base. nullsFirst:false
-  // so a contact that has actually synced sorts above never-synced ones.
-  const { data, error } = await db
-    .from('contacts')
-    .select('glofox_synced_at')
-    .eq('glofox_membership_type', 'num_classes')
-    .order('glofox_synced_at', { ascending: false, nullsFirst: false })
-    .limit(1)
-    .maybeSingle()
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  // SAAS4-O1 — per-LOCATION freshness. The pre-412 version computed ONE
+  // global most-recent sync, so one healthy tenant's sync masked another
+  // tenant's rot. Now: evaluate each active location's own pack base.
+  // Locations with zero num_classes contacts are skipped entirely (not
+  // Glofox-connected, or no packs sold) — never a false stale.
+  const { data: locations, error: locErr } = await db
+    .from('locations')
+    .select('id, name')
+    .eq('active', true)
+  if (locErr) {
+    return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
   }
 
-  const latestSync = data?.glofox_synced_at || null
-  const stale = isPackCreditDataStale(latestSync)
+  const perLocation = []
+  for (const loc of locations || []) {
+    // Most-recent sync in THIS location's pack base. nullsFirst:false so
+    // a contact that has actually synced sorts above never-synced ones.
+    const { data: row, error } = await db
+      .from('contacts')
+      .select('glofox_synced_at')
+      .eq('location_id', loc.id)
+      .eq('glofox_membership_type', 'num_classes')
+      .order('glofox_synced_at', { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle()
+    if (error) {
+      return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    }
+    if (!row) continue // no pack base here — nothing to go stale
 
-  if (stale) {
-    // Skip the heartbeat stamp — the cron-health endpoint flagging
-    // 'glofox-data-quality' as stale IS the alert.
-    logWarn('glofox-data-quality',
-      `pack-credit data is stale — latest num_classes sync ${latestSync || 'never'} (threshold ${PACK_CREDIT_MAX_AGE_DAYS}d)`)
-    return NextResponse.json({ success: true, healthy: false, latest_pack_sync: latestSync })
+    const latestSync = row.glofox_synced_at || null
+    const stale = isPackCreditDataStale(latestSync)
+    perLocation.push({ location_id: loc.id, location: loc.name, latest_pack_sync: latestSync, healthy: !stale })
+
+    if (stale) {
+      logWarn('glofox-data-quality',
+        `pack-credit data is stale at ${loc.name} — latest num_classes sync ${latestSync || 'never'} (threshold ${PACK_CREDIT_MAX_AGE_DAYS}d)`)
+    } else {
+      await stampTenantHeartbeat('glofox-data-quality', loc.id)
+    }
   }
 
-  await stampHeartbeat('glofox-data-quality').catch(() => {})
-  return NextResponse.json({ success: true, healthy: true, latest_pack_sync: latestSync })
+  // Global heartbeat semantics preserved: stamped only when EVERY
+  // evaluated location is fresh (and at least one was evaluated —
+  // an empty pack base everywhere reads as stale, exactly like the
+  // old global query returning no row). The cron-health endpoint
+  // flagging 'glofox-data-quality' as stale IS the alert.
+  const healthy = perLocation.length > 0 && perLocation.every((l) => l.healthy)
+  if (healthy) await stampHeartbeat('glofox-data-quality').catch(() => {})
+
+  return NextResponse.json({ success: true, healthy, locations: perLocation })
 }

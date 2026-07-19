@@ -88,7 +88,7 @@ export async function POST(request) {
     const ab = await blob.arrayBuffer()
     const bytes = Buffer.from(ab)
 
-    const result = await extractInvoiceFieldsFromBytes(bytes, row.attachment_mime_type)
+    const result = await extractInvoiceFieldsFromBytes(bytes, row.attachment_mime_type, { locationId: row.location_id })
     if (!result.ok) {
       // Persist the error; row stays at its current state so the UI
       // can surface a retry.

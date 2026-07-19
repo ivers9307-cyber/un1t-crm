@@ -10,9 +10,8 @@
 // a private helper there), so this file carries its own local copy
 // rather than modifying that file.
 import { z } from 'zod'
+import { anthropicMessages } from '@/lib/anthropic'
 
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
-const ANTHROPIC_VERSION = '2023-06-01'
 const MODEL = 'claude-sonnet-4-6'
 // claude-sonnet-4-6 pricing per 1M tokens
 const INPUT_USD_PER_TOKEN = 3 / 1_000_000
@@ -60,22 +59,21 @@ export async function scoreHuntCandidate({ bytes, mime, line }) {
     `statement description: ${line.description || '(none)'}; reference: ${line.reference || '(none)'}. ` +
     `Is the attached document the invoice/receipt for this exact transaction? Return only the JSON verdict.`
 
-  let res
+  let res, data
   try {
-    res = await fetch(ANTHROPIC_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': ANTHROPIC_VERSION,
-      },
-      body: JSON.stringify({
+    // SAAS4-M1 — metered via the shared wrapper (source: hunt_scoring).
+    // recon_hunts carries no location key (mig 370, keyed by bank_line),
+    // so the usage event is untagged; llm_spend_usd on recon_hunts stays
+    // the hunt-level spend record it always was.
+    ;({ res, data } = await anthropicMessages(
+      {
         model: MODEL,
         max_tokens: 512,
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: [contentBlockFor(bytes, mime), { type: 'text', text: userText }] }],
-      }),
-    })
+      },
+      { apiKey, source: 'hunt_scoring' }
+    ))
   } catch (e) {
     return { ok: false, error: `Anthropic API request failed: ${e.message || String(e)}` }
   }
@@ -84,7 +82,6 @@ export async function scoreHuntCandidate({ bytes, mime, line }) {
     const errText = await res.text().catch(() => '<unreadable>')
     return { ok: false, error: `Anthropic API error (${res.status}): ${errText}` }
   }
-  const data = await res.json().catch(() => null)
   if (!data) return { ok: false, error: 'Anthropic returned non-JSON response body.' }
 
   const spendUsd =

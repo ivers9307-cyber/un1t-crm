@@ -195,7 +195,11 @@ const ScheduledReport = z.object({
 registry.registerComponent('securitySchemes', 'BearerAuth', {
   type: 'http',
   scheme: 'bearer',
-  description: 'CRM_API_KEY for n8n / external integrations. Sent as `Authorization: Bearer <token>`.',
+  description:
+    'API key for n8n / external integrations, sent as `Authorization: Bearer <token>`. ' +
+    'Two kinds are accepted (SAAS-3): a per-organization key (`unitk_…`, issued at ' +
+    '/settings/api-keys) whose queries are scoped to the key\'s organization, or the ' +
+    'legacy shared CRM_API_KEY (unscoped, system-admin behaviour).',
 })
 registry.registerComponent('securitySchemes', 'CookieAuth', {
   type: 'apiKey',
@@ -2207,6 +2211,44 @@ registry.registerPath({
   },
 })
 
+// Location create (SAAS4-W0.1) — server-side so per-location defaults
+// (FUNNEL.1 pipeline stages) are seeded atomically with the row.
+registry.registerPath({
+  method: 'post',
+  path: '/api/locations',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create a location and seed its defaults (master only)',
+  description: 'Creates the locations row (slug derived from name) and seeds the FUNNEL.1 pipeline_stages set from the classifier taxonomy. Seeding is idempotent on (location_id, slug). Replaces the legacy browser-side insert in LocationForm.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            name: z.string().min(1).max(100),
+            organization_id: uuidLike,
+            address: z.string().max(300).nullish(),
+            phone: z.string().max(50).nullish(),
+            email: z.string().email().nullish(),
+            timezone: z.string().max(64).optional(),
+            country: z.string().length(2).optional(),
+            active: z.boolean().optional(),
+            monthly_contractor_budget_eur: z.number().min(0).nullish(),
+            invoices_inbound_slug: z.string().nullish(),
+            email_inbox_reply_to: z.string().email().nullish(),
+          }).openapi('LocationCreate'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Location created and seeded' },
+    403: { description: 'Forbidden — master only', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Slug already exists', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Location created but seeding failed (safe to re-run)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Marketing frequency cap (FREQ-CAP.1, mig 399)
 registry.registerPath({
   method: 'get',
@@ -3154,8 +3196,9 @@ function buildSpec() {
       version: '1.1.0',
       description:
         'HTTP API for the UN1T gym CRM. Most endpoints accept either a Supabase ' +
-        'session cookie (browser) or a Bearer token (CRM_API_KEY for n8n / external ' +
-        'integrations). Mutating endpoints validate request bodies via Zod schemas; ' +
+        'session cookie (browser) or a Bearer token for n8n / external integrations — ' +
+        'a per-organization `unitk_…` API key (org-scoped) or the legacy shared ' +
+        'CRM_API_KEY (unscoped). Mutating endpoints validate request bodies via Zod schemas; ' +
         'invalid input returns 400 with structured `issues` array.' +
         ' Covers the public, inbound-webhook, bridge and mobile integration surface; planned outbound events appear under webhooks.',
     },

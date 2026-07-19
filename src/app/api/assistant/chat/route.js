@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
+import { anthropicMessages } from '@/lib/anthropic'
+import { recordUsage } from '@/lib/usage'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { fetchScheduledShiftRows } from '@/lib/report-generator'
 import { upsertShiftAssignment } from '@/lib/roster-write'
@@ -124,10 +126,12 @@ export async function executeTool(toolName, input, context) {
     }
 
     case 'create_shift': {
+      if (!locationId) return { error: 'No active location — switch to a location before creating a shift.' }
       // RETIRE-SHIFTS-MIRROR.4 — writes the Roster v2 model (find-or-create
-      // block + upsert assignment) instead of the legacy shifts table; the
-      // mig 068 forward trigger keeps shifts in sync for remaining readers.
-      const { error } = await upsertShiftAssignment(db, {
+      // block + upsert assignment) instead of the legacy shifts table.
+      // The helper validates template + profile against the location
+      // (SAAS-1): a cross-tenant id errors before anything is written.
+      const { template, error } = await upsertShiftAssignment(db, {
         locationId,
         profileId: input.profile_id,
         shiftTemplateId: input.shift_template_id,
@@ -135,12 +139,12 @@ export async function executeTool(toolName, input, context) {
         actorId: context.userId,
       })
       if (error) return { error: error.message }
-      // Friendly names for the response — same shape as before.
-      const [{ data: tpl }, { data: prof }] = await Promise.all([
-        db.from('shift_templates').select('name').eq('id', input.shift_template_id).maybeSingle(),
-        db.from('profiles').select('full_name').eq('id', input.profile_id).maybeSingle(),
-      ])
-      return { success: true, shift: { date: input.shift_date, staff: prof?.full_name, template: tpl?.name } }
+      // Friendly name for the response — the template comes back from the
+      // validated fetch above, and profile_id was checked against
+      // profile_locations inside the helper, so this bare-id read can only
+      // hit an in-location staff member.
+      const { data: prof } = await db.from('profiles').select('full_name').eq('id', input.profile_id).maybeSingle()
+      return { success: true, shift: { date: input.shift_date, staff: prof?.full_name, template: template?.name } }
     }
 
     case 'list_staff': {
@@ -162,6 +166,8 @@ export async function executeTool(toolName, input, context) {
     }
 
     case 'list_shift_templates': {
+      // No location → no unscoped read.
+      if (!locationId) return { templates: [] }
       const { data } = await db.from('shift_templates')
         .select('id, name, start_time, end_time, color')
         .eq('location_id', locationId)
@@ -171,6 +177,8 @@ export async function executeTool(toolName, input, context) {
     }
 
     case 'get_shifts_for_week': {
+      // No location → no unscoped read.
+      if (!locationId) return { shifts: [] }
       const startDate = input.start_date
       const endDate = new Date(new Date(startDate + 'T00:00:00').getTime() + 6 * 86400000).toISOString().split('T')[0]
       // RETIRE-SHIFTS-MIRROR.3 — reads shift_assignments+shift_blocks now.
@@ -256,9 +264,22 @@ export async function executeTool(toolName, input, context) {
 
     case 'get_holiday_allowance': {
       // Staff can only check their own allowance
-      let profileId = input.profile_id || userId
-      if (!MANAGER_ROLES.includes(role) && input.profile_id && input.profile_id !== userId) {
+      const profileId = input.profile_id || userId
+      if (!MANAGER_ROLES.includes(role) && profileId !== userId) {
         return { error: 'You can only view your own holiday allowance.' }
+      }
+      // Reading anyone else requires them to share the active location —
+      // a bare profile_id would read any tenant's allowance (SAAS-1).
+      // Self-reads skip the check so a caller without an active location
+      // still sees their own.
+      if (profileId !== userId) {
+        if (!locationId) return { error: 'No active location for this action.' }
+        const { data: link } = await db.from('profile_locations')
+          .select('profile_id')
+          .eq('profile_id', profileId)
+          .eq('location_id', locationId)
+          .maybeSingle()
+        if (!link) return { error: 'Staff member not found in your active location.' }
       }
       const year = input.year || new Date().getFullYear()
       const { data } = await db.from('staff_allowances')
@@ -271,6 +292,7 @@ export async function executeTool(toolName, input, context) {
     }
 
     case 'generate_report': {
+      if (!locationId) return { error: 'No active location for this action.' }
       // We can't easily call /api/schedule/reports internally with the
       // caller's auth context, so generate the report inline here.
       const reportType = input.report_type
@@ -299,11 +321,25 @@ export async function executeTool(toolName, input, context) {
       }
 
       if (reportType === 'staff_cost') {
-        const { data: profiles } = await db.from('profiles').select('id, full_name, employment_type, annual_salary, hourly_rate, contracted_hours_per_week').eq('active', true)
+        // Rate data only for staff linked to the active location (mirror
+        // list_staff) — an unscoped profiles read would expose every
+        // tenant's salary data (SAAS-1).
+        const { data: links } = await db.from('profile_locations')
+          .select('profile_id')
+          .eq('location_id', locationId)
+        const profileIds = [...new Set((links || []).map(l => l.profile_id))]
+        let profiles = []
+        if (profileIds.length > 0) {
+          const { data } = await db.from('profiles')
+            .select('id, full_name, employment_type, annual_salary, hourly_rate, contracted_hours_per_week')
+            .in('id', profileIds)
+            .eq('active', true)
+          profiles = data || []
+        }
         // RETIRE-SHIFTS-MIRROR.3 — reads shift_assignments+shift_blocks now.
         const shifts = await fetchScheduledShiftRows(db, { locationId, periodStart, periodEnd })
         const rateMap = {}
-        for (const p of (profiles || [])) {
+        for (const p of profiles) {
           let rate = 0
           if (p.employment_type === 'contractor') rate = Number(p.hourly_rate) || 0
           else if (p.annual_salary && p.contracted_hours_per_week) rate = Number(p.annual_salary) / (Number(p.contracted_hours_per_week) * 52)
@@ -473,7 +509,18 @@ export async function POST(request) {
               }
             }
 
-            const { content, stopReason } = finalizeTurn(turn)
+            const { content, stopReason, usage } = finalizeTurn(turn)
+
+            // SAAS4-M1 — meter the streamed turn (source: assistant_chat;
+            // tracked but allowance-exempt). Fire-and-forget by design.
+            if (usage) {
+              recordUsage({
+                locationId: userContext.locationId ?? null,
+                source: 'assistant_chat',
+                model: ASSISTANT_MODEL,
+                usage,
+              }).catch(() => {})
+            }
 
             if (stopReason === 'tool_use') {
               claudeMessages.push({ role: 'assistant', content })
@@ -527,28 +574,22 @@ export async function POST(request) {
   while (maxIterations > 0) {
     maxIterations--
 
-    const claudeRes = await fetch(ANTHROPIC_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+    // SAAS4-M1 — metered via the shared wrapper (source: assistant_chat).
+    const { res: claudeRes, data: claudeData } = await anthropicMessages(
+      {
+        model: ASSISTANT_MODEL,
         max_tokens: 1024,
         system: systemPrompt,
         messages: claudeMessages,
         tools: allowedTools,
-      }),
-    })
+      },
+      { apiKey, locationId: userContext.locationId ?? null, source: 'assistant_chat' }
+    )
 
     if (!claudeRes.ok) {
       const errText = await claudeRes.text()
       return NextResponse.json({ success: false, error: `Claude API error: ${errText}` }, { status: 500 })
     }
-
-    const claudeData = await claudeRes.json()
 
     // Check if Claude wants to use tools
     if (claudeData.stop_reason === 'tool_use') {

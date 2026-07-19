@@ -4,6 +4,7 @@ import { createServerClient as createSSRClient } from '@supabase/ssr'
 import { cookies, headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { mergeTemplates } from '@shared/permissions'
+import { isApiKeyToken } from './api-keys'
 
 // React 18's `cache()` is only exported from the server build of react.
 // In the Vitest (Node) environment we get the client build which omits
@@ -159,6 +160,10 @@ async function getUserFromBearer() {
   // Skip the n8n CRM_API_KEY — that path doesn't carry a Supabase user;
   // routes that need a user under that token use requireApiKey() instead.
   if (process.env.CRM_API_KEY && token === process.env.CRM_API_KEY) return null
+  // SAAS-3: per-org API keys (unitk_…) likewise never carry a Supabase
+  // user — skip the doomed auth.getUser() round-trip; routes resolve
+  // them via authenticateApiKey()/requireApiKeyOrManager() instead.
+  if (isApiKeyToken(token)) return null
   try {
     const sb = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL,

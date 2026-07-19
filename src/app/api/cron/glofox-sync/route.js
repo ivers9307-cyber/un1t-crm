@@ -21,6 +21,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
+import { stampTenantHeartbeat } from '@/lib/tenant-heartbeat'
 import { glofoxCredentialsForLocation, fetchAllMembersPage } from '@/lib/glofox'
 import { syncMembershipCatalog } from '@/lib/glofox-catalog'
 import { applyMemberSync } from '@/lib/glofox-sync'
@@ -84,6 +85,12 @@ export async function GET(request) {
   for (const loc of eligibleLocations) {
     const result = await syncOneLocation(db, loc, filters, lookbackSec)
     perLocationResults.push(result)
+    // SAAS4-O1 — per-tenant heartbeat: only the locations whose sync
+    // actually completed stamp, so one tenant's failure is visible in
+    // tenant_cron_health even while the global heartbeat stays green.
+    if (result.status === 'completed') {
+      await stampTenantHeartbeat('glofox-sync', loc.id)
+    }
   }
 
   await stampHeartbeat('glofox-sync')

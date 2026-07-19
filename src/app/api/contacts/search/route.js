@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { authenticateApiKey, scopeQueryToOrg } from '@/lib/api-auth'
+import { authenticateApiKey, orgScopeLocationIds } from '@/lib/api-auth'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { applyAudienceFilterAsync, InvalidAudienceFilterError } from '@/lib/audience-filter'
 import { audienceFilterSchema } from '@/lib/schemas'
@@ -37,7 +37,8 @@ export async function GET(request) {
   const locationId = searchParams.get('location_id')
   if (locationId) query = query.eq('location_id', locationId)
   // APIKEYS.3 — per-org key: restrict to the org's locations.
-  query = await scopeQueryToOrg(query, db, auth.orgId)
+  const orgLocs = await orgScopeLocationIds(db, auth.orgId)
+  if (orgLocs) query = query.in('location_id', orgLocs)
 
   if (fields === 'email') {
     query = query.ilike('email', `%${term}%`)

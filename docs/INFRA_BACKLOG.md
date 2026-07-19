@@ -75,5 +75,7 @@ path, so these are yours to execute; ordering above avoids an outage.
 
 _Still open from the review (not in scope for this pass): #6 error-visibility
 after disabling Observability Plus (e.g. Sentry free / a sentinel 5xx watcher),
-#7 CI gap (`next build` + a route-level integration smoke against a Supabase
-branch)._
+#7 CI gap — `next build` **DONE** (SAAS4-W0.3, parallel "Next build" job in
+web-ci.yml); the route-level integration smoke against a Supabase branch
+remains open (planned as part of the Section-4 SaaS machinery CI ladder,
+alongside the cross-tenant harness)._

@@ -83,11 +83,32 @@ export async function GET(request) {
   const stale = checks.filter((c) => c.is_stale)
   const allHealthy = stale.length === 0
 
+  // SAAS4-O1 — per-tenant visibility (additive; best-effort). The
+  // 200/503 contract stays driven by the GLOBAL cron_health rows —
+  // per-tenant crons (e.g. glofox-data-quality) only stamp their
+  // global heartbeat when every tenant is fresh, so a tenant-level
+  // outage already 503s via the global row. tenant_stale names WHICH
+  // tenant is behind, so the operator (and later /admin/health) can
+  // route the alert instead of hunting.
+  let tenantStale = []
+  try {
+    const db = createServerClient()
+    const { data } = await db
+      .from('tenant_cron_health')
+      .select('name, location_id, last_ok_at, stale_seconds')
+      .eq('is_stale', true)
+      .order('name')
+    tenantStale = data || []
+  } catch {
+    /* tenant detail is diagnostic — never fail the health check over it */
+  }
+
   return NextResponse.json(
     {
       success: allHealthy,
       all_healthy: allHealthy,
       stale: stale.map((c) => c.name),
+      tenant_stale: tenantStale,
       checks,
       checked_at: new Date().toISOString(),
     },

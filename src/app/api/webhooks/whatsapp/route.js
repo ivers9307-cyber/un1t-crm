@@ -122,6 +122,28 @@ export async function POST(request) {
         const value = change.value
         const phoneNumberId = value.metadata?.phone_number_id
 
+        // SAAS-2 — strict tenant routing: only an active whatsapp_numbers
+        // row may own inbound traffic (messages AND statuses). A missing or
+        // unknown phone_number_id, an env-only match (no location), or a
+        // failed lookup DROPS the whole change with a structured log — the
+        // old first-locations-row fallback routed a foreign number's
+        // messages (and the contact + Mia reply they spawned) into an
+        // arbitrary tenant. Still 200s below: Meta auto-disables webhooks
+        // on non-2xx.
+        let routing = { action: 'drop' }
+        if (phoneNumberId) {
+          try {
+            routing = classifyInboundOwner(await resolveWhatsAppNumberByPhoneNumberId(phoneNumberId))
+          } catch (e) {
+            console.error(`[wa-webhook] DROP messages change: phone_number_id ${phoneNumberId} lookup failed: ${e.message}`)
+            continue
+          }
+        }
+        if (routing.action !== 'location') {
+          console.error(`[wa-webhook] DROP messages change: unroutable phone_number_id ${phoneNumberId || '(missing)'} — no active whatsapp_numbers row`)
+          continue
+        }
+
         // Handle incoming messages. Per-message idempotency
         // (mig 107) — Meta retries the entire envelope on non-2xx,
         // so each message.id is the natural dedup key. A retry
@@ -136,7 +158,7 @@ export async function POST(request) {
               })
               if (dedup.seen) continue
             }
-            await handleIncomingMessage(db, message, value.contacts, phoneNumberId)
+            await handleIncomingMessage(db, message, value.contacts, routing.locationId)
           }
         }
 
@@ -166,7 +188,9 @@ export async function POST(request) {
   return NextResponse.json({ success: true })
 }
 
-async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
+// `defaultLocationId` is the location owning the recipient phone_number_id —
+// already resolved (and unroutable traffic dropped) by the POST loop.
+async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
   const senderPhone = message.from  // E.164 format
   const messageId = message.id
   const timestamp = message.timestamp ? new Date(parseInt(message.timestamp) * 1000) : new Date()
@@ -174,30 +198,6 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
   // Get sender name from Meta's contacts array
   const metaContact = contacts?.find(c => c.wa_id === senderPhone)
   const senderName = metaContact?.profile?.name || null
-
-  // WA-MULTI.1 / WA-TECHPROV.4 — route inbound to the location that
-  // owns the recipient phone_number_id. Unknown ids are DROPPED
-  // (cross-tenant protection); the env-config number and resolver
-  // errors keep the historical first-location fallback.
-  let routing = { action: 'first_location' }   // no phone_number_id in payload = legacy behaviour
-  if (phoneNumberId) {
-    try {
-      const owningNumber = await resolveWhatsAppNumberByPhoneNumberId(phoneNumberId)
-      routing = classifyInboundOwner(owningNumber)
-    } catch (e) {
-      console.warn('[wa-webhook] phone_number_id resolution failed (falling back):', e.message)
-    }
-  }
-  if (routing.action === 'drop') {
-    console.warn(`[wa-webhook] dropping inbound for unregistered phone_number_id ${phoneNumberId}`)
-    return
-  }
-
-  let defaultLocationId = routing.action === 'location' ? routing.locationId : null
-  if (!defaultLocationId) {
-    const { data: locations } = await db.from('locations').select('id').limit(1)
-    if (locations?.length) defaultLocationId = locations[0].id
-  }
 
   // Try to find existing contact by phone number
   // Meta sends phone without '+' (e.g. 353873147675), but contacts may store it
@@ -238,8 +238,7 @@ async function handleIncomingMessage(db, message, contacts, phoneNumberId) {
   }
 
   // Determine location: contact's location wins if known (their
-  // existing CRM placement), otherwise the WA-number owner, then
-  // first-location fallback.
+  // existing CRM placement), otherwise the WA-number owner.
   const locationId = contact?.location_id || defaultLocationId
 
   // Get or create conversation (keyed by phone number, NOT by contact)
@@ -620,30 +619,27 @@ async function handleStatusUpdate(db, status) {
 // unknown ids are dropped, mirroring the messages path.
 async function handleCoexistenceEvent(db, field, value) {
   const phoneNumberId = value?.metadata?.phone_number_id
-  // Mirror handleIncomingMessage: a resolver THROW means "owner undetermined"
-  // (transient DB error) → keep the first-location fallback, NOT drop. Dropping
-  // here is permanent (we 200 + dedup, Meta never retries). Only a genuine
-  // null (unknown number) reaches classifyInboundOwner → { action: 'drop' }.
+  // SAAS-2 — same strict routing as the messages path: only an active
+  // whatsapp_numbers row may own coexistence traffic. A missing/unknown
+  // phone_number_id or a failed lookup DROPS the event with a structured
+  // log (still 200) — the first-location fallback that used to catch
+  // these landed a foreign number's echoes in an arbitrary tenant.
   let owner = null
-  let routing = { action: 'first_location' }
+  let routing = { action: 'drop' }
   if (phoneNumberId) {
     try {
       owner = await resolveWhatsAppNumberByPhoneNumberId(phoneNumberId)
       routing = classifyInboundOwner(owner)
     } catch (e) {
-      console.warn('[wa-webhook] coexistence phone_number_id resolution failed (falling back):', e?.message)
+      console.error(`[wa-webhook] DROP coexistence ${field}: phone_number_id ${phoneNumberId} lookup failed: ${e?.message}`)
+      return
     }
   }
-  if (routing.action === 'drop') {
-    console.warn(`[wa-webhook] dropping coexistence ${field} for unregistered phone_number_id ${phoneNumberId}`)
+  if (routing.action !== 'location') {
+    console.error(`[wa-webhook] DROP coexistence ${field}: unroutable phone_number_id ${phoneNumberId || '(missing)'} — no active whatsapp_numbers row`)
     return
   }
-  let locationId = routing.action === 'location' ? routing.locationId : null
-  if (!locationId) {
-    const { data: locations } = await db.from('locations').select('id').limit(1)
-    locationId = locations?.[0]?.id || null
-  }
-  if (!locationId) return
+  const locationId = routing.locationId
 
   if (field === 'smb_app_state_sync') {
     for (const c of parseSyncContacts(value)) {

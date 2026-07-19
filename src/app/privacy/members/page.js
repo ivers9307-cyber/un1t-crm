@@ -8,9 +8,11 @@
 // /welcome SiteFooter "Privacy" link points here.
 //
 // Controller named here is Champ Fitness Ltd (trading as UN1T
-// Dublin), per operator instruction 2026-06-19. NOTE: the internal
-// /privacy page still names "UN1T Dublin Ltd" — these need to be
-// reconciled by the operator; do not silently change the other page.
+// Dublin), per operator instruction 2026-06-19. RECONCILED 2026-07-19
+// (SAAS4-W0.2): Richard settled Champ Fitness Ltd as the single legal
+// entity across ALL legal pages (/privacy, /privacy/authority-requests,
+// /terms updated to match). tests/legal-entity-consistency.test.js
+// pins the consistency.
 //
 // Server-rendered static markup so it loads without auth.
 

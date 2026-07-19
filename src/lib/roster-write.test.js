@@ -5,14 +5,22 @@ import { upsertShiftAssignment, bulkUpsertShiftAssignments } from './roster-writ
 
 // Per-table mock of the supabase builder. `existingBlock` null → the helper
 // must create one; captured.blockInsert / captured.assignmentUpsert record
-// what was written.
-function makeDb({ template, existingBlock, newBlockId = 'blk-new', assignment = { id: 'a1' } }) {
+// what was written. `template`/`profileLink` null stand in for the
+// location-scoped lookups matching nothing (SAAS-1) — the route-level
+// harness in assistant/chat/route.test.js is what actually applies the
+// filters against a two-location fixture.
+function makeDb({ template, existingBlock, newBlockId = 'blk-new', assignment = { id: 'a1' }, profileLink = { profile_id: 'p1' } }) {
   const captured = { blockInsert: null, assignmentUpsert: null }
   const db = {
     captured,
     from(table) {
       if (table === 'shift_templates') {
-        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: template, error: null }) }) }) }
+        const chain = { eq: () => chain, maybeSingle: () => Promise.resolve({ data: template, error: null }) }
+        return { select: () => chain }
+      }
+      if (table === 'profile_locations') {
+        const chain = { eq: () => chain, maybeSingle: () => Promise.resolve({ data: profileLink, error: null }) }
+        return { select: () => chain }
       }
       if (table === 'shift_blocks') {
         return {
@@ -78,6 +86,21 @@ describe('upsertShiftAssignment', () => {
   it('errors when the template is not found', async () => {
     const res = await upsertShiftAssignment(makeDb({ template: null, existingBlock: null }), base)
     expect(res.error?.message).toMatch(/template not found/)
+  })
+
+  it('errors when the profile is not linked to the location, with no writes (SAAS-1)', async () => {
+    const db = makeDb({ template, existingBlock: null, profileLink: null })
+    const res = await upsertShiftAssignment(db, base)
+    expect(res.error?.message).toMatch(/not linked/)
+    expect(db.captured.blockInsert).toBeNull()
+    expect(db.captured.assignmentUpsert).toBeNull()
+  })
+
+  it('returns the validated template row so callers can reuse its name', async () => {
+    const db = makeDb({ template: { ...template, name: 'AM Shift' }, existingBlock: { id: 'blk-existing' } })
+    const res = await upsertShiftAssignment(db, base)
+    expect(res.error).toBeNull()
+    expect(res.template?.name).toBe('AM Shift')
   })
 })
 

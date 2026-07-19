@@ -17,8 +17,8 @@ import { buildCachedSystem } from './prompt'
 import { formatHistoryForClaude } from './core'
 import { formatNextClass } from './account-tools'
 import { getLocationBranding } from '@/lib/location-branding'
+import { anthropicMessages } from '@/lib/anthropic'
 
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const AGENT_MODEL = 'claude-sonnet-4-6'
 
 const KIND_LABELS = {
@@ -122,18 +122,12 @@ async function composeAgentText(location, settings, historyRows, instruction, co
     { role: 'user', content: instruction },
   ]
   try {
-    const res = await fetch(ANTHROPIC_API_URL, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({ model: AGENT_MODEL, max_tokens: 300, system, messages }),
-      signal,
-    })
+    // SAAS4-M1 — metered via the shared wrapper (source: approval_suggest).
+    const { res, data: body } = await anthropicMessages(
+      { model: AGENT_MODEL, max_tokens: 300, system, messages },
+      { apiKey, locationId: location.id, source: 'approval_suggest', signal }
+    )
     if (!res.ok) return { error: `model_http_${res.status}` }
-    const body = await res.json()
     const text = (body?.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim()
     return { text }
   } catch (e) {

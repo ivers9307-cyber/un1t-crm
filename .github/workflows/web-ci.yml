@@ -106,3 +106,40 @@ jobs:
       # rules in a scoped config. See eslint.guardrails.config.mjs.
       - name: Supabase guardrails
         run: npm run check:guardrails
+
+  # SAAS4-W0.3 (INFRA_BACKLOG #7) — `next build` as a first-class CI gate.
+  # Vitest runs on mocked imports, so a missing/renamed export or an
+  # unresolvable import sails through tests + eslint and only fails in
+  # Vercel's Turbopack build ("green CI, red Vercel"). Runs as a parallel
+  # job so it doesn't lengthen the test/lint feedback loop. The build
+  # needs no env secrets — env reads (getAppUrl etc.) throw at request
+  # time, not build time; all pages are dynamic.
+  build:
+    name: Next build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      # Persist Next's incremental compilation cache between runs —
+      # keyed on the lockfile (dependency graph) with a source-hash
+      # refinement so the newest compatible cache restores on any
+      # source change.
+      - name: Restore Next build cache
+        uses: actions/cache@v4
+        with:
+          path: .next/cache
+          key: next-build-${{ hashFiles('package-lock.json') }}-${{ hashFiles('src/**', 'shared/**') }}
+          restore-keys: |
+            next-build-${{ hashFiles('package-lock.json') }}-
+
+      - name: Next build
+        run: npm run build
