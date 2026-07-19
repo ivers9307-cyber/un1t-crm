@@ -16,10 +16,16 @@ const CHUNK = 300 // house cap for .in()/bulk payloads (cf. coverage.js/statuses
 const LINE_DISPLAY_CAP = 200 // deliberate display cap for a report email, not a pagination boundary
 const RECENT_CRON_MS = 48 * 3600 * 1000
 
+// Status filter mirrors claim_recon_hunt_batch (mig 370) and the
+// QStash worker's CAS — a queued row in any OTHER status (covered by a
+// pull while queued, historic needs_attention re-hunts) is unclaimable
+// by every drain path, so counting it here would wedge the finalizer
+// at hunts_pending forever.
 async function hasPendingHunts(db) {
   const { data } = await db
     .from('recon_bank_lines')
     .select('id')
+    .in('status', ['uncovered', 'not_found'])
     .not('hunt_queued_at', 'is', null)
     .limit(1)
     .maybeSingle()
@@ -58,13 +64,17 @@ async function loadConnections(db) {
 
 // That location's own latest cron run within the last 48h — the
 // per-location stats source for its section. Returns null when none
-// (the caller records an error and skips the location entirely).
+// (the caller records an error and skips the location entirely). The
+// 48h bound matches the global gate's RECENT_CRON_MS: without it, a
+// location whose pull stopped running would keep satisfying allClean
+// on the strength of a stale old run.
 async function locationCronRun(db, locationId) {
   const { data } = await db
     .from('recon_runs')
     .select('id, status, started_at, stats')
     .eq('location_id', locationId)
     .eq('trigger', 'cron')
+    .gte('started_at', new Date(Date.now() - RECENT_CRON_MS).toISOString())
     .order('started_at', { ascending: false })
     .limit(1)
     .maybeSingle()

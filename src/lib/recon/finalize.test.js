@@ -2,8 +2,9 @@
 //
 // The weekly cycle's last step, ticked by process-receipt-hunts every
 // 5 min. Gate order:
-//   1. any pending hunt (hunt_queued_at not null anywhere) → bail,
-//      hunts_pending (queue not drained yet).
+//   1. any pending CLAIMABLE hunt (hunt_queued_at not null on an
+//      uncovered/not_found row — the statuses the claim paths drain) →
+//      bail, hunts_pending (queue not drained yet).
 //   2. no cron run (trigger='cron') within the last 48h → bail,
 //      no_recent_cron (nothing to finalize against).
 //   3. a report row (trigger='report') newer than that cron run
@@ -326,5 +327,62 @@ describe('maybeFinalizeWeekly — compile + send', () => {
     // `undefined` and throw on .insert(), failing the test loudly.
     expect(mockDb.from).toHaveBeenCalledTimes(9)
     expect(stampHeartbeat).not.toHaveBeenCalled()
+  })
+})
+
+describe('maybeFinalizeWeekly — wedge guards', () => {
+  it('pending-hunts gate only counts rows the drain can actually claim (uncovered/not_found)', async () => {
+    // A queued row in any OTHER status (needs_attention rehunt, a line
+    // covered by a pull while queued) is invisible to both
+    // claim_recon_hunt_batch and the QStash worker's CAS — if the gate
+    // counted it, the finalizer would sit at hunts_pending forever.
+    const pending = chainable({ data: null, error: null }, 'maybeSingle')
+    const lastCron = chainable({ data: null, error: null }, 'maybeSingle')
+    mockDb.from.mockReturnValueOnce(pending).mockReturnValueOnce(lastCron)
+
+    await finalize.maybeFinalizeWeekly(mockDb)
+
+    expect(pending.in).toHaveBeenCalledWith('status', ['uncovered', 'not_found'])
+  })
+
+  it('per-location cron run lookup is bounded to the 48h window (a stale run must read as "no cron run this cycle")', async () => {
+    const pending = chainable({ data: null, error: null }, 'maybeSingle')
+    const lastCron = chainable({ data: { id: 'run-1', started_at: CRON_STARTED_AT }, error: null }, 'maybeSingle')
+    const noExistingReport = chainable({ data: null, error: null }, 'maybeSingle')
+    const connections = chainable({
+      data: [{ location_id: 'loc-1', location: { id: 'loc-1', name: 'Stillorgan' } }],
+      error: null,
+    }, 'select')
+    const foundHunts = chainable({ data: [], error: null }, 'gte')
+    const locationCronRun = chainable({
+      data: { id: 'run-loc-1', status: 'ok', started_at: CRON_STARTED_AT, stats: { accounts: [], anomalies: [] } },
+      error: null,
+    }, 'maybeSingle')
+    const inReviewLines = chainable({ data: [], error: null }, 'limit')
+    const needsAttentionLines = chainable({ data: [], error: null }, 'limit')
+    const uncoveredLines = chainable({ data: [], error: null }, 'limit')
+    const reportInsert = chainable({ data: { id: 'report-row-1' }, error: null }, 'insert')
+
+    mockDb.from
+      .mockReturnValueOnce(pending)
+      .mockReturnValueOnce(lastCron)
+      .mockReturnValueOnce(noExistingReport)
+      .mockReturnValueOnce(connections)
+      .mockReturnValueOnce(foundHunts)
+      .mockReturnValueOnce(locationCronRun)
+      .mockReturnValueOnce(inReviewLines)
+      .mockReturnValueOnce(needsAttentionLines)
+      .mockReturnValueOnce(uncoveredLines)
+      .mockReturnValueOnce(reportInsert)
+
+    await finalize.maybeFinalizeWeekly(mockDb)
+
+    expect(locationCronRun.gte).toHaveBeenCalledTimes(1)
+    const [column, sinceIso] = locationCronRun.gte.mock.calls[0]
+    expect(column).toBe('started_at')
+    // Bound must sit at now − 48h (same RECENT_CRON_MS as the global gate).
+    const ageMs = Date.now() - new Date(sinceIso).getTime()
+    expect(ageMs).toBeGreaterThan(47.9 * 3600 * 1000)
+    expect(ageMs).toBeLessThan(48.1 * 3600 * 1000)
   })
 })
