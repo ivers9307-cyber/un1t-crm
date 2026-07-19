@@ -14,6 +14,11 @@
 //   3. Worker skips integration if it has been disconnected.
 //
 //   4. Worker skips if fewer than 10 samples (too thin to be useful).
+//
+//   5. QSTASH.9 — enqueueExportsForSession publishes { id } to QStash per
+//      FRESHLY-INSERTED job (bounded `strava-exports` queue, parallelism 2),
+//      and processExportJob (the shared per-job unit) keeps the cron's exact
+//      claim + failure bookkeeping for the push worker.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -24,10 +29,17 @@ vi.mock('@/lib/strava', () => ({
   uploadTcx: vi.fn(),
   pollUpload: vi.fn(),
 }))
+vi.mock('@/lib/qstash', () => ({
+  publishQueuePush: vi.fn(async () => ({ ok: true, messageId: 'm1' })),
+  STRAVA_EXPORTS_WORKER_PATH: '/api/webhooks/qstash/strava-exports',
+  STRAVA_EXPORTS_QUEUE_NAME: 'strava-exports',
+  STRAVA_EXPORTS_QUEUE_PARALLELISM: 2,
+}))
 
-import { enqueueExportsForSession, runExportWorker } from './external-export.js'
+import { enqueueExportsForSession, runExportWorker, processExportJob } from './external-export.js'
 import { buildTcx } from '@/lib/tcx-builder'
-import { uploadTcx } from '@/lib/strava'
+import { uploadTcx, refreshAccessToken } from '@/lib/strava'
+import { publishQueuePush, STRAVA_EXPORTS_WORKER_PATH } from '@/lib/qstash'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -103,9 +115,16 @@ function makeWorkerDb({
           },
         }
       },
+      // QSTASH.9 — the enqueue upsert now chains .select('id') to learn
+      // which rows were freshly inserted (ignoreDuplicates drops the rest).
       upsert: (rows, opts) => {
         upserts.push({ rows, opts })
-        return Promise.resolve({ error: upsertError })
+        return {
+          select: () => Promise.resolve({
+            data: upsertError ? null : rows.map((r, i) => ({ id: `job-${i + 1}` })),
+            error: upsertError,
+          }),
+        }
       },
     },
     contact_external_integrations: {
@@ -147,7 +166,11 @@ function makeWorkerDb({
 // ─── enqueueExportsForSession ─────────────────────────────────────────────────
 
 describe('enqueueExportsForSession', () => {
-  function makeEnqueueDb({ integrations = [], upsertError = null } = {}) {
+  // `inserted` simulates what PostgREST returns from the
+  // upsert(...ignoreDuplicates).select('id') chain: ONLY the rows the
+  // upsert actually created. undefined → every attempted row inserted;
+  // [] → all were duplicates (ON CONFLICT DO NOTHING returned nothing).
+  function makeEnqueueDb({ integrations = [], upsertError = null, inserted } = {}) {
     const upserts = []
     return {
       from: (table) => {
@@ -166,7 +189,14 @@ describe('enqueueExportsForSession', () => {
           return {
             upsert: (rows, opts) => {
               upserts.push({ rows, opts })
-              return Promise.resolve({ error: upsertError })
+              return {
+                select: () => Promise.resolve({
+                  data: upsertError
+                    ? null
+                    : (inserted ?? rows.map((r, i) => ({ id: `job-${i + 1}` }))),
+                  error: upsertError,
+                }),
+              }
             },
           }
         }
@@ -175,6 +205,10 @@ describe('enqueueExportsForSession', () => {
       _upserts: upserts,
     }
   }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
 
   it('returns queued=0 and never upserts when session has no ended_at', async () => {
     const db = makeEnqueueDb()
@@ -217,6 +251,89 @@ describe('enqueueExportsForSession', () => {
       contact_id: 'c-1',
       provider: 'strava',
     })
+  })
+
+  // ── QSTASH.9 — push publish per freshly-inserted job ──────────────────────
+
+  it('publishes { id } per inserted job onto the bounded strava-exports queue (exact shape)', async () => {
+    const db = makeEnqueueDb({
+      integrations: [{ contact_id: 'c-1', provider: 'strava', auto_export_enabled: true }],
+    })
+    const result = await enqueueExportsForSession(db, {
+      id: 'sess-1',
+      contact_id: 'c-1',
+      ended_at: '2026-01-15T11:00:00Z',
+    })
+    expect(result.ok).toBe(true)
+    expect(publishQueuePush).toHaveBeenCalledTimes(1)
+    expect(publishQueuePush).toHaveBeenCalledWith({
+      path: STRAVA_EXPORTS_WORKER_PATH,
+      body: { id: 'job-1' },
+      deduplicationId: 'strava-export-job-1',
+      queueName: 'strava-exports',
+      queueParallelism: 2,
+    })
+  })
+
+  it('dedup id is DASH-ONLY — QStash 400s on colons', async () => {
+    const db = makeEnqueueDb({
+      integrations: [{ contact_id: 'c-1', provider: 'strava', auto_export_enabled: true }],
+    })
+    await enqueueExportsForSession(db, {
+      id: 'sess-1', contact_id: 'c-1', ended_at: '2026-01-15T11:00:00Z',
+    })
+    expect(publishQueuePush.mock.calls[0][0].deduplicationId).not.toMatch(/:/)
+  })
+
+  it('does NOT publish for duplicate rows (ignoreDuplicates returned nothing — the job already existed)', async () => {
+    const db = makeEnqueueDb({
+      integrations: [{ contact_id: 'c-1', provider: 'strava', auto_export_enabled: true }],
+      inserted: [],
+    })
+    const result = await enqueueExportsForSession(db, {
+      id: 'sess-1', contact_id: 'c-1', ended_at: '2026-01-15T11:00:00Z',
+    })
+    expect(result.ok).toBe(true)
+    expect(publishQueuePush).not.toHaveBeenCalled()
+  })
+
+  it('does NOT publish when the upsert errors — nothing was inserted', async () => {
+    const db = makeEnqueueDb({
+      integrations: [{ contact_id: 'c-1', provider: 'strava', auto_export_enabled: true }],
+      upsertError: { message: 'db down' },
+    })
+    const result = await enqueueExportsForSession(db, {
+      id: 'sess-1', contact_id: 'c-1', ended_at: '2026-01-15T11:00:00Z',
+    })
+    expect(result.ok).toBe(false)
+    expect(publishQueuePush).not.toHaveBeenCalled()
+  })
+
+  it('a publish rejection never affects the enqueue result — the cron sweeps the row', async () => {
+    publishQueuePush.mockRejectedValueOnce(new Error('qstash down'))
+    const db = makeEnqueueDb({
+      integrations: [{ contact_id: 'c-1', provider: 'strava', auto_export_enabled: true }],
+    })
+    const result = await enqueueExportsForSession(db, {
+      id: 'sess-1', contact_id: 'c-1', ended_at: '2026-01-15T11:00:00Z',
+    })
+    expect(result.ok).toBe(true)
+    expect(result.queued).toBe(1)
+  })
+
+  it('publishes once per inserted job when multiple providers queue', async () => {
+    const db = makeEnqueueDb({
+      integrations: [
+        { contact_id: 'c-1', provider: 'strava', auto_export_enabled: true },
+        { contact_id: 'c-1', provider: 'garmin', auto_export_enabled: true },
+      ],
+    })
+    await enqueueExportsForSession(db, {
+      id: 'sess-1', contact_id: 'c-1', ended_at: '2026-01-15T11:00:00Z',
+    })
+    expect(publishQueuePush).toHaveBeenCalledTimes(2)
+    const ids = publishQueuePush.mock.calls.map((c) => c[0].body.id)
+    expect(ids).toEqual(['job-1', 'job-2'])
   })
 })
 
@@ -334,5 +451,138 @@ describe('runExportWorker — HR samples pagination', () => {
     const db = makeWorkerDb({ jobs: [] })
     const result = await runExportWorker(db)
     expect(result.processed).toBe(0)
+  })
+})
+
+// ─── processExportJob — the shared per-job unit (QSTASH.9) ───────────────────
+//
+// Exactly the cron loop's old body: processOneJob plus the throw-path
+// bookkeeping (markFailed — re-queue with the queue's own backoff under
+// MAX_ATTEMPTS, terminal 'failed' + integration last_error at the cap).
+// The push worker and the cron sweeper share this unit, so its claim +
+// failure semantics ARE the queue's semantics.
+
+describe('processExportJob', () => {
+  const baseJob = {
+    id: 'job-1',
+    session_id: 'sess-1',
+    contact_id: 'c-1',
+    provider: 'strava',
+    attempts: 0,
+  }
+  const baseIntegration = {
+    id: 'int-1',
+    contact_id: 'c-1',
+    provider: 'strava',
+    auto_export_enabled: true,
+    disconnected_at: null,
+    access_token: 'tok-valid',
+    refresh_token: 'ref-tok',
+    expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+  }
+  const baseService = {
+    provider: 'strava',
+    is_enabled: true,
+    client_id: 'cid',
+    client_secret: 'csec',
+  }
+  const baseSession = {
+    id: 'sess-1',
+    contact_id: 'c-1',
+    started_at: new Date(Date.now() - 45 * 60_000).toISOString(),
+    ended_at: new Date().toISOString(),
+    avg_hr_bpm: 155,
+    peak_hr_bpm: 185,
+    effort_points: 450,
+    zones_seconds: {},
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    uploadTcx.mockResolvedValue({ activityId: 'strava-act-123', uploadId: null })
+  })
+
+  it('returns succeeded after a clean upload (claim flip to processing + attempts bump preserved)', async () => {
+    const db = makeWorkerDb({
+      integration: baseIntegration,
+      service: baseService,
+      session: baseSession,
+      allSamples: makeSamples(50),
+    })
+    const outcome = await processExportJob(db, baseJob)
+    expect(outcome.status).toBe('succeeded')
+    // The cron's exact claim: status→processing with attempts+1 first.
+    const claim = db._updates[0]
+    expect(claim.patch).toMatchObject({ status: 'processing', attempts: 1 })
+    expect(claim.val).toBe('job-1')
+    // Terminal stamp: succeeded.
+    const stamp = db._updates.find((u) => u.patch?.status === 'succeeded')
+    expect(stamp).toBeTruthy()
+    expect(stamp.patch.external_id).toBe('strava-act-123')
+  })
+
+  it('returns skipped for a terminal skip (integration disconnected)', async () => {
+    const db = makeWorkerDb({
+      integration: { ...baseIntegration, auto_export_enabled: false },
+      service: baseService,
+      session: baseSession,
+      allSamples: makeSamples(50),
+    })
+    const outcome = await processExportJob(db, baseJob)
+    expect(outcome.status).toBe('skipped')
+    expect(uploadTcx).not.toHaveBeenCalled()
+  })
+
+  it('a thrown job under the cap is RE-QUEUED with the backoff schedule (cron bookkeeping verbatim)', async () => {
+    uploadTcx.mockRejectedValueOnce(new Error('strava 500'))
+    const db = makeWorkerDb({
+      integration: baseIntegration,
+      service: baseService,
+      session: baseSession,
+      allSamples: makeSamples(50),
+    })
+    const before = Date.now()
+    const outcome = await processExportJob(db, baseJob)
+    expect(outcome.status).toBe('failed')
+    expect(outcome.error).toBe('strava 500')
+    const requeue = db._updates.find((u) => u.patch?.status === 'queued')
+    expect(requeue).toBeTruthy()
+    expect(requeue.patch.attempts).toBe(1)
+    expect(requeue.patch.last_error).toBe('strava 500')
+    // First retry waits ≥1 min — QStash must NOT be asked to beat this
+    // (the worker 200s on failure; the cron owns the schedule).
+    expect(new Date(requeue.patch.next_attempt_at).getTime()).toBeGreaterThanOrEqual(before + 60_000)
+  })
+
+  it('a thrown job AT the cap goes terminal failed and bubbles last_error onto the integration', async () => {
+    uploadTcx.mockRejectedValueOnce(new Error('token revoked'))
+    const db = makeWorkerDb({
+      integration: baseIntegration,
+      service: baseService,
+      session: baseSession,
+      allSamples: makeSamples(50),
+    })
+    const outcome = await processExportJob(db, { ...baseJob, attempts: 4 })
+    expect(outcome.status).toBe('failed')
+    const terminal = db._updates.find((u) => u.patch?.status === 'failed')
+    expect(terminal).toBeTruthy()
+    expect(terminal.patch.last_error).toBe('token revoked')
+    const bubble = db._updates.find(
+      (u) => u.table === 'contact_external_integrations' && u.patch?.last_error === 'token revoked',
+    )
+    expect(bubble).toBeTruthy()
+  })
+
+  it('a refresh-token failure follows the same throw path', async () => {
+    refreshAccessToken.mockRejectedValueOnce(new Error('invalid refresh token'))
+    const db = makeWorkerDb({
+      integration: { ...baseIntegration, expires_at: new Date(Date.now() - 1000).toISOString() },
+      service: baseService,
+      session: baseSession,
+      allSamples: makeSamples(50),
+    })
+    const outcome = await processExportJob(db, baseJob)
+    expect(outcome.status).toBe('failed')
+    expect(uploadTcx).not.toHaveBeenCalled()
   })
 })

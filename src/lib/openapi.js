@@ -695,6 +695,28 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/webhooks/qstash/strava-exports',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker for external export jobs (Strava uploads)',
+  description:
+    'QStash → CRM. Delivers `{ id }` of an external_export_jobs row published per freshly-inserted job by ' +
+    'enqueueExportsForSession (live-class endSession) onto the `strava-exports` QUEUE (parallelism 2 — each export ' +
+    'burns 2–4 Strava API calls against the 100-req/15-min budget); verified via the Upstash-Signature HS256 JWT ' +
+    '(current + next signing keys). Runs the row through the same per-job unit as the /api/cron/run-strava-exports ' +
+    'sweeper. 200 for EVERY processed outcome INCLUDING failures — the bookkeeping already re-queued the job on the ' +
+    "queue's own backoff (or went terminal at the attempt cap), and the claim is not a CAS, so retries belong to the " +
+    'cron; 500 only for infrastructure errors (row fetch).',
+  request: { body: { content: { 'application/json': { schema: z.object({ id: uuidLike }).openapi('QstashStravaExportsMessage') } } } },
+  responses: {
+    200: { description: 'Export uploaded, job terminally skipped, delivery skipped (row not queued/due), or failed with bookkeeping done (cron owns the retry)' },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Infrastructure error — QStash should retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/webhooks/inbody',
   tags: ['Webhooks (Inbound)'],
   security: [{ WebhookToken: [] }],

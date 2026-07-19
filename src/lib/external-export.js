@@ -3,11 +3,14 @@
 // enqueueExportsForSession is called best-effort from
 // live-class.endSession() — for every active integration where
 // the contact has auto_export_enabled, we insert a row in
-// external_export_jobs. The worker (Vercel cron) drains it.
+// external_export_jobs (and, QSTASH.9, fire-and-forget publish each
+// freshly-inserted job id to QStash for push delivery — the cron
+// remains the sweeper and the delivery guarantee).
 //
 // runExportWorker pulls a small batch of due jobs and processes
-// each: refresh tokens if needed, build TCX, upload, stamp the
-// row. Errors are caught per-job (one bad token doesn't kill
+// each via processExportJob (the per-job unit shared with the QStash
+// worker route): refresh tokens if needed, build TCX, upload, stamp
+// the row. Errors are caught per-job (one bad token doesn't kill
 // the run) and surfaced via last_error on both the job row and
 // the parent contact_external_integrations row.
 
@@ -15,6 +18,12 @@ import { logInfo, logWarn } from '@/lib/log'
 import { buildTcx } from '@/lib/tcx-builder'
 import { refreshAccessToken, uploadTcx, pollUpload } from '@/lib/strava'
 import { selectAll } from '@/lib/select-all'
+import {
+  publishQueuePush,
+  STRAVA_EXPORTS_WORKER_PATH,
+  STRAVA_EXPORTS_QUEUE_NAME,
+  STRAVA_EXPORTS_QUEUE_PARALLELISM,
+} from '@/lib/qstash'
 
 const MAX_ATTEMPTS = 5
 const RETRY_DELAYS_MS = [
@@ -47,12 +56,41 @@ export async function enqueueExportsForSession(db, session) {
     contact_id: session.contact_id,
     provider: i.provider,
   }))
-  const { error: insErr } = await db
+  // QSTASH.9 — .select('id') on the ignoreDuplicates upsert returns ONLY
+  // the rows actually created (ON CONFLICT DO NOTHING drops the rest), so
+  // a re-enqueued session never re-publishes a job that is already queued
+  // or already processed.
+  const { data: inserted, error: insErr } = await db
     .from('external_export_jobs')
     .upsert(rows, { onConflict: 'session_id,contact_id,provider', ignoreDuplicates: true })
+    .select('id')
   if (insErr) {
     logWarn('export-queue', 'enqueue failed', { sessionId: session.id, err: insErr })
     return { ok: false, error: insErr.message }
+  }
+
+  // QSTASH.9 — fire-and-forget push per freshly-inserted job. The table
+  // write above is the delivery guarantee (the cron sweeps); the push is
+  // the latency optimisation. Publishes go onto the bounded
+  // `strava-exports` QStash queue (parallelism 2, the invoice-analysis
+  // recipe) — NOT plain publish: each export burns 2–4 Strava API calls
+  // against a 100-req/15-min budget, and endSession fans out per member
+  // when a class ends. Dedup id is DASH-ONLY (QStash 400s on colons).
+  // allSettled + never-throwing publishQueuePush + belt-and-braces
+  // try/catch: a publish problem must never affect the enqueue result.
+  const insertedIds = (inserted || []).map((r) => r?.id).filter(Boolean)
+  if (insertedIds.length > 0) {
+    try {
+      await Promise.allSettled(insertedIds.map((id) => publishQueuePush({
+        path: STRAVA_EXPORTS_WORKER_PATH,
+        body: { id },
+        deduplicationId: `strava-export-${id}`,
+        queueName: STRAVA_EXPORTS_QUEUE_NAME,
+        queueParallelism: STRAVA_EXPORTS_QUEUE_PARALLELISM,
+      })))
+    } catch {
+      // publishQueuePush swallows its own errors; belt-and-braces only.
+    }
   }
   return { ok: true, queued: rows.length }
 }
@@ -88,22 +126,45 @@ export async function runExportWorker(db, { batchSize = 20, nowMs = Date.now() }
   let skipped = 0
 
   for (const job of claimed) {
-    try {
-      const result = await processOneJob(db, job)
-      if (result.skipped) skipped++
-      else if (result.ok) succeeded++
-      else failed++
-    } catch (err) {
-      failed++
-      logWarn('export-worker', 'job threw', { jobId: job.id, err })
-      await markFailed(db, job, err?.message || String(err))
-    }
+    const outcome = await processExportJob(db, job)
+    if (outcome.status === 'skipped') skipped++
+    else if (outcome.status === 'succeeded') succeeded++
+    else failed++
   }
 
   logInfo('export-worker', 'tick', {
     claimed: claimed.length, succeeded, failed, skipped,
   })
   return { ok: true, processed: claimed.length, succeeded, failed, skipped }
+}
+
+/**
+ * QSTASH.9 — the per-job unit shared by the cron sweeper and the QStash
+ * push worker (/api/webhooks/qstash/strava-exports). Exactly the cron
+ * loop's old body: processOneJob plus the throw-path bookkeeping
+ * (markFailed — re-queue with the queue's own backoff schedule under
+ * MAX_ATTEMPTS, terminal 'failed' + integration last_error bubble at
+ * the cap). Claim semantics unchanged: processOneJob "claims" by
+ * flipping the row to 'processing' (attempts+1) WITHOUT a
+ * compare-and-swap — the documented, accepted race (duplicate uploads
+ * are rare AND harmless; Strava de-dupes by external_id).
+ *
+ * @param {object} db  service-role Supabase client
+ * @param {object} job row from external_export_jobs
+ *   (id, session_id, contact_id, provider, attempts)
+ * @returns {Promise<{status: 'succeeded'|'skipped'|'failed', error?: string}>}
+ */
+export async function processExportJob(db, job) {
+  try {
+    const result = await processOneJob(db, job)
+    if (result.skipped) return { status: 'skipped' }
+    if (result.ok) return { status: 'succeeded' }
+    return { status: 'failed', error: 'unknown_result' }
+  } catch (err) {
+    logWarn('export-worker', 'job threw', { jobId: job.id, err })
+    await markFailed(db, job, err?.message || String(err))
+    return { status: 'failed', error: err?.message || String(err) }
+  }
 }
 
 async function processOneJob(db, job) {
