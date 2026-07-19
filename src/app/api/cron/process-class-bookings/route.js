@@ -1,17 +1,21 @@
-// Drains class_booking_requests: re-queues rows orphaned in 'processing' by a
-// dead run, claims queued rows (CAS), runs each through the decision-tree
-// processor, stamps the heartbeat. Bounded batch per run.
+// SWEEPER for class_booking_requests (QSTASH.7). Push delivery is the fast
+// path: the enqueue sites publish { id } to QStash, which POSTs
+// /api/webhooks/qstash/class-bookings — both consumers claim through the same
+// CAS in src/lib/class-booking-queue.js, so they race safely. This cron
+// remains the delivery guarantee: it re-queues rows orphaned in 'processing'
+// by a dead run (CRON-ONLY reaper), claims + processes anything QStash missed
+// (publish skipped/failed, retries exhausted), and stamps the heartbeat.
+// Bounded batch per run.
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
-import { processClassBookingRequest } from '@/lib/class-booking-processor'
+import { claimAndProcessBookingJob, MAX_ATTEMPTS } from '@/lib/class-booking-queue'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
-const MAX_ATTEMPTS = 3
 const STALE_MS = 10 * 60_000 // a row 'processing' longer than this lost its run (maxDuration is 5m)
 
 export async function GET(request) {
@@ -37,24 +41,17 @@ export async function GET(request) {
     const { data: rows } = await db.from('class_booking_requests')
       .select('*').eq('status', 'queued').order('created_at', { ascending: true }).limit(25)
     for (const row of rows || []) {
-      const { data: claimed } = await db.from('class_booking_requests')
-        .update({ status: 'processing', attempts: (row.attempts || 0) + 1 })
-        .eq('id', row.id).eq('status', 'queued').select('id').maybeSingle()
-      if (!claimed) continue // lost the race
+      // Shared claim CAS + process + throw-path bookkeeping (QSTASH.7 —
+      // src/lib/class-booking-queue.js, also run by the QStash worker).
+      const res = await claimAndProcessBookingJob(db, row)
+      if (res.status === 'skipped') continue // lost the race
       stats.processed++
-      try {
-        const r = await processClassBookingRequest(db, row)
-        if (r.outcome === 'booked') stats.booked++
-        else if (r.outcome === 'needs_review') stats.review++
-        else stats.failed++
-      } catch (e) {
+      if (res.status === 'failed') {
         stats.failed++
-        logWarn('process-class-bookings', `row ${row.id} threw`, { err: e })
-        // Retry under the cap, else flag for staff. The status guard stops this
-        // ever clobbering a row the processor already moved to a terminal state.
-        const next = (row.attempts || 0) + 1 >= MAX_ATTEMPTS ? 'needs_review' : 'queued'
-        try { await db.from('class_booking_requests').update({ status: next, last_error: String(e?.message || e) }).eq('id', row.id).eq('status', 'processing') } catch {}
-      }
+        logWarn('process-class-bookings', `row ${row.id} threw`, { err: res.error })
+      } else if (res.outcome === 'booked') stats.booked++
+      else if (res.outcome === 'needs_review') stats.review++
+      else stats.failed++
     }
     await stampHeartbeat('process-class-bookings', stats)
     return NextResponse.json({ success: true, ...stats })

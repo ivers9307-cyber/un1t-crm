@@ -44,6 +44,11 @@ export const CONTACT_IMPORTS_WORKER_PATH = '/api/webhooks/qstash/contact-imports
 export const INVOICE_ANALYSIS_WORKER_PATH = '/api/webhooks/qstash/invoice-analysis'
 export const INVOICE_ANALYSIS_QUEUE_NAME = 'invoice-analysis'
 export const INVOICE_ANALYSIS_QUEUE_PARALLELISM = 2
+// QSTASH.7 — worker for class_booking_requests pushes (published by
+// /api/public/class-booking and the WhatsApp Flow completion handler,
+// swept by /api/cron/process-class-bookings). Plain publish — bookings
+// arrive one at a time, no parallelism bound needed.
+export const CLASS_BOOKINGS_WORKER_PATH = '/api/webhooks/qstash/class-bookings'
 
 const QSTASH_PUBLISH_BASE = 'https://qstash.upstash.io/v2/publish/'
 // Enqueue onto a named FIFO queue: /v2/enqueue/<queueName>/<destination>.
