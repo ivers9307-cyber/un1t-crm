@@ -59,6 +59,19 @@ export const CLASS_BOOKINGS_WORKER_PATH = '/api/webhooks/qstash/class-bookings'
 // id — an identical-body dedup id would be swallowed inside QStash's
 // dedup window and break the chain).
 export const HOST_CAMPAIGNS_WORKER_PATH = '/api/webhooks/qstash/host-campaigns'
+// QSTASH.9 — worker for external_export_jobs pushes (published per
+// freshly-inserted job by enqueueExportsForSession in
+// src/lib/external-export.js, swept by /api/cron/run-strava-exports).
+// Second job on a bounded QStash QUEUE (parallelism 2): each export
+// makes 2–4 Strava API calls against a 100-req/15-min app budget, and
+// a class ending fans out one endSession per member — an "end all"
+// for a 30-person class must never become 30 concurrent uploads.
+// Provider-generic by design (the queue carries a provider column);
+// Strava is the only implementer today, so the path is named for it —
+// same naming rationale as the cron.
+export const STRAVA_EXPORTS_WORKER_PATH = '/api/webhooks/qstash/strava-exports'
+export const STRAVA_EXPORTS_QUEUE_NAME = 'strava-exports'
+export const STRAVA_EXPORTS_QUEUE_PARALLELISM = 2
 
 const QSTASH_PUBLISH_BASE = 'https://qstash.upstash.io/v2/publish/'
 // Enqueue onto a named FIFO queue: /v2/enqueue/<queueName>/<destination>.
