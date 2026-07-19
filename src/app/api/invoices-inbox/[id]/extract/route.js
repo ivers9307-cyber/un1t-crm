@@ -74,7 +74,7 @@ export async function POST(_request, { params }) {
   const ab = await blob.arrayBuffer()
   const bytes = Buffer.from(ab)
 
-  const result = await extractInvoiceFieldsFromBytes(bytes, row.attachment_mime_type)
+  const result = await extractInvoiceFieldsFromBytes(bytes, row.attachment_mime_type, { locationId: row.location_id })
   if (!result.ok) {
     // Persist the error so the inbox shows it; keep the row in
     // quality_approved so the operator can retry without re-doing

@@ -61,7 +61,7 @@ export function splitSSEEvents(buffer) {
 
 /** Fresh accumulator for one Anthropic message turn. */
 export function initTurn() {
-  return { blocks: [], stopReason: null, _partialJson: {} }
+  return { blocks: [], stopReason: null, usage: null, _partialJson: {} }
 }
 
 /**
@@ -71,8 +71,9 @@ export function initTurn() {
  *   - content_block_start  → open a text or tool_use block at `index`
  *   - content_block_delta  → text_delta (emit) or input_json_delta (buffer)
  *   - content_block_stop   → finalize a tool_use block's JSON input
- *   - message_delta        → capture stop_reason
- * Everything else (message_start, ping, message_stop, __done__) is a no-op.
+ *   - message_start        → capture input-side usage (SAAS4-M1)
+ *   - message_delta        → capture stop_reason + output usage
+ * Everything else (ping, message_stop, __done__) is a no-op.
  *
  * @param {ReturnType<typeof initTurn>} turn
  * @param {{event?:string, data:any}} evt
@@ -123,9 +124,22 @@ export function applyAnthropicEvent(turn, evt) {
       }
       break
     }
+    case 'message_start': {
+      // SAAS4-M1 — usage capture. message_start carries the input-side
+      // token counts (input + cache read/creation); message_delta below
+      // carries the final output_tokens. Merged into turn.usage so the
+      // route can meter the streamed turn like a buffered one.
+      if (data.message?.usage) {
+        turn.usage = { ...(turn.usage || {}), ...data.message.usage }
+      }
+      break
+    }
     case 'message_delta': {
       if (data.delta && typeof data.delta.stop_reason !== 'undefined') {
         turn.stopReason = data.delta.stop_reason
+      }
+      if (data.usage) {
+        turn.usage = { ...(turn.usage || {}), ...data.usage }
       }
       break
     }
@@ -144,6 +158,7 @@ export function finalizeTurn(turn) {
   return {
     content: turn.blocks.filter(Boolean),
     stopReason: turn.stopReason,
+    usage: turn.usage,
   }
 }
 

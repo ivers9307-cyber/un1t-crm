@@ -71,7 +71,7 @@ export async function processInvoiceAnalysisRow(db, row) {
   }
 
   const bytes = Buffer.from(await blob.arrayBuffer())
-  const result = await extractInvoiceFieldsFromBytes(bytes, row.attachment_mime_type)
+  const result = await extractInvoiceFieldsFromBytes(bytes, row.attachment_mime_type, { locationId: row.location_id })
   if (!result.ok) {
     return fail(result.error || 'extraction_failed')
   }

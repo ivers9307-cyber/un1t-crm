@@ -40,7 +40,7 @@ export async function POST(request, props) {
   if (!apiKey) return NextResponse.json({ success: false, error: 'AI is not configured.' }, { status: 500 })
 
   const trigger = { type: sequence.trigger_type || 'manual', config: sequence.trigger_config || {} }
-  const result = await runFlowAgent({ apiKey, prompt, trigger })
+  const result = await runFlowAgent({ apiKey, prompt, trigger, locationId: sequence.location_id })
   if (!result.ok) return NextResponse.json({ success: false, error: result.error || 'The AI could not build a flow.' }, { status: 502 })
 
   // Save the agent's draft + its RECOMMENDED trigger + name so the settings

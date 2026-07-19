@@ -42,8 +42,8 @@ import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account
 import { BOOKING_TOOLS, executeBookingTool } from './booking-tools'
 import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
 import { CARD_TOOLS, CARD_TOOL_NAMES, executeCardTool } from './card-tools'
+import { anthropicMessages } from '@/lib/anthropic'
 
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 export const AGENT_MODEL = 'claude-sonnet-4-6'
 
 // Prompt caching (CACHE.1): ACCOUNT_TOOLS (~4k tokens) is byte-identical on
@@ -469,22 +469,19 @@ async function runChannelAgentInner(db, adapter, ctx) {
       let iterations = MAX_TOOL_ITERATIONS
       let done = false
       while (iterations-- > 0 && !done) {
-        const res = await fetch(ANTHROPIC_API_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({
+        // SAAS4-M1 — metered via the shared wrapper (source: mia_auto_reply);
+        // each tool-loop iteration is one API call and one usage event.
+        const { res, data } = await anthropicMessages(
+          {
             model: AGENT_MODEL,
             max_tokens: 600,
             output_config: { effort: agentEffort },
             system,
             messages,
             tools: CACHED_ACCOUNT_TOOLS,
-          }),
-        })
+          },
+          { apiKey, locationId, source: 'mia_auto_reply' }
+        )
         if (!res.ok) {
           console.error('[radar-agent] Anthropic error', res.status, await res.text().catch(() => ''))
           // COMMS-AUDIT 2026-07-10 — a model outage must not mean dead air:
@@ -499,7 +496,6 @@ async function runChannelAgentInner(db, adapter, ctx) {
             notify: modelFailureNotify(adapter),
           })
         }
-        const data = await res.json()
         const content = data.content || []
 
         if (data.stop_reason === 'tool_use') {

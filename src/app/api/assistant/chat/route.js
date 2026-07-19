@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
+import { anthropicMessages } from '@/lib/anthropic'
+import { recordUsage } from '@/lib/usage'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { fetchScheduledShiftRows } from '@/lib/report-generator'
 import { upsertShiftAssignment } from '@/lib/roster-write'
@@ -473,7 +475,18 @@ export async function POST(request) {
               }
             }
 
-            const { content, stopReason } = finalizeTurn(turn)
+            const { content, stopReason, usage } = finalizeTurn(turn)
+
+            // SAAS4-M1 — meter the streamed turn (source: assistant_chat;
+            // tracked but allowance-exempt). Fire-and-forget by design.
+            if (usage) {
+              recordUsage({
+                locationId: userContext.locationId ?? null,
+                source: 'assistant_chat',
+                model: ASSISTANT_MODEL,
+                usage,
+              }).catch(() => {})
+            }
 
             if (stopReason === 'tool_use') {
               claudeMessages.push({ role: 'assistant', content })
@@ -527,28 +540,22 @@ export async function POST(request) {
   while (maxIterations > 0) {
     maxIterations--
 
-    const claudeRes = await fetch(ANTHROPIC_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+    // SAAS4-M1 — metered via the shared wrapper (source: assistant_chat).
+    const { res: claudeRes, data: claudeData } = await anthropicMessages(
+      {
+        model: ASSISTANT_MODEL,
         max_tokens: 1024,
         system: systemPrompt,
         messages: claudeMessages,
         tools: allowedTools,
-      }),
-    })
+      },
+      { apiKey, locationId: userContext.locationId ?? null, source: 'assistant_chat' }
+    )
 
     if (!claudeRes.ok) {
       const errText = await claudeRes.text()
       return NextResponse.json({ success: false, error: `Claude API error: ${errText}` }, { status: 500 })
     }
-
-    const claudeData = await claudeRes.json()
 
     // Check if Claude wants to use tools
     if (claudeData.stop_reason === 'tool_use') {

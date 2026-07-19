@@ -49,6 +49,7 @@
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { INVOICE_CATEGORIES } from './invoice-categories'
+import { anthropicMessages } from '@/lib/anthropic'
 
 /**
  * Convert a HEIC/HEIF image (HEVC-encoded — the iPhone default) to JPEG so
@@ -66,8 +67,6 @@ export async function heicToJpeg(bytes) {
   return Buffer.from(out)
 }
 
-const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
-const ANTHROPIC_VERSION = '2023-06-01'
 const MODEL = 'claude-sonnet-4-6'
 
 // Anthropic accepts PDF + a handful of image media types. Reject
@@ -273,9 +272,10 @@ function stripJsonFences(raw) {
  *
  * @param {Buffer|Uint8Array} bytes  the file contents
  * @param {string} mime              MIME type — must be in SUPPORTED_MIME
+ * @param {{ locationId?: string|null }} [meta] SAAS4-M1 — tenant tag for usage metering
  * @returns {Promise<{ ok: true, fields, raw_response } | { ok: false, error, raw_response? }>}
  */
-export async function extractInvoiceFieldsFromBytes(bytes, mime) {
+export async function extractInvoiceFieldsFromBytes(bytes, mime, meta = {}) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) {
     return { ok: false, error: 'ANTHROPIC_API_KEY is not configured.' }
@@ -318,16 +318,11 @@ export async function extractInvoiceFieldsFromBytes(bytes, mime) {
         source: { type: 'base64', media_type: mime, data: base64 },
       }
 
-  let claudeRes
+  let claudeRes, claudeData
   try {
-    claudeRes = await fetch(ANTHROPIC_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': ANTHROPIC_VERSION,
-      },
-      body: JSON.stringify({
+    // SAAS4-M1 — metered via the shared wrapper (source: invoice_ocr).
+    ;({ res: claudeRes, data: claudeData } = await anthropicMessages(
+      {
         model: MODEL,
         max_tokens: 2048,
         system: SYSTEM_PROMPT,
@@ -343,8 +338,9 @@ export async function extractInvoiceFieldsFromBytes(bytes, mime) {
             ],
           },
         ],
-      }),
-    })
+      },
+      { apiKey, locationId: meta.locationId ?? null, source: 'invoice_ocr' }
+    ))
   } catch (e) {
     return { ok: false, error: `Anthropic API request failed: ${e.message || String(e)}` }
   }
@@ -353,8 +349,6 @@ export async function extractInvoiceFieldsFromBytes(bytes, mime) {
     const errText = await claudeRes.text().catch(() => '<unreadable>')
     return { ok: false, error: `Anthropic API error (${claudeRes.status}): ${errText}` }
   }
-
-  const claudeData = await claudeRes.json().catch(() => null)
   if (!claudeData) {
     return { ok: false, error: 'Anthropic returned non-JSON response body.' }
   }
