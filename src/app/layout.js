@@ -2,6 +2,7 @@ import './globals.css'
 import AppShellServer from '@/components/AppShellServer'
 import StudioLockOverlay from '@/components/StudioLockOverlay'
 import CookieConsent from '@/components/CookieConsent'
+import { resolveDefaultFaviconUrl } from '@/lib/default-favicon'
 
 // PERF.3 — Vercel SpeedInsights + Analytics are now mounted inside
 // AppShell's authenticated branch (not at the root layout). Pre-auth
@@ -20,8 +21,12 @@ import CookieConsent from '@/components/CookieConsent'
 // timestamp cache-buster is intentionally omitted — Supabase
 // Storage serves the same path forever and the browser's own
 // cache handles invalidation cheaply enough.
-const FAVICON_URL =
-  'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/a0000000-0000-0000-0000-000000000001/favicon.png'
+//
+// SAAS-7 — the URL is no longer hardcoded to the Stillorgan UUID:
+// resolveDefaultFaviconUrl reads the operator-uploaded favicon from
+// company_settings behind a module-level TTL cache (one DB read per
+// lambda per 5 min, not per request) and falls back to the exact
+// pre-SAAS-7 URL on any miss/blip, so UN1T renders identically.
 
 // Default site metadata. Customer-facing public surfaces (event
 // signup, deposit pay, etc.) inherit these unless the page exports
@@ -34,20 +39,23 @@ const FAVICON_URL =
 // Per-page upgrades (richer previews showing the actual event name
 // + description) live on individual page files via generateMetadata
 // — see src/app/event/[slug]/page.js for the event signup example.
-export const metadata = {
-  title: 'UN1T Dublin',
-  description: 'UN1T Dublin — strength, conditioning, racing.',
-  openGraph: {
+export async function generateMetadata() {
+  const faviconUrl = await resolveDefaultFaviconUrl()
+  return {
     title: 'UN1T Dublin',
     description: 'UN1T Dublin — strength, conditioning, racing.',
-    siteName: 'UN1T Dublin',
-    type: 'website',
-  },
-  icons: {
-    icon: FAVICON_URL,
-    shortcut: FAVICON_URL,
-    apple: FAVICON_URL,
-  },
+    openGraph: {
+      title: 'UN1T Dublin',
+      description: 'UN1T Dublin — strength, conditioning, racing.',
+      siteName: 'UN1T Dublin',
+      type: 'website',
+    },
+    icons: {
+      icon: faviconUrl,
+      shortcut: faviconUrl,
+      apple: faviconUrl,
+    },
+  }
 }
 
 // Explicit viewport — Next.js ships a sensible default but pinning
