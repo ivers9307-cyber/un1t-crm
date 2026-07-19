@@ -612,6 +612,25 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/webhooks/qstash/contact-imports',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker for the contact-imports queue',
+  description:
+    'QStash → CRM. Delivers `{ id }` of a contact_imports row published by the async path of /api/contacts/import/commit; ' +
+    'verified via the Upstash-Signature HS256 JWT (current + next signing keys). Runs the import through the same ' +
+    'claim CAS as the /api/cron/process-contact-imports sweeper — 200 processed/skipped, 500 = the import failed ' +
+    '(row stamped failed for the operator; retries re-fetch and skip).',
+  request: { body: { content: { 'application/json': { schema: z.object({ id: uuidLike }).openapi('QstashContactImportsMessage') } } } },
+  responses: {
+    200: { description: 'Import processed, or skipped (row already claimed / handled)' },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Import failed — row stamped failed with its error_message', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/webhooks/inbody',
   tags: ['Webhooks (Inbound)'],
   security: [{ WebhookToken: [] }],
