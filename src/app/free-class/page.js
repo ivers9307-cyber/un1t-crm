@@ -27,9 +27,15 @@
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import RevealManager from '@/components/landing-page/RevealManager'
 import { RevealArmScript } from '@/components/landing-page/reveal-arm'
+import { getLandingLogo, STILLORGAN_LANDING_LOGO } from '@/lib/landing-logo'
 
-const STILLORGAN_LOGO =
-  'https://iyvtbjjxdggiadzwwvdj.supabase.co/storage/v1/object/public/branding/landing-page/a0000000-0000-0000-0000-000000000001/de12ffbe-22db-4c34-b307-8983488ffd96.png'
+// SAAS-7 — the header logo resolves from Stillorgan's
+// landing_page_settings row (the operator-editable source /stillorgan
+// itself renders) with the old hardcoded URL as fallback; live value is
+// identical today, so paid traffic sees no change. force-dynamic so the
+// lookup runs per-request (matching /start and /stillorgan) instead of
+// baking a build-time value.
+export const dynamic = 'force-dynamic'
 
 // Single conversion target — the hero CTA, sticky-header CTA and footer
 // CTA all scroll to the lead form (#waitlist, the id LeadFormBlock sets).
@@ -120,13 +126,14 @@ export const metadata = {
   },
 }
 
-export default function FreeClassPage() {
+export default async function FreeClassPage() {
+  const logoUrl = await getLandingLogo('stillorgan', STILLORGAN_LANDING_LOGO)
   return (
     <div className="min-h-screen bg-black text-white antialiased">
       <RevealArmScript />
       <RevealManager />
       <SiteHeader
-        logoUrl={STILLORGAN_LOGO}
+        logoUrl={logoUrl}
         logoAlt="UN1T Stillorgan"
         sticky
         ctaHref={CTA.href}
