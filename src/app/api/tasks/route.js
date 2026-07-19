@@ -22,7 +22,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { authenticateApiKey, scopeQueryToOrg, assertCreateInOrg } from '@/lib/api-auth'
+import { authenticateApiKey, orgScopeLocationIds, assertCreateInOrg } from '@/lib/api-auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 
@@ -54,7 +54,8 @@ export async function GET(request) {
     .eq('kind', 'task')
 
   // APIKEYS.3 — per-org key: restrict to the org's locations.
-  query = await scopeQueryToOrg(query, db, auth.orgId)
+  const orgLocs = await orgScopeLocationIds(db, auth.orgId)
+  if (orgLocs) query = query.in('location_id', orgLocs)
 
   const locationId = searchParams.get('location_id')
   if (locationId) query = query.eq('location_id', locationId)
