@@ -17,7 +17,12 @@
 
 /**
  * Find-or-create the block for (location, template, date), then upsert the
- * coach's assignment on it. Returns { blockId, assignment, error }.
+ * coach's assignment on it. Returns { blockId, assignment, template, error }.
+ *
+ * SAAS-1: the template and profile are validated against locationId here,
+ * inside the helper, so every caller is covered — callers run on the
+ * service-role client (no RLS), and the assistant's create_shift passes
+ * ids straight from tool input.
  *
  * @param {import('@supabase/supabase-js').SupabaseClient} db  service-role client
  * @param {object} input
@@ -43,13 +48,28 @@ export async function upsertShiftAssignment(db, input) {
   }
 
   // Template defaults populate a freshly-created block's snapshot columns.
+  // The location filter doubles as the tenant check (SAAS-1): a bare-id
+  // fetch would let a cross-tenant template seed a block here. `name` is
+  // selected so callers can render it without a second, unscoped lookup.
   const { data: template, error: tErr } = await db
     .from('shift_templates')
-    .select('start_time, end_time, max_coaches')
+    .select('name, start_time, end_time, max_coaches')
     .eq('id', shiftTemplateId)
+    .eq('location_id', locationId)
     .maybeSingle()
   if (tErr) return { error: tErr }
   if (!template) return { error: { message: 'shift_template not found' } }
+
+  // The profile must be linked to the location via profile_locations
+  // (SAAS-1) — otherwise any tenant's staff could be rostered here.
+  const { data: link, error: lErr } = await db
+    .from('profile_locations')
+    .select('profile_id')
+    .eq('profile_id', profileId)
+    .eq('location_id', locationId)
+    .maybeSingle()
+  if (lErr) return { error: lErr }
+  if (!link) return { error: { message: 'profile not linked to this location' } }
 
   // Find the block for (location, template, date).
   const { data: existing, error: fErr } = await db
@@ -100,7 +120,7 @@ export async function upsertShiftAssignment(db, input) {
     .single()
   if (aErr) return { error: aErr }
 
-  return { blockId, assignment, error: null }
+  return { blockId, assignment, template, error: null }
 }
 
 /**
