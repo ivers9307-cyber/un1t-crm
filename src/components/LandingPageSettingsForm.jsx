@@ -1104,17 +1104,9 @@ function ReviewsEdit({ block, onUpdate }) {
           <option value="fast">Fast</option>
         </select>
       </Field>
-      <label className="flex items-center gap-2">
-        <input
-          type="checkbox"
-          checked={block.show_aggregate !== false}
-          onChange={(e) => onUpdate({ show_aggregate: e.target.checked })}
-        />
-        <span className="text-xs text-un1t-subtle">Show the &ldquo;4.9 ★ · N Google reviews&rdquo; header</span>
-      </label>
       <p className="text-[11px] text-un1t-muted">
-        Reviews come from your Google Business listing. Connect it and hide
-        specific reviews in <strong>Settings → Locations → Integrations</strong>.
+        Reviews are curated per location — the marquee shows the stored Google
+        reviews that match the minimum rating above.
       </p>
     </>
   )

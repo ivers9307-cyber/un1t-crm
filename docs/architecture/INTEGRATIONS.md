@@ -70,12 +70,12 @@ Per-location OAuth 2.0 connection stored in the `xero_connections` table (migrat
 
 OAuth routes:
 - `GET /api/xero/connect?location_id=…` — kick off OAuth (sets CSRF cookie, redirects)
-- `GET /api/xero/callback` — exchange code, persist tokens, redirect to /settings/integrations
+- `GET /api/xero/callback` — exchange code, persist tokens, redirect to `/settings/locations/<id>?tab=xero`
 - `POST /api/xero/disconnect` — remove the connection row
 - `GET /api/xero/status?location_id=…` — safe subset of the connection row (no tokens) for client UIs
 - `GET /api/xero/debug` — dev-only diagnostic; dumps masked env vars + the exact authorize URL
 
-Settings UI lives at `/settings/integrations` (`XeroLocationCard.jsx`).
+Settings UI lives on the per-location Integrations tab — Settings → Locations → \<name\> → Integrations → Xero, i.e. `/settings/locations/<id>?tab=xero` (`XeroIntegrationTab.jsx` wrapping `XeroLocationCard.jsx`). The old standalone `/settings/integrations` page was retired (INTEG-A4).
 
 ### Xero OAuth scopes — granular reference
 
@@ -110,7 +110,7 @@ Non-Accounting APIs are unaffected by the granular split: `payroll.*`, `files`, 
 
 **Do not include the OIDC scopes** (`openid`, `profile`, `email`) unless we actually start consuming the id_token for Xero-side identity. Including them on apps that haven't explicitly opted into OIDC also throws the same "Invalid scope" error. The user is already authenticated via Supabase — the access_token is all we need.
 
-When adding a new Xero feature, append the relevant granular scope to `XERO_SCOPES` in `src/lib/xero/client.js`. Existing connected locations need to click "Reconnect" to receive the additional scope on their token (scopes are additive). The integration card on `/settings/integrations` shows the current scope grant in `connection.scopes`.
+When adding a new Xero feature, append the relevant granular scope to `XERO_SCOPES` in `src/lib/xero/client.js`. Existing connected locations need to click "Reconnect" to receive the additional scope on their token (scopes are additive). The integration card on the per-location Integrations tab (`/settings/locations/<id>?tab=xero`) shows the current scope grant in `connection.scopes`.
 
 ### Xero invoice push (v2) + bills auto-forward
 
@@ -129,7 +129,7 @@ Route: `POST /api/cars/[id]/documents/[docId]/send-to-xero`. Persists `xero_sent
 
 `POST /api/xero/bills-email` updates `bills_email_address` on the connection row from the integrations UI. Validated as an email; null clears it.
 
-The earlier Files API path (`src/lib/xero/files.js`) is retained as a deprecation marker only — nothing imports it. Email-to-Bills is the supported path because it doesn't require the per-org "Convert files to bills" Files Inbox toggle.
+The earlier Files API path (`src/lib/xero/files.js`) has been deleted — nothing imported it. Email-to-Bills is the supported path because it doesn't require the per-org "Convert files to bills" Files Inbox toggle.
 
 ### Webhook authentication
 

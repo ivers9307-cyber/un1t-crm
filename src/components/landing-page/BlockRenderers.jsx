@@ -583,9 +583,11 @@ export function TestimonialBlock({ block, onEdit }) {
 }
 
 // Reviews — continuous CSS marquee of Google reviews. Data is passed down
-// from the page (reviewsData = { reviews, averageRating, totalCount }); the
-// renderer does no fetching, so it stays pure + server-safe. Edit mode has no
-// live reviewsData — show a placeholder so the operator sees where it lands.
+// from the page (reviewsData = { reviews }); the renderer does no fetching,
+// so it stays pure + server-safe. Edit mode has no live reviewsData — show
+// a placeholder so the operator sees where it lands. The "4.9 ★ · N Google
+// reviews" aggregate header was removed with the Google Business Profile
+// sync (mig 410) — reviews are populated manually now.
 export function ReviewsBlock({ block, onEdit, reviewsData }) {
   const minRating = Number.isFinite(block.min_rating) ? block.min_rating : 4
   const all = reviewsData?.reviews || []
@@ -596,8 +598,8 @@ export function ReviewsBlock({ block, onEdit, reviewsData }) {
     return (
       <section className="bg-black text-white py-24 md:py-32 border-t border-white/10">
         <div className="max-w-6xl mx-auto px-6 text-center text-white/40 text-sm border border-dashed border-white/20 rounded py-10">
-          Google reviews appear here on the live page (connect Google Business in
-          Settings → Locations → Integrations, then sync).
+          Google reviews appear here on the live page once reviews have been
+          added for this location.
         </div>
       </section>
     )
@@ -609,22 +611,9 @@ export function ReviewsBlock({ block, onEdit, reviewsData }) {
   return (
     <section className="bg-black text-white py-24 md:py-32 border-t border-white/10 overflow-hidden">
       <div className="max-w-6xl mx-auto px-6">
-        {(block.title || block.show_aggregate) && (
+        {block.title && (
           <div className="lp-reveal text-center mb-12">
-            {block.title && (
-              <h2 className="font-display font-extrabold uppercase text-3xl md:text-4xl tracking-tight">{block.title}</h2>
-            )}
-            {block.show_aggregate && reviewsData?.averageRating != null && (
-              <div className="mt-5 flex items-baseline justify-center gap-3">
-                <span className="font-display font-extrabold text-4xl md:text-5xl">
-                  {Number(reviewsData.averageRating).toFixed(1)}
-                </span>
-                <span className="text-amber-400 tracking-[0.2em] text-sm">★★★★★</span>
-                {reviewsData.totalCount != null && (
-                  <span className="text-sm text-white/55">{reviewsData.totalCount} Google reviews</span>
-                )}
-              </div>
-            )}
+            <h2 className="font-display font-extrabold uppercase text-3xl md:text-4xl tracking-tight">{block.title}</h2>
           </div>
         )}
       </div>
