@@ -1,6 +1,7 @@
 import { createServerClient } from './supabase'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
 import { htmlToPlainText } from './email-content'
+import { resolveEmailSender } from './tenant-email'
 
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'
 
@@ -52,6 +53,33 @@ function getPostmarkToken() {
   return token
 }
 
+// INTEG-B3 — resolve the tenant sending override for a send. Returns
+// { token, from } where BOTH are null unless a LIVE tenant email domain
+// (server-per-tenant, mig 427) resolves for the given location:
+//   - `token` non-null  → use it as X-Postmark-Server-Token (that org's
+//     Postmark server) instead of getPostmarkToken()
+//   - `from`  non-null  → use it as the From (that org's verified sender)
+//
+// ZERO BEHAVIOUR CHANGE is keyed on `token`: with no locationId/sender, or
+// no live tenant row, or any resolver error, resolveEmailSender returns the
+// global default (serverToken null) → token/from stay null → the caller's
+// EXISTING getPostmarkToken() + POSTMARK_FROM_EMAIL path runs byte-for-byte
+// unchanged. resolveEmailSender never throws.
+async function resolveTenantOverride({ locationId, sender }) {
+  // `sender === undefined` = the caller did not pre-resolve; only then do
+  // we look up by locationId. A caller can pass `sender: null` to force the
+  // global default with no lookup.
+  const resolved = sender !== undefined
+    ? sender
+    : (locationId ? await resolveEmailSender(createServerClient(), locationId) : null)
+  const token = resolved?.serverToken || null
+  if (!token) return { token: null, from: null }
+  const from = resolved.fromName
+    ? `${resolved.fromName} <${resolved.fromEmail}>`
+    : (resolved.fromEmail || null)
+  return { token, from }
+}
+
 // ============================================================
 // CORE SENDING
 // ============================================================
@@ -100,15 +128,23 @@ export async function sendEmail({
   metadata = {},
   unsubscribeUrl,
   headers: extraHeaders,
+  // INTEG-B3 — optional per-tenant routing. Pass `locationId` to resolve
+  // the location's org sending config, or a pre-resolved `sender`. When a
+  // LIVE tenant email domain exists the send goes out on that org's Postmark
+  // server + verified From; otherwise this is a no-op (byte-identical).
+  locationId,
+  sender,
 }) {
+  const tenant = await resolveTenantOverride({ locationId, sender })
+
   const headers = {
     'Accept': 'application/json',
     'Content-Type': 'application/json',
-    'X-Postmark-Server-Token': getPostmarkToken(),
+    'X-Postmark-Server-Token': tenant.token || getPostmarkToken(),
   }
 
   const body = {
-    From: from || process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>',
+    From: tenant.from || from || process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>',
     To: to,
     Subject: subject,
     HtmlBody: htmlBody,
@@ -168,13 +204,20 @@ export async function sendEmail({
 }
 
 /**
- * Send batch emails via Postmark (up to 500 per call)
+ * Send batch emails via Postmark (up to 500 per call).
+ *
+ * INTEG-B3 — the optional 2nd arg carries per-tenant routing for the WHOLE
+ * batch: `{ locationId }` (resolved once) or a pre-resolved `{ sender }`.
+ * With neither (every caller today) the resolver returns the global default
+ * and the token + per-email From are byte-identical to before.
  */
-export async function sendBatch(emails) {
+export async function sendBatch(emails, { locationId, sender } = {}) {
+  const tenant = await resolveTenantOverride({ locationId, sender })
+
   const headers = {
     'Accept': 'application/json',
     'Content-Type': 'application/json',
-    'X-Postmark-Server-Token': getPostmarkToken(),
+    'X-Postmark-Server-Token': tenant.token || getPostmarkToken(),
   }
 
   // Postmark batch limit is 500
@@ -187,7 +230,7 @@ export async function sendBatch(emails) {
 
   for (const chunk of chunks) {
     const body = chunk.map(email => ({
-      From: email.from || process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>',
+      From: tenant.from || email.from || process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>',
       To: email.to,
       Subject: email.subject,
       HtmlBody: email.htmlBody,
@@ -471,17 +514,24 @@ export async function sendTransactionalEmail({
   // write them in a follow-up UPDATE that raced the webhook).
   sourceType = 'transactional', sequenceId = null, sequenceStepId = null,
 }) {
+  // INTEG-B3 — one service client, reused for the tenant-sender lookup and
+  // the email_sends insert. The sender resolves to the global default when
+  // there is no live tenant email domain (every org today) → byte-identical
+  // send, and from_email logs the ACTUAL From used.
+  const db = (contactId || locationId) ? createServerClient() : null
+  const sender = locationId ? await resolveEmailSender(db, locationId) : null
+
   const result = await sendEmail({
     to,
     subject,
     htmlBody,
     stream: 'outbound',  // Postmark transactional stream
     tag: tag || 'transactional',
+    sender: sender || undefined,
   })
 
   // Log to email_sends
   if (contactId) {
-    const db = createServerClient()
     await db.from('email_sends').insert({
       contact_id: contactId,
       location_id: locationId,
@@ -489,7 +539,7 @@ export async function sendTransactionalEmail({
       sequence_id: sequenceId,
       sequence_step_id: sequenceStepId,
       subject,
-      from_email: process.env.POSTMARK_FROM_EMAIL,
+      from_email: sender?.fromEmail || process.env.POSTMARK_FROM_EMAIL,
       to_email: to,
       postmark_message_id: result.messageId,
       postmark_stream: 'outbound',
@@ -554,6 +604,12 @@ export async function sendMarketingEmail({
     resolvedReplyTo = await getLocationInboxReplyTo(locationId)
   }
 
+  // INTEG-B3 — one service client, reused for the tenant-sender lookup and
+  // the email_sends insert. Global default when no live tenant domain
+  // exists (every org today) → byte-identical send + honest from_email.
+  const db = (contactId || locationId) ? createServerClient() : null
+  const sender = locationId ? await resolveEmailSender(db, locationId) : null
+
   const result = await sendEmail({
     to,
     subject,
@@ -562,11 +618,11 @@ export async function sendMarketingEmail({
     stream: 'broadcast',  // Postmark marketing stream — attaches List-Unsubscribe headers
     tag: tag || 'marketing',
     unsubscribeUrl,
+    sender: sender || undefined,
   })
 
   // Log to email_sends (same shape as the campaign + transactional paths).
   if (contactId) {
-    const db = createServerClient()
     await db.from('email_sends').insert({
       contact_id: contactId,
       location_id: locationId,
@@ -574,7 +630,7 @@ export async function sendMarketingEmail({
       sequence_id: sequenceId,
       sequence_step_id: sequenceStepId,
       subject,
-      from_email: process.env.POSTMARK_FROM_EMAIL,
+      from_email: sender?.fromEmail || process.env.POSTMARK_FROM_EMAIL,
       to_email: to,
       postmark_message_id: result.messageId,
       postmark_stream: 'broadcast',

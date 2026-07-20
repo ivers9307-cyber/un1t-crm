@@ -4,7 +4,7 @@ import { hasPermission } from '@/lib/permissions'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, UserCog, LayoutGrid, Trophy, Cable, ChevronRight, Bell, KeyRound, MessagesSquare, Bot, Download, Globe, Activity, Store, Gauge, CreditCard } from 'lucide-react'
+import { Users, MapPin, Shield, UserCog, LayoutGrid, Trophy, Cable, ChevronRight, Bell, KeyRound, MessagesSquare, Bot, Download, Globe, Activity, Store, Gauge, CreditCard, AtSign } from 'lucide-react'
 
 // SETTINGS.3/.4 — reorganized this page:
 //   - Master tools moved to TOP (was mid-page)
@@ -293,6 +293,26 @@ export default async function SettingsPage() {
                   <div className="text-un1t-text">Billing &amp; usage</div>
                   <div className="text-xs text-un1t-subtle mt-0.5">
                     Your platform plan, usage against allowances, the usage wallet, and invoices — per location.
+                  </div>
+                </div>
+              </div>
+              <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text shrink-0" />
+            </Link>
+            {/* Email domain (INTEG-B3) — self-serve per-tenant sending
+                domain (server-per-tenant). Paid add-on: the page shows an
+                upsell state when the org's plan doesn't include it. When
+                B4 makes the integrations hub owner-visible, the hub's
+                Email card deep-links here. */}
+            <Link
+              href="/settings/email-domain"
+              className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <AtSign size={16} className="text-un1t-subtle shrink-0" />
+                <div>
+                  <div className="text-un1t-text">Email domain</div>
+                  <div className="text-xs text-un1t-subtle mt-0.5">
+                    Send from your own verified domain on a dedicated mail server — your reputation, your analytics. Add-on.
                   </div>
                 </div>
               </div>
