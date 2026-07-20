@@ -6,6 +6,7 @@ import Sidebar from './Sidebar'
 import AccountShell from './account/AccountShell'
 import PlatformShell from './platform/PlatformShell'
 import ImpersonationBanner from './ImpersonationBanner'
+import SupportBanner from './SupportBanner'
 import CommandPalette from './CommandPalette'
 import AssistantBubble from './AssistantBubble'
 import { hasPermission } from '@/lib/permissions'
@@ -140,12 +141,18 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Only while a master is actually impersonating another user.
+        {/* SUPPORT-ACCESS — a tenant support session takes precedence over
+            the plain impersonation banner (a read-only support session
+            impersonates the tenant owner, so `impersonatingFrom` is also
+            set; we show the mode-aware SupportBanner instead of the
+            generic "Viewing as" bar). Falls back to the impersonation
+            banner for ordinary "view as user" sessions.
             `impersonatingFrom` is null for a normal session (incl. a master
             on their own profile) — auth.js only sets it for a genuine
-            cross-user impersonation backed by an open audit row. Rendering
-            unconditionally showed every user a "Viewing as <yourself>" bar. */}
-        {user?.impersonatingFrom && <ImpersonationBanner user={user} />}
+            cross-user impersonation backed by an open audit row. */}
+        {user?.supportSession
+          ? <SupportBanner user={user} />
+          : user?.impersonatingFrom && <ImpersonationBanner user={user} />}
         {/* Keying the page subtree on the active location remounts it
             when the location switches. The Sidebar already updates from
             the refreshed `user` prop, but client components inside a

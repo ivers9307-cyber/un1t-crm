@@ -179,6 +179,7 @@ describe('getCurrentUser — master path (SAAS-4 must not touch it)', () => {
       profileRole: 'master',
       isMaster: true,
       impersonatingFrom: null,
+      supportSession: null,
     })
   })
 
@@ -244,6 +245,7 @@ describe('getCurrentUser — rollout safety (zero profile_organizations rows)', 
       profileRole: 'owner',
       isMaster: false,
       impersonatingFrom: null,
+      supportSession: null,
     })
   })
 

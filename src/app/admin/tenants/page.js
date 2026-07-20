@@ -18,6 +18,7 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { getTenantsRoster } from '@/lib/admin-tenants'
+import { getRecentSupportSessions } from '@/lib/support-session'
 import TenantsConsole from '@/components/admin/TenantsConsole'
 
 export const runtime = 'nodejs'
@@ -28,7 +29,10 @@ export default async function AdminTenantsPage() {
   if (!user || user.profileRole !== 'master') redirect('/')
 
   const db = createServerClient()
-  const roster = await getTenantsRoster(db)
+  const [roster, supportSessions] = await Promise.all([
+    getTenantsRoster(db),
+    getRecentSupportSessions(db, 25),
+  ])
 
   return (
     <div className="p-6 md:p-8 max-w-6xl">
@@ -36,9 +40,10 @@ export default async function AdminTenantsPage() {
       <p className="text-sm text-un1t-subtle mb-6 max-w-3xl">
         Every organization on the platform: plan, wallet, month-to-date
         usage and health at a glance. Open a tenant for per-location
-        detail and the wallet ledger.
+        detail and the wallet ledger, or use “View into ↗” to open a
+        support session (read-only or act-on-behalf).
       </p>
-      <TenantsConsole roster={roster} />
+      <TenantsConsole roster={roster} supportSessions={supportSessions} />
     </div>
   )
 }
