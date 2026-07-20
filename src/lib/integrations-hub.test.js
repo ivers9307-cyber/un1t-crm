@@ -6,6 +6,8 @@ import {
   gradeXeroConnection,
   agentSignal,
   locationTabHref,
+  gradeTenantEmail,
+  emailDomainHref,
   buildAttention,
   calendarDaysBetween,
   billingExpiresOn,
@@ -120,6 +122,43 @@ describe('agentSignal', () => {
 describe('locationTabHref', () => {
   it('deep-links into the existing per-location integrations tab', () => {
     expect(locationTabHref('loc-1', 'glofox')).toBe('/settings/locations/loc-1?tab=glofox')
+  })
+})
+
+describe('gradeTenantEmail', () => {
+  it('no row → platform (the default shared-account state today)', () => {
+    expect(gradeTenantEmail(null)).toBe('platform')
+    expect(gradeTenantEmail(undefined)).toBe('platform')
+  })
+
+  it('live → connected', () => {
+    expect(gradeTenantEmail({ status: 'live', sending_domain: 'mail.gymx.com' })).toBe('connected')
+  })
+
+  it('pending / verifying → action_needed', () => {
+    expect(gradeTenantEmail({ status: 'pending' })).toBe('action_needed')
+    expect(gradeTenantEmail({ status: 'verifying' })).toBe('action_needed')
+  })
+
+  it('failed / disabled → error', () => {
+    expect(gradeTenantEmail({ status: 'failed' })).toBe('error')
+    expect(gradeTenantEmail({ status: 'disabled' })).toBe('error')
+  })
+
+  it('unknown status → platform (defensive: shared account is the safe fallback)', () => {
+    expect(gradeTenantEmail({ status: 'wat' })).toBe('platform')
+    expect(gradeTenantEmail({})).toBe('platform')
+  })
+})
+
+describe('emailDomainHref', () => {
+  it('appends organization_id for master (owner ignores the param)', () => {
+    expect(emailDomainHref('org-1')).toBe('/settings/email-domain?organization_id=org-1')
+  })
+
+  it('falls back to the bare wizard path when no org id', () => {
+    expect(emailDomainHref(null)).toBe('/settings/email-domain')
+    expect(emailDomainHref(undefined)).toBe('/settings/email-domain')
   })
 })
 
