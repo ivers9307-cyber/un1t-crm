@@ -29,7 +29,7 @@ import { canMobile, canDashboard } from '../../lib/permissions'
 import { colors } from '../../lib/colors'
 import { isoDate } from '../../lib/dates'
 import {
-  glofoxStateMeta, splitCrmBookings, crmBookingStatusMeta, relativeTime,
+  glofoxStateMeta, glofoxPauseResumeLabel, splitCrmBookings, crmBookingStatusMeta, relativeTime,
 } from '../../lib/contact-command-centre'
 import { formatBookingTime } from '../../lib/bookings-api'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
@@ -218,6 +218,8 @@ export default function ContactDetail() {
   const openUrl = (url) => Linking.openURL(url).catch(() => {})
 
   const stateChip = useMemo(() => glofoxStateMeta(contact?.glofox_membership_state), [contact])
+  // GLOFOX-REACTIVE — "· resumes {date}" suffix on the paused state chip.
+  const pauseResume = useMemo(() => glofoxPauseResumeLabel(contact), [contact])
 
   return (
     <View className="flex-1 bg-un1t-bg">
@@ -246,7 +248,9 @@ export default function ContactDetail() {
                 arrears signal the web header + churn radar surface. */}
             {stateChip && (
               <View className={`rounded-full px-3 py-1 ${stateChip.cls}`}>
-                <Text className={`text-xs font-medium ${stateChip.text}`}>{stateChip.label}</Text>
+                <Text className={`text-xs font-medium ${stateChip.text}`}>
+                  {stateChip.label}{pauseResume ? ` · resumes ${pauseResume}` : ''}
+                </Text>
               </View>
             )}
           </View>

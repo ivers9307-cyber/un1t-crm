@@ -7,7 +7,7 @@
 // stays a web action, so the unlinked state is just a hint here.
 import { View, Text } from 'react-native'
 import {
-  glofoxStatusMeta, glofoxStateMeta, formatTenure, relativeTime,
+  glofoxStatusMeta, glofoxStateMeta, glofoxPauseResumeLabel, formatTenure, relativeTime,
   formatMoney, formatShortDate, billingLine,
   splitGlofoxBookings, glofoxBookingBadge, formatGlofoxBookingTime,
 } from '../lib/contact-command-centre'
@@ -48,6 +48,15 @@ export default function ContactGlofoxCard({ contact }) {
   const linked = Boolean(contact?.glofox_member_id)
   const statusMeta = glofoxStatusMeta(contact?.glofox_membership_status)
   const stateMeta = glofoxStateMeta(contact?.glofox_membership_state)
+  // GLOFOX-REACTIVE — append "· resumes {date}" to the paused chip and
+  // show a "Paused since …" line (parity with the web card).
+  const pauseResume = glofoxPauseResumeLabel(contact)
+  const pausedSince = contact?.glofox_membership_state === 'paused'
+    ? formatShortDate(contact?.glofox_membership_paused_at)
+    : null
+  const stateMetaDisplay = stateMeta && pauseResume
+    ? { ...stateMeta, label: `${stateMeta.label} · resumes ${pauseResume}` }
+    : stateMeta
   const tenure = formatTenure(contact?.joined_at)
   const lastAttended = relativeTime(contact?.last_attended_at)
   const lastPayment = relativeTime(contact?.last_payment_at)
@@ -86,7 +95,7 @@ export default function ContactGlofoxCard({ contact }) {
               the arrears signal) + headline numbers */}
           <View className="flex-row items-center flex-wrap gap-2">
             <Chip meta={statusMeta || { label: 'Unknown', cls: 'bg-gray-500/10', text: 'text-gray-700' }} />
-            <Chip meta={stateMeta} />
+            <Chip meta={stateMetaDisplay} />
             {credits != null && (
               <Text className="text-xs text-un1t-subtle">{credits} credit{credits === 1 ? '' : 's'}</Text>
             )}
@@ -110,6 +119,12 @@ export default function ContactGlofoxCard({ contact }) {
             <Text className={`text-xs mt-1 ${expiryPast ? 'text-red-700' : 'text-un1t-subtle'}`}>
               {expiryPast ? 'Expired' : 'Renews'} {expiryDate}
               {expiryRel ? ` (${expiryRel})` : ''}
+            </Text>
+          )}
+          {/* GLOFOX-REACTIVE — pause detail (parity with the web card) */}
+          {pausedSince && (
+            <Text className="text-xs text-amber-700 mt-1">
+              Paused since {pausedSince}{pauseResume ? ` · resumes ${pauseResume}` : ''}
             </Text>
           )}
 
