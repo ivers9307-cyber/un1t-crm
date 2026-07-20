@@ -14,18 +14,29 @@ import { createServerClient } from '@/lib/supabase'
 import { exchangeAuthorizationCode, listConnectedTenants, XeroError } from '@/lib/xero/client'
 import { pullAccounts } from '@/lib/xero/accounts-sync'
 import { pullTaxRates } from '@/lib/xero/tax-rates-sync'
+import { safeReturnTo, decodeReturnTo } from '@/lib/xero/return-to'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// Redirect target: the per-location settings page with the Xero tab
-// selected (`?tab=xero` is read by LocationIntegrations). Falls back
-// to /settings when the flow never yielded a trustworthy location id
+// Redirect target after OAuth. Default: the per-location settings page with
+// the Xero tab selected (`?tab=xero` is read by LocationIntegrations); falls
+// back to /settings when the flow never yielded a trustworthy location id
 // (missing or mismatched state).
-function settingsUrl(req, locationId, params = {}) {
-  const u = locationId
-    ? new URL(`/settings/locations/${locationId}?tab=xero`, req.url)
-    : new URL('/settings', req.url)
+//
+// `returnTo` (carried through the SIGNED state) OVERRIDES the default when
+// present — but ONLY after passing the open-redirect guard again
+// (safeReturnTo), so an attacker-supplied absolute/protocol-relative URL can
+// never become the post-OAuth redirect target. An invalid returnTo is
+// ignored and the default is used. The success/error query params are always
+// appended on top, whichever base is chosen.
+function settingsUrl(req, locationId, params = {}, returnTo = null) {
+  const validated = safeReturnTo(returnTo)
+  const u = validated
+    ? new URL(validated, req.url)
+    : locationId
+      ? new URL(`/settings/locations/${locationId}?tab=xero`, req.url)
+      : new URL('/settings', req.url)
   for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v)
   return u
 }
@@ -37,16 +48,19 @@ export async function GET(req) {
   const oauthError = url.searchParams.get('error')
   const cookieState = req.cookies.get('xero_oauth_state')?.value
 
-  // Best-effort location for error redirects — only trust the id
-  // embedded in `state` once it matches the CSRF cookie we set in
-  // /api/xero/connect.
-  const stateLocationId =
-    state && cookieState === state ? state.split('.')[1] || null : null
+  // Best-effort location + return_to for error redirects — only trust the
+  // values embedded in `state` once it matches the CSRF cookie we set in
+  // /api/xero/connect (the cookie binding is what makes return_to
+  // tamper-proof; safeReturnTo in settingsUrl is the second-line guard).
+  const verified = Boolean(state && cookieState === state)
+  const stateParts = verified ? state.split('.') : []
+  const stateLocationId = verified ? (stateParts[1] || null) : null
+  const stateReturnTo = verified ? decodeReturnTo(stateParts[2]) : null
 
   const user = await getCurrentUser()
   if (!user) return NextResponse.redirect(new URL('/login', req.url))
   if (user.role !== 'owner' && user.role !== 'master') {
-    return NextResponse.redirect(settingsUrl(req, stateLocationId, { error: 'Not permitted' }))
+    return NextResponse.redirect(settingsUrl(req, stateLocationId, { error: 'Not permitted' }, stateReturnTo))
   }
 
   // Clear the cookie regardless of outcome.
@@ -56,25 +70,26 @@ export async function GET(req) {
   }
 
   if (oauthError) {
-    return clearCookie(NextResponse.redirect(settingsUrl(req, stateLocationId, { error: `Xero declined: ${oauthError}` })))
+    return clearCookie(NextResponse.redirect(settingsUrl(req, stateLocationId, { error: `Xero declined: ${oauthError}` }, stateReturnTo)))
   }
   if (!code || !state) {
-    return clearCookie(NextResponse.redirect(settingsUrl(req, stateLocationId, { error: 'Missing code/state' })))
+    return clearCookie(NextResponse.redirect(settingsUrl(req, stateLocationId, { error: 'Missing code/state' }, stateReturnTo)))
   }
   if (!cookieState || cookieState !== state) {
     return clearCookie(NextResponse.redirect(settingsUrl(req, null, { error: 'OAuth state mismatch' })))
   }
 
   const [, locationId] = state.split('.')
+  const returnTo = stateReturnTo // already decoded from the verified state
   if (!locationId) {
-    return clearCookie(NextResponse.redirect(settingsUrl(req, null, { error: 'Invalid state' })))
+    return clearCookie(NextResponse.redirect(settingsUrl(req, null, { error: 'Invalid state' }, returnTo)))
   }
 
   try {
     const tokens = await exchangeAuthorizationCode(code)
     const tenants = await listConnectedTenants(tokens.access_token)
     if (!tenants.length) {
-      return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { error: 'No Xero tenants returned' })))
+      return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { error: 'No Xero tenants returned' }, returnTo)))
     }
     // Default behaviour: take the first tenant. The user can re-auth
     // and pick a different org from the Xero consent screen if they
@@ -98,7 +113,7 @@ export async function GET(req) {
         connected_by: user.id,
       }, { onConflict: 'location_id' })
     if (upErr) {
-      return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { error: `DB error: ${upErr.message}` })))
+      return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { error: `DB error: ${upErr.message}` }, returnTo)))
     }
 
     // Prime the caches so a freshly-connected location has accounts +
@@ -107,9 +122,9 @@ export async function GET(req) {
     try { await pullAccounts(locationId) } catch (e) { console.warn(`[xero connect] accounts sync: ${e?.message || e}`) }
     try { await pullTaxRates(locationId) } catch (e) { console.warn(`[xero connect] tax-rate sync: ${e?.message || e}`) }
 
-    return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { connected: tenant.tenantName || 'Xero' })))
+    return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { connected: tenant.tenantName || 'Xero' }, returnTo)))
   } catch (e) {
     const msg = e instanceof XeroError ? e.message : (e.message || String(e))
-    return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { error: msg })))
+    return clearCookie(NextResponse.redirect(settingsUrl(req, locationId, { error: msg }, returnTo)))
   }
 }

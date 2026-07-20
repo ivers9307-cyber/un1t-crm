@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server'
 import { randomBytes } from 'node:crypto'
 import { getCurrentUser } from '@/lib/auth'
 import { buildAuthorizeUrl } from '@/lib/xero/client'
+import { safeReturnTo, encodeReturnTo } from '@/lib/xero/return-to'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,8 +41,21 @@ export async function GET(req) {
   // CSRF: the cookie value is what we trust on callback. Encode the
   // location_id alongside a random nonce so we know which location
   // the round-trip belongs to.
+  //
+  // Optional post-connect redirect (`return_to`): the hub's inline Connect
+  // button passes `?return_to=/settings/integrations-hub` so the callback
+  // returns the browser to the hub instead of the per-location Xero tab.
+  // It is carried INSIDE the signed `state` (base64url, appended after a
+  // "."), so it is bound to the same value stored in the httpOnly cookie —
+  // a tampered return_to fails the callback's cookie==state check before it
+  // is read. It is validated to an INTERNAL PATH here (open-redirect guard)
+  // and re-validated on callback; an invalid value is simply dropped and the
+  // callback uses its existing default redirect.
   const nonce = randomBytes(24).toString('hex')
-  const state = `${nonce}.${locationId}`
+  const returnTo = safeReturnTo(url.searchParams.get('return_to'))
+  const state = returnTo
+    ? `${nonce}.${locationId}.${encodeReturnTo(returnTo)}`
+    : `${nonce}.${locationId}`
 
   const authorizeUrl = buildAuthorizeUrl({ state })
   const res = NextResponse.redirect(authorizeUrl)

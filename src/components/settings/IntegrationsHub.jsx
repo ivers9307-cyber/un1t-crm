@@ -477,9 +477,13 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
                       ? 'No number yet'
                       : r.numbers.map((n) => (n.displayPhone ? `${n.displayPhone} “${n.label}”` : n.label)).join(' · ')}
                   </span>
-                  <Link href={r.href} className={linkBtn(r.numbers.length === 0)}>
-                    {r.numbers.length === 0 ? 'Connect' : 'Manage numbers'}
-                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => setManaging({ cardKey: 'whatsapp', locationId: r.locationId, initial: r })}
+                    className={linkBtn(r.numbers.length === 0)}
+                  >
+                    {r.numbers.length === 0 ? 'Connect' : 'Manage'}
+                  </button>
                 </div>
                 {r.numbers.filter((n) => n.message).map((n) => (
                   <p key={n.id} className="text-xs text-red-700 bg-red-500/10 rounded px-2 py-1">{n.message}</p>
@@ -561,7 +565,14 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
               <p className="text-xs text-un1t-subtle">No Xero organisation connected{scope === 'all' ? '' : ' at this location'}.</p>
               <div className="flex gap-2 pt-1 mt-auto">
                 {(scope === 'all' ? locations : locations.filter((l) => l.id === scope)).slice(0, 1).map((l) => (
-                  <Link key={l.id} href={`/settings/locations/${l.id}?tab=xero`} className={linkBtn(true)}>Connect</Link>
+                  <button
+                    key={l.id}
+                    type="button"
+                    onClick={() => setManaging({ cardKey: 'xero', locationId: l.id })}
+                    className={linkBtn(true)}
+                  >
+                    Connect
+                  </button>
                 ))}
               </div>
             </>
@@ -576,9 +587,13 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
                 <p className="text-xs text-red-700 bg-red-500/10 rounded px-2 py-1.5">{r.message}</p>
               )}
               <div className="flex gap-2 pt-1">
-                <Link href={r.href} className={linkBtn(r.status === 'error')}>
+                <button
+                  type="button"
+                  onClick={() => setManaging({ cardKey: 'xero', locationId: r.locationId, initial: r })}
+                  className={linkBtn(r.status === 'error')}
+                >
                   {r.status === 'error' ? 'Reconnect' : 'Manage'}
-                </Link>
+                </button>
               </div>
             </div>
           ))}
@@ -867,16 +882,19 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
       )}
 
       <p className="mt-10 pt-4 border-t border-un1t-border text-xs text-un1t-muted max-w-3xl">
-        Glofox, Twilio, UniFi, Climate, BCA, Meta Ads and Instagram now connect, edit and disconnect
-        right here in a Manage panel — secrets stay write-only (leave a field blank to keep it). The
-        remaining cards (WhatsApp, Xero, email delivery, billing) deep-link into the surface that
-        owns them. The plan &amp; wallet strip itself is read-only.
+        Glofox, Twilio, UniFi, Climate, BCA, Meta Ads, Instagram, Xero and WhatsApp now connect and
+        disconnect right here in a Manage panel — secrets stay write-only (leave a field blank to
+        keep it); Xero connects over its OAuth redirect and WhatsApp over Meta&apos;s guided signup,
+        with the heavy config one click away. The remaining cards (email delivery, billing)
+        deep-link into the surface that owns them. The plan &amp; wallet strip itself is read-only.
       </p>
 
       {/* Per-card Manage drawer — Ads/Instagram (Phase 1) + Glofox/Twilio/
-          UniFi/Climate/BCA credential forms (Phase 2). `initial` is the
-          matched hub row so the form prefills non-secret values + has_*
-          presence; `isMaster` gates the master-only providers read-only. */}
+          UniFi/Climate/BCA credential forms (Phase 2) + Xero/WhatsApp
+          connect/disconnect (Phase 3). `initial` is the matched hub row so
+          the panel prefills state (Xero tenant/status, WhatsApp numbers) —
+          absent for a not-yet-connected Xero location; `isMaster` gates the
+          master-only credential providers read-only. */}
       {managing && (
         <IntegrationsHubDrawer
           cardKey={managing.cardKey}
