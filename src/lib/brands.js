@@ -85,6 +85,7 @@ export const BRANDS = [
       '/start',         // Meta-ad booking wizard (src/app/start)
       '/privacy',       // GDPR privacy policy (waitlist consent link + App Store URL)
       '/terms',         // Terms of Service (Meta App Review + site footer)
+      '/legal/',        // SAAS4-C4: /legal/subprocessors (public subprocessor register)
       '/technical',     // Tech-provider service page (Meta Access Verification URL)
       '/book/',         // public Calendly-style booking pages
       '/event/',        // public race / workshop / etc. signup pages
