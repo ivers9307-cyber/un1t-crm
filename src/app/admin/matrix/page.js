@@ -71,7 +71,18 @@ export default async function AdminMatrixPage() {
     <div className="p-8 max-w-7xl">
       <div className="flex items-start justify-between gap-4 mb-2">
         <h2 className="text-2xl font-bold">Platform admin</h2>
-        <AddOrganizationButton />
+        <div className="flex items-center gap-2">
+          {/* SAAS4-P2 — the guided flow (org → location → owner invite →
+              branding → subdomain). AddOrganizationButton stays for the
+              bare add-an-org case. */}
+          <Link
+            href="/admin/tenants/new"
+            className="bg-un1t-text text-un1t-bg text-sm font-medium rounded-lg px-3 py-1.5"
+          >
+            New tenant
+          </Link>
+          <AddOrganizationButton />
+        </div>
       </div>
       <p className="text-sm text-un1t-subtle mb-8">
         Master-only view across every organization, location, and user. Feature toggles edit
