@@ -18,8 +18,7 @@ import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { capNoticeDecision, dublinMonthStartStr } from '@/lib/usage-caps'
-import { sendPushToRolesAtLocation } from '@/lib/push'
-import { ADMIN_ROLES } from '@/lib/schemas'
+import { sendOpsAlert } from '@/lib/ops-alerts'
 import { logWarn } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -116,16 +115,16 @@ async function sendCapNotices(db, todayStr) {
 
     for (const check of checks) {
       if (check.decision !== 'send') continue
-      for (const locationId of locationIds) {
-        try {
-          // No notify_* category fits an ops/billing notice — omitting
-          // the category routes to master only (push.js contract),
-          // which is the right recipient until O2's ops_alerts routing.
-          await sendPushToRolesAtLocation(locationId, ADMIN_ROLES, {
-            title: check.title, body: check.body,
-          })
-        } catch { /* per-location push failure never blocks the sweep */ }
-      }
+      // SAAS4-O2 — routed per tenant: emails the org's configured
+      // ops_alert_emails; falls back to the master push when none are
+      // set. One alert per org per meter per month (not per location).
+      await sendOpsAlert({
+        organizationId: org.organization_id,
+        locationId: locationIds[0],
+        subject: check.title,
+        htmlBody: `<p>${check.body}</p>`,
+        pushBody: check.body,
+      })
       await db
         .from('org_settings')
         .update({ [check.column]: month })

@@ -2394,6 +2394,49 @@ registry.registerPath({
   },
 })
 
+// Tenant Billing & usage page (INTEG-D1)
+registry.registerPath({
+  method: 'get',
+  path: '/api/settings/billing',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Tenant billing & usage assembler (owner of the org or master)',
+  description: 'Per pinned location: plan (tier/price/effective date/add-ons), month-to-date meters vs allowance (staff assistant separate — allowance-exempt), wallet (balance, Dublin month-end expiry, lapse warning, last-20 ledger, auto-top-up config). Orgs with zero active tier pinnings get pinned:false and an empty locations list. ?organization_id targets another org (master only; a foreign org answers 404, not 403).',
+  responses: {
+    200: { description: 'Billing page data' },
+    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/settings/billing/auto-topup',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Configure wallet auto-top-up (owner of the org or master)',
+  description: 'Writes the three DORMANT wallets.auto_topup_* config columns only (never balance_cents — wallet_apply stays the only balance write path). Takes effect when the Stripe card top-up leg ships. A foreign/unknown location answers 404, not 403.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            location_id: uuidLike,
+            enabled: z.boolean(),
+            amount_cents: z.number().int().min(500).max(50000).nullable().optional(),
+            threshold_cents: z.number().int().min(0).max(20000).nullable().optional(),
+          }).openapi('WalletAutoTopupConfig'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Auto-top-up config saved' },
+    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Location create (SAAS4-W0.1) — server-side so per-location defaults
 // (FUNNEL.1 pipeline stages) are seeded atomically with the row.
 registry.registerPath({
@@ -3489,15 +3532,105 @@ registry.registerPath({
     'with legacy location-field fallback), xero_connections, whatsapp_numbers (read-only), ' +
     'ad_accounts presence, the customer-agent live signal, and a derived "needs attention" list ' +
     '(errors first, then tokens expiring within 10 days, then incomplete setups). ' +
+    'INTEG-C4 adds a read-only `billing` array (one entry per location) for the plan & wallet strip: ' +
+    'with an ACTIVE tier pinning in location_plans it carries plan {name, effectiveFrom, priceCents, addons}, ' +
+    'wallet {balanceCents, periodStart, expiresOn = last day of the current Dublin month, lapseWarning} and ' +
+    'per-meter MTD usage vs allowance with overage cents drawn from the wallet ledger; ' +
+    'unpinned locations (all of them today) return { locationId, plan: null }. ' +
     'Secrets are never returned — no token columns are selected. ' +
     'Master-only (profileRole) while the hub is behind the phase-B rollout flag.',
   responses: {
     200: {
-      description: 'Hub payload — per-provider card states keyed by location, plus the attention strip',
+      description: 'Hub payload — per-provider card states keyed by location, the billing strip, plus the attention strip',
       content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('IntegrationsHubResponse') } },
     },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Not a master account', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// Tenant console (INTEG-D2) — master roster / drill-in / wallet adjust
+// ============================================================================
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/admin/tenants',
+  tags: ['Platform Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Tenant roster with platform stat tiles (master only)',
+  description:
+    'One row per organization — locations count, pinned-plan summary, combined wallet balance, ' +
+    'MTD usage snapshot (wa_template_send / email_send / derived ai_message) and health ' +
+    '(integrations attention + stale tenant heartbeats) — plus the platform stats: MRR ' +
+    '(sum of active pinned tier prices), trials (stubbed 0 until trial machinery exists), ' +
+    'past-due locations (negative wallets) and wallet top-ups this Dublin month. Read-only.',
+  responses: {
+    200: {
+      description: 'Roster payload — stats + per-org rows',
+      content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('AdminTenantsRosterResponse') } },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/admin/tenants/{orgId}',
+  tags: ['Platform Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Tenant drill-in: per-location plan, wallet, usage, health (master only)',
+  description:
+    'Org header plus one block per location: pinned plan version + price (null when unpinned — ' +
+    'every location today), wallet balance/period + last-50 ledger entries newest-first, MTD ' +
+    'meters vs plan allowances with the allowance-EXEMPT staff-assistant count as a separate ' +
+    'line, integrations summary derived from the hub assembler, and stale tenant heartbeats. ' +
+    '404 (not 403) for unknown org ids so they cannot be enumerated.',
+  request: { params: z.object({ orgId: uuidLike }) },
+  responses: {
+    200: {
+      description: 'Drill-in payload — org + per-location blocks',
+      content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('AdminTenantDetailResponse') } },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Organization not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/tenants/wallet-adjust',
+  tags: ['Platform Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Post a goodwill wallet adjustment for a location (master only)',
+  description:
+    'The single write action on the /admin/tenants console. Posts a signed adjustment ' +
+    '(positive = credit, negative = debit, EUR cents, non-zero, within ±1,000,000 cents = ±€10,000) ' +
+    'via the wallet_apply RPC — the ONLY wallet write path (append-only ledger, row-locked, ' +
+    '-1000-cent grace floor enforced in SQL). A note of at least 5 characters is required; ' +
+    'the ledger row records created_by = the acting master and the action is audit-logged.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      locationId: uuidLike,
+      amountCents: z.number().int()
+        .openapi({ description: 'Signed EUR cents. Positive = credit, negative = debit. Non-zero, |amount| <= 1,000,000.' }),
+      note: z.string().min(5).max(500),
+    }).openapi('AdminTenantWalletAdjustBody') } } },
+  },
+  responses: {
+    200: {
+      description: 'Adjustment applied — returns the new balance',
+      content: { 'application/json': { schema: SuccessResponse(z.object({
+        locationId: uuidLike,
+        balanceCents: z.number().int(),
+      })).openapi('AdminTenantWalletAdjustResponse') } },
+    },
+    400: { description: 'Validation failed or the wallet_apply RPC refused (e.g. grace-floor breach)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
