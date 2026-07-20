@@ -72,20 +72,34 @@ export async function POST(request) {
   // bytes Glofox sent, not a re-stringified copy.
   const rawBody = await request.text()
   const signature = getSignatureHeader(request)
+  const db = createServerClient()
 
-  // Parse once for branch_id lookup. JSON errors → 200 with
-  // status='invalid_json' (Glofox wouldn't be able to retry into
-  // success anyway).
+  // GLOFOX-ROBUST — strip NUL bytes before parsing/storing. Postgres
+  // jsonb rejects the NUL character, which silently fails the audit
+  // payload types that contain them (observed: SERVICE_* deliveries
+  // 200'd with no recorded row — a silently-dropped webhook). The HMAC
+  // is still verified against the ORIGINAL bytes below.
+  const bodyForParse = typeof rawBody === 'string' ? rawBody.replace(/\u0000/g, '') : rawBody
+
+  // Parse once for branch_id lookup. On failure we do NOT silently drop
+  // the delivery — dead-letter the raw body so it's visible + replayable.
   let payload
   try {
-    payload = rawBody ? JSON.parse(rawBody) : {}
+    payload = bodyForParse ? JSON.parse(bodyForParse) : {}
   } catch (e) {
     logWarn('glofox-webhook', 'invalid JSON body', { err: e?.message })
+    await deadLetterWebhook(db, {
+      provider: 'glofox',
+      eventType: null,
+      payload: {
+        _unparsed_raw_body: (bodyForParse || '').slice(0, 8000),
+        _content_type: request.headers.get('content-type') || null,
+      },
+      error: e,
+    })
     return NextResponse.json({ success: true, status: 'invalid_json' })
   }
   const parsed = parseGlofoxEvent(payload)
-
-  const db = createServerClient()
 
   // 1. Look up the location's credentials by branch_id. No
   // branch_id in the payload OR no matching location → 401 (we
@@ -139,6 +153,7 @@ export async function POST(request) {
       .single()
     if (error) {
       logWarn('glofox-webhook', 'event row upsert failed', { err: error.message, event_id: parsed.eventId })
+      await deadLetterWebhook(db, { provider: 'glofox', eventType: parsed.eventType, payload, error, locationId: creds.locationId })
       return NextResponse.json({ success: true, status: 'audit_failed' })
     }
     eventRow = data
@@ -162,6 +177,7 @@ export async function POST(request) {
       .single()
     if (error) {
       logWarn('glofox-webhook', 'event row insert failed', { err: error.message })
+      await deadLetterWebhook(db, { provider: 'glofox', eventType: parsed.eventType, payload, error, locationId: creds.locationId })
       return NextResponse.json({ success: true, status: 'audit_failed' })
     }
     eventRow = data
