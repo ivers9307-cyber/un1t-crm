@@ -14,16 +14,20 @@
 // wallet balance/expiry (with the late-month lapse warning) + MTD
 // meter bars vs allowance. Read-only and pinning-gated — an unpinned
 // scope (every UN1T location today) renders one quiet "No platform
-// plan" line. The Manage-plan button from the mockup is deliberately
-// OMITTED until D1 builds its landing page.
+// plan" line. The strip carries a "Manage plan" deep-link into the D1
+// billing page (/settings/billing).
 //
-// Deliberately OMITTED from this phase (they ship later):
-//   - the Postmark email-domain DNS wizard (B3)
-//   - TikTok stays a static coming-soon card
+// The Email-delivery card reflects each org's tenant sending-domain
+// state (INTEG-B3, tenant_email_domains): no row → platform email (the
+// default for every org today), live → the custom domain, pending/
+// verifying → setup in progress, failed/disabled → attention. It
+// deep-links into the B3 wizard (/settings/email-domain). TikTok stays
+// a static coming-soon card.
 //
-// Every action is a DEEP LINK into the existing per-location
-// integrations tab (/settings/locations/<id>?tab=<key>) — no new
-// mutation surface in this PR, and the old tabs are untouched.
+// Every action is a DEEP LINK into an existing surface — the per-location
+// integrations tab (/settings/locations/<id>?tab=<key>), the email-domain
+// wizard, or the billing page — no new mutation surface here, and the old
+// tabs are untouched.
 
 import { useState } from 'react'
 import Link from 'next/link'
@@ -84,6 +88,39 @@ function fmtDate(iso) {
   return d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
+// ── Email delivery (INTEG-B3) — per-org tenant sending-domain state ──
+// The assembler grades each org into these statuses; the card reflects them.
+const EMAIL_CHIP_LABELS = {
+  platform: 'Platform email',
+  connected: 'Custom domain',
+  action_needed: 'Setup in progress',
+  error: 'Attention',
+}
+
+const EMAIL_RANK = { error: 3, action_needed: 2, connected: 1, platform: 0 }
+function emailCardStatus(entries) {
+  let best = 'platform'
+  for (const e of entries) {
+    if ((EMAIL_RANK[e.status] ?? 0) > (EMAIL_RANK[best] ?? 0)) best = e.status
+  }
+  return best
+}
+
+function emailDetail(e) {
+  switch (e.status) {
+    case 'connected':
+      return e.fromEmail
+        ? `Sending from ${e.fromEmail}`
+        : (e.sendingDomain ? `Custom domain ${e.sendingDomain} live` : 'Custom sending domain live')
+    case 'action_needed':
+      return `Custom domain setup in progress${e.sendingDomain ? ` · ${e.sendingDomain}` : ''}`
+    case 'error':
+      return 'Custom sending domain needs attention'
+    default:
+      return 'Sending via the platform email account'
+  }
+}
+
 function Meter({ label, value, max, warn }) {
   const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0
   return (
@@ -139,7 +176,7 @@ function PlanMeter({ label, used, allowance, overQty, overageDrawnCents }) {
 
 // One pinned location's strip row: plan name/price · wallet balance
 // with expiry (+ lapse warning) · the three meter bars. Read-only —
-// the Manage-plan action ships with D1's landing page.
+// mutations happen on the D1 billing page, reached via Manage plan.
 function BillingStripRow({ row, locationName, showLocation }) {
   const { plan, wallet, meters } = row
   return (
@@ -158,6 +195,9 @@ function BillingStripRow({ row, locationName, showLocation }) {
             + {plan.addons.map((a) => a.name).join(', ')}
           </p>
         )}
+        <div className="flex gap-2 pt-2">
+          <Link href="/settings/billing" className={linkBtn()}>Manage plan</Link>
+        </div>
       </div>
       <div className="lg:w-56 shrink-0">
         <div className="text-[10px] uppercase tracking-wider text-un1t-muted">Wallet</div>
@@ -253,6 +293,9 @@ export default function IntegrationsHub({ data, isMaster = false }) {
   const ads = (data.ads || []).filter((r) => inScope(r.locationId))
   const sms = (data.sms || []).filter((r) => inScope(r.locationId))
   const agent = (data.agent || []).filter((r) => inScope(r.locationId))
+  // Email delivery is per-ORG; keep an org row when any of its (scoped)
+  // locations is in the selected location scope.
+  const email = (data.email || []).filter((e) => scope === 'all' || (e.locationIds || []).includes(scope))
   const unifi = (data.unifi || []).filter((r) => inScope(r.locationId))
   const climate = (data.climate || []).filter((r) => inScope(r.locationId))
   const bca = (data.bca || []).filter((r) => inScope(r.locationId))
@@ -316,11 +359,16 @@ export default function IntegrationsHub({ data, isMaster = false }) {
         <StatusChip status="platform" />
       </div>
 
-      {/* ── Plan & wallet strip (INTEG-C4) — read-only, pinning-gated ── */}
+      {/* ── Plan & wallet strip (INTEG-C4) — read-only, pinning-gated ──
+          Manage-plan deep-links into the D1 billing page (/settings/billing,
+          owner+/master). */}
       <div className="space-y-3 mb-6">
         {pinnedBilling.length === 0 ? (
-          <div className="rounded-xl border border-un1t-border bg-white px-4 py-3 text-sm text-un1t-subtle">
-            No platform plan{scope !== 'all' && nameById[scope] ? ` — ${nameById[scope]}` : ''}
+          <div className="rounded-xl border border-un1t-border bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+            <span className="text-sm text-un1t-subtle">
+              No platform plan{scope !== 'all' && nameById[scope] ? ` — ${nameById[scope]}` : ''}
+            </span>
+            <Link href="/settings/billing" className={linkBtn()}>Manage plan</Link>
           </div>
         ) : pinnedBilling.map((row) => (
           <BillingStripRow
@@ -568,18 +616,41 @@ export default function IntegrationsHub({ data, isMaster = false }) {
           </div>
         </HubCard>
 
-        {/* Email delivery */}
+        {/* Email delivery — reflects each org's tenant sending-domain state (INTEG-B3) */}
         <HubCard
           icon={Mail}
           title="Email delivery"
           provider="Receipts, confirmations, campaigns"
-          chip={<StatusChip status="platform" />}
+          chip={<StatusChip status={emailCardStatus(email)} label={email.length === 0 ? CHIP_LABELS.platform : EMAIL_CHIP_LABELS[emailCardStatus(email)]} />}
           muted
         >
-          <div className="text-xs text-un1t-subtle space-y-0.5">
-            <p>· Sending via the platform&apos;s email account</p>
-            <p>· Custom sending domains arrive with the domain wizard (next phase)</p>
-          </div>
+          {email.length === 0 ? (
+            <p className="text-xs text-un1t-subtle">· Sending via the platform email account</p>
+          ) : (
+            <div className="divide-y divide-un1t-border border-t border-un1t-border text-sm">
+              {email.map((e) => {
+                const showOrg = email.length > 1 && e.orgName
+                const attention = e.status === 'error' || e.status === 'action_needed'
+                return (
+                  <div key={e.organizationId} className="py-2 space-y-1.5">
+                    <div className="flex items-center gap-3">
+                      {showOrg && <span className="font-semibold min-w-[88px]">{e.orgName}</span>}
+                      <span className="flex-1 text-xs text-un1t-subtle truncate">{emailDetail(e)}</span>
+                      <StatusChip status={e.status} label={EMAIL_CHIP_LABELS[e.status]} />
+                    </div>
+                    {e.status === 'error' && e.lastError && (
+                      <p className="text-xs text-red-700 bg-red-500/10 rounded px-2 py-1">{e.lastError}</p>
+                    )}
+                    <div className="flex gap-2">
+                      <Link href={e.href} className={linkBtn(attention)}>
+                        {e.status === 'platform' ? 'Set up domain' : 'Open'}
+                      </Link>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </HubCard>
 
         {/* SMS */}
@@ -721,9 +792,9 @@ export default function IntegrationsHub({ data, isMaster = false }) {
       )}
 
       <p className="mt-10 pt-4 border-t border-un1t-border text-xs text-un1t-muted max-w-3xl">
-        Every action here deep-links into the per-location Integrations tab, where connecting and
-        disconnecting happens. The plan &amp; wallet strip is read-only (plan management lands with
-        its own page); the email-domain wizard ships in a later phase.
+        Every action here deep-links into the surface that owns it — the per-location Integrations
+        tab, the email-domain wizard, or the billing page — where connecting, disconnecting and plan
+        changes actually happen. The plan &amp; wallet strip itself is read-only.
       </p>
     </div>
   )

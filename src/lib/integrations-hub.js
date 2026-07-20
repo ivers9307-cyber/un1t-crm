@@ -129,6 +129,42 @@ export function locationTabHref(locationId, tabKey) {
   return `/settings/locations/${locationId}?tab=${tabKey}`
 }
 
+/**
+ * Grade one org's tenant_email_domains row (mig 427) into the Email-delivery
+ * card's status vocabulary. B3 shipped the sending-domain wizard, so the hub
+ * card now reflects real state:
+ *   no row            → 'platform'      (sending via the shared account — the
+ *                                        default/normal state for every org today)
+ *   status='live'     → 'connected'     (custom domain verified + routing)
+ *   pending/verifying → 'action_needed' (setup in progress)
+ *   failed/disabled   → 'error'         (needs attention)
+ *   anything else     → 'platform'      (defensive — the shared account is the
+ *                                        safe fallback the send path already uses)
+ * SECRET: the caller must select only the non-secret allowlist (never
+ * postmark_server_token); this grades from the lifecycle status alone. Pure.
+ */
+export function gradeTenantEmail(row) {
+  if (!row) return 'platform'
+  switch (row.status) {
+    case 'live': return 'connected'
+    case 'pending':
+    case 'verifying': return 'action_needed'
+    case 'failed':
+    case 'disabled': return 'error'
+    default: return 'platform'
+  }
+}
+
+/**
+ * Deep link to the tenant email-domain wizard (INTEG-B3, /settings/email-domain).
+ * Master reads ?organization_id to view a specific org; an owner resolves their
+ * own org and the param is ignored — so appending it is master-correct and
+ * owner-safe. Pure.
+ */
+export function emailDomainHref(orgId) {
+  return orgId ? `/settings/email-domain?organization_id=${orgId}` : '/settings/email-domain'
+}
+
 // Card labels used by the attention strip.
 const CARD_LABELS = {
   glofox: 'Glofox',
@@ -519,13 +555,59 @@ async function assembleBillingStrip(db, locs, todayStr) {
 }
 
 /**
+ * Assemble the Email-delivery card's per-ORG state (INTEG-B3, mig 427).
+ * Keyed by organization_id: ONE lookup per distinct org (deduped), never
+ * one per location. SECRET: selects only the non-secret allowlist (the
+ * tenantEmailStatePayload shape) — postmark_server_token is NEVER selected,
+ * so the token can't leak into the hub payload. The org set derives entirely
+ * from `locs`, which the route already scoped to the caller's org(s), so this
+ * inherits that scope (master → every in-scope org; owner → only their own).
+ * Each entry carries the in-scope locationIds of its org so the UI's location
+ * scope switcher can filter the org rows.
+ */
+async function assembleEmailDelivery(db, locs, orgIds) {
+  if (!orgIds.length) return []
+  const [domRes, orgRes] = await Promise.all([
+    db.from('tenant_email_domains')
+      // Allowlist ONLY — postmark_server_token is a live sending credential
+      // and is deliberately never selected here.
+      .select('organization_id, status, sending_domain, from_email, from_name, dkim_verified, return_path_verified, last_error')
+      .in('organization_id', orgIds),
+    db.from('organizations').select('id, name').in('id', orgIds),
+  ])
+  const rowByOrg = Object.fromEntries((domRes.data || []).map((r) => [r.organization_id, r]))
+  const nameByOrg = Object.fromEntries((orgRes.data || []).map((o) => [o.id, o.name]))
+  const locsByOrg = {}
+  for (const l of locs) {
+    if (!l.organization_id) continue
+    ;(locsByOrg[l.organization_id] ||= []).push(l.id)
+  }
+  return orgIds.map((orgId) => {
+    const row = rowByOrg[orgId] || null
+    return {
+      organizationId: orgId,
+      orgName: nameByOrg[orgId] || null,
+      locationIds: locsByOrg[orgId] || [],
+      status: gradeTenantEmail(row),
+      sendingDomain: row?.sending_domain ?? null,
+      fromEmail: row?.from_email ?? null,
+      fromName: row?.from_name ?? null,
+      dkimVerified: !!row?.dkim_verified,
+      returnPathVerified: !!row?.return_path_verified,
+      lastError: row?.last_error ?? null,
+      href: emailDomainHref(orgId),
+    }
+  })
+}
+
+/**
  * Assemble the full hub payload for a set of locations. Master-only
  * callers (the /settings/integrations-hub page + GET /api/integrations/hub)
  * — the caller has already authorised; this only reads.
  *
  * @param {object} db  createServerClient() — service role
- * @param {Array<object>} locations  full location rows (id, name, settings,
- *   sensibo_api_key, sensibo_pod_id, thinq_pat, thinq_client_id,
+ * @param {Array<object>} locations  full location rows (id, name, organization_id,
+ *   settings, sensibo_api_key, sensibo_pod_id, thinq_pat, thinq_client_id,
  *   thinq_country_code, twilio_alpha_sender_id, bca_config, features)
  * @param {{ now?: Date }} [opts]
  */
@@ -763,6 +845,12 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     return [{ locationId: loc.id, status, href }]
   })
 
+  // ── Email delivery — per-ORG tenant sending domain (INTEG-B3, mig 427) ──
+  // One lookup per distinct org (deduped), not per location. Never selects
+  // the Postmark server token. Org set derives from the already-scoped locs.
+  const orgIds = [...new Set(locs.map((l) => l.organization_id).filter(Boolean))]
+  const email = await assembleEmailDelivery(db, locs, orgIds)
+
   // ── Plan & wallet strip (INTEG-C4) — pinning-gated, zero writes ──
   const billing = await assembleBillingStrip(db, locs, dublinDayStr(now))
 
@@ -777,6 +865,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     ads,
     sms,
     agent,
+    email,
     unifi,
     climate,
     bca,

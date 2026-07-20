@@ -3639,6 +3639,11 @@ registry.registerPath({
     'with legacy location-field fallback), xero_connections, whatsapp_numbers (read-only), ' +
     'ad_accounts presence, the customer-agent live signal, and a derived "needs attention" list ' +
     '(errors first, then tokens expiring within 10 days, then incomplete setups). ' +
+    'INTEG-B3 adds a per-ORG `email` array (one entry per distinct in-scope org, deduped) for the ' +
+    'Email-delivery card: { organizationId, orgName, locationIds, status (platform | connected | ' +
+    'action_needed | error, derived from the org\'s tenant_email_domains lifecycle status), ' +
+    'sendingDomain, fromEmail, fromName, dkimVerified, returnPathVerified, lastError, href } — ' +
+    'the Postmark server token is NEVER selected or returned. ' +
     'INTEG-C4 adds a read-only `billing` array (one entry per location) for the plan & wallet strip: ' +
     'with an ACTIVE tier pinning in location_plans it carries plan {name, effectiveFrom, priceCents, addons}, ' +
     'wallet {balanceCents, periodStart, expiresOn = last day of the current Dublin month, lapseWarning} and ' +
