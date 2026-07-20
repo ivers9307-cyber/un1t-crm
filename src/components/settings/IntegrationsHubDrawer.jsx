@@ -6,6 +6,22 @@
 //   ads       → AdsIntegrationTab (saves via PUT /api/settings/ads)
 //   instagram → ConnectionsSection (embedded)
 //
+// PHASE 3 adds two compact connect/disconnect panels that reuse EXISTING
+// routes verbatim — inventing no new routing/activation logic:
+//   xero      → Connect/Reconnect kicks off the full-page OAuth redirect
+//               (GET /api/xero/connect?location_id=…&return_to=/settings/
+//               integrations-hub — the return_to guard shipped in Phase-3
+//               part 1); Disconnect → POST /api/xero/disconnect.
+//   whatsapp  → the SHARED ConnectWhatsAppCard (Meta Embedded Signup popup,
+//               GET/POST …/whatsapp/embedded-signup) + per-number Disconnect
+//               that calls the SAME DELETE …/whatsapp/numbers/[numberId] the
+//               tab calls, with the tab's exact confirm() copy + semantics
+//               (never touches a different number, no reactivation). The
+//               heavy config for both stays on the "Advanced settings"
+//               deep-link ("Xero data & accounts" / "Manage numbers").
+//               WhatsApp is the LIVE customer channel — no send/routing code
+//               is touched here; connect + per-number disconnect only.
+//
 // PHASE 2 adds first-class inline Manage forms for the credential-bearing
 // providers stored on the `locations` row, saving through ONE new
 // service-role route — PUT/DELETE /api/locations/[id]/integrations/[provider]:
@@ -31,9 +47,10 @@
 
 import { useEffect, useId, useRef, useState } from 'react'
 import Link from 'next/link'
-import { X, Save, Loader2, Check, AlertCircle, Unplug } from 'lucide-react'
+import { X, Save, Loader2, Check, AlertCircle, Unplug, Plug, RefreshCw } from 'lucide-react'
 import { buttonClasses } from '@/components/ui'
 import AdsIntegrationTab from './integrations/AdsIntegrationTab'
+import { ConnectWhatsAppCard } from './integrations/ConnectWhatsAppCard'
 import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
 
 // cardKey → { title, routeProvider, tabKey, masterOnly, intro, fields }.
@@ -115,8 +132,12 @@ const FORM_SPECS = {
   },
 }
 
-const TITLES = { ads: 'Meta Ads', instagram: 'Instagram' }
-const TAB_KEY = { ads: 'ads', instagram: 'instagram' }
+const TITLES = { ads: 'Meta Ads', instagram: 'Instagram', xero: 'Xero', whatsapp: 'WhatsApp' }
+const TAB_KEY = { ads: 'ads', instagram: 'instagram', xero: 'xero', whatsapp: 'whatsapp' }
+// Phase 3 — the footer deep-link label for the compact connect/disconnect
+// panels: the drawer handles the common connect/disconnect inline, and the
+// heavy per-provider config stays one click away in the existing tab.
+const DEEP_LINK_LABEL = { xero: 'Xero data & accounts', whatsapp: 'Manage numbers' }
 
 const FOCUSABLE =
   'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
@@ -215,6 +236,23 @@ export default function IntegrationsHubDrawer({ cardKey, locationId, locationNam
           {cardKey === 'instagram' && (
             <ConnectionsSection locationId={locationId} locationName={locationName} embedded onChanged={onChanged} />
           )}
+          {cardKey === 'xero' && (
+            <XeroPanel
+              locationId={locationId}
+              locationName={locationName}
+              initial={initial}
+              onChanged={onChanged}
+              onDisconnected={onClose}
+            />
+          )}
+          {cardKey === 'whatsapp' && (
+            <WhatsAppPanel
+              locationId={locationId}
+              locationName={locationName}
+              initial={initial}
+              onChanged={onChanged}
+            />
+          )}
           {spec && (
             <IntegrationCredForm
               spec={spec}
@@ -233,7 +271,7 @@ export default function IntegrationsHubDrawer({ cardKey, locationId, locationNam
               href={`/settings/locations/${locationId}?tab=${tabKey}`}
               className={buttonClasses({ variant: 'secondary', size: 'sm' })}
             >
-              Advanced settings
+              {DEEP_LINK_LABEL[cardKey] || 'Advanced settings'}
             </Link>
           </div>
         )}
@@ -423,6 +461,203 @@ function IntegrationCredForm({ spec, locationId, initial, readOnly, onChanged, o
           {saving ? <><Loader2 size={12} className="animate-spin" /> Saving…</> : <><Save size={12} /> Save</>}
         </button>
       </div>
+    </div>
+  )
+}
+
+// ── Xero connect/disconnect panel (Phase 3) ──
+//
+// Connect/Reconnect starts the EXISTING full-page OAuth flow
+// (GET /api/xero/connect) with return_to=/settings/integrations-hub so the
+// callback bounces the browser back to the hub (the return_to guard shipped
+// in Phase-3 part 1). Disconnect posts the EXISTING /api/xero/disconnect with
+// this location's id and the tab's exact confirm() copy. No new route, no
+// token rendered. `initial` is the assembled hub xero row (present only when
+// connected); its absence renders the not-connected Connect-only state.
+function XeroPanel({ locationId, locationName, initial, onChanged, onDisconnected }) {
+  const connected = !!initial && initial.status !== 'not_connected'
+  const [disconnecting, setDisconnecting] = useState(false)
+  const [error, setError] = useState(null)
+
+  function connect() {
+    // Full-page redirect — the OAuth handshake needs a top-level navigation;
+    // return_to (allowlist-guarded) returns the browser to the hub, which
+    // re-assembles fresh, so no in-place re-grade is needed here.
+    const returnTo = '/settings/integrations-hub'
+    window.location.href =
+      `/api/xero/connect?location_id=${encodeURIComponent(locationId)}&return_to=${encodeURIComponent(returnTo)}`
+  }
+
+  async function disconnect() {
+    if (!confirm(`Disconnect Xero from ${locationName || 'this location'}? Future invoice pushes will fail until you reconnect.`)) return
+    setDisconnecting(true); setError(null)
+    try {
+      const res = await fetch('/api/xero/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ location_id: locationId }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || j.success === false) {
+        setError(j.error || `Disconnect failed (${res.status})`)
+        setDisconnecting(false)
+        return
+      }
+      onChanged?.()
+      onDisconnected?.()
+    } catch (e) {
+      setError(e.message || 'Network error')
+      setDisconnecting(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-un1t-subtle">
+        Accounting sync. Connecting starts Xero&apos;s OAuth consent in this window and returns you
+        here. Used to push customer invoices and forward supplier docs into Xero&apos;s Bills inbox.
+      </p>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
+          <AlertCircle size={12} className="mt-0.5" /> {error}
+        </div>
+      )}
+
+      {connected ? (
+        <div className="rounded-md border border-un1t-border bg-un1t-surface px-3 py-2 text-xs text-un1t-subtle space-y-0.5">
+          <div>
+            Connected to <span className="text-un1t-text font-medium">{initial.tenantName}</span>
+          </div>
+          {initial.connectedAt && (
+            <div>Linked {new Date(initial.connectedAt).toLocaleDateString()}{initial.lastRefreshedAt ? ` · refreshed ${new Date(initial.lastRefreshedAt).toLocaleDateString()}` : ''}</div>
+          )}
+          {initial.status === 'error' && initial.message && (
+            <div className="text-red-700">{initial.message}</div>
+          )}
+        </div>
+      ) : (
+        <div className="rounded-md border border-un1t-border bg-un1t-surface px-3 py-2 text-xs text-un1t-subtle">
+          No Xero organisation connected at this location.
+        </div>
+      )}
+
+      <div className="flex items-center justify-between gap-2 pt-2 border-t border-un1t-border/40">
+        {connected ? (
+          <button
+            type="button"
+            onClick={disconnect}
+            disabled={disconnecting}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-un1t-border text-sm text-red-700 hover:bg-red-500/10 disabled:opacity-50"
+          >
+            {disconnecting ? <Loader2 size={12} className="animate-spin" /> : <Unplug size={12} />} Disconnect
+          </button>
+        ) : <span />}
+        <button
+          type="button"
+          onClick={connect}
+          disabled={disconnecting}
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-un1t-text text-un1t-bg text-sm font-semibold hover:bg-un1t-accent disabled:opacity-50"
+        >
+          {connected ? <><RefreshCw size={12} /> Reconnect</> : <><Plug size={12} /> Connect</>}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── WhatsApp connect/disconnect panel (Phase 3) ──
+//
+// The SHARED ConnectWhatsAppCard (Meta Embedded Signup) drives connect,
+// verbatim — same GET/POST …/whatsapp/embedded-signup flow the tab uses.
+// Below it, each already-connected number gets a Disconnect button that calls
+// the SAME DELETE …/whatsapp/numbers/[numberId] the tab's remove() calls, with
+// the tab's exact confirm() copy + semantics: it targets ONLY that number's
+// id, never reactivates anything, and never touches a different number. The
+// numbers list is kept in local state (seeded from the assembled hub row) so a
+// per-number disconnect updates the panel without re-plumbing the drawer's
+// `initial`; onChanged still re-grades the hub card behind the drawer. The
+// full numbers UI (add/edit/default/token) stays on the "Manage numbers"
+// deep-link — WhatsApp is the LIVE customer channel, so this panel does the
+// two safe operations only.
+function WhatsAppPanel({ locationId, locationName, initial, onChanged }) {
+  const [numbers, setNumbers] = useState(() => (Array.isArray(initial?.numbers) ? initial.numbers : []))
+  const [busyId, setBusyId] = useState(null)
+  const [error, setError] = useState(null)
+
+  async function disconnectNumber(number) {
+    // The tab's EXACT confirm copy + fallback semantics — unchanged.
+    if (!confirm(`Remove "${number.label}"? Any sends to / from this number will fall back to the location's other configured number, or the env-var default.`)) return
+    setBusyId(number.id); setError(null)
+    try {
+      const res = await fetch(`/api/locations/${locationId}/whatsapp/numbers/${number.id}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || j.success === false) {
+        setError(j.error || `Disconnect failed (${res.status})`)
+        setBusyId(null)
+        return
+      }
+      // Drop just this number from the local list; re-grade the hub behind us.
+      setNumbers((prev) => prev.filter((n) => n.id !== number.id))
+      setBusyId(null)
+      onChanged?.()
+    } catch (e) {
+      setError(e.message || 'Network error')
+      setBusyId(null)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-un1t-subtle">
+        WhatsApp Cloud API. Connect onboards a number through Meta&apos;s guided signup; each
+        connected number can be disconnected below (it falls back to another number or the
+        env-var default). Editing tokens, labels and the default number stays on Manage numbers.
+      </p>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/30 text-red-700 text-xs rounded-md p-2 flex items-start gap-2">
+          <AlertCircle size={12} className="mt-0.5" /> {error}
+        </div>
+      )}
+
+      {numbers.length > 0 && (
+        <div className="rounded-md border border-un1t-border divide-y divide-un1t-border">
+          {numbers.map((n) => (
+            <div key={n.id} className="flex items-center gap-3 px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm text-un1t-text truncate">{n.label}</div>
+                <div className="text-[11px] text-un1t-subtle truncate">
+                  {n.displayPhone || n.id}
+                  {n.isDefault ? ' · default' : ''}
+                  {n.source === 'coexistence' ? ' · coexistence' : ''}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => disconnectNumber(n)}
+                disabled={busyId === n.id}
+                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-un1t-border text-xs text-red-700 hover:bg-red-500/10 disabled:opacity-50"
+              >
+                {busyId === n.id ? <Loader2 size={12} className="animate-spin" /> : <Unplug size={12} />} Disconnect
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* The shared Embedded Signup card — identical to the WhatsApp tab. The
+          hub page is owner+/master gated and the route re-checks master-or-
+          owner, so connecting is permitted for every hub viewer. */}
+      <ConnectWhatsAppCard
+        location={{ id: locationId, name: locationName }}
+        canEdit
+        onConnected={onChanged}
+      />
     </div>
   )
 }
