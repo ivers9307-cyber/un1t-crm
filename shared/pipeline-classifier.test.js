@@ -31,7 +31,7 @@ describe('funnel taxonomy constants', () => {
   it('off-funnel includes pack_member as a first-class group (FUNNEL.3)', () => {
     expect(OFF_FUNNEL_STAGE_SLUGS).toContain('pack_member')
     expect(OFF_FUNNEL_STAGE_SLUGS).toEqual([
-      'member', 'pack_member', 'classpass', 'cold_lead', 'dormant',
+      'member', 'pack_member', 'classpass', 'gympass', 'cold_lead', 'dormant',
     ])
   })
 
@@ -62,13 +62,14 @@ describe('splitStagesByFunnel', () => {
       stage('converted', { order: 5 }),
       stage('member', { dormant: true, order: 6 }),
       stage('new_lead', { order: 1 }),
-      stage('dormant', { dormant: true, order: 10 }),
+      stage('dormant', { dormant: true, order: 11 }),
       stage('first_class', { order: 2 }),
       stage('pack_member', { dormant: true, order: 7 }),
       stage('trial_done', { order: 4 }),
       stage('second_class', { order: 3 }),
       stage('classpass', { dormant: true, order: 8 }),
-      stage('cold_lead', { dormant: true, order: 9 }),
+      stage('gympass', { dormant: true, order: 9 }),
+      stage('cold_lead', { dormant: true, order: 10 }),
     ]
     const { funnel, offFunnel } = splitStagesByFunnel(rows)
     expect(funnel.map((s) => s.slug)).toEqual([...FUNNEL_STAGE_SLUGS])

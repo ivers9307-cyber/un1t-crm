@@ -23,6 +23,7 @@ const STAGE_PILL = {
   member:       'bg-slate-500/10 text-slate-700',
   pack_member:  'bg-cyan-500/10 text-cyan-700',
   classpass:    'bg-purple-500/10 text-purple-700',
+  gympass:      'bg-orange-500/10 text-orange-700',
   cold_lead:    'bg-zinc-500/10 text-zinc-700',
   dormant:      'bg-slate-500/10 text-slate-700',
 }

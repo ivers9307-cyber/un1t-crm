@@ -24,6 +24,7 @@ const statusColors = {
   member:       'border-l-slate-500',
   pack_member:  'border-l-cyan-600',
   classpass:    'border-l-purple-500',
+  gympass:      'border-l-orange-500',
   cold_lead:    'border-l-zinc-600',
   dormant:      'border-l-gray-500',
 }

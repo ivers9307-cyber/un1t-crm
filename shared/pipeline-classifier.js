@@ -19,6 +19,10 @@
 //                  in the funnel. Membership outranks it. (off funnel)
 //   classpass    — classpass_payg, always (off funnel — distinct motion;
 //                  the ClassPass PLATFORM, not our Class Packs)
+//   gympass      — has a synced gympass_member_id (metadata.gympass) and
+//                  isn't a paying member (off funnel — GYMPASS.2). Training
+//                  via Gympass/Wellhub; can't be sold a membership, so out
+//                  of the sellable funnel. A real membership outranks it.
 //   cold_lead    — operator marked "not worth selling to / not interested"
 //                  (FUNNEL.4, contacts.pipeline_dismissed_at). Off funnel,
 //                  auto-revoked when they attend a class after the
@@ -64,6 +68,7 @@ export const OFF_FUNNEL_STAGE_SLUGS = Object.freeze([
   'member',
   'pack_member',
   'classpass',
+  'gympass',
   'cold_lead',
   'dormant',
 ])
@@ -166,6 +171,16 @@ export function classifyContact(contact, now = Date.now()) {
     }
     return 'member'
   }
+
+  // ── Gympass: training via the Gympass/Wellhub platform ─────────
+  // GYMPASS.2 (Richard, 2026-07-20): a Gympass user can't be sold a
+  // membership, so they're pulled OUT of the sellable funnel into their
+  // own off-funnel pile — keyed off the synced gympass_member_id
+  // (metadata.gympass.id, GYMPASS.1). Checked AFTER member/converted so a
+  // Gympass user who buys a real membership graduates to the member
+  // category (the Glofox profile is shared); checked BEFORE the funnel
+  // rules so an attending Gympass lead never shows as a hot trial prospect.
+  if (contact.gympass_member_id) return 'gympass'
 
   // ── ClassPass: excluded from the funnel entirely ───────────────
   if (status === 'classpass_payg') return 'classpass'

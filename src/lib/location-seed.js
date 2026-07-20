@@ -26,6 +26,9 @@ const STAGE_DETAILS = Object.freeze({
   classpass: { name: 'ClassPass', display_order: 308, color: '#A855F7' },
   dormant: { name: 'Dormant', display_order: 309, color: '#6B7280' },
   cold_lead: { name: 'Cold', display_order: 310, color: '#52525B' },
+  // GYMPASS.2 (mig 430) — Gympass/Wellhub platform users, off-funnel.
+  // Appended at 311 (unique order); orange to distinguish from ClassPass.
+  gympass: { name: 'Gympass', display_order: 311, color: '#F97316' },
 })
 
 export function defaultPipelineStages() {
