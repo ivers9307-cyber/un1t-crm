@@ -3624,7 +3624,7 @@ registry.registerPath({
 })
 
 // ============================================================================
-// Integrations hub (INTEG-B2) — master-only card states
+// Integrations hub (INTEG-B2 / B4) — owner+/master card states
 // ============================================================================
 
 registry.registerPath({
@@ -3632,9 +3632,9 @@ registry.registerPath({
   path: '/api/integrations/hub',
   tags: ['Settings'],
   security: [{ CookieAuth: [] }],
-  summary: 'Integrations hub card states (master-only)',
+  summary: 'Integrations hub card states (owner+/master)',
   description:
-    'Assembled connection state for every location, powering /settings/integrations-hub: ' +
+    'Assembled connection state for the caller\'s locations, powering /settings/integrations-hub: ' +
     'channel_connections registry rows (glofox/unifi/sensibo/thinq/twilio_sender/bca/instagram, ' +
     'with legacy location-field fallback), xero_connections, whatsapp_numbers (read-only), ' +
     'ad_accounts presence, the customer-agent live signal, and a derived "needs attention" list ' +
@@ -3645,14 +3645,16 @@ registry.registerPath({
     'per-meter MTD usage vs allowance with overage cents drawn from the wallet ledger; ' +
     'unpinned locations (all of them today) return { locationId, plan: null }. ' +
     'Secrets are never returned — no token columns are selected. ' +
-    'Master-only (profileRole) while the hub is behind the phase-B rollout flag.',
+    'B4 access: master sees every location; owner/org-admin (SAAS-4) sees ONLY their own ' +
+    'organisation(s)\' locations (payload hard-scoped via getOwnerOrganizationIds → ' +
+    '.in(organization_id)); managers/head_coach/staff get 403.',
   responses: {
     200: {
       description: 'Hub payload — per-provider card states keyed by location, the billing strip, plus the attention strip',
       content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('IntegrationsHubResponse') } },
     },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Not a master account', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not an owner/org-admin/master account', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
