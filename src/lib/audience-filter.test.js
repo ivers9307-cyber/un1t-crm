@@ -110,6 +110,13 @@ describe('applyAudienceFilter', () => {
     expect(q.calls).toEqual([['is', 'glofox_member_id', null]])
   })
 
+  // GYMPASS.1 — the Gympass audience segment: gympass_member_id not_null.
+  it('builds the Gympass segment (gympass_member_id not_null)', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'gympass_member_id', op: 'not_null' }] })
+    expect(q.calls).toEqual([['not', 'gympass_member_id', 'is', null]])
+    expect(AUDIENCE_FIELDS.gympass_member_id).toBeDefined()
+  })
+
   // GLOFOX2.1.8 — glofox_membership_status is the synced Glofox-side
   // Client Status. Operator filters on this to build sequences
   // targeting Credit Members, ClassPass users, ex-members etc.

@@ -730,6 +730,19 @@ export function extractMemberProfile(member) {
     ? ecRaw : null
   const gender = typeof m.gender === 'string' && m.gender && m.gender !== 'not_specified'
     ? m.gender : null
+  // GYMPASS.1 — Gympass (Wellhub) stamps its own block on the member
+  // profile: member.metadata.gympass = { id }. It's the reliable positive
+  // marker for a Gympass user. (ClassPass uses metadata.classpass +
+  // origin='classpass'; Gympass's own `origin` only appears for payg
+  // drop-ins and is ABSENT for a full member who ALSO uses Gympass — so we
+  // key off metadata.gympass.id, which is present in both cases.) Coerced
+  // to a trimmed string; null when the block is absent.
+  const gympassMeta = m.metadata && typeof m.metadata === 'object'
+    && m.metadata.gympass && typeof m.metadata.gympass === 'object'
+    ? m.metadata.gympass : null
+  const gympassMemberId = gympassMeta && gympassMeta.id != null
+    ? (String(gympassMeta.id).trim() || null)
+    : null
 
   return {
     glofox_membership_expiry: unixToIso(mem.expiry_date),
@@ -744,6 +757,7 @@ export function extractMemberProfile(member) {
     glofox_roaming_enabled: typeof mem.roaming_enabled === 'boolean' ? mem.roaming_enabled : null,
     glofox_account_active: typeof m.active === 'boolean' ? m.active : null,
     glofox_source: typeof m.source === 'string' && m.source ? m.source : null,
+    gympass_member_id: gympassMemberId,
   }
 }
 
@@ -1139,7 +1153,7 @@ export async function findExistingContact(db, locationId, mapped) {
   // set: the funnel classifier counts attended classes from recent_bookings
   // and gates the Converted column on converted_at, and a LIST/skipBookings
   // sync doesn't recompute either.
-  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, created_at, glofox_member_id, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, lead_source, last_booked_at, last_attended_at, last_payment_at, total_bookings_30d, total_attended_30d, total_attended_7d, total_noshow_30d, trial_credits_remaining, recent_bookings, converted_at, pack_customer_at, pipeline_dismissed_at'
+  const SELECT_COLS = 'id, email, first_name, last_name, phone, dob, joined_at, created_at, glofox_member_id, gympass_member_id, glofox_membership_status, glofox_membership_state, glofox_membership_expiry, lead_source, last_booked_at, last_attended_at, last_payment_at, total_bookings_30d, total_attended_30d, total_attended_7d, total_noshow_30d, trial_credits_remaining, recent_bookings, converted_at, pack_customer_at, pipeline_dismissed_at'
   const queries = []
   queries.push(
     db.from('contacts')
@@ -1500,6 +1514,7 @@ const GLOFOX_DETAIL_KEYS = [
   'glofox_membership_expiry', 'glofox_membership_price_cents', 'glofox_billing_interval',
   'glofox_payment_method', 'glofox_account_active', 'glofox_source', 'glofox_image_url',
   'gender', 'emergency_contact', 'glofox_signup_answers', 'glofox_roaming_enabled',
+  'gympass_member_id',
 ]
 
 // Detail keys the MEMBER owns via the champ-app profile wizard
