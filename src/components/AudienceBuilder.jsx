@@ -84,6 +84,7 @@ const FIELD_OPTIONS = [
   { value: 'last_payment_at',            label: 'Last Payment',            type: 'date' },
   { value: 'last_invoice_at',            label: 'Last Invoice (any status)', type: 'date' },
   { value: 'glofox_member_id',      label: 'Has Glofox ID',         type: 'exists' },
+  { value: 'gympass_member_id',     label: 'Gympass Member',        type: 'exists' },
   { value: 'phone',                 label: 'Has Phone',             type: 'exists' },
 ]
 

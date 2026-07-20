@@ -953,6 +953,43 @@ describe('extractMemberProfile', () => {
     })
     expect(out.glofox_billing_interval).toBe('1 month')
   })
+
+  // GYMPASS.1 — capture the Gympass linkage from member.metadata.gympass.
+  // Payloads mirror the two live-probed Gympass members (2026-07-20).
+  it('captures gympass_member_id from metadata.gympass (payg drop-in)', () => {
+    // Tommy Faherty: payg lead, origin=gympass, metadata.gympass.id present.
+    const out = extractMemberProfile({
+      origin: 'gympass',
+      source: 'UNKNOWN',
+      membership: { type: 'payg' },
+      metadata: { gympass: { id: '3601127012482' } },
+    })
+    expect(out.gympass_member_id).toBe('3601127012482')
+  })
+
+  it('captures gympass_member_id for a FULL member who also uses Gympass (no origin=gympass)', () => {
+    // Lucy Thornton: a paying €99 member with NO origin field, but a
+    // numeric metadata.gympass.id — coerced to a string. This is the case
+    // an origin-only check would miss.
+    const out = extractMemberProfile({
+      source: 'WEBPORTAL',
+      membership: { type: 'time', subscription: { price: 99, interval: 'month', interval_count: 1 } },
+      metadata: { gympass: { id: 3602390808954 } },
+    })
+    expect(out.gympass_member_id).toBe('3602390808954')
+  })
+
+  it('leaves gympass_member_id null for ClassPass / non-aggregator / empty members', () => {
+    // ClassPass member — metadata.classpass, NOT metadata.gympass.
+    expect(extractMemberProfile({
+      origin: 'classpass', membership: { type: 'payg' }, metadata: { classpass: { _id: '49722810' } },
+    }).gympass_member_id).toBeNull()
+    // Ordinary member with no aggregator metadata.
+    expect(extractMemberProfile({ membership: { type: 'time' } }).gympass_member_id).toBeNull()
+    // Malformed gympass block (no id) and empty input.
+    expect(extractMemberProfile({ metadata: { gympass: {} } }).gympass_member_id).toBeNull()
+    expect(extractMemberProfile(null).gympass_member_id).toBeNull()
+  })
 })
 
 // GLOFOX2.1.13 — joined_at parsing for tenure audiences.

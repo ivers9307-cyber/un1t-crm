@@ -82,6 +82,12 @@ export const AUDIENCE_FIELDS = Object.freeze({
   // other text fields use are a PostgREST 400 on an array column.
   tags:                      { type: 'text',    array: true, ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
   glofox_member_id:          { type: 'text',    ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
+  // GYMPASS.1 (mig 429) — Gympass (Wellhub) member id, lifted from the
+  // Glofox profile's metadata.gympass block by the member sync. Presence
+  // (not_null) = an active Gympass user, so operators can build a Gympass
+  // audience segment ("Gympass Member exists"). ClassPass stays targetable
+  // via glofox_membership_status = classpass_payg.
+  gympass_member_id:         { type: 'text',    ops: ['eq', 'neq', 'is_null', 'is_not_null', 'not_null'] },
 
   // Contact identifiers (filtering only — never returned by these queries)
   name:                      { type: 'text',    ops: ['eq', 'neq', 'contains', 'not_contains', 'is_null', 'is_not_null', 'not_null'] },
