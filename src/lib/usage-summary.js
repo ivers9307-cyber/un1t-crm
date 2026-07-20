@@ -51,7 +51,7 @@ export async function getOrgUsageSummary(db, orgId) {
   const [{ data: settings }, { data: aiSpend }, { data: emailSends }, rollups] =
     await Promise.all([
       db.from('org_settings')
-        .select('ai_hard_cap_cents, email_hard_cap_sends, ai_cap_notice_month, email_cap_notice_month')
+        .select('ai_hard_cap_cents, email_hard_cap_sends, ops_alert_emails, ai_cap_notice_month, email_cap_notice_month')
         .eq('organization_id', orgId)
         .maybeSingle(),
       db.rpc('org_ai_spend_month_cents', { p_org: orgId, p_month_start: monthStart }),
@@ -70,6 +70,7 @@ export async function getOrgUsageSummary(db, orgId) {
     caps: {
       ai_hard_cap_cents: settings?.ai_hard_cap_cents ?? null,
       email_hard_cap_sends: settings?.email_hard_cap_sends ?? null,
+      ops_alert_emails: settings?.ops_alert_emails ?? null,
     },
     meters,
     by_location: byLocation,
