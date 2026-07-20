@@ -9,6 +9,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { getEmailCapStatus } from '@/lib/usage-caps'
+import { checkSpend } from '@/lib/wallet-enforcement'
 
 export const dynamic = 'force-dynamic'
 
@@ -52,6 +53,23 @@ export async function POST(_request, props) {
       code: 'email_hard_cap',
     }, { status: 422 })
   }
+
+  // INTEG-C3 — per-LOCATION prepaid wallet gate, beside (composing
+  // with, never replacing) the per-ORG hard cap above: a tier-pinned
+  // location whose monthly email allowance is used up AND whose wallet
+  // is empty pauses marketing starts. Unpinned locations (every UN1T
+  // location today) answer 'unpinned' and behave exactly as before.
+  // Fail-open on any error — a billing bug must never block a send.
+  try {
+    const spend = await checkSpend(db, campaign.location_id, 'email_send', 'marketing')
+    if (!spend.allow) {
+      return NextResponse.json({
+        success: false,
+        error: 'Monthly email allowance is used up and the prepaid wallet is empty — marketing sends are paused. Top up the wallet to send this campaign.',
+        code: 'wallet_empty',
+      }, { status: 422 })
+    }
+  } catch { /* fail open — checkSpend already never throws */ }
 
   // Flip to 'queued' — the run-campaigns cron will pick it up on
   // its next tick (typically within 60s) and start the populate

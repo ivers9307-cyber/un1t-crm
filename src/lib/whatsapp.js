@@ -6,6 +6,7 @@ import {
   rollingHeadroom, selectDripRecipients, dripOutcome,
 } from './whatsapp-drip.js'
 import { getSendBudget, blastBudgetBlockError, effectiveTickHeadroom } from './whatsapp-budget.js'
+import { checkSpend } from './wallet-enforcement.js'
 import { sliceBlastChunk } from './whatsapp-schedule.js'
 import { getLocationFrequencyCap, isFrequencyCapped, stampMarketingTouch } from './frequency-cap.js'
 import { getLocationBranding } from './location-branding'
@@ -989,6 +990,26 @@ export async function sendBroadcast(broadcastId, { force = false, maxRecipients 
   const qualityBlock = broadcastQualityBlockError(broadcastConfig.qualityRating)
   if (qualityBlock && !force) throw new Error(qualityBlock)
 
+  // INTEG-C3 — per-location prepaid wallet gate (composes with, never
+  // replaces, the Meta tier budget below — both apply): a tier-pinned
+  // location whose monthly WhatsApp allowance is used up AND whose
+  // wallet is empty pauses marketing blasts. Checked BEFORE the status
+  // flip so a refusal leaves the broadcast in its entry state (same
+  // posture as the quality gate); a scheduled blast's refusal is
+  // caught by the cron, which pushes the managers. Unpinned locations
+  // answer 'unpinned' → byte-identical old behaviour. Deliberately NOT
+  // force-bypassable and FAIL-OPEN on any error (checkSpend never
+  // throws; the try/catch is belt-and-braces per the C3 spec).
+  let walletBlock = null
+  try {
+    const spend = await checkSpend(db, broadcast.location_id, 'wa_template_send', 'marketing')
+    if (!spend.allow) {
+      walletBlock = 'Monthly WhatsApp allowance is used up and the prepaid wallet is empty — marketing sends are paused. ' +
+        'Top up the wallet, then press Send again to deliver this broadcast.'
+    }
+  } catch { /* fail open */ }
+  if (walletBlock) throw new Error(walletBlock)
+
   // Compare-and-swap the draft→sending flip so two concurrent clicks can't
   // both start a pass — only the request that actually flips it proceeds.
   // A broadcast already 'sending' is a legitimate resume (the per-recipient
@@ -1368,6 +1389,17 @@ export async function sendDripChunk(broadcastId, { perTickMax = PER_TICK_MAX } =
   const budget = await getSendBudget(db, { locationId: broadcast.location_id, tier: config.messagingLimitTier })
   const headroom = effectiveTickHeadroom(capHeadroom, budget)
   if (headroom <= 0) return { status: 'sending', skipped: 'no_tier_headroom', headroom: 0, sent: 0, failed: 0 }
+
+  // INTEG-C3 — per-location prepaid wallet gate (composes with the
+  // per-broadcast daily_cap and Meta tier budget above — all apply):
+  // allowance exhausted + wallet empty parks THIS tick; the drip stays
+  // 'sending' and a later tick re-checks, so a top-up resumes it with
+  // no operator action (the no_headroom posture). Unpinned locations
+  // answer 'unpinned' → byte-identical old behaviour. Fail-open.
+  try {
+    const spend = await checkSpend(db, broadcast.location_id, 'wa_template_send', 'marketing')
+    if (!spend.allow) return { status: 'sending', skipped: 'wallet_empty', sent: 0, failed: 0 }
+  } catch { /* fail open */ }
 
   // Eligible audience (paginated) minus already-processed, capped to this tick.
   const audience = await fetchAllWhatsAppAudience(db, broadcast.audience_filter, broadcast.location_id)

@@ -44,6 +44,7 @@ import { EVENT_TOOLS, EVENT_TOOL_NAMES, executeEventTool } from './event-tools'
 import { CARD_TOOLS, CARD_TOOL_NAMES, executeCardTool } from './card-tools'
 import { anthropicMessages } from '@/lib/anthropic'
 import { getAiCapStatus } from '@/lib/usage-caps'
+import { checkSpend } from '@/lib/wallet-enforcement'
 
 export const AGENT_MODEL = 'claude-sonnet-4-6'
 
@@ -307,6 +308,31 @@ async function runChannelAgentInner(db, adapter, ctx) {
       },
     })
   }
+
+  // INTEG-C3 — per-LOCATION prepaid wallet gate, beside (composing
+  // with, never replacing) the per-ORG hard cap above: a tier-pinned
+  // location whose monthly AI allowance is used up AND whose wallet is
+  // empty soft-pauses Mia. Same shape as ai_cap — the check runs at
+  // turn-START, so a turn already in flight always FINISHES its reply
+  // before the next inbound hits this pause; softHandoff keeps the
+  // agent armed (a top-up re-engages it on the next inbound) and its
+  // debounce keeps a message burst to ONE holding message. Unpinned
+  // locations answer 'unpinned' → byte-identical old behaviour.
+  // Fail-open on any error (checkSpend never throws; belt-and-braces).
+  try {
+    const walletSpend = await checkSpend(db, locationId, 'ai_message', 'ai')
+    if (!walletSpend.allow) {
+      return await softHandoff(db, adapter, {
+        conversationId, locationId, recipient, contactId, connection, settings,
+        lastReplyAt: conv?.agent_last_reply_at,
+        reason: 'wallet_empty',
+        notify: {
+          title: `${adapter.label} · agent paused (wallet empty)`,
+          body: 'The location\'s monthly AI allowance is used up and the prepaid wallet is empty. The customer got the holding message — needs a human. Top up the wallet to resume Mia.',
+        },
+      })
+    }
+  } catch { /* fail open — never let billing silence Mia */ }
 
   // Concurrency claim — stop two near-simultaneous inbound messages from
   // both running a turn on this thread (double reply / double spend /

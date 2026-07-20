@@ -6,6 +6,7 @@
 
 import { toE164Ireland } from '@/lib/twilio'
 import { sendTemplateMessage, getOrCreateConversation } from '@/lib/whatsapp'
+import { logTransactionalWalletState } from '@/lib/wallet-enforcement'
 import { logWarn } from '@/lib/log'
 
 // Live APPROVED template names (single source of truth — keep in sync with the
@@ -34,6 +35,11 @@ export async function maybeSendBookingWhatsappConfirm({ db, locationId, contact,
       type: 'body',
       parameters: bodyParams.map((v) => ({ type: 'text', text: (v == null || v === '') ? ' ' : String(v) })),
     }]
+
+    // INTEG-C3 — booking confirmations are TRANSACTIONAL: never blocked
+    // by billing, log-only (loud at/below the −€10 grace floor).
+    // Fire-and-forget; the helper never rejects.
+    logTransactionalWalletState(db, locationId, 'wa_template_send')
 
     const result = await sendTemplateMessage(waPhone, template.name, template.language || 'en', components, { locationId })
 

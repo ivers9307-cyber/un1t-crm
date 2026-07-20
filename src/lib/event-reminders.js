@@ -24,6 +24,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { sendTransactionalEmail, applyMergeTags } from '@/lib/postmark'
 import { sendLocationSms, TwilioError } from '@/lib/twilio'
+import { logTransactionalWalletState } from '@/lib/wallet-enforcement'
 import { logWarn } from '@/lib/log'
 import { fmtBookingTime } from '@/lib/booking-confirmations'
 import { overlayConnections } from '@/lib/connection-registry'
@@ -123,6 +124,12 @@ export async function runEventReminderSends() {
       emailSubject: reminder.email_subject,
       smsBody: reminder.sms_body,
     }
+
+    // INTEG-C3 — reminders are TRANSACTIONAL: never blocked by billing,
+    // log-only (loud at/below the −€10 grace floor). Once per reminder
+    // batch, not per booking; fire-and-forget, never rejects, and the
+    // enforcement lib's 30s state cache keeps repeat calls free.
+    logTransactionalWalletState(db, et.location_id, 'email_send')
 
     for (const booking of bookings) {
       const bookingMs = new Date(`${booking.booking_date}T${booking.start_time}Z`).getTime() // eslint-disable-line guardrails/no-zulu-template-date -- reminder window-match against now-based bounds; left by the #650 verification, reminder-timing reviewed separately
