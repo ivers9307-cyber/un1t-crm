@@ -4,7 +4,7 @@ import { hasPermission } from '@/lib/permissions'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, UserCog, LayoutGrid, Trophy, Cable, ChevronRight, Bell, KeyRound, MessagesSquare, Bot, Download, Globe, Activity, Store, Gauge, CreditCard, AtSign } from 'lucide-react'
+import { Users, MapPin, Shield, UserCog, LayoutGrid, Trophy, Cable, ChevronRight, Bell, KeyRound, MessagesSquare, Bot, Download, Globe, Activity, Store, Gauge, CreditCard, AtSign, Plug } from 'lucide-react'
 
 // SETTINGS.3/.4 — reorganized this page:
 //   - Master tools moved to TOP (was mid-page)
@@ -271,6 +271,38 @@ export default async function SettingsPage() {
           </Link>
         </div>
       </div>
+
+      {/* Integrations (INTEG-B4) — the Integrations hub, now the primary
+          integrations surface for owners. Owner+/master only (managers/
+          staff keep read-only per-location tabs; the hub page + API carry
+          their own owner+/master server gate and org-scope the payload
+          regardless). Every card in the hub deep-links back into the
+          per-location Integrations tab for connect/disconnect. */}
+      {(user.role === 'owner' || user.role === 'master') && (
+        <div className="mb-10">
+          <div className="flex items-center gap-2 mb-4">
+            <Plug size={18} className="text-un1t-subtle" />
+            <h3 className="text-lg font-semibold">Integrations</h3>
+          </div>
+          <div className="space-y-2">
+            <Link
+              href="/settings/integrations-hub"
+              className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <Plug size={16} className="text-un1t-subtle shrink-0" />
+                <div>
+                  <div className="text-un1t-text">Integrations hub</div>
+                  <div className="text-xs text-un1t-subtle mt-0.5">
+                    Every tool your gym connects to — Glofox, Xero, WhatsApp, Instagram, Meta Ads — with health at a glance across your locations. Connect, test, and disconnect from one place.
+                  </div>
+                </div>
+              </div>
+              <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text shrink-0" />
+            </Link>
+          </div>
+        </div>
+      )}
 
       {/* Billing (INTEG-D1) — the tenant Billing & usage page. Owner/
           master only (billing is an ownership surface; the page carries

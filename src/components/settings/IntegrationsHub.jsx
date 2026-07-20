@@ -240,7 +240,7 @@ const DOT = {
   info: 'bg-blue-600',
 }
 
-export default function IntegrationsHub({ data }) {
+export default function IntegrationsHub({ data, isMaster = false }) {
   const [scope, setScope] = useState('all')
   const locations = data.locations || []
   const nameById = Object.fromEntries(locations.map((l) => [l.id, l.name]))
@@ -618,7 +618,14 @@ export default function IntegrationsHub({ data }) {
         </HubCard>
       </div>
 
-      {/* ══ Tier 3 — Master view (hidden from tenants) ══ */}
+      {/* ══ Tier 3 — Master view (hidden from tenants) ══
+          B4: the hub is now owner-visible, so this master-only tier —
+          UN1T studio customisation (UniFi/Climate) + org-gated/excluded
+          cards — is rendered ONLY for masters. Without this gate an
+          owner would see a section literally headed "Only you see this
+          section". Data is org-scoped upstream regardless. */}
+      {isMaster && (
+      <>
       <SectionHead
         title="Master view · hidden from tenants"
         hidden
@@ -710,10 +717,12 @@ export default function IntegrationsHub({ data }) {
           </p>
         </HubCard>
       </div>
+      </>
+      )}
 
       <p className="mt-10 pt-4 border-t border-un1t-border text-xs text-un1t-muted max-w-3xl">
-        Master-only preview (phase B rollout flag): operators keep the per-location Integrations tabs — every
-        action here deep-links into them. The plan &amp; wallet strip is read-only (plan management lands with
+        Every action here deep-links into the per-location Integrations tab, where connecting and
+        disconnecting happens. The plan &amp; wallet strip is read-only (plan management lands with
         its own page); the email-domain wizard ships in a later phase.
       </p>
     </div>

@@ -108,6 +108,21 @@ export default async function EditLocationPage(props) {
     ? requestedSection
     : (searchParams.tab ? 'integrations' : 'details')
 
+  // INTEG-B4 — the Integrations hub (/settings/integrations-hub) is now
+  // the primary integrations surface for owner+/master. Hand the GENERIC
+  // per-location Integrations landing over to it: the bare Integrations
+  // tab with NO provider selected (?section=integrations and no ?tab=)
+  // redirects. A provider-specific deep-link — ?tab=<providerKey>, incl.
+  // ?section=integrations&tab=xero — is the hub's OWN connect/disconnect
+  // target and the only management surface, so it MUST keep rendering the
+  // Edit-Location Integrations tab exactly as before and never redirects.
+  // The page is already master/owner-only (gate above), so this only ever
+  // fires for the hub's audience.
+  if (active === 'integrations' && !searchParams.tab
+    && (user.role === 'master' || user.role === 'owner')) {
+    redirect('/settings/integrations-hub')
+  }
+
   return (
     <div className="p-8 max-w-3xl">
       <h2 className="text-2xl font-bold mb-1">Edit Location</h2>
