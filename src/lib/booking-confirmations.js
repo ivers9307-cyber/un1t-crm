@@ -17,6 +17,7 @@
 
 import { sendTransactionalEmail, applyMergeTags } from './postmark'
 import { sendLocationSms, TwilioError } from './twilio'
+import { logTransactionalWalletState } from './wallet-enforcement'
 import { logWarn } from './log'
 import { overlayConnections } from '@/lib/connection-registry'
 
@@ -119,6 +120,12 @@ export async function sendBookingConfirmation(db, bookingId) {
     emailSubject: ev.confirmation_email_subject,
     smsBody: ev.confirmation_sms_body,
   }
+
+  // INTEG-C3 — transactional sends are NEVER blocked by billing: this
+  // only logs (loudly at/below the −€10 grace floor) so ops can see a
+  // tier-pinned location confirming bookings on credit. Fire-and-forget
+  // — the helper swallows everything and the promise never rejects.
+  logTransactionalWalletState(db, ev.location_id, 'email_send')
 
   for (const channel of channels) {
     try {
