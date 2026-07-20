@@ -50,47 +50,55 @@ function AccountRow({ account, onSetPrimary, onUnlink, busy, error }) {
     : null
 
   return (
-    <div className="flex items-center gap-3 py-2.5 border-b border-un1t-border/50 last:border-b-0">
-      {/* Avatar */}
-      <div
-        aria-hidden="true"
-        className="flex-none h-8 w-8 rounded-full bg-un1t-text/[0.06] flex items-center justify-center text-xs font-semibold text-un1t-text"
-      >
-        {abbr}
-      </div>
+    // Row wraps: on a wide card the actions sit to the right of the
+    // identity; in the narrow 280px contact rail they drop onto their
+    // own line beneath it instead of crushing the meta text. The
+    // identity keeps a min-width floor so it never collapses to a
+    // single word-per-line column (the old bug).
+    <div className="flex flex-wrap items-start gap-x-3 gap-y-2 py-2.5 border-b border-un1t-border/50 last:border-b-0">
+      {/* Avatar + identity — grows to fill, never shrinks below ~11rem */}
+      <div className="flex items-start gap-3 min-w-[11rem] flex-1">
+        {/* Avatar */}
+        <div
+          aria-hidden="true"
+          className="flex-none h-8 w-8 rounded-full bg-un1t-text/[0.06] flex items-center justify-center text-xs font-semibold text-un1t-text"
+        >
+          {abbr}
+        </div>
 
-      {/* Name + meta */}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-medium text-un1t-text truncate">{name || '—'}</span>
-          {isPrimary && (
-            <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-un1t-text/[0.08] text-un1t-text">
-              Primary
-            </span>
+        {/* Name + meta */}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium text-un1t-text truncate">{name || '—'}</span>
+            {isPrimary && (
+              <span className="text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-un1t-text/[0.08] text-un1t-text">
+                Primary
+              </span>
+            )}
+            {status && (
+              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${toneCls}`}>
+                {labelText}
+              </span>
+            )}
+          </div>
+          {glofoxMemberId && (
+            <p className="text-[11px] text-un1t-muted mt-0.5 break-words">Member #{glofoxMemberId}</p>
           )}
-          {status && (
-            <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${toneCls}`}>
-              {labelText}
-            </span>
+          {/* Per-account activity strip — shows which account carries the visits */}
+          {activityLine && (
+            <p className="text-[11px] text-un1t-muted mt-0.5">{activityLine}</p>
+          )}
+          {error && error.contactId === account.contactId && (
+            <p className="text-[11px] text-red-700 mt-0.5 flex items-center gap-1">
+              <AlertCircle size={10} className="shrink-0" />
+              {error.message}
+            </p>
           )}
         </div>
-        {glofoxMemberId && (
-          <p className="text-[11px] text-un1t-muted mt-0.5">Member #{glofoxMemberId}</p>
-        )}
-        {/* Per-account activity strip — shows which account carries the visits */}
-        {activityLine && (
-          <p className="text-[11px] text-un1t-muted mt-0.5">{activityLine}</p>
-        )}
-        {error && error.contactId === account.contactId && (
-          <p className="text-[11px] text-red-700 mt-0.5 flex items-center gap-1">
-            <AlertCircle size={10} className="shrink-0" />
-            {error.message}
-          </p>
-        )}
       </div>
 
-      {/* Actions */}
-      <div className="flex-none flex items-center gap-1">
+      {/* Actions — right-aligned; wrap beneath the identity when the row is tight */}
+      <div className="flex-none flex items-center gap-1 ml-auto">
         {!isPrimary && (
           <Button
             variant="ghost"
