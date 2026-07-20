@@ -67,6 +67,39 @@ function getSignatureHeader(request) {
   return null
 }
 
+// GLOFOX-REACTIVE-DEBUG (TEMPORARY — remove once the live SERVICE_*
+// payload shape is captured). Persists the raw body of any delivery we
+// return 200 for WITHOUT recording a normal event row (invalid_json or
+// audit_failed), so we can inspect the real Glofox payload our
+// parser/record step is choking on. Strips NUL bytes (Postgres jsonb
+// rejects  — itself a candidate cause of the insert failing) and
+// flags whether they were present. Best-effort; never throws.
+async function captureUnrecordedDelivery(rawBody, signature, contentType, reason) {
+  try {
+    const raw = typeof rawBody === 'string' ? rawBody : String(rawBody ?? '')
+    const db = createServerClient()
+    await db.from('glofox_webhook_events').insert({
+      event_id: null,
+      event_type: 'DEBUG_UNRECORDED',
+      branch_id: null,
+      entity_id: null,
+      contact_email: null,
+      payload: {
+        _debug: true,
+        _reason: reason,
+        _content_type: contentType || null,
+        _had_null_bytes: raw.includes('\u0000'),
+        _raw_len: raw.length,
+        _raw_body: raw.replace(/\u0000/g, '').slice(0, 8000),
+      },
+      signature: signature || null,
+      status: 'debug_unrecorded',
+    })
+  } catch {
+    // diagnostics must never break the webhook
+  }
+}
+
 export async function POST(request) {
   // Read raw body BEFORE parsing — HMAC must compute over the
   // bytes Glofox sent, not a re-stringified copy.
@@ -80,6 +113,7 @@ export async function POST(request) {
   try {
     payload = rawBody ? JSON.parse(rawBody) : {}
   } catch (e) {
+    await captureUnrecordedDelivery(rawBody, signature, request.headers.get('content-type'), 'invalid_json')
     logWarn('glofox-webhook', 'invalid JSON body', { err: e?.message })
     return NextResponse.json({ success: true, status: 'invalid_json' })
   }
@@ -138,6 +172,7 @@ export async function POST(request) {
       .select()
       .single()
     if (error) {
+      await captureUnrecordedDelivery(rawBody, signature, request.headers.get('content-type'), `audit_failed_upsert: ${error.message}`)
       logWarn('glofox-webhook', 'event row upsert failed', { err: error.message, event_id: parsed.eventId })
       return NextResponse.json({ success: true, status: 'audit_failed' })
     }
@@ -161,6 +196,7 @@ export async function POST(request) {
       .select()
       .single()
     if (error) {
+      await captureUnrecordedDelivery(rawBody, signature, request.headers.get('content-type'), `audit_failed_insert: ${error.message}`)
       logWarn('glofox-webhook', 'event row insert failed', { err: error.message })
       return NextResponse.json({ success: true, status: 'audit_failed' })
     }
