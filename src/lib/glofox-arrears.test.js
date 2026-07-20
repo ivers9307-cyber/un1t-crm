@@ -56,6 +56,39 @@ describe('computeArrears', () => {
     expect(out.byMember[0].amountCents).toBe(17900)
   })
 
+  it('AWAITING-AUTH.2 — an in-progress (PENDING) charge is a PENDING candidate, not a PAST_DUE debt', () => {
+    // A PAYG class booking whose card auth is pending (Cian Gormley's case):
+    // Glofox shows "Awaiting authorization". The old blanket 'PAST_DUE' wrongly
+    // marked it as debt; it should backfill as PENDING.
+    const rows = [
+      mkStripe({ invoice_id: 'AW', paid: false, status: 'PENDING', amount: 25, event: 'book_class', user_id: 'u_cian', user_name: 'Cian' }),
+    ]
+    const out = computeArrears(rows, { existingInvoiceIds: new Set() })
+    expect(out.totals.candidates).toBe(1)
+    const c = out.candidates[0]
+    expect(c.status).toBe('PENDING')
+    expect(c.amountCents).toBe(2500)
+    expect(c.glofoxEvent).toBe('book_class')
+  })
+
+  it('a genuinely failed charge stays a PAST_DUE candidate', () => {
+    const rows = [
+      mkStripe({ invoice_id: 'FL', paid: false, status: 'failed', failed_amount: 50, event: 'book_class' }),
+    ]
+    const out = computeArrears(rows, { existingInvoiceIds: new Set() })
+    expect(out.candidates[0].status).toBe('PAST_DUE')
+  })
+
+  it('a pending-then-failed invoice (one id, subscription dunning) is PAST_DUE, not awaiting-auth (AWAITING-AUTH.2)', () => {
+    const rows = [
+      mkStripe({ invoice_id: 'PF', paid: false, status: 'PENDING', amount: 209, event: 'subscription_payment_failed' }),
+      mkStripe({ invoice_id: 'PF', paid: false, status: 'failed', failed_amount: 209, event: 'subscription_payment_failed' }),
+    ]
+    const out = computeArrears(rows, { existingInvoiceIds: new Set() })
+    expect(out.candidates).toHaveLength(1)
+    expect(out.candidates[0].status).toBe('PAST_DUE')
+  })
+
   it('skips an unpaid invoice that is already present in glofox_invoices', () => {
     const rows = [
       mkStripe({ invoice_id: 'R', paid: false, status: 'failed', failed_amount: 179 }),

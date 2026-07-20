@@ -58,6 +58,11 @@ async function fetchOpenPastDue(db, locationId) {
 export async function runArrearsReconcile(db, creds, locationId, opts = {}) {
   const {
     commit = false,
+    // AWAITING-AUTH.2 — the PAST_DUE→PENDING re-status is a one-time historical
+    // correction; it's only WRITTEN when explicitly allowed, so a dry-run can be
+    // reviewed first and the scheduled cron never auto-applies it. Clears
+    // (PAID/FORGIVEN/CANCELLED) are never gated — they run as before.
+    allowRestatus = false,
     nowMs = Date.now(),
     absentAgeDays = 2,
     reportFetcher = fetchPaymentsReport,
@@ -93,27 +98,40 @@ export async function runArrearsReconcile(db, creds, locationId, opts = {}) {
 
   const idx = indexReportByInvoice(details)
   const decisions = reconcileOpenPastDue(pastDueRows, idx, nowMs, { absentAgeDays })
+  // 'clear' removes a row from the owed lists (PAID / FORGIVEN / CANCELLED);
+  // 'restatus' corrects the status in place (PAST_DUE → PENDING awaiting-auth,
+  // AWAITING-AUTH.2). Both are always PROPOSED (so a dry-run shows the full
+  // picture); on commit, clears always write but re-status writes only when
+  // allowRestatus is set.
   const clears = decisions.filter((d) => d.action === 'clear')
+  const restated = decisions.filter((d) => d.action === 'restatus')
+  const proposed = [...clears, ...restated]
 
   const byReason = {}
-  for (const d of clears) byReason[d.reason] = (byReason[d.reason] || 0) + 1
+  for (const d of proposed) byReason[d.reason] = (byReason[d.reason] || 0) + 1
   const summary = {
     ok: true,
     locationId,
     scanned,
     cleared: clears.length,
-    kept: scanned - clears.length,
+    restated: restated.length,
+    restatusApplied: commit && allowRestatus,
+    kept: scanned - proposed.length,
     byReason,
-    sample: clears.slice(0, 20),
+    sample: proposed.slice(0, 20),
     dryRun: !commit,
   }
-  if (!commit || clears.length === 0) return summary
+  if (!commit) return summary
 
-  // Commit: group by (newStatus, reason) so each UPDATE is one status+reason,
-  // and clear in chunks. Records reconciled_at/reason for auditability.
+  // Commit: clears always; the PAST_DUE→PENDING re-status only when allowed.
+  const toWrite = allowRestatus ? proposed : clears
+  if (toWrite.length === 0) return summary
+
+  // Group by (newStatus, reason) so each UPDATE is one status+reason, in chunks.
+  // Records reconciled_at/reason for auditability.
   const nowIso = new Date(nowMs).toISOString()
   const groups = new Map() // `${status}|${reason}` -> ids[]
-  for (const d of clears) {
+  for (const d of toWrite) {
     const key = `${d.newStatus}|${d.reason}`
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key).push(d.id)

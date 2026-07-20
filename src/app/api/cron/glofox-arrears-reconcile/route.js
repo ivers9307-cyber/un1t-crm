@@ -27,6 +27,18 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
   }
 
+  // AWAITING-AUTH.2 — manual controls (the scheduled cron passes neither):
+  //   ?dry=1       — dry-run: report what WOULD change (clears + re-status), no writes.
+  //   ?restatus=1  — also APPLY the PAST_DUE→PENDING awaiting-authorization
+  //                  re-status (default off, so the scheduled run only ever
+  //                  clears settled/forgiven/aged rows as before). Review a
+  //                  dry-run first, then run once with ?restatus=1 to apply.
+  const params = new URL(request.url).searchParams
+  const isTruthy = (v) => v === '1' || v === 'true'
+  const dryRun = isTruthy(params.get('dry'))
+  const allowRestatus = isTruthy(params.get('restatus'))
+  const commit = !dryRun
+
   const db = createServerClient()
 
   const { data: locations, error: locErr } = await db
@@ -46,16 +58,21 @@ export async function GET(request) {
         perLocation.push({ location_id: loc.id, location_name: loc.name, skipped: 'no_glofox_credentials' })
         continue
       }
-      const res = await runArrearsReconcile(db, creds, loc.id, { commit: true })
+      const res = await runArrearsReconcile(db, creds, loc.id, { commit, allowRestatus })
       perLocation.push({
         location_id: loc.id,
         location_name: loc.name,
         ok: true,
+        dry_run: res.dryRun,
         scanned: res.scanned,
         cleared: res.cleared,
+        restated: res.restated ?? 0,
+        restatus_applied: res.restatusApplied ?? false,
         kept: res.kept,
         by_reason: res.byReason,
         written: res.written ?? 0,
+        // On a dry-run, surface the sample of proposed changes for review.
+        ...(res.dryRun ? { sample: res.sample } : {}),
       })
     } catch (e) {
       // One bad location can't stall the rest of the sweep.
@@ -63,7 +80,8 @@ export async function GET(request) {
     }
   }
 
-  await stampHeartbeat('glofox-arrears-reconcile').catch(() => {})
+  // A dry-run isn't a real reconcile — don't reset the staleness clock.
+  if (!dryRun) await stampHeartbeat('glofox-arrears-reconcile').catch(() => {})
 
-  return NextResponse.json({ success: true, locations: perLocation.length, perLocation })
+  return NextResponse.json({ success: true, dry_run: dryRun, restatus_applied: allowRestatus && !dryRun, locations: perLocation.length, perLocation })
 }
