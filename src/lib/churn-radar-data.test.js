@@ -287,6 +287,29 @@ describe('PENDING custom-charge fees — provisional, never counted as owed (OWE
     expect(summary.totalValueCents).toBe(1500)
   })
 
+  it('AWAITING-AUTH.2 — a PENDING charge of ANY type (a class booking) shows in Awaiting authorization, not just custom-charge fees', async () => {
+    // Cian Gormley's case: a PAYG class booking awaiting authorization, stored
+    // PENDING (BOOK_CLASS). The old custom-charge-only filter hid it from the
+    // tab; it must now surface there and never count as owed.
+    const db = makeDb({
+      glofox_invoices: (state) => {
+        if (state.status === 'PENDING') return [gInvoice({ id: 'bc', glofox_user_id: 'cg', contact_id: 'c-cian', amount_cents: 2500, status: 'PENDING', invoice_date: '2026-05-08T00:00:00Z', line_item_subtypes: 'BOOK_CLASS' })]
+        return []
+      },
+      churn_radar_actions: [],
+      contacts: [contact({ id: 'c-cian', name: 'Cian' })],
+    })
+    const { charges: awaiting } = await loadAwaitingAuth(db, LOC, NOW)
+    expect(awaiting).toHaveLength(1)
+    expect(awaiting[0].contactId).toBe('c-cian')
+    expect(awaiting[0].amountOwedCents).toBe(2500)
+    // never a debt: absent from Overdue and Unpaid charges
+    const { overdue } = await loadOverdue(db, LOC, NOW)
+    expect(overdue).toHaveLength(0)
+    const { charges: unpaid } = await loadUnpaidCharges(db, LOC, NOW)
+    expect(unpaid).toHaveLength(0)
+  })
+
   it('keeps a ≥€50 PAST_DUE debt on Overdue and its PENDING fee under Awaiting authorization', async () => {
     const db = makeDb({
       glofox_invoices: (state) => {

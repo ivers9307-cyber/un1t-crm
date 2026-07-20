@@ -36,6 +36,17 @@ describe('indexReportByInvoice (GLOFOX-RECONCILE.1)', () => {
     ])
     expect(idx.get('D')).toMatchObject({ settled: true })
   })
+
+  it('flags an invoice pending when a transaction is in-progress / awaiting authorization (AWAITING-AUTH.2)', () => {
+    const idx = indexReportByInvoice([
+      txn({ invoice_id: 'P', transaction_status: 'PENDING' }),
+      txn({ invoice_id: 'F', transaction_status: 'ERROR', paid: false }),           // failed, not pending
+      txn({ invoice_id: 'S', transaction_status: 'SUBSCRIPTION_CYCLE_PAYMENT_FAILED' }), // failed sub, not pending
+    ])
+    expect(idx.get('P')).toMatchObject({ pending: true, failed: false, settled: false, forgiven: false })
+    expect(idx.get('F')).toMatchObject({ pending: false, failed: true })
+    expect(idx.get('S')).toMatchObject({ pending: false, failed: true })
+  })
 })
 
 describe('reconcileOpenPastDue (GLOFOX-RECONCILE.1)', () => {
@@ -96,6 +107,49 @@ describe('reconcileOpenPastDue (GLOFOX-RECONCILE.1)', () => {
     const byId = Object.fromEntries(out.map((d) => [d.id, d]))
     expect(byId.pp).toMatchObject({ action: 'clear', newStatus: 'PAID', reason: 'settled' })
     expect(byId.pf).toMatchObject({ action: 'clear', newStatus: 'FORGIVEN', reason: 'forgiven' })
+  })
+
+  // AWAITING-AUTH.2 — a PAST_DUE row the report shows as an in-progress (PENDING)
+  // payment is awaiting authorization, not a failed debt: re-status it to PENDING.
+  it('re-statuses a PAST_DUE row the report shows as an in-progress (PENDING) payment', () => {
+    const idx = indexReportByInvoice([
+      txn({ invoice_id: 'await1', transaction_status: 'PENDING' }),
+      txn({ invoice_id: 'fail1', transaction_status: 'ERROR', paid: false }),
+    ])
+    const out = reconcileOpenPastDue([
+      { id: 'await1', status: 'PAST_DUE', invoice_date: '2026-05-08' },
+      { id: 'fail1', status: 'PAST_DUE', invoice_date: '2026-05-08' },
+    ], idx, NOW)
+    const byId = Object.fromEntries(out.map((d) => [d.id, d]))
+    expect(byId.await1).toMatchObject({ action: 'restatus', newStatus: 'PENDING', reason: 'awaiting_authorization' })
+    expect(byId.fail1).toMatchObject({ action: 'keep', reason: 'report_unpaid' }) // genuinely failed → stays a debt
+  })
+
+  it('does not re-status a row that is already PENDING (only PAST_DUE flips)', () => {
+    const idx = indexReportByInvoice([txn({ invoice_id: 'p', transaction_status: 'PENDING' })])
+    const out = reconcileOpenPastDue([{ id: 'p', status: 'PENDING', invoice_date: '2026-06-01' }], idx, NOW)
+    expect(out[0].action).toBe('keep')
+  })
+
+  it('keeps a PAST_DUE debt when the report shows a failed attempt alongside a pending one (AWAITING-AUTH.2)', () => {
+    // subscription dunning reuses one invoice_id: a pending + a failed attempt →
+    // still a real debt; awaiting-auth must not mask it.
+    const idx = indexReportByInvoice([
+      txn({ invoice_id: 'mix', transaction_status: 'PENDING' }),
+      txn({ invoice_id: 'mix', transaction_status: 'SUBSCRIPTION_CYCLE_PAYMENT_FAILED' }),
+    ])
+    expect(idx.get('mix')).toMatchObject({ pending: true, failed: true })
+    const out = reconcileOpenPastDue([{ id: 'mix', status: 'PAST_DUE', invoice_date: '2026-06-01' }], idx, NOW)
+    expect(out[0]).toMatchObject({ action: 'keep', reason: 'report_unpaid' })
+  })
+
+  it('prioritises settled over a stray pending flag (a paid-then-pending invoice is cleared PAID, not re-statused)', () => {
+    const idx = indexReportByInvoice([
+      txn({ invoice_id: 's', transaction_status: 'PENDING' }),
+      txn({ invoice_id: 's', paid: true }),
+    ])
+    const out = reconcileOpenPastDue([{ id: 's', status: 'PAST_DUE', invoice_date: '2026-06-01' }], idx, NOW)
+    expect(out[0]).toMatchObject({ action: 'clear', newStatus: 'PAID', reason: 'settled' })
   })
 })
 
@@ -209,6 +263,38 @@ describe('runArrearsReconcile — orchestration (GLOFOX-RECONCILE.1)', () => {
     await expect(
       runArrearsReconcile(db, creds, 'loc-1', { nowMs: NOW, reportFetcher: async () => ({ ok: false, status: 502 }) }),
     ).rejects.toThrow(/report/i)
+  })
+
+  // AWAITING-AUTH.2 — the PAST_DUE→PENDING re-status is gated: proposed in a
+  // dry-run and surfaced on every run, but only WRITTEN when allowRestatus is set.
+  it('proposes re-status in a dry-run and does NOT write it on a plain commit (gated)', async () => {
+    const rows = [{ id: 'await1', status: 'PAST_DUE', invoice_date: '2026-05-08', amount_cents: 2500 }]
+    const rep = { ok: true, status: 200, body: { TransactionsList: { details: [rtxn({ invoice_id: 'await1', transaction_status: 'PENDING' })] } } }
+
+    const { db: db1 } = makeReconcileDb(rows)
+    const dry = await runArrearsReconcile(db1, creds, 'loc-1', { nowMs: NOW, reportFetcher: async () => rep })
+    expect(dry.dryRun).toBe(true)
+    expect(dry.restated).toBe(1)
+    expect(dry.cleared).toBe(0)
+    expect(dry.byReason).toMatchObject({ awaiting_authorization: 1 })
+
+    const { db: db2, updates: u2 } = makeReconcileDb(rows)
+    const res2 = await runArrearsReconcile(db2, creds, 'loc-1', { nowMs: NOW, reportFetcher: async () => rep, commit: true })
+    expect(res2.restated).toBe(1)          // still surfaced
+    expect(res2.restatusApplied).toBe(false)
+    expect(u2).toHaveLength(0)             // but not written
+  })
+
+  it('commits the PAST_DUE→PENDING re-status when allowRestatus is set', async () => {
+    const rows = [{ id: 'await1', status: 'PAST_DUE', invoice_date: '2026-05-08', amount_cents: 2500 }]
+    const rep = { ok: true, status: 200, body: { TransactionsList: { details: [rtxn({ invoice_id: 'await1', transaction_status: 'PENDING' })] } } }
+    const { db, updates } = makeReconcileDb(rows)
+    const res = await runArrearsReconcile(db, creds, 'loc-1', { nowMs: NOW, reportFetcher: async () => rep, commit: true, allowRestatus: true })
+    expect(res.restatusApplied).toBe(true)
+    const written = new Map()
+    for (const u of updates) for (const id of u.ids) written.set(id, u.payload)
+    expect(written.get('await1')).toMatchObject({ status: 'PENDING', reconciled_reason: 'awaiting_authorization' })
+    expect(written.get('await1').reconciled_at).toBeTruthy()
   })
 
   it('OWED-PENDING.1 — scans PENDING custom-charge fees (kept when absent), drops pending subscriptions', async () => {

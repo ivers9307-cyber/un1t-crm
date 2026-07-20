@@ -55,6 +55,35 @@ function isForgivenTxn(t) {
   )
 }
 
+// AWAITING-AUTH.2 — a transaction whose payment is IN PROGRESS / awaiting
+// authorization. Per the Glofox OpenAPI spec, invoice status PENDING means
+// "the payment is in progress but not yet confirmed" (e.g. a bank/card
+// authorization pending) — Glofox's UI shows this as "Awaiting authorization".
+// The TransactionsList `transaction_status` enum carries PENDING for these.
+// This is DISTINCT from a failed charge (ERROR / SUBSCRIPTION_CYCLE_PAYMENT_
+// FAILED), which is a genuine PAST_DUE debt. Used to tell a provisional,
+// expires-if-unpaid charge apart from a real arrears debt.
+function isPendingTxn(t) {
+  return (
+    t?.transaction_status === 'PENDING' ||
+    t?.status === 'PENDING' ||
+    t?.status === 'pending'
+  )
+}
+
+// AWAITING-AUTH.2 — a transaction that DEFINITIVELY FAILED (declined card,
+// insufficient funds, a failed subscription cycle). An invoice with any failed
+// attempt is a real debt (PAST_DUE), even if it ALSO carries an earlier/other
+// pending attempt — so "awaiting authorization" never masks a genuine failure
+// (e.g. subscription dunning reuses one invoice_id across attempts).
+function isFailedTxn(t) {
+  return (
+    t?.status === 'failed' ||
+    t?.transaction_status === 'ERROR' ||
+    t?.transaction_status === 'SUBSCRIPTION_CYCLE_PAYMENT_FAILED'
+  )
+}
+
 // Euros owed on a single transaction. Paid charges carry `amount`; failed
 // charges carry `failed_amount` with amount:0.
 function txEuros(t) {
@@ -301,7 +330,13 @@ export function computeArrears(details, opts = {}) {
       userName: repr?.metadata?.user_name ?? null,
       amountCents: Math.round(owedEuros * 100),
       currency: repr?.currency || 'eur',
-      status: 'PAST_DUE',
+      // AWAITING-AUTH.2 — a group whose payment is IN PROGRESS (a PENDING attempt
+      // and NO failed attempt) is "awaiting authorization", not a debt; anything
+      // with a failed attempt (ERROR / SUBSCRIPTION_CYCLE_PAYMENT_FAILED, or a
+      // pending-then-failed retry under one invoice_id) is PAST_DUE. The old
+      // blanket 'PAST_DUE' mislabelled provisional charges (e.g. a PAYG class
+      // booking awaiting card auth) as debt.
+      status: g.txns.some(isPendingTxn) && !g.txns.some(isFailedTxn) ? 'PENDING' : 'PAST_DUE',
       invoiceDate: Number.isFinite(earliestMs) ? new Date(earliestMs).toISOString() : null,
       description: repr?.description ?? null,
       paymentMethod: repr?.metadata?.payment_method ?? null,
@@ -386,11 +421,12 @@ export function isCountedOwedRow(row) {
 
 /**
  * Index a Glofox report's transactions by invoice_id, recording whether the
- * invoice has any settled / forgiven transaction. Invoices with no transaction
- * in the report are simply absent from the map.
+ * invoice has any settled / forgiven / pending (awaiting-authorization)
+ * transaction. Invoices with no transaction in the report are simply absent
+ * from the map.
  *
  * @param {Array} details  TransactionsList.details from the Glofox report
- * @returns {Map<string, { settled: boolean, forgiven: boolean }>}
+ * @returns {Map<string, { settled: boolean, forgiven: boolean, pending: boolean, failed: boolean }>}
  */
 export function indexReportByInvoice(details) {
   const map = new Map()
@@ -398,9 +434,11 @@ export function indexReportByInvoice(details) {
     const { t } = unwrap(row)
     const invId = t?.invoice_id
     if (!invId) continue
-    const cur = map.get(invId) || { settled: false, forgiven: false }
+    const cur = map.get(invId) || { settled: false, forgiven: false, pending: false, failed: false }
     if (isSettledTxn(t)) cur.settled = true
     if (isForgivenTxn(t)) cur.forgiven = true
+    if (isPendingTxn(t)) cur.pending = true
+    if (isFailedTxn(t)) cur.failed = true
     map.set(invId, cur)
   }
   return map
@@ -411,9 +449,11 @@ export function indexReportByInvoice(details) {
  * owed (keep) or should be cleared because Glofox no longer shows it as a debt.
  * `glofox_invoices.id` IS the Glofox invoice_id, so we match directly.
  *
- *   - report settled  → clear as PAID      (the charge went through)
- *   - report forgiven → clear as FORGIVEN  (staff waived it)
- *   - report present, unpaid → keep        (a real, still-open debt)
+ *   - report settled  → clear as PAID       (the charge went through)
+ *   - report forgiven → clear as FORGIVEN   (staff waived it)
+ *   - report pending + local PAST_DUE → re-status as PENDING (AWAITING-AUTH.2 —
+ *       the payment is in progress / awaiting authorization, not a failed debt)
+ *   - report present, unpaid (failed) → keep (a real, still-open debt)
  *   - absent from report:
  *       · status PENDING → keep (OWED-PENDING.1 — a pending fee isn't charged
  *         yet, so it's EXPECTED to be absent; absence is not a cancel signal)
@@ -427,10 +467,10 @@ export function indexReportByInvoice(details) {
  * applies the returned 'clear' decisions.
  *
  * @param {Array<{id:string, status?:string, invoice_date?:string|null}>} pastDueRows
- * @param {Map<string,{settled:boolean,forgiven:boolean}>} reportIndex
+ * @param {Map<string,{settled:boolean,forgiven:boolean,pending:boolean}>} reportIndex
  * @param {number} [nowMs]
  * @param {{ absentAgeDays?: number }} [opts]
- * @returns {Array<{ id:string, action:'keep'|'clear', newStatus?:string, reason:string }>}
+ * @returns {Array<{ id:string, action:'keep'|'clear'|'restatus', newStatus?:string, reason:string }>}
  */
 export function reconcileOpenPastDue(pastDueRows, reportIndex, nowMs = Date.now(), opts = {}) {
   const absentAgeDays =
@@ -441,6 +481,18 @@ export function reconcileOpenPastDue(pastDueRows, reportIndex, nowMs = Date.now(
     const v = idx.get(r.id)
     if (v?.settled) { out.push({ id: r.id, action: 'clear', newStatus: 'PAID', reason: 'settled' }); continue }
     if (v?.forgiven) { out.push({ id: r.id, action: 'clear', newStatus: 'FORGIVEN', reason: 'forgiven' }); continue }
+    // AWAITING-AUTH.2 — a local PAST_DUE row that Glofox's report shows as an
+    // IN-PROGRESS (PENDING / awaiting-authorization) payment is not a failed
+    // debt: it's a provisional charge (a class booking, product buy or fee whose
+    // card auth is pending, which expires if never paid). Re-status it to PENDING
+    // so it drops off the Overdue / Unpaid-charges debt lists and moves into the
+    // Awaiting-authorization tab. Only PAST_DUE flips, and only when NO attempt
+    // failed — an invoice with any failed attempt (`v.failed`, e.g. subscription
+    // dunning that reuses one invoice_id) stays a real debt via `report_unpaid`.
+    if (v?.pending && !v?.failed && r.status === 'PAST_DUE') {
+      out.push({ id: r.id, action: 'restatus', newStatus: 'PENDING', reason: 'awaiting_authorization' })
+      continue
+    }
     if (v) { out.push({ id: r.id, action: 'keep', reason: 'report_unpaid' }); continue }
     // Absent from the report.
     if (r.status === 'PENDING') {

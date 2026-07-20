@@ -16,7 +16,7 @@ import {
   classifyContact,
   MEMBER_STATUSES,
 } from '@/lib/churn-radar'
-import { nettedOutByRetry, isCustomChargeFee } from '@/lib/glofox-arrears'
+import { nettedOutByRetry } from '@/lib/glofox-arrears'
 import { combineGroupActivity, rollupByPerson } from '@/lib/person-rollup'
 import { selectAll } from '@/lib/select-all'
 
@@ -112,10 +112,12 @@ export async function fetchPastDue(db, locationId) {
     fetchInvoicesByStatus(db, locationId, 'PENDING', 'id, contact_id, glofox_user_id, amount_cents, invoice_date, status, line_item_subtypes'),
     fetchInvoicesByStatus(db, locationId, 'PAID', 'glofox_user_id, amount_cents, invoice_date'),
   ])
-  // OWED-PENDING.1 — PENDING custom-charge fees (no-show / late-cancel, applied
-  // but not yet collected) count as owed too; a PENDING subscription renewal is
-  // a scheduled future payment, not arrears, so it's filtered out.
-  const openRows = [...pastDueRows, ...pendingRows.filter(isCustomChargeFee)]
+  // AWAITING-AUTH.2 — every PENDING invoice ("awaiting authorization" in Glofox:
+  // a payment in progress, not yet confirmed) feeds the Awaiting-authorization
+  // tab, whatever its charge type (class booking, product buy, fee or renewal).
+  // Pending is never owed/overdue (see bucketArrears / the de-count); PAST_DUE
+  // drives the Overdue + Unpaid-charges debt lists.
+  const openRows = [...pastDueRows, ...pendingRows]
   // Net cross-invoice-id payment retries out before aggregating.
   const { kept } = nettedOutByRetry(openRows, paidRows)
 

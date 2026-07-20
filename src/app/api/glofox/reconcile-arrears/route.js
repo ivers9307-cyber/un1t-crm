@@ -8,8 +8,9 @@
 // Flow: pull the Glofox /Analytics/report (TransactionsList) back to `start`,
 // group transactions by invoice_id, drop any invoice with a settled/forgiven
 // txn, value the rest from amount/failed_amount, diff against the invoice ids
-// already in glofox_invoices, and (on commit) upsert the missing ones as
-// PAST_DUE keyed on invoice_id so a later webhook dedupes cleanly.
+// already in glofox_invoices, and (on commit) upsert the missing ones keyed on
+// invoice_id — as PAST_DUE (failed) or PENDING (awaiting authorization / in
+// progress) per the transaction_status — so a later webhook dedupes cleanly.
 //
 // Query params:
 //   location_id  optional  defaults to user.activeLocation
@@ -133,6 +134,16 @@ export async function GET(request) {
 
   const analysis = computeArrears(details, { existingInvoiceIds, beforeDate })
 
+  // AWAITING-AUTH.2 — split the candidate value: real arrears (PAST_DUE) vs
+  // awaiting-authorization (PENDING, provisional — not a debt). The blended
+  // total would overstate what's actually owed.
+  const arrearsCents = analysis.candidates
+    .filter((c) => c.status !== 'PENDING')
+    .reduce((s, c) => s + (c.amountCents || 0), 0)
+  const awaitingAuthCents = analysis.candidates
+    .filter((c) => c.status === 'PENDING')
+    .reduce((s, c) => s + (c.amountCents || 0), 0)
+
   // Resolve candidate members → contact_id so the dry-run shows match rate and
   // commit can link the rows.
   let contactByUser
@@ -161,7 +172,10 @@ export async function GET(request) {
     totals: analysis.totals,
     taxonomy: analysis.taxonomy,
     candidates_by_event: analysis.candidatesByEvent,
-    candidate_arrears_cents: analysis.candidateArrearsCents,
+    // Real debt only (PAST_DUE). `candidate_awaiting_auth_cents` is the
+    // provisional PENDING value that will NOT show as owed.
+    candidate_arrears_cents: arrearsCents,
+    candidate_awaiting_auth_cents: awaitingAuthCents,
     contact_match: {
       candidates: analysis.candidates.length,
       matched: matchedCandidates,
@@ -189,7 +203,11 @@ export async function GET(request) {
     glofox_user_id: c.glofoxUserId,
     amount_cents: c.amountCents,
     currency: (c.currency || 'eur').toLowerCase(),
-    status: 'PAST_DUE',
+    // AWAITING-AUTH.2 — honour the status computeArrears derived from the
+    // transaction_status: an in-progress payment backfills as PENDING (awaiting
+    // authorization), a failed one as PAST_DUE. The old blanket 'PAST_DUE'
+    // mislabelled provisional charges (e.g. a PAYG class booking) as debt.
+    status: c.status || 'PAST_DUE',
     payment_method: c.paymentMethod,
     document_type: null,
     line_item_subtypes: null,
