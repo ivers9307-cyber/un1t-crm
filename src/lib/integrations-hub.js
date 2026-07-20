@@ -399,6 +399,12 @@ function pickRegistry(rows, locationId, platform) {
   return (rows || []).find((r) => r.location_id === locationId && r.platform === platform) || null
 }
 
+// Non-array plain-object slice or {} — for reading a locations.settings sub-slice
+// safely. Kept local (the connection-registry has its own copy for its mappers).
+function plainSlice(v) {
+  return v && typeof v === 'object' && !Array.isArray(v) ? v : {}
+}
+
 // Billing meters that read straight off usage_rollups_daily
 // (ai_message has no rollup meter — derived from usage_events, see
 // shared/plans.js).
@@ -653,10 +659,18 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     const reg = pickRegistry(regRows, loc.id, 'glofox')
     const legacy = registryRowFromLegacy('glofox', loc) // presence only — secrets stay here
     const status = reg ? reg.status : (legacy ? 'connected' : 'not_connected')
+    // Presence booleans + non-secret prefill for the Phase-2 Manage drawer.
+    // Read off the LEGACY slice (authoritative during the dual-write phase);
+    // each secret maps straight to a boolean — the value never leaves here.
+    const g = plainSlice(loc.settings?.glofox)
     const row = {
       locationId: loc.id,
       status,
       branchId: reg ? reg.external_account_id : (legacy?.external_account_id ?? null),
+      namespace: g.namespace ?? null,
+      hasApiKey: !!g.api_key,
+      hasApiToken: !!g.api_token,
+      hasWebhookSecret: !!g.webhook_secret,
       lastOkAt: reg?.last_ok_at ?? null,
       lastError: reg?.last_error ?? null,
       source: reg ? 'registry' : 'legacy',
@@ -803,11 +817,23 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     if (!reg && !legacy) return []
     const status = reg ? reg.status : 'connected'
     const href = locationTabHref(loc.id, 'unifi')
+    const u = plainSlice(loc.settings?.unifi) // non-secret prefill + token presence
     attentionInputs.push({
       cardKey: 'unifi', locationId: loc.id, locationName: nameById[loc.id],
       status, message: reg?.last_error ?? null, partialSetup: false, href,
     })
-    return [{ locationId: loc.id, status, lastOkAt: reg?.last_ok_at ?? null, lastError: reg?.last_error ?? null, href }]
+    return [{
+      locationId: loc.id,
+      status,
+      host: u.host ?? null,
+      hasToken: !!u.api_token,
+      staffPolicyId: u.staff_policy_id ?? null,
+      managerPolicyId: u.manager_policy_id ?? null,
+      allowSelfSigned: u.allow_self_signed === true,
+      lastOkAt: reg?.last_ok_at ?? null,
+      lastError: reg?.last_error ?? null,
+      href,
+    }]
   })
 
   const climate = locs.flatMap((loc) => {
@@ -829,7 +855,20 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
       cardKey: 'climate', locationId: loc.id, locationName: nameById[loc.id],
       status, message: vendors.find((v) => v.lastError)?.lastError ?? null, partialSetup: false, href,
     })
-    return [{ locationId: loc.id, status, vendors, href }]
+    // Non-secret prefill + secret presence for the Phase-2 AC creds drawer
+    // (the ac_devices device TABLE stays on the deep-link, not the drawer).
+    return [{
+      locationId: loc.id,
+      status,
+      vendors,
+      sensibo: { hasKey: !!loc.sensibo_api_key },
+      thinq: {
+        hasPat: !!loc.thinq_pat,
+        clientId: loc.thinq_client_id ?? null,
+        countryCode: loc.thinq_country_code ?? null,
+      },
+      href,
+    }]
   })
 
   const bca = locs.flatMap((loc) => {
@@ -838,11 +877,22 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     if (!reg && !legacy) return []
     const status = reg ? reg.status : 'connected'
     const href = locationTabHref(loc.id, 'bca')
+    const c = plainSlice(loc.bca_config) // bca_config has NO secrets (email + templates)
     attentionInputs.push({
       cardKey: 'bca', locationId: loc.id, locationName: nameById[loc.id],
       status, message: reg?.last_error ?? null, partialSetup: false, href,
     })
-    return [{ locationId: loc.id, status, href }]
+    return [{
+      locationId: loc.id,
+      status,
+      sendFrom: c.send_from ?? null,
+      sendTo: c.send_to ?? null,
+      cc: c.cc ?? null,
+      subjectTemplate: c.subject_template ?? null,
+      bodyTemplate: c.body_template ?? null,
+      documentCount: Array.isArray(c.documents) ? c.documents.length : 0,
+      href,
+    }]
   })
 
   // ── Email delivery — per-ORG tenant sending domain (INTEG-B3, mig 427) ──

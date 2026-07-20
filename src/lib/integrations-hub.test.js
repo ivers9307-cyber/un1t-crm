@@ -18,6 +18,7 @@ import {
   buildBillingMeters,
   LAPSE_WARN_MIN_CENTS,
   LAPSE_WARN_DAYS,
+  assembleIntegrationsHub,
 } from './integrations-hub'
 
 const NOW = new Date('2026-07-19T12:00:00Z')
@@ -393,5 +394,68 @@ describe('buildBillingMeters', () => {
     const out = buildBillingMeters(null)
     expect(out).toHaveLength(3)
     for (const m of out) expect(m).toMatchObject({ used: 0, allowance: 0, overQty: 0, overageDrawnCents: 0 })
+  })
+})
+
+// ── Phase-2: per-provider has_* presence flags + non-secret prefill ──
+// A stub db whose every read resolves to no rows, so the assembler drives
+// glofox/unifi/climate/bca from the LEGACY location fields (registry empty).
+// Pins two things: (1) the drawer's prefill fields are present, (2) NO raw
+// secret value ever appears in the assembled payload.
+function emptyDb() {
+  const builder = {
+    select: () => builder,
+    in: () => builder,
+    eq: () => builder,
+    neq: () => builder,
+    gte: () => builder,
+    order: () => builder,
+    limit: () => builder,
+    maybeSingle: () => Promise.resolve({ data: null, error: null }),
+    single: () => Promise.resolve({ data: null, error: null }),
+    then: (res, rej) => Promise.resolve({ data: [], error: null }).then(res, rej),
+  }
+  return { from: () => builder }
+}
+
+describe('assembleIntegrationsHub — Phase-2 presence flags + secret non-leak', () => {
+  const LOCATION = {
+    id: 'loc-1',
+    name: 'Stillorgan',
+    organization_id: null, // keep email-delivery + billing queries out
+    settings: {
+      glofox: { branch_id: 'br-1', api_key: 'SECRET_KEY', api_token: 'SECRET_TOKEN', webhook_secret: 'SECRET_HOOK', namespace: 'untstillorgan' },
+      unifi: { host: 'https://u:12445', api_token: 'SECRET_UNIFI', staff_policy_id: 's1', allow_self_signed: true },
+    },
+    sensibo_api_key: 'SECRET_SENSIBO',
+    thinq_pat: 'SECRET_PAT',
+    thinq_client_id: 'cid-1',
+    thinq_country_code: 'IE',
+    twilio_alpha_sender_id: 'UN1T STILL',
+    bca_config: { send_from: 'a@ccf.com', send_to: 'b@bca.com', documents: [{ slug: 'doc_01', label: 'x' }] },
+    features: { bca_submit: true },
+  }
+
+  it('exposes has_* + non-secret prefill and never leaks a secret value', async () => {
+    const data = await assembleIntegrationsHub(emptyDb(), [LOCATION], { now: NOW })
+
+    const g = data.glofox[0]
+    expect(g).toMatchObject({ branchId: 'br-1', namespace: 'untstillorgan', hasApiKey: true, hasApiToken: true, hasWebhookSecret: true })
+
+    const u = data.unifi[0]
+    expect(u).toMatchObject({ host: 'https://u:12445', hasToken: true, staffPolicyId: 's1', allowSelfSigned: true })
+
+    const c = data.climate[0]
+    expect(c.sensibo).toEqual({ hasKey: true })
+    expect(c.thinq).toEqual({ hasPat: true, clientId: 'cid-1', countryCode: 'IE' })
+
+    expect(data.bca[0]).toMatchObject({ sendFrom: 'a@ccf.com', sendTo: 'b@bca.com', documentCount: 1 })
+    expect(data.sms[0].senderId).toBe('UN1T STILL')
+
+    // The whole payload must not contain a single raw secret.
+    const json = JSON.stringify(data)
+    for (const secret of ['SECRET_KEY', 'SECRET_TOKEN', 'SECRET_HOOK', 'SECRET_UNIFI', 'SECRET_SENSIBO', 'SECRET_PAT']) {
+      expect(json).not.toContain(secret)
+    }
   })
 })

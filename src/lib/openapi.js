@@ -3663,6 +3663,55 @@ registry.registerPath({
   },
 })
 
+// INTEG hub inline #4 Phase 2 — in-hub Manage (write-only) for the
+// credential-bearing `locations` providers.
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/integrations/{provider}',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save a location integration inline (write-only secrets)',
+  description:
+    'Service-role save behind the Integrations-hub Manage drawer for the providers stored on the ' +
+    '`locations` row: glofox, twilio, unifi, ac (Sensibo + LG ThinQ creds only), bca. ' +
+    'Secrets are WRITE-ONLY — a blank or masked-echo secret KEEPS the stored value, a fresh value ' +
+    'overwrites, non-secret fields set normally (src/lib/integration-secret-merge.js). The whole ' +
+    'slice is NEVER collapsed to null on a blank save (the Glofox null-collapse guard), so a no-op ' +
+    'save can\'t wipe a live connection. JSONB slices are read-merge-write (sibling slices untouched); ' +
+    'channel_connections is re-synced IN-HANDLER via syncConnectionFromLegacy. Role gate: glofox/twilio = ' +
+    'ADMIN_ROLES; unifi/ac/bca = master-only. Plus assertLocationAccess. The response is a MASKED echo ' +
+    '(has_* booleans + non-secret values) — a token is never returned.',
+  request: {
+    params: z.object({ id: uuidLike, provider: z.enum(['glofox', 'twilio', 'unifi', 'ac', 'bca']) }),
+    body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('IntegrationSaveBody') } } },
+  },
+  responses: {
+    200: { description: 'Saved — masked echo (has_* + non-secret values)', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    400: { description: 'Invalid body / provider not enabled', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — role/location gate', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown provider or location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+registry.registerPath({
+  method: 'delete',
+  path: '/api/locations/{id}/integrations/{provider}',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Disconnect a location integration (deactivate, not delete)',
+  description:
+    'Explicit disconnect for the same providers: clears the legacy `locations` slice and, via ' +
+    'syncConnectionFromLegacy, DEACTIVATES the channel_connections registry row (is_active=false). ' +
+    'Deactivate — never a hard delete, and no provider-side revoke. Same role/location gate as PUT.',
+  request: { params: z.object({ id: uuidLike, provider: z.enum(['glofox', 'twilio', 'unifi', 'ac', 'bca']) }) },
+  responses: {
+    200: { description: 'Disconnected (deactivated)', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — role/location gate', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown provider or location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Tenant console (INTEG-D2) — master roster / drill-in / wallet adjust
 // ============================================================================
