@@ -29,7 +29,11 @@ const PROVIDERS = [
   { key: 'tiktok', label: 'TikTok', comingSoon: true },
 ]
 
-export default function AdsIntegrationTab({ location, canEdit }) {
+// `onChanged` (optional): called after a successful account save so a host
+// surface (the Integrations hub drawer) can re-grade its own card without a
+// full route refresh. When absent, the standalone location-tab behaviour is
+// unchanged (router.refresh() re-runs the tab's server data + status dots).
+export default function AdsIntegrationTab({ location, canEdit, onChanged }) {
   const router = useRouter()
   const [rows, setRows] = useState({}) // provider -> masked row (or null)
   const [recipients, setRecipients] = useState('')
@@ -92,7 +96,8 @@ export default function AdsIntegrationTab({ location, canEdit }) {
               canEdit={canEdit}
               onSaved={(row) => {
                 setRows((prev) => ({ ...prev, [p.key]: row }))
-                router.refresh()
+                if (onChanged) onChanged()
+                else router.refresh()
               }}
             />
           ))}
