@@ -46,6 +46,7 @@ import {
 } from '@/lib/sequences/triggers'
 import { applyInvoiceWebhook } from '@/lib/glofox-invoices'
 import { applyServiceWebhook } from '@/lib/glofox-services'
+import { applyMembershipPauseWindow } from '@/lib/glofox-membership'
 import { maybeEnrolDunning, exitDunningForContact } from '@/lib/dunning'
 import { applyMemberSync } from '@/lib/glofox-sync'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
@@ -467,9 +468,24 @@ export async function POST(request) {
       }
     }
 
+    // 10. GLOFOX-REACTIVE — membership pause WINDOW. Glofox delivers a
+    // pause as MEMBERSHIP_UPDATED (status=PAUSED, cycle.start_date =
+    // resume date), NOT a service event. Runs AFTER the member sync so
+    // glofox_membership_state is current for the multi-membership guard
+    // (an active membership's event must not wipe another's live pause).
+    let membershipPauseResult = null
+    if (evUpper === 'MEMBERSHIP_CREATED' || evUpper === 'MEMBERSHIP_UPDATED' || evUpper === 'MEMBERSHIP_DELETED') {
+      try {
+        membershipPauseResult = await applyMembershipPauseWindow(db, contact.id, payload)
+      } catch (e) {
+        logWarn('glofox-webhook', 'membership pause window threw', { err: e?.message, contact_id: contact.id })
+      }
+    }
+
     await markEvent(db, eventRow.id, 'applied', {
       contact_id: contact.id, tags: appliedTags, ltv: ltvResult,
-      service: serviceResult, dunning: dunningResult, member_sync: memberSyncResult,
+      service: serviceResult, membership_pause: membershipPauseResult,
+      dunning: dunningResult, member_sync: memberSyncResult,
     }, null)
     return NextResponse.json({
       success: true,
@@ -479,6 +495,7 @@ export async function POST(request) {
       tags: appliedTags,
       ltv: ltvResult,
       service: serviceResult,
+      membership_pause: membershipPauseResult,
       dunning: dunningResult,
       member_sync: memberSyncResult ? { applied: memberSyncResult.action || memberSyncResult.ok || false } : null,
     })
