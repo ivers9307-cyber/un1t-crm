@@ -15,6 +15,7 @@ const stageColors = {
   member:       '#64748B',
   pack_member:  '#0891B2',
   classpass:    '#A855F7',
+  gympass:      '#F97316',
   cold_lead:    '#52525B',
   dormant:      '#6B7280',
 }

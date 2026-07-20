@@ -30,6 +30,7 @@ const STAGE_LABELS = {
   converted:    'Converted',
   member:       'Member',
   classpass:    'ClassPass',
+  gympass:      'Gympass',
   dormant:      'Dormant',
   '':           '(no deal yet)',
   // Legacy labels kept for the one-time FUNNEL.1 migration matrix

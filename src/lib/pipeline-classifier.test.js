@@ -6,6 +6,8 @@ import {
   countAttendedBookings,
   nextBookedClass,
   PIPELINE_THRESHOLDS,
+  FUNNEL_STAGE_SLUGS,
+  OFF_FUNNEL_STAGE_SLUGS,
 } from './pipeline-classifier.js'
 
 const NOW = new Date('2026-07-02T12:00:00Z').getTime()
@@ -148,6 +150,32 @@ describe('classifyContact — exclusions', () => {
       glofox_membership_status: 'classpass_payg', joined_at: daysAgo(5),
       last_attended_at: daysAgo(2), recent_bookings: [attendedBooking(2)],
     }, NOW)).toBe('classpass')
+  })
+  // GYMPASS.2 — Gympass/Wellhub users are pulled OUT of the sellable funnel.
+  it('an ATTENDING Gympass lead is off the funnel → gympass (not trial_done)', () => {
+    // Tommy Faherty's shape: a Gympass lead training regularly. Without the
+    // gympass check this classifies to trial_done — a hot prospect you can't sell.
+    expect(classifyContact({
+      glofox_membership_status: 'lead', gympass_member_id: '3601127012482',
+      joined_at: daysAgo(20), last_attended_at: daysAgo(1),
+      recent_bookings: [attendedBooking(1), attendedBooking(3), attendedBooking(5)],
+    }, NOW)).toBe('gympass')
+  })
+  it('a Gympass user who becomes a MEMBER graduates to the member category', () => {
+    // Richard 2026-07-20: the Glofox profile is shared, so a real membership
+    // OUTRANKS Gympass — converted ≤60d → converted, else member.
+    expect(classifyContact({
+      glofox_membership_status: 'member', gympass_member_id: '3602390808954',
+      converted_at: daysAgo(10), joined_at: daysAgo(15),
+    }, NOW)).toBe('converted')
+    expect(classifyContact({
+      glofox_membership_status: 'member', gympass_member_id: '3602390808954',
+      converted_at: daysAgo(90), joined_at: daysAgo(200),
+    }, NOW)).toBe('member')
+  })
+  it('gympass is an off-funnel stage, never a funnel column', () => {
+    expect(OFF_FUNNEL_STAGE_SLUGS).toContain('gympass')
+    expect(FUNNEL_STAGE_SLUGS).not.toContain('gympass')
   })
   it('ex_member → dormant (winback, not a funnel lead)', () => {
     expect(classifyContact({

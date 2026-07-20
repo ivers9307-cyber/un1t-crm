@@ -1652,6 +1652,8 @@ export async function previewMemberSync(db, locationId, member, opts = {}) {
     pack_customer_at: existingRow?.pack_customer_at ?? null,
     // FUNNEL.4 — operator Cold dismissal (persisted; never touched by sync).
     pipeline_dismissed_at: existingRow?.pipeline_dismissed_at ?? null,
+    // GYMPASS.2 — off-funnel gympass pile; mapped value or persisted fallback.
+    gympass_member_id: mapped.gympass_member_id ?? existingRow?.gympass_member_id ?? null,
   })
 
   // Ambiguous: same email already linked to a DIFFERENT glofox member.
@@ -2077,6 +2079,11 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
         // never writes it). Keeps a cold lead cold across a webhook sync,
         // and lets a fresh attendance (last_attended_at newer) revive them.
         pipeline_dismissed_at: ex.pipeline_dismissed_at ?? null,
+        // GYMPASS.2 — a Gympass user is parked in the off-funnel gympass
+        // pile by classifyContact. A LIST / detail-less sync leaves it off
+        // `m`, so fall back to the persisted row (matches the nightly
+        // pipeline-reclassify input, so the two writers converge).
+        gympass_member_id: m.gympass_member_id ?? ex.gympass_member_id ?? null,
       }
       dealResult = await ensureDealForContact(
         db, locationId, contactId, contactSnapshot,
@@ -2128,6 +2135,26 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     }
   }
 
+  // GYMPASS.2 — a Gympass (Wellhub) user gets a durable `gympass` tag,
+  // idempotent. Keyed off the synced metadata.gympass id (or the persisted
+  // fallback); classifyContact separately parks them in the off-funnel
+  // Gympass pile. Best-effort — never blocks the contact/deal write.
+  const gympassMemberId = preview.mapped?.gympass_member_id ?? preview.existing?.gympass_member_id ?? null
+  let gympassTagResult = null
+  if (gympassMemberId) {
+    try {
+      const { writeContactTag } = await import('./contact-tags.js')
+      gympassTagResult = await writeContactTag(db, {
+        contactId,
+        locationId,
+        tag: 'gympass',
+        metadata: { gympass_member_id: gympassMemberId, source: 'glofox_sync' },
+      })
+    } catch (e) {
+      gympassTagResult = { error: e?.message || 'gympass tag write threw' }
+    }
+  }
+
   // SEQ-TRIG (membership_state_change) — fire when the Glofox membership
   // state (active / paused / locked) transitions. Drives win-back / dunning
   // sequences (state → locked → dunning). Mirrors the trial-transition tags
@@ -2152,6 +2179,7 @@ export async function applyMemberSync(db, locationId, member, opts = {}) {
     deal: dealResult,
     interactions: interactionsResult,
     transition_tags: transitionTagsResult,
+    gympass_tag: gympassTagResult,
     membership_state_trigger: membershipStateTriggerResult,
   }
 }

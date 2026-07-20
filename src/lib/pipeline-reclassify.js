@@ -51,6 +51,9 @@ const SELECT_COLS = [
   // FUNNEL.4 — operator Cold dismissal; same parity rule (else the
   // nightly cron flaps a cold lead back onto the board).
   'pipeline_dismissed_at',
+  // GYMPASS.2 — parks Gympass users in the off-funnel gympass pile; the
+  // classifier reads it, so the cron must select it or it flaps them back.
+  'gympass_member_id',
 ].join(', ')
 
 /**
@@ -246,6 +249,8 @@ export async function reclassifyAllContacts(db, args) {
       converted_at: c.converted_at,
       pack_customer_at: c.pack_customer_at,
       pipeline_dismissed_at: c.pipeline_dismissed_at,
+      // GYMPASS.2 — parks Gympass users in the off-funnel gympass pile.
+      gympass_member_id: c.gympass_member_id,
     })
     const targetStageId = stageIdBySlug.get(targetSlug)
     if (!targetStageId) {
