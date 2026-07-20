@@ -33,7 +33,7 @@ export default async function EditStaffPage(props) {
     // PERM-AUDIT.3 — role templates (mig 364) so the form hydrates
     // toggles against the role's EFFECTIVE defaults at each location.
     db.from('location_role_permissions').select('location_id, role, employment_type, permissions'),
-    // SAAS-4 (mig 411) — org list + current org-admin grants for the
+    // SAAS-4 (mig 417) — org list + current org-admin grants for the
     // master-only Organisation Admin card. Owners never see the card,
     // so both fetches are skipped for them.
     user.isMaster

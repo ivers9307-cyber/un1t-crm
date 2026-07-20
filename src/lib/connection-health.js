@@ -1,6 +1,6 @@
 // INTEG-A3 — connection health plumbing for the connections registry.
 //
-// channel_connections (mig 230, widened mig 411) carries a uniform hub
+// channel_connections (mig 230, widened mig 418) carries a uniform hub
 // status model: status ('connected' | 'action_needed' | 'error' |
 // 'not_connected'), last_error, last_ok_at. Three pieces live here:
 //

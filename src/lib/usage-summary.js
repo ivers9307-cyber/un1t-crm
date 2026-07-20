@@ -43,7 +43,7 @@ async function fetchMonthRollups(db, orgId, monthStart) {
 
 /**
  * Full month-to-date summary for one org: live cap-relevant numbers
- * (mig 415 RPCs) + nightly rollup totals + the configured hard caps.
+ * (mig 421 RPCs) + nightly rollup totals + the configured hard caps.
  */
 export async function getOrgUsageSummary(db, orgId) {
   const monthStart = dublinMonthStartStr()

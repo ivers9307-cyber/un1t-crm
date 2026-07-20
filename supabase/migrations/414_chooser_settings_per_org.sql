@@ -110,7 +110,7 @@ CREATE POLICY chooser_settings_select ON public.chooser_settings
     OR private.auth_is_in_organization(organization_id)
   );
 
--- Write tier: master, org_admin of THIS org (mig 411), or an OWNER of
+-- Write tier: master, org_admin of THIS org (mig 417), or an OWNER of
 -- any location in THIS org — mirroring the app-layer gate in
 -- /api/chooser-settings (assertOrganizationAdmin semantics with the
 -- getOwnerOrganizationIds owner opt-in, same delegation as mig 317's

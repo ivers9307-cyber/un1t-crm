@@ -16,7 +16,7 @@ import { validateBody } from '@/lib/validate'
 export const runtime = 'nodejs'
 
 function isOwnerOrMaster(user) {
-  // SAAS-4: org admins (mig 411) count — they act as owner across
+  // SAAS-4: org admins (mig 417) count — they act as owner across
   // their whole org, and getOwnerOrganizationIds() below already
   // scopes them to exactly their admin orgs. The role check alone
   // would usually pass anyway (their active-location role resolves to

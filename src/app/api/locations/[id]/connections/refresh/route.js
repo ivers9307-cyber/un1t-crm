@@ -8,7 +8,7 @@
 // endpoint after a successful save: it re-reads the location's CURRENT
 // legacy fields server-side and re-syncs the active registry row per
 // platform (upsert when legacy is configured, deactivate when legacy
-// was cleared) using the exact mig 412 mapping.
+// was cleared) using the exact mig 419 mapping.
 //
 // Scope: the dual-read platforms only (glofox, unifi, sensibo, thinq,
 // twilio_sender, bca). WhatsApp / Instagram / Messenger / Xero are

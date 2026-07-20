@@ -1,6 +1,6 @@
 // SAAS4-M3 — org usage summary + hard-cap management (SaaS machinery
 // plan §3). Read side feeds /settings/usage: live cap-relevant numbers
-// (AI spend, email sends — the mig 415 RPCs) plus month-to-date meter
+// (AI spend, email sends — the mig 421 RPCs) plus month-to-date meter
 // totals and a per-location split from usage_rollups_daily (nightly).
 // Write side sets/clears the two OPTIONAL hard caps on org_settings.
 //

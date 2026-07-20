@@ -1,5 +1,5 @@
 // INTEG-C2a — per-location prepaid usage wallet helpers
-// (wallets / wallet_transactions + wallet_apply RPC, mig 414).
+// (wallets / wallet_transactions + wallet_apply RPC, mig 420).
 //
 // The wallet is a MONTHLY USAGE BUDGET, not stored value: the balance
 // resets to zero at the start of each billing month and unused credit

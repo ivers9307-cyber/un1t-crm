@@ -30,7 +30,7 @@
 //      duplicate ledger entry (the RPC no-ops at balance 0).
 //
 // Bearer CRON_SECRET. Heartbeat on a clean run only (any failure
-// must surface as staleness — 31-day window + 3-day grace, mig 414).
+// must surface as staleness — 31-day window + 3-day grace, mig 420).
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
