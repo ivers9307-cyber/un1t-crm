@@ -14,17 +14,39 @@
 // /terms updated to match). tests/legal-entity-consistency.test.js
 // pins the consistency.
 //
-// Server-rendered static markup so it loads without auth.
+// Server-rendered markup so it loads without auth.
+//
+// SAAS4-C2 — tenant-aware: when the request Host resolves to a tenant
+// org (tenant_domains, SAAS-8) whose legal identity is configured
+// (org_settings legal fields, mig 425), this path renders the
+// TENANT's templated notice — they are the controller of their
+// members' data; Champ Fitness Ltd appears only as the platform
+// processor. Every other case (platform hostnames, unconfigured
+// tenants, resolution errors) renders the Champ Fitness copy below,
+// byte-identical to pre-C2. Dynamic because the output depends on the
+// Host header.
+
+import { headers } from 'next/headers'
+import { getTenantPrivacyEntity } from '@/lib/tenant-privacy'
+import TenantPrivacyNotice from '@/components/TenantPrivacyNotice'
 
 export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 
 export const metadata = {
-  title: 'Privacy policy · UN1T Dublin',
+  title: 'Privacy policy',
   description:
-    'How Champ Fitness Ltd (trading as UN1T Dublin) collects, uses, and protects the personal data of members, member app users, leads, and website visitors under GDPR and Irish data protection law.',
+    'How this studio collects, uses, and protects the personal data of members, leads, and website visitors under GDPR and Irish data protection law.',
 }
 
-export default function MemberPrivacyPolicy() {
+export default async function MemberPrivacyPolicy() {
+  const host = (await headers()).get('host') || ''
+  const entity = await getTenantPrivacyEntity(host.split(':')[0].toLowerCase())
+  if (entity) return <TenantPrivacyNotice entity={entity} />
+  return <PlatformMemberPrivacyPolicy />
+}
+
+function PlatformMemberPrivacyPolicy() {
   return (
     <div className="min-h-screen bg-white text-gray-900">
       <div className="mx-auto max-w-3xl px-6 py-12">

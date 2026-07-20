@@ -46,7 +46,10 @@ export const TENANT_DOMAINS_CACHE_TTL_MS = 5 * 60 * 1000 // domain churn is rare
 // minus its UN1T-specific pretty paths; every entry is already
 // public on the CRM hostname, so the default exposes nothing new.
 export const DB_BRAND_DEFAULTS = Object.freeze({
-  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/api/public/', '/api/webhooks/']),
+  // '/privacy' (SAAS4-C2): startsWith-matched, so it also covers
+  // /privacy/members — the tenant-aware notice that renders the
+  // tenant's own legal entity once configured (tenant-privacy.js).
+  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/privacy', '/api/public/', '/api/webhooks/']),
   rootHandler: 'rewrite',
   rootRewriteTo: '/welcome',
   fallbackHandler: 'rewrite',
