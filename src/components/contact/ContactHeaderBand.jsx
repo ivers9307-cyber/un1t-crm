@@ -10,7 +10,7 @@
 import PersonHeader from '@/components/PersonHeader'
 import PersonActionBar from '@/components/PersonActionBar'
 import { formatLastSeen } from '@/lib/person-view'
-import { formatMoney } from './format'
+import { formatMoney, formatDate } from './format'
 
 // PULSE-90.4 — first-90-days journey status chips. Light-theme contrast
 // recipe (bg-<c>-500/10 text-<c>-700 — never the -300/-400 ramp).
@@ -51,6 +51,16 @@ function StatTile({ label, value, tone = 'default' }) {
 export default function ContactHeaderBand({ contact, person, risk, journey, metrics, attention = [], nextClassAt = null }) {
   const funnel = BADGE_SLUGS.has(contact.pipeline_stage_slug)
   const lastAttended = person?.lastAttendedAt || contact.last_attended_at
+  // GLOFOX-REACTIVE (mig 428) — membership pause, surfaced prominently
+  // beside the name but framed NEUTRAL (amber, not the red "needs
+  // attention" band): a paused member is on a planned freeze, not a
+  // chase. resume_date comes from the Glofox service webhook; a past
+  // date means the pause has lapsed, so we drop the "resumes …" suffix.
+  const membershipPaused = contact.glofox_membership_state === 'paused'
+  const pauseResumeFuture = membershipPaused && contact.glofox_membership_resume_at
+    ? new Date(contact.glofox_membership_resume_at).getTime() > Date.now()
+    : false
+  const pauseResumeLabel = pauseResumeFuture ? formatDate(contact.glofox_membership_resume_at) : null
 
   return (
     <div className="mb-6">
@@ -76,6 +86,15 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
             {risk && (
               <span title={risk.title} className={`px-3 py-1 rounded-full text-sm border ${risk.cls}`}>
                 {risk.label}
+              </span>
+            )}
+            {/* GLOFOX-REACTIVE — membership pause: prominent but neutral. */}
+            {membershipPaused && (
+              <span
+                title={pauseResumeLabel ? `Membership paused — resumes ${pauseResumeLabel}` : 'Membership paused'}
+                className="px-3 py-1 rounded-full text-sm border bg-amber-500/10 text-amber-700 border-amber-500/20"
+              >
+                Paused{pauseResumeLabel ? ` · resumes ${pauseResumeLabel}` : ''}
               </span>
             )}
             {/* FUNNEL.4 — Message / Task / Sequence + the Cold toggle. */}
