@@ -74,7 +74,7 @@ describe('buildWhatsAppAudienceAsync', () => {
     expect(result.query).toBeDefined()
   })
 
-  it('applies the WhatsApp eligibility gates (single-table, post mig 325)', async () => {
+  it('applies the WhatsApp eligibility gates (single-table, post mig 422)', async () => {
     const { builder, calls } = makeFakeQuery()
     const db = { from: (t) => { calls.push({ method: 'from', args: [t] }); return builder } }
     await buildWhatsAppAudienceAsync(db, { logic: 'and', filters: [] }, 'loc-uuid')

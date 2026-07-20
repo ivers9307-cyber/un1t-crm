@@ -222,7 +222,7 @@ export async function sendWhatsappStep(db, { step, sequence, contact, frequencyC
   }
   // Send-time consent gate — mirrors the SMS step and the broadcast
   // reachability predicate (applyWhatsAppReachability in
-  // src/lib/whatsapp.js, post mig 325: whatsapp_marketing is
+  // src/lib/whatsapp.js, post mig 422: whatsapp_marketing is
   // denormalised onto contacts): opted into WA marketing AND not
   // opted_out/blocked/undeliverable. Broadcasts filter this at the
   // audience layer; a sequence contact can text STOP mid-flow, so the

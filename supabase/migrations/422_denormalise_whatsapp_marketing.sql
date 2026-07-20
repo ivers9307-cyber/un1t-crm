@@ -1,4 +1,4 @@
--- 325 — denormalise contact_preferences.whatsapp_marketing onto contacts, +
+-- 422 — denormalise contact_preferences.whatsapp_marketing onto contacts, +
 -- whatsapp_broadcasts.delivery_summary.
 --
 -- WHY: WhatsApp broadcast reachability gates on whatsapp_marketing (consent),
@@ -50,11 +50,11 @@ CREATE TRIGGER sync_contacts_whatsapp_marketing_trigger
   EXECUTE FUNCTION sync_contacts_whatsapp_marketing();
 
 COMMENT ON COLUMN contacts.whatsapp_marketing IS
-  'Denormalized read-copy of contact_preferences.whatsapp_marketing (mig 325). Trigger-maintained; operators never write it. Lets WhatsApp broadcast audiences gate reachability single-table. Source of truth = contact_preferences.';
+  'Denormalized read-copy of contact_preferences.whatsapp_marketing (mig 422). Trigger-maintained; operators never write it. Lets WhatsApp broadcast audiences gate reachability single-table. Source of truth = contact_preferences.';
 
 -- Per-send reachability snapshot so the record/list explain exclusions.
 ALTER TABLE whatsapp_broadcasts
   ADD COLUMN IF NOT EXISTS delivery_summary jsonb;
 
 COMMENT ON COLUMN whatsapp_broadcasts.delivery_summary IS
-  'Reachability snapshot stamped at send: { matched, reachable, excluded: { no_number, no_consent, opted_out } }. matched = raw audience_filter count; reachable = contacts actually attempted. Reason counts may overlap. Nullable for rows sent before mig 325.';
+  'Reachability snapshot stamped at send: { matched, reachable, excluded: { no_number, no_consent, opted_out } }. matched = raw audience_filter count; reachable = contacts actually attempted. Reason counts may overlap. Nullable for rows sent before mig 422.';
