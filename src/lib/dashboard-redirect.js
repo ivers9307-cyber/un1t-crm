@@ -24,6 +24,16 @@ import { resolveLandingPreference, LANDING_PREFERENCE_TARGETS } from '@shared/pe
 // portfolio lives at /portfolio.
 export const ACCOUNT_HOME_ROUTE = '/portfolio'
 
+// REPSET-PLATFORM.1 — the Platform Console home (the master cockpit).
+// A master's post-login destination is now this console, not the
+// account portfolio. Kept as a plain string here (rather than imported
+// from platform-nav.js) so the hot `/` landing path doesn't pull the
+// console's lucide-react nav module — mirrors ACCOUNT_HOME_ROUTE owning
+// its own literal. Loop-safe: /admin/tenants is not `/`, so landing
+// there never re-runs this resolver, and its own master page-guard
+// passes a master through without redirecting.
+export const PLATFORM_CONSOLE_HOME = '/admin/tenants'
+
 /**
  * REPSET-ACCOUNT.1 — post-login ACCOUNT-tier landing decision.
  *
@@ -33,8 +43,10 @@ export const ACCOUNT_HOME_ROUTE = '/portfolio'
  * to the EXISTING per-studio behaviour (resolveDashboardTarget).
  *
  * Decision table:
- *   master (with an active org)            → /portfolio (Platform Console
- *                                            is a later phase)
+ *   master                                 → /admin/tenants (Platform
+ *                                            Console home — REPSET-PLATFORM.1;
+ *                                            no active org required, the
+ *                                            console is cross-tenant)
  *   owner of the active org, ≥2 accessible
  *     studios in that org                  → /portfolio
  *   owner with 1 studio                    → null (studio dashboard, UNCHANGED)
@@ -57,9 +69,12 @@ export function resolveLandingTarget(user) {
 
     const isMaster = user.isMaster || user.profileRole === 'master' || user.role === 'master'
     if (isMaster) {
-      // Master → their active org's Account Home (for now). No active
-      // org → fall through to the existing dashboard resolution.
-      return user.activeOrganization?.id ? ACCOUNT_HOME_ROUTE : null
+      // REPSET-PLATFORM.1 — a master lands on the Platform Console home
+      // (the cross-tenant cockpit), NOT the account portfolio. The
+      // console needs no active org, so this is unconditional for a
+      // master. Loop-safe: /admin/tenants isn't `/` (never re-runs this)
+      // and its master page-guard passes a master through.
+      return PLATFORM_CONSOLE_HOME
     }
 
     const activeOrgId = user.activeOrganization?.id

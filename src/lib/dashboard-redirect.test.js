@@ -110,9 +110,10 @@ describe('resolveDashboardTarget', () => {
   })
 })
 
-// REPSET-ACCOUNT.1 — the ACCOUNT-tier landing decision. Routes a
-// multi-studio owner (or master) to the org portfolio; everyone else
-// falls through (null) to the existing per-studio behaviour.
+// REPSET-ACCOUNT.1 / REPSET-PLATFORM.1 — the tier landing decision.
+// A master lands on the Platform Console (/admin/tenants); a multi-
+// studio owner lands on the org portfolio; everyone else falls through
+// (null) to the existing per-studio behaviour.
 describe('resolveLandingTarget', () => {
   // getOwnerOrganizationIds reads rolesByLocation + locations, so build
   // the real user shape.
@@ -131,12 +132,20 @@ describe('resolveLandingTarget', () => {
     expect(resolveLandingTarget(undefined)).toBe(null)
   })
 
-  it('master with an active org lands on the portfolio', () => {
-    expect(resolveLandingTarget(acct({ role: 'master', isMaster: true, activeOrgId: 'org-a' }))).toBe('/portfolio')
+  // REPSET-PLATFORM.1 — a master now lands on the Platform Console home,
+  // NOT the account portfolio. The console is cross-tenant, so no active
+  // org is required.
+  it('master lands on the Platform Console home (/admin/tenants)', () => {
+    expect(resolveLandingTarget(acct({ role: 'master', isMaster: true, activeOrgId: 'org-a' }))).toBe('/admin/tenants')
   })
 
-  it('master with NO active org falls through (existing behaviour)', () => {
-    expect(resolveLandingTarget(acct({ role: 'master', isMaster: true, activeOrgId: null }))).toBe(null)
+  it('master with NO active org still lands on the console (no org required)', () => {
+    expect(resolveLandingTarget(acct({ role: 'master', isMaster: true, activeOrgId: null }))).toBe('/admin/tenants')
+  })
+
+  it('master detected via profileRole (not the isMaster flag) also lands on the console', () => {
+    const u = { profileRole: 'master', activeOrganization: null, rolesByLocation: {}, locations: [] }
+    expect(resolveLandingTarget(u)).toBe('/admin/tenants')
   })
 
   it('owner of the active org with ≥2 studios → portfolio', () => {
