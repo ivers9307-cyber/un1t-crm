@@ -18,6 +18,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { stampTenantHeartbeat } from '@/lib/tenant-heartbeat'
+import { sendOpsAlert } from '@/lib/ops-alerts'
 import { logWarn } from '@/lib/log'
 import { isPackCreditDataStale, PACK_CREDIT_MAX_AGE_DAYS } from '@/lib/glofox-data-quality'
 
@@ -39,7 +40,7 @@ export async function GET(request) {
   // Glofox-connected, or no packs sold) — never a false stale.
   const { data: locations, error: locErr } = await db
     .from('locations')
-    .select('id, name')
+    .select('id, name, organization_id')
     .eq('active', true)
   if (locErr) {
     return NextResponse.json({ success: false, error: locErr.message }, { status: 500 })
@@ -69,6 +70,16 @@ export async function GET(request) {
     if (stale) {
       logWarn('glofox-data-quality',
         `pack-credit data is stale at ${loc.name} — latest num_classes sync ${latestSync || 'never'} (threshold ${PACK_CREDIT_MAX_AGE_DAYS}d)`)
+      // SAAS4-O2 — tell the tenant, not just the global heartbeat. Once
+      // per daily run while stale; emails the org's ops recipients,
+      // master-push fallback when none are configured.
+      await sendOpsAlert({
+        organizationId: loc.organization_id,
+        locationId: loc.id,
+        subject: `Glofox sync is stale at ${loc.name}`,
+        htmlBody: `<p>The Glofox pack-credit data at <strong>${loc.name}</strong> has not synced since ${latestSync || 'never'} (threshold ${PACK_CREDIT_MAX_AGE_DAYS} days). Class-pack balances and the churn radar's Active base are drifting until the sync recovers.</p>`,
+        pushBody: `Glofox pack-credit data at ${loc.name} last synced ${latestSync || 'never'} — the nightly sync looks broken.`,
+      })
     } else {
       await stampTenantHeartbeat('glofox-data-quality', loc.id)
     }

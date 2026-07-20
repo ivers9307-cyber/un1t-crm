@@ -8,10 +8,11 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 
-export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCents, initialEmailCapSends }) {
+export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCents, initialEmailCapSends, initialOpsEmails }) {
   const router = useRouter()
   const [aiCap, setAiCap] = useState(initialAiCapCents != null ? String(initialAiCapCents / 100) : '')
   const [emailCap, setEmailCap] = useState(initialEmailCapSends != null ? String(initialEmailCapSends) : '')
+  const [opsEmails, setOpsEmails] = useState(Array.isArray(initialOpsEmails) ? initialOpsEmails.join(', ') : '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
@@ -54,6 +55,8 @@ export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCen
           organization_id: organizationId,
           ai_hard_cap_cents: aiNum == null ? null : Math.round(aiNum * 100),
           email_hard_cap_sends: emailNum,
+          // SAAS4-O2 — comma string; server normalises/validates.
+          ops_alert_emails: opsEmails.trim() === '' ? null : opsEmails,
         }),
       })
       json = await res.json()
@@ -116,6 +119,19 @@ export default function UsageCapsForm({ organizationId, canEdit, initialAiCapCen
           />
         </label>
       </div>
+
+      <label className="block text-sm mb-4 max-w-xl">
+        <span className="text-un1t-text">Ops alert emails</span>
+        <input
+          value={opsEmails}
+          onChange={(e) => setOpsEmails(e.target.value)}
+          placeholder="ops@yourgym.ie, owner@yourgym.ie"
+          className="mt-1 w-full bg-un1t-bg border border-un1t-border rounded-lg px-3 py-2 text-sm"
+        />
+        <span className="text-xs text-un1t-subtle">
+          Where cap warnings and sync-stale alerts go, comma-separated. Blank = platform admin only.
+        </span>
+      </label>
 
       <button
         type="submit"

@@ -143,6 +143,7 @@ export default async function UsageSettingsPage() {
         canEdit={canEditCaps}
         initialAiCapCents={aiCap}
         initialEmailCapSends={emailCap}
+        initialOpsEmails={summary.caps.ops_alert_emails}
       />
     </div>
   )
