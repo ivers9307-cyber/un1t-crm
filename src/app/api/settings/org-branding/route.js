@@ -13,6 +13,13 @@ const OrgBrandingSchema = z.object({
   logo_url: z.string().url().max(2000).nullable().optional(),
   favicon_url: z.string().url().max(2000).nullable().optional(),
   company_name: z.string().max(200).nullable().optional(),
+  // SAAS4-C2 — the tenant's legal identity for their privacy notice
+  // (mig 425). Entity name + privacy email must BOTH be set before the
+  // tenant's hostname serves the tenant-entity notice.
+  legal_entity_name: z.string().max(200).nullable().optional(),
+  legal_trading_name: z.string().max(200).nullable().optional(),
+  legal_address: z.string().max(500).nullable().optional(),
+  privacy_contact_email: z.string().email().max(200).nullable().optional(),
 })
 
 // Resolve the org the caller may act on. Master targets any org (defaults to
@@ -65,6 +72,12 @@ export async function PUT(request) {
     company_name: body.company_name ?? null,
     updated_at: new Date().toISOString(),
     updated_by: user.id,
+  }
+  // SAAS4-C2 legal fields: included ONLY when present in the body —
+  // unlike the branding trio above, an older client saving branding
+  // must never null-out the tenant's legal identity.
+  for (const key of ['legal_entity_name', 'legal_trading_name', 'legal_address', 'privacy_contact_email']) {
+    if (key in body) record[key] = body[key]
   }
 
   const { data, error } = await db.from('org_settings')
