@@ -53,3 +53,32 @@ export function verifyStripeWebhook(rawBody, signatureHeader) {
 export function isStripeConfigured() {
   return !!process.env.STRIPE_SECRET_KEY
 }
+
+// ── Wallet top-ups (INTEG-C2b) ──────────────────────────────────────────────
+// Wallet top-ups are PLAIN platform charges on the same Stripe account —
+// no connected-account params anywhere. They get their OWN webhook
+// endpoint (/api/webhooks/stripe-wallet) with its OWN signing secret so
+// the Connect-events endpoint above and the wallet endpoint can never
+// consume each other's deliveries.
+
+/**
+ * Verify + parse a wallet-top-up webhook (STRIPE_WALLET_WEBHOOK_SECRET).
+ * Throws on a bad signature OR a missing secret — deliberately NO
+ * fallback to STRIPE_WEBHOOK_SECRET (a wallet event verified against
+ * the Connect endpoint's secret would be a config error, not a feature).
+ * The route turns the missing-secret case into a 503 BEFORE calling
+ * this, keeping the endpoint safely inert until configured.
+ * @param {string|Buffer} rawBody
+ * @param {string} signatureHeader  value of the `Stripe-Signature` header
+ * @returns {import('stripe').Stripe.Event}
+ */
+export function verifyStripeWalletWebhook(rawBody, signatureHeader) {
+  const secret = process.env.STRIPE_WALLET_WEBHOOK_SECRET
+  if (!secret) throw new Error('STRIPE_WALLET_WEBHOOK_SECRET is not configured.')
+  return getStripe().webhooks.constructEvent(rawBody, signatureHeader, secret)
+}
+
+/** True when the wallet webhook signing secret is configured. */
+export function isStripeWalletWebhookConfigured() {
+  return !!process.env.STRIPE_WALLET_WEBHOOK_SECRET
+}

@@ -2401,7 +2401,7 @@ registry.registerPath({
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
   summary: 'Tenant billing & usage assembler (owner of the org or master)',
-  description: 'Per pinned location: plan (tier/price/effective date/add-ons), month-to-date meters vs allowance (staff assistant separate — allowance-exempt), wallet (balance, Dublin month-end expiry, lapse warning, last-20 ledger, auto-top-up config). Orgs with zero active tier pinnings get pinned:false and an empty locations list. ?organization_id targets another org (master only; a foreign org answers 404, not 403).',
+  description: 'Per pinned location: plan (tier/price/effective date/add-ons), month-to-date meters vs allowance (staff assistant separate — allowance-exempt), wallet (balance, Dublin month-end expiry, lapse warning, last-20 ledger, auto-top-up config). Plus the org\'s recent wallet top-up VAT invoices (INTEG-C2b: last 24 across all the org\'s locations, newest first). Orgs with zero active tier pinnings get pinned:false and empty locations/invoices lists. ?organization_id targets another org (master only; a foreign org answers 404, not 403).',
   responses: {
     200: { description: 'Billing page data' },
     403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
@@ -2434,6 +2434,37 @@ registry.registerPath({
     200: { description: 'Auto-top-up config saved' },
     403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// Wallet top-up (INTEG-C2b) — one-off Stripe Checkout, fixed
+// denominations, VAT invoiced at the point of top-up.
+registry.registerPath({
+  method: 'post',
+  path: '/api/settings/billing/topup',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Start a Stripe wallet top-up (owner of the org or master)',
+  description: 'Creates a pending TU-serial VAT invoice row and a hosted Stripe Checkout Session (plain platform charge — no Connect params) for a FIXED denomination (2500/5000/10000/25000 cents ex-VAT; 23% Irish VAT added on top at checkout). Requires an ACTIVE tier pinning on the location — unpinned locations (every location today) answer 400. Fulfilment (invoice paid + wallet_apply credit + VAT-invoice email) happens on the dedicated /api/webhooks/stripe-wallet endpoint, never on the redirect. A foreign/unknown location answers 404, not 403.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            location_id: uuidLike,
+            amount_cents: z.number().int()
+              .describe('One of the fixed denominations in EUR cents (ex-VAT): 2500, 5000, 10000, 25000.'),
+          }).openapi('WalletTopupStart'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Checkout created — { checkout_url, invoice_id, number }' },
+    400: { description: 'Invalid denomination, or the location has no active platform plan', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Stripe checkout could not be created', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
