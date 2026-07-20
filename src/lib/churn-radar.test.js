@@ -873,11 +873,11 @@ describe('RADAR-TREND.1 — computeTrend', () => {
   })
 })
 
-describe('bucketArrears (OWED-PENDING.1)', () => {
+describe('bucketArrears (OWED-PENDING.1 / AWAITING-AUTH.1)', () => {
   const M = (entries) => new Map(entries)
 
   it('routes PAST_DUE ≥ €50 → Overdue, < €50 → Unpaid charges', () => {
-    const { overdueById, unpaidById } = bucketArrears(
+    const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(
       M([
         ['big', { amountCents: 6000, count: 1, oldestDueAt: '2026-05-01' }],
         ['small', { amountCents: 1000, count: 1, oldestDueAt: '2026-05-01' }],
@@ -888,32 +888,36 @@ describe('bucketArrears (OWED-PENDING.1)', () => {
     expect(overdueById.has('small')).toBe(false)
     expect(unpaidById.get('small')?.amountCents).toBe(1000)
     expect(unpaidById.has('big')).toBe(false)
+    expect(awaitingAuthById.size).toBe(0)
   })
 
-  it('always routes PENDING fees to Unpaid charges, never Overdue — even ≥ €50', () => {
-    const { overdueById, unpaidById } = bucketArrears(
+  it('routes PENDING fees to Awaiting authorization — never Overdue or Unpaid charges, even ≥ €50', () => {
+    const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(
       M(),
       M([['p', { amountCents: 9000, count: 1, oldestDueAt: '2026-05-01' }]]),
     )
     expect(overdueById.size).toBe(0)
-    expect(unpaidById.get('p')?.amountCents).toBe(9000)
+    expect(unpaidById.size).toBe(0)
+    expect(awaitingAuthById.get('p')?.amountCents).toBe(9000)
   })
 
-  it('puts a ≥€50 PAST_DUE debt in Overdue AND its PENDING fee in Unpaid charges (both tabs)', () => {
-    const { overdueById, unpaidById } = bucketArrears(
+  it('puts a ≥€50 PAST_DUE debt in Overdue AND its PENDING fee in Awaiting authorization (both tabs)', () => {
+    const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(
       M([['c', { amountCents: 20900, count: 1, oldestDueAt: '2026-05-01' }]]),
       M([['c', { amountCents: 1000, count: 1, oldestDueAt: '2026-05-26' }]]),
     )
     expect(overdueById.get('c')?.amountCents).toBe(20900)
-    expect(unpaidById.get('c')?.amountCents).toBe(1000)
+    expect(unpaidById.has('c')).toBe(false)
+    expect(awaitingAuthById.get('c')?.amountCents).toBe(1000)
   })
 
-  it('merges a small PAST_DUE + a PENDING fee into ONE Unpaid-charges row', () => {
-    const { overdueById, unpaidById } = bucketArrears(
+  it('keeps a small PAST_DUE (Unpaid charges) and a PENDING fee (Awaiting authorization) in SEPARATE tabs', () => {
+    const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(
       M([['c', { amountCents: 1000, count: 1, oldestDueAt: '2026-05-03' }]]),
       M([['c', { amountCents: 1000, count: 1, oldestDueAt: '2026-05-26' }]]),
     )
     expect(overdueById.size).toBe(0)
-    expect(unpaidById.get('c')).toMatchObject({ amountCents: 2000, count: 2, oldestDueAt: '2026-05-03' })
+    expect(unpaidById.get('c')).toMatchObject({ amountCents: 1000, count: 1, oldestDueAt: '2026-05-03' })
+    expect(awaitingAuthById.get('c')).toMatchObject({ amountCents: 1000, count: 1, oldestDueAt: '2026-05-26' })
   })
 })

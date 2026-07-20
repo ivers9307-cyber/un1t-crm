@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { loadOverdue, loadUnpaidCharges, loadRadar, loadContactArrears } from './churn-radar-data'
+import { loadOverdue, loadUnpaidCharges, loadAwaitingAuth, loadRadar, loadContactArrears } from './churn-radar-data'
 
 // ARREARS-NETTING.1 (Fix B) — the live Overdue feature must net cross-
 // invoice-id payment retries out of the chase-list + total, the same way the
@@ -211,11 +211,13 @@ describe('loadContactArrears — per-contact profile arrears (PROFILE-ARREARS.1)
   })
 })
 
-// ── OWED-PENDING.1: PENDING custom-charge fees count as owed ──────────────────
+// ── OWED-PENDING.1 / AWAITING-AUTH.1: PENDING custom-charge fees ──────────────
 // A no-show / late-cancel fee that's been applied but not yet collected sits
-// PENDING in Glofox; it counts toward what a member owes. A PENDING subscription
-// renewal (a scheduled future payment) does NOT.
-describe('PENDING custom-charge fees count as owed (OWED-PENDING.1)', () => {
+// PENDING in Glofox ("awaiting authorization"). It counts toward what a member
+// owes on their profile (loadContactArrears), but on the churn radar it lands in
+// its OWN Awaiting-authorization tab — never Overdue and never Unpaid charges. A
+// PENDING subscription renewal (a scheduled future payment) counts as neither.
+describe('PENDING custom-charge fees — profile owed vs radar tab (OWED-PENDING.1 / AWAITING-AUTH.1)', () => {
   it('loadContactArrears counts a PENDING custom-charge fee but not a pending subscription', async () => {
     const db = makeDb({
       glofox_invoices: (state) => {
@@ -232,7 +234,7 @@ describe('PENDING custom-charge fees count as owed (OWED-PENDING.1)', () => {
     expect(res.count).toBe(2)
   })
 
-  it('routes a small PAST_DUE + PENDING fee to Unpaid charges, never Overdue', async () => {
+  it('splits a small PAST_DUE (Unpaid charges) from a PENDING fee (Awaiting authorization)', async () => {
     const db = makeDb({
       glofox_invoices: (state) => {
         if (state.status === 'PAST_DUE') return [gInvoice({ id: 'pd', glofox_user_id: 'cf', contact_id: 'c-claire', amount_cents: 1000, status: 'PAST_DUE', invoice_date: '2026-05-03T00:00:00Z' })]
@@ -244,14 +246,47 @@ describe('PENDING custom-charge fees count as owed (OWED-PENDING.1)', () => {
     })
     const { overdue } = await loadOverdue(db, LOC, NOW)
     expect(overdue).toHaveLength(0) // €10 past-due < €50 → not on the chase-list
+    // Unpaid charges = the €10 confirmed PAST_DUE only (pending no longer merged in).
     const { charges, summary } = await loadUnpaidCharges(db, LOC, NOW)
     expect(charges).toHaveLength(1)
     expect(charges[0].contactId).toBe('c-claire')
-    expect(charges[0].invoiceCount).toBe(2) // €10 PAST_DUE + €10 PENDING fee
-    expect(summary.totalValueCents).toBe(2000)
+    expect(charges[0].invoiceCount).toBe(1)
+    expect(charges[0].amountOwedCents).toBe(1000)
+    expect(summary.totalValueCents).toBe(1000)
+    // Awaiting authorization = the €10 PENDING fee only.
+    const { charges: awaiting, summary: aSummary } = await loadAwaitingAuth(db, LOC, NOW)
+    expect(awaiting).toHaveLength(1)
+    expect(awaiting[0].contactId).toBe('c-claire')
+    expect(awaiting[0].invoiceCount).toBe(1)
+    expect(awaiting[0].amountOwedCents).toBe(1000)
+    expect(aSummary.totalValueCents).toBe(1000)
   })
 
-  it('keeps a ≥€50 PAST_DUE debt on Overdue but its PENDING fee in Unpaid charges (both tabs)', async () => {
+  it('surfaces a PENDING-only contact (no past-due at all) in Awaiting authorization', async () => {
+    // Guards the loadArrearsRows id-union: a contact with ONLY a pending fee has
+    // no PAST_DUE row, so their contact row is fetched via awaitingAuthById.keys()
+    // — otherwise buildOverdue would have no contact to build a row from.
+    const db = makeDb({
+      glofox_invoices: (state) => {
+        if (state.status === 'PENDING') return [gInvoice({ id: 'fee', glofox_user_id: 'pf', contact_id: 'c-pen', amount_cents: 1500, status: 'PENDING', invoice_date: '2026-05-20T00:00:00Z', line_item_subtypes: 'CUSTOM_CHARGE' })]
+        return [] // no PAST_DUE, no PAID
+      },
+      churn_radar_actions: [],
+      contacts: [contact({ id: 'c-pen', name: 'Pending Only' })],
+    })
+    const { overdue } = await loadOverdue(db, LOC, NOW)
+    expect(overdue).toHaveLength(0)
+    const { charges } = await loadUnpaidCharges(db, LOC, NOW)
+    expect(charges).toHaveLength(0)
+    const { charges: awaiting, summary } = await loadAwaitingAuth(db, LOC, NOW)
+    expect(awaiting).toHaveLength(1)
+    expect(awaiting[0].contactId).toBe('c-pen')
+    expect(awaiting[0].name).toBe('Pending Only')
+    expect(awaiting[0].amountOwedCents).toBe(1500)
+    expect(summary.totalValueCents).toBe(1500)
+  })
+
+  it('keeps a ≥€50 PAST_DUE debt on Overdue and its PENDING fee under Awaiting authorization', async () => {
     const db = makeDb({
       glofox_invoices: (state) => {
         if (state.status === 'PAST_DUE') return [gInvoice({ id: 'pd', glofox_user_id: 'cf', contact_id: 'c-big', amount_cents: 20900, status: 'PAST_DUE', invoice_date: '2026-05-03T00:00:00Z' })]
@@ -264,10 +299,14 @@ describe('PENDING custom-charge fees count as owed (OWED-PENDING.1)', () => {
     const { overdue } = await loadOverdue(db, LOC, NOW)
     expect(overdue).toHaveLength(1)
     expect(overdue[0].amountOwedCents).toBe(20900) // PAST_DUE only — pending excluded from Overdue
+    // No small confirmed past-due charge → Unpaid charges is empty (pending moved out).
     const { charges } = await loadUnpaidCharges(db, LOC, NOW)
-    expect(charges).toHaveLength(1)
-    expect(charges[0].contactId).toBe('c-big')
-    expect(charges[0].amountOwedCents).toBe(1000) // just the pending fee
+    expect(charges).toHaveLength(0)
+    // The pending fee is under Awaiting authorization instead.
+    const { charges: awaiting } = await loadAwaitingAuth(db, LOC, NOW)
+    expect(awaiting).toHaveLength(1)
+    expect(awaiting[0].contactId).toBe('c-big')
+    expect(awaiting[0].amountOwedCents).toBe(1000)
   })
 })
 

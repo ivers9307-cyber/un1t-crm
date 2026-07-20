@@ -119,10 +119,10 @@ export async function fetchPastDue(db, locationId) {
   // Net cross-invoice-id payment retries out before aggregating.
   const { kept } = nettedOutByRetry(openRows, paidRows)
 
-  // OWED-PENDING.1 — bucket the netted rows by status. PAST_DUE drives the
-  // Overdue chase-list + 'overdue' classification; PENDING ('awaiting
+  // OWED-PENDING.1 / AWAITING-AUTH.1 — bucket the netted rows by status. PAST_DUE
+  // drives the Overdue chase-list + 'overdue' classification; PENDING ('awaiting
   // authorization') fees are kept SEPARATE so they only ever surface in the
-  // Unpaid-charges tab, never on the Overdue list.
+  // Awaiting-authorization tab, never on the Overdue list or in Unpaid charges.
   const byId = new Map()        // PAST_DUE
   const pendingById = new Map() // PENDING custom-charge fees
   for (const r of kept) {
@@ -138,7 +138,7 @@ export async function fetchPastDue(db, locationId) {
     target.set(r.contact_id, cur)
   }
   // ids = PAST_DUE contacts only — a pending fee never classifies a member as
-  // 'overdue' (no pill, off the chase-list); it shows in Unpaid charges instead.
+  // 'overdue' (no pill, off the chase-list); it shows in Awaiting authorization instead.
   return { ids: new Set(byId.keys()), byId, pendingById }
 }
 
@@ -358,15 +358,16 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
   // how many came back to training afterwards.
   const recovery = computeRecoveryStats(members, actions, nowMs)
 
-  // RADAR-OVERDUE.1 — split the full past-due chase-list at OVERDUE_MIN_CENTS
-  // so the headline badges match their tabs: Overdue (≥€50, real debts) vs
-  // Unpaid charges (<€50, small custom charges). Incl. ex-members who owe.
-  // OWED-PENDING.1 — Overdue badge = ≥€50 PAST_DUE; Unpaid charges = small
-  // PAST_DUE + PENDING 'awaiting authorization' fees. Pending never counts as
-  // Overdue. (A contact can land in both if they owe ≥€50 AND have a pending fee.)
-  const { overdueById, unpaidById } = bucketArrears(pastDue.byId, pastDue.pendingById)
+  // RADAR-OVERDUE.1 / AWAITING-AUTH.1 — split the full arrears set so the
+  // headline badges match their tabs: Overdue (≥€50 PAST_DUE, real debts),
+  // Unpaid charges (<€50 PAST_DUE, small confirmed custom charges) and Awaiting
+  // authorization (PENDING fees not yet collected). Incl. ex-members who owe.
+  // Pending never counts as Overdue or Unpaid charges. (A contact can land in
+  // more than one bucket — a ≥€50 debt AND a pending fee, say.)
+  const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(pastDue.byId, pastDue.pendingById)
   let overdueCount = 0, overdueValueCents = 0
   let unpaidChargesCount = 0, unpaidChargesValueCents = 0
+  let awaitingAuthCount = 0, awaitingAuthValueCents = 0
   for (const [id, agg] of overdueById) {
     if (dismissed.has(id)) continue
     overdueCount++; overdueValueCents += agg.amountCents || 0
@@ -375,11 +376,16 @@ export async function loadRadar(db, locationId, nowMs = Date.now()) {
     if (dismissed.has(id)) continue
     unpaidChargesCount++; unpaidChargesValueCents += agg.amountCents || 0
   }
+  for (const [id, agg] of awaitingAuthById) {
+    if (dismissed.has(id)) continue
+    awaitingAuthCount++; awaitingAuthValueCents += agg.amountCents || 0
+  }
 
   const finalSummary = {
     ...summary, quarantine: quarantineOpen, snoozed, recovery,
     overdue: overdueCount, overdueValueCents,
     unpaidCharges: unpaidChargesCount, unpaidChargesValueCents,
+    awaitingAuth: awaitingAuthCount, awaitingAuthValueCents,
   }
 
   // RADAR-TREND.1 — week-over-week deltas vs the most recent weekly
@@ -443,10 +449,11 @@ export async function loadQuarantine(db, locationId) {
  * @returns {Promise<{ overdue: object[], summary: object }>}
  */
 /**
- * Build every open-past-due row at the location (minus dismissed), each
- * with its most recent contacting action, then split at OVERDUE_MIN_CENTS:
- * `overdue` (the chase-list) vs `unpaidCharges` (small custom charges).
- * Shared by loadOverdue + loadUnpaidCharges so they read identical data.
+ * Build every open-arrears row at the location (minus dismissed), each with its
+ * most recent contacting action, split into the three tabs: `overdue` (≥€50
+ * PAST_DUE chase-list), `unpaidCharges` (<€50 confirmed PAST_DUE custom charges)
+ * and `awaitingAuth` (PENDING fees not yet collected). Shared by loadOverdue +
+ * loadUnpaidCharges + loadAwaitingAuth so they read identical data.
  */
 async function loadArrearsRows(db, locationId, nowMs) {
   const [pastDue, actions, dismissed] = await Promise.all([
@@ -454,11 +461,11 @@ async function loadArrearsRows(db, locationId, nowMs) {
     fetchActions(db, locationId),
     fetchDismissed(db, locationId),
   ])
-  // OWED-PENDING.1 — PAST_DUE drives Overdue (≥€50) vs small-charges; PENDING
-  // 'awaiting authorization' fees go to the Unpaid-charges tab only. A contact
-  // may appear in both tabs (a real ≥€50 debt + a separate pending fee).
-  const { overdueById, unpaidById } = bucketArrears(pastDue.byId, pastDue.pendingById)
-  const ids = [...new Set([...overdueById.keys(), ...unpaidById.keys()])].filter((id) => !dismissed.has(id))
+  // OWED-PENDING.1 / AWAITING-AUTH.1 — PAST_DUE drives Overdue (≥€50) vs Unpaid
+  // charges (<€50); PENDING 'awaiting authorization' fees go to their own
+  // Awaiting-authorization tab only. A contact may appear in more than one tab.
+  const { overdueById, unpaidById, awaitingAuthById } = bucketArrears(pastDue.byId, pastDue.pendingById)
+  const ids = [...new Set([...overdueById.keys(), ...unpaidById.keys(), ...awaitingAuthById.keys()])].filter((id) => !dismissed.has(id))
   const contacts = await fetchContactsByIds(db, ids)
 
   // Actions are newest-first — first hit per contact is the latest.
@@ -472,7 +479,8 @@ async function loadArrearsRows(db, locationId, nowMs) {
 
   const overdue = buildOverdue(contacts, nowMs, { pastDueById: overdueById }).map(withAction)
   const unpaidCharges = buildOverdue(contacts, nowMs, { pastDueById: unpaidById }).map(withAction)
-  return { overdue, unpaidCharges }
+  const awaitingAuth = buildOverdue(contacts, nowMs, { pastDueById: awaitingAuthById }).map(withAction)
+  return { overdue, unpaidCharges, awaitingAuth }
 }
 
 export async function loadOverdue(db, locationId, nowMs = Date.now()) {
@@ -482,10 +490,11 @@ export async function loadOverdue(db, locationId, nowMs = Date.now()) {
 }
 
 /**
- * Load the "Unpaid charges" tab — contacts whose open past-due total is
- * below OVERDUE_MIN_CENTS (€50): the small custom charges (€5–€10 fees)
- * that would otherwise clutter the main Overdue chase-list. Same row
- * shape as Overdue.
+ * Load the "Unpaid charges" tab — contacts whose open CONFIRMED past-due total
+ * is below OVERDUE_MIN_CENTS (€50): the small custom charges (€5–€10 fees) that
+ * would otherwise clutter the main Overdue chase-list. PENDING 'awaiting
+ * authorization' fees are NOT here — they live in their own tab (loadAwaitingAuth).
+ * Same row shape as Overdue.
  *
  * @returns {Promise<{ charges: object[], summary: object }>}
  */
@@ -493,6 +502,22 @@ export async function loadUnpaidCharges(db, locationId, nowMs = Date.now()) {
   const { unpaidCharges } = await loadArrearsRows(db, locationId, nowMs)
   const totalValueCents = unpaidCharges.reduce((sum, r) => sum + (r.amountOwedCents || 0), 0)
   return { charges: unpaidCharges, summary: { total: unpaidCharges.length, totalValueCents } }
+}
+
+/**
+ * AWAITING-AUTH.1 — load the "Awaiting authorization" tab: contacts with a
+ * PENDING custom-charge fee (a no-show / late-cancel fee Glofox has applied but
+ * not yet collected — it shows as "Awaiting authorization" in Glofox). These are
+ * NOT confirmed debts, so they're kept off the Overdue chase-list AND out of the
+ * Unpaid-charges tab; they get their own low-priority tab. Same row shape as
+ * Overdue (returns `charges` so the UI can reuse the charges list).
+ *
+ * @returns {Promise<{ charges: object[], summary: object }>}
+ */
+export async function loadAwaitingAuth(db, locationId, nowMs = Date.now()) {
+  const { awaitingAuth } = await loadArrearsRows(db, locationId, nowMs)
+  const totalValueCents = awaitingAuth.reduce((sum, r) => sum + (r.amountOwedCents || 0), 0)
+  return { charges: awaitingAuth, summary: { total: awaitingAuth.length, totalValueCents } }
 }
 
 /**
