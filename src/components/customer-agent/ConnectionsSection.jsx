@@ -19,7 +19,11 @@ const IG_FIELDS = [
   { key: 'app_secret', label: 'Instagram app secret (also set as INSTAGRAM_APP_SECRET env)', placeholder: 'paste to set', secret: true },
 ]
 
-export default function ConnectionsSection({ locationId, locationName, embedded = false }) {
+// `onChanged` (optional): fired after a successful Instagram connect/update
+// or disconnect so a host surface (the Integrations hub drawer) can re-grade
+// its own card. The component's own `load()` still refreshes the in-card
+// state either way; onChanged is purely a notify-up hook.
+export default function ConnectionsSection({ locationId, locationName, embedded = false, onChanged }) {
   const [connections, setConnections] = useState([])
   const [draft, setDraft] = useState({})
   const [loading, setLoading] = useState(true)
@@ -67,7 +71,7 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
         method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       })
       const j = await res.json()
-      if (j.success) { setSavedAt(Date.now()); await load() }
+      if (j.success) { setSavedAt(Date.now()); await load(); onChanged?.() }
       else setError(j.error || 'Failed to save')
     } catch { setError('Failed to save') }
     finally { setSaving(false) }
@@ -77,6 +81,7 @@ export default function ConnectionsSection({ locationId, locationName, embedded 
     if (!igConn) return
     await fetch(`/api/locations/${locationId}/channels/${igConn.id}`, { method: 'DELETE' })
     await load()
+    onChanged?.()
   }
 
   if (loading) return <div className="text-sm text-un1t-muted">Loading connections…</div>

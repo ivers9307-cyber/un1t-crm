@@ -29,7 +29,7 @@
 // wizard, or the billing page — no new mutation surface here, and the old
 // tabs are untouched.
 
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import Link from 'next/link'
 import {
   Zap, MessageCircle, Instagram as InstagramIcon, Landmark, Megaphone,
@@ -37,6 +37,7 @@ import {
   CreditCard, FileCheck, Activity,
 } from 'lucide-react'
 import { buttonClasses } from '@/components/ui'
+import IntegrationsHubDrawer from './IntegrationsHubDrawer'
 
 // ── status chips — the light-theme contrast recipe (bg-*-500/10 + text-*-700,
 // lint-enforced via check:guardrails no-low-contrast-chip) ──
@@ -280,8 +281,28 @@ const DOT = {
   info: 'bg-blue-600',
 }
 
-export default function IntegrationsHub({ data, isMaster = false }) {
+export default function IntegrationsHub({ data: initialData, isMaster = false }) {
   const [scope, setScope] = useState('all')
+  // The hub payload is held in state so a save inside the Manage drawer can
+  // re-grade in place: after connect/disconnect the drawer's onChanged fires
+  // one scoped GET /api/integrations/hub (the same org-scoped route that seeded
+  // this page) and swaps the payload — updating every card chip + the attention
+  // strip without a full navigation. Last-good is kept on a failed refetch.
+  const [data, setData] = useState(initialData)
+  // The per-card Manage drawer. Keyed by (cardKey, locationId) — Ads/IG are
+  // per-location, so the drawer always targets one location's connection.
+  const [managing, setManaging] = useState(null)
+
+  const refetchHub = useCallback(async () => {
+    try {
+      const res = await fetch('/api/integrations/hub', { credentials: 'same-origin' })
+      const j = await res.json().catch(() => ({}))
+      if (j.success && j.data) setData(j.data)
+    } catch {
+      /* keep last-good payload — the drawer's own UI already showed the save result */
+    }
+  }, [])
+
   const locations = data.locations || []
   const nameById = Object.fromEntries(locations.map((l) => [l.id, l.name]))
   const inScope = (locationId) => scope === 'all' || locationId === scope
@@ -481,7 +502,21 @@ export default function IntegrationsHub({ data, isMaster = false }) {
           chip={<StatusChip status={worstOf(instagram.map((r) => r.status))} />}
         >
           {instagram.length === 0 ? (
-            <p className="text-xs text-un1t-subtle">No Instagram connection{scope === 'all' ? '' : ' at this location'} yet.</p>
+            <>
+              <p className="text-xs text-un1t-subtle">No Instagram connection{scope === 'all' ? '' : ' at this location'} yet.</p>
+              <div className="flex gap-2 pt-1 mt-auto">
+                {(scope === 'all' ? locations : locations.filter((l) => l.id === scope)).slice(0, 1).map((l) => (
+                  <button
+                    key={l.id}
+                    type="button"
+                    onClick={() => setManaging({ cardKey: 'instagram', locationId: l.id })}
+                    className={linkBtn(true)}
+                  >
+                    Connect
+                  </button>
+                ))}
+              </div>
+            </>
           ) : instagram.map((r) => (
             <div key={r.locationId} className="space-y-2">
               <div className="text-xs text-un1t-subtle space-y-0.5">
@@ -497,9 +532,13 @@ export default function IntegrationsHub({ data, isMaster = false }) {
                 />
               )}
               <div className="flex gap-2 pt-1">
-                <Link href={r.href} className={linkBtn(r.status !== 'connected')}>
+                <button
+                  type="button"
+                  onClick={() => setManaging({ cardKey: 'instagram', locationId: r.locationId })}
+                  className={linkBtn(r.status !== 'connected')}
+                >
                   {r.status === 'connected' ? 'Manage' : 'Reconnect'}
-                </Link>
+                </button>
               </div>
             </div>
           ))}
@@ -566,9 +605,14 @@ export default function IntegrationsHub({ data, isMaster = false }) {
               ? [{ id: ads[0].locationId }]
               : (scope === 'all' ? locations : locations.filter((l) => l.id === scope)).slice(0, 1)
             ).map((l) => (
-              <Link key={l.id} href={`/settings/locations/${l.id}?tab=ads`} className={linkBtn(ads.length === 0)}>
+              <button
+                key={l.id}
+                type="button"
+                onClick={() => setManaging({ cardKey: 'ads', locationId: l.id })}
+                className={linkBtn(ads.length === 0)}
+              >
                 {ads.length === 0 ? 'Connect' : 'Manage'}
-              </Link>
+              </button>
             ))}
           </div>
         </HubCard>
@@ -792,10 +836,21 @@ export default function IntegrationsHub({ data, isMaster = false }) {
       )}
 
       <p className="mt-10 pt-4 border-t border-un1t-border text-xs text-un1t-muted max-w-3xl">
-        Every action here deep-links into the surface that owns it — the per-location Integrations
-        tab, the email-domain wizard, or the billing page — where connecting, disconnecting and plan
-        changes actually happen. The plan &amp; wallet strip itself is read-only.
+        Meta Ads and Instagram now connect, test and disconnect right here in a Manage panel. Every
+        other card deep-links into the surface that owns it — the per-location Integrations tab, the
+        email-domain wizard, or the billing page. The plan &amp; wallet strip itself is read-only.
       </p>
+
+      {/* Per-card Manage drawer — Ads/Instagram inline management (Phase 1). */}
+      {managing && (
+        <IntegrationsHubDrawer
+          cardKey={managing.cardKey}
+          locationId={managing.locationId}
+          locationName={nameById[managing.locationId] || null}
+          onClose={() => setManaging(null)}
+          onChanged={refetchHub}
+        />
+      )}
     </div>
   )
 }
