@@ -546,37 +546,37 @@ export function splitArrears(rows, minCents = OVERDUE_MIN_CENTS) {
 }
 
 /**
- * OWED-PENDING.1 — bucket per-contact arrears into the two radar tabs.
- * PAST_DUE drives the split: ≥ minCents → Overdue (the chase-list), < minCents
- * → Unpaid charges (small custom charges). PENDING fees ("awaiting
- * authorization") ALWAYS land in Unpaid charges, never on the Overdue
- * chase-list — a pending charge isn't a confirmed debt to dun. A contact can
- * appear in BOTH buckets: a real ≥€50 past-due debt in Overdue plus a separate
- * pending fee in Unpaid charges.
+ * OWED-PENDING.1 / AWAITING-AUTH.1 — bucket per-contact arrears into the three
+ * radar tabs. PAST_DUE drives the split: ≥ minCents → Overdue (the chase-list),
+ * > 0 and < minCents → Unpaid charges (small CONFIRMED custom charges). PENDING
+ * fees ("awaiting authorization" in Glofox — a no-show / late-cancel fee applied
+ * but not yet collected) are NOT confirmed debts, so they stand alone in their
+ * own Awaiting-authorization bucket: never on the Overdue chase-list, and no
+ * longer merged into Unpaid charges. A contact can appear in more than one tab —
+ * a real ≥€50 past-due debt in Overdue, a small past-due charge in Unpaid
+ * charges, and/or a pending fee in Awaiting authorization.
  *
  * @param {Map<string,{amountCents:number,count:number,oldestDueAt:string|null}>} pastDueById
  * @param {Map<string,{amountCents:number,count:number,oldestDueAt:string|null}>} pendingById
- * @returns {{ overdueById: Map, unpaidById: Map }} per-contact aggregates per tab
+ * @returns {{ overdueById: Map, unpaidById: Map, awaitingAuthById: Map }} per-contact aggregates per tab
  */
 export function bucketArrears(pastDueById, pendingById, minCents = OVERDUE_MIN_CENTS) {
   const overdueById = new Map()
   const unpaidById = new Map()
+  const awaitingAuthById = new Map()
   const pd = pastDueById instanceof Map ? pastDueById : new Map()
   const pe = pendingById instanceof Map ? pendingById : new Map()
-  const addUnpaid = (id, part) => {
-    if (!part || !(part.amountCents > 0)) return
-    const cur = unpaidById.get(id) || { amountCents: 0, count: 0, oldestDueAt: null }
-    cur.amountCents += part.amountCents || 0
-    cur.count += part.count || 0
-    if (part.oldestDueAt && (!cur.oldestDueAt || part.oldestDueAt < cur.oldestDueAt)) cur.oldestDueAt = part.oldestDueAt
-    unpaidById.set(id, cur)
-  }
   for (const [id, agg] of pd) {
-    if ((agg?.amountCents || 0) >= minCents) overdueById.set(id, agg)
-    else addUnpaid(id, agg)
+    const amt = agg?.amountCents || 0
+    if (amt >= minCents) overdueById.set(id, agg)
+    else if (amt > 0) unpaidById.set(id, agg)
   }
-  for (const [id, agg] of pe) addUnpaid(id, agg)
-  return { overdueById, unpaidById }
+  // PENDING fees stand alone in the Awaiting-authorization tab — no cross-status
+  // merging with the confirmed PAST_DUE charges in Unpaid charges.
+  for (const [id, agg] of pe) {
+    if ((agg?.amountCents || 0) > 0) awaitingAuthById.set(id, agg)
+  }
+  return { overdueById, unpaidById, awaitingAuthById }
 }
 
 /**

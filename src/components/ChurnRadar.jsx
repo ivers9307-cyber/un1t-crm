@@ -2,11 +2,13 @@
 
 // CHURN-RADAR.1 — the at-risk member radar dashboard.
 //
-// Four tabs:
-//   At Risk    — scored active members + per-member win-back actions.
-//   Win-back   — former members (lapsed 45–365 days) worth re-winning.
-//   Overdue    — live members whose payment has failed; a chase-list.
-//   Quarantine — zero-activity "ghost member" records for bulk triage.
+// Tabs:
+//   At Risk       — scored active members + per-member win-back actions.
+//   Win-back      — former members (lapsed 45–365 days) worth re-winning.
+//   Overdue       — members owing ≥€50 on a past-due invoice; a chase-list.
+//   Unpaid charges— small confirmed past-due custom charges (<€50).
+//   Awaiting auth — PENDING fees Glofox hasn't collected yet (AWAITING-AUTH.1).
+//   Quarantine    — zero-activity "ghost member" records for bulk triage.
 //
 // All data comes from /api/churn-radar/*; this component is pure UI +
 // fetch orchestration.
@@ -15,7 +17,7 @@ import { useEffect, useState, useCallback } from 'react'
 import {
   Radar, AlertTriangle, Clock, TrendingDown, UserX, Phone,
   ClipboardList, BellOff, Check, CalendarClock, RotateCcw,
-  CreditCard, Ticket, TrendingUp, Mail, UserMinus, Coins,
+  CreditCard, Ticket, TrendingUp, Mail, UserMinus, Coins, Hourglass,
 } from 'lucide-react'
 import RadarOutreachButton from '@/components/RadarOutreachButton'
 
@@ -58,6 +60,7 @@ export default function ChurnRadar() {
   const [winback, setWinback] = useState(null)
   const [overdue, setOverdue] = useState(null)
   const [charges, setCharges] = useState(null)
+  const [awaiting, setAwaiting] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(null)        // contactId mid-action
@@ -122,13 +125,25 @@ export default function ChurnRadar() {
     }
   }, [])
 
+  const loadAwaiting = useCallback(async () => {
+    try {
+      const r = await fetch('/api/churn-radar/awaiting-authorization', { cache: 'no-store' })
+      const j = await r.json()
+      if (!r.ok || !j.success) throw new Error(j.error || 'Failed to load awaiting authorization')
+      setAwaiting(j.data)
+    } catch (e) {
+      setError(e.message)
+    }
+  }, [])
+
   useEffect(() => { loadRadar() }, [loadRadar])
   useEffect(() => {
     if (tab === 'quarantine' && quarantine === null) loadQuarantine()
     if (tab === 'winback' && winback === null) loadWinback()
     if (tab === 'overdue' && overdue === null) loadOverdue()
     if (tab === 'charges' && charges === null) loadCharges()
-  }, [tab, quarantine, winback, overdue, charges, loadQuarantine, loadWinback, loadOverdue, loadCharges])
+    if (tab === 'awaiting' && awaiting === null) loadAwaiting()
+  }, [tab, quarantine, winback, overdue, charges, awaiting, loadQuarantine, loadWinback, loadOverdue, loadCharges, loadAwaiting])
 
   function showFlash(msg, ok = true) {
     setFlash({ msg, ok })
@@ -150,6 +165,7 @@ export default function ChurnRadar() {
       if (winback !== null) await loadWinback()
       if (overdue !== null) await loadOverdue()
       if (charges !== null) await loadCharges()
+      if (awaiting !== null) await loadAwaiting()
     } catch (e) {
       showFlash(e.message, false)
     } finally {
@@ -179,6 +195,7 @@ export default function ChurnRadar() {
       if (winback !== null) await loadWinback()
       if (overdue !== null) await loadOverdue()
       if (charges !== null) await loadCharges()
+      if (awaiting !== null) await loadAwaiting()
     } catch (e) {
       showFlash(e.message, false)
     } finally {
@@ -292,6 +309,8 @@ export default function ChurnRadar() {
           icon={CreditCard} label={`Overdue (${summary.overdue})`} />
         <Tab active={tab === 'charges'} onClick={() => setTab('charges')}
           icon={Coins} label={`Unpaid charges (${summary.unpaidCharges || 0})`} />
+        <Tab active={tab === 'awaiting'} onClick={() => setTab('awaiting')}
+          icon={Hourglass} label={`Awaiting authorization (${summary.awaitingAuth || 0})`} />
         <Tab active={tab === 'quarantine'} onClick={() => setTab('quarantine')}
           icon={AlertTriangle}
           label={`Quarantine (${quarantine ? quarantine.length : summary.quarantine})`} />
@@ -312,6 +331,10 @@ export default function ChurnRadar() {
 
       {tab === 'charges' && (
         <UnpaidChargesList data={charges} busy={busy} onAction={runAction} onRefresh={runRefresh} />
+      )}
+
+      {tab === 'awaiting' && (
+        <AwaitingAuthList data={awaiting} busy={busy} onAction={runAction} onRefresh={runRefresh} />
       )}
 
       {tab === 'quarantine' && (
@@ -847,8 +870,9 @@ function OverdueList({ data, busy, onAction, onRefresh }) {
   )
 }
 
-// RADAR-OVERDUE.1 — the small-charges tab (< €50). Same row shape as
-// Overdue, so it reuses OverdueRow; only the framing differs.
+// RADAR-OVERDUE.1 — the small-charges tab: CONFIRMED past-due charges under €50.
+// Same row shape as Overdue, so it reuses OverdueRow; only the framing differs.
+// PENDING 'awaiting authorization' fees are NOT here — they have their own tab.
 function UnpaidChargesList({ data, busy, onAction, onRefresh }) {
   if (data === null) return <p className="text-sm text-un1t-subtle">Loading unpaid charges…</p>
   const rows = data.charges || []
@@ -859,7 +883,8 @@ function UnpaidChargesList({ data, busy, onAction, onRefresh }) {
         <p className="mt-3 font-medium text-un1t-text">No small unpaid charges</p>
         <p className="mt-1 text-sm text-un1t-subtle">
           No member has a small past-due charge (under €50). Larger debts appear
-          under the <strong>Overdue</strong> tab.
+          under the <strong>Overdue</strong> tab; fees still awaiting payment are
+          under <strong>Awaiting authorization</strong>.
         </p>
       </div>
     )
@@ -867,22 +892,57 @@ function UnpaidChargesList({ data, busy, onAction, onRefresh }) {
   return (
     <div className="space-y-2">
       <p className="mb-1 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-        Small <strong>past-due charges under €50</strong> — usually one-off custom
-        charges or fees. Lower priority than the main Overdue chase-list, but worth
-        clearing. Highest owed first.
+        Small <strong>confirmed past-due charges under €50</strong> — usually one-off
+        custom charges or fees. Lower priority than the main Overdue chase-list, but
+        worth clearing. Fees not yet collected are under <strong>Awaiting
+        authorization</strong>. Highest owed first.
       </p>
       {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} />)}
     </div>
   )
 }
 
-function OverdueRow({ m, busy, onAction, onRefresh }) {
+// AWAITING-AUTH.1 — PENDING custom-charge fees Glofox shows as "Awaiting
+// authorization": a no-show / late-cancel fee applied but not yet collected. Not
+// a confirmed debt, so it's kept off Overdue and out of Unpaid charges. Reuses
+// OverdueRow with the 'awaiting' variant (amber pill, "awaiting authorization").
+function AwaitingAuthList({ data, busy, onAction, onRefresh }) {
+  if (data === null) return <p className="text-sm text-un1t-subtle">Loading awaiting authorization…</p>
+  const rows = data.charges || []
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-un1t-border p-10 text-center">
+        <Check size={28} className="mx-auto text-green-500" />
+        <p className="mt-3 font-medium text-un1t-text">Nothing awaiting authorization</p>
+        <p className="mt-1 text-sm text-un1t-subtle">
+          No member has a pending charge waiting to be collected. Confirmed
+          past-due charges are under the <strong>Unpaid charges</strong> and{' '}
+          <strong>Overdue</strong> tabs.
+        </p>
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-2">
+      <p className="mb-1 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+        <strong>Pending charges awaiting authorization</strong> — no-show or
+        late-cancel fees Glofox has applied but not yet collected. Not confirmed
+        debts yet; they clear once the member&apos;s payment goes through. Highest first.
+      </p>
+      {rows.map((m) => <OverdueRow key={m.contactId} m={m} busy={busy} onAction={onAction} onRefresh={onRefresh} variant="awaiting" />)}
+    </div>
+  )
+}
+
+function OverdueRow({ m, busy, onAction, onRefresh, variant = 'owed' }) {
   const isBusy = busy === m.contactId
+  const awaiting = variant === 'awaiting'
   const attendLine = m.daysSinceAttended == null
     ? 'no class history'
     : m.daysSinceAttended <= 30
       ? `still training — last class ${m.daysSinceAttended}d ago`
       : `last class ${m.daysSinceAttended}d ago`
+  const PillIcon = awaiting ? Clock : CreditCard
   return (
     <div className="rounded-lg border border-un1t-border bg-un1t-surface p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -897,15 +957,17 @@ function OverdueRow({ m, busy, onAction, onRefresh }) {
           </div>
           <p className="mt-0.5 text-xs text-un1t-subtle">
             {m.membershipPlan || m.membershipStatus}
-            {m.invoiceCount > 1 && ` · ${m.invoiceCount} unpaid invoices`}
+            {m.invoiceCount > 1 && ` · ${m.invoiceCount} ${awaiting ? 'pending charges' : 'unpaid invoices'}`}
             {` · ${attendLine}`}
             {m.lastContacted && ` · contacted ${timeAgo(m.lastContacted.at)}`}
           </p>
         </div>
-        <span className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700">
-          <CreditCard size={12} />
-          {formatMoney(m.amountOwedCents)} owed
-          {m.daysOverdue != null && ` · ${m.daysOverdue}d overdue`}
+        <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium ${
+          awaiting ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-red-200 bg-red-50 text-red-700'
+        }`}>
+          <PillIcon size={12} />
+          {formatMoney(m.amountOwedCents)}{awaiting ? ' awaiting authorization' : ' owed'}
+          {m.daysOverdue != null && (awaiting ? ` · applied ${m.daysOverdue}d ago` : ` · ${m.daysOverdue}d overdue`)}
         </span>
       </div>
 
