@@ -4,11 +4,13 @@ import { usePathname, useRouter } from 'next/navigation'
 import { Fragment, useState, useEffect } from 'react'
 import Sidebar from './Sidebar'
 import AccountShell from './account/AccountShell'
+import PlatformShell from './platform/PlatformShell'
 import ImpersonationBanner from './ImpersonationBanner'
 import CommandPalette from './CommandPalette'
 import AssistantBubble from './AssistantBubble'
 import { hasPermission } from '@/lib/permissions'
 import { isAccountTierPath } from '@/lib/account-nav'
+import { isPlatformTierPath } from '@/lib/platform-nav'
 // PERF.3 — Vercel SpeedInsights + Analytics mount in the authenticated
 // branch below (NOT the root layout) so /login and the public booking/
 // payment surfaces don't pay for the two analytics bundles pre-auth.
@@ -81,14 +83,24 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
     return null
   }
 
-  // REPSET-ACCOUNT.2 — account-tier (/portfolio) pages get a DISTINCT
-  // account shell (org-level nav) instead of the studio operational
-  // sidebar. Everything below is a pure additive branch: on a studio
-  // path `isAccountTier` is false and the chrome renders byte-for-byte
-  // as before, so the studio CRM is completely untouched. The studio-
-  // only widgets (⌘K palette, AI assistant bubble) are studio-context
-  // tools, so they don't mount at the account tier.
-  const isAccountTier = isAccountTierPath(pathname)
+  // Repset three-tier shell selection — a page is PLATFORM-tier,
+  // ACCOUNT-tier, or STUDIO (default), and the three are MUTUALLY
+  // EXCLUSIVE. Both non-studio branches are pure additions: on a studio
+  // path both flags are false and the chrome renders byte-for-byte as
+  // before, so the studio CRM is completely untouched.
+  //
+  // REPSET-PLATFORM.1 — platform-tier (the four /admin console pages)
+  // gets the master console shell. Gated on BOTH the path AND
+  // `user.isMaster`: a non-master who somehow hits a console path falls
+  // through to the normal shell (and the page's own master guard then
+  // redirects them), so this branch only ever engages for masters.
+  // REPSET-ACCOUNT.2 — account-tier (/portfolio) gets the org shell.
+  // `!isPlatformTier` on the account line makes the exclusion explicit
+  // (the path sets are already disjoint, so it's defensive, not load-
+  // bearing). The studio-only widgets (⌘K palette, AI assistant bubble)
+  // are studio-context tools, so they don't mount at either tier.
+  const isPlatformTier = !!user.isMaster && isPlatformTierPath(pathname)
+  const isAccountTier = !isPlatformTier && isAccountTierPath(pathname)
 
   return (
     <div className="flex h-screen overflow-hidden bg-un1t-bg">
@@ -102,13 +114,18 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
         <span className="font-bold tracking-wider text-un1t-text">
-          {isAccountTier
-            ? (user?.activeOrganization?.name || 'Account')
-            : (user?.activeLocation?.name || 'UN1T')}
+          {isPlatformTier
+            ? 'Repset · Platform'
+            : isAccountTier
+              ? (user?.activeOrganization?.name || 'Account')
+              : (user?.activeLocation?.name || 'UN1T')}
         </span>
       </div>
 
-      {isAccountTier ? (
+      {isPlatformTier ? (
+        /* Platform tier — master cross-tenant console shell. */
+        <PlatformShell user={user} mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
+      ) : isAccountTier ? (
         /* Account tier — org-level nav shell. */
         <AccountShell user={user} mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
       ) : (
@@ -152,7 +169,7 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
           this mount and the two Vercel scripts below were accidental
           casualties of the d184209 AppShell rewrite (restored 2026-06,
           platform audit). */}
-      {!isAccountTier && hasPermission(user, 'assistant') && <AssistantBubble user={user} />}
+      {!isAccountTier && !isPlatformTier && hasPermission(user, 'assistant') && <AssistantBubble user={user} />}
 
       {/* PERF.3 — Speed Insights + Analytics only on authenticated
           pages. Public surfaces return before this branch. */}
