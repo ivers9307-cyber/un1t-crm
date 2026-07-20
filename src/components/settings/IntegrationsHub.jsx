@@ -447,9 +447,13 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
                     ? 'Not connected'
                     : <>Branch {r.branchId ? `${String(r.branchId).slice(0, 6)}…${String(r.branchId).slice(-4)}` : '—'}{r.lastOkAt ? ` · last OK ${fmtDate(r.lastOkAt)}` : ''}</>}
                 </span>
-                <Link href={r.href} className={linkBtn(r.status === 'not_connected')}>
+                <button
+                  type="button"
+                  onClick={() => setManaging({ cardKey: 'glofox', locationId: r.locationId, initial: r })}
+                  className={linkBtn(r.status === 'not_connected')}
+                >
                   {r.status === 'not_connected' ? 'Connect' : 'Manage'}
-                </Link>
+                </button>
               </div>
             ))}
           </div>
@@ -716,7 +720,14 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           </div>
           <div className="flex gap-2 pt-1 mt-auto">
             {sms.slice(0, 1).map((r) => (
-              <Link key={r.locationId} href={r.href} className={linkBtn()}>Edit sender ID</Link>
+              <button
+                key={r.locationId}
+                type="button"
+                onClick={() => setManaging({ cardKey: 'sms', locationId: r.locationId, initial: r })}
+                className={linkBtn()}
+              >
+                Edit sender ID
+              </button>
             ))}
           </div>
         </HubCard>
@@ -763,7 +774,14 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           </div>
           <div className="flex gap-2 pt-1 mt-auto">
             {unifi.slice(0, 1).map((r) => (
-              <Link key={r.locationId} href={r.href} className={linkBtn()}>Manage</Link>
+              <button
+                key={r.locationId}
+                type="button"
+                onClick={() => setManaging({ cardKey: 'unifi', locationId: r.locationId, initial: r })}
+                className={linkBtn()}
+              >
+                Manage
+              </button>
             ))}
           </div>
         </HubCard>
@@ -785,7 +803,14 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           </div>
           <div className="flex gap-2 pt-1 mt-auto">
             {climate.slice(0, 1).map((r) => (
-              <Link key={r.locationId} href={r.href} className={linkBtn()}>Manage devices</Link>
+              <button
+                key={r.locationId}
+                type="button"
+                onClick={() => setManaging({ cardKey: 'climate', locationId: r.locationId, initial: r })}
+                className={linkBtn()}
+              >
+                Manage
+              </button>
             ))}
           </div>
         </HubCard>
@@ -814,7 +839,13 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
           <p className="text-xs text-un1t-subtle">· Org-gated to CCF Autos. Not offered to gym tenants.</p>
           {bca.length > 0 && (
             <div className="flex gap-2 pt-1 mt-auto">
-              <Link href={bca[0].href} className={linkBtn()}>Manage</Link>
+              <button
+                type="button"
+                onClick={() => setManaging({ cardKey: 'bca', locationId: bca[0].locationId, initial: bca[0] })}
+                className={linkBtn()}
+              >
+                Manage
+              </button>
             </div>
           )}
         </HubCard>
@@ -836,17 +867,23 @@ export default function IntegrationsHub({ data: initialData, isMaster = false })
       )}
 
       <p className="mt-10 pt-4 border-t border-un1t-border text-xs text-un1t-muted max-w-3xl">
-        Meta Ads and Instagram now connect, test and disconnect right here in a Manage panel. Every
-        other card deep-links into the surface that owns it — the per-location Integrations tab, the
-        email-domain wizard, or the billing page. The plan &amp; wallet strip itself is read-only.
+        Glofox, Twilio, UniFi, Climate, BCA, Meta Ads and Instagram now connect, edit and disconnect
+        right here in a Manage panel — secrets stay write-only (leave a field blank to keep it). The
+        remaining cards (WhatsApp, Xero, email delivery, billing) deep-link into the surface that
+        owns them. The plan &amp; wallet strip itself is read-only.
       </p>
 
-      {/* Per-card Manage drawer — Ads/Instagram inline management (Phase 1). */}
+      {/* Per-card Manage drawer — Ads/Instagram (Phase 1) + Glofox/Twilio/
+          UniFi/Climate/BCA credential forms (Phase 2). `initial` is the
+          matched hub row so the form prefills non-secret values + has_*
+          presence; `isMaster` gates the master-only providers read-only. */}
       {managing && (
         <IntegrationsHubDrawer
           cardKey={managing.cardKey}
           locationId={managing.locationId}
           locationName={nameById[managing.locationId] || null}
+          initial={managing.initial}
+          isMaster={isMaster}
           onClose={() => setManaging(null)}
           onChanged={refetchHub}
         />
