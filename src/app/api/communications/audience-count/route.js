@@ -36,7 +36,7 @@ export async function POST(request) {
   const db = createServerClient()
   try {
     if (channel === 'whatsapp') {
-      // Single-table reachability counts (safe post mig 325) — keep the pre-send
+      // Single-table reachability counts (safe post mig 422) — keep the pre-send
       // number honest about WhatsApp consent + a usable wa_phone.
       const { matched, reachable, excluded } =
         await computeWhatsAppReachabilitySummary(db, audience_filter || { logic: 'and', filters: [] }, location_id)

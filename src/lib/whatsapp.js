@@ -658,7 +658,7 @@ export async function editTemplate(metaTemplateId, { category, components }, opt
 
 /**
  * The WhatsApp broadcast reachability gate, as single-table predicates on
- * contacts (post mig 325: whatsapp_marketing is denormalized). Shared by the
+ * contacts (post mig 422: whatsapp_marketing is denormalized). Shared by the
  * send audience and the pre-send count so they agree by construction:
  * opted into WA marketing, has a normalized WA number, not blocked/opted-out.
  */
@@ -673,7 +673,7 @@ export function applyWhatsAppReachability(query) {
 
 /**
  * Reachability breakdown for an audience_filter at a location, as single-table
- * head:true counts on contacts (safe post mig 325). Shared by the pre-send
+ * head:true counts on contacts (safe post mig 422). Shared by the pre-send
  * count endpoint and the persisted delivery_summary so the number the operator
  * sees before sending matches what actually goes out.
  *
@@ -825,7 +825,7 @@ export async function markUndeliverableIfPermanent(db, contactId, { code, messag
 
 /**
  * Build audience query for WhatsApp broadcasts. Single-table on contacts now
- * that whatsapp_marketing is denormalized (mig 325) — no contact_preferences
+ * that whatsapp_marketing is denormalized (mig 422) — no contact_preferences
  * embed, so head:true counts over this gate are safe.
  */
 function whatsAppAudienceBase(db, locationId) {

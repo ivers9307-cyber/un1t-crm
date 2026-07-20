@@ -5,7 +5,7 @@
 -- WhatsApp interaction (inbound webhook / inbox "start conversation"), never
 -- derived from the imported `phone`. So 8,169 Stillorgan contacts had a phone
 -- but no wa_phone and showed as "no WhatsApp number" in broadcast reachability
--- (mig 325 / WA-REACH) — only 4 of 8,303 contacts were WhatsApp-reachable.
+-- (mig 422 / WA-REACH) — only 4 of 8,303 contacts were WhatsApp-reachable.
 --
 -- Normalisation mirrors src/lib/glofox-sync.js#normalizePhone (then strips '+'
 -- to match the wa_phone format the inbox webhook stores):
