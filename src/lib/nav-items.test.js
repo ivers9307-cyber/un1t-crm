@@ -46,16 +46,19 @@ describe('ALL_NAV structure', () => {
     }
   })
 
-  it('pins exactly one section-less item: the Dashboard group link', () => {
+  it('pins exactly two section-less items: the Account-home + Dashboard links', () => {
+    // REPSET-ACCOUNT.1 — the Account-home portfolio entry pins above the
+    // Dashboard link (Account tier sits above Studio). Order matters.
     const pinned = ALL_NAV.filter((i) => !i.section)
-    expect(pinned).toHaveLength(1)
-    expect(pinned[0].href).toBe('/dashboard')
-    expect(pinned[0].dashboardGroup).toBe(true)
+    expect(pinned.map((i) => i.href)).toEqual(['/portfolio', '/dashboard'])
+    expect(pinned[0].masterOrOwnerOnly).toBe(true) // owner+/master only
+    expect(pinned[1].dashboardGroup).toBe(true)
   })
 
   it('gives every entry a label, an icon, and a visibility gate', () => {
     const gated = (i) =>
-      i.openToAll || i.dashboardGroup || i.anyPermission || i.permission
+      i.openToAll || i.dashboardGroup || i.anyPermission || i.permission ||
+      i.masterOrOwnerOnly || i.masterOnly
     for (const item of ALL_NAV) {
       expect(item.label, item.href).toBeTruthy()
       expect(item.icon, item.href).toBeTruthy()
