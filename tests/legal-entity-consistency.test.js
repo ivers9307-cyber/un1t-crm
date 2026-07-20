@@ -16,6 +16,8 @@ const PAGES = [
   'src/app/privacy/members/page.js',
   'src/app/privacy/authority-requests/page.js',
   'src/app/terms/page.js',
+  // SAAS4-C4 — the public subprocessor register joins the single-entity rule.
+  'src/app/legal/subprocessors/page.js',
 ]
 
 const read = (p) => readFileSync(join(process.cwd(), p), 'utf8')

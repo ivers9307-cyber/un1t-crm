@@ -91,7 +91,11 @@ export default function PrivacyPolicy() {
           </ul>
 
           <h2 className="text-xl font-semibold mt-8 mb-3">5. Who we share it with (sub-processors)</h2>
-          <p>The Service relies on the following sub-processors. Each has a Data Processing Agreement in place with us.</p>
+          <p>
+            The Service relies on the following sub-processors. Each has a Data Processing Agreement
+            in place with us. The maintained register, including regions and safeguards, is published
+            at <a className="underline" href="/legal/subprocessors">/legal/subprocessors</a>.
+          </p>
           <ul className="list-disc pl-6 space-y-1">
             <li><strong>Supabase</strong> — primary database, file storage, and authentication. Region: EU (Ireland).</li>
             <li><strong>Vercel</strong> — hosts the web application. Region: EU.</li>

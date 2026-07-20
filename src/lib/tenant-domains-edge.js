@@ -49,7 +49,9 @@ export const DB_BRAND_DEFAULTS = Object.freeze({
   // '/privacy' (SAAS4-C2): startsWith-matched, so it also covers
   // /privacy/members — the tenant-aware notice that renders the
   // tenant's own legal entity once configured (tenant-privacy.js).
-  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/privacy', '/api/public/', '/api/webhooks/']),
+  // '/legal/' (SAAS4-C4): the public subprocessor register — tenant
+  // privacy notices reference it.
+  allowedPaths: Object.freeze(['/welcome', '/book/', '/event/', '/privacy', '/legal/', '/api/public/', '/api/webhooks/']),
   rootHandler: 'rewrite',
   rootRewriteTo: '/welcome',
   fallbackHandler: 'rewrite',
