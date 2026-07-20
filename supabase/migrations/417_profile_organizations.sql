@@ -1,5 +1,5 @@
 -- ============================================================
--- 411: profile_organizations — the org-admin role tier (SAAS-4)
+-- 417: profile_organizations — the org-admin role tier (SAAS-4)
 --
 -- Applied to prod via Supabase MCP (apply_migration); this file
 -- mirrors it for history and fresh-env replay, so it is written
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS public.profile_organizations (
 );
 
 COMMENT ON TABLE public.profile_organizations IS
-  'Org-level role grants (mig 411). org_admin = manages every location in the org: getCurrentUser() expands their access to all active org locations, acting as owner wherever they have no explicit profile_locations row. Master is platform-wide on profiles.role and never needs a row here. Grant/revoke is master-only.';
+  'Org-level role grants (mig 417). org_admin = manages every location in the org: getCurrentUser() expands their access to all active org locations, acting as owner wherever they have no explicit profile_locations row. Master is platform-wide on profiles.role and never needs a row here. Grant/revoke is master-only.';
 
 COMMENT ON COLUMN public.profile_organizations.role IS
   'Org-level role. Only ''org_admin'' today; CHECK-constrained so future tiers are an explicit migration.';
@@ -132,7 +132,7 @@ $$;
 GRANT EXECUTE ON FUNCTION private.auth_is_in_organization(UUID) TO authenticated;
 
 COMMENT ON FUNCTION private.auth_is_in_organization(UUID) IS
-  'Returns TRUE if the caller is a master OR a member of any location belonging to the named organization OR holds a profile_organizations grant on it (mig 411 org-admin tier). Mirrors private.auth_is_in_location(loc_id). Use as the canonical predicate when adding RLS policies on future org-scoped tables.';
+  'Returns TRUE if the caller is a master OR a member of any location belonging to the named organization OR holds a profile_organizations grant on it (mig 417 org-admin tier). Mirrors private.auth_is_in_location(loc_id). Use as the canonical predicate when adding RLS policies on future org-scoped tables.';
 
 -- ─── organizations_select — org admins read their org row ────────
 -- Still ONE permissive SELECT policy; the org-admin membership is a

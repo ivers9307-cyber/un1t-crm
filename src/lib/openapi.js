@@ -2144,14 +2144,14 @@ registry.registerPath({
   },
 })
 
-// Org-admin grants (SAAS-4, mig 411)
+// Org-admin grants (SAAS-4, mig 417)
 registry.registerPath({
   method: 'get',
   path: '/api/staff/{id}/org-admin',
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
   summary: 'Org-admin grants for a staff member (master only)',
-  description: 'Returns { organization_ids } — the organizations this profile holds an org_admin grant on (profile_organizations, mig 411). An org admin acts as owner at every active location of those orgs.',
+  description: 'Returns { organization_ids } — the organizations this profile holds an org_admin grant on (profile_organizations, mig 417). An org admin acts as owner at every active location of those orgs.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Current grants' },
@@ -2316,7 +2316,7 @@ registry.registerPath({
   tags: ['Locations'],
   security: [{ CookieAuth: [] }],
   summary: 'Re-sync channel_connections registry rows from the location\'s legacy config (admin)',
-  description: 'INTEG-A2 dual-write bridge: re-reads the location\'s legacy integration fields (settings.glofox, settings.unifi, sensibo/thinq columns, twilio_alpha_sender_id, bca_config) and upserts/deactivates the matching active channel_connections rows using the mig 412 mapping. Fired by the integration settings tabs after a legacy save. Idempotent. Returns { results: { platform: action } }.',
+  description: 'INTEG-A2 dual-write bridge: re-reads the location\'s legacy integration fields (settings.glofox, settings.unifi, sensibo/thinq columns, twilio_alpha_sender_id, bca_config) and upserts/deactivates the matching active channel_connections rows using the mig 419 mapping. Fired by the integration settings tabs after a legacy save. Idempotent. Returns { results: { platform: action } }.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: 'Per-platform sync results' },
@@ -2332,7 +2332,7 @@ registry.registerPath({
   tags: ['Staff'],
   security: [{ CookieAuth: [] }],
   summary: 'Org month-to-date usage + hard caps (admin roles)',
-  description: 'Live AI spend and email sends (cap-relevant, mig 415 RPCs) plus nightly per-meter and per-location rollup totals for the active organisation. ?organization_id targets another org (master only).',
+  description: 'Live AI spend and email sends (cap-relevant, mig 421 RPCs) plus nightly per-meter and per-location rollup totals for the active organisation. ?organization_id targets another org (master only).',
   responses: {
     200: { description: 'Usage summary' },
     403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },

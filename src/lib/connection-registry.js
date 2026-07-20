@@ -1,14 +1,14 @@
 // INTEG-A2 — connections-registry dual-read accessor.
 //
 // channel_connections (migs 230 + 411) is becoming the single
-// per-location registry for provider connections. Mig 412 backfilled
+// per-location registry for provider connections. Mig 419 backfilled
 // it from today's legacy storage; this module is the ONE seam through
 // which read paths resolve a provider's config during the migration:
 //
 //   registry row (active, per location+platform)  → wins when present
 //   legacy location fields                        → fallback otherwise
 //
-// Legacy ⇄ registry mapping (must stay in lockstep with mig 412):
+// Legacy ⇄ registry mapping (must stay in lockstep with mig 419):
 //
 //   glofox         settings.glofox.branch_id      ⇄ external_account_id
 //                  settings.glofox.api_key        ⇄ access_token
@@ -76,7 +76,7 @@ function stripNulls(obj) {
 //   rowFromLegacy(loc)    → { external_account_id?, access_token?,
 //                             app_secret?, config } or null when the
 //                             location has no legacy config (mirrors
-//                             the mig 412 WHERE gates)
+//                             the mig 419 WHERE gates)
 //   applyRow(loc, row)    → new location-shaped object with the
 //                             legacy fields replaced by the registry
 //                             row's values (the dual-read overlay)
@@ -207,7 +207,7 @@ const PROVIDERS = {
 /**
  * Registry-row fields a legacy-configured location maps to, or null
  * when the location has no legacy config for the platform. Pure —
- * mirrors mig 412's mapping exactly; used by the refresh endpoint to
+ * mirrors mig 419's mapping exactly; used by the refresh endpoint to
  * re-sync a registry row after a legacy save.
  */
 export function registryRowFromLegacy(platform, location) {

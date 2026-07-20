@@ -38,7 +38,7 @@ export function buildRolesByLocation(locationLinks) {
 }
 
 /**
- * SAAS-4 (mig 411) — expand an org admin's access maps with their
+ * SAAS-4 (mig 417) — expand an org admin's access maps with their
  * organizations' locations.
  *
  * Org-bounded mirror of the master expansion in getCurrentUser():
@@ -357,7 +357,7 @@ export const getCurrentUser = cache(async function getCurrentUser() {
   const allOrgsPromise = profile.role === 'master'
     ? db.from('organizations').select('*').eq('active', true).order('name')
     : Promise.resolve({ data: null })
-  // SAAS-4 — org-admin grants (mig 411). A SaaS org owner manages every
+  // SAAS-4 — org-admin grants (mig 417). A SaaS org owner manages every
   // location in THEIR org without needing per-location rows. Master
   // skips the fetch entirely — the platform-wide bypass supersedes org
   // admin, and skipping keeps the master path free of extra queries.
@@ -388,7 +388,7 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     locations = allLocs
   }
 
-  // SAAS-4 — org-admin expansion (mig 411). Org-bounded mirror of the
+  // SAAS-4 — org-admin expansion (mig 417). Org-bounded mirror of the
   // master expansion above: the user's reachable set becomes the union
   // of their explicit assignments and every ACTIVE location of the
   // orgs they hold an org_admin grant on, acting as 'owner' anywhere
@@ -607,7 +607,7 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     // orgs whose locations they're a member of.
     organizationsById,
     activeOrganization,
-    // SAAS-4 (mig 411) — org ids the user holds an org_admin grant on.
+    // SAAS-4 (mig 417) — org ids the user holds an org_admin grant on.
     // Empty for everyone else (including master, whose platform-wide
     // bypass supersedes the tier — the fetch is skipped for masters).
     // Guards read this via assertOrganizationAdmin(); org-scoped
@@ -667,7 +667,7 @@ export function getUserLocationIds(user) {
  * are handled separately by the caller (they see everything); this returns
  * only the explicit owner-org set, so a non-owner gets `[]`.
  *
- * SAAS-4: org-admin orgs (user.orgAdminOrgIds, mig 411) are included —
+ * SAAS-4: org-admin orgs (user.orgAdminOrgIds, mig 417) are included —
  * an org admin acts as owner across their whole org, so org-scoped
  * resources gated on this helper (contracts, contract templates, org
  * branding) are manageable by them too. Users without grants are
@@ -768,7 +768,7 @@ export function assertLocationAccessOr404(user, locationId) {
   return null
 }
 
-// ─── Organization guards (SAAS-4, mig 411) ──────────────────────────
+// ─── Organization guards (SAAS-4, mig 417) ──────────────────────────
 // Org-level mirrors of assertLocationAccess / assertLocationAccessOr404,
 // for routes that take an organization_id instead of a location_id.
 //

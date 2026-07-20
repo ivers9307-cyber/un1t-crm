@@ -1,4 +1,4 @@
-// Route-level tests for /api/staff/[id]/org-admin (SAAS-4, mig 411).
+// Route-level tests for /api/staff/[id]/org-admin (SAAS-4, mig 417).
 //
 // The org-admin grant hands out owner-everywhere access across a whole
 // org, so the surface is MASTER ONLY on both verbs — these tests pin

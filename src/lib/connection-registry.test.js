@@ -103,7 +103,7 @@ function mockDb({ rows = [], location = null, failRegistry = false } = {}) {
   }
 }
 
-// ── registryRowFromLegacy: the mig 412 mapping ───────────────
+// ── registryRowFromLegacy: the mig 419 mapping ───────────────
 
 describe('registryRowFromLegacy', () => {
   it('glofox: branch_id/api_key/webhook_secret map to registry columns, the rest to config', () => {
@@ -154,12 +154,12 @@ describe('registryRowFromLegacy', () => {
     for (const p of DUAL_READ_PLATFORMS) {
       expect(registryRowFromLegacy(p, bare)).toBeNull()
     }
-    // empty object counts as unconfigured (mirrors the mig 412 gate)
+    // empty object counts as unconfigured (mirrors the mig 419 gate)
     expect(registryRowFromLegacy('glofox', { settings: { glofox: {} } })).toBeNull()
     expect(registryRowFromLegacy('bca', { bca_config: {} })).toBeNull()
   })
 
-  it('thinq is configured when only client_id is set (mirrors mig 412 OR gate)', () => {
+  it('thinq is configured when only client_id is set (mirrors mig 419 OR gate)', () => {
     const row = registryRowFromLegacy('thinq', { thinq_client_id: 'c9' })
     expect(row).toEqual({ access_token: null, config: { client_id: 'c9' } })
   })

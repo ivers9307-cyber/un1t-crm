@@ -164,7 +164,7 @@ describe('resolveActiveLocationRole', () => {
   })
 })
 
-// ─── expandOrgAdminAccess (SAAS-4, mig 411) ─────────────────────────────
+// ─── expandOrgAdminAccess (SAAS-4, mig 417) ─────────────────────────────
 // Pure org-bounded mirror of the master expansion inside getCurrentUser.
 // The IO side (which orgs' locations get fetched) is pinned in
 // auth.getCurrentUser.test.js; these tests pin the merge semantics.
@@ -433,7 +433,7 @@ describe('getUserLocationIds', () => {
   })
 })
 
-// ─── Organization guards (SAAS-4, mig 411) ──────────────────────────────
+// ─── Organization guards (SAAS-4, mig 417) ──────────────────────────────
 // Full caller matrix per guard: master / org-admin / member (via a
 // location in the org) / outsider / null. The two access guards are
 // MEMBERSHIP checks (mirror private.auth_is_in_organization); the admin

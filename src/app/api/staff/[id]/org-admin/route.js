@@ -1,5 +1,5 @@
 // /api/staff/[id]/org-admin — org-admin grants for a staff member
-// (SAAS-4, mig 411).
+// (SAAS-4, mig 417).
 //
 //   GET  current org_admin grants for the profile.
 //   PUT  desired-state list of organization ids — added orgs are

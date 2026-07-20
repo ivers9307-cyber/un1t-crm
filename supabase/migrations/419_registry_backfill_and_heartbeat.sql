@@ -1,7 +1,7 @@
--- 412: INTEG-A2 — connections-registry backfill (dual-read phase) +
+-- 419: INTEG-A2 — connections-registry backfill (dual-read phase) +
 -- INTEG-A3 heartbeat seed.
 --
--- Phase A1 (mig 411) widened channel_connections into the per-location
+-- Phase A1 (mig 418) widened channel_connections into the per-location
 -- connections registry. This migration seeds it from today's legacy
 -- storage so dual-read code (src/lib/connection-registry.js) finds a
 -- registry row wherever legacy config exists:

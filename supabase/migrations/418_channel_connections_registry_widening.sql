@@ -1,4 +1,4 @@
--- 411: INTEG-A1 — connections-registry widening (Integrations & Monetisation
+-- 418: INTEG-A1 — connections-registry widening (Integrations & Monetisation
 -- deployment plan, phase A1). channel_connections (mig 230) becomes the
 -- consolidated per-location connections registry: more providers, a uniform
 -- status model, error surfacing, and a config slot for provider-specific

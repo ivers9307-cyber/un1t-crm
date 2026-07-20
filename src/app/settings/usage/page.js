@@ -3,7 +3,7 @@
 // 2026-07-19: allowance = soft band via the plans/wallets track; only
 // these operator-set hard caps interrupt service).
 //
-// Data: live cap-relevant numbers (AI spend, email sends — mig 415
+// Data: live cap-relevant numbers (AI spend, email sends — mig 421
 // RPCs) + nightly rollup totals per meter and per location. The
 // rollup rows refresh at 02:40 UTC, so the per-location split can lag
 // a day; the cap numbers are always live.

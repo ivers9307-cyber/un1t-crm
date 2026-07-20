@@ -57,7 +57,7 @@ export default function StaffForm({
   // the role-default baseline both honour the template so toggles
   // show the TRUE effective state at each location.
   roleTemplates = {},
-  // SAAS-4 (mig 411) — org list + this staff member's current
+  // SAAS-4 (mig 417) — org list + this staff member's current
   // org-admin grants for the master-only Organisation Admin card.
   // Only the edit page passes these (and only for master callers).
   organizations = [],
@@ -557,7 +557,7 @@ export default function StaffForm({
         </div>
       )}
 
-      {/* Organisation Admin grants (SAAS-4, mig 411) — master callers
+      {/* Organisation Admin grants (SAAS-4, mig 417) — master callers
           only, edit-only. Saves independently of the main form via
           PUT /api/staff/[id]/org-admin (grants are a diff-synced
           desired-state list, not part of the profile payload). */}
@@ -1394,7 +1394,7 @@ function PermanentDeleteButton({ staffId, staffName }) {
 // user gets an extra email they can ignore). Useful for: re-sending
 // a missed invite, helping a user who forgot their password, or
 // rotating credentials after suspected compromise.
-// SAAS-4 (mig 411) — Organisation Admin grants card. Master-only (the
+// SAAS-4 (mig 417) — Organisation Admin grants card. Master-only (the
 // parent gates rendering on callerIsMaster). One checkbox per active
 // organisation; Save PUTs the desired-state list to
 // /api/staff/[id]/org-admin, which diffs grants/revokes server-side.

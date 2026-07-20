@@ -1,4 +1,4 @@
-// Mocked-pipeline tests for getCurrentUser() — SAAS-4 (mig 411).
+// Mocked-pipeline tests for getCurrentUser() — SAAS-4 (mig 417).
 //
 // The pure expansion semantics live in auth.test.js
 // (expandOrgAdminAccess); these tests run the REAL getCurrentUser()
