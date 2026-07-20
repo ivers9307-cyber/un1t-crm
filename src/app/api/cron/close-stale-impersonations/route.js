@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { closeStaleImpersonations } from '@/lib/impersonation'
+import { closeStaleSupportSessions } from '@/lib/support-session'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -31,11 +32,21 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: result.error }, { status: 500 })
   }
 
+  // SUPPORT-ACCESS (Repset Phase 3) — the same reaper closes stale
+  // support_sessions rows (mig 431) at the shared session max-age. A
+  // failure here is logged but does NOT fail the cron (the impersonation
+  // sweep already succeeded + will heartbeat).
+  const support = await closeStaleSupportSessions(db)
+  if (!support.ok) {
+    console.warn(`[cron][close-stale-impersonations] support: ${support.error}`)
+  }
+
   await stampHeartbeat('close-stale-impersonations')
 
   return NextResponse.json({
     success: true,
     stale: result.stale,
     closed: result.closed,
+    support: { stale: support.stale, closed: support.closed },
   })
 }

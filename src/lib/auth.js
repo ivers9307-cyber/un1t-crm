@@ -5,6 +5,7 @@ import { cookies, headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { mergeTemplates } from '@shared/permissions'
 import { isApiKeyToken } from './api-keys'
+import { SUPPORT_COOKIE, verifySupportCookie } from './support-session-edge'
 
 // React 18's `cache()` is only exported from the server build of react.
 // In the Vitest (Node) environment we get the client build which omits
@@ -597,6 +598,37 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     ? organizationsById[activeLocation.organization_id] || null
     : null
 
+  // SUPPORT-ACCESS (Repset Phase 3) — surface an active tenant support
+  // session for the banner. Only the REAL underlying session being a
+  // master can carry one (the signed un1t_support cookie is minted
+  // master-only by /api/support-session/start). We read it here, verify
+  // the signature (cheap; only when the cookie is present), and resolve
+  // the tenant name from organizationsById (already built above — no
+  // extra DB round-trip). This is PRESENTATION only; the read-only
+  // enforcement lives in the proxy. The cookie was already awaited into
+  // cookieStore above.
+  let supportSession = null
+  if (realProfile.role === 'master') {
+    const rawSupport = cookieStore.get(SUPPORT_COOKIE)?.value
+    if (rawSupport) {
+      try {
+        const payload = await verifySupportCookie(rawSupport)
+        const notExpired = payload && (typeof payload.exp !== 'number' || Date.now() <= payload.exp)
+        if (payload && notExpired && payload.org) {
+          supportSession = {
+            mode: payload.mode === 'act_on_behalf' ? 'act_on_behalf' : 'read_only',
+            organizationId: payload.org,
+            organizationName: organizationsById[payload.org]?.name || null,
+            impersonatedUserId: payload.imp || null,
+          }
+        }
+      } catch {
+        // A bad cookie is inert for the banner; the proxy still fails
+        // closed on it. Leave supportSession null.
+      }
+    }
+  }
+
   return {
     ...profile,
     user,
@@ -641,6 +673,11 @@ export const getCurrentUser = cache(async function getCurrentUser() {
     // 'Stop impersonating' UI and to know who the real caller is
     // for audit purposes.
     impersonatingFrom,
+    // SUPPORT-ACCESS (Repset Phase 3) — non-null while a master is in a
+    // tenant support session. { mode, organizationId, organizationName,
+    // impersonatedUserId }. The SupportBanner reads this; the read-only
+    // ENFORCEMENT is in src/proxy.js, not here.
+    supportSession,
   }
 })
 

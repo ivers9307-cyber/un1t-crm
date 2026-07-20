@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { resolveBrand, isFrameworkAsset } from '@/lib/brands'
 import { resolveTenantDomainBrand } from '@/lib/tenant-domains-edge'
 import { isApiKeyToken, sha256HexEdge } from '@/lib/api-keys-edge'
+import { readSupportModeEdge, decideSupportWriteBlock } from '@/lib/support-session-edge'
 
 // Constant-time string compare. Implemented inline because the proxy runs
 // in the Edge runtime which doesn't expose node:crypto.timingSafeEqual. The
@@ -98,6 +99,40 @@ export async function proxy(request) {
   }
 
   // ── CRM hostname (default) — existing behaviour ──────────────────
+
+  // ── SUPPORT-ACCESS — read-only support-session write block ───────
+  // THE SECURITY CRUX (Repset Phase 3). A master helping a tenant can
+  // open a READ-ONLY support session (mode=read_only, carried in the
+  // signed `un1t_support` cookie). While that session is read-only,
+  // EVERY state-changing request is rejected HERE — the single central
+  // chokepoint that already runs on every request — so enforcement
+  // never relies on hiding UI buttons. This deliberately runs BEFORE the
+  // public-path / Bearer gates so nothing mutating can slip past it, and
+  // it covers BOTH `/api/*` mutations AND Next.js server-action POSTs to
+  // page routes (both arrive here as POST/PUT/PATCH/DELETE).
+  //
+  // FAIL CLOSED (see decideSupportWriteBlock): a write is allowed ONLY
+  // when the mode is EXACTLY 'act_on_behalf'; a present-but-unverifiable
+  // (tampered/corrupt) cookie resolves to read_only and blocks. GET/HEAD/
+  // OPTIONS are always allowed. The ONLY mutating exceptions are the
+  // support-session control routes (exit / switch-mode) + the
+  // impersonation stop escape-hatch — a master must always be able to
+  // leave or upgrade the session.
+  {
+    const support = await readSupportModeEdge(request)
+    const decision = decideSupportWriteBlock(support, request.method, request.nextUrl.pathname)
+    if (decision.block) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'read_only_support_mode',
+          message: 'Read-only support mode — writes are disabled. Switch to “Act on behalf” to make changes.',
+        },
+        { status: 403 }
+      )
+    }
+  }
+
   // Public routes that don't require auth.
   // /tv/ — big-screen kiosk displays (HR live board, future race
   // display moves here too). TV browsers don't have CRM accounts
