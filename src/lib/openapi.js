@@ -2325,6 +2325,35 @@ registry.registerPath({
   },
 })
 
+// DSAR contact export + tenant suspend (SAAS4-C3/P4)
+registry.registerPath({
+  method: 'get',
+  path: '/api/contacts/{id}/export',
+  tags: ['Contacts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Subject-access (DSAR) export — full JSON bundle for one contact',
+  description: 'Profile, preferences, consent log, email/booking/activity/note history, WhatsApp + Instagram messages. Sections paginate past the 1k cap and carry honest truncated flags; a broken section fails the export rather than shipping a silent hole. Every export is audit-logged. MANAGER_ROLES, location-scoped, 404 on cross-tenant ids.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'JSON download (Content-Disposition attachment)' },
+    404: { description: 'Not found (incl. cross-tenant ids)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/orgs/{id}/suspend',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Suspend a tenant org (master only; reversible)',
+  description: 'Flips the org and ALL its locations inactive — every existing active=true filter (staff location lists, loop-over-locations crons, admin surfaces) enforces the suspension. DELETE on the same path unsuspends. Audit-logged both ways. Deletion stays manual: docs/runbooks/tenant-offboarding.md.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Org + locations toggled' },
+    403: { description: 'Master only', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Org usage summary + hard caps (SAAS4-M3)
 registry.registerPath({
   method: 'get',
