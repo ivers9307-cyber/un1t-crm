@@ -91,6 +91,16 @@ export default function GlofoxProfileCard({ contact }) {
   const linked = Boolean(contact.glofox_member_id)
   const statusMeta = GLOFOX_STATUS_META[contact.glofox_membership_status] || null
   const stateMeta = GLOFOX_STATE_META[contact.glofox_membership_state] || null
+  // GLOFOX-REACTIVE (mig 428) — pause window. resume_date is captured
+  // only from the Glofox service webhook. A past resume date means the
+  // pause has lapsed (sync will flip state back to active), so we stop
+  // showing "resumes …" once it's in the past.
+  const isPaused = contact.glofox_membership_state === 'paused'
+  const resumeDate = isPaused ? formatDate(contact.glofox_membership_resume_at) : null
+  const resumeFuture = isPaused && contact.glofox_membership_resume_at
+    ? new Date(contact.glofox_membership_resume_at).getTime() > Date.now()
+    : false
+  const pausedSince = isPaused ? formatDate(contact.glofox_membership_paused_at) : null
   const tenure = formatTenure(contact.joined_at)
   const lastAttended = relativeTime(contact.last_attended_at)
   const lastPayment = relativeTime(contact.last_payment_at)
@@ -160,7 +170,7 @@ export default function GlofoxProfileCard({ contact }) {
             )}
             {stateMeta && (
               <span className={`text-xs px-2 py-0.5 rounded-full border ${stateMeta.cls}`}>
-                {stateMeta.label}
+                {stateMeta.label}{resumeFuture ? ` · resumes ${resumeDate}` : ''}
               </span>
             )}
             {credits != null && (
@@ -195,6 +205,13 @@ export default function GlofoxProfileCard({ contact }) {
             <p className={`text-xs ${expiryPast ? 'text-red-400/90' : 'text-un1t-subtle'}`}>
               {expiryPast ? 'Expired' : 'Renews'} {expiryDate}
               {expiryRel && <span className="text-un1t-muted"> · {expiryRel}</span>}
+            </p>
+          )}
+          {/* GLOFOX-REACTIVE — pause window detail (backward-looking
+              "since"; the chip carries the forward-looking "resumes"). */}
+          {isPaused && pausedSince && (
+            <p className="text-xs text-amber-700">
+              Paused since {pausedSince}{resumeFuture ? ` · resumes ${resumeDate}` : ''}
             </p>
           )}
 

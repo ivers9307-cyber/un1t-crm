@@ -119,6 +119,19 @@ export function glofoxStateMeta(state) {
   return GLOFOX_STATE_META[state] || null
 }
 
+/**
+ * GLOFOX-REACTIVE — forward-looking pause label ("15 Aug") for a paused
+ * membership, or null when not paused / no future resume date. Mirrors
+ * the web ContactHeaderBand + GlofoxProfileCard "resumes …" logic.
+ */
+export function glofoxPauseResumeLabel(contact) {
+  if (contact?.glofox_membership_state !== 'paused') return null
+  const iso = contact?.glofox_membership_resume_at
+  if (!iso) return null
+  if (new Date(iso).getTime() <= Date.now()) return null
+  return formatShortDate(iso)
+}
+
 // ── formatting (ports of src/components/contact/format.js) ──────────
 
 export function relativeTime(iso) {

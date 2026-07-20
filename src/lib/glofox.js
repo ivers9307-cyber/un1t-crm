@@ -68,6 +68,14 @@ const EVENT_ID_PATHS = [
   // MEMBER_UPDATED, MEMBERSHIP_UPDATED) wrap data under Payload.
   ['Payload', 'id'],
   ['Metadata', 'trace_id'],
+  // GLOFOX-REACTIVE — SERVICE_* events (per openapi.yaml) use
+  // lowercase metadata/payload. Their per-emission id is
+  // metadata.trace_id. We deliberately do NOT fall back to
+  // payload.id (the service id) as an event id: it's stable across
+  // updates, so a pause→resume SERVICE_UPDATED would be dropped as a
+  // "duplicate". If trace_id is absent the receiver inserts without
+  // dedup, which is safe — the service upsert is idempotent.
+  ['metadata', 'trace_id'],
 ]
 const EVENT_TYPE_PATHS = [
   ['event_type'],
@@ -89,6 +97,11 @@ const BRANCH_ID_PATHS = [
   ['Metadata', 'location_id'],
   ['Metadata', 'branch_id'],
   ['Payload', 'branch_id'],
+  // GLOFOX-REACTIVE — SERVICE_* events carry the location under
+  // lowercase metadata (same location/branch interchangeability as
+  // invoice events).
+  ['metadata', 'location_id'],
+  ['metadata', 'branch_id'],
 ]
 const ENTITY_ID_PATHS = [
   ['data', 'id'],
@@ -98,6 +111,8 @@ const ENTITY_ID_PATHS = [
   ['data', 'membership_id'],
   ['entity_id'],
   ['Payload', 'id'],
+  // GLOFOX-REACTIVE — SERVICE_* service id (lowercase payload).
+  ['payload', 'id'],
 ]
 // Email lives under different keys depending on the entity:
 //   - member.created     → data.email
@@ -131,6 +146,15 @@ const USER_ID_PATHS = [
   // MEMBER_* events: the member ID IS the entity ID.
   ['Payload', 'id'],
   ['data', 'id'],
+  // GLOFOX-REACTIVE — SERVICE_* events link to the member via
+  // payload.member_ids (an array). pluck() walks integer keys as
+  // array indices, so [.., 0] resolves the first member id — which
+  // matches contacts.glofox_member_id (the existing fallback lookup
+  // in the receiver, no new lookup path needed). member_id_2 covers
+  // a shared/family service's second member defensively.
+  ['payload', 'member_ids', 0],
+  ['Payload', 'member_ids', 0],
+  ['payload', 'user_id'],
 ]
 
 function pluck(obj, paths) {

@@ -39,8 +39,14 @@ import {
   glofoxCredentialsByBranchId,
   glofoxFetch,
 } from '@/lib/glofox'
-import { triggerSequencesForTagsAdded, triggerSequencesForContactCreated } from '@/lib/sequences/triggers'
+import {
+  triggerSequencesForTagsAdded,
+  triggerSequencesForContactCreated,
+  triggerSequencesForMembershipStateChange,
+} from '@/lib/sequences/triggers'
 import { applyInvoiceWebhook } from '@/lib/glofox-invoices'
+import { applyServiceWebhook } from '@/lib/glofox-services'
+import { maybeEnrolDunning, exitDunningForContact } from '@/lib/dunning'
 import { applyMemberSync } from '@/lib/glofox-sync'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 
@@ -285,6 +291,60 @@ export async function POST(request) {
       }
     }
 
+    // 7b. GLOFOX-REACTIVE — event-driven dunning off the invoice
+    // status. PAST_DUE → enrol into the location's dunning sequence
+    // (opt-in via locations.dunning_auto_enroll; paused members skipped;
+    // idempotent so a new-invoice-id-per-attempt retry storm collapses
+    // to one enrolment). PAID / FORGIVEN → stop any in-flight dunning —
+    // the gap the manual "Send payment reminder" flow never closed.
+    // Best-effort: the helpers never throw, but guard anyway.
+    let dunningResult = null
+    if (isInvoiceEvent && ltvResult?.ok) {
+      const invStatus = String(ltvResult.invoice_status || '').toUpperCase()
+      try {
+        if (invStatus === 'PAST_DUE') {
+          dunningResult = await maybeEnrolDunning(db, creds.locationId, contact.id, { invoiceId: ltvResult.invoice_id })
+        } else if (invStatus === 'PAID' || invStatus === 'FORGIVEN') {
+          dunningResult = await exitDunningForContact(db, creds.locationId, contact.id, `invoice_${invStatus.toLowerCase()}`)
+        }
+      } catch (e) {
+        logWarn('glofox-webhook', 'reactive dunning threw', { err: e?.message, contact_id: contact.id })
+      }
+    }
+
+    // 7c. GLOFOX-REACTIVE — SERVICE_* pause capture. Persist the pause
+    // window (start / duration / resume_date — the only Glofox surface
+    // that carries it) + denormalise onto the contact. On a real state
+    // flip, fire membership_state_change sequences; when it flips to
+    // paused, suppress any in-flight dunning (never dun a paused member).
+    let serviceResult = null
+    const isServiceEvent = evUpper === 'SERVICE_CREATED' || evUpper === 'SERVICE_UPDATED' || evUpper === 'SERVICE_DELETED'
+    if (isServiceEvent) {
+      try {
+        serviceResult = await applyServiceWebhook(db, creds.locationId, contact.id, payload)
+        const flip = serviceResult?.state_change
+        if (flip) {
+          try {
+            await triggerSequencesForMembershipStateChange(contact.id, flip.from, flip.to)
+          } catch (e) {
+            logWarn('glofox-webhook', 'membership_state_change trigger threw', { err: e?.message, contact_id: contact.id })
+          }
+          if (flip.to === 'paused') {
+            try {
+              await exitDunningForContact(db, creds.locationId, contact.id, 'membership_paused')
+            } catch (e) {
+              logWarn('glofox-webhook', 'pause dunning-suppress threw', { err: e?.message, contact_id: contact.id })
+            }
+          }
+        }
+      } catch (e) {
+        logWarn('glofox-webhook', 'service webhook threw', {
+          err: e?.message, contact_id: contact.id, event_id: parsed.eventId,
+        })
+        serviceResult = { ok: false, reason: 'threw', error: e?.message }
+      }
+    }
+
     // 6c. SEQ-GLOFOX.2 — stamp glofox_first_booking once-ever on the first
     // booking we see for a contact. The flow builder's "has booked their
     // first class?" branch keys on this tag. Two guards keep it honest:
@@ -392,7 +452,8 @@ export async function POST(request) {
     }
 
     await markEvent(db, eventRow.id, 'applied', {
-      contact_id: contact.id, tags: appliedTags, ltv: ltvResult, member_sync: memberSyncResult,
+      contact_id: contact.id, tags: appliedTags, ltv: ltvResult,
+      service: serviceResult, dunning: dunningResult, member_sync: memberSyncResult,
     }, null)
     return NextResponse.json({
       success: true,
@@ -401,6 +462,8 @@ export async function POST(request) {
       contact_id: contact.id,
       tags: appliedTags,
       ltv: ltvResult,
+      service: serviceResult,
+      dunning: dunningResult,
       member_sync: memberSyncResult ? { applied: memberSyncResult.action || memberSyncResult.ok || false } : null,
     })
   } catch (e) {

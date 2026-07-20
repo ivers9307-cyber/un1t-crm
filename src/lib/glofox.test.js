@@ -197,6 +197,34 @@ describe('parseGlofoxEvent', () => {
       expect(out.userId).toBe('658b300f48e87a159508c8e7')
     })
 
+    it('parses a SERVICE_UPDATED payload — lowercase metadata/payload, member_ids[0] as userId', () => {
+      // GLOFOX-REACTIVE: SERVICE_* events use lowercase keys and link
+      // to the member via a member_ids ARRAY (no email). The parser
+      // must resolve member_ids[0] via array-index path so the
+      // receiver's glofox_member_id fallback finds the contact, and
+      // must use metadata.trace_id (NOT the stable service id) as the
+      // dedup key so a pause→resume update isn't dropped.
+      const payload = {
+        type: 'SERVICE_UPDATED',
+        metadata: { trace_id: 'svc-trace-9', location_id: '6155764859810329ec3826b3', version: '1' },
+        timestamp: '2026-07-20T10:00:00Z',
+        payload: {
+          id: 'svc_abc',
+          membership_id: 'mem_1',
+          member_ids: ['658b300f48e87a159508c8e7'],
+          status: 'active',
+          pause: { start_date: '2026-07-15T00:00:00Z', duration_unit: 'week', duration_amount: 4, resume_date: '2026-08-15T00:00:00Z' },
+        },
+      }
+      const out = parseGlofoxEvent(payload)
+      expect(out.eventType).toBe('SERVICE_UPDATED')
+      expect(out.branchId).toBe('6155764859810329ec3826b3')
+      expect(out.eventId).toBe('svc-trace-9') // trace_id, not the service id
+      expect(out.entityId).toBe('svc_abc')
+      expect(out.contactEmail).toBeNull()
+      expect(out.userId).toBe('658b300f48e87a159508c8e7') // member_ids[0]
+    })
+
     it('parses Payload.contact_email as a fallback for MEMBER payloads', () => {
       // Some Glofox MEMBER payloads carry contact_email separately
       // from email — capture both. The email path resolves first;
