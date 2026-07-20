@@ -16,13 +16,22 @@
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
-import { resolveDashboardTarget } from '@/lib/dashboard-redirect'
+import { resolveDashboardTarget, resolveLandingTarget } from '@/lib/dashboard-redirect'
 
 export const dynamic = 'force-dynamic'
 
 export default async function Root() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
+
+  // REPSET-ACCOUNT.1 — ACCOUNT-tier landing. A multi-studio owner (or a
+  // master) lands on the org portfolio instead of a single studio.
+  // Single-studio users and non-account-tier roles get null here and fall
+  // through to the EXISTING per-studio resolution UNCHANGED. Fail-safe:
+  // any error/ambiguity also returns null. Applied only here (the login
+  // landing), never on /dashboard — see resolveLandingTarget for why.
+  const accountTarget = resolveLandingTarget(user)
+  if (accountTarget) redirect(accountTarget)
 
   const target = resolveDashboardTarget(user)
   if (target) redirect(target)

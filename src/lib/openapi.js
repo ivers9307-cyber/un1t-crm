@@ -3797,6 +3797,30 @@ registry.registerPath({
   },
 })
 
+// Account (Repset ACCOUNT tier) — org portfolio roll-up (REPSET-ACCOUNT.1)
+registry.registerPath({
+  method: 'get',
+  path: '/api/account/overview',
+  tags: ['Account'],
+  security: [{ CookieAuth: [] }, { BearerAuth: [] }],
+  summary: 'Org portfolio roll-up (owner-of-org + master)',
+  description:
+    'Read-only ACCOUNT-tier roll-up across an organization\'s studios: org-level KPIs ' +
+    '(members, bookings last 7 days, high-risk members) plus a per-studio breakdown with an ' +
+    'attention signal (open approvals + Glofox-connected). Org-scoped: master may pass ' +
+    '?organization_id (defaults to their active org); an owner is constrained to the orgs they own ' +
+    'and a foreign/unknown org answers 404 (not 403). Managers/staff → 403.',
+  request: {
+    query: z.object({ organization_id: uuidLike.optional() }),
+  },
+  responses: {
+    200: { description: 'Org portfolio roll-up', content: { 'application/json': { schema: z.object({}).passthrough().openapi('AccountOverviewResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not an account-tier operator (manager / staff)', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Organisation not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Spec generator — build once and cache
 // ============================================================================

@@ -23,7 +23,7 @@ import {
   LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare,
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
   Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
-  Workflow, Timer, Projector, Trophy, Activity, Landmark,
+  Workflow, Timer, Projector, Trophy, Activity, Landmark, Building2,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -50,6 +50,13 @@ export const DASHBOARD_LINK_PERM_KEYS = [
 // NAV_SECTIONS below. Within a section, items render in the order they
 // appear here.
 export const ALL_NAV = [
+  // REPSET-ACCOUNT.1 — ACCOUNT-tier home (org portfolio). Pinned above
+  // the Dashboard link and section headers because it sits ABOVE the
+  // studio surfaces in the tier model (Account → Studio). Owner+/master
+  // only (role-gated, like the other privileged config surfaces — no
+  // per-user permission key). `/account` is the personal account page,
+  // so the org portfolio lives at /portfolio.
+  { href: '/portfolio',  label: 'Account home', icon: Building2,       masterOrOwnerOnly: true },
   { href: '/dashboard',  label: 'Dashboard',   icon: LayoutDashboard, dashboardGroup: true },
 
   // ── Work — the action queues. One section for everything that

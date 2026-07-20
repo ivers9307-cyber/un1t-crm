@@ -3,7 +3,7 @@
 // the user-permission revocation edge case.
 
 import { describe, it, expect } from 'vitest'
-import { resolveDashboardTarget } from './dashboard-redirect.js'
+import { resolveDashboardTarget, resolveLandingTarget } from './dashboard-redirect.js'
 
 // Stable user shape factory. Two buckets matter here:
 //   - hasPermission() reads `user.activeAssignment.permissions`
@@ -107,5 +107,92 @@ describe('resolveDashboardTarget', () => {
       const u = user({ perms: { ...noDashboards, dashboard_personal: true, churn_radar: true } })
       expect(resolveDashboardTarget(u)).toBe('/dashboard/today')
     })
+  })
+})
+
+// REPSET-ACCOUNT.1 — the ACCOUNT-tier landing decision. Routes a
+// multi-studio owner (or master) to the org portfolio; everyone else
+// falls through (null) to the existing per-studio behaviour.
+describe('resolveLandingTarget', () => {
+  // getOwnerOrganizationIds reads rolesByLocation + locations, so build
+  // the real user shape.
+  function acct({
+    role = 'owner', isMaster = false, activeOrgId = 'org-a', locations = [], rolesByLocation = {},
+  } = {}) {
+    return {
+      role, isMaster,
+      activeOrganization: activeOrgId ? { id: activeOrgId } : null,
+      rolesByLocation, locations,
+    }
+  }
+
+  it('returns null for a missing user (caller → /login)', () => {
+    expect(resolveLandingTarget(null)).toBe(null)
+    expect(resolveLandingTarget(undefined)).toBe(null)
+  })
+
+  it('master with an active org lands on the portfolio', () => {
+    expect(resolveLandingTarget(acct({ role: 'master', isMaster: true, activeOrgId: 'org-a' }))).toBe('/portfolio')
+  })
+
+  it('master with NO active org falls through (existing behaviour)', () => {
+    expect(resolveLandingTarget(acct({ role: 'master', isMaster: true, activeOrgId: null }))).toBe(null)
+  })
+
+  it('owner of the active org with ≥2 studios → portfolio', () => {
+    const u = acct({
+      role: 'owner', activeOrgId: 'org-a',
+      rolesByLocation: { loc1: 'owner', loc2: 'owner' },
+      locations: [
+        { id: 'loc1', organization_id: 'org-a' },
+        { id: 'loc2', organization_id: 'org-a' },
+      ],
+    })
+    expect(resolveLandingTarget(u)).toBe('/portfolio')
+  })
+
+  it('single-studio owner → null (studio dashboard, UNCHANGED)', () => {
+    const u = acct({
+      role: 'owner', activeOrgId: 'org-a',
+      rolesByLocation: { loc1: 'owner' },
+      locations: [{ id: 'loc1', organization_id: 'org-a' }],
+    })
+    expect(resolveLandingTarget(u)).toBe(null)
+  })
+
+  it('only counts studios WITHIN the active org (a second-org studio does not tip it over)', () => {
+    const u = acct({
+      role: 'owner', activeOrgId: 'org-a',
+      rolesByLocation: { loc1: 'owner', loc2: 'owner' },
+      locations: [
+        { id: 'loc1', organization_id: 'org-a' },
+        { id: 'loc2', organization_id: 'org-b' }, // different org
+      ],
+    })
+    expect(resolveLandingTarget(u)).toBe(null)
+  })
+
+  it('a multi-studio MANAGER (not an org owner) falls through — not account-tier', () => {
+    const u = acct({
+      role: 'manager', activeOrgId: 'org-a',
+      rolesByLocation: { loc1: 'manager', loc2: 'manager' },
+      locations: [
+        { id: 'loc1', organization_id: 'org-a' },
+        { id: 'loc2', organization_id: 'org-a' },
+      ],
+    })
+    expect(resolveLandingTarget(u)).toBe(null)
+  })
+
+  it('no active org → null (fail-safe / ambiguity)', () => {
+    const u = acct({ role: 'owner', activeOrgId: null })
+    expect(resolveLandingTarget(u)).toBe(null)
+  })
+
+  it('a malformed user degrades to null instead of throwing (fail-safe)', () => {
+    // locations is not an array — the internal filter would throw if
+    // unguarded; the try/catch returns null.
+    const u = { role: 'owner', activeOrganization: { id: 'org-a' }, rolesByLocation: { loc1: 'owner' }, locations: 'nope' }
+    expect(resolveLandingTarget(u)).toBe(null)
   })
 })

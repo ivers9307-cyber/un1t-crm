@@ -16,7 +16,68 @@
 //      expected to fall through to /dashboard's empty-state render.
 
 import { hasPermission } from '@/lib/permissions'
+import { getOwnerOrganizationIds } from '@/lib/auth'
 import { resolveLandingPreference, LANDING_PREFERENCE_TARGETS } from '@shared/permissions'
+
+// REPSET-ACCOUNT.1 — the Account Home (org portfolio) route. `/account`
+// is taken by the per-user self-service account page, so the org
+// portfolio lives at /portfolio.
+export const ACCOUNT_HOME_ROUTE = '/portfolio'
+
+/**
+ * REPSET-ACCOUNT.1 — post-login ACCOUNT-tier landing decision.
+ *
+ * Decides whether an authenticated visitor hitting the login landing
+ * (`/`) should be routed to the org portfolio instead of straight into
+ * a single studio. Returns the portfolio route, or null to fall through
+ * to the EXISTING per-studio behaviour (resolveDashboardTarget).
+ *
+ * Decision table:
+ *   master (with an active org)            → /portfolio (Platform Console
+ *                                            is a later phase)
+ *   owner of the active org, ≥2 accessible
+ *     studios in that org                  → /portfolio
+ *   owner with 1 studio                    → null (studio dashboard, UNCHANGED)
+ *   manager / head_coach / staff           → null (not account-tier)
+ *   no active org / any error / ambiguity  → null (FAIL-SAFE: existing behaviour)
+ *
+ * Pure — no DB. Wrapped in try/catch so any unexpected shape degrades to
+ * null (the existing landing) rather than throwing on the hot `/` path.
+ * This decision is deliberately applied ONLY at `/` (the login landing),
+ * NOT at `/dashboard`: `/dashboard` is the studio drill-in target
+ * ("Open studio →" sets the active location and navigates there), so
+ * redirecting multi-studio users away from it would create a bounce loop.
+ *
+ * @param {object|null} user  getCurrentUser() result
+ * @returns {string|null}     the portfolio route, or null to fall through
+ */
+export function resolveLandingTarget(user) {
+  try {
+    if (!user) return null
+
+    const isMaster = user.isMaster || user.profileRole === 'master' || user.role === 'master'
+    if (isMaster) {
+      // Master → their active org's Account Home (for now). No active
+      // org → fall through to the existing dashboard resolution.
+      return user.activeOrganization?.id ? ACCOUNT_HOME_ROUTE : null
+    }
+
+    const activeOrgId = user.activeOrganization?.id
+    if (!activeOrgId) return null // missing/ambiguous org → existing behaviour
+
+    // Only an account-tier operator (owner of the ACTIVE org) is routed to
+    // the portfolio — a multi-studio manager stays in their studio.
+    if (!getOwnerOrganizationIds(user).includes(activeOrgId)) return null
+
+    // Count the caller's accessible studios WITHIN the active org.
+    const orgStudioCount = (user.locations || [])
+      .filter((l) => l && l.organization_id === activeOrgId).length
+
+    return orgStudioCount >= 2 ? ACCOUNT_HOME_ROUTE : null
+  } catch {
+    return null // FAIL-SAFE — never break the login landing
+  }
+}
 
 /**
  * Given an authenticated user object (must include role and
