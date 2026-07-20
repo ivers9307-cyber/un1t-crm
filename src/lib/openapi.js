@@ -3489,11 +3489,16 @@ registry.registerPath({
     'with legacy location-field fallback), xero_connections, whatsapp_numbers (read-only), ' +
     'ad_accounts presence, the customer-agent live signal, and a derived "needs attention" list ' +
     '(errors first, then tokens expiring within 10 days, then incomplete setups). ' +
+    'INTEG-C4 adds a read-only `billing` array (one entry per location) for the plan & wallet strip: ' +
+    'with an ACTIVE tier pinning in location_plans it carries plan {name, effectiveFrom, priceCents, addons}, ' +
+    'wallet {balanceCents, periodStart, expiresOn = last day of the current Dublin month, lapseWarning} and ' +
+    'per-meter MTD usage vs allowance with overage cents drawn from the wallet ledger; ' +
+    'unpinned locations (all of them today) return { locationId, plan: null }. ' +
     'Secrets are never returned — no token columns are selected. ' +
     'Master-only (profileRole) while the hub is behind the phase-B rollout flag.',
   responses: {
     200: {
-      description: 'Hub payload — per-provider card states keyed by location, plus the attention strip',
+      description: 'Hub payload — per-provider card states keyed by location, the billing strip, plus the attention strip',
       content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('IntegrationsHubResponse') } },
     },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
