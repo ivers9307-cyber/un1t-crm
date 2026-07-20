@@ -4,7 +4,9 @@
 // Assembles every location's connection state in one payload:
 // channel_connections registry rows (with legacy fallback via the
 // dual-read mappers), xero_connections, whatsapp_numbers (read-only),
-// ad_accounts presence, and the customer-agent live signal. Batched —
+// ad_accounts presence, the customer-agent live signal, and the
+// INTEG-C4 billing strip (pinned plan + wallet + MTD meters; plan:
+// null for every unpinned location — all of them today). Batched —
 // one query per table, not per location. Secrets never leave the
 // server: the assembler selects no token columns (see
 // src/lib/integrations-hub.js).

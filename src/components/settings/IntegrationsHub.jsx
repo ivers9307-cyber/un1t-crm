@@ -10,8 +10,14 @@
 // (registry + xero_connections + whatsapp_numbers + ad_accounts);
 // this component only filters by scope and renders.
 //
+// INTEG-C4 adds the plan & wallet strip at the top: pinned tier +
+// wallet balance/expiry (with the late-month lapse warning) + MTD
+// meter bars vs allowance. Read-only and pinning-gated — an unpinned
+// scope (every UN1T location today) renders one quiet "No platform
+// plan" line. The Manage-plan button from the mockup is deliberately
+// OMITTED until D1 builds its landing page.
+//
 // Deliberately OMITTED from this phase (they ship later):
-//   - plan & usage strip + wallet (phase C)
 //   - the Postmark email-domain DNS wizard (B3)
 //   - TikTok stays a static coming-soon card
 //
@@ -99,6 +105,86 @@ function Meter({ label, value, max, warn }) {
 const linkBtn = (primary = false) =>
   buttonClasses({ variant: primary ? 'primary' : 'secondary', size: 'sm' })
 
+// ── Plan & wallet strip (INTEG-C4) ──
+
+const eur = new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' })
+const fmtEurCents = (cents) => eur.format((Number(cents) || 0) / 100)
+
+// Usage-vs-allowance bar: fill caps at 100%; past the allowance the
+// numbers flip to the red -700 ramp (chip-contrast rule for light
+// cards) with the "+N over · €X.XX drawn" suffix.
+function PlanMeter({ label, used, allowance, overQty, overageDrawnCents }) {
+  const pct = allowance > 0
+    ? Math.min(100, Math.round((used / allowance) * 100))
+    : (used > 0 ? 100 : 0)
+  const over = overQty > 0
+  return (
+    <div className="space-y-1">
+      <div className="flex items-baseline justify-between gap-2 text-xs tabular-nums">
+        <span className="text-un1t-subtle truncate">{label}</span>
+        <span className={`whitespace-nowrap ${over ? 'text-red-700 font-semibold' : 'text-un1t-subtle'}`}>
+          {used.toLocaleString()} / {allowance.toLocaleString()}
+          {over && <> · +{overQty.toLocaleString()} over · {fmtEurCents(overageDrawnCents)} drawn</>}
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-un1t-border/60 overflow-hidden">
+        <div
+          className={`h-full rounded-full ${over ? 'bg-red-600' : 'bg-un1t-accent'}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
+// One pinned location's strip row: plan name/price · wallet balance
+// with expiry (+ lapse warning) · the three meter bars. Read-only —
+// the Manage-plan action ships with D1's landing page.
+function BillingStripRow({ row, locationName, showLocation }) {
+  const { plan, wallet, meters } = row
+  return (
+    <div className="rounded-xl border border-un1t-border bg-white p-4 flex flex-col lg:flex-row gap-4 lg:gap-8">
+      <div className="lg:w-52 shrink-0">
+        <div className="text-[10px] uppercase tracking-wider text-un1t-muted">
+          Plan{showLocation && locationName ? ` · ${locationName}` : ''}
+        </div>
+        <div className="text-sm font-semibold text-un1t-text mt-1">
+          {plan.name}
+          <span className="text-un1t-subtle font-normal"> · {fmtEurCents(plan.priceCents)}/mo</span>
+        </div>
+        <p className="text-xs text-un1t-muted mt-0.5">Pricing version effective {fmtDate(plan.effectiveFrom)}</p>
+        {plan.addons?.length > 0 && (
+          <p className="text-xs text-un1t-muted mt-0.5">
+            + {plan.addons.map((a) => a.name).join(', ')}
+          </p>
+        )}
+      </div>
+      <div className="lg:w-56 shrink-0">
+        <div className="text-[10px] uppercase tracking-wider text-un1t-muted">Wallet</div>
+        <div className="text-sm font-semibold text-un1t-text tabular-nums mt-1">{fmtEurCents(wallet.balanceCents)}</div>
+        <p className="text-xs text-un1t-muted mt-0.5">expires {fmtDate(wallet.expiresOn)}</p>
+        {wallet.lapseWarning && (
+          <p className="text-xs text-amber-700 bg-amber-500/10 rounded px-2 py-1 mt-1.5">
+            {fmtEurCents(wallet.balanceCents)} unused credit expires with the monthly reset.
+          </p>
+        )}
+      </div>
+      <div className="flex-1 grid gap-3 content-center">
+        {meters.map((m) => (
+          <PlanMeter
+            key={m.key}
+            label={m.label}
+            used={m.used}
+            allowance={m.allowance}
+            overQty={m.overQty}
+            overageDrawnCents={m.overageDrawnCents}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function HubCard({ icon: Icon, title, locTag, provider, chip, dashed, muted, children }) {
   return (
     <div className={`rounded-xl border p-4 flex flex-col gap-3 transition-colors ${
@@ -171,6 +257,8 @@ export default function IntegrationsHub({ data }) {
   const climate = (data.climate || []).filter((r) => inScope(r.locationId))
   const bca = (data.bca || []).filter((r) => inScope(r.locationId))
   const attention = (data.attention || []).filter((r) => inScope(r.locationId))
+  const billing = (data.billing || []).filter((r) => inScope(r.locationId))
+  const pinnedBilling = billing.filter((r) => r.plan)
 
   const scopeTag = scope === 'all'
     ? (arr) => (arr.length > 1 ? `${arr.length} locations` : (arr[0] ? nameById[arr[0].locationId] : null))
@@ -226,6 +314,22 @@ export default function IntegrationsHub({ data }) {
         <StatusChip status="not_connected" />
         <StatusChip status="coming_soon" />
         <StatusChip status="platform" />
+      </div>
+
+      {/* ── Plan & wallet strip (INTEG-C4) — read-only, pinning-gated ── */}
+      <div className="space-y-3 mb-6">
+        {pinnedBilling.length === 0 ? (
+          <div className="rounded-xl border border-un1t-border bg-white px-4 py-3 text-sm text-un1t-subtle">
+            No platform plan{scope !== 'all' && nameById[scope] ? ` — ${nameById[scope]}` : ''}
+          </div>
+        ) : pinnedBilling.map((row) => (
+          <BillingStripRow
+            key={row.locationId}
+            row={row}
+            locationName={nameById[row.locationId]}
+            showLocation={scope === 'all'}
+          />
+        ))}
       </div>
 
       {/* ── Needs attention ── */}
@@ -609,8 +713,8 @@ export default function IntegrationsHub({ data }) {
 
       <p className="mt-10 pt-4 border-t border-un1t-border text-xs text-un1t-muted max-w-3xl">
         Master-only preview (phase B rollout flag): operators keep the per-location Integrations tabs — every
-        action here deep-links into them. The plan &amp; usage strip, wallet and the email-domain wizard ship in
-        the next phases.
+        action here deep-links into them. The plan &amp; wallet strip is read-only (plan management lands with
+        its own page); the email-domain wizard ships in a later phase.
       </p>
     </div>
   )

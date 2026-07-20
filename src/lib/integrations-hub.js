@@ -12,6 +12,11 @@
 //   whatsapp_numbers     per-location WA Cloud API numbers (read-only here).
 //   ad_accounts          Meta/TikTok ad account presence (read-only here).
 //   locations.settings   customer_agent block → the AI-agent live signal.
+//   location_plans /     the plan & wallet strip (INTEG-C4) — pinned
+//   wallets / usage      tier + wallet balance + MTD meter usage vs
+//                        allowance; read-only and PINNING-GATED (an
+//                        unpinned location yields plan: null and no
+//                        wallet/usage query runs when nothing is pinned).
 //
 // Status model (mirrors channel_connections.status + the hub mockup):
 //   connected | action_needed | error | not_connected
@@ -32,6 +37,10 @@
 import { registryRowFromLegacy } from '@/lib/connection-registry'
 import { EXPIRY_SOON_DAYS } from '@/lib/connection-health'
 import { getSendBudget, tierDailyLimit } from '@/lib/whatsapp-budget'
+import { resolveAllowances } from '@/lib/plans'
+import { currentPeriodStart, nextPeriodStart } from '@/lib/wallet'
+import { addDaysISO, dublinDayStr } from '@/lib/dublin-time'
+import { METERS, METER_KEYS } from '@shared/plans'
 
 export { EXPIRY_SOON_DAYS }
 
@@ -204,6 +213,141 @@ export function buildAttention(rows, { now = new Date(), expirySoonDays = EXPIRY
 }
 
 // ─────────────────────────────────────────────────────────────
+// Plan & wallet strip (INTEG-C4) — pure derivation helpers
+// ─────────────────────────────────────────────────────────────
+//
+// Read-only aggregation kept LOCAL to the hub assembler on purpose:
+// enforcement (draw posting) lives on the C3 track and a shared
+// getBillingState-shaped helper may land later — when it does, this
+// section collapses onto it. Nothing here writes; the strip only
+// renders what plans/wallets/usage already recorded.
+
+// Lapse warning (Richard's requirement): flag a wallet whose UNUSED
+// credit is about to evaporate — strictly more than €10 of balance
+// with 7 or fewer days until the monthly reset expires it.
+export const LAPSE_WARN_MIN_CENTS = 1000
+export const LAPSE_WARN_DAYS = 7
+
+/**
+ * Pure calendar-day difference between two YYYY-MM-DD strings
+ * (to - from, in whole days). Timezoneless calendar math via UTC —
+ * the addDaysISO pattern. null on unparseable input.
+ */
+export function calendarDaysBetween(fromStr, toStr) {
+  const from = Date.parse(String(fromStr) + 'T00:00:00Z')
+  const to = Date.parse(String(toStr) + 'T00:00:00Z')
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null
+  return Math.round((to - from) / 86400000)
+}
+
+/**
+ * The date the current wallet credit expires: the LAST day of the
+ * Dublin month containing todayStr (the monthly-reset cron zeroes the
+ * balance at the next period start — see src/lib/wallet.js). Pure.
+ */
+export function billingExpiresOn(todayStr) {
+  return addDaysISO(nextPeriodStart(todayStr), -1)
+}
+
+/**
+ * Should the strip show the late-month lapse warning? True when a
+ * balance STRICTLY over €10 would expire within LAPSE_WARN_DAYS days
+ * (inclusive — the expiry day itself still warns). Pure.
+ */
+export function walletLapseWarning({ balanceCents, todayStr, expiresOn }) {
+  if (!(Number(balanceCents) > LAPSE_WARN_MIN_CENTS)) return false
+  const days = calendarDaysBetween(todayStr, expiresOn ?? billingExpiresOn(todayStr))
+  return days !== null && days <= LAPSE_WARN_DAYS
+}
+
+/**
+ * Group active location_plans embed rows into per-location pins:
+ * { [locationId]: { tier: {plan, version}|null, addons: [{plan, version}] } }.
+ * A location absent from the result (or with tier: null) is UNPINNED —
+ * the normal state for every UN1T location today. Pure.
+ */
+export function groupPlanPins(rows) {
+  const byLoc = {}
+  for (const r of rows || []) {
+    const plan = r?.version?.plan
+    if (!plan) continue
+    const { plan: _plan, ...version } = r.version
+    const bucket = (byLoc[r.location_id] ||= { tier: null, addons: [] })
+    if (plan.kind === 'tier') {
+      bucket.tier = { plan, version } // one active tier pin per location (DB-enforced)
+    } else if (plan.kind === 'addon') {
+      bucket.addons.push({ plan, version })
+    }
+  }
+  return byLoc
+}
+
+/**
+ * Fold usage_rollups_daily rows into per-location per-meter MTD sums:
+ * { [locationId]: { [meter]: quantity } }. Pure.
+ */
+export function foldMeterUsage(rows) {
+  const byLoc = {}
+  for (const r of rows || []) {
+    if (!r?.location_id || !r?.meter) continue
+    const loc = (byLoc[r.location_id] ||= {})
+    loc[r.meter] = (loc[r.meter] || 0) + (Number(r.quantity) || 0)
+  }
+  return byLoc
+}
+
+// Draw ledger rows may carry either the billing meter key or the
+// finer-grained unit-rate key (wa marketing/utility split, email per
+// 1k — see shared/plans.js UNIT_RATE_KEYS); fold both onto the meter
+// the strip displays so the suffix stays correct whichever the C3
+// enforcement rollup posts.
+const DRAW_METER_ALIASES = {
+  wa_marketing: 'wa_template_send',
+  wa_utility: 'wa_template_send',
+  email_per_1k: 'email_send',
+}
+
+/**
+ * Fold wallet_transactions draw rows (kind='draw', current period)
+ * into per-location per-meter cents DRAWN (positive — draw
+ * amount_cents are stored negative): { [locationId]: { [meter]: cents } }.
+ * Pure.
+ */
+export function foldDrawCents(rows) {
+  const byLoc = {}
+  for (const r of rows || []) {
+    if (!r?.location_id || !r?.meter) continue
+    const meter = DRAW_METER_ALIASES[r.meter] || r.meter
+    const loc = (byLoc[r.location_id] ||= {})
+    loc[meter] = (loc[meter] || 0) + Math.max(0, -(Number(r.amount_cents) || 0))
+  }
+  return byLoc
+}
+
+/**
+ * Build the strip's meter states from a resolved allowance set
+ * (resolveAllowances output) + MTD usage + MTD overage draws. One
+ * entry per shared/plans.js METER_KEYS, in registry order. Pure.
+ *
+ * @returns {Array<{ key, label, unit, used, allowance, overQty, overageDrawnCents }>}
+ */
+export function buildBillingMeters(resolved, usage = {}, drawnCents = {}) {
+  return METER_KEYS.map((key) => {
+    const allowance = Number(resolved?.allowances?.[key]) || 0
+    const used = Number(usage[key]) || 0
+    return {
+      key,
+      label: METERS[key].label,
+      unit: METERS[key].unit,
+      used,
+      allowance,
+      overQty: Math.max(0, used - allowance),
+      overageDrawnCents: Number(drawnCents[key]) || 0,
+    }
+  })
+}
+
+// ─────────────────────────────────────────────────────────────
 // Async assembler — batched reads, one query per table
 // ─────────────────────────────────────────────────────────────
 
@@ -217,6 +361,161 @@ const REGISTRY_PLATFORMS = ['glofox', 'unifi', 'sensibo', 'thinq', 'twilio_sende
 
 function pickRegistry(rows, locationId, platform) {
   return (rows || []).find((r) => r.location_id === locationId && r.platform === platform) || null
+}
+
+// Billing meters that read straight off usage_rollups_daily
+// (ai_message has no rollup meter — derived from usage_events, see
+// shared/plans.js).
+const ROLLUP_BILLING_METERS = METER_KEYS
+  .map((key) => METERS[key].rollupMeter)
+  .filter(Boolean)
+
+// MTD rollups for the strip. locations × 2 meters × ≤31 days can pass
+// the PostgREST 1k cap once enough locations are pinned —
+// .range()-paginate with an explicit order (the pipeline-reclassify
+// pattern, same as usage-summary.js).
+async function fetchBillingRollups(db, locationIds, monthStart) {
+  const PAGE = 1000
+  const rows = []
+  for (let from = 0; ; from += PAGE) {
+    const { data } = await db
+      .from('usage_rollups_daily')
+      .select('location_id, meter, quantity')
+      .in('location_id', locationIds)
+      .in('meter', ROLLUP_BILLING_METERS)
+      .gte('day', monthStart)
+      .order('day', { ascending: true })
+      .order('location_id', { ascending: true })
+      .order('meter', { ascending: true })
+      .range(from, from + PAGE - 1)
+    rows.push(...(data || []))
+    if (!data || data.length < PAGE) break
+  }
+  return rows
+}
+
+// Current-period overage draws (kind='draw'; `period` stamps the
+// wallet's period_start when the entry posted — mig 420). One draw
+// per meter per location per day by design, but paginate anyway.
+async function fetchPeriodDraws(db, locationIds, periodStart) {
+  const PAGE = 1000
+  const rows = []
+  for (let from = 0; ; from += PAGE) {
+    const { data } = await db
+      .from('wallet_transactions')
+      .select('location_id, meter, amount_cents')
+      .in('location_id', locationIds)
+      .eq('kind', 'draw')
+      .eq('period', periodStart)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1)
+    rows.push(...(data || []))
+    if (!data || data.length < PAGE) break
+  }
+  return rows
+}
+
+// ai_message MTD = COUNT of allowance-eligible usage_events rows
+// (meter='anthropic_tokens', source != 'assistant_chat' — the staff
+// assistant is metered but allowance-exempt; month semantics match
+// mig 421's org_ai_spend_month_cents). Head-only counts with plain
+// column filters (the embedded-filter/head trap doesn't apply), one
+// per TIER-PINNED location — bounded by the pinned count (zero
+// today), the deliberate exception to one-query-per-table until an
+// ai_message rollup meter exists.
+async function fetchAiMessageCounts(db, locationIds, monthStart) {
+  const entries = await Promise.all(locationIds.map(async (locationId) => {
+    const { count } = await db
+      .from('usage_events')
+      .select('id', { count: 'exact', head: true })
+      .eq('location_id', locationId)
+      .eq('meter', 'anthropic_tokens')
+      .neq('source', 'assistant_chat')
+      .gte('created_at', monthStart)
+    return [locationId, count || 0]
+  }))
+  return Object.fromEntries(entries)
+}
+
+/**
+ * Assemble the plan & wallet strip rows (INTEG-C4). Read-only and
+ * PINNING-GATED: a location without an ACTIVE tier pin in
+ * location_plans yields { locationId, plan: null } (the strip's quiet
+ * placeholder), and when NOTHING is pinned — every UN1T location
+ * today — no wallet/usage/ledger query runs at all.
+ */
+async function assembleBillingStrip(db, locs, todayStr) {
+  const ids = locs.map((l) => l.id)
+  const unpinnedAll = () => locs.map((l) => ({ locationId: l.id, plan: null }))
+  if (!ids.length) return []
+
+  const { data: pinRows } = await db
+    .from('location_plans')
+    .select(
+      'location_id, ' +
+      'version:plan_versions!plan_version_id(id, plan_id, effective_from, price_cents, currency, allowances, unit_rates_cents, features, ' +
+      'plan:plans!plan_id(id, slug, name, kind))'
+    )
+    .in('location_id', ids)
+    .eq('active', true)
+
+  const pins = groupPlanPins(pinRows || [])
+  const pinnedIds = ids.filter((id) => pins[id]?.tier)
+  if (!pinnedIds.length) return unpinnedAll()
+
+  const monthStart = currentPeriodStart(todayStr)
+  const expiresOn = billingExpiresOn(todayStr)
+
+  const [walletsRes, rollupRows, drawRows, aiCounts] = await Promise.all([
+    db.from('wallets')
+      .select('location_id, balance_cents, period_start')
+      .in('location_id', pinnedIds),
+    fetchBillingRollups(db, pinnedIds, monthStart),
+    fetchPeriodDraws(db, pinnedIds, monthStart),
+    fetchAiMessageCounts(db, pinnedIds, monthStart),
+  ])
+
+  const walletByLoc = Object.fromEntries(
+    (walletsRes.data || []).map((w) => [w.location_id, w])
+  )
+  const usageByLoc = foldMeterUsage(rollupRows)
+  const drawsByLoc = foldDrawCents(drawRows)
+
+  return locs.map((loc) => {
+    const pin = pins[loc.id]
+    if (!pin?.tier) return { locationId: loc.id, plan: null }
+
+    const resolved = resolveAllowances(pin.tier.version, pin.addons.map((a) => a.version))
+    // No wallet row yet is normal (wallet_apply creates it lazily) —
+    // render a zero balance for the current period.
+    const wallet = walletByLoc[loc.id] || null
+    const balanceCents = Number(wallet?.balance_cents) || 0
+    const usage = { ...(usageByLoc[loc.id] || {}), ai_message: aiCounts[loc.id] || 0 }
+
+    return {
+      locationId: loc.id,
+      plan: {
+        name: pin.tier.plan.name,
+        slug: pin.tier.plan.slug,
+        effectiveFrom: pin.tier.version.effective_from,
+        priceCents: pin.tier.version.price_cents,
+        currency: pin.tier.version.currency || 'EUR',
+        addons: pin.addons.map((a) => ({
+          name: a.plan.name,
+          slug: a.plan.slug,
+          priceCents: a.version.price_cents,
+        })),
+      },
+      wallet: {
+        balanceCents,
+        periodStart: wallet?.period_start || monthStart,
+        expiresOn,
+        lapseWarning: walletLapseWarning({ balanceCents, todayStr, expiresOn }),
+      },
+      meters: buildBillingMeters(resolved, usage, drawsByLoc[loc.id] || {}),
+    }
+  })
 }
 
 /**
@@ -464,6 +763,9 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     return [{ locationId: loc.id, status, href }]
   })
 
+  // ── Plan & wallet strip (INTEG-C4) — pinning-gated, zero writes ──
+  const billing = await assembleBillingStrip(db, locs, dublinDayStr(now))
+
   return {
     generatedAt: now.toISOString(),
     expirySoonDays: EXPIRY_SOON_DAYS,
@@ -478,6 +780,7 @@ export async function assembleIntegrationsHub(db, locations, { now = new Date() 
     unifi,
     climate,
     bca,
+    billing,
     attention: buildAttention(attentionInputs, { now }),
   }
 }
