@@ -23,11 +23,13 @@ import { createServerClient } from '@/lib/supabase'
 import { tickCampaignSend } from '@/lib/campaign-sender'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { getEmailCapStatus } from '@/lib/usage-caps'
+import { pickFairCampaigns } from '@/lib/campaign-fairness'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const MAX_CAMPAIGNS_PER_TICK = 3   // limit parallelism within one cron invocation
+const FAIR_PICK_WINDOW = 20        // SAAS4-O3 — candidates fetched for the fair pick
 
 function unauthorized() {
   return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
@@ -88,7 +90,11 @@ export async function GET(request) {
   }
 
   // STEP 2 — pick campaigns to tick this run.
-  const { data: campaigns, error: pickErr } = await db
+  // SAAS4-O3 — tenant fairness: fetch an age-ordered window, then
+  // round-robin by location (one slot per location before any second
+  // slot) so a busy tenant's backlog can't occupy every slot and
+  // starve other tenants' sends. A lone tenant still gets all slots.
+  const { data: window, error: pickErr } = await db
     .from('campaigns')
     // email_inbox_reply_to (mig 394) — per-location Reply-To default so
     // campaign replies route into the unified inbox (EMAIL-INBOX.1).
@@ -97,12 +103,14 @@ export async function GET(request) {
     .select('*, locations(name, slug, email_inbox_reply_to, settings)')
     .in('status', ['queued', 'sending'])
     .order('updated_at', { ascending: true })
-    .limit(MAX_CAMPAIGNS_PER_TICK)
+    .limit(FAIR_PICK_WINDOW)
 
   if (pickErr) {
     console.error('[cron run-campaigns] pick failed:', pickErr.message)
     return NextResponse.json({ ok: false, ...summary, error: pickErr.message }, { status: 500 })
   }
+
+  const campaigns = pickFairCampaigns(window, MAX_CAMPAIGNS_PER_TICK)
 
   for (const campaign of campaigns || []) {
     try {
