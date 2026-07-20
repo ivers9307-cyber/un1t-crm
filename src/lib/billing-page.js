@@ -122,6 +122,51 @@ function toCount(value) {
   return Number.isFinite(n) && n > 0 ? n : 0
 }
 
+// How many top-up invoices the page lists (newest first).
+export const INVOICE_LIST_LIMIT = 24
+
+/**
+ * Pure: shape wallet_topup_invoices rows for the page/API — resolve
+ * each row's location name from the org's locations list (unknown ids
+ * fall back to a neutral label rather than leaking the raw uuid).
+ *
+ * @param {Array<object>} rows - wallet_topup_invoices rows
+ * @param {Array<{ id: string, name: string }>} locs - the org's locations
+ */
+export function shapeTopupInvoices(rows, locs) {
+  const nameById = new Map((locs || []).map((l) => [l.id, l.name]))
+  return (rows || []).map((row) => ({
+    id: row.id,
+    number: row.number,
+    location_id: row.location_id,
+    location_name: nameById.get(row.location_id) || 'Unknown location',
+    amount_cents: row.amount_cents,
+    vat_cents: row.vat_cents,
+    total_cents: row.total_cents,
+    currency: row.currency || 'EUR',
+    status: row.status,
+    created_at: row.created_at,
+    paid_at: row.paid_at,
+  }))
+}
+
+// The org's recent top-up invoices (INTEG-C2b). Scoped to the org's
+// OWN location ids (all of them, not just pinned — invoices are
+// permanent records that must survive an unpin). ≤24 rows, so no
+// pagination concern.
+async function fetchTopupInvoices(db, locs) {
+  const ids = (locs || []).map((l) => l.id)
+  if (ids.length === 0) return []
+  const { data, error } = await db
+    .from('wallet_topup_invoices')
+    .select('id, number, location_id, amount_cents, vat_cents, total_cents, currency, status, created_at, paid_at')
+    .in('location_id', ids)
+    .order('created_at', { ascending: false })
+    .limit(INVOICE_LIST_LIMIT)
+  if (error) throw new Error(`fetchTopupInvoices: ${error.message}`)
+  return shapeTopupInvoices(data, locs)
+}
+
 // Month rollups for the pinned locations. Two meters × ≤31 days ×
 // locations can exceed the PostgREST 1k cap for a large org —
 // .range()-paginate with an explicit order (the pipeline-reclassify
@@ -177,6 +222,7 @@ async function fetchAiMessageCounts(db, locationId, monthStartIso) {
  *   month_start: string,
  *   pinned: boolean,
  *   locations: Array<object>,
+ *   invoices: Array<object>,
  *   billing_contact: null,
  *   billing_contact_supported: false,
  * }>}
@@ -211,11 +257,17 @@ export async function getBillingPageData(db, orgId, { todayStr = dublinTodayStr(
     billing_contact: null,
     billing_contact_supported: false,
   }
-  if (pinned.length === 0) return { ...base, pinned: false, locations: [] }
+  // Unpinned orgs (every real org today) keep the zero-extra-queries
+  // early return — invoices: [] mirrors the empty locations list.
+  if (pinned.length === 0) return { ...base, pinned: false, locations: [], invoices: [] }
 
-  const rollupsByLocation = foldRollupsByLocation(
-    await fetchMonthRollups(db, pinned.map((p) => p.loc.id), monthStart)
-  )
+  const [rollupRows, invoices] = await Promise.all([
+    fetchMonthRollups(db, pinned.map((p) => p.loc.id), monthStart),
+    // Top-up invoices span ALL the org's locations (permanent records —
+    // a later unpin must not hide them), newest first, last 24.
+    fetchTopupInvoices(db, locs),
+  ])
+  const rollupsByLocation = foldRollupsByLocation(rollupRows)
 
   const locations = []
   for (const { loc, plan } of pinned) {
@@ -269,5 +321,5 @@ export async function getBillingPageData(db, orgId, { todayStr = dublinTodayStr(
     })
   }
 
-  return { ...base, pinned: true, locations }
+  return { ...base, pinned: true, locations, invoices }
 }
