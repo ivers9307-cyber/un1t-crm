@@ -21,7 +21,7 @@
 //    CLAUDE.md pattern from pipeline-reclassify.js.
 //  - thenables: never .catch() a supabase builder — try { await } catch {} only.
 
-import { nettedOutByRetry, isCustomChargeFee } from './glofox-arrears'
+import { nettedOutByRetry } from './glofox-arrears'
 import { normalisePhone9 } from './person-links'
 
 const PAGE_SIZE = 1000
@@ -91,20 +91,17 @@ export async function aggregatePerson(db, groupId) {
   const contacts = contactRows || []
 
   // ── Step 3: Build parallel fetches ───────────────────────────────────────
-  const [pastDueRows, pendingRows, paidRows, dealCountRes, timelineRes, notesRes] = await Promise.all([
-    // Arrears: PAST_DUE invoices for these members
+  const [pastDueRows, paidRows, dealCountRes, timelineRes, notesRes] = await Promise.all([
+    // Arrears: PAST_DUE invoices for these members. AWAITING-AUTH.1 — PENDING
+    // "awaiting authorization" fees are NOT fetched: they're provisional (they
+    // expire if unpaid), so they never count as owed and don't inflate the
+    // grouped-profile arrears figure. They surface only in the radar's
+    // Awaiting-authorization tab.
     fetchGroupInvoicesByStatus(
       db,
       memberIds,
       'PAST_DUE',
       'id, contact_id, glofox_user_id, amount_cents, invoice_date',
-    ),
-    // Arrears: PENDING custom-charge fees count too (OWED-PENDING.1)
-    fetchGroupInvoicesByStatus(
-      db,
-      memberIds,
-      'PENDING',
-      'id, contact_id, glofox_user_id, amount_cents, invoice_date, line_item_subtypes',
     ),
     // Arrears: PAID invoices for netting (retry detection)
     fetchGroupInvoicesByStatus(
@@ -191,9 +188,9 @@ export async function aggregatePerson(db, groupId) {
   }
 
   // ── Step 7: Arrears — nettedOutByRetry (same as fetchPastDue) ────────────
-  // OWED-PENDING.1 — include PENDING custom-charge fees alongside PAST_DUE.
-  const openRows = [...pastDueRows, ...pendingRows.filter(isCustomChargeFee)]
-  const { kept: survivingPastDue } = nettedOutByRetry(openRows, paidRows)
+  // AWAITING-AUTH.1 — CONFIRMED PAST_DUE only. PENDING "awaiting authorization"
+  // fees are provisional (they expire if unpaid), so they never count as owed.
+  const { kept: survivingPastDue } = nettedOutByRetry(pastDueRows, paidRows)
   const arrearsCents = survivingPastDue.reduce(
     (sum, r) => sum + (Number(r.amount_cents) || 0),
     0,

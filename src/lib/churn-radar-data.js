@@ -544,7 +544,7 @@ async function fetchContactInvoicesByStatus(db, contactId, status, columns) {
 }
 
 /**
- * PROFILE-ARREARS.1 — the open past-due total for ONE contact, for the
+ * PROFILE-ARREARS.1 — the open CONFIRMED past-due total for ONE contact, for the
  * contact profile page. fetchPastDue aggregates the whole location to drive
  * the Overdue chase-list; the profile needs the single-contact figure so an
  * ungrouped member (the ~99% case) shows the SAME arrears the chase-list
@@ -552,6 +552,12 @@ async function fetchContactInvoicesByStatus(db, contactId, status, columns) {
  * and the shared `nettedOutByRetry` settled-retry netting, so the profile,
  * the radar (fetchPastDue) and the grouped person view (person-aggregate)
  * all agree.
+ *
+ * AWAITING-AUTH.1 — PAST_DUE only. PENDING "awaiting authorization" fees are
+ * provisional (they expire if the customer never pays), so they are NOT counted
+ * as owed here: they must not light the profile "Payment overdue" pill, inflate
+ * the profile arrears figure, or keep a member on the Overdue chase-list via the
+ * refresh-member re-flag. They surface only in the Awaiting-authorization tab.
  *
  * Best-effort: any DB error (or a pre-migration glofox_invoices) returns
  * zeros rather than crashing the profile render.
@@ -563,14 +569,11 @@ async function fetchContactInvoicesByStatus(db, contactId, status, columns) {
 export async function loadContactArrears(db, contactId) {
   if (!contactId) return { arrearsCents: 0, count: 0 }
   try {
-    const [pastDueRows, pendingRows, paidRows] = await Promise.all([
+    const [pastDueRows, paidRows] = await Promise.all([
       fetchContactInvoicesByStatus(db, contactId, 'PAST_DUE', 'id, contact_id, glofox_user_id, amount_cents, invoice_date'),
-      fetchContactInvoicesByStatus(db, contactId, 'PENDING', 'id, contact_id, glofox_user_id, amount_cents, invoice_date, line_item_subtypes'),
       fetchContactInvoicesByStatus(db, contactId, 'PAID', 'glofox_user_id, amount_cents, invoice_date'),
     ])
-    // OWED-PENDING.1 — count PENDING custom-charge fees as owed (not pending subs).
-    const openRows = [...pastDueRows, ...pendingRows.filter(isCustomChargeFee)]
-    const { kept } = nettedOutByRetry(openRows, paidRows)
+    const { kept } = nettedOutByRetry(pastDueRows, paidRows)
     const arrearsCents = kept.reduce((sum, r) => sum + (Number(r.amount_cents) || 0), 0)
     return { arrearsCents, count: kept.length }
   } catch {

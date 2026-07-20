@@ -213,12 +213,13 @@ describe('loadContactArrears — per-contact profile arrears (PROFILE-ARREARS.1)
 
 // ── OWED-PENDING.1 / AWAITING-AUTH.1: PENDING custom-charge fees ──────────────
 // A no-show / late-cancel fee that's been applied but not yet collected sits
-// PENDING in Glofox ("awaiting authorization"). It counts toward what a member
-// owes on their profile (loadContactArrears), but on the churn radar it lands in
-// its OWN Awaiting-authorization tab — never Overdue and never Unpaid charges. A
-// PENDING subscription renewal (a scheduled future payment) counts as neither.
-describe('PENDING custom-charge fees — profile owed vs radar tab (OWED-PENDING.1 / AWAITING-AUTH.1)', () => {
-  it('loadContactArrears counts a PENDING custom-charge fee but not a pending subscription', async () => {
+// PENDING in Glofox ("awaiting authorization"). It is provisional — it expires
+// if the customer never pays — so it does NOT count as owed anywhere: not on the
+// contact-profile arrears figure/pill (loadContactArrears) and not on the churn
+// radar's Overdue or Unpaid-charges tabs. It surfaces only in its own
+// Awaiting-authorization tab.
+describe('PENDING custom-charge fees — provisional, never counted as owed (OWED-PENDING.1 / AWAITING-AUTH.1)', () => {
+  it('loadContactArrears counts CONFIRMED PAST_DUE only — never a PENDING "awaiting authorization" fee', async () => {
     const db = makeDb({
       glofox_invoices: (state) => {
         if (state.status === 'PAST_DUE') return [gInvoice({ id: 'pd', glofox_user_id: 'cf', contact_id: 'c-claire', amount_cents: 1000, status: 'PAST_DUE', invoice_date: '2026-05-03T00:00:00Z' })]
@@ -230,8 +231,8 @@ describe('PENDING custom-charge fees — profile owed vs radar tab (OWED-PENDING
       },
     })
     const res = await loadContactArrears(db, 'c-claire')
-    expect(res.arrearsCents).toBe(2000) // €10 PAST_DUE + €10 PENDING fee; €209 pending sub excluded
-    expect(res.count).toBe(2)
+    expect(res.arrearsCents).toBe(1000) // €10 PAST_DUE only; the €10 pending fee no longer counts as owed
+    expect(res.count).toBe(1)
   })
 
   it('splits a small PAST_DUE (Unpaid charges) from a PENDING fee (Awaiting authorization)', async () => {

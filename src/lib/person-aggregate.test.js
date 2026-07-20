@@ -325,6 +325,26 @@ describe('aggregatePerson', () => {
     expect(result.arrearsCents).toBe(2500)
   })
 
+  it('excludes PENDING "awaiting authorization" fees from arrears (AWAITING-AUTH.1)', async () => {
+    // A pending custom-charge fee is provisional (it expires if unpaid), so it
+    // must NOT inflate the grouped-profile arrears figure — only the confirmed
+    // PAST_DUE debt counts.
+    const db = makeDb({
+      person_groups: personGroups,
+      person_group_members: personGroupMembers,
+      contacts,
+      deals,
+      activities: [],
+      notes: [],
+      glofox_invoices: [
+        { id: 'pd', contact_id: PRIMARY_ID, glofox_user_id: 'gfx-alice', amount_cents: 2500, invoice_date: '2026-06-01T10:00:00Z', status: 'PAST_DUE' },
+        { id: 'fee', contact_id: PRIMARY_ID, glofox_user_id: 'gfx-alice', amount_cents: 1000, invoice_date: '2026-06-02T10:00:00Z', status: 'PENDING', line_item_subtypes: 'CUSTOM_CHARGE' },
+      ],
+    })
+    const result = await aggregatePerson(db, GROUP_ID)
+    expect(result.arrearsCents).toBe(2500) // just the €25 PAST_DUE; the €10 pending fee is excluded
+  })
+
   it('counts attendedBookingsCount from attended bookings across all member contacts', async () => {
     // primary=5, shadow=2, dormant=0 → sum=7
     const db = makeSeededDb()
