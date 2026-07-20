@@ -2394,6 +2394,49 @@ registry.registerPath({
   },
 })
 
+// Tenant Billing & usage page (INTEG-D1)
+registry.registerPath({
+  method: 'get',
+  path: '/api/settings/billing',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Tenant billing & usage assembler (owner of the org or master)',
+  description: 'Per pinned location: plan (tier/price/effective date/add-ons), month-to-date meters vs allowance (staff assistant separate — allowance-exempt), wallet (balance, Dublin month-end expiry, lapse warning, last-20 ledger, auto-top-up config). Orgs with zero active tier pinnings get pinned:false and an empty locations list. ?organization_id targets another org (master only; a foreign org answers 404, not 403).',
+  responses: {
+    200: { description: 'Billing page data' },
+    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/settings/billing/auto-topup',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Configure wallet auto-top-up (owner of the org or master)',
+  description: 'Writes the three DORMANT wallets.auto_topup_* config columns only (never balance_cents — wallet_apply stays the only balance write path). Takes effect when the Stripe card top-up leg ships. A foreign/unknown location answers 404, not 403.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            location_id: uuidLike,
+            enabled: z.boolean(),
+            amount_cents: z.number().int().min(500).max(50000).nullable().optional(),
+            threshold_cents: z.number().int().min(0).max(20000).nullable().optional(),
+          }).openapi('WalletAutoTopupConfig'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Auto-top-up config saved' },
+    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Location not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Location create (SAAS4-W0.1) — server-side so per-location defaults
 // (FUNNEL.1 pipeline stages) are seeded atomically with the row.
 registry.registerPath({

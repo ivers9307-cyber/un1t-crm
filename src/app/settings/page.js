@@ -4,7 +4,7 @@ import { hasPermission } from '@/lib/permissions'
 import { ADMIN_ROLES } from '@/lib/schemas'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { Users, MapPin, Shield, UserCog, LayoutGrid, Trophy, Cable, ChevronRight, Bell, KeyRound, MessagesSquare, Bot, Download, Globe, Activity, Store, Gauge } from 'lucide-react'
+import { Users, MapPin, Shield, UserCog, LayoutGrid, Trophy, Cable, ChevronRight, Bell, KeyRound, MessagesSquare, Bot, Download, Globe, Activity, Store, Gauge, CreditCard } from 'lucide-react'
 
 // SETTINGS.3/.4 — reorganized this page:
 //   - Master tools moved to TOP (was mid-page)
@@ -271,6 +271,36 @@ export default async function SettingsPage() {
           </Link>
         </div>
       </div>
+
+      {/* Billing (INTEG-D1) — the tenant Billing & usage page. Owner/
+          master only (billing is an ownership surface; the page carries
+          its own server gate regardless). Pinning-gated inside: an org
+          with no platform plan sees a quiet empty state. */}
+      {(user.role === 'owner' || user.role === 'master') && (
+        <div className="mb-10">
+          <div className="flex items-center gap-2 mb-4">
+            <CreditCard size={18} className="text-un1t-subtle" />
+            <h3 className="text-lg font-semibold">Billing</h3>
+          </div>
+          <div className="space-y-2">
+            <Link
+              href="/settings/billing"
+              className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <CreditCard size={16} className="text-un1t-subtle shrink-0" />
+                <div>
+                  <div className="text-un1t-text">Billing &amp; usage</div>
+                  <div className="text-xs text-un1t-subtle mt-0.5">
+                    Your platform plan, usage against allowances, the usage wallet, and invoices — per location.
+                  </div>
+                </div>
+              </div>
+              <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text shrink-0" />
+            </Link>
+          </div>
+        </div>
+      )}
 
       {/* Events (EVENTS-HOST.2) — operator config for the events
           platform. Event hosts are third-party organisers paid directly
