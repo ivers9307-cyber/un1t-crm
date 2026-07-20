@@ -14,6 +14,7 @@
 import { useRouter } from 'next/navigation'
 import { Building2, ArrowRight, Users, CalendarCheck, AlertTriangle } from 'lucide-react'
 import { KpiCard, KpiRow } from '@/components/dashboard/Cards'
+import { setActiveLocation } from '@/lib/active-location'
 
 // Attention pill tones — mirrors the Business dashboard rail chip map.
 // Light-theme contrast rule (CLAUDE.md): -500/10 bg + -700 text.
@@ -62,12 +63,19 @@ export default function AccountHome({ data, activeLocationId }) {
   const { organization, kpis, studios } = data || {}
 
   function openStudio(locationId) {
-    // Same mechanism as LocationSwitcher — set the active-location cookie,
-    // then navigate into the existing studio dashboard. The /dashboard
-    // route reads the cookie server-side on the next request.
-    // eslint-disable-next-line react-hooks/immutability -- document.cookie write is a user-action side-effect inside an onClick handler, not render (see LocationSwitcher.jsx).
-    document.cookie = `un1t_active_location=${locationId}; path=/; max-age=${365 * 24 * 60 * 60}; SameSite=Lax`
+    // Drill into a studio the SAME way the location switcher does: set
+    // the active-location cookie (the one shared path — see
+    // src/lib/active-location.js), then land on /dashboard.
+    setActiveLocation(locationId)
+    // router.refresh() is load-bearing, NOT belt-and-braces: a bare
+    // router.push('/dashboard') can be served from the client Router
+    // Cache (a prefetched RSC payload rendered under the OLD cookie), so
+    // getCurrentUser() never re-reads the cookie we just set and the
+    // switcher/context stays on the previous studio. refresh() clears
+    // that cache and forces a fresh server render under the new cookie —
+    // the exact reason the switcher itself calls router.refresh().
     router.push('/dashboard')
+    router.refresh()
   }
 
   const studioList = Array.isArray(studios) ? studios : []
