@@ -3,10 +3,12 @@
 import { usePathname, useRouter } from 'next/navigation'
 import { Fragment, useState, useEffect } from 'react'
 import Sidebar from './Sidebar'
+import AccountShell from './account/AccountShell'
 import ImpersonationBanner from './ImpersonationBanner'
 import CommandPalette from './CommandPalette'
 import AssistantBubble from './AssistantBubble'
 import { hasPermission } from '@/lib/permissions'
+import { isAccountTierPath } from '@/lib/account-nav'
 // PERF.3 — Vercel SpeedInsights + Analytics mount in the authenticated
 // branch below (NOT the root layout) so /login and the public booking/
 // payment surfaces don't pay for the two analytics bundles pre-auth.
@@ -79,6 +81,15 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
     return null
   }
 
+  // REPSET-ACCOUNT.2 — account-tier (/portfolio) pages get a DISTINCT
+  // account shell (org-level nav) instead of the studio operational
+  // sidebar. Everything below is a pure additive branch: on a studio
+  // path `isAccountTier` is false and the chrome renders byte-for-byte
+  // as before, so the studio CRM is completely untouched. The studio-
+  // only widgets (⌘K palette, AI assistant bubble) are studio-context
+  // tools, so they don't mount at the account tier.
+  const isAccountTier = isAccountTierPath(pathname)
+
   return (
     <div className="flex h-screen overflow-hidden bg-un1t-bg">
       {/* Mobile top bar */}
@@ -90,14 +101,25 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
         >
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
-        <span className="font-bold tracking-wider text-un1t-text">{user?.activeLocation?.name || 'UN1T'}</span>
+        <span className="font-bold tracking-wider text-un1t-text">
+          {isAccountTier
+            ? (user?.activeOrganization?.name || 'Account')
+            : (user?.activeLocation?.name || 'UN1T')}
+        </span>
       </div>
 
-      {/* Global ⌘K command palette — search/jump/create from anywhere. */}
-      <CommandPalette user={user} />
+      {isAccountTier ? (
+        /* Account tier — org-level nav shell. */
+        <AccountShell user={user} mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
+      ) : (
+        <>
+          {/* Global ⌘K command palette — search/jump/create from anywhere. */}
+          <CommandPalette user={user} />
 
-      {/* Sidebar */}
-      <Sidebar user={user} isLinkedHost={isLinkedHost} mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
+          {/* Sidebar */}
+          <Sidebar user={user} isLinkedHost={isLinkedHost} mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
+        </>
+      )}
 
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
@@ -130,7 +152,7 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
           this mount and the two Vercel scripts below were accidental
           casualties of the d184209 AppShell rewrite (restored 2026-06,
           platform audit). */}
-      {hasPermission(user, 'assistant') && <AssistantBubble user={user} />}
+      {!isAccountTier && hasPermission(user, 'assistant') && <AssistantBubble user={user} />}
 
       {/* PERF.3 — Speed Insights + Analytics only on authenticated
           pages. Public surfaces return before this branch. */}
