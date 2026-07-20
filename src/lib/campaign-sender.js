@@ -66,6 +66,7 @@
 // mid-send cancels.
 
 import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch, consentFieldForStream, isTransientSendError } from './postmark.js'
+import { resolveEmailSender } from './tenant-email.js'
 import { injectPreheader, htmlToPlainText } from './email-content.js'
 import { resolveAbPhase, assignAbVariants, clampAbTestPct, decideAbWinner, subjectForVariant } from './campaign-ab.js'
 import { frequencyCapFromLocationSettings, capCutoffIso, stampMarketingTouch, CAMPAIGN_CAP_SKIP_AFTER_MS } from './frequency-cap.js'
@@ -485,7 +486,17 @@ export async function tickCampaignSend(db, campaign) {
     }
   })
 
-  const results = await sendBatch(emailBatch)
+  // INTEG-B3 — resolve the org's tenant sending config ONCE for the whole
+  // chunk. With no live tenant email domain (every org today) this is the
+  // global default: sendBatch sends byte-identically and loggedFromEmail
+  // keeps the campaign's own from_email. With a live tenant, the batch
+  // rides that org's Postmark server + verified From, logged honestly.
+  const tenantSender = await resolveEmailSender(db, campaign.location_id)
+  const loggedFromEmail = tenantSender.serverToken
+    ? tenantSender.fromEmail
+    : (campaign.from_email || process.env.POSTMARK_FROM_EMAIL)
+
+  const results = await sendBatch(emailBatch, { sender: tenantSender })
 
   // Apply results.
   let sentCount = 0
@@ -515,7 +526,7 @@ export async function tickCampaignSend(db, campaign) {
         // CAMPAIGN-AB — log the subject this recipient actually got
         // (variant B / winning subject), not blindly campaign.subject.
         subject: item._rawSubject,
-        from_email: campaign.from_email || process.env.POSTMARK_FROM_EMAIL,
+        from_email: loggedFromEmail,
         to_email: item.to,
         postmark_message_id: result.MessageID,
         postmark_stream: stream,

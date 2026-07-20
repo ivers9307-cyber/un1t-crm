@@ -2468,6 +2468,82 @@ registry.registerPath({
   },
 })
 
+// Tenant email sending domain (INTEG-B3) — server-per-tenant. Owner-of-org
+// or master; the server token is NEVER returned (redacted status payload).
+registry.registerPath({
+  method: 'get',
+  path: '/api/settings/email-domain',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Tenant email sending-domain status (owner of the org or master)',
+  description: 'Redacted status for the caller\'s org: sending domain, the DNS records to add (DKIM TXT + Return-Path CNAME), per-record verified booleans, lifecycle status, and addon_active/account_configured flags for the UI gate. The Postmark SERVER TOKEN is never included. ?organization_id targets another org (master only; a foreign org answers 404, not 403). 503 when POSTMARK_ACCOUNT_TOKEN is unset.',
+  responses: {
+    200: { description: 'Redacted email-domain status' },
+    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Provisioning not configured on this deployment', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/settings/email-domain',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Provision the org\'s Postmark server + sending domain (owner of the org or master)',
+  description: 'Initiate: creates the org\'s dedicated Postmark server (via the Account API) and its sending domain, persists ids/token, and returns the DNS records to add — NEVER the server token. Gated by the custom_email_domain plan add-on (403 if the org\'s plan lacks it). Idempotent: a re-post for an already-provisioned org re-reads Postmark, never spawning a second server. A foreign org answers 404, not 403. 503 when POSTMARK_ACCOUNT_TOKEN is unset.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            organization_id: uuidLike.optional().describe('Master only — target another org (defaults to the active org).'),
+            domain: z.string().describe('Bare sending domain, e.g. mail.yourgym.com (a subdomain is recommended).'),
+            from_local: z.string().optional().describe('Local part of the From address (default "hello").'),
+            from_name: z.string().optional().describe('Optional display name for the From.'),
+          }).openapi('TenantEmailDomainInitiate'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Provisioned — redacted status + DNS records' },
+    400: { description: 'Invalid sending domain', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — owners/master only, or the add-on is not on the plan', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Postmark could not provision the server/domain', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Provisioning not configured on this deployment', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/settings/email-domain/verify',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Re-check the org\'s sending-domain DNS and go live (owner of the org or master)',
+  description: 'Asks Postmark to re-verify DKIM + Return-Path; when both verify, flips the status to live. Idempotent. Operates on an already-provisioned row (409 if none). A foreign org answers 404, not 403. 503 when POSTMARK_ACCOUNT_TOKEN is unset.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            organization_id: uuidLike.optional().describe('Master only — target another org (defaults to the active org).'),
+          }).openapi('TenantEmailDomainVerify'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Re-checked — redacted status + DNS records' },
+    403: { description: 'Forbidden — owners and master only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Organization not found (or not yours)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'No sending domain provisioned yet', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Postmark could not read the domain', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Provisioning not configured on this deployment', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Location create (SAAS4-W0.1) — server-side so per-location defaults
 // (FUNNEL.1 pipeline stages) are seeded atomically with the row.
 registry.registerPath({
