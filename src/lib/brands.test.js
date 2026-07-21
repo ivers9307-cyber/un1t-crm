@@ -9,7 +9,7 @@
 // edge cases so future-me notices breakage before staging does.
 
 import { describe, it, expect } from 'vitest'
-import { BRANDS, resolveBrand, isFrameworkAsset } from './brands.js'
+import { BRANDS, resolveBrand, isFrameworkAsset, getLegacyBrandRows, CRM_DEFAULT_HOSTNAME } from './brands.js'
 
 describe('BRANDS registry shape', () => {
   it('has at least the two known brands', () => {
@@ -132,5 +132,37 @@ describe('isFrameworkAsset', () => {
     expect(isFrameworkAsset(null)).toBe(false)
     expect(isFrameworkAsset(undefined)).toBe(false)
     expect(isFrameworkAsset(42)).toBe(false)
+  })
+})
+
+describe('getLegacyBrandRows — read-only display descriptors for the admin view', () => {
+  it('leads with the CRM default, then one descriptor per BRANDS entry', () => {
+    const rows = getLegacyBrandRows()
+    expect(rows[0].key).toBe('crm-default')
+    expect(rows[0].label).toBe('CRM (default)')
+    // Every registry brand id is represented.
+    for (const b of BRANDS) {
+      expect(rows.map((r) => r.key)).toContain(b.id)
+    }
+  })
+
+  it('exposes the live legacy hostnames (marketing + pay)', () => {
+    const hostnames = getLegacyBrandRows().map((r) => r.hostname)
+    expect(hostnames).toContain('un1tdublin.com')
+    expect(hostnames).toContain('pay.ccfautos.com')
+  })
+
+  it('CRM default falls back to the constant when NEXT_PUBLIC_APP_URL is unset', () => {
+    const crmRow = getLegacyBrandRows().find((r) => r.key === 'crm-default')
+    // In the test env NEXT_PUBLIC_APP_URL is typically unset → constant.
+    expect(typeof crmRow.hostname).toBe('string')
+    expect(crmRow.hostname.length).toBeGreaterThan(0)
+    expect(CRM_DEFAULT_HOSTNAME).toBe('crm.un1tdublin.com')
+  })
+
+  it('carries a brand\'s extra hostnames (e.g. www.) separately from the primary', () => {
+    const marketing = getLegacyBrandRows().find((r) => r.key === 'un1t-marketing')
+    expect(marketing.hostname).toBe('un1tdublin.com')
+    expect(marketing.extraHostnames).toContain('www.un1tdublin.com')
   })
 })

@@ -114,3 +114,36 @@ export async function loadFrontPage(db = null) {
     return { headline: null, intro: null, tiles: [] }
   }
 }
+
+/**
+ * Repset per-location domains (mig 432): given the location_id a
+ * request host maps to (resolveTenantLocationId, tenant-domains-edge),
+ * return the public welcome path for THAT studio — /welcome/<public_path>
+ * — so a location-scoped tenant domain lands strays on the one studio
+ * rather than the org chooser. Returns null when there is no location
+ * (whole-org / unmapped / legacy hostname) or the location has no
+ * public landing path, in which case the caller renders the chooser
+ * exactly as today. Fail-soft: any error → null (never blocks the
+ * public page).
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient|null} db  Injectable for tests.
+ * @param {string|null} locationId  From resolveTenantLocationId(host).
+ * @returns {Promise<string|null>}  '/welcome/<public_path>' or null.
+ */
+export async function publicWelcomePathForLocation(db, locationId) {
+  if (!locationId) return null
+  try {
+    const client = db || createServerClient()
+    const { data } = await client
+      .from('landing_page_settings')
+      .select('public_path')
+      .eq('location_id', locationId)
+      .not('public_path', 'is', null)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    return data?.public_path ? `/welcome/${data.public_path}` : null
+  } catch {
+    return null
+  }
+}

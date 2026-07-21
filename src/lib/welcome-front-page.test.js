@@ -11,7 +11,7 @@
 // The db is injected, so nothing is mocked at module level.
 
 import { describe, it, expect } from 'vitest'
-import { loadFrontPage, FRONT_PAGE_ORG_SLUG, TILE_ORDER } from './welcome-front-page.js'
+import { loadFrontPage, publicWelcomePathForLocation, FRONT_PAGE_ORG_SLUG, TILE_ORDER } from './welcome-front-page.js'
 
 const ORG_A = 'aaaaaaaa-0000-0000-0000-000000000001'
 const ORG_B = 'bbbbbbbb-0000-0000-0000-000000000001'
@@ -123,5 +123,49 @@ describe('loadFrontPage — /welcome still resolves the UN1T chooser (SAAS-6)', 
     const db = { from() { throw new Error('boom') } }
     const page = await loadFrontPage(db)
     expect(page).toEqual({ headline: null, intro: null, tiles: [] })
+  })
+})
+
+// A location-scoped tenant domain (mig 432) lands strays on ONE studio's
+// public welcome page instead of the org chooser. This resolves that
+// studio's path from its location_id; null means "render the chooser as
+// today" (whole-org, unmapped, or no public landing).
+describe('publicWelcomePathForLocation — per-location domain landing (mig 432)', () => {
+  // Chain stub matching .select().eq().not().order().limit().maybeSingle()
+  function landingDb(row) {
+    let touched = false
+    const chain = {
+      select: () => chain,
+      eq: () => chain,
+      not: () => chain,
+      order: () => chain,
+      limit: () => chain,
+      maybeSingle: async () => ({ data: row, error: null }),
+    }
+    return {
+      touched: () => touched,
+      from: (t) => { if (t === 'landing_page_settings') touched = true; return chain },
+    }
+  }
+
+  it('null locationId → null (whole-org / unmapped → chooser), no DB touch', async () => {
+    const db = landingDb(null)
+    expect(await publicWelcomePathForLocation(db, null)).toBe(null)
+    expect(db.touched()).toBe(false)
+  })
+
+  it('location with a public landing row → /welcome/<public_path>', async () => {
+    const db = landingDb({ public_path: 'stillorgan' })
+    expect(await publicWelcomePathForLocation(db, 'loc-1')).toBe('/welcome/stillorgan')
+  })
+
+  it('location with no public landing → null (fall back to chooser)', async () => {
+    const db = landingDb(null)
+    expect(await publicWelcomePathForLocation(db, 'loc-1')).toBe(null)
+  })
+
+  it('fails soft to null on a thrown error (never blocks the public page)', async () => {
+    const db = { from() { throw new Error('boom') } }
+    expect(await publicWelcomePathForLocation(db, 'loc-1')).toBe(null)
   })
 })

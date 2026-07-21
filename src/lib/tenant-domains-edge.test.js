@@ -11,6 +11,7 @@ import { makeFakeDb } from './api-auth.test-helpers.js'
 import {
   resolveTenantDomainBrand,
   resolveTenantOrgId,
+  resolveTenantLocationId,
   DB_BRAND_DEFAULTS,
   TENANT_DOMAINS_CACHE_TTL_MS,
   _resetTenantDomainsCache,
@@ -175,5 +176,35 @@ describe('resolveTenantOrgId — the SAAS-6/7 handoff seam', () => {
   it('unmapped host → null (welcome keeps its UN1T slug fallback byte-identical)', async () => {
     // un1tdublin.com deliberately has no row (in-code tier owns it).
     expect(await resolveTenantOrgId('un1tdublin.com', { db: fixture() })).toBe(null)
+  })
+})
+
+describe('per-location scoping (mig 432)', () => {
+  it('brand carries locationId null for a whole-org row (unchanged shape)', async () => {
+    const brand = await resolveTenantDomainBrand('members.acmegym.ie', { db: fixture() })
+    expect(brand.locationId).toBe(null)
+  })
+
+  it('brand carries locationId for a location-scoped row', async () => {
+    const db = fixture([{ ...ROW, location_id: 'loc-central' }])
+    const brand = await resolveTenantDomainBrand('members.acmegym.ie', { db })
+    expect(brand.locationId).toBe('loc-central')
+    // The rewrite targets are UNCHANGED — the location only steers the
+    // /welcome render, never the proxy's rewrite. Routing stays identical.
+    expect(brand.rootRewriteTo).toBe('/welcome')
+    expect(brand.fallbackRewriteTo).toBe('/welcome')
+  })
+
+  it('resolveTenantLocationId → the scoped location for a location row', async () => {
+    const db = fixture([{ ...ROW, location_id: 'loc-central' }])
+    expect(await resolveTenantLocationId('members.acmegym.ie', { db })).toBe('loc-central')
+  })
+
+  it('resolveTenantLocationId → null for a whole-org row (chooser byte-identical)', async () => {
+    expect(await resolveTenantLocationId('members.acmegym.ie', { db: fixture() })).toBe(null)
+  })
+
+  it('resolveTenantLocationId → null for an unmapped host', async () => {
+    expect(await resolveTenantLocationId('un1tdublin.com', { db: fixture() })).toBe(null)
   })
 })

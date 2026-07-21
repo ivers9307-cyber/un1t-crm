@@ -181,3 +181,56 @@ export function isFrameworkAsset(path) {
   if (FRAMEWORK_ASSET_FILES.has(path)) return true
   return FRAMEWORK_ASSET_PATHS.some((p) => path.startsWith(p))
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Legacy (in-code) hostnames — read-only display descriptors
+//
+// The CRM's OWN hostname is deliberately NOT a BRANDS entry
+// (resolveBrand returns null for it → the CRM auth gate). It's named
+// here only so the /admin/tenant-domains "managed in code" view can
+// show the FULL domain picture. Sourced from NEXT_PUBLIC_APP_URL when
+// set, else this constant.
+// ─────────────────────────────────────────────────────────────────
+
+export const CRM_DEFAULT_HOSTNAME = 'crm.un1tdublin.com'
+
+/**
+ * Read-only descriptors of the in-code hostnames (the CRM default +
+ * every BRANDS entry) for the admin "managed in code · read-only"
+ * section. NOT routing data — the proxy still routes via BRANDS /
+ * resolveBrand; these must never be written to tenant_domains (mig 415
+ * forbids it; the admin API refuses them). One descriptor per brand:
+ * the primary hostname, any extra hostnames (e.g. www.), a label and a
+ * description.
+ *
+ * @returns {{ key:string, hostname:string, extraHostnames:string[], label:string, description:string }[]}
+ */
+export function getLegacyBrandRows() {
+  let crmHost = CRM_DEFAULT_HOSTNAME
+  try {
+    crmHost = new URL(process.env.NEXT_PUBLIC_APP_URL).hostname.toLowerCase()
+  } catch {
+    // Env unset/malformed (dev/tests) — fall back to the constant.
+  }
+
+  const rows = [{
+    key: 'crm-default',
+    hostname: crmHost,
+    extraHostnames: [],
+    label: 'CRM (default)',
+    description: 'Staff CRM — the default hostname (auth-gated)',
+  }]
+
+  for (const brand of BRANDS) {
+    const [primary, ...extra] = brand.hostnames
+    if (!primary) continue
+    rows.push({
+      key: brand.id,
+      hostname: primary,
+      extraHostnames: extra,
+      label: brand.id,
+      description: brand.description || '',
+    })
+  }
+  return rows
+}

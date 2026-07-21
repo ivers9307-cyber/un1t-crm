@@ -100,7 +100,7 @@ async function loadRows(db, nowMs) {
     if (client) {
       const { data, error } = await client
         .from('tenant_domains')
-        .select('id, hostname, organization_id, brand')
+        .select('id, hostname, organization_id, location_id, brand')
         .eq('active', true)
       if (!error && Array.isArray(data)) rows = data
     }
@@ -145,6 +145,13 @@ function brandFromRow(row) {
     fallbackHandler: normalizeHandler(cfg.fallbackHandler, DB_BRAND_DEFAULTS.fallbackHandler),
     fallbackRewriteTo: normalizePath(cfg.fallbackRewriteTo, DB_BRAND_DEFAULTS.fallbackRewriteTo),
     organizationId: row.organization_id,
+    // OPTIONAL per-location scoping (mig 432). NULL = whole org = the
+    // original behaviour; the proxy's rewrite targets are UNCHANGED
+    // either way (still /welcome). A non-null value is consumed only by
+    // the /welcome resolution (resolveTenantLocationId below →
+    // publicWelcomePathForLocation) to redirect strays to that ONE
+    // studio's page — so a whole-org row routes byte-identically.
+    locationId: row.location_id || null,
   }
 }
 
@@ -183,4 +190,21 @@ export async function resolveTenantDomainBrand(hostname, { db = null, nowMs = Da
 export async function resolveTenantOrgId(hostname, opts = {}) {
   const brand = await resolveTenantDomainBrand(hostname, opts)
   return brand ? brand.organizationId : null
+}
+
+/**
+ * Hostname → location_id, or null when the host is unmapped OR mapped
+ * to a WHOLE-ORG row (location_id NULL). Sibling of resolveTenantOrgId,
+ * threaded into the /welcome resolution (see src/app/welcome/page.js):
+ * a non-null result redirects strays to that ONE studio's public
+ * welcome page; null keeps the org chooser byte-identical. Shares the
+ * row cache above. (mig 432)
+ *
+ * @param {string} hostname
+ * @param {{ db?: object, nowMs?: number }} [opts]
+ * @returns {Promise<string | null>}
+ */
+export async function resolveTenantLocationId(hostname, opts = {}) {
+  const brand = await resolveTenantDomainBrand(hostname, opts)
+  return brand ? (brand.locationId || null) : null
 }
