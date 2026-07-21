@@ -16,17 +16,27 @@ import { GET, POST } from './route.js'
 import { PATCH, DELETE } from './[id]/route.js'
 
 const ORG_ID = 'a0000000-0000-0000-0000-0000000000aa'
+const OTHER_ORG_ID = 'a0000000-0000-0000-0000-0000000000ab'
 const ROW_ID = 'b0000000-0000-0000-0000-0000000000bb'
 const MISSING_ID = 'c0000000-0000-0000-0000-0000000000cc'
+const LOC_ID = 'd0000000-0000-0000-0000-0000000000dd'          // belongs to ORG_ID
+const OTHER_LOC_ID = 'd0000000-0000-0000-0000-0000000000de'    // belongs to OTHER_ORG_ID
 
 const MASTER = { id: 'u-master', profileRole: 'master' }
 const OWNER = { id: 'u-owner', profileRole: 'owner' }
 
 function fixture() {
   return {
-    organizations: [{ id: ORG_ID, name: 'Acme Gyms', slug: 'acme-gyms' }],
+    organizations: [
+      { id: ORG_ID, name: 'Acme Gyms', slug: 'acme-gyms' },
+      { id: OTHER_ORG_ID, name: 'Other Org', slug: 'other-org' },
+    ],
+    locations: [
+      { id: LOC_ID, name: 'Acme Central', organization_id: ORG_ID },
+      { id: OTHER_LOC_ID, name: 'Other Studio', organization_id: OTHER_ORG_ID },
+    ],
     tenant_domains: [
-      { id: ROW_ID, hostname: 'members.acmegym.ie', organization_id: ORG_ID, brand: {}, active: true },
+      { id: ROW_ID, hostname: 'members.acmegym.ie', organization_id: ORG_ID, location_id: null, brand: {}, active: true },
     ],
   }
 }
@@ -144,6 +154,34 @@ describe('POST — create', () => {
     const body = await res.json()
     expect(body.error).toBe('Unknown organization')
   })
+
+  it('no location_id → whole-org row (location_id null), today\'s behaviour', async () => {
+    const res = await POST(postReq({ hostname: 'pay.acmegym.ie', organization_id: ORG_ID }))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.data.location_id ?? null).toBe(null)
+  })
+
+  it('location_id in the org → persisted (per-location scoping)', async () => {
+    const res = await POST(postReq({ hostname: 'pay.acmegym.ie', organization_id: ORG_ID, location_id: LOC_ID }))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.data.location_id).toBe(LOC_ID)
+  })
+
+  it('location_id belonging to ANOTHER org → 400 (belongs-to-org validation)', async () => {
+    const res = await POST(postReq({ hostname: 'pay.acmegym.ie', organization_id: ORG_ID, location_id: OTHER_LOC_ID }))
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toContain('does not belong to the selected organization')
+  })
+
+  it('unknown location_id → 400', async () => {
+    const res = await POST(postReq({ hostname: 'pay.acmegym.ie', organization_id: ORG_ID, location_id: MISSING_ID }))
+    expect(res.status).toBe(400)
+  })
 })
 
 describe('PATCH — update', () => {
@@ -176,6 +214,36 @@ describe('PATCH — update', () => {
 
   it('empty patch → 400', async () => {
     const res = await PATCH(idReq('PATCH', {}), props(ROW_ID))
+    expect(res.status).toBe(400)
+  })
+
+  it('scoping to a location IN the org → 200, persisted', async () => {
+    const res = await PATCH(idReq('PATCH', { location_id: LOC_ID }), props(ROW_ID))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.location_id).toBe(LOC_ID)
+  })
+
+  it('scoping to a location in ANOTHER org → 400 (belongs-to-org validation)', async () => {
+    const res = await PATCH(idReq('PATCH', { location_id: OTHER_LOC_ID }), props(ROW_ID))
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toContain('does not belong to the selected organization')
+  })
+
+  it('clearing location_id back to null → 200 (whole-org)', async () => {
+    await PATCH(idReq('PATCH', { location_id: LOC_ID }), props(ROW_ID))
+    const res = await PATCH(idReq('PATCH', { location_id: null }), props(ROW_ID))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.location_id ?? null).toBe(null)
+  })
+
+  it('changing the org that orphans the existing location → 400', async () => {
+    // Row is first scoped to LOC_ID (in ORG_ID); moving the org to
+    // OTHER_ORG_ID without also clearing/changing the location is refused.
+    await PATCH(idReq('PATCH', { location_id: LOC_ID }), props(ROW_ID))
+    const res = await PATCH(idReq('PATCH', { organization_id: OTHER_ORG_ID }), props(ROW_ID))
     expect(res.status).toBe(400)
   })
 })

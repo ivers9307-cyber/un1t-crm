@@ -24,10 +24,13 @@
 // that lifts on hover. Tile data + visibility logic untouched.
 
 import Link from 'next/link'
+import { headers } from 'next/headers'
+import { redirect } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import { blocksOrDefault } from '@/lib/landing-page-blocks'
 import EditModeOverlay from '@/components/landing-page/EditModeOverlay'
-import { loadFrontPage } from '@/lib/welcome-front-page'
+import { loadFrontPage, publicWelcomePathForLocation } from '@/lib/welcome-front-page'
+import { resolveTenantLocationId } from '@/lib/tenant-domains-edge'
 
 export const dynamic = 'force-dynamic'
 
@@ -121,6 +124,22 @@ export default async function WelcomePage(props) {
         initialLogoWidthPx={row?.logo_width_px || 200}
       />
     )
+  }
+
+  // Repset per-location domains (mig 432): if this host maps to a
+  // LOCATION-SCOPED tenant_domains row, strays land on that ONE
+  // studio's public welcome page rather than the org chooser. NEW
+  // branch — engages ONLY when the host resolves to a non-null
+  // location_id. A whole-org row (location_id NULL), the legacy
+  // in-code hostnames (un1tdublin.com never has a row), and any
+  // unmapped host all resolve null here and render the chooser
+  // BYTE-IDENTICALLY to before. Fail-soft (resolveTenantLocationId +
+  // publicWelcomePathForLocation both swallow errors → null → chooser).
+  const host = (await headers()).get('host') || ''
+  const scopedLocationId = await resolveTenantLocationId(host)
+  if (scopedLocationId) {
+    const landing = await publicWelcomePathForLocation(createServerClient(), scopedLocationId)
+    if (landing) redirect(landing)
   }
 
   const { headline, intro, tiles } = await loadFrontPage()

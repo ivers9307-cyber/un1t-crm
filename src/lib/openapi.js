@@ -2194,7 +2194,7 @@ registry.registerPath({
   tags: ['Admin'],
   security: [{ CookieAuth: [] }],
   summary: 'List tenant domain mappings (master only)',
-  description: 'Rows from tenant_domains (mig 415): custom domains routed as tenant brands by the proxy, each linked to an organization. Includes the organization name/slug for display.',
+  description: 'Rows from tenant_domains (mig 415): custom domains routed as tenant brands by the proxy, each linked to an organization and optionally a single location (mig 432). Includes the organization name/slug and the scoped location name for display.',
   responses: {
     200: { description: 'Mappings, ordered by hostname' },
     401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
@@ -2208,7 +2208,7 @@ registry.registerPath({
   tags: ['Admin'],
   security: [{ CookieAuth: [] }],
   summary: 'Create a tenant domain mapping (master only)',
-  description: 'The hostname (stored lowercase, bare — no scheme/port/path) goes live within the proxy cache TTL (~5 min), no deploy. Hostnames handled by the in-code brand registry, and the CRM\'s own hostname, are refused (400). Duplicate hostnames return 409.',
+  description: 'The hostname (stored lowercase, bare — no scheme/port/path) goes live within the proxy cache TTL (~5 min), no deploy. Optional location_id (mig 432) scopes the domain to a single studio inside the org — it must belong to organization_id (else 400); null/omitted = whole organisation. Hostnames handled by the in-code brand registry, and the CRM\'s own hostname, are refused (400). Duplicate hostnames return 409.',
   request: {
     body: {
       content: {
@@ -2216,6 +2216,7 @@ registry.registerPath({
           schema: z.object({
             hostname: z.string().max(253).openapi({ example: 'members.acmegym.ie' }),
             organization_id: uuidLike,
+            location_id: uuidLike.nullish().openapi({ description: 'Optional per-location scoping (mig 432). Must belong to organization_id. Null/omitted = whole organisation.' }),
             brand: TenantDomainBrandConfig.optional(),
             active: z.boolean().optional(),
           }).openapi('TenantDomainCreate'),
@@ -2225,7 +2226,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Created mapping' },
-    400: { description: 'Invalid hostname/brand config, reserved hostname, or unknown organization', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Invalid hostname/brand config, reserved hostname, unknown organization, or a location that is not in the organization', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Hostname already mapped', content: { 'application/json': { schema: ErrorResponse } } },
   },
@@ -2237,7 +2238,7 @@ registry.registerPath({
   tags: ['Admin'],
   security: [{ CookieAuth: [] }],
   summary: 'Update a tenant domain mapping (master only)',
-  description: 'Any of hostname / organization_id / brand / active. active=false is the soft kill switch — the hostname falls through to the CRM auth gate within the proxy cache TTL, config kept.',
+  description: 'Any of hostname / organization_id / location_id / brand / active. location_id (mig 432): a uuid scopes the domain to that studio (must belong to the effective org), null clears it back to whole-organisation. active=false is the soft kill switch — the hostname falls through to the CRM auth gate within the proxy cache TTL, config kept.',
   request: {
     params: z.object({ id: uuidLike }),
     body: {
@@ -2246,6 +2247,7 @@ registry.registerPath({
           schema: z.object({
             hostname: z.string().max(253).optional(),
             organization_id: uuidLike.optional(),
+            location_id: uuidLike.nullish().openapi({ description: 'Optional per-location scoping (mig 432). uuid = scope to that studio (must belong to the effective org); null = whole organisation.' }),
             brand: TenantDomainBrandConfig.optional(),
             active: z.boolean().optional(),
           }).openapi('TenantDomainPatch'),
@@ -2255,7 +2257,7 @@ registry.registerPath({
   },
   responses: {
     200: { description: 'Updated mapping' },
-    400: { description: 'Invalid or empty patch, or reserved hostname', content: { 'application/json': { schema: ErrorResponse } } },
+    400: { description: 'Invalid or empty patch, reserved hostname, or a location that is not in the organization', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Mapping not found', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Hostname already mapped', content: { 'application/json': { schema: ErrorResponse } } },

@@ -15,7 +15,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, tenantHostname, tenantDomainBrandConfigSchema } from '@/lib/schemas'
-import { reservedHostnameError } from '../route'
+import { reservedHostnameError, locationOrgMismatchError } from '../route'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -23,6 +23,9 @@ export const dynamic = 'force-dynamic'
 export const TenantDomainPatchSchema = z.object({
   hostname: tenantHostname.optional(),
   organization_id: uuidLike.optional(),
+  // OPTIONAL per-location scoping (mig 432). null clears it back to
+  // whole-org; a uuid scopes to that studio (must belong to the org).
+  location_id: uuidLike.nullish(),
   brand: tenantDomainBrandConfigSchema.optional(),
   active: z.boolean().optional(),
 })
@@ -40,7 +43,7 @@ async function loadRow(db, id) {
   if (!id || !uuidLike.safeParse(id).success) return null
   const { data } = await db
     .from('tenant_domains')
-    .select('id, hostname, organization_id, brand, active')
+    .select('id, hostname, organization_id, location_id, brand, active')
     .eq('id', id)
     .maybeSingle()
   return data || null
@@ -54,7 +57,7 @@ export async function PATCH(request, props) {
   const validation = await validateBody(request, TenantDomainPatchSchema)
   if (!validation.ok) return validation.response
   const patch = {}
-  for (const k of ['hostname', 'organization_id', 'brand', 'active']) {
+  for (const k of ['hostname', 'organization_id', 'location_id', 'brand', 'active']) {
     if (validation.data[k] !== undefined) patch[k] = validation.data[k]
   }
   if (Object.keys(patch).length === 0) {
@@ -72,6 +75,16 @@ export async function PATCH(request, props) {
     if (reserved) {
       return NextResponse.json({ success: false, error: reserved }, { status: 400 })
     }
+  }
+
+  // Per-location scoping (mig 432): the effective location must belong
+  // to the effective org — covers changing the location, the org, or
+  // both. A null effective location is whole-org (no check).
+  const effectiveOrg = patch.organization_id ?? row.organization_id
+  const effectiveLoc = ('location_id' in patch) ? patch.location_id : row.location_id
+  const locErr = await locationOrgMismatchError(db, effectiveLoc, effectiveOrg)
+  if (locErr) {
+    return NextResponse.json({ success: false, error: locErr }, { status: 400 })
   }
 
   const { data: updated, error } = await db

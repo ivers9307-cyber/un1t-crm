@@ -26,9 +26,30 @@ export const dynamic = 'force-dynamic'
 export const TenantDomainCreateSchema = z.object({
   hostname: tenantHostname,
   organization_id: uuidLike,
+  // OPTIONAL per-location scoping (mig 432). Null/omitted = whole org.
+  // Must belong to organization_id — validated below.
+  location_id: uuidLike.nullish(),
   brand: tenantDomainBrandConfigSchema.optional(),
   active: z.boolean().optional(),
 })
+
+/**
+ * Validate that a location (if given) belongs to organizationId.
+ * Returns an error string for a 400, or null when OK / no location.
+ * A location_id of null/undefined is the whole-org default — no check.
+ */
+export async function locationOrgMismatchError(db, locationId, organizationId) {
+  if (!locationId) return null
+  const { data: loc } = await db
+    .from('locations')
+    .select('id, organization_id')
+    .eq('id', locationId)
+    .maybeSingle()
+  if (!loc || loc.organization_id !== organizationId) {
+    return 'The chosen location does not belong to the selected organization.'
+  }
+  return null
+}
 
 /**
  * Hostnames the DB tier must never carry. The in-code registry is
@@ -66,7 +87,7 @@ export async function GET() {
   const db = createServerClient()
   const { data, error } = await db
     .from('tenant_domains')
-    .select('id, hostname, organization_id, brand, active, created_at, organizations:organization_id (name, slug)')
+    .select('id, hostname, organization_id, location_id, brand, active, created_at, organizations:organization_id (name, slug), locations:location_id (name)')
     .order('hostname')
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
@@ -80,7 +101,7 @@ export async function POST(request) {
 
   const validation = await validateBody(request, TenantDomainCreateSchema)
   if (!validation.ok) return validation.response
-  const { hostname, organization_id, brand = {}, active = true } = validation.data
+  const { hostname, organization_id, location_id = null, brand = {}, active = true } = validation.data
 
   const reserved = reservedHostnameError(hostname)
   if (reserved) {
@@ -99,6 +120,12 @@ export async function POST(request) {
   if (!org) {
     return NextResponse.json({ success: false, error: 'Unknown organization' }, { status: 400 })
   }
+
+  // Per-location scoping (mig 432): the location must belong to the org.
+  const locErr = await locationOrgMismatchError(db, location_id, organization_id)
+  if (locErr) {
+    return NextResponse.json({ success: false, error: locErr }, { status: 400 })
+  }
   const { data: existing } = await db
     .from('tenant_domains')
     .select('id')
@@ -114,7 +141,7 @@ export async function POST(request) {
 
   const { data: created, error: insertErr } = await db
     .from('tenant_domains')
-    .insert({ hostname, organization_id, brand, active })
+    .insert({ hostname, organization_id, location_id: location_id ?? null, brand, active })
     .select()
     .single()
   if (insertErr) {
