@@ -47,6 +47,17 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Server misconfigured' }, { status: 500 })
   }
   const result = verifyMetaSignature(rawBody, signature, appSecret)
+
+  // TEMP DIAGNOSTIC (IG-ECHO) — capture every inbound IG webhook envelope
+  // (incl. signature-rejected) so we can inspect the real echo payload
+  // shape before building the handler fix. Best-effort; removed after
+  // capture. Scratch table _ig_webhook_debug (dropped post-diagnosis).
+  try {
+    let parsed = null
+    try { parsed = JSON.parse(rawBody) } catch { parsed = { unparseable: String(rawBody).slice(0, 4000) } }
+    await createServerClient().from('_ig_webhook_debug').insert({ sig_ok: !!result.ok, raw: parsed })
+  } catch { /* diagnostic must never affect the webhook */ }
+
   if (!result.ok) {
     console.warn(`Instagram webhook rejected: ${result.reason}`)
     return NextResponse.json({ success: false, error: 'Invalid signature' }, { status: 403 })
