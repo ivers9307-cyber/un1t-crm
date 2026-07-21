@@ -108,14 +108,22 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
     } catch { /* leave state as-is */ }
   }
 
+  // Signature of the currently-rendered thread (count + last message id).
+  // Lets the safety-net poll below skip all state churn — and the
+  // scroll-to-bottom yank — when a poll returns nothing new.
+  const threadSigRef = useRef('')
   const loadThread = useCallback(async (id) => {
     if (!id) return
     try {
       const res = await fetch(`/api/instagram/conversations/${id}`)
       const data = await res.json()
       if (data.success) {
+        const msgs = data.messages || []
+        const sig = `${msgs.length}:${msgs[msgs.length - 1]?.id || ''}`
+        if (sig === threadSigRef.current) return
+        threadSigRef.current = sig
         setConversation(data.conversation)
-        setMessages(data.messages || [])
+        setMessages(msgs)
       }
     } catch {
       /* ignore */
@@ -193,11 +201,27 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
   }, [loadConversations])
   useEffect(() => {
     setApprovals([])
+    threadSigRef.current = ''   // force a fresh load when switching threads
     if (selectedId) {
       loadThread(selectedId)
       fetchApprovals(selectedId)
     }
   }, [selectedId, loadThread, fetchApprovals])
+
+  // Safety-net poll for the OPEN thread. Realtime pushes new messages
+  // instantly when the socket is connected, but if it drops (websocket
+  // blocked, resubscribe gap) the thread would otherwise only refresh on
+  // re-select — the reported bug. Mirrors the 60s conversation-list poll;
+  // 10s here, skipped when the tab is hidden, and a no-op (via the
+  // signature guard in loadThread) when nothing changed.
+  useEffect(() => {
+    if (!selectedId) return
+    const t = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+      loadThread(selectedId)
+    }, 10000)
+    return () => clearInterval(t)
+  }, [selectedId, loadThread])
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
   async function handleSend(e) {
