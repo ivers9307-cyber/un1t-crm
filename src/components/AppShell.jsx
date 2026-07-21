@@ -105,6 +105,15 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
 
   return (
     <div className="flex h-screen overflow-hidden bg-un1t-bg">
+      {/* A11Y (WCAG 2.4.1 Bypass Blocks) — keyboard/screen-reader users can
+          jump past the sidebar straight to <main>. Visually hidden until
+          focused, then pinned top-left. Targets the #main-content id below. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-un1t-text focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-un1t-bg focus:shadow-lg"
+      >
+        Skip to content
+      </a>
       {/* Mobile top bar */}
       <div className="md:hidden fixed top-0 inset-x-0 z-40 flex items-center gap-3 px-4 h-14 bg-un1t-surface border-b border-un1t-border">
         <button
@@ -162,7 +171,7 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
             location switch (not on normal navigation), so it forces the
             re-fetch exactly when it's needed. Fragment = no extra DOM,
             zero layout impact. */}
-        <main className="flex-1 overflow-y-auto pt-14 md:pt-0">
+        <main id="main-content" className="flex-1 overflow-y-auto pt-14 md:pt-0">
           <Fragment key={user?.activeLocation?.id ?? 'no-location'}>
             {children}
           </Fragment>
