@@ -20,6 +20,10 @@ import {
   resolveAgentEffort,
   shouldNotifyAgentActivity,
   AGENT_ACTIVITY_DEBOUNCE_MS,
+  resolveVerifyFailHandoff,
+  shouldHandoffAfterVerifyFail,
+  nextVerifyAttempts,
+  VERIFY_FAIL_HANDOFF_DEFAULT,
 } from './core'
 import { HANDOFF_PREFIX, OPTIONS_PREFIX } from './prompt'
 
@@ -660,5 +664,50 @@ describe('shouldAgentReply — human-owned thread gate (AGENT-REARM.2)', () => {
   it('does not affect an active conversation', () => {
     const r = shouldAgentReply({ ...base, conversation: { agent_active: true }, lastOutboundHuman: true })
     expect(r.reply).toBe(true)
+  })
+})
+
+describe('resolveVerifyFailHandoff', () => {
+  it('defaults to 2 when unset or non-numeric', () => {
+    expect(resolveVerifyFailHandoff(null)).toBe(2)
+    expect(resolveVerifyFailHandoff({})).toBe(2)
+    expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: 'x' })).toBe(2)
+    expect(VERIFY_FAIL_HANDOFF_DEFAULT).toBe(2)
+  })
+  it('honours a positive override (rounded)', () => {
+    expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: 3 })).toBe(3)
+    expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: 2.6 })).toBe(3)
+  })
+  it('treats 0 / negative as disabled', () => {
+    expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: 0 })).toBe(0)
+    expect(resolveVerifyFailHandoff({ handoff_after_verify_failures: -1 })).toBe(0)
+  })
+})
+
+describe('shouldHandoffAfterVerifyFail', () => {
+  it('true at or above a positive threshold', () => {
+    expect(shouldHandoffAfterVerifyFail(2, 2)).toBe(true)
+    expect(shouldHandoffAfterVerifyFail(3, 2)).toBe(true)
+  })
+  it('false below the threshold', () => {
+    expect(shouldHandoffAfterVerifyFail(1, 2)).toBe(false)
+    expect(shouldHandoffAfterVerifyFail(0, 2)).toBe(false)
+  })
+  it('never fires when disabled (threshold 0)', () => {
+    expect(shouldHandoffAfterVerifyFail(5, 0)).toBe(false)
+  })
+})
+
+describe('nextVerifyAttempts', () => {
+  it('increments on an explicit failure', () => {
+    expect(nextVerifyAttempts(0, { verified: false })).toBe(1)
+    expect(nextVerifyAttempts(1, { verified: false })).toBe(2)
+  })
+  it('resets to 0 on success', () => {
+    expect(nextVerifyAttempts(3, { verified: true })).toBe(0)
+  })
+  it('leaves the count unchanged for a non-verify result', () => {
+    expect(nextVerifyAttempts(2, null)).toBe(2)
+    expect(nextVerifyAttempts(2, { requested: true })).toBe(2)
   })
 })

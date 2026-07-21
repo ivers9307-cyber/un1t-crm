@@ -517,3 +517,30 @@ export function resolveAgentEffort(raw) {
   const v = String(raw ?? '').trim().toLowerCase()
   return AGENT_EFFORT_LEVELS.includes(v) ? v : DEFAULT_AGENT_EFFORT
 }
+
+// AGENT-VERIFY-HANDOFF.1 — auto-hand-off after repeated identity-verification
+// failures so Mia can't loop a customer on the email+surname quiz. The count
+// lives on the conversation (agent_verify_attempts); these pure helpers own the
+// threshold + counter arithmetic so the auto-reply wiring stays thin.
+export const VERIFY_FAIL_HANDOFF_DEFAULT = 2
+
+// Per-location threshold from the agent settings blob. 0/negative disables the
+// auto-handoff. Mirrors resolveHandoffSlaMinutes. Pure.
+export function resolveVerifyFailHandoff(settings) {
+  const raw = Number(settings?.handoff_after_verify_failures)
+  if (!Number.isFinite(raw)) return VERIFY_FAIL_HANDOFF_DEFAULT
+  return raw > 0 ? Math.round(raw) : 0
+}
+
+// Should this many consecutive failed attempts trigger a handoff? Pure.
+export function shouldHandoffAfterVerifyFail(attempts, threshold) {
+  return threshold > 0 && (Number(attempts) || 0) >= threshold
+}
+
+// New failed-attempt count given a verify_identity tool result: reset to 0 on
+// success, +1 on an explicit failure, unchanged for any other result. Pure.
+export function nextVerifyAttempts(current, result) {
+  const n = Number(current) || 0
+  if (!result || typeof result.verified !== 'boolean') return n
+  return result.verified ? 0 : n + 1
+}
