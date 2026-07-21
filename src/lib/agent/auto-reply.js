@@ -36,6 +36,9 @@ import {
   resolveAutoVerify,
   resolveActingContactId,
   shouldNotifyAgentActivity,
+  resolveVerifyFailHandoff,
+  shouldHandoffAfterVerifyFail,
+  nextVerifyAttempts,
 } from './core'
 import { personGroupResolver } from '@/lib/person-links'
 import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account-tools'
@@ -242,7 +245,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
   // Conversation state: kill switch + linked contact + verification.
   const nameCol = adapter.nameColumn
   const { data: conv } = await db.from(adapter.conversationsTable)
-    .select(`agent_active, agent_handed_off_at, contact_id, agent_verified_contact_id, agent_verified_at, agent_last_reply_at, agent_activity_notified_at${nameCol ? `, ${nameCol}` : ''}`)
+    .select(`agent_active, agent_handed_off_at, contact_id, agent_verified_contact_id, agent_verified_at, agent_last_reply_at, agent_activity_notified_at, agent_verify_attempts${nameCol ? `, ${nameCol}` : ''}`)
     .eq('id', conversationId)
     .single()
 
@@ -276,7 +279,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
   if (decision.rearm) {
     try {
       await db.from(adapter.conversationsTable)
-        .update({ agent_active: true, agent_handed_off_at: null })
+        .update({ agent_active: true, agent_handed_off_at: null, agent_verify_attempts: 0 })
         .eq('id', conversationId)
     } catch { /* next turn retries */ }
   }
@@ -484,6 +487,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
     // EFFORT.1 — operator-tunable reasoning effort (defaults to `medium`, one
     // notch below the API's `high` default) for this short transactional turn.
     const agentEffort = resolveAgentEffort(settings?.effort)
+    const verifyFailThreshold = resolveVerifyFailHandoff(settings)
 
     const messages = formatHistoryForClaude(history || [], { maxMessages: MAX_HISTORY })
     if (messages.length === 0) return { handled: false, reason: 'no_history' }
@@ -509,6 +513,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
       settings,
     }
 
+    let verifyFails = conv?.agent_verify_attempts ?? 0
     let modelText = ''
     try {
       let iterations = MAX_TOOL_ITERATIONS
@@ -555,20 +560,25 @@ async function runChannelAgentInner(db, adapter, ctx) {
                 : CARD_TOOL_NAMES.has(block.name)
                   ? await executeCardTool(block.name, block.input || {}, toolCtx)
                   : await executeBookingTool(block.name, block.input || {}, toolCtx)
-            if (block.name === 'verify_identity' && result?.verified) {
-              // Re-read the contact id the server just stamped so the
-              // follow-up lookups in this same turn are authorised.
-              const { data: fresh } = await db.from(adapter.conversationsTable)
-                .select('agent_verified_contact_id')
-                .eq('id', conversationId)
-                .single()
-              const rawVerified = fresh?.agent_verified_contact_id || toolCtx.verifiedContactId
-              // AGENT-AUTH.2 — act on the person's PRIMARY account, not whichever
-              // duplicate the email+surname quiz happened to match.
-              const r = await personGroupResolver(db, [rawVerified])
-              toolCtx.verifiedContactId = resolveActingContactId({
-                contactId: rawVerified, groupOf: r.groupOf, primaryOf: r.primaryOf,
-              }) || rawVerified
+            if (block.name === 'verify_identity') {
+              // AGENT-VERIFY-HANDOFF.1 — track consecutive failures so a stuck
+              // quiz hands off (reset on success, +1 on failure).
+              verifyFails = nextVerifyAttempts(verifyFails, result)
+              if (result?.verified) {
+                // Re-read the contact id the server just stamped so the
+                // follow-up lookups in this same turn are authorised.
+                const { data: fresh } = await db.from(adapter.conversationsTable)
+                  .select('agent_verified_contact_id')
+                  .eq('id', conversationId)
+                  .single()
+                const rawVerified = fresh?.agent_verified_contact_id || toolCtx.verifiedContactId
+                // AGENT-AUTH.2 — act on the person's PRIMARY account, not whichever
+                // duplicate the email+surname quiz happened to match.
+                const r = await personGroupResolver(db, [rawVerified])
+                toolCtx.verifiedContactId = resolveActingContactId({
+                  contactId: rawVerified, groupOf: r.groupOf, primaryOf: r.primaryOf,
+                }) || rawVerified
+              }
             }
             toolResults.push({
               type: 'tool_result',
@@ -614,6 +624,32 @@ async function runChannelAgentInner(db, adapter, ctx) {
     // sub-second read; a genuine simultaneous tie is still possible but rare.
     if (await humanTookOverDuringTurn(db, adapter, conversationId, turnStartIso)) {
       return { handled: false, reason: 'human_took_over' }
+    }
+
+    // AGENT-VERIFY-HANDOFF.1 — after N failed verify_identity attempts (default
+    // 2), stop asking and hand off. Deterministic server-side counter so a model
+    // that would keep re-asking can't loop the customer; the model's retry text
+    // for this turn is discarded in favour of the handoff holding message. The
+    // SLA sweep re-alerts if nobody picks it up.
+    if (shouldHandoffAfterVerifyFail(verifyFails, verifyFailThreshold)) {
+      try {
+        await db.from(adapter.conversationsTable)
+          .update({ agent_verify_attempts: 0 })
+          .eq('id', conversationId)
+      } catch { /* handoff still proceeds; the next re-arm resets anyway */ }
+      await handoff(db, adapter, { ...common, reason: 'verify_failed', settings })
+      return { handled: true, action: 'handoff', reason: 'verify_failed' }
+    }
+
+    // Persist the running attempt count when it changed (an under-threshold
+    // failure, or a reset after a success). Best-effort; a turn with no verify
+    // attempt leaves it unchanged and writes nothing.
+    if (verifyFails !== (conv?.agent_verify_attempts ?? 0)) {
+      try {
+        await db.from(adapter.conversationsTable)
+          .update({ agent_verify_attempts: verifyFails })
+          .eq('id', conversationId)
+      } catch { /* next turn recomputes from the stored value */ }
     }
 
     if (parsed.action === 'handoff') {
