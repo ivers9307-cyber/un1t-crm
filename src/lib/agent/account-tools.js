@@ -191,6 +191,35 @@ export function emailPathVerifies(contact, provided, opts = {}) {
 }
 
 /**
+ * From the pool of contacts that belong to THIS sender, pick the one a
+ * verification attempt matches — or null. Pure.
+ *
+ * LINKED (`linked:true` — a WhatsApp thread whose number is already on a
+ * contact): a matching email on ANY of the sender's contacts verifies, because
+ * the number is the second factor. We test the whole pool — every contact on
+ * the sender's number — NOT just the thread's bound contact_id, so a thread
+ * pinned to a duplicate whose email differs from the member's can still verify.
+ * The customer can only ever type their own real email, never the dupe's, so
+ * this doesn't weaken the check; it just stops it being unwinnable.
+ *
+ * UNLINKED (`linked:false` — Instagram, or an unknown WhatsApp number): email
+ * alone is too weak, so emailPathVerifies additionally requires the surname
+ * (supplied, or evident from the channel display name `nameHint`).
+ *
+ * @param {Array<object>|null} candidates  contacts on the sender's number/person
+ * @param {object} provided                { email, last_name }
+ * @param {object} [opts]                   { linked, nameHint }
+ * @returns {object|null} the matched contact
+ */
+export function pickVerifiedContact(candidates, provided, { linked = false, nameHint = null } = {}) {
+  const pool = Array.isArray(candidates) ? candidates.filter(Boolean) : []
+  const test = linked
+    ? (c) => identityMatches(c, provided || {})
+    : (c) => emailPathVerifies(c, provided || {}, { nameHint })
+  return pool.find(test) || null
+}
+
+/**
  * Human-friendly membership summary for the agent to relay. Pure.
  * Reads the reliably-synced Glofox columns: state + account-active +
  * plan (when present). Price/payment standing are not reported here.
@@ -297,19 +326,55 @@ export function buildMembershipPurchaseDetails(input = {}) {
   }
 }
 
+// All contacts belonging to the sender behind a LINKED conversation: every
+// contact that shares the bound contact's WhatsApp/phone number at this
+// location (duplicates included), so verify_identity can match the member's
+// real email even when the thread is pinned to a duplicate whose email differs.
+// Falls back to just the bound contact when it carries no number. Mirrors the
+// phone match auto-reply uses for phone auto-verify (core.resolveAutoVerify).
+async function contactsForSender(db, { contactId, locationId }) {
+  const { data: bound } = await db.from('contacts')
+    .select('id, email, last_name, wa_phone, phone')
+    .eq('id', contactId)
+    .maybeSingle()
+  if (!bound) return []
+  const bares = [...new Set([bound.wa_phone, bound.phone]
+    .filter(Boolean)
+    .map((n) => String(n).replace(/^\+/, '')))]
+  if (bares.length === 0) return [bound]
+  const ors = bares
+    .flatMap((b) => [`wa_phone.eq.${b}`, `wa_phone.eq.+${b}`, `phone.eq.${b}`, `phone.eq.+${b}`])
+    .join(',')
+  const { data: siblings } = await db.from('contacts')
+    .select('id, email, last_name')
+    .eq('location_id', locationId)
+    .or(ors)
+    .limit(20)
+  const pool = (siblings && siblings.length) ? siblings : [bound]
+  // Guarantee the bound contact is present even if the phone query missed it.
+  if (!pool.some((c) => c.id === bound.id)) {
+    pool.push({ id: bound.id, email: bound.email, last_name: bound.last_name })
+  }
+  return pool
+}
+
 // ── executor (IO) ───────────────────────────────────────────────────
 // ctx: { db, conversationId, conversationsTable, contactId, verifiedContactId, locationId }
 export async function executeAccountTool(toolName, input, ctx) {
   const { db, conversationId, conversationsTable, contactId, verifiedContactId, locationId } = ctx
 
   if (toolName === 'verify_identity') {
-    let candidate = null
+    // Candidate pool = the contacts belonging to THIS sender.
+    // Linked (a WhatsApp number already on a contact) → EVERY contact sharing
+    // the sender's number at this location, so a thread pinned to a duplicate
+    // whose email differs from the member's can still verify (the linked-path
+    // check used to look at the bound contact_id alone, which made the quiz
+    // unwinnable for members with duplicate contact rows on one number).
+    // Unlinked (Instagram / unknown number) → the single contact whose email
+    // the customer supplies (email + surname required, see pickVerifiedContact).
+    let candidates = []
     if (contactId) {
-      const { data } = await db.from('contacts')
-        .select('id, email, last_name')
-        .eq('id', contactId)
-        .maybeSingle()
-      candidate = data || null
+      candidates = await contactsForSender(db, { contactId, locationId })
     } else if (normEmail(input?.email)) {
       const { data } = await db.from('contacts')
         .select('id, email, last_name')
@@ -317,24 +382,21 @@ export async function executeAccountTool(toolName, input, ctx) {
         .ilike('email', normEmail(input.email))
         .limit(1)
         .maybeSingle()
-      candidate = data || null
+      candidates = data ? [data] : []
     }
 
-    // Linked conversations (a phone-matched WhatsApp contact) keep the
-    // email-OR-DOB+surname rule — the channel is already a weak factor.
-    // Unlinked conversations (Instagram always; unknown WhatsApp numbers)
-    // go through the email PATH, which requires email + surname so that
-    // knowing only an email can't impersonate a member. The surname may
-    // come from the channel display name (nameHint).
-    const matched = contactId
-      ? identityMatches(candidate, input || {})
-      : emailPathVerifies(candidate, input || {}, { nameHint: ctx.nameHint })
-    if (!candidate || !matched) {
+    const matchedContact = pickVerifiedContact(candidates, input || {}, {
+      linked: !!contactId,
+      nameHint: ctx.nameHint,
+    })
+    if (!matchedContact) {
       return { verified: false, hint: 'No match yet. Ask for the email on the account together with the surname. Never ask for a date of birth. Never reveal which detail did or did not match.' }
     }
 
+    // Stamp the matched contact. auto-reply resolves this to the person-group
+    // primary for the acting account on this and subsequent turns.
     await db.from(conversationsTable).update({
-      agent_verified_contact_id: candidate.id,
+      agent_verified_contact_id: matchedContact.id,
       agent_verified_at: new Date().toISOString(),
     }).eq('id', conversationId)
     return { verified: true }

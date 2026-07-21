@@ -210,3 +210,108 @@ describe('buildMembershipPurchaseDetails', () => {
     expect(buildMembershipPurchaseDetails({})).toEqual({ offer: null, note: null })
   })
 })
+
+// ── DUPE-VERIFY — a linked thread must verify against ANY contact on the
+// sender's number, not just the thread's bound contact_id. A WhatsApp number
+// with several contact rows (duplicates) that gets pinned to one whose email
+// differs from the member's would otherwise make the email quiz unwinnable:
+// the customer can only ever type their own real email, never the dupe's.
+import { pickVerifiedContact, executeAccountTool } from './account-tools'
+
+describe('pickVerifiedContact', () => {
+  const member = { id: 'm1', email: 'richard@richardivers.com', last_name: 'Ivers' }
+  const dupe = { id: 'd1', email: 'test@richardivers.com', last_name: 'Ivers' }
+
+  it('LINKED: verifies against a sibling when the thread is bound to a different duplicate', () => {
+    // Pool = the bound dupe (test@, no membership) + the real member (richard@).
+    // Customer gives their real membership email → must resolve to the member.
+    expect(pickVerifiedContact([dupe, member], { email: 'richard@richardivers.com' }, { linked: true })).toEqual(member)
+  })
+
+  it('LINKED: matches email case-insensitively across the pool', () => {
+    expect(pickVerifiedContact([dupe, member], { email: '  RICHARD@RICHARDIVERS.COM ' }, { linked: true })).toEqual(member)
+  })
+
+  it('LINKED: no match when the email is on none of the sender\'s contacts', () => {
+    expect(pickVerifiedContact([dupe, member], { email: 'someone@else.com' }, { linked: true })).toBeNull()
+  })
+
+  it('LINKED: a single-contact pool behaves exactly like the old bound-only check', () => {
+    expect(pickVerifiedContact([member], { email: 'richard@richardivers.com' }, { linked: true })).toEqual(member)
+    expect(pickVerifiedContact([member], { email: 'someone@else.com' }, { linked: true })).toBeNull()
+  })
+
+  it('UNLINKED (email path): still requires email + surname, not email alone', () => {
+    expect(pickVerifiedContact([member], { email: 'richard@richardivers.com' }, { linked: false })).toBeNull()
+    expect(pickVerifiedContact([member], { email: 'richard@richardivers.com', last_name: 'Ivers' }, { linked: false })).toEqual(member)
+  })
+
+  it('UNLINKED: surname may come from the channel display name (nameHint)', () => {
+    expect(pickVerifiedContact([member], { email: 'richard@richardivers.com' }, { linked: false, nameHint: 'Richard Ivers' })).toEqual(member)
+  })
+
+  it('returns null on empty / non-array pool', () => {
+    expect(pickVerifiedContact([], { email: 'x@y.com' }, { linked: true })).toBeNull()
+    expect(pickVerifiedContact(null, { email: 'x@y.com' }, { linked: true })).toBeNull()
+  })
+})
+
+// Minimal thenable-builder mock mirroring the two contacts reads + one
+// conversations update that verify_identity performs. supabase-js builders are
+// thenables, so the mock resolves on await via `then`.
+function makeVerifyMockDb({ bound, siblings, onUpdate }) {
+  return {
+    from(table) {
+      const b = {
+        _table: table, _update: false, _or: false, _payload: null,
+        select() { return b },
+        update(payload) { b._update = true; b._payload = payload; return b },
+        eq() { return b },
+        or() { b._or = true; return b },
+        ilike() { return b },
+        limit() { return b },
+        async maybeSingle() { return { data: bound, error: null } },
+        then(resolve, reject) {
+          try {
+            if (b._update) { onUpdate && onUpdate(b._payload); resolve({ data: null, error: null }) }
+            else if (b._or) { resolve({ data: siblings, error: null }) }
+            else { resolve({ data: null, error: null }) }
+          } catch (e) { reject(e) }
+        },
+      }
+      return b
+    },
+  }
+}
+
+describe('executeAccountTool · verify_identity across duplicate contacts', () => {
+  const bound = { id: 'd1', email: 'test@richardivers.com', last_name: 'Ivers', wa_phone: '353873147675', phone: '0873147675' }
+  const siblings = [
+    { id: 'd1', email: 'test@richardivers.com', last_name: 'Ivers' },
+    { id: 'm1', email: 'richard@richardivers.com', last_name: 'Ivers' },
+  ]
+
+  it('verifies the member and stamps the MEMBER contact, though the thread is bound to a membership-less dupe', async () => {
+    let stamped = null
+    const db = makeVerifyMockDb({ bound, siblings, onUpdate: (p) => { stamped = p } })
+    const res = await executeAccountTool(
+      'verify_identity',
+      { email: 'richard@richardivers.com', last_name: 'Ivers' },
+      { db, conversationId: 'c1', conversationsTable: 'whatsapp_conversations', contactId: 'd1', locationId: 'loc1' },
+    )
+    expect(res).toEqual({ verified: true })
+    expect(stamped.agent_verified_contact_id).toBe('m1')
+  })
+
+  it('still refuses an email that is on none of the sender\'s contacts', async () => {
+    let stamped = null
+    const db = makeVerifyMockDb({ bound, siblings, onUpdate: (p) => { stamped = p } })
+    const res = await executeAccountTool(
+      'verify_identity',
+      { email: 'attacker@evil.com', last_name: 'Ivers' },
+      { db, conversationId: 'c1', conversationsTable: 'whatsapp_conversations', contactId: 'd1', locationId: 'loc1' },
+    )
+    expect(res.verified).toBe(false)
+    expect(stamped).toBeNull()
+  })
+})
