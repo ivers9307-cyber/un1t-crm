@@ -18,12 +18,14 @@ import { MANAGER_ROLES } from '@/lib/schemas'
 import { stampConnectionOk, stampConnectionError, isMetaAuthError } from '@/lib/connection-health'
 
 /**
- * Normalise a Meta Instagram webhook body into a flat list of inbound
- * text events. Pure — no IO. Skips echoes (our own sends), reactions,
- * read receipts, and non-text payloads (which the agent hands off on).
+ * Normalise a Meta Instagram webhook body into a flat list of message
+ * events. Pure — no IO. Emits echoes too (`isEcho: true` — a message WE
+ * sent, from the CRM or the native IG app), which the handler records so
+ * a staff app-reply marks the thread answered. Skips reactions, read
+ * receipts, and events with no `message`.
  *
  * @param {object} body  the parsed webhook JSON
- * @returns {Array<{recipientAccountId:string, senderId:string, messageId:string|null, text:string, type:string, timestamp:number|null, isEcho:boolean}>}
+ * @returns {Array<{accountId:string, customerId:string, messageId:string|null, text:string, type:string, timestamp:number|null, isEcho:boolean}>}
  */
 export function parseInstagramEvents(body) {
   const out = []
@@ -34,13 +36,19 @@ export function parseInstagramEvents(body) {
       const msg = ev.message
       if (!msg) continue                         // delivery/read/reaction → ignore
       const isEcho = !!msg.is_echo
-      const senderId = ev.sender?.id || null
-      const recipientAccountId = ev.recipient?.id || entry.id || null
+      // Direction-aware normalisation. `entry.id` is ALWAYS our own IG
+      // business account (the webhook owner) in both directions — the
+      // stable anchor for resolving the location. The customer is the
+      // OTHER party: for inbound it's the sender, for an echo (a message
+      // WE sent, from the CRM or the native IG app) it's the recipient.
+      // Confirmed against real captured payloads (IG-ECHO diagnostic).
+      const accountId = entry.id || (isEcho ? ev.sender?.id : ev.recipient?.id) || null
+      const customerId = (isEcho ? ev.recipient?.id : ev.sender?.id) || null
       const text = typeof msg.text === 'string' ? msg.text : ''
       const hasAttachments = Array.isArray(msg.attachments) && msg.attachments.length > 0
       out.push({
-        recipientAccountId,
-        senderId,
+        accountId,
+        customerId,
         messageId: msg.mid || null,
         text,
         type: hasAttachments && !text ? 'attachment' : 'text',
@@ -155,31 +163,33 @@ export const instagramAdapter = {
  * @param {object} event  one element of parseInstagramEvents()
  */
 export async function handleInstagramInbound(db, event) {
-  if (!event || event.isEcho) return { handled: false, reason: 'echo' }
-  if (!event.senderId || !event.recipientAccountId) return { handled: false, reason: 'malformed' }
+  if (!event) return { handled: false, reason: 'malformed' }
+  if (!event.accountId || !event.customerId) return { handled: false, reason: 'malformed' }
 
-  // Resolve which studio owns the IG business account that received this.
-  const resolved = await resolveLocationByExternalAccount('instagram', event.recipientAccountId, db)
+  // Resolve which studio owns the IG business account this belongs to.
+  // accountId is our own account in BOTH directions (inbound + echo).
+  const resolved = await resolveLocationByExternalAccount('instagram', event.accountId, db)
   if (!resolved) return { handled: false, reason: 'unmatched_account' }
   const { locationId, connection } = resolved
 
   // Find-or-create the conversation (one per location + customer IGSID).
   const { data: existingConv } = await db.from('instagram_conversations')
-    .select('id, contact_id')
+    .select('id, contact_id, agent_handed_off_at')
     .eq('location_id', locationId)
-    .eq('ig_user_id', event.senderId)
+    .eq('ig_user_id', event.customerId)
     .maybeSingle()
 
   let conversationId = existingConv?.id
   const contactId = existingConv?.contact_id || null
+  const existingHandoffAt = existingConv?.agent_handed_off_at || null
   if (!conversationId) {
     // Capture the customer's IG display name once, so the agent can use
     // the surname as a verification factor without making them retype it.
-    const profile = await fetchInstagramProfile(event.senderId, connection)
+    const profile = await fetchInstagramProfile(event.customerId, connection)
     const { data: created } = await db.from('instagram_conversations').insert({
       location_id: locationId,
       channel_connection_id: connection?.id || null,
-      ig_user_id: event.senderId,
+      ig_user_id: event.customerId,
       ig_username: profile?.username || null,
       customer_name: profile?.name || null,
       status: 'active',
@@ -191,6 +201,55 @@ export async function handleInstagramInbound(db, event) {
   const ts = event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString()
   const messageType = event.type || 'text'
   const body = event.text || (messageType !== 'text' ? `[${messageType}]` : '')
+
+  // ── Echo path: a message WE sent, reflected back by Meta ────────────
+  // Two sources: our own CRM/agent send (already persisted — dedup and
+  // skip), or a reply a staff member typed from the native IG app /
+  // Business Suite (record it, so the thread shows answered and Mia
+  // steps aside). The echo mid equals the Send API's returned message_id
+  // (verified), so an existing row with this ig_message_id means it was
+  // our CRM/agent send.
+  if (event.isEcho) {
+    if (event.messageId) {
+      const { data: already } = await db.from('instagram_messages')
+        .select('id').eq('ig_message_id', event.messageId).limit(1).maybeSingle()
+      if (already) return { handled: false, reason: 'echo_own_send', conversationId }
+    }
+    const { error: echoErr } = await db.from('instagram_messages').insert({
+      conversation_id: conversationId,
+      contact_id: contactId,
+      location_id: locationId,
+      ig_message_id: event.messageId,
+      direction: 'outbound',
+      message_type: messageType,
+      body,
+      status: 'sent',
+      source: 'instagram_app',
+      sent_at: ts,
+    })
+    if (echoErr) {
+      // 23505 on the unique idx_ig_msg_mid = our own CRM/agent send landed
+      // between the dedup lookup above and this insert (webhook/send race).
+      // It's NOT an external reply, so do NOT run the takeover below — that
+      // would flip agent_active off on Mia's own message. Just bail.
+      if (echoErr.code === '23505') return { handled: false, reason: 'echo_own_send', conversationId }
+      console.error('[instagram echo] insert failed', echoErr.message)
+      return { handled: false, reason: 'echo_insert_failed', conversationId }
+    }
+    // A human replied from outside the CRM → mirror the operator send
+    // route exactly: take over (stop Mia) and flip the thread to
+    // answered, so app-replies and CRM-replies behave identically in the
+    // inbox queues. No agent trigger, no push (this is our own outbound).
+    await db.from('instagram_conversations').update({
+      last_message_at: ts,
+      last_message_direction: 'outbound',
+      last_message_preview: body.substring(0, 100),
+      agent_active: false,
+      agent_handed_off_at: existingHandoffAt || ts,
+      updated_at: ts,
+    }).eq('id', conversationId)
+    return { handled: true, conversationId, echo: true }
+  }
 
   await db.from('instagram_messages').insert({
     conversation_id: conversationId,
@@ -234,7 +293,7 @@ export async function handleInstagramInbound(db, event) {
       agentResult = await runChannelAgent(db, instagramAdapter, {
         conversationId,
         locationId,
-        recipient: event.senderId,
+        recipient: event.customerId,
         contactId,
         messageType,
         body,

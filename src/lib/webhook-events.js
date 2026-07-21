@@ -33,6 +33,10 @@ export const WEBHOOK_PROVIDERS = Object.freeze({
   REVOLUT: 'revolut',
   REVOLUT_RACE: 'revolut_race',
   WHATSAPP: 'whatsapp',
+  // Instagram DM webhooks (messages field, incl. is_echo reflections).
+  // Was missing — the IG webhook route passed `undefined` here, so IG
+  // events had NO idempotency (Meta retries could double-process).
+  INSTAGRAM: 'instagram',
   TWILIO: 'twilio',
   XERO: 'xero',
   // Mig 120: UniFi Access door-unlock events — drives zero-touch

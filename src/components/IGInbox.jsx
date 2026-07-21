@@ -391,7 +391,7 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
                 }
                 const m = item.message
                 const outbound = m.direction === 'outbound'
-                const fromAgent = outbound && m.source && m.source !== 'operator'
+                const fromAgent = outbound && m.source === 'agent'
                 return (
                   <div key={item.key} className={`flex ${outbound ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${outbound ? 'bg-un1t-accent text-un1t-bg' : 'bg-un1t-surface text-un1t-text'}`}>

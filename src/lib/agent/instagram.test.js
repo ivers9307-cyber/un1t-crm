@@ -11,7 +11,7 @@ describe('parseInstagramEvents', () => {
     expect(parseInstagramEvents({})).toEqual([])
   })
 
-  it('extracts a text DM with sender, recipient, mid', () => {
+  it('extracts an inbound DM: account = our biz id, customer = sender', () => {
     const body = baseEntry([{
       sender: { id: 'CUST1' },
       recipient: { id: 'IGBIZ1' },
@@ -21,8 +21,8 @@ describe('parseInstagramEvents', () => {
     const out = parseInstagramEvents(body)
     expect(out).toHaveLength(1)
     expect(out[0]).toMatchObject({
-      recipientAccountId: 'IGBIZ1',
-      senderId: 'CUST1',
+      accountId: 'IGBIZ1',
+      customerId: 'CUST1',
       messageId: 'm1',
       text: 'how much is membership?',
       type: 'text',
@@ -30,17 +30,23 @@ describe('parseInstagramEvents', () => {
     })
   })
 
-  it('falls back to entry.id when recipient is absent', () => {
+  it('uses entry.id as the account anchor (webhook owner is always our biz)', () => {
     const body = baseEntry([{ sender: { id: 'C' }, message: { mid: 'm', text: 'hi' } }])
-    expect(parseInstagramEvents(body)[0].recipientAccountId).toBe('IGBIZ1')
+    expect(parseInstagramEvents(body)[0].accountId).toBe('IGBIZ1')
   })
 
-  it('flags echoes (our own outbound) so they can be skipped', () => {
+  it('echo: mirror-imaged — account = our biz id (entry.id), customer = recipient', () => {
+    // A message WE sent (native IG app or CRM), echoed back by Meta.
     const body = baseEntry([{
       sender: { id: 'IGBIZ1' }, recipient: { id: 'CUST1' },
       message: { mid: 'm2', text: 'our reply', is_echo: true },
     }])
-    expect(parseInstagramEvents(body)[0].isEcho).toBe(true)
+    expect(parseInstagramEvents(body)[0]).toMatchObject({
+      accountId: 'IGBIZ1',
+      customerId: 'CUST1',
+      messageId: 'm2',
+      isEcho: true,
+    })
   })
 
   it('ignores delivery/read/reaction events (no message)', () => {
@@ -71,6 +77,6 @@ describe('parseInstagramEvents', () => {
     }
     const out = parseInstagramEvents(body)
     expect(out.map(e => e.text)).toEqual(['one', 'two'])
-    expect(out.map(e => e.recipientAccountId)).toEqual(['A', 'B'])
+    expect(out.map(e => e.accountId)).toEqual(['A', 'B'])
   })
 })
