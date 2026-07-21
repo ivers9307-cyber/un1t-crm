@@ -33,7 +33,7 @@
 
 import { dublinTodayStr, dublinDayStr, addDaysISO } from '@/lib/dublin-time'
 import { dublinMonthStartStr } from '@/lib/usage-caps'
-import { resolveAllowances } from '@/lib/plans'
+import { resolveAllowances, pickActiveVersion } from '@/lib/plans'
 import { assembleIntegrationsHub } from '@/lib/integrations-hub'
 import { METER_KEYS } from '@shared/plans'
 
@@ -226,6 +226,48 @@ export function summariseHubForLocation(hub, locationId) {
     connections,
     attention: (hub.attention || []).filter((a) => a.locationId === locationId),
   }
+}
+
+/**
+ * The assignable plan catalogue for the tenant drill-in: each ACTIVE
+ * plan (tier or add-on) paired with its version active on `today` (its
+ * current price). Plans with no effective version yet are dropped — you
+ * can't pin a plan that has no price. Tiers and add-ons are split and
+ * ordered by the plan `sort` column so the Assign modal renders them in
+ * catalogue order. Pure.
+ *
+ * @param {Array<{ id, slug, name, kind, active, sort, versions?: Array }>} plans
+ *   plans rows with an embedded `versions` array (plan_versions)
+ * @param {string} today - 'YYYY-MM-DD' Dublin business date
+ * @returns {{ tiers: Array, addons: Array }}
+ */
+export function buildPlanCatalogue(plans, today) {
+  const tiers = []
+  const addons = []
+  for (const plan of plans || []) {
+    if (plan?.active === false) continue
+    const v = pickActiveVersion(plan.versions || [], today)
+    if (!v) continue
+    const entry = {
+      planId: plan.id,
+      slug: plan.slug,
+      name: plan.name,
+      kind: plan.kind,
+      sort: plan.sort ?? 0,
+      version: {
+        id: v.id,
+        priceCents: v.price_cents,
+        effectiveFrom: v.effective_from,
+        features: v.features || {},
+      },
+    }
+    if (plan.kind === 'tier') tiers.push(entry)
+    else if (plan.kind === 'addon') addons.push(entry)
+  }
+  const bySort = (a, b) => a.sort - b.sort || a.name.localeCompare(b.name)
+  tiers.sort(bySort)
+  addons.sort(bySort)
+  return { tiers, addons }
 }
 
 /** Attention-item count per org, via a location→org map. Pure. */
@@ -432,7 +474,7 @@ export async function getTenantDetail(db, orgId, { today = dublinTodayStr() } = 
   const locIds = locations.map((l) => l.id)
   const locationOrgMap = Object.fromEntries(locations.map((l) => [l.id, l.organization_id]))
 
-  const [pinsRes, walletsRes, heartbeatsRes, rollups, aiEvents, hub, ledgers] = await Promise.all([
+  const [pinsRes, walletsRes, heartbeatsRes, rollups, aiEvents, hub, ledgers, catalogueRes] = await Promise.all([
     db.from('location_plans').select(PIN_EMBED).eq('active', true).in('location_id', locIds),
     db.from('wallets').select('location_id, balance_cents, period_start, updated_at').in('location_id', locIds),
     db.from('tenant_cron_health').select('name, location_id, is_stale, stale_seconds, muted').in('location_id', locIds),
@@ -471,10 +513,18 @@ export async function getTenantDetail(db, orgId, { today = dublinTodayStr() } = 
       if (error) throw new Error(`admin-tenants ledger: ${error.message}`)
       return [id, data || []]
     })),
+    // Assignable catalogue — active plans with their version history so
+    // the drill-in's Assign/Change control can offer tiers + add-ons at
+    // their current price. Master-read table; the plan catalogue is tiny.
+    db.from('plans')
+      .select('id, slug, name, kind, active, sort, versions:plan_versions!plan_id(id, price_cents, effective_from, features)')
+      .eq('active', true)
+      .order('sort', { ascending: true }),
   ])
   if (pinsRes.error) throw new Error(`admin-tenants location_plans: ${pinsRes.error.message}`)
   if (walletsRes.error) throw new Error(`admin-tenants wallets: ${walletsRes.error.message}`)
   if (heartbeatsRes.error) throw new Error(`admin-tenants tenant_cron_health: ${heartbeatsRes.error.message}`)
+  if (catalogueRes.error) throw new Error(`admin-tenants plans catalogue: ${catalogueRes.error.message}`)
 
   const pins = pinsRes.data || []
   const walletByLocation = Object.fromEntries((walletsRes.data || []).map((w) => [w.location_id, w]))
@@ -503,18 +553,31 @@ export async function getTenantDetail(db, orgId, { today = dublinTodayStr() } = 
       createdAt: loc.created_at,
       plan: tierPin
         ? {
+            planId: tierPin.version.plan.id,
+            planVersionId: tierPin.version.id,
             name: tierPin.version.plan.name,
             slug: tierPin.version.plan.slug,
             priceCents: tierPin.version.price_cents,
             effectiveFrom: tierPin.version.effective_from,
             assignedAt: tierPin.assigned_at,
             addons: addonPins.map((p) => ({
+              planId: p.version.plan.id,
+              planVersionId: p.version.id,
               name: p.version.plan.name,
               slug: p.version.plan.slug,
               priceCents: p.version.price_cents,
             })),
           }
         : null,
+      // Active add-on pins independent of the tier — the UI's add-on
+      // toggles reflect these even when the location is dormant (no tier).
+      addons: addonPins.map((p) => ({
+        planId: p.version.plan.id,
+        planVersionId: p.version.id,
+        name: p.version.plan.name,
+        slug: p.version.plan.slug,
+        priceCents: p.version.price_cents,
+      })),
       allowances: resolved ? resolved.allowances : null,
       wallet: wallet
         ? {
@@ -542,6 +605,7 @@ export async function getTenantDetail(db, orgId, { today = dublinTodayStr() } = 
       createdAt: org.created_at,
       locationsCount: locations.length,
     },
+    catalogue: buildPlanCatalogue(catalogueRes.data || [], today),
     locations: locationBlocks,
   }
 }

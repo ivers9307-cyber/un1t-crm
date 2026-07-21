@@ -10,6 +10,7 @@ import {
   staleHeartbeatsByLocation,
   summariseHubForLocation,
   attentionCountByOrg,
+  buildPlanCatalogue,
 } from './admin-tenants'
 
 const tierPin = (price, name = 'Growth', overrides = {}) => ({
@@ -237,5 +238,44 @@ describe('attentionCountByOrg', () => {
   it('empty input → empty map', () => {
     expect(attentionCountByOrg([], {})).toEqual({})
     expect(attentionCountByOrg(undefined, undefined)).toEqual({})
+  })
+})
+
+describe('buildPlanCatalogue', () => {
+  const plan = (id, kind, sort, versions) => ({
+    id, slug: id, name: id[0].toUpperCase() + id.slice(1), kind, active: true, sort, versions,
+  })
+  const TODAY = '2026-07-21'
+
+  it('pairs each active plan with its version active today, split by kind and ordered by sort', () => {
+    const cat = buildPlanCatalogue([
+      plan('growth', 'tier', 20, [{ id: 'gv', price_cents: 17900, effective_from: '2026-07-01', features: {} }]),
+      plan('core', 'tier', 10, [{ id: 'cv', price_cents: 9900, effective_from: '2026-07-01', features: {} }]),
+      plan('custom_email_domain', 'addon', 110, [{ id: 'av', price_cents: 1500, effective_from: '2026-07-01', features: {} }]),
+    ], TODAY)
+    expect(cat.tiers.map((t) => t.slug)).toEqual(['core', 'growth']) // sort order
+    expect(cat.tiers[0].version).toMatchObject({ id: 'cv', priceCents: 9900 })
+    expect(cat.addons.map((a) => a.slug)).toEqual(['custom_email_domain'])
+  })
+
+  it('picks the LATEST effective version <= today (grandfathered current price)', () => {
+    const cat = buildPlanCatalogue([
+      plan('core', 'tier', 10, [
+        { id: 'v1', price_cents: 9900, effective_from: '2026-01-01', features: {} },
+        { id: 'v2', price_cents: 10900, effective_from: '2026-07-01', features: {} },
+        { id: 'v3', price_cents: 11900, effective_from: '2026-12-01', features: {} }, // future — not yet active
+      ]),
+    ], TODAY)
+    expect(cat.tiers[0].version.id).toBe('v2')
+  })
+
+  it('drops inactive plans and plans with no effective version', () => {
+    const cat = buildPlanCatalogue([
+      { ...plan('core', 'tier', 10, [{ id: 'cv', price_cents: 9900, effective_from: '2026-07-01', features: {} }]), active: false },
+      plan('growth', 'tier', 20, []), // no versions
+      plan('scale', 'tier', 30, [{ id: 'sv', price_cents: 29900, effective_from: '2027-01-01', features: {} }]), // all future
+    ], TODAY)
+    expect(cat.tiers).toEqual([])
+    expect(cat.addons).toEqual([])
   })
 })

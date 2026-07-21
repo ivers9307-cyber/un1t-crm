@@ -17,7 +17,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Building2, Wallet } from 'lucide-react'
+import { ArrowLeft, Building2, Wallet, Zap, PowerOff } from 'lucide-react'
 import { Button, Card, Modal, Field, Table } from '@/components/ui'
 import {
   euro, euroSigned, num, shortDate, shortDateTime,
@@ -25,6 +25,35 @@ import {
 } from '@/components/admin/tenants-format'
 
 const MAX_ADJUST_EUR = 10000
+
+// Shared error extractor for the plan-assignment fetches (structured
+// { success, error, issues } shape).
+function errFromJson(json, res) {
+  const detail = (json?.issues || []).map((i) => `${i.path}: ${i.message}`).join('; ')
+  return detail || json?.error || `Request failed (${res?.status ?? '?'})`
+}
+
+async function postPlan(orgId, body) {
+  const res = await fetch(`/api/admin/tenants/${orgId}/plans`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const json = await res.json().catch(() => ({}))
+  if (!json.success) throw new Error(errFromJson(json, res))
+  return json.data
+}
+
+async function deletePlan(orgId, body) {
+  const res = await fetch(`/api/admin/tenants/${orgId}/plans`, {
+    method: 'DELETE',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const json = await res.json().catch(() => ({}))
+  if (!json.success) throw new Error(errFromJson(json, res))
+  return json.data
+}
 
 function KindChip({ kind }) {
   const k = LEDGER_KINDS[kind] || { label: kind, chip: 'bg-gray-500/10 text-gray-700' }
@@ -169,9 +198,133 @@ function AdjustWalletModal({ location, onClose, onApplied }) {
   )
 }
 
-function LocationBlock({ loc, onAdjust }) {
+// Assign / change the TIER pinned to a location. Picks a tier from the
+// active catalogue (defaulting the version to the plan's current active
+// version, price shown) and POSTs the pin. The consequence is stated
+// plainly: pinning a tier turns billing ON for this location.
+function AssignPlanModal({ orgId, location, catalogue, onClose, onDone }) {
+  const tiers = catalogue?.tiers || []
+  const current = location.plan // active tier or null
+  const [planId, setPlanId] = useState(current?.planId || tiers[0]?.planId || '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+
+  const selected = tiers.find((t) => t.planId === planId) || null
+  const isChange = Boolean(current)
+  const isSameAsCurrent = current && selected && current.planId === selected.planId
+  const canSubmit = Boolean(selected) && !busy
+
+  async function submit() {
+    if (!canSubmit) return
+    setBusy(true)
+    setError(null)
+    try {
+      await postPlan(orgId, {
+        location_id: location.id,
+        plan_id: selected.planId,
+        plan_version_id: selected.version.id,
+        kind: 'tier',
+      })
+      onDone()
+    } catch (e) {
+      setError(e.message)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`${isChange ? 'Change' : 'Assign'} plan — ${location.name}`}
+      size="sm"
+      footer={(
+        <>
+          <Button type="button" variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button type="button" icon={Zap} onClick={submit} loading={busy} disabled={!canSubmit || isSameAsCurrent}>
+            {isChange ? 'Change tier' : 'Assign & activate'}
+          </Button>
+        </>
+      )}
+    >
+      <p className="text-xs text-un1t-subtle mb-4">
+        Pins a tier to this location. Assigning a tier <strong>activates billing, wallet and
+        usage enforcement for this location</strong> — meters start counting against the plan
+        allowance and MRR includes this tier. Other locations are unaffected.
+      </p>
+
+      {tiers.length === 0 ? (
+        <p className="text-sm text-un1t-muted">
+          No active tier plans in the catalogue. Create one in <code>/admin/plans</code> first.
+        </p>
+      ) : (
+        <div className="space-y-4">
+          <Field id="assign-tier" label="Tier">
+            {(props) => (
+              <select {...props} className="ipt w-full" value={planId} onChange={(e) => setPlanId(e.target.value)}>
+                {tiers.map((t) => (
+                  <option key={t.planId} value={t.planId}>
+                    {t.name} — {euro(t.version.priceCents)}/mo
+                  </option>
+                ))}
+              </select>
+            )}
+          </Field>
+          {selected && (
+            <div className="text-xs text-un1t-subtle rounded-lg bg-un1t-surface px-3 py-2">
+              <div><span className="text-un1t-text font-medium">{selected.name}</span> · {euro(selected.version.priceCents)}/mo</div>
+              <div className="mt-0.5">Version effective {shortDate(selected.version.effectiveFrom)} (current active version)</div>
+              {isSameAsCurrent && <div className="mt-1 text-amber-700">Already the active tier for this location.</div>}
+            </div>
+          )}
+          {error && <p className="text-sm text-red-700">{error}</p>}
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+function LocationBlock({ loc, orgId, catalogue, onAdjust, onChanged }) {
   const usage = loc.usage || {}
   const allowances = loc.allowances || null
+  const [assigning, setAssigning] = useState(false)
+  const [busyAction, setBusyAction] = useState(null) // 'unassign' | addon planId | null
+  const [actionError, setActionError] = useState(null)
+
+  const activeAddonIds = new Set((loc.addons || []).map((a) => a.planId))
+
+  async function runAction(key, fn) {
+    setBusyAction(key)
+    setActionError(null)
+    try {
+      await fn()
+      onChanged()
+    } catch (e) {
+      setActionError(e.message)
+      setBusyAction(null)
+    }
+  }
+
+  function unassignTier() {
+    if (!loc.plan) return
+    runAction('unassign', () =>
+      deletePlan(orgId, { location_id: loc.id, plan_version_id: loc.plan.planVersionId }))
+  }
+
+  function toggleAddon(addon) {
+    const active = activeAddonIds.has(addon.planId)
+    const activePin = (loc.addons || []).find((a) => a.planId === addon.planId)
+    runAction(addon.planId, () =>
+      active
+        ? deletePlan(orgId, { location_id: loc.id, plan_version_id: activePin.planVersionId })
+        : postPlan(orgId, {
+            location_id: loc.id,
+            plan_id: addon.planId,
+            plan_version_id: addon.version.id,
+            kind: 'addon',
+          }))
+  }
+
   return (
     <Card
       className="mb-4"
@@ -201,15 +354,59 @@ function LocationBlock({ loc, onAdjust }) {
               <div className="text-xs text-un1t-muted mt-0.5">
                 Version effective {shortDate(loc.plan.effectiveFrom)}
               </div>
-              {loc.plan.addons?.length > 0 && (
-                <div className="text-xs text-un1t-subtle mt-1">
-                  {loc.plan.addons.map((a) => `${a.name} (${euro(a.priceCents)}/mo)`).join(' · ')}
-                </div>
-              )}
+              <div className="text-xs text-green-700 mt-1">Billing active for this location</div>
             </div>
           ) : (
-            <div className="text-sm text-un1t-muted">No plan</div>
+            <div className="text-sm">
+              <div className="font-medium text-un1t-muted">No plan — dormant</div>
+              <div className="text-xs text-un1t-muted mt-0.5">No billing, wallet or usage enforcement.</div>
+            </div>
           )}
+
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button type="button" variant="secondary" size="sm" icon={Zap} onClick={() => setAssigning(true)}>
+              {loc.plan ? 'Change plan' : 'Assign plan'}
+            </Button>
+            {loc.plan && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                icon={PowerOff}
+                loading={busyAction === 'unassign'}
+                disabled={busyAction != null}
+                onClick={unassignTier}
+              >
+                Set dormant
+              </Button>
+            )}
+          </div>
+
+          {/* Add-ons */}
+          {(catalogue?.addons?.length > 0) && (
+            <div className="mt-3">
+              <div className="text-[11px] uppercase tracking-wider text-un1t-subtle font-semibold mb-1">Add-ons</div>
+              <div className="space-y-1">
+                {catalogue.addons.map((addon) => {
+                  const active = activeAddonIds.has(addon.planId)
+                  return (
+                    <label key={addon.planId} className="flex items-center gap-2 text-xs text-un1t-text cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={active}
+                        disabled={busyAction != null}
+                        onChange={() => toggleAddon(addon)}
+                      />
+                      <span>{addon.name}</span>
+                      <span className="text-un1t-muted">{euro(addon.version.priceCents)}/mo</span>
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {actionError && <p className="text-xs text-red-700 mt-2">{actionError}</p>}
         </div>
 
         {/* Wallet */}
@@ -296,6 +493,16 @@ function LocationBlock({ loc, onAdjust }) {
           empty="No wallet activity yet."
         />
       </div>
+
+      {assigning && (
+        <AssignPlanModal
+          orgId={orgId}
+          location={loc}
+          catalogue={catalogue}
+          onClose={() => setAssigning(false)}
+          onDone={() => { setAssigning(false); onChanged() }}
+        />
+      )}
     </Card>
   )
 }
@@ -306,6 +513,7 @@ export default function TenantDetailView({ detail }) {
   const [balanceOverrides, setBalanceOverrides] = useState({})
 
   const { org } = detail
+  const catalogue = detail.catalogue || { tiers: [], addons: [] }
   const locations = detail.locations.map((loc) => (
     balanceOverrides[loc.id] != null
       ? { ...loc, wallet: { ...(loc.wallet || {}), balanceCents: balanceOverrides[loc.id] } }
@@ -316,6 +524,12 @@ export default function TenantDetailView({ detail }) {
     setBalanceOverrides((prev) => ({ ...prev, [locationId]: balanceCents }))
     setAdjusting(null)
     router.refresh() // pull the fresh ledger row into the RSC payload
+  }
+
+  // Re-grade the drill-in after a plan pin/unpin so the pin, MRR-relevant
+  // price and allowances reflect immediately.
+  function handlePlanChanged() {
+    router.refresh()
   }
 
   return (
@@ -339,7 +553,14 @@ export default function TenantDetailView({ detail }) {
         <Card><div className="text-sm text-un1t-muted">No locations in this organization yet.</div></Card>
       )}
       {locations.map((loc) => (
-        <LocationBlock key={loc.id} loc={loc} onAdjust={setAdjusting} />
+        <LocationBlock
+          key={loc.id}
+          loc={loc}
+          orgId={org.id}
+          catalogue={catalogue}
+          onAdjust={setAdjusting}
+          onChanged={handlePlanChanged}
+        />
       ))}
 
       {adjusting && (
