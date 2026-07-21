@@ -35,6 +35,7 @@ import {
   DEFAULT_HOLDING_MESSAGE,
   resolveAutoVerify,
   resolveActingContactId,
+  distinctPersonCount,
   shouldNotifyAgentActivity,
   resolveVerifyFailHandoff,
   shouldHandoffAfterVerifyFail,
@@ -414,6 +415,14 @@ async function runChannelAgentInner(db, adapter, ctx) {
       }
     }
 
+    // AGENT-AUTH.3 — a number linked to more than one PERSON can't be
+    // auto-identified (one ungrouped duplicate is enough to trip it, and we
+    // can't always dedupe). Tell the prompt so Mia asks WHICH account (by email)
+    // with context instead of the blind email+surname quiz. Duplicate rows
+    // already linked as one Person collapse to a single person and don't trip
+    // this. The prompt only acts on it when the sender isn't already verified.
+    const multipleAccounts = distinctPersonCount(phoneMatches, groupOf) >= 2
+
     const { data: knowledge } = await db.from('agent_knowledge')
       .select('category, title, content, enabled, sort_order')
       .eq('location_id', locationId)
@@ -481,6 +490,8 @@ async function runChannelAgentInner(db, adapter, ctx) {
       // re-quizzed inside the 30-day window. (Tools already honour the stored
       // verification via toolCtx; this closes the prompt-side gap.)
       identityPreverified: !!preverifiedContactId || isVerificationFresh(conv?.agent_verified_at),
+      // AGENT-AUTH.3 — number linked to >1 person → ask which account by email.
+      multipleAccounts,
       knownContact,
     })
 

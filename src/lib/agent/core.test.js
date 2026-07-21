@@ -711,3 +711,42 @@ describe('nextVerifyAttempts', () => {
     expect(nextVerifyAttempts(2, { requested: true })).toBe(2)
   })
 })
+
+// AGENT-AUTH.3 — a number linked to more than one PERSON can't be auto-identified.
+import { distinctPersonCount } from './core'
+
+describe('distinctPersonCount', () => {
+  // groupOf closure: map of contactId -> group id (or undefined = ungrouped)
+  const groupOfFrom = (map) => (id) => map[id] || null
+
+  it('counts duplicate rows already linked as one Person as a single person', () => {
+    const g = groupOfFrom({ a: 'grp1', b: 'grp1', c: 'grp1' })
+    expect(distinctPersonCount([{ id: 'a' }, { id: 'b' }, { id: 'c' }], g)).toBe(1)
+  })
+
+  it('flags ≥2 when an ungrouped stray shares the number with a linked group', () => {
+    // Richard's real case: 4 rows in one group + 1 ungrouped "test test".
+    const g = groupOfFrom({ a: 'grp1', b: 'grp1', c: 'grp1', d: 'grp1' })
+    expect(distinctPersonCount([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }], g)).toBe(2)
+  })
+
+  it('counts two ungrouped contacts as two people', () => {
+    const g = groupOfFrom({})
+    expect(distinctPersonCount([{ id: 'x' }, { id: 'y' }], g)).toBe(2)
+  })
+
+  it('counts two distinct groups as two people', () => {
+    const g = groupOfFrom({ a: 'grp1', b: 'grp2' })
+    expect(distinctPersonCount([{ id: 'a' }, { id: 'b' }], g)).toBe(2)
+  })
+
+  it('is 1 for a single contact and 0 for empty/null', () => {
+    expect(distinctPersonCount([{ id: 'solo' }], groupOfFrom({}))).toBe(1)
+    expect(distinctPersonCount([], groupOfFrom({}))).toBe(0)
+    expect(distinctPersonCount(null, groupOfFrom({}))).toBe(0)
+  })
+
+  it('ignores malformed entries', () => {
+    expect(distinctPersonCount([{ id: 'a' }, null, {}, { id: 'a' }], groupOfFrom({ a: 'grp1' }))).toBe(1)
+  })
+})

@@ -484,6 +484,27 @@ export function resolveActingContactId({ contactId, groupOf, primaryOf }) {
   return (primaryOf && primaryOf(g)) || contactId
 }
 
+/**
+ * AGENT-AUTH.3 — count distinct PEOPLE among the contacts matched on a sender's
+ * number. A person = their person-group id when grouped, else the contact id
+ * itself, so N duplicate rows already linked as one Person count once. Pure.
+ *
+ * ≥2 means the number is linked to more than one account, so the agent can't
+ * auto-identify the sender and asks WHICH account (by email) rather than the
+ * blind email+surname quiz. `groupOf` is the closure from personGroupResolver.
+ * @param {Array<{id:string}>|null} matches contacts matching the sender's number
+ * @param {(contactId:string)=>string|null} groupOf
+ * @returns {number}
+ */
+export function distinctPersonCount(matches, groupOf) {
+  const people = new Set()
+  for (const m of matches || []) {
+    if (!m || !m.id) continue
+    people.add((groupOf && groupOf(m.id)) || m.id)
+  }
+  return people.size
+}
+
 // How long a successful identity verification stays valid on a thread.
 // After this, the customer must re-verify before any account lookup or
 // pause/cancel request — so a phone/IG handle changing hands doesn't
