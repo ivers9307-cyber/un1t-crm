@@ -138,6 +138,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   // needs the latest value when handling a message event without
   // re-subscribing on every selection. ref carries it across renders.
   const selectedIdRef = useRef(initialConversationId || null)
+  // Signature (count + last id) of the rendered thread — lets the
+  // open-thread safety-net poll skip state churn + scroll-yank on no-op ticks.
+  const threadSigRef = useRef('')
 
   const fetchConversations = useCallback(async () => {
     try {
@@ -266,11 +269,26 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   useEffect(() => {
     selectedIdRef.current = selectedId
     setApprovals([])
+    threadSigRef.current = ''   // force a fresh load when switching threads
     if (selectedId) {
       fetchMessages(selectedId)
       fetchApprovals(selectedId)
       setShowAddContact(false)
     }
+  }, [selectedId])
+
+  // Safety-net poll for the OPEN thread. Realtime pushes new messages
+  // instantly when connected; if the socket drops the thread would
+  // otherwise only refresh on re-select. Mirrors the 60s list poll; 10s
+  // here, skipped when the tab is hidden, and a no-op (signature guard in
+  // fetchMessages) when nothing changed.
+  useEffect(() => {
+    if (!selectedId) return
+    const t = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+      fetchMessages(selectedId)
+    }, 10000)
+    return () => clearInterval(t)
   }, [selectedId])
 
   // Embedded mode — the unified inbox owns the queue; follow its selection.
@@ -303,8 +321,12 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       const res = await fetch(`/api/whatsapp/conversations/${convId}`)
       const data = await res.json()
       if (data.success) {
+        const msgs = data.messages || []
+        const sig = `${msgs.length}:${msgs[msgs.length - 1]?.id || ''}`
+        if (sig === threadSigRef.current) return
+        threadSigRef.current = sig
         setConversation(data.conversation)
-        setMessages(data.messages)
+        setMessages(msgs)
         setFlowAvailable(Boolean(data.flow_available))
 
         // Pre-fill add contact form with WA profile name
