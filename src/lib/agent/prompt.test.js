@@ -127,6 +127,27 @@ describe('identity pre-verification section', () => {
   })
 })
 
+// AGENT-AUTH.3 — a number linked to more than one account can't be
+// auto-identified; Mia asks WHICH account (by email) with context, not the
+// blind email+surname quiz — and never reveals the on-file details.
+describe('multiple-accounts disambiguation section', () => {
+  it('asks which account by email (context) when multipleAccounts is set', () => {
+    const out = buildCustomerSystemPrompt({ multipleAccounts: true })
+    expect(out).toMatch(/more than one account/i)
+    expect(out).toMatch(/confirm the email/i)
+    expect(out).toMatch(/email only|never a surname/i)          // email-only on this path
+    expect(out).toMatch(/never.*(read out|list|reveal|hint)/i)  // no PII leak
+  })
+  it('yields to the pre-verified override — a known sender is never asked', () => {
+    const out = buildCustomerSystemPrompt({ identityPreverified: true, multipleAccounts: true })
+    expect(out).toMatch(/already verified/i)
+    expect(out).not.toMatch(/more than one account/i)
+  })
+  it('omits the section by default', () => {
+    expect(buildCustomerSystemPrompt({})).not.toMatch(/more than one account/i)
+  })
+})
+
 describe('multi-person bookings hand off instead of partial-booking', () => {
   it('tells Mia to hand off when more than one person wants to come in', () => {
     const out = buildCustomerSystemPrompt({})

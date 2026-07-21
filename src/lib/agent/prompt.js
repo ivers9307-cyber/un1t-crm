@@ -228,6 +228,7 @@ export function buildCardSetsBlock(cardSets) {
  * @param {string} [opts.agentName]
  * @param {string} [opts.membershipUrl]
  * @param {boolean}[opts.identityPreverified]
+ * @param {boolean}[opts.multipleAccounts] number linked to >1 person — ask which account by email (yields to identityPreverified)
  * @param {{firstName?:string|null, hasEmail?:boolean}}[opts.knownContact] linked contact's on-file details, so Mia never re-asks for them
  * @returns {{ stable: string, volatile: string }}
  */
@@ -276,6 +277,14 @@ export function buildCustomerSystemPromptParts(opts = {}) {
     volatileParts.push(
       '## Identity — already verified\n' +
       'The studio system has already CONFIRMED this customer\'s identity for this conversation (from their phone number or an earlier check). This overrides the verification steps above: do NOT ask for their email or surname, and do NOT call verify_identity. Use the account and booking tools directly and answer their own-account questions right away. (Everything else still applies: no billing details, no other people\'s accounts.)'
+    )
+  } else if (opts.multipleAccounts) {
+    // AGENT-AUTH.3 — this number is linked to more than one account, so the
+    // system can't auto-pick one. Ask WHICH account (by email) with context
+    // instead of the blind email+surname quiz — and never reveal on-file details.
+    volatileParts.push(
+      '## Identity — more than one account on this number\n' +
+      'This phone number is linked to MORE THAN ONE account, so the system cannot tell which one is theirs. When they need their own account (their membership, a booking, a pause or cancellation), do NOT ask the generic email-and-surname question. Instead tell them there is more than one account linked to this number and ask them to confirm the EMAIL on the account they mean, then call verify_identity with that email. Ask for the email ONLY, never a surname. NEVER read out, list, spell, or hint at any name or email already on file. They must supply it themselves.'
     )
   }
 
