@@ -3799,6 +3799,73 @@ registry.registerPath({
   },
 })
 
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/tenants/{orgId}/plans',
+  tags: ['Platform Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Pin a plan version to a tenant location — the billing on-switch (master only)',
+  description:
+    'Pins a plan VERSION to one of the org\'s locations via a location_plans row (mig 413). ' +
+    'Assigning an ACTIVE TIER is the on-switch: getLocationPlan() starts returning non-null for ' +
+    'that location, engaging wallet, usage enforcement, monthly reset, meters and MRR — other ' +
+    'locations stay dormant. plan_version_id is optional; it defaults to the plan\'s CURRENT ' +
+    'active version. THE ONE-ACTIVE-TIER INVARIANT: assigning a tier atomically deactivates any ' +
+    'existing active tier pin for the location BEFORE activating the new one (deactivate-first), ' +
+    'so a location can never hold two active tiers. Add-ons are additive (multiple allowed) and ' +
+    'idempotent. Cross-org / unknown location → 404 (not 403). Validates the plan is active and ' +
+    'its kind matches, and that an explicit version belongs to the plan.',
+  request: {
+    params: z.object({ orgId: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: uuidLike,
+      plan_id: uuidLike.optional().openapi({ description: 'Plan id — provide this or plan_slug.' }),
+      plan_slug: z.string().optional().openapi({ description: 'Plan slug — alternative to plan_id.' }),
+      plan_version_id: uuidLike.optional().openapi({ description: 'Specific version to pin (grandfathering). Defaults to the plan\'s current active version.' }),
+      kind: z.enum(['tier', 'addon']),
+    }).openapi('AdminTenantPlanAssignBody') } } },
+  },
+  responses: {
+    200: {
+      description: 'Pin created/activated — returns the resulting pin, plan and version',
+      content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('AdminTenantPlanAssignResponse') } },
+    },
+    400: { description: 'Validation failed — inactive plan, kind mismatch, version not on plan, or no active version', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Org, location (incl. cross-org), or plan not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/admin/tenants/{orgId}/plans',
+  tags: ['Platform Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Unpin a plan from a tenant location — set dormant (master only)',
+  description:
+    'Deactivates a specific pin (location_plans row) for a location. Unpinning the active TIER ' +
+    'returns the location to DORMANT — getLocationPlan() goes null and billing/wallet/enforcement ' +
+    'switch off for it; unpinning an add-on just drops that add-on. Cross-org / unknown location ' +
+    'or a pin the location never had → 404.',
+  request: {
+    params: z.object({ orgId: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: uuidLike,
+      plan_version_id: uuidLike,
+    }).openapi('AdminTenantPlanUnassignBody') } } },
+  },
+  responses: {
+    200: {
+      description: 'Pin deactivated',
+      content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('AdminTenantPlanUnassignResponse') } },
+    },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master role required', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Org, location (incl. cross-org), or pin not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Account (Repset ACCOUNT tier) — org portfolio roll-up (REPSET-ACCOUNT.1)
 registry.registerPath({
   method: 'get',
