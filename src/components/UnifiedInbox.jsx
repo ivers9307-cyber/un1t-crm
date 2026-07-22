@@ -20,6 +20,8 @@ import WAInbox from '@/components/WAInbox'
 import IGInbox from '@/components/IGInbox'
 import EmailInbox from '@/components/EmailInbox'
 import CommandCentre from '@/components/CommandCentre'
+import { ChannelGlyph, ChannelAvatar } from '@/components/inbox/ChannelBits'
+import { channelOf } from '../../shared/channels'
 
 function formatTime(dateStr) {
   if (!dateStr) return ''
@@ -42,6 +44,12 @@ function rowName(conv) {
   if (conv._ch === 'em') return conv.counterpart_name || conv.counterpart_email || 'Email contact'
   if (conv.ig_username) return `@${conv.ig_username}`
   return 'Instagram user'
+}
+
+// Two-letter initials for the queue row's ChannelAvatar tile — first
+// letters of the first two words of the display name (INBOX-REDESIGN.4).
+function initialsOf(name) {
+  return (name || '').trim().split(/\s+/).slice(0, 2).map(w => w[0] || '').join('').toUpperCase()
 }
 
 const CHANNELS = [
@@ -251,22 +259,20 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
 
           {visible.map(conv => {
             const isSelected = selected?.id === conv.id && selected?.ch === conv._ch
+            const name = rowName(conv)
             return (
               <button
                 key={`${conv._ch}:${conv.id}`}
                 onClick={() => { setSelected({ ch: conv._ch, id: conv.id }); setCcTab('profile') }}
-                className={`w-full text-left px-4 py-3 border-b border-un1t-border/50 transition-colors ${
+                className={`grid grid-cols-[auto_auto_1fr_auto] items-center gap-[11px] w-full text-left px-4 py-3 border-b border-un1t-border/50 transition-colors ${
                   isSelected ? 'bg-un1t-border/50' : 'hover:bg-un1t-border/20'
                 }`}
               >
-                <div className="flex items-center justify-between gap-2">
+                <ChannelGlyph channel={channelOf(conv)} />
+                <ChannelAvatar channel={channelOf(conv)} initials={initialsOf(name)} />
+                <div className="min-w-0 flex flex-col gap-0.5">
                   <span className="flex items-center gap-1.5 min-w-0">
-                    {conv._ch === 'wa'
-                      ? <MessageCircle size={13} className="text-green-600 shrink-0" />
-                      : conv._ch === 'em'
-                        ? <Mail size={13} className="text-blue-600 shrink-0" />
-                        : <Instagram size={13} className="text-pink-600 shrink-0" />}
-                    <span className="font-medium text-sm truncate">{rowName(conv)}</span>
+                    <span className="font-medium text-sm truncate">{name}</span>
                     {isAgentHandoff(conv) && (
                       <span className="text-[10px] font-semibold text-amber-700 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0">
                         Needs human
@@ -279,10 +285,10 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
                       </span>
                     )}
                   </span>
-                  <span className="text-xs text-un1t-muted shrink-0">{formatTime(conv.last_message_at)}</span>
-                </div>
-                <div className="flex items-center justify-between gap-2 mt-0.5 pl-[19px]">
                   <span className="text-xs text-un1t-subtle truncate">{conv.last_message_preview || '—'}</span>
+                </div>
+                <div className="flex flex-col items-end gap-0.5">
+                  <span className="text-xs text-un1t-muted shrink-0">{formatTime(conv.last_message_at)}</span>
                   <span className="flex items-center gap-1.5 shrink-0">
                     {conv.unread_count > 0 && (
                       <span className="bg-green-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
