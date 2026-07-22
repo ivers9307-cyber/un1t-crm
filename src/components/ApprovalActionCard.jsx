@@ -9,6 +9,7 @@
 'use client'
 
 import { useState } from 'react'
+import { Sparkles } from 'lucide-react'
 import { getNextSteps, buildDeclineDraft, DECLINE_REASONS, BOOKING_KINDS } from '@shared/approvals-next-steps'
 import { approvalCardSummary, APPROVAL_KIND_LABELS } from '@shared/approval-cards'
 import SequencePicker from '@/components/SequencePicker'
@@ -113,6 +114,13 @@ export default function ApprovalActionCard({
   return (
     <div className="flex justify-center my-2">
       <div className="w-full max-w-md bg-un1t-surface border border-un1t-border rounded-lg px-3 py-2.5 text-sm relative">
+        {/* Mia eyebrow — every request this card renders originates from
+            the agent (see file header); tag it the same way the thread
+            itself tags Mia's own messages (WAInbox author tag). */}
+        <span className="flex items-center gap-1 text-[10px] font-semibold text-mia mb-1">
+          <Sparkles size={11} />
+          MIA
+        </span>
         <div className="flex items-center justify-between gap-2">
           <span className="font-medium text-un1t-text">{kindLabel}</span>
           <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${STATUS_CHIP[status] || STATUS_CHIP.pending}`}>
@@ -184,7 +192,7 @@ export default function ApprovalActionCard({
             ))}
             {suggestion && (
               <button type="button" title={suggestion} onClick={() => onPrefillComposer?.(suggestion)}
-                className="px-2.5 py-1 rounded-full text-xs font-medium bg-un1t-bg border border-purple-500/40 text-un1t-text hover:bg-un1t-border/30">
+                className="px-2.5 py-1 rounded-full text-xs font-medium bg-un1t-bg border border-mia/40 text-mia hover:bg-un1t-border/30">
                 Mia suggests
               </button>
             )}
