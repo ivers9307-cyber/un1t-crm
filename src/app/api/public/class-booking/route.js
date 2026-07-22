@@ -1,5 +1,8 @@
-// POST /api/public/class-booking — public enqueue for the /start wizard's class
-// path. Captures the lead in the CRM (contact + new_lead deal + lead_source +
+// POST /api/public/class-booking — public enqueue for the ClassFunnel block /
+// /start wizard's class path. Location resolved from the body `path`
+// (public_path; defaults to 'stillorgan'); the chosen class is re-validated
+// against that location's live bookable list.
+// Captures the lead in the CRM (contact + new_lead deal + lead_source +
 // tag = "reclassify as a fresh lead") then enqueues a class_booking_requests
 // row for the process-class-bookings cron. Returns instantly; the booking +
 // WhatsApp confirmation happen async. No auth; rate-limited.
@@ -13,11 +16,13 @@ import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
 import { logWarn } from '@/lib/log'
+import { resolveLandingPath } from '@/lib/public-landing'
 
 export const runtime = 'nodejs'
 
 const Schema = z.object({
   event_id: z.string().trim().min(1).max(64),
+  path: z.string().trim().max(64).optional(),
   class_name: z.string().trim().max(200).optional(),
   starts_at: z.string().trim().max(40).optional(),
   first_name: z.string().trim().min(1).max(120),
@@ -40,9 +45,10 @@ const Schema = z.object({
 export async function POST(request) {
   const db = createServerClient()
   const ip = getClientIp(request)
-  // SAAS-6: tenant-keyed. This route is hard-scoped to the 'stillorgan'
-  // public_path (resolved below), so the tenant identifier is that
-  // constant — the right shape for when the wizard goes multi-location.
+  // Rate-limit key is still the 'stillorgan' literal, not the resolved
+  // landingPath: only Stillorgan is Glofox-connected today, so it's the only
+  // path that can actually book. Re-key by landingPath when a second location
+  // goes live on this block (tracked with the tag/CAPI follow-up below).
   const limit = await checkRateLimit(db, `classbook:stillorgan:${ip}`, { max: 8, windowMs: 15 * 60_000 })
   if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
 
@@ -50,8 +56,9 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const b = validation.data
 
+  const landingPath = resolveLandingPath(b.path)
   const { data: page } = await db.from('landing_page_settings')
-    .select('location_id').eq('public_path', 'stillorgan').maybeSingle()
+    .select('location_id').eq('public_path', landingPath).maybeSingle()
   if (!page?.location_id) {
     return NextResponse.json({ success: false, error: 'Class booking is not available right now.' }, { status: 400 })
   }
@@ -94,6 +101,11 @@ export async function POST(request) {
       await db.from('contacts').update(patch).eq('id', contactId).is('ad_external_id', null)
     }
   } catch (e) { logWarn('attribution', 'utm persist failed', { err: e }) }
+  // FOLLOW-UP (multi-location): the nurture tag below and the CAPI eventSourceUrl
+  // further down are still Stillorgan literals. Only Stillorgan is Glofox-connected
+  // so this is unreachable for any other location today; when a second gym adopts
+  // the class_funnel block, derive both from the page's block config the way
+  // /api/public/leads does (leadConfigFromBlocks) rather than hard-coding.
   try { await writeContactTag(db, { contactId, locationId, tag: 'stillorgan-start' }) } catch (e) { logWarn('classbook', 'tag failed', { err: e }) }
   try {
     const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')

@@ -99,6 +99,19 @@ const LEAD_FORM_DEFAULT = () => ({
   lead_source:     'hatch_launch',
 })
 
+const CLASS_FUNNEL_DEFAULT = () => ({
+  id:                newBlockId(),
+  type:              'class_funnel',
+  heading:           'Your first 3 classes are free',
+  subhead:           'Book your first class now — pop in your details to start.',
+  consent_label:     "I'd like to hear from UN1T by email, SMS and WhatsApp.",
+  class_done_title:  "You're being booked in 🎉",
+  class_done_body:   "That's the first of your 3 free classes — watch for a WhatsApp confirming it. See you soon!",
+  consult_done_title:"You're booked 🎉",
+  consult_done_body: "You'll get a WhatsApp confirming your consultation if we have your number. See you soon!",
+  consult_slug:      '', // operator picks a booking type; empty ⇒ no consult upsell
+})
+
 const STATS_DEFAULT = () => ({
   id:    newBlockId(),
   type:  'stats',
@@ -144,6 +157,7 @@ export const BLOCK_TYPES = [
   { type: 'booking',     label: 'Booking form', description: 'Embed the booking form for a chosen booking type.',    factory: BOOKING_DEFAULT },
   { type: 'event',       label: 'Event signup', description: 'Embed the full signup form for a chosen event.',        factory: EVENT_DEFAULT },
   { type: 'lead_form',   label: 'Lead form',    description: 'Waitlist / interest capture — name, email, phone + consent.',  factory: LEAD_FORM_DEFAULT },
+  { type: 'class_funnel', label: 'Glofox Class Booking Funnel', description: 'Capture details, pick a live Glofox class, book. Optional free-consult upsell.', factory: CLASS_FUNNEL_DEFAULT },
   { type: 'pillars',     label: 'Pillars',      description: '3 value-prop tiles. Each can have a photo.',           factory: PILLARS_DEFAULT },
   { type: 'gallery',     label: 'Photo gallery',description: 'Grid of photos with optional captions.',                factory: GALLERY_DEFAULT },
   { type: 'embed',       label: 'Video embed',  description: 'YouTube or Instagram video embed.',                    factory: EMBED_DEFAULT },
@@ -219,6 +233,9 @@ export function primaryCta(blocks) {
       href: '#waitlist',
       label: (leadForm.button_label && leadForm.button_label.trim()) || 'Join the waitlist',
     }
+  }
+  if (list.some((b) => b && b.type === 'class_funnel')) {
+    return { href: '#start', label: 'Claim 3 free classes' }
   }
   if (list.some((b) => b && b.type === 'booking')) {
     return { href: '#book', label: 'Book a free consult' }
