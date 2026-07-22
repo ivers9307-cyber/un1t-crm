@@ -32,6 +32,10 @@ export const WEBHOOK_PROVIDERS = Object.freeze({
   POSTMARK: 'postmark',
   REVOLUT: 'revolut',
   REVOLUT_RACE: 'revolut_race',
+  // PAID-INTRO.6: signed Revolut receiver for PAID class-funnel bookings.
+  // Distinct provider key so a (order, state) pair can't collide with the
+  // race-payments webhook if a webhook is ever misrouted.
+  REVOLUT_CLASS_BOOKING: 'revolut_class_booking',
   WHATSAPP: 'whatsapp',
   // Instagram DM webhooks (messages field, incl. is_echo reflections).
   // Was missing — the IG webhook route passed `undefined` here, so IG
