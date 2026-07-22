@@ -291,3 +291,37 @@ describe('primaryCta (WEBSITE-REDESIGN 2026-06)', () => {
     expect(primaryCta(null)).toBeNull()
   })
 })
+
+describe('class_funnel block type', () => {
+  it('is registered in the palette with the Glofox label', () => {
+    const meta = BLOCK_TYPES.find((t) => t.type === 'class_funnel')
+    expect(meta).toBeTruthy()
+    expect(meta.label).toBe('Glofox Class Booking Funnel')
+  })
+
+  it('newBlockOfType builds a class_funnel with default copy', () => {
+    const b = newBlockOfType('class_funnel')
+    expect(b.type).toBe('class_funnel')
+    expect(b.id).toBeTruthy()
+    expect(b.heading).toBeTruthy()
+    expect(b.consult_slug).toBe('') // no upsell until the operator picks one
+  })
+
+  it('blocksOrDefault keeps a saved class_funnel block', () => {
+    const saved = [{ id: 'x1', type: 'class_funnel', heading: 'Hi' }]
+    expect(blocksOrDefault(saved)).toHaveLength(1)
+  })
+
+  it('primaryCta points the header at the funnel anchor', () => {
+    const cta = primaryCta([{ id: 'x1', type: 'class_funnel', heading: 'Book a class' }])
+    expect(cta).toEqual({ href: '#start', label: 'Claim 3 free classes' })
+  })
+
+  it('lead_form still outranks class_funnel for the CTA', () => {
+    const cta = primaryCta([
+      { id: 'a', type: 'class_funnel' },
+      { id: 'b', type: 'lead_form', button_label: 'Join' },
+    ])
+    expect(cta.href).toBe('#waitlist')
+  })
+})
