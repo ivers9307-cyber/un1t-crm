@@ -36,6 +36,7 @@ export const runtime = 'nodejs'
 const ACTIONS = [
   'auth.sign_in',
   'auth.sign_out',
+  'auth.magic_link_requested',
   'auth.password_reset_requested',
   'auth.password_changed',
 ]
