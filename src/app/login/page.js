@@ -13,6 +13,7 @@ import { Suspense, useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Lock, Mail } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
+import { safeInternalPath } from '@/lib/urlish'
 
 // useSearchParams wants dynamic rendering; the Suspense boundary
 // lets Next.js skip prerender at build time. Still required under
@@ -29,7 +30,11 @@ export default function LoginPageWrapper() {
 function LoginInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const redirect = searchParams.get('redirect') || '/'
+  // Sanitise the post-login redirect: an attacker can craft
+  // /login?redirect=//evil.com (or javascript:/backslash variants) and the
+  // value is handed to router.push() after auth. safeInternalPath() rejects
+  // anything not a same-origin, root-relative path and falls back to '/'.
+  const redirect = safeInternalPath(searchParams.get('redirect'))
 
   const [mode, setMode] = useState('login') // 'login' | 'forgot'
   const [email, setEmail] = useState('')
