@@ -324,6 +324,14 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       setShowMoreMenu(false)
       setShowComposerMenu(false)
       setShowCardSetPicker(false)
+      // INBOX-REDESIGN.3.3 — the template picker now renders inside the
+      // OPEN-window composer too (shared showTemplatePicker || selectedTemplate
+      // condition), so leftover template state from a previous conversation
+      // must not survive a thread switch — it would carry the wrong
+      // contact's personalization into a send on the new thread.
+      setShowTemplatePicker(false)
+      setSelectedTemplate(null)
+      setTemplateVars({})
     }
   }, [selectedId])
 
@@ -1066,7 +1074,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                         </div>
                       )}
                       {msg.message_type === 'template' && (
-                        <p className="text-[10px] text-green-300 mb-1">Template: {msg.template_name}</p>
+                        <p className="text-[10px] text-green-700 mb-1">Template: {msg.template_name}</p>
                       )}
                       {isServableMedia(msg)
                         ? <WAMediaContent message={msg} />
