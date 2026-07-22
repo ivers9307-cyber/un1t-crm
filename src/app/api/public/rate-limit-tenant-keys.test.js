@@ -100,16 +100,34 @@ describe('SAAS-6 tenant-keyed rate limits — swept call sites', () => {
     expect(limiterKey()).toBe(`race-check-member:city-race:${IP}`)
   })
 
-  it('public classes keys on its hard-scoped stillorgan tenant', async () => {
-    const res = await classesGET(req('/api/public/classes'))
+  it('public classes keys on the resolved ?path= tenant (defaulting to stillorgan)', async () => {
+    let res = await classesGET(req('/api/public/classes'))
     expect(res.status).toBe(429)
-    expect(limiterKey()).toBe(`pubclasses:stillorgan:${IP}`)
+    expect(checkRateLimit.mock.calls[0][1]).toBe(`pubclasses:stillorgan:${IP}`)
+
+    res = await classesGET(req('/api/public/classes?path=hatch-street'))
+    expect(res.status).toBe(429)
+    expect(checkRateLimit.mock.calls[1][1]).toBe(`pubclasses:hatch-street:${IP}`)
   })
 
-  it('class-booking keys on its hard-scoped stillorgan tenant', async () => {
-    const res = await classBookingPOST(req('/api/public/class-booking', { method: 'POST', body: {} }))
+  it('class-booking keys on the landing path from the validated body (defaulting to stillorgan)', async () => {
+    const body = {
+      event_id: 'evt_1', first_name: 'A', last_name: 'B',
+      email: 'a@example.com', phone: '0871234567', consent: true,
+    }
+    let res = await classBookingPOST(req('/api/public/class-booking', { method: 'POST', body: { ...body, path: 'hatch-street' } }))
     expect(res.status).toBe(429)
-    expect(limiterKey()).toBe(`classbook:stillorgan:${IP}`)
+    expect(checkRateLimit.mock.calls[0][1]).toBe(`classbook:hatch-street:${IP}`)
+
+    res = await classBookingPOST(req('/api/public/class-booking', { method: 'POST', body }))
+    expect(res.status).toBe(429)
+    expect(checkRateLimit.mock.calls[1][1]).toBe(`classbook:stillorgan:${IP}`)
+  })
+
+  it('class-booking: a malformed body 400s WITHOUT consuming the limiter window', async () => {
+    const res = await classBookingPOST(req('/api/public/class-booking', { method: 'POST', body: {} }))
+    expect(res.status).toBe(400)
+    expect(checkRateLimit).not.toHaveBeenCalled()
   })
 
   it('leads keys on the landing public_path from the validated body', async () => {
