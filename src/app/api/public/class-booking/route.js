@@ -1,5 +1,8 @@
-// POST /api/public/class-booking — public enqueue for the /start wizard's class
-// path. Captures the lead in the CRM (contact + new_lead deal + lead_source +
+// POST /api/public/class-booking — public enqueue for the ClassFunnel block /
+// /start wizard's class path. Location resolved from the body `path`
+// (public_path; defaults to 'stillorgan'); the chosen class is re-validated
+// against that location's live bookable list.
+// Captures the lead in the CRM (contact + new_lead deal + lead_source +
 // tag = "reclassify as a fresh lead") then enqueues a class_booking_requests
 // row for the process-class-bookings cron. Returns instantly; the booking +
 // WhatsApp confirmation happen async. No auth; rate-limited.
@@ -13,11 +16,13 @@ import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
 import { logWarn } from '@/lib/log'
+import { resolveLandingPath } from '@/lib/public-landing'
 
 export const runtime = 'nodejs'
 
 const Schema = z.object({
   event_id: z.string().trim().min(1).max(64),
+  path: z.string().trim().max(64).optional(),
   class_name: z.string().trim().max(200).optional(),
   starts_at: z.string().trim().max(40).optional(),
   first_name: z.string().trim().min(1).max(120),
@@ -50,8 +55,9 @@ export async function POST(request) {
   if (!validation.ok) return validation.response
   const b = validation.data
 
+  const landingPath = resolveLandingPath(b.path)
   const { data: page } = await db.from('landing_page_settings')
-    .select('location_id').eq('public_path', 'stillorgan').maybeSingle()
+    .select('location_id').eq('public_path', landingPath).maybeSingle()
   if (!page?.location_id) {
     return NextResponse.json({ success: false, error: 'Class booking is not available right now.' }, { status: 400 })
   }
