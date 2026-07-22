@@ -39,10 +39,12 @@ describe('classFunnelConfigFromBlocks', () => {
       tag: 'stillorgan-start',
       leadSource: 'meta_book',
       eventSourceUrl: 'https://www.un1tdublin.com/start',
+      trialMembershipId: null,
+      trialPlanCode: null,
     })
     // A page with other block types but no class_funnel → same defaults.
     expect(classFunnelConfigFromBlocks([{ type: 'hero' }, { type: 'lead_form', tag: 'x' }], 'stillorgan'))
-      .toEqual({ tag: 'stillorgan-start', leadSource: 'meta_book', eventSourceUrl: 'https://www.un1tdublin.com/start' })
+      .toEqual({ tag: 'stillorgan-start', leadSource: 'meta_book', eventSourceUrl: 'https://www.un1tdublin.com/start', trialMembershipId: null, trialPlanCode: null })
   })
 
   it('derives location-specific defaults for a non-Stillorgan path (never mistagged as stillorgan)', () => {
@@ -50,6 +52,8 @@ describe('classFunnelConfigFromBlocks', () => {
       tag: 'blackrock-start',
       leadSource: 'meta_book',
       eventSourceUrl: 'https://www.un1tdublin.com/blackrock',
+      trialMembershipId: null,
+      trialPlanCode: null,
     })
   })
 
@@ -64,6 +68,8 @@ describe('classFunnelConfigFromBlocks', () => {
       tag: 'blackrock-vip',
       leadSource: 'meta_vip',
       eventSourceUrl: 'https://blackrock.example.com/join',
+      trialMembershipId: null,
+      trialPlanCode: null,
     })
   })
 
@@ -73,6 +79,8 @@ describe('classFunnelConfigFromBlocks', () => {
       tag: 'blackrock-start',
       leadSource: 'meta_book',
       eventSourceUrl: 'https://www.un1tdublin.com/blackrock',
+      trialMembershipId: null,
+      trialPlanCode: null,
     })
   })
 
@@ -81,6 +89,48 @@ describe('classFunnelConfigFromBlocks', () => {
       tag: 'stillorgan-start',
       leadSource: 'meta_book',
       eventSourceUrl: 'https://www.un1tdublin.com/start',
+      trialMembershipId: null,
+      trialPlanCode: null,
     })
+  })
+})
+
+describe('classFunnelConfigFromBlocks — trial product', () => {
+  const withBlock = (extra) => [{ id: 'b1', type: 'class_funnel', ...extra }]
+
+  it('returns both trial ids when both are set on the block', () => {
+    const r = classFunnelConfigFromBlocks(withBlock({ trial_membership_id: 'm1', trial_plan_code: 'p1' }), 'stillorgan')
+    expect(r.trialMembershipId).toBe('m1')
+    expect(r.trialPlanCode).toBe('p1')
+  })
+
+  it('returns nulls when neither is set (use location default)', () => {
+    const r = classFunnelConfigFromBlocks(withBlock({}), 'stillorgan')
+    expect(r.trialMembershipId).toBeNull()
+    expect(r.trialPlanCode).toBeNull()
+  })
+
+  it('returns nulls when only one of the pair is set (half-configured guard)', () => {
+    const r1 = classFunnelConfigFromBlocks(withBlock({ trial_membership_id: 'm1' }), 'stillorgan')
+    expect(r1.trialMembershipId).toBeNull()
+    expect(r1.trialPlanCode).toBeNull()
+    const r2 = classFunnelConfigFromBlocks(withBlock({ trial_plan_code: 'p1' }), 'stillorgan')
+    expect(r2.trialMembershipId).toBeNull()
+    expect(r2.trialPlanCode).toBeNull()
+  })
+
+  it('trims whitespace-only trial values to null', () => {
+    const r = classFunnelConfigFromBlocks(withBlock({ trial_membership_id: '  ', trial_plan_code: 'p1' }), 'stillorgan')
+    expect(r.trialMembershipId).toBeNull()
+    expect(r.trialPlanCode).toBeNull()
+  })
+
+  it('still returns the existing tag/leadSource/eventSourceUrl fields', () => {
+    const r = classFunnelConfigFromBlocks([], 'stillorgan')
+    expect(r.tag).toBe('stillorgan-start')
+    expect(r.leadSource).toBe('meta_book')
+    expect(r.eventSourceUrl).toBe('https://www.un1tdublin.com/start')
+    expect(r.trialMembershipId).toBeNull()
+    expect(r.trialPlanCode).toBeNull()
   })
 })

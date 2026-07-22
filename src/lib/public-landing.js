@@ -49,5 +49,14 @@ export function classFunnelConfigFromBlocks(blocks, landingPath) {
   const eventSourceUrl = override(cf?.event_source_url)
     || CLASS_FUNNEL_EVENT_SOURCE_URL_BY_PATH[path]
     || `https://www.un1tdublin.com/${path}`
-  return { tag, leadSource, eventSourceUrl }
+  // Per-funnel trial product override — BOTH ids must be present to count;
+  // a half-configured block (only one set) falls back to the location default.
+  const trialMembershipId = override(cf?.trial_membership_id)
+  const trialPlanCode = override(cf?.trial_plan_code)
+  const bothTrial = trialMembershipId && trialPlanCode
+  return {
+    tag, leadSource, eventSourceUrl,
+    trialMembershipId: bothTrial ? trialMembershipId : null,
+    trialPlanCode: bothTrial ? trialPlanCode : null,
+  }
 }
