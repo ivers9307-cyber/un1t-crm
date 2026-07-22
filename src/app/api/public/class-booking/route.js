@@ -16,7 +16,7 @@ import { writeContactTag } from '@/lib/contact-tags'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
 import { logWarn } from '@/lib/log'
-import { resolveLandingPath } from '@/lib/public-landing'
+import { resolveLandingPath, classFunnelConfigFromBlocks } from '@/lib/public-landing'
 
 export const runtime = 'nodejs'
 
@@ -45,25 +45,31 @@ const Schema = z.object({
 export async function POST(request) {
   const db = createServerClient()
   const ip = getClientIp(request)
-  // Rate-limit key is still the 'stillorgan' literal, not the resolved
-  // landingPath: only Stillorgan is Glofox-connected today, so it's the only
-  // path that can actually book. Re-key by landingPath when a second location
-  // goes live on this block (tracked with the tag/CAPI follow-up below).
-  const limit = await checkRateLimit(db, `classbook:stillorgan:${ip}`, { max: 8, windowMs: 15 * 60_000 })
-  if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
 
+  // Body is validated FIRST (pure, no DB) so the landing path is known before
+  // the limiter — a malformed body 400s without consuming any tenant's window.
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
   const b = validation.data
 
   const landingPath = resolveLandingPath(b.path)
+  // SAAS-6: tenant-keyed by the RESOLVED landing path so one location's booking
+  // traffic can't exhaust another's window for the same IP.
+  const limit = await checkRateLimit(db, `classbook:${landingPath}:${ip}`, { max: 8, windowMs: 15 * 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
+
   const { data: page } = await db.from('landing_page_settings')
-    .select('location_id').eq('public_path', landingPath).maybeSingle()
+    .select('location_id, blocks').eq('public_path', landingPath).maybeSingle()
   if (!page?.location_id) {
     return NextResponse.json({ success: false, error: 'Class booking is not available right now.' }, { status: 400 })
   }
   const locationId = page.location_id
   const name = `${b.first_name} ${b.last_name}`.trim()
+  // Nurture tag / lead_source / CAPI eventSourceUrl are DERIVED from this
+  // location's class_funnel block (defaults reproduce today's Stillorgan
+  // values) — never Stillorgan literals, so a second gym on this block isn't
+  // mistagged 'stillorgan-start' or misreported to Meta as /start.
+  const { tag, leadSource, eventSourceUrl } = classFunnelConfigFromBlocks(page.blocks, landingPath)
 
   // Validate the chosen class against the live bookable list — never trust the
   // client's event_id / class_name / starts_at. We use the SERVER's name + start
@@ -85,7 +91,7 @@ export async function POST(request) {
   const contactId = await findOrCreateRaceContact({ db, locationId, email: b.email.toLowerCase(), name, phone: b.phone, restrictToLocation: true })
   if (!contactId) return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
 
-  try { await db.from('contacts').update({ lead_source: 'meta_book' }).eq('id', contactId).is('lead_source', null) } catch (e) { logWarn('classbook', 'lead_source failed', { err: e }) }
+  try { await db.from('contacts').update({ lead_source: leadSource }).eq('id', contactId).is('lead_source', null) } catch (e) { logWarn('classbook', 'lead_source failed', { err: e }) }
   // ADS-REPORT.2 — first-touch ad-click attribution (stamp-if-null). Marketing
   // params are low-trust: sanitised + length-capped. Only stamp when a real ad
   // signal is present so organic /start visitors never get ad_provider='meta'.
@@ -101,12 +107,7 @@ export async function POST(request) {
       await db.from('contacts').update(patch).eq('id', contactId).is('ad_external_id', null)
     }
   } catch (e) { logWarn('attribution', 'utm persist failed', { err: e }) }
-  // FOLLOW-UP (multi-location): the nurture tag below and the CAPI eventSourceUrl
-  // further down are still Stillorgan literals. Only Stillorgan is Glofox-connected
-  // so this is unreachable for any other location today; when a second gym adopts
-  // the class_funnel block, derive both from the page's block config the way
-  // /api/public/leads does (leadConfigFromBlocks) rather than hard-coding.
-  try { await writeContactTag(db, { contactId, locationId, tag: 'stillorgan-start' }) } catch (e) { logWarn('classbook', 'tag failed', { err: e }) }
+  try { await writeContactTag(db, { contactId, locationId, tag }) } catch (e) { logWarn('classbook', 'tag failed', { err: e }) }
   try {
     const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
     await applyFormMarketingConsent(db, { contactId, consent: true, source: 'start_class', ipAddress: ip })
@@ -169,7 +170,7 @@ export async function POST(request) {
     const { sendWebsiteConversion } = await import('@/lib/meta-capi')
     await sendWebsiteConversion(db, {
       locationId, eventName: 'Lead', email: b.email, phone: b.phone,
-      eventSourceUrl: 'https://www.un1tdublin.com/start',
+      eventSourceUrl,
       eventId: `classlead-${contactId}-${b.event_id}`,
       contentName: chosen.name,
     })

@@ -16,14 +16,14 @@ export const dynamic = 'force-dynamic'
 export async function GET(request) {
   const db = createServerClient()
   const ip = getClientIp(request)
-  // Rate-limit key is still the 'stillorgan' literal, not the resolved path:
-  // only Stillorgan is Glofox-connected today so it's the only path returning
-  // classes. Re-key by the resolved path when a second location goes live.
-  const limit = await checkRateLimit(db, `pubclasses:stillorgan:${ip}`, { max: 30, windowMs: 5 * 60_000 })
+  // SAAS-6: tenant-keyed by the RESOLVED landing path (defaults to 'stillorgan'
+  // when absent) so one location's polling can't exhaust another's window for
+  // the same IP. resolveLandingPath never throws, so it's safe above the try.
+  const path = resolveLandingPath(new URL(request.url).searchParams.get('path'))
+  const limit = await checkRateLimit(db, `pubclasses:${path}:${ip}`, { max: 30, windowMs: 5 * 60_000 })
   if (!limit.allowed) return rateLimitResponse(limit, 'Too many requests. Please wait a moment.')
 
   try {
-    const path = resolveLandingPath(new URL(request.url).searchParams.get('path'))
     const { data: page } = await db.from('landing_page_settings')
       .select('location_id').eq('public_path', path).maybeSingle()
     if (!page?.location_id) return NextResponse.json({ success: true, data: { classes: [] } })
