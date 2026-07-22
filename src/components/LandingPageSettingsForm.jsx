@@ -826,6 +826,12 @@ function LeadFormEdit({ block, onUpdate }) {
 
 function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId }) {
   const bts = availableBookingTypes || []
+  // Price is edited as a raw euros string (draft) and only coerced to integer
+  // cents on write — a fully-controlled input re-derived from cents each
+  // keystroke would eat the decimal point ("29.50" → 29 → 2950 cents wrong).
+  // Resync only when the edited block changes identity.
+  const [priceDraft, setPriceDraft] = useState(centsToEuros(block.price_cents))
+  useEffect(() => { setPriceDraft(centsToEuros(block.price_cents)) }, [block.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const [memberships, setMemberships] = useState([])
   const [membershipsLoading, setMembershipsLoading] = useState(false)
   useEffect(() => {
@@ -895,8 +901,8 @@ function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId })
         hint="Leave blank for a FREE trial (today's behaviour). If set, the funnel charges this for the chosen trial product — the location's payment rail must be configured."
       >
         <Input
-          value={centsToEuros(block.price_cents)}
-          onChange={(v) => onUpdate({ price_cents: eurosToCents(v) })}
+          value={priceDraft}
+          onChange={(v) => { setPriceDraft(v); onUpdate({ price_cents: eurosToCents(v) }) }}
           maxLength={10}
           placeholder="e.g. 29"
         />

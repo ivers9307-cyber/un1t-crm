@@ -263,7 +263,6 @@ export default function ClassFunnel(props) {
         <ClassFunnelCheckout
           paymentId={payment.paymentId}
           checkout={payment.checkout}
-          priceLabel={payment.checkout?.amountLabel || null}
           onPaid={() => { fireStep('booked_class'); setStep('classdone') }}
           onCancel={() => { setStep('classpick') }}
         />

@@ -34,7 +34,7 @@ export default function ClassPayStatus({ paymentId }) {
   )
 
   if (state === 'paid') return wrap("You're being booked in 🎉", "That's your first class — watch for a WhatsApp confirming it. See you soon!")
-  if (state === 'failed') return wrap('Payment didn’t go through', 'No charge was taken. Head back to the funnel to try again.')
-  if (state === 'notfound') return wrap('Not found', 'We couldn’t find that payment.')
+  if (state === 'failed') return wrap('Payment didn’t go through', 'No charge was taken. You can close this page and start again from the class page.')
+  if (state === 'notfound') return wrap('Not found', 'We couldn’t find that payment. You can safely close this page.')
   return wrap('Confirming your payment…', 'One moment — this page updates automatically.')
 }

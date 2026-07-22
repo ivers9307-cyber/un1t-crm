@@ -20,7 +20,8 @@ export default function ClassFunnelCheckout({ paymentId, checkout, priceLabel, o
   useEffect(() => {
     if (checkout?.provider !== 'revolut') { setError('This payment method is not available yet.'); return }
     if (!revolutPublicKey()) { setError('Payment is not configured.'); return }
-    if (!checkout?.token || !targetRef.current || instanceRef.current) return
+    if (!checkout?.token) { setError('Payment session is missing. Please refresh and try again.'); return }
+    if (!targetRef.current || instanceRef.current) return
     let destroyed = false
     loadRevolutSdk(revolutMode())
       .then((RC) => {
