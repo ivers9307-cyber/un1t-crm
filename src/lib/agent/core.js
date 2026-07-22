@@ -179,6 +179,12 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
   const testMode = !!s.test_mode
   if (!enabled && !testMode) return { reply: false, reason: 'disabled' }
 
+  // INBOX-REDESIGN.2.3 — sticky operator pause (mig 435: whatsapp_conversations
+  // .agent_paused_at). Checked before the kill switch and content gates so a
+  // paused thread stays FULLY silent: no onDuty, no soft-handoff acknowledgement,
+  // no re-arm. Cleared only by the explicit resume endpoint.
+  if (conversation?.agent_paused_at) return { reply: false, reason: 'agent_paused' }
+
   // Per-conversation kill switch (human takeover / prior escalation).
   // AGENT-REARM.1 — a handoff auto-releases after the configured
   // cooldown so one escalation doesn't silence the agent forever; the

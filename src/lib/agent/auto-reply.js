@@ -207,11 +207,19 @@ async function hasInboundAfter(db, adapter, conversationId, sinceIso) {
 export async function humanTookOverDuringTurn(db, adapter, conversationId, sinceIso) {
   if (!conversationId) return false
   try {
+    // INBOX-REDESIGN.2.3 — agent_paused_at (mig 435) is a WhatsApp-only
+    // column (instagram_conversations has no such column), so it's only
+    // added to the select for the WhatsApp adapter — same guard as the
+    // conv-select in runChannelAgentInner below and the adapter.name ===
+    // 'whatsapp' branch already used for wa_card_sets further down this file.
+    const isWhatsApp = adapter.name === 'whatsapp'
     const { data: conv } = await db.from(adapter.conversationsTable)
-      .select('agent_active')
+      .select(isWhatsApp ? 'agent_active, agent_paused_at' : 'agent_active')
       .eq('id', conversationId)
       .single()
-    if (conv && conv.agent_active === false) return true
+    // A sticky pause mid-turn is also a takeover: Mia must not talk over an
+    // operator who just paused the thread while she was generating.
+    if (conv && (conv.agent_active === false || conv.agent_paused_at)) return true
 
     const { data: lastOut } = await db.from(adapter.messagesTable)
       .select(`${adapter.humanOutboundColumns || 'source'}, created_at`)
@@ -245,8 +253,13 @@ async function runChannelAgentInner(db, adapter, ctx) {
 
   // Conversation state: kill switch + linked contact + verification.
   const nameCol = adapter.nameColumn
+  // INBOX-REDESIGN.2.3 — agent_paused_at (mig 435) is a WhatsApp-only column;
+  // instagram_conversations has no such column, so (like nameCol above) it's
+  // only appended to the select for the WhatsApp adapter. Selecting it
+  // unconditionally would 400 the whole conv fetch for every Instagram turn.
+  const isWhatsApp = adapter.name === 'whatsapp'
   const { data: conv } = await db.from(adapter.conversationsTable)
-    .select(`agent_active, agent_handed_off_at, contact_id, agent_verified_contact_id, agent_verified_at, agent_last_reply_at, agent_activity_notified_at, agent_verify_attempts${nameCol ? `, ${nameCol}` : ''}`)
+    .select(`agent_active, agent_handed_off_at, contact_id, agent_verified_contact_id, agent_verified_at, agent_last_reply_at, agent_activity_notified_at, agent_verify_attempts${nameCol ? `, ${nameCol}` : ''}${isWhatsApp ? ', agent_paused_at' : ''}`)
     .eq('id', conversationId)
     .single()
 

@@ -38,6 +38,14 @@ describe('humanTookOverDuringTurn', () => {
     expect(await humanTookOverDuringTurn(db, whatsappAdapter, 'c1', TURN_START)).toBe(true)
   })
 
+  // INBOX-REDESIGN.2.3 — an operator paused the thread (agent_paused_at,
+  // mig 435) while Mia was mid-generation: treat it exactly like the
+  // agent_active flip above, so the stale reply never sends.
+  it('true when the conversation was paused mid-turn (agent_paused_at set)', async () => {
+    const db = stubDb({ conv: { agent_active: true, agent_paused_at: DURING } })
+    expect(await humanTookOverDuringTurn(db, whatsappAdapter, 'c1', TURN_START)).toBe(true)
+  })
+
   it('true when a HUMAN outbound landed during the turn (before the gate flip committed)', async () => {
     const db = stubDb({
       conv: { agent_active: true },
