@@ -1,0 +1,44 @@
+# Dependabot — supply-chain hygiene (audit this-quarter item).
+# Version updates are GROUPED + weekly to avoid PR spam; Dependabot PRs are
+# reviewed, never auto-merged. They touch the lockfiles, so web PRs are gated
+# by web-ci + dependency-audit.yml.
+#
+# NOTE: enable "Dependabot security updates" in repo Settings → Code security
+# for out-of-band security bumps (that toggle is repo config, not this file).
+version: 2
+updates:
+  # Web app (root) — the primary surface.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      web-minor-patch:
+        update-types: [minor, patch]
+    labels: [dependencies]
+
+  # Mobile (Expo/RN). CAUTION: EAS runs a strict `npm ci` and the app tracks a
+  # specific Expo SDK — a blind transitive bump can break the native build.
+  # Kept grouped + low-volume; every mobile bump MUST be reviewed against
+  # Expo's expected versions before merge (never blind-merge). The planned
+  # SDK 54→56 jump is handled separately, not by Dependabot.
+  - package-ecosystem: npm
+    directory: /mobile
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      mobile-grouped:
+        patterns: ['*']
+    labels: [dependencies, mobile]
+
+  # Keep GitHub Actions pinned versions current (near-zero risk).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies, ci]
