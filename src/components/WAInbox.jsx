@@ -10,6 +10,7 @@ import WAMediaContent from '@/components/WAMediaContent'
 import ApprovalActionCard from '@/components/ApprovalActionCard'
 import { ChannelAvatar } from '@/components/inbox/ChannelBits'
 import HandledByControl from '@/components/inbox/HandledByControl'
+import MiaDecisionTrace from '@/components/inbox/MiaDecisionTrace'
 import {
   ArrowLeft, Send, MessageCircle, Clock, CheckCheck,
   Check, Image as ImageIcon, FileText, Mic, AlertCircle, RefreshCw,
@@ -858,6 +859,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                     conversation={conversation}
                     onChanged={() => { threadSigRef.current = ''; fetchMessages(selectedId) }}
                   />
+                )}
+                {conversation && (
+                  <MiaDecisionTrace conversationId={conversation.id} />
                 )}
                 {conversation && (
                   <button

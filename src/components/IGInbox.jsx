@@ -13,6 +13,7 @@ import { CHANNELS } from '@shared/channels'
 import ApprovalActionCard from '@/components/ApprovalActionCard'
 import { ChannelAvatar } from '@/components/inbox/ChannelBits'
 import HandledByControl from '@/components/inbox/HandledByControl'
+import MiaDecisionTrace from '@/components/inbox/MiaDecisionTrace'
 import {
   ArrowLeft, Send, MessageCircle, Clock, Check, AlertCircle,
   RefreshCw, Bot, UserCheck, Instagram,
@@ -382,6 +383,9 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
                   conversation={conversation}
                   onChanged={() => { loadThread(selectedId); fetchApprovals(selectedId) }}
                 />
+                {conversation && (
+                  <MiaDecisionTrace conversationId={conversation.id} />
+                )}
               </div>
             </div>
 
