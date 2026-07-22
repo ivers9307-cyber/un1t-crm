@@ -1,10 +1,10 @@
-// Login screen. iOS-style large-title header, soft inputs with rounded
-// rows, primary action button. Mirrors the web /login page's logic:
-//   - Email + password against Supabase
-//   - On success, AuthProvider's onAuthStateChange picks up the session
-//     and the root index redirects to (tabs).
-//   - Errors are shown inline; we never show raw Supabase error codes
-//     since they're not user-friendly.
+// Login screen. iOS-style large-title header, soft inputs, primary action.
+// MAGIC-LINK.1 — passwordless-first: request a 6-digit code by email, then
+// verify it (mirrors champ-app/mobile; no deep-link / native release). Password
+// sign-in is retained as break-glass. Studio-device pairing is unchanged.
+//   - On success, AuthProvider's onAuthStateChange picks up the session and the
+//     root index redirects to (tabs).
+//   - Errors are shown inline; never raw Supabase error codes.
 
 import { useState } from 'react'
 import { useRouter } from 'expo-router'
@@ -18,13 +18,64 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth-context'
 
 export default function Login() {
-  const { signIn } = useAuth()
+  const { signIn, requestCode, verifyCode } = useAuth()
   const router = useRouter()
   const { refreshPairing } = useStudioPin()
-  const [mode, setMode] = useState('login') // 'login' | 'pair'
+  const [mode, setMode] = useState('code') // 'code' | 'password' | 'pair'
+  const [codeStep, setCodeStep] = useState('email') // 'email' | 'code'
+
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [otp, setOtp] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState(null)
+
   const [pairToken, setPairToken] = useState('')
   const [pairLabel, setPairLabel] = useState('')
   const [pairError, setPairError] = useState(null)
+
+  function switchMode(next) {
+    setMode(next); setError(null); setCodeStep('email')
+  }
+
+  async function handleRequestCode() {
+    setError(null); setSubmitting(true)
+    const result = await requestCode(email.trim())
+    setSubmitting(false)
+    if (!result.success) {
+      const m = result.error || ''
+      if (/rate|too many/i.test(m)) setError('Too many requests. Wait a minute and try again.')
+      else if (/signups? not allowed|not found|otp_disabled/i.test(m)) setError('No account found for that email.')
+      else setError('Could not send the code. Try again, or use a password.')
+      return
+    }
+    setOtp(''); setCodeStep('code')
+  }
+
+  async function handleVerifyCode() {
+    setError(null); setSubmitting(true)
+    const result = await verifyCode(email.trim(), otp)
+    setSubmitting(false)
+    if (!result.success) {
+      setError("That code didn't work — check it and try again.")
+      return
+    }
+    router.replace('/(tabs)')
+  }
+
+  async function handleSignIn() {
+    setError(null); setSubmitting(true)
+    const result = await signIn(email.trim(), password)
+    setSubmitting(false)
+    if (!result.success) {
+      const msg = /invalid login credentials/i.test(result.error || '')
+        ? 'Email or password is incorrect.'
+        : (result.error || 'Sign in failed. Try again.')
+      setError(msg)
+      return
+    }
+    router.replace('/(tabs)')
+  }
 
   async function handlePair() {
     setPairError(null)
@@ -35,42 +86,33 @@ export default function Login() {
     }
     try {
       await savePairing({ token: t, label: pairLabel.trim() })
-      // Becoming paired makes StudioPinProvider show the PIN pad overlay.
       await refreshPairing()
     } catch {
       setPairError('Could not save the pairing token. Try again.')
     }
   }
 
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState(null)
-
-  async function handleSignIn() {
-    setError(null)
-    setSubmitting(true)
-    const result = await signIn(email.trim(), password)
-    setSubmitting(false)
-    if (!result.success) {
-      // Translate Supabase-isms to staff-friendly copy.
-      const msg = /invalid login credentials/i.test(result.error || '')
-        ? 'Email or password is incorrect.'
-        : (result.error || 'Sign in failed. Try again.')
-      setError(msg)
-      return
-    }
-    router.replace('/(tabs)')
-  }
+  const emailRow = (
+    <View className="px-4 py-3 border-b border-un1t-border">
+      <Text className="text-xs text-un1t-subtle mb-1">Email</Text>
+      <TextInput
+        value={email}
+        onChangeText={setEmail}
+        placeholder="you@un1t.ie"
+        placeholderTextColor="#94A3B8"
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="email-address"
+        textContentType="username"
+        className="text-base text-un1t-text"
+      />
+    </View>
+  )
 
   return (
     <SafeAreaView className="flex-1 bg-un1t-bg">
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        className="flex-1"
-      >
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} className="flex-1">
         <View className="flex-1 px-6 justify-center">
-          {/* Large title — iOS-native feeling */}
           <Text className="text-3xl font-bold text-un1t-text mb-1">CF Studio</Text>
           <Text className="text-base text-un1t-subtle mb-10">Sign in to continue</Text>
 
@@ -80,51 +122,97 @@ export default function Login() {
             </View>
           ) : null}
 
-          <View className="bg-un1t-surface rounded-2xl border border-un1t-border overflow-hidden mb-4">
-            <View className="px-4 py-3 border-b border-un1t-border">
-              <Text className="text-xs text-un1t-subtle mb-1">Email</Text>
-              <TextInput
-                value={email}
-                onChangeText={setEmail}
-                placeholder="you@un1t.ie"
-                placeholderTextColor="#94A3B8"
-                autoCapitalize="none"
-                autoCorrect={false}
-                keyboardType="email-address"
-                textContentType="username"
-                className="text-base text-un1t-text"
-              />
-            </View>
-            <View className="px-4 py-3">
-              <Text className="text-xs text-un1t-subtle mb-1">Password</Text>
-              <TextInput
-                value={password}
-                onChangeText={setPassword}
-                placeholder="••••••••"
-                placeholderTextColor="#94A3B8"
-                secureTextEntry
-                textContentType="password"
-                className="text-base text-un1t-text"
-              />
-            </View>
-          </View>
+          {/* ── Magic code (default) ───────────────────────────────── */}
+          {mode === 'code' && codeStep === 'email' && (
+            <>
+              <View className="bg-un1t-surface rounded-2xl border border-un1t-border overflow-hidden mb-4">{emailRow}</View>
+              <Pressable
+                onPress={handleRequestCode}
+                disabled={submitting || !email}
+                className={`rounded-2xl py-4 items-center ${submitting || !email ? 'bg-un1t-border' : 'bg-un1t-text'}`}
+              >
+                {submitting ? <ActivityIndicator color="#FFFFFF" /> : <Text className="text-un1t-bg font-semibold text-base">Email me a login code</Text>}
+              </Pressable>
+              <Pressable onPress={() => switchMode('password')} className="py-3 items-center mt-2 active:opacity-70">
+                <Text className="text-sm text-un1t-subtle underline">Sign in with a password instead</Text>
+              </Pressable>
+            </>
+          )}
 
-          <Pressable
-            onPress={handleSignIn}
-            disabled={submitting || !email || !password}
-            className={`rounded-2xl py-4 items-center ${
-              submitting || !email || !password ? 'bg-un1t-border' : 'bg-un1t-text'
-            }`}
-          >
-            {submitting ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <Text className="text-un1t-bg font-semibold text-base">Sign in</Text>
-            )}
-          </Pressable>
+          {mode === 'code' && codeStep === 'code' && (
+            <>
+              <Text className="text-sm text-un1t-subtle mb-4">Enter the 6-digit code we emailed to {email}.</Text>
+              <View className="bg-un1t-surface rounded-2xl border border-un1t-border overflow-hidden mb-4">
+                <View className="px-4 py-3">
+                  <Text className="text-xs text-un1t-subtle mb-1">Login code</Text>
+                  <TextInput
+                    value={otp}
+                    onChangeText={setOtp}
+                    placeholder="123456"
+                    placeholderTextColor="#94A3B8"
+                    keyboardType="number-pad"
+                    autoComplete="one-time-code"
+                    textContentType="oneTimeCode"
+                    maxLength={6}
+                    className="text-base text-un1t-text tracking-[8px]"
+                  />
+                </View>
+              </View>
+              <Pressable
+                onPress={handleVerifyCode}
+                disabled={submitting || otp.length < 6}
+                className={`rounded-2xl py-4 items-center ${submitting || otp.length < 6 ? 'bg-un1t-border' : 'bg-un1t-text'}`}
+              >
+                {submitting ? <ActivityIndicator color="#FFFFFF" /> : <Text className="text-un1t-bg font-semibold text-base">Verify &amp; sign in</Text>}
+              </Pressable>
+              <View className="flex-row justify-between mt-3">
+                <Pressable onPress={() => { setCodeStep('email'); setError(null) }} className="py-2 active:opacity-70">
+                  <Text className="text-sm text-un1t-subtle">Change email</Text>
+                </Pressable>
+                <Pressable onPress={handleRequestCode} disabled={submitting} className="py-2 active:opacity-70">
+                  <Text className="text-sm text-un1t-subtle">Resend code</Text>
+                </Pressable>
+              </View>
+            </>
+          )}
 
-          {mode === 'pair' ? (
-            <View className="mt-6">
+          {/* ── Password break-glass ───────────────────────────────── */}
+          {mode === 'password' && (
+            <>
+              <View className="bg-un1t-surface rounded-2xl border border-un1t-border overflow-hidden mb-4">
+                {emailRow}
+                <View className="px-4 py-3">
+                  <Text className="text-xs text-un1t-subtle mb-1">Password</Text>
+                  <TextInput
+                    value={password}
+                    onChangeText={setPassword}
+                    placeholder="••••••••"
+                    placeholderTextColor="#94A3B8"
+                    secureTextEntry
+                    textContentType="password"
+                    className="text-base text-un1t-text"
+                  />
+                </View>
+              </View>
+              <Pressable
+                onPress={handleSignIn}
+                disabled={submitting || !email || !password}
+                className={`rounded-2xl py-4 items-center ${submitting || !email || !password ? 'bg-un1t-border' : 'bg-un1t-text'}`}
+              >
+                {submitting ? <ActivityIndicator color="#FFFFFF" /> : <Text className="text-un1t-bg font-semibold text-base">Sign in</Text>}
+              </Pressable>
+              <Pressable onPress={() => switchMode('code')} className="py-3 items-center mt-2 active:opacity-70">
+                <Text className="text-sm text-un1t-subtle underline">Use a login code instead</Text>
+              </Pressable>
+              <Text className="text-xs text-un1t-subtle text-center mt-3">
+                Forgot your password? Use the web app at{'\n'}crm.un1tdublin.com to reset it.
+              </Text>
+            </>
+          )}
+
+          {/* ── Studio-device pairing ──────────────────────────────── */}
+          {mode === 'pair' && (
+            <View>
               {pairError ? (
                 <View className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-3">
                   <Text className="text-red-500 text-sm">{pairError}</Text>
@@ -161,19 +249,17 @@ export default function Login() {
               >
                 <Text className="text-un1t-bg font-semibold text-base">Pair this device</Text>
               </Pressable>
-              <Pressable onPress={() => setMode('login')} className="py-3 items-center mt-1 active:opacity-70">
+              <Pressable onPress={() => switchMode('code')} className="py-3 items-center mt-1 active:opacity-70">
                 <Text className="text-sm text-un1t-subtle">Back to sign in</Text>
               </Pressable>
             </View>
-          ) : (
-            <>
-              <Text className="text-xs text-un1t-subtle text-center mt-6">
-                Forgot your password? Use the web app at{'\n'}crm.un1tdublin.com to reset it.
-              </Text>
-              <Pressable onPress={() => setMode('pair')} className="py-3 items-center mt-4 active:opacity-70">
-                <Text className="text-sm text-un1t-subtle underline">Set up as studio device</Text>
-              </Pressable>
-            </>
+          )}
+
+          {/* Studio-device entry point (hidden while pairing) */}
+          {mode !== 'pair' && (
+            <Pressable onPress={() => switchMode('pair')} className="py-3 items-center mt-4 active:opacity-70">
+              <Text className="text-sm text-un1t-subtle underline">Set up as studio device</Text>
+            </Pressable>
           )}
         </View>
       </KeyboardAvoidingView>

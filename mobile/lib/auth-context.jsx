@@ -134,6 +134,30 @@ export function AuthProvider({ children }) {
     return { success: true, data }
   }, [])
 
+  // MAGIC-LINK.1 — passwordless login on mobile via a 6-digit email code
+  // (the same code the shared Supabase Magic Link email carries; mirrors
+  // champ-app/mobile). No deep-link / native release needed. Password sign-in
+  // above stays as break-glass. shouldCreateUser:false + project signups OFF
+  // means an unknown email can never provision an account.
+  const requestCode = useCallback(async (email) => {
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim().toLowerCase(),
+      options: { shouldCreateUser: false },
+    })
+    if (error) return { success: false, error: error.message }
+    return { success: true }
+  }, [])
+
+  const verifyCode = useCallback(async (email, token) => {
+    const { data, error } = await supabase.auth.verifyOtp({
+      email: email.trim().toLowerCase(),
+      token: token.trim(),
+      type: 'email',
+    })
+    if (error) return { success: false, error: error.message }
+    return { success: true, data }
+  }, [])
+
   const signOut = useCallback(async () => {
     // If a "view as user" session is active, close it first so its audit
     // row gets a precise ended_at + the local target is cleared, rather
@@ -217,6 +241,8 @@ export function AuthProvider({ children }) {
         error,
         impersonatingFrom,
         signIn,
+        requestCode,
+        verifyCode,
         signOut,
         setActiveLocationId,
         refresh,
