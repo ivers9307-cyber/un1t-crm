@@ -83,7 +83,7 @@ jobs:
       # Cache key is invalidated when Cargo.toml changes — any
       # dependency bump invalidates and we rebuild from scratch.
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
