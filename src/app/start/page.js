@@ -1,6 +1,6 @@
 // /start — public Meta-ad landing page (Stillorgan). A full landing page that
 // mirrors the welcome-page layout: a hero (Ken Burns push-in + bottom-weighted
-// scrim + film grain, lp-* classes from globals.css) with the StartFunnel
+// scrim + film grain, lp-* classes from globals.css) with the ClassFunnel
 // booking flow as a frosted card in place of the usual headline/CTA, followed
 // by the rest of the Hatch Street page's content blocks (video testimonials,
 // pillars, stats, testimonial) rendered through the shared BlockRenderers, a
@@ -18,7 +18,7 @@ import { blocksOrDefault } from '@/lib/landing-page-blocks'
 import BlockRenderer, { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import RevealManager from '@/components/landing-page/RevealManager'
 import { RevealArmScript } from '@/components/landing-page/reveal-arm'
-import StartFunnel from '@/components/StartFunnel'
+import ClassFunnel from '@/components/ClassFunnel'
 import { getLandingLogo, STILLORGAN_LANDING_LOGO } from '@/lib/landing-logo'
 
 export const dynamic = 'force-dynamic'
@@ -88,7 +88,7 @@ export default async function StartPage() {
         />
 
         <div className="relative z-10 flex-1 flex items-center justify-center px-5 pt-28 pb-16">
-          <StartFunnel />
+          <ClassFunnel />
         </div>
       </section>
 
