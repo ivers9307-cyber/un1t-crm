@@ -20,6 +20,7 @@
 // Never throws.
 
 import { sendTextMessage, sendInteractiveOptions, sendTypingIndicator, sendCtaUrlMessage, splitTrailingUrl } from '@/lib/whatsapp'
+import { recordAgentDecision } from './decision-log'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { sendPushToRolesAtLocation, sendPushToInboxStaffAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -183,6 +184,18 @@ export async function runChannelAgent(db, adapter, ctx) {
       reason: result.reason || 'unknown',
     }))
   }
+
+  // FEAT-AGENT-TRACE.1 — persist WHY (reply vs silent + reason) so the inbox
+  // decision-trace can show it. Best-effort; never affects the turn.
+  await recordAgentDecision(db, {
+    channel: adapter.name,
+    conversationId: ctx?.conversationId,
+    contactId: ctx?.contactId,
+    locationId: ctx?.locationId,
+    decision: result?.handled === true && result?.action === 'reply' ? 'reply' : 'silent',
+    reason: result?.reason,
+  })
+
   return result
 }
 
