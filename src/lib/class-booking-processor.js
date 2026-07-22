@@ -101,7 +101,10 @@ export async function processClassBookingRequest(db, request) {
   if (!memberId) {
     // Truly brand-new (not found in Glofox) → create + grant the trial credit.
     // Only a clean create/link is safe; 'needs_review'/'failed' → staff.
-    const res = await findOrCreateGlofoxMember({ db, locationId: request.location_id, contact, source: 'booking_form', createIfMissing: true, attachTrial: true })
+    const trialOverride = (request.trial_membership_id && request.trial_plan_code)
+      ? { membershipId: request.trial_membership_id, planCode: request.trial_plan_code }
+      : null
+    const res = await findOrCreateGlofoxMember({ db, locationId: request.location_id, contact, source: 'booking_form', createIfMissing: true, attachTrial: true, trialOverride })
     if (!res.glofox_member_id || (res.status !== 'created' && res.status !== 'linked')) {
       return routeToReview(db, request, `account_${res.status || 'failed'}`)
     }
