@@ -43,6 +43,7 @@ import {
   BLOCK_TYPES, blocksOrDefault, newBlockOfType, setByPath, newBlockId,
 } from '@/lib/landing-page-blocks'
 import { buildTrialOptions } from '@/lib/glofox-trial-options'
+import { centsToEuros, eurosToCents } from '@/lib/price-format'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
@@ -646,8 +647,10 @@ function summaryFor(block) {
     case 'event':       return block.slug ? `event: ${block.slug}` : 'no event'
     case 'lead_form':   return block.heading || 'Waitlist'
     case 'class_funnel': {
-      const base = block.consult_slug ? `consult: ${block.consult_slug}` : 'no consult upsell'
-      return block.trial_membership_id ? `${base} · trial set` : base
+      let base = block.consult_slug ? `consult: ${block.consult_slug}` : 'no consult upsell'
+      if (block.trial_membership_id) base = `${base} · trial set`
+      if (Number(block.price_cents) > 0) base = `${base} · €${centsToEuros(block.price_cents)}`
+      return base
     }
     case 'pillars':     return `${(block.items || []).length} items`
     case 'gallery':     return `${(block.items || []).length} photo${(block.items || []).length === 1 ? '' : 's'}`
@@ -886,6 +889,17 @@ function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId })
         {membershipsLoading && trialOptions.length > 0 && (
           <p className="text-[11px] text-un1t-muted mt-1">Loading membership list…</p>
         )}
+      </Field>
+      <Field
+        label="Price (€)"
+        hint="Leave blank for a FREE trial (today's behaviour). If set, the funnel charges this for the chosen trial product — the location's payment rail must be configured."
+      >
+        <Input
+          value={centsToEuros(block.price_cents)}
+          onChange={(v) => onUpdate({ price_cents: eurosToCents(v) })}
+          maxLength={10}
+          placeholder="e.g. 29"
+        />
       </Field>
       <Field
         label="Free-consult upsell"
