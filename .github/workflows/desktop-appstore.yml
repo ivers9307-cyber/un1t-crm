@@ -127,7 +127,7 @@ jobs:
       # with the App Store cert + entitlements file, which gives us
       # exact control over what entitlements end up embedded.
       - name: Tauri build (universal, unsigned)
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         with:
           projectPath: desktop
           # bundles=app skips DMG creation (App Store doesn't ship
