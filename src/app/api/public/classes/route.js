@@ -16,9 +16,9 @@ export const dynamic = 'force-dynamic'
 export async function GET(request) {
   const db = createServerClient()
   const ip = getClientIp(request)
-  // SAAS-6: tenant-keyed. This route is hard-scoped to the 'stillorgan'
-  // public_path (see header), so the tenant identifier is that constant
-  // — already the right shape for when the route grows a location param.
+  // Rate-limit key is still the 'stillorgan' literal, not the resolved path:
+  // only Stillorgan is Glofox-connected today so it's the only path returning
+  // classes. Re-key by the resolved path when a second location goes live.
   const limit = await checkRateLimit(db, `pubclasses:stillorgan:${ip}`, { max: 30, windowMs: 5 * 60_000 })
   if (!limit.allowed) return rateLimitResponse(limit, 'Too many requests. Please wait a moment.')
 

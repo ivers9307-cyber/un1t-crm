@@ -45,9 +45,10 @@ const Schema = z.object({
 export async function POST(request) {
   const db = createServerClient()
   const ip = getClientIp(request)
-  // SAAS-6: tenant-keyed. This route is hard-scoped to the 'stillorgan'
-  // public_path (resolved below), so the tenant identifier is that
-  // constant — the right shape for when the wizard goes multi-location.
+  // Rate-limit key is still the 'stillorgan' literal, not the resolved
+  // landingPath: only Stillorgan is Glofox-connected today, so it's the only
+  // path that can actually book. Re-key by landingPath when a second location
+  // goes live on this block (tracked with the tag/CAPI follow-up below).
   const limit = await checkRateLimit(db, `classbook:stillorgan:${ip}`, { max: 8, windowMs: 15 * 60_000 })
   if (!limit.allowed) return rateLimitResponse(limit, 'Too many submissions. Please wait a few minutes.')
 
@@ -100,6 +101,11 @@ export async function POST(request) {
       await db.from('contacts').update(patch).eq('id', contactId).is('ad_external_id', null)
     }
   } catch (e) { logWarn('attribution', 'utm persist failed', { err: e }) }
+  // FOLLOW-UP (multi-location): the nurture tag below and the CAPI eventSourceUrl
+  // further down are still Stillorgan literals. Only Stillorgan is Glofox-connected
+  // so this is unreachable for any other location today; when a second gym adopts
+  // the class_funnel block, derive both from the page's block config the way
+  // /api/public/leads does (leadConfigFromBlocks) rather than hard-coding.
   try { await writeContactTag(db, { contactId, locationId, tag: 'stillorgan-start' }) } catch (e) { logWarn('classbook', 'tag failed', { err: e }) }
   try {
     const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
