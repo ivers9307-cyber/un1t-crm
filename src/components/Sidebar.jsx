@@ -456,7 +456,7 @@ function SidebarItem({ item, pathname, isChild = false, badge = 0 }) {
     )
   }
   return (
-    <Link href={href} className={className}>
+    <Link href={href} className={className} aria-current={active ? 'page' : undefined}>
       <Icon size={isChild ? 14 : 18} />
       {label}
       {badgeNode}
@@ -484,7 +484,7 @@ function SidebarGroup({ item, pathname, open, onToggle }) {
     <div>
       <div className="flex items-stretch">
         {parentHasPerm ? (
-          <Link href={href} className={clsx(leafClassName(parentActive), 'flex-1')}>
+          <Link href={href} className={clsx(leafClassName(parentActive), 'flex-1')} aria-current={parentActive ? 'page' : undefined}>
             <Icon size={18} />
             {label}
           </Link>
