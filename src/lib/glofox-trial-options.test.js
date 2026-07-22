@@ -1,16 +1,36 @@
 import { describe, it, expect } from 'vitest'
 import { buildTrialOptions } from './glofox-trial-options.js'
 
+// Real catalogue shape as returned by listGlofoxMemberships /
+// GET /api/locations/[id]/glofox-memberships: memberships with nested plans[].
 const CATALOGUE = [
-  { membership_id: 'm1', plan_code: 'p1', label: 'Trial — 1 week' },
-  { membership_id: 'm2', plan_code: 'p2' },
+  { _id: 'm1', name: 'UN1T Trial', trial: true, plans: [{ code: 'p1', name: '3 classes' }] },
+  { _id: 'm2', name: 'Intro Pack', plans: [{ code: 'p2' }] }, // plan has no name
 ]
 
 describe('buildTrialOptions', () => {
-  it('maps the catalogue to {value,label}, using a fallback label when none', () => {
+  it('flattens membership×plan into {value,label}, plan name appended when present', () => {
     expect(buildTrialOptions(CATALOGUE, '')).toEqual([
-      { value: 'm1:p1', label: 'Trial — 1 week' },
-      { value: 'm2:p2', label: 'm2 / p2' },
+      { value: 'm1:p1', label: 'UN1T Trial — 3 classes' },
+      { value: 'm2:p2', label: 'Intro Pack' },
+    ])
+  })
+
+  it('emits one option per plan for a multi-plan membership', () => {
+    const multi = [{ _id: 'mx', name: 'Flex', plans: [{ code: 'a', name: 'Weekly' }, { code: 'b', name: 'Monthly' }] }]
+    expect(buildTrialOptions(multi, '')).toEqual([
+      { value: 'mx:a', label: 'Flex — Weekly' },
+      { value: 'mx:b', label: 'Flex — Monthly' },
+    ])
+  })
+
+  it('skips memberships without an _id and plans without a code', () => {
+    const messy = [
+      { name: 'no id', plans: [{ code: 'p' }] },
+      { _id: 'ok', name: 'Ok', plans: [{ name: 'no code' }, { code: 'good', name: 'Good' }] },
+    ]
+    expect(buildTrialOptions(messy, '')).toEqual([
+      { value: 'ok:good', label: 'Ok — Good' },
     ])
   })
 
