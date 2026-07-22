@@ -41,10 +41,12 @@ describe('classFunnelConfigFromBlocks', () => {
       eventSourceUrl: 'https://www.un1tdublin.com/start',
       trialMembershipId: null,
       trialPlanCode: null,
+      priceCents: 0,
+      currency: 'EUR',
     })
     // A page with other block types but no class_funnel → same defaults.
     expect(classFunnelConfigFromBlocks([{ type: 'hero' }, { type: 'lead_form', tag: 'x' }], 'stillorgan'))
-      .toEqual({ tag: 'stillorgan-start', leadSource: 'meta_book', eventSourceUrl: 'https://www.un1tdublin.com/start', trialMembershipId: null, trialPlanCode: null })
+      .toEqual({ tag: 'stillorgan-start', leadSource: 'meta_book', eventSourceUrl: 'https://www.un1tdublin.com/start', trialMembershipId: null, trialPlanCode: null, priceCents: 0, currency: 'EUR' })
   })
 
   it('derives location-specific defaults for a non-Stillorgan path (never mistagged as stillorgan)', () => {
@@ -54,6 +56,8 @@ describe('classFunnelConfigFromBlocks', () => {
       eventSourceUrl: 'https://www.un1tdublin.com/blackrock',
       trialMembershipId: null,
       trialPlanCode: null,
+      priceCents: 0,
+      currency: 'EUR',
     })
   })
 
@@ -70,6 +74,8 @@ describe('classFunnelConfigFromBlocks', () => {
       eventSourceUrl: 'https://blackrock.example.com/join',
       trialMembershipId: null,
       trialPlanCode: null,
+      priceCents: 0,
+      currency: 'EUR',
     })
   })
 
@@ -81,6 +87,8 @@ describe('classFunnelConfigFromBlocks', () => {
       eventSourceUrl: 'https://www.un1tdublin.com/blackrock',
       trialMembershipId: null,
       trialPlanCode: null,
+      priceCents: 0,
+      currency: 'EUR',
     })
   })
 
@@ -91,6 +99,8 @@ describe('classFunnelConfigFromBlocks', () => {
       eventSourceUrl: 'https://www.un1tdublin.com/start',
       trialMembershipId: null,
       trialPlanCode: null,
+      priceCents: 0,
+      currency: 'EUR',
     })
   })
 })
@@ -132,5 +142,22 @@ describe('classFunnelConfigFromBlocks — trial product', () => {
     expect(r.eventSourceUrl).toBe('https://www.un1tdublin.com/start')
     expect(r.trialMembershipId).toBeNull()
     expect(r.trialPlanCode).toBeNull()
+  })
+})
+
+describe('classFunnelConfigFromBlocks — price', () => {
+  const withBlock = (extra) => [{ id: 'b1', type: 'class_funnel', ...extra }]
+  it('returns priceCents + currency from the block', () => {
+    const r = classFunnelConfigFromBlocks(withBlock({ price_cents: 2900, currency: 'EUR' }), 'stillorgan')
+    expect(r.priceCents).toBe(2900)
+    expect(r.currency).toBe('EUR')
+  })
+  it('defaults to 0 / EUR when unset or non-numeric', () => {
+    expect(classFunnelConfigFromBlocks(withBlock({}), 'stillorgan').priceCents).toBe(0)
+    expect(classFunnelConfigFromBlocks(withBlock({ price_cents: 'x' }), 'stillorgan').priceCents).toBe(0)
+    expect(classFunnelConfigFromBlocks(withBlock({}), 'stillorgan').currency).toBe('EUR')
+  })
+  it('clamps a negative price to 0', () => {
+    expect(classFunnelConfigFromBlocks(withBlock({ price_cents: -5 }), 'stillorgan').priceCents).toBe(0)
   })
 })

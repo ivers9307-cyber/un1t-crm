@@ -54,9 +54,13 @@ export function classFunnelConfigFromBlocks(blocks, landingPath) {
   const trialMembershipId = override(cf?.trial_membership_id)
   const trialPlanCode = override(cf?.trial_plan_code)
   const bothTrial = trialMembershipId && trialPlanCode
+  const rawPrice = Number(cf?.price_cents)
+  const priceCents = Number.isFinite(rawPrice) && rawPrice > 0 ? Math.floor(rawPrice) : 0
+  const currency = (typeof cf?.currency === 'string' && cf.currency.trim()) ? cf.currency.trim().toUpperCase() : 'EUR'
   return {
     tag, leadSource, eventSourceUrl,
     trialMembershipId: bothTrial ? trialMembershipId : null,
     trialPlanCode: bothTrial ? trialPlanCode : null,
+    priceCents, currency,
   }
 }

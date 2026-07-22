@@ -112,6 +112,8 @@ const CLASS_FUNNEL_DEFAULT = () => ({
   consult_slug:      '', // operator picks a booking type; empty ⇒ no consult upsell
   trial_membership_id: '', // '' ⇒ grant the location's default trial product
   trial_plan_code:     '',
+  price_cents:         0,     // 0 ⇒ free trial (today's behaviour); >0 ⇒ paid intro
+  currency:            'EUR',
 })
 
 const STATS_DEFAULT = () => ({

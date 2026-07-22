@@ -333,3 +333,11 @@ describe('class_funnel trial product defaults', () => {
     expect(b.trial_plan_code).toBe('')
   })
 })
+
+describe('class_funnel paid-intro defaults', () => {
+  it('newBlockOfType seeds a free (0) price and EUR', () => {
+    const b = newBlockOfType('class_funnel')
+    expect(b.price_cents).toBe(0)
+    expect(b.currency).toBe('EUR')
+  })
+})
