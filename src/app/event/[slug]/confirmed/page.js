@@ -5,17 +5,10 @@
 // Loads the race + registration via the existing public race
 // endpoint + a small registration-specific lookup.
 
-import { Poppins } from 'next/font/google'
+import { poppinsBody as poppins } from '@/fonts/poppins'
 import RaceConfirmedPage from '@/components/RaceConfirmedPage'
 
 export const runtime = 'nodejs'
-
-const poppins = Poppins({
-  weight: ['400', '500', '600', '700', '800'],
-  subsets: ['latin'],
-  variable: '--font-body',
-  display: 'swap',
-})
 
 export default async function Page(props) {
   const searchParams = await props.searchParams;

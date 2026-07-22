@@ -8,15 +8,8 @@
 // different domain (UN1T races vs CCF Autos), different copy, no
 // T&Cs step.
 
-import { Poppins } from 'next/font/google'
+import { poppinsBody as poppins } from '@/fonts/poppins'
 import RaceCheckoutPage from '@/components/RaceCheckoutPage'
-
-const poppins = Poppins({
-  weight: ['400', '500', '600', '700', '800'],
-  subsets: ['latin'],
-  variable: '--font-body',
-  display: 'swap',
-})
 
 export const runtime = 'nodejs'
 

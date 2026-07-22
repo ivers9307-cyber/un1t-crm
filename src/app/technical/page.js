@@ -23,17 +23,10 @@
 // can arm the reveal system, exactly as the /welcome layout does.
 
 import Link from 'next/link'
-import { Poppins } from 'next/font/google'
+import { poppinsBody as poppins } from '@/fonts/poppins'
 import { SiteHeader, SiteFooter } from '@/components/landing-page/BlockRenderers'
 import RevealManager from '@/components/landing-page/RevealManager'
 import { RevealArmScript } from '@/components/landing-page/reveal-arm'
-
-const poppins = Poppins({
-  weight: ['400', '500', '600', '700', '800'],
-  subsets: ['latin'],
-  variable: '--font-body',
-  display: 'swap',
-})
 
 export const runtime = 'nodejs'
 

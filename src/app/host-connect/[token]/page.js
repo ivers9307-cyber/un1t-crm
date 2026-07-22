@@ -7,18 +7,11 @@
 // next/font + a `font-body` wrapper, then the HostConnect client component does
 // the token fetch + Stripe onboarding hand-off.
 
-import { Poppins } from 'next/font/google'
+import { poppinsBody as poppins } from '@/fonts/poppins'
 import HostConnect from '@/components/HostConnect'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-
-const poppins = Poppins({
-  weight: ['400', '500', '600', '700', '800'],
-  subsets: ['latin'],
-  variable: '--font-body',
-  display: 'swap',
-})
 
 export default async function Page(props) {
   const params = await props.params

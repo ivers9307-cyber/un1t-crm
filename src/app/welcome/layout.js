@@ -16,14 +16,7 @@
 // per-studio pages, the edit-mode preview iframe (?edit=1) and the
 // dev preview harness — so the editor previews exactly what ships.
 
-import { Poppins } from 'next/font/google'
-
-const poppins = Poppins({
-  weight: ['400', '500', '600', '700', '800'],
-  subsets: ['latin'],
-  variable: '--font-body',
-  display: 'swap',
-})
+import { poppinsBody as poppins } from '@/fonts/poppins'
 
 export default function WelcomeLayout({ children }) {
   // id="lp-shell": the reveal arming script (reveal-arm.js) adds the
