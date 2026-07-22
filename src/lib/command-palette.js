@@ -86,8 +86,41 @@ export function sanitizeSearchTerm(term) {
     .trim()
 }
 
-/** Minimum sanitized length before we hit the DB for contact search. */
+/** Minimum sanitized length before we hit the DB for entity search. */
 export const MIN_CONTACT_SEARCH_LEN = 2
+
+// FEAT-LAUNCH.2 — multi-entity search. Beyond contacts, the launcher searches
+// staff and events (both have a real deep-link target and a clear permission
+// gate). Invoices are intentionally excluded until there's an /invoices/[id]
+// detail route to land on. Per-entity cap keeps the palette scannable.
+export const LAUNCHER_RESULT_CAP = 5
+
+// Which permission gates each entity in the search endpoint. Staff live under
+// the settings-gated admin area; events use the same 'races' key as the page.
+export const LAUNCHER_ENTITIES = [
+  { type: 'contact', permission: 'contacts' },
+  { type: 'staff', permission: 'settings' },
+  { type: 'event', permission: 'races' },
+]
+
+/**
+ * Shape one DB row into a launcher result. Pure — the route selects the
+ * columns and calls this so href/label derivation has a single source of
+ * truth (and is unit-testable without a DB).
+ */
+export function entityResult(type, row) {
+  if (!row?.id) return null
+  switch (type) {
+    case 'contact':
+      return { type, key: `contact:${row.id}`, label: row.name || row.email || 'Contact', sublabel: row.email || row.phone || '', href: `/contacts/${row.id}` }
+    case 'staff':
+      return { type, key: `staff:${row.id}`, label: row.full_name || row.email || 'Staff', sublabel: row.email || '', href: `/settings/staff/${row.id}` }
+    case 'event':
+      return { type, key: `event:${row.id}`, label: row.name || 'Event', sublabel: row.sublabel || '', href: `/events/${row.id}` }
+    default:
+      return null
+  }
+}
 
 // FEAT-LAUNCH.1 — recents. Track the last few destinations the operator jumped
 // to from the palette so they can return in two keystrokes. Pure list-mgmt
