@@ -11,16 +11,10 @@
 import { notFound } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'
 import HostListSignup from '@/components/HostListSignup'
-import { Poppins } from 'next/font/google'
+import { poppinsBody as poppins } from '@/fonts/poppins'
 
 // Same brand-font setup as /event/[slug] — self-hosted Poppins scoped to
 // this public subtree via the `--font-body` variable.
-const poppins = Poppins({
-  weight: ['400', '500', '600', '700', '800'],
-  subsets: ['latin'],
-  variable: '--font-body',
-  display: 'swap',
-})
 
 export const dynamic = 'force-dynamic'
 

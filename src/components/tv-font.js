@@ -11,13 +11,9 @@
 // reused by TemplateCanvas (zone text), TemplateEditor (ZoneBox
 // preview text) and TVDisplay (idle-view mark + clock) so every
 // surface that can show template text agrees on the face.
-import { Poppins } from 'next/font/google'
+import { poppinsTv } from '@/fonts/poppins'
 
-export const tvFont = Poppins({
-  weight: ['400', '600', '700', '800', '900'],
-  subsets: ['latin'],
-  display: 'swap',
-})
+export const tvFont = poppinsTv
 
 // Fallback stack appended after the brand face — matches the
 // system-ui stack TVDisplay already sets on its outer wrapper, so
