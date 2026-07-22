@@ -399,6 +399,9 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
       .eq('location_id', location.id)
       .eq('agent_active', true)
       .is('agent_handed_off_at', null)
+      // INBOX-REDESIGN.2.3 — a sticky operator pause (mig 435) gets no
+      // proactive nudges either, same as a handed-off thread.
+      .is('agent_paused_at', null)
       .lt('agent_followup_stage', 2)
       .gte('last_message_at', sinceIso)
       .order('last_message_at', { ascending: false })

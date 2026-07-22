@@ -130,6 +130,34 @@ describe('shouldAgentReply', () => {
   })
 })
 
+// INBOX-REDESIGN.2.3 — sticky operator pause (mig 435: whatsapp_conversations
+// .agent_paused_at). Checked before the kill switch and content gates, so a
+// paused thread stays fully silent: no onDuty, no soft-handoff acknowledgement.
+describe('shouldAgentReply — sticky pause (agent_paused_at)', () => {
+  const base = {
+    settings: { enabled: true },
+    message: { type: 'text', body: 'hi' },
+    senderPhone: '+353871234567',
+    now: new Date('2026-06-01T12:00:00Z'),
+  }
+  it('stays silent with no onDuty when the conversation is paused', () => {
+    const r = shouldAgentReply({ ...base, conversation: { agent_active: true, agent_paused_at: '2026-07-21T09:00:00Z' } })
+    expect(r).toEqual({ reply: false, reason: 'agent_paused' })
+    expect(r.onDuty).toBeUndefined()
+  })
+  it('wins over the kill-switch check — reason is agent_paused, not handed_off', () => {
+    const r = shouldAgentReply({
+      ...base,
+      conversation: { agent_active: false, agent_handed_off_at: '2020-01-01T00:00:00Z', agent_paused_at: '2026-07-21T09:00:00Z' },
+    })
+    expect(r).toEqual({ reply: false, reason: 'agent_paused' })
+  })
+  it('does not affect a conversation with no agent_paused_at', () => {
+    expect(shouldAgentReply({ ...base, conversation: { agent_active: true } }))
+      .toEqual({ reply: true, reason: 'ok' })
+  })
+})
+
 describe('formatHistoryForClaude', () => {
   it('maps direction to roles and folds a leading outbound OPENER into the first user turn as context (does not drop it)', () => {
     const rows = [

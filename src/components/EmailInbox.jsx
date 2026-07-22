@@ -9,6 +9,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { createBrowserClient } from '@/lib/supabase'
+import { CHANNELS } from '@shared/channels'
+import { ChannelAvatar } from '@/components/inbox/ChannelBits'
 import {
   ArrowLeft, Send, Clock, Check, AlertCircle, RefreshCw, Mail,
 } from 'lucide-react'
@@ -30,6 +32,13 @@ function displayName(conv) {
   if (conv.contacts?.first_name) return conv.contacts.first_name
   if (conv.counterpart_name) return conv.counterpart_name
   return conv.counterpart_email || 'Email contact'
+}
+
+// Two-letter avatar initials — first letters of the first two words
+// (mirrors UnifiedInbox.jsx's initialsOf / WAInbox.jsx's twin so a
+// contact's tile initials read the same everywhere in the inbox).
+function initialsOf(name) {
+  return String(name || '').replace(/^@/, '').split(/[^A-Za-z0-9]+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'
 }
 
 // `embedded` (UIX-P1b semantics): thread-pane-only mode for the unified
@@ -248,12 +257,16 @@ export default function EmailInbox({ locationId, initialConversationId, embedded
         ) : (
           <>
             <div className="flex items-center justify-between gap-3 p-4 border-b border-un1t-border">
-              <div className="flex items-center gap-2 min-w-0">
+              <div className="flex items-center gap-3 min-w-0">
                 <button onClick={() => setSelectedId(null)} className={embedded ? 'hidden' : 'md:hidden text-un1t-subtle'} aria-label="Back">
                   <ArrowLeft size={18} />
                 </button>
+                <ChannelAvatar channel="em" initials={initialsOf(displayName(conversation))} badge />
                 <div className="min-w-0">
-                  <p className="font-medium text-sm truncate">{displayName(conversation)}</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-medium text-sm truncate">{displayName(conversation)}</p>
+                    <span className="text-[10px] font-semibold text-channel-em">{CHANNELS.em.name}</span>
+                  </div>
                   <p className="text-xs text-un1t-muted truncate">{conversation?.counterpart_email}</p>
                   {conversation?.contacts?.id ? (
                     <Link href={`/contacts/${conversation.contacts.id}`} className="text-xs text-un1t-accent hover:underline">

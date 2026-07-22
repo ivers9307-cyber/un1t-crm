@@ -5,12 +5,15 @@ import Link from 'next/link'
 import { createBrowserClient } from '@/lib/supabase'
 import { isServableMedia } from '@shared/whatsapp-media'
 import { mergeTimeline } from '@shared/approval-cards'
+import { CHANNELS } from '@shared/channels'
 import WAMediaContent from '@/components/WAMediaContent'
 import ApprovalActionCard from '@/components/ApprovalActionCard'
+import { ChannelAvatar } from '@/components/inbox/ChannelBits'
+import HandledByControl from '@/components/inbox/HandledByControl'
 import {
   ArrowLeft, Send, MessageCircle, Clock, CheckCheck,
   Check, Image as ImageIcon, FileText, Mic, AlertCircle, RefreshCw,
-  UserPlus, X, UserCheck, LayoutTemplate, CalendarPlus
+  UserPlus, X, UserCheck, LayoutTemplate, CalendarPlus, MoreHorizontal
 } from 'lucide-react'
 
 function formatTime(dateStr) {
@@ -55,6 +58,13 @@ function getDisplayName(conv) {
 
 function isUnknownSender(conv) {
   return !conv.contact_id && !conv.contacts
+}
+
+// Two-letter avatar initials — first letters of the first two words
+// (mirrors UnifiedInbox.jsx's initialsOf so a contact's tile initials
+// read the same everywhere in the inbox).
+function initialsOf(name) {
+  return String(name || '').replace(/^@/, '').split(/[^A-Za-z0-9]+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'
 }
 
 // `embedded` (UIX-P1b): thread-pane-only mode for the unified inbox —
@@ -112,6 +122,22 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     name: '', first_name: '', email: '', add_to_pipeline: true, pipeline_stage: 'new',
   })
   const [addingContact, setAddingContact] = useState(false)
+  // Header overflow (⋯) menu — Block/Unblock + Add to contacts/View contact.
+  // No dropdown/menu primitive exists yet in src/components/ui, so this is a
+  // minimal click-toggled popover (ref pattern mirrors PersonActionBar.jsx).
+  const [showMoreMenu, setShowMoreMenu] = useState(false)
+  const moreButtonRef = useRef(null)
+  const moreMenuRef = useRef(null)
+  useEffect(() => {
+    if (!showMoreMenu) return
+    function onClick(e) {
+      if (moreButtonRef.current?.contains(e.target)) return
+      if (moreMenuRef.current?.contains(e.target)) return
+      setShowMoreMenu(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [showMoreMenu])
   const [templates, setTemplates] = useState([])
   // C4 — operator-curated card sets (settings → WhatsApp → Card sets), sent
   // as an in-session media carousel. null = not fetched yet (lazy — loaded
@@ -274,6 +300,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       fetchMessages(selectedId)
       fetchApprovals(selectedId)
       setShowAddContact(false)
+      setShowMoreMenu(false)
     }
   }, [selectedId])
 
@@ -532,6 +559,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     ? new Date(conversation.window_expires_at).toLocaleString('en-IE', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' })
     : null
   const isUnknown = conversation && !conversation.contact_id
+  const headerName = conversation?.contacts?.name || conversation?.wa_profile_name || conversation?.wa_phone || ''
 
   return (
     <div className={`flex ${embedded ? 'h-full' : 'h-screen'}`}>
@@ -648,36 +676,44 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
         ) : (
           <>
             {/* Chat header */}
-            <div className="px-5 py-3 border-b border-un1t-border bg-un1t-surface flex items-center justify-between shrink-0">
-              <div>
-                <div className="flex items-center gap-2">
-                  <p className="font-semibold text-sm">
-                    {conversation?.contacts?.name || conversation?.wa_profile_name || conversation?.wa_phone}
-                  </p>
-                  {isUnknown && (
-                    <span className="bg-orange-500/20 text-orange-700 text-[9px] font-bold px-1.5 py-0.5 rounded">
-                      Not in contacts
+            <div className="px-5 py-3 border-b border-un1t-border bg-un1t-surface flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <ChannelAvatar channel="wa" initials={initialsOf(headerName)} badge />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-semibold text-sm truncate">
+                      {headerName}
+                    </p>
+                    {isUnknown && (
+                      <span className="bg-orange-500/20 text-orange-700 text-[9px] font-bold px-1.5 py-0.5 rounded">
+                        Not in contacts
+                      </span>
+                    )}
+                    <span className="text-[10px] font-semibold text-channel-wa">{CHANNELS.wa.name}</span>
+                    {conversation?.contacts?.pipeline_stage_slug && (
+                      <span className="text-[10px] text-un1t-subtle">
+                        {conversation.contacts.pipeline_stage_slug.replace(/_/g, ' ')}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-un1t-muted flex items-center gap-1">
+                    {conversation?.wa_phone}
+                    <span
+                      className={windowOpen ? 'text-green-700' : 'text-amber-700'}
+                      title={windowOpen ? `Window open until ${windowExpiry}` : 'Window closed — templates only'}
+                    >
+                      · {windowOpen ? 'Window open' : 'Window closed'}
                     </span>
-                  )}
+                  </p>
                 </div>
-                <p className="text-xs text-un1t-muted">
-                  {conversation?.wa_phone}
-                  {conversation?.contacts?.pipeline_stage_slug && (
-                    <span> · {conversation.contacts.pipeline_stage_slug.replace(/_/g, ' ')}</span>
-                  )}
-                </p>
               </div>
-              <div className="flex items-center gap-3">
-                {windowOpen ? (
-                  <span className="text-xs text-green-400">
-                    <Clock size={10} className="inline mr-1" />
-                    Window open until {windowExpiry}
-                  </span>
-                ) : (
-                  <span className="text-xs text-orange-400">
-                    <Clock size={10} className="inline mr-1" />
-                    Window closed — templates only
-                  </span>
+              <div className="flex items-center gap-2 shrink-0">
+                {conversation && (
+                  <HandledByControl
+                    channel="wa"
+                    conversation={conversation}
+                    onChanged={() => { threadSigRef.current = ''; fetchMessages(selectedId) }}
+                  />
                 )}
                 {conversation && (
                   <button
@@ -693,34 +729,59 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                   </button>
                 )}
                 {conversation && (
-                  <button
-                    onClick={() => toggleBlocked(conversation)}
-                    title={conversation.is_blocked ? 'Unblock this sender' : 'Block this sender (spam/abuse)'}
-                    className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border transition-colors ${
-                      conversation.is_blocked
-                        ? 'bg-red-600 border-transparent text-white hover:bg-red-700'
-                        : 'border-un1t-border text-un1t-subtle hover:text-red-600'
-                    }`}
-                  >
-                    {conversation.is_blocked ? 'Blocked — unblock' : 'Block'}
-                  </button>
-                )}
-                {isUnknown ? (
-                  <button
-                    onClick={() => setShowAddContact(!showAddContact)}
-                    className="flex items-center gap-1.5 text-xs bg-green-600 text-white px-3 py-1.5 rounded-md hover:bg-green-700 transition-colors"
-                  >
-                    <UserPlus size={12} />
-                    Add to Contacts
-                  </button>
-                ) : conversation?.contacts?.id && (
-                  <Link
-                    href={`/contacts/${conversation.contacts.id}`}
-                    className="flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text transition-colors"
-                  >
-                    <UserCheck size={12} />
-                    View contact
-                  </Link>
+                  <div className="relative">
+                    <button
+                      ref={moreButtonRef}
+                      type="button"
+                      onClick={() => setShowMoreMenu(v => !v)}
+                      className="p-1.5 text-un1t-subtle hover:text-un1t-text rounded-md border border-un1t-border transition-colors"
+                      aria-haspopup="menu"
+                      aria-expanded={showMoreMenu}
+                      title="More actions"
+                    >
+                      <MoreHorizontal size={16} />
+                    </button>
+                    {showMoreMenu && (
+                      <div
+                        ref={moreMenuRef}
+                        role="menu"
+                        className="absolute right-0 top-full mt-1 z-20 bg-un1t-surface border border-un1t-border rounded-md shadow-lg py-1 min-w-[180px]"
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => { setShowMoreMenu(false); toggleBlocked(conversation) }}
+                          title={conversation.is_blocked ? 'Unblock this sender' : 'Block this sender (spam/abuse)'}
+                          className={`w-full text-left px-3 py-1.5 text-xs hover:bg-un1t-border/40 transition-colors ${
+                            conversation.is_blocked ? 'text-red-600' : 'text-un1t-text'
+                          }`}
+                        >
+                          {conversation.is_blocked ? 'Blocked — unblock' : 'Block'}
+                        </button>
+                        {isUnknown ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => { setShowMoreMenu(false); setShowAddContact(!showAddContact) }}
+                            className="w-full text-left px-3 py-1.5 text-xs text-un1t-text hover:bg-un1t-border/40 flex items-center gap-2 transition-colors"
+                          >
+                            <UserPlus size={13} />
+                            Add to Contacts
+                          </button>
+                        ) : conversation?.contacts?.id && (
+                          <Link
+                            href={`/contacts/${conversation.contacts.id}`}
+                            role="menuitem"
+                            onClick={() => setShowMoreMenu(false)}
+                            className="w-full text-left px-3 py-1.5 text-xs text-un1t-text hover:bg-un1t-border/40 flex items-center gap-2 transition-colors"
+                          >
+                            <UserCheck size={13} />
+                            View contact
+                          </Link>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </div>

@@ -2028,6 +2028,25 @@ registry.registerPath({
   },
 })
 
+// WhatsApp inbox pause/resume-Mia action (cookie auth)
+registry.registerPath({
+  method: 'patch',
+  path: '/api/whatsapp/conversations/{id}/agent',
+  tags: ['WhatsApp'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Pause or resume the Mia auto-responder for this conversation',
+  description: "Sticky pause, mirroring the Instagram agent-toggle sibling but on a dedicated column: active:false sets agent_paused_at (Mia stops auto-replying until explicitly resumed); active:true clears it back to null. Distinct from agent_active, which already auto-flips on every staff reply and auto-rearms after handoff_cooldown_hours — that machinery can't express a sticky pause, so this uses agent_paused_at instead (mig 435). Does not touch agent_handed_off_at.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ active: z.boolean() }).openapi('WaAgentToggle') } } },
+  },
+  responses: {
+    200: { description: 'Pause state updated', content: { 'application/json': { schema: z.object({ success: z.literal(true), agent_paused_at: z.string().datetime().nullable() }) } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Conversation not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // WhatsApp spend telemetry (cookie auth)
 registry.registerPath({
   method: 'get',

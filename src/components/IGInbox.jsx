@@ -9,7 +9,10 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { createBrowserClient } from '@/lib/supabase'
 import { mergeTimeline } from '@shared/approval-cards'
+import { CHANNELS } from '@shared/channels'
 import ApprovalActionCard from '@/components/ApprovalActionCard'
+import { ChannelAvatar } from '@/components/inbox/ChannelBits'
+import HandledByControl from '@/components/inbox/HandledByControl'
 import {
   ArrowLeft, Send, MessageCircle, Clock, Check, AlertCircle,
   RefreshCw, Bot, UserCheck, Instagram,
@@ -32,6 +35,13 @@ function displayName(conv) {
   if (conv.contacts?.first_name) return conv.contacts.first_name
   if (conv.ig_username) return `@${conv.ig_username}`
   return 'Instagram user'
+}
+
+// Two-letter avatar initials — first letters of the first two words
+// (mirrors UnifiedInbox.jsx's initialsOf / WAInbox.jsx's twin so a
+// contact's tile initials read the same everywhere in the inbox).
+function initialsOf(name) {
+  return String(name || '').replace(/^@/, '').split(/[^A-Za-z0-9]+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'
 }
 
 // `embedded` (UIX-P1b): thread-pane-only mode for the unified inbox —
@@ -249,26 +259,6 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
     }
   }
 
-  async function toggleAgent(active) {
-    if (!selectedId) return
-    try {
-      const res = await fetch(`/api/instagram/conversations/${selectedId}/agent`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ active }),
-      })
-      const data = await res.json()
-      if (data.success) {
-        await loadThread(selectedId)
-        await fetchApprovals(selectedId)
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-
-  const agentActive = conversation?.agent_active !== false
-
   return (
     <div className={`flex ${embedded ? 'h-full' : 'h-[calc(100vh-4rem)]'} bg-un1t-bg`}>
       {/* Conversation list (hidden in embedded mode — the unified queue replaces it) */}
@@ -354,12 +344,16 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
         ) : (
           <>
             <div className="flex items-center justify-between gap-3 p-4 border-b border-un1t-border">
-              <div className="flex items-center gap-2 min-w-0">
+              <div className="flex items-center gap-3 min-w-0">
                 <button onClick={() => setSelectedId(null)} className={embedded ? 'hidden' : 'md:hidden text-un1t-subtle'} aria-label="Back">
                   <ArrowLeft size={18} />
                 </button>
+                <ChannelAvatar channel="ig" initials={initialsOf(displayName(conversation))} badge />
                 <div className="min-w-0">
-                  <p className="font-medium text-sm truncate">{displayName(conversation)}</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-medium text-sm truncate">{displayName(conversation)}</p>
+                    <span className="text-[10px] font-semibold text-channel-ig">{CHANNELS.ig.name}</span>
+                  </div>
                   {conversation?.contacts?.id ? (
                     <Link href={`/contacts/${conversation.contacts.id}`} className="text-xs text-un1t-accent hover:underline">
                       View contact
@@ -383,17 +377,11 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
                     {conversation.resolved_at ? 'Reopen' : 'Resolve'}
                   </button>
                 )}
-                {agentActive ? (
-                  <span className="inline-flex items-center gap-1 text-xs text-un1t-muted">
-                    <Bot size={12} /> Agent active
-                    <button onClick={() => toggleAgent(false)} className="ml-2 text-amber-400 hover:underline">Take over</button>
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 text-xs text-amber-400">
-                    <UserCheck size={12} /> You&apos;re handling this
-                    <button onClick={() => toggleAgent(true)} className="ml-2 text-un1t-accent hover:underline">Hand back to agent</button>
-                  </span>
-                )}
+                <HandledByControl
+                  channel="ig"
+                  conversation={conversation}
+                  onChanged={() => { loadThread(selectedId); fetchApprovals(selectedId) }}
+                />
               </div>
             </div>
 
