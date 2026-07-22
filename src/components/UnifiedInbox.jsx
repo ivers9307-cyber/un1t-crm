@@ -2,8 +2,11 @@
 
 // UIX-P1b — the unified inbox. One queue for WhatsApp + Instagram +
 // Email (docs/UNIFIED_INBOX_2026-06.md; EMAIL-INBOX.1 added email):
-// channel filter chips, the Needs-reply/Everything split from P1a,
-// per-row channel badge + unread + resolved tick. The thread pane is
+// client-side search + the Needs-reply/Everything split from P1a,
+// per-row channel badge + unread + resolved tick. The old channel
+// filter chips (All/WhatsApp/Instagram/Email) were dropped in
+// INBOX-REDESIGN.5 — the per-row ChannelGlyph already makes the
+// channel obvious, so the row was redundant. The thread pane is
 // the EXISTING channel inbox rendered in `embedded` mode —
 // WAInbox/IGInbox/EmailInbox keep owning their composers, templates,
 // 24h-window logic and Resolve buttons, so nothing about sending
@@ -12,9 +15,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
 import { needsReply, isAgentHandoff } from '@/lib/inbox-queues'
+import { matchesSearch } from '@/lib/inbox-search'
 import {
-  MessageCircle, Instagram, Mail, RefreshCw, Check, Inbox as InboxIcon,
-  ArrowLeft,
+  MessageCircle, RefreshCw, Check, Inbox as InboxIcon,
+  ArrowLeft, Search,
 } from 'lucide-react'
 import WAInbox from '@/components/WAInbox'
 import IGInbox from '@/components/IGInbox'
@@ -52,13 +56,6 @@ function initialsOf(name) {
   return (name || '').trim().split(/\s+/).slice(0, 2).map(w => w[0] || '').join('').toUpperCase()
 }
 
-const CHANNELS = [
-  ['all', 'All'],
-  ['wa', 'WhatsApp'],
-  ['ig', 'Instagram'],
-  ['em', 'Email'],
-]
-
 const VALID_CHANNELS = new Set(['wa', 'ig', 'em'])
 
 export default function UnifiedInbox({ locationId, userId, initialConversationId, initialChannel, canEditConsent = false }) {
@@ -66,8 +63,8 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
   const [igConvs, setIgConvs] = useState([])
   const [emConvs, setEmConvs] = useState([])
   const [loading, setLoading] = useState(true)
-  const [channelFilter, setChannelFilter] = useState('all')
   const [queueFilter, setQueueFilter] = useState('needs_reply')
+  const [search, setSearch] = useState('')
   const [selected, setSelected] = useState(
     initialConversationId
       ? { ch: VALID_CHANNELS.has(initialChannel) ? initialChannel : 'wa', id: initialConversationId }
@@ -159,10 +156,10 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
     ...emConvs.map(c => ({ ...c, _ch: 'em' })),
   ].sort((a, b) => new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0))
 
-  const channelMatched = channelFilter === 'all' ? merged : merged.filter(c => c._ch === channelFilter)
-  const visible = queueFilter === 'all'
-    ? channelMatched
-    : channelMatched.filter(queueFilter === 'handoff' ? isAgentHandoff : needsReply)
+  const queueMatched = queueFilter === 'all'
+    ? merged
+    : merged.filter(queueFilter === 'handoff' ? isAgentHandoff : needsReply)
+  const visible = queueMatched.filter(conv => matchesSearch(`${rowName(conv)} ${conv.last_message_preview || ''}`, search))
   const needsReplyCount = merged.filter(needsReply).length
   const handoffCount = merged.filter(isAgentHandoff).length
 
@@ -193,29 +190,25 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
               </span>
             )}
           </div>
-          <button onClick={loadConversations} className="text-un1t-subtle hover:text-un1t-text" aria-label="Refresh">
+          <button type="button" onClick={loadConversations} className="text-un1t-subtle hover:text-un1t-text" aria-label="Refresh">
             <RefreshCw size={16} />
           </button>
         </div>
 
-        {/* Channel chips */}
-        <div className="flex gap-1.5 px-3 pt-2">
-          {CHANNELS.map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setChannelFilter(key)}
-              className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                channelFilter === key
-                  ? 'bg-un1t-text text-un1t-bg border-transparent'
-                  : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
-              }`}
-            >
-              {key === 'wa' && <MessageCircle size={11} />}
-              {key === 'ig' && <Instagram size={11} />}
-              {key === 'em' && <Mail size={11} />}
-              {label}
-            </button>
-          ))}
+        {/* Search — client-side over the already-loaded queue (channel is now
+            obvious per-row via ChannelGlyph, so the old channel-filter row
+            was redundant and is gone; INBOX-REDESIGN.5) */}
+        <div className="px-3 pt-2">
+          <div className="flex items-center gap-2 rounded-[9px] border border-un1t-border bg-un1t-surface px-[11px] py-2 text-un1t-subtle">
+            <Search size={15} className="flex-none" />
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search people & messages"
+              className="w-full border-0 bg-transparent text-sm text-un1t-text outline-none placeholder:text-un1t-subtle"
+            />
+          </div>
         </div>
 
         {/* Queue split chips (P1a semantics; INBOX-HANDOFF.1 added the agent-handoff queue) */}
@@ -223,6 +216,7 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
           {[['needs_reply', 'Needs reply'], ['handoff', 'Agent handoff'], ['all', 'Everything']].map(([key, label]) => (
             <button
               key={key}
+              type="button"
               onClick={() => setQueueFilter(key)}
               className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
                 queueFilter === key
