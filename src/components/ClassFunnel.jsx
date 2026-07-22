@@ -13,6 +13,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { isValidMobileNumber } from '@/lib/phone-validate'
 import { trackFunnelStep } from '@/lib/funnel-track'
+import ClassFunnelCheckout from '@/components/landing-page/ClassFunnelCheckout'
 
 // Default copy = today's live Stillorgan /start funnel, so a bare
 // <ClassFunnel /> is unchanged from the old StartFunnel.
@@ -40,7 +41,8 @@ export default function ClassFunnel(props) {
   // consultSlug is different: an explicit '' means "no consult upsell" and MUST
   // be honoured, so read it straight from props and only default when absent.
   const consultSlug = props?.consultSlug ?? DEFAULTS.consultSlug
-  const [step, setStep] = useState('details') // details | calendar | classpick | done | classdone
+  const [step, setStep] = useState('details') // details | calendar | classpick | payment | done | classdone
+  const [payment, setPayment] = useState(null) // { paymentId, checkout } when requiresPayment
   const [path, setPath] = useState('class')   // 'class' (default) | 'consultation' (upsell only)
   // Marketing-consent defaults to ticked (operator's call — pre-ticked + required;
   // accepted GDPR/Planet49 risk to maximise opt-in). Still un-tickable, and the
@@ -232,6 +234,12 @@ export default function ClassFunnel(props) {
       })
       const j = await r.json().catch(() => ({}))
       if (!r.ok || j.success === false) { setError(j.error || 'Something went wrong — please try again.'); return }
+      if (j.data?.requiresPayment) {
+        setPayment({ paymentId: j.data.paymentId, checkout: j.data.checkout })
+        fireStep('payment_view')
+        setStep('payment')
+        return
+      }
       fireStep('booked_class')
       setStep('classdone')
     } catch { setError('Something went wrong. Please try again.') } finally { setSubmitting(false) }
@@ -251,6 +259,15 @@ export default function ClassFunnel(props) {
           <p className="text-white/70">{consultDoneBody}</p>
         </div>
       )}
+      {step === 'payment' && payment && (
+        <ClassFunnelCheckout
+          paymentId={payment.paymentId}
+          checkout={payment.checkout}
+          onPaid={() => { fireStep('booked_class'); setStep('classdone') }}
+          onCancel={() => { setStep('classpick') }}
+        />
+      )}
+
       {step === 'classdone' && (
         <div className="py-6">
           <div className="text-center mb-6">

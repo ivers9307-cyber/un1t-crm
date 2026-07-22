@@ -18,31 +18,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { loadStripe } from '@stripe/stripe-js'
 import { Loader2, AlertCircle, Lock } from 'lucide-react'
+import { loadRevolutSdk, revolutMode, revolutPublicKey } from '@/lib/revolut-embed'
 
-const SDK_URLS = {
-  sandbox: 'https://sandbox-merchant.revolut.com/embed.js',
-  prod: 'https://merchant.revolut.com/embed.js',
-}
-
-let sdkPromise = null
-function loadRevolutSdk(mode) {
-  if (typeof window === 'undefined') return Promise.reject(new Error('SSR'))
-  if (window.RevolutCheckout) return Promise.resolve(window.RevolutCheckout)
-  if (sdkPromise) return sdkPromise
-  sdkPromise = new Promise((resolve, reject) => {
-    const url = SDK_URLS[mode] || SDK_URLS.sandbox
-    const script = document.createElement('script')
-    script.src = url
-    script.async = true
-    script.onload = () => resolve(window.RevolutCheckout)
-    script.onerror = () => reject(new Error('Failed to load Revolut SDK'))
-    document.head.appendChild(script)
-  })
-  return sdkPromise
-}
-
-const REVOLUT_MODE = process.env.NEXT_PUBLIC_REVOLUT_MODE === 'prod' ? 'prod' : 'sandbox'
-const REVOLUT_PUBLIC_KEY = process.env.NEXT_PUBLIC_REVOLUT_PUBLIC_KEY || ''
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || ''
 
 // loadStripe caches per (key, options) internally; we still guard so a
@@ -159,7 +136,7 @@ export default function RaceCheckoutPage({ paymentId }) {
     }
 
     // ─── Revolut: mount the Revolut embed SDK ────────────────────────
-    if (!REVOLUT_PUBLIC_KEY) {
+    if (!revolutPublicKey()) {
       setPhase('error')
       setPhaseError('Payment widget is not configured (NEXT_PUBLIC_REVOLUT_PUBLIC_KEY missing).')
       return
@@ -173,12 +150,12 @@ export default function RaceCheckoutPage({ paymentId }) {
     let destroyed = false
     setPhase('paying')
 
-    loadRevolutSdk(REVOLUT_MODE)
+    loadRevolutSdk(revolutMode())
       .then((RC) => {
         if (destroyed) return
         const instance = RC.embeddedCheckout({
-          publicToken: REVOLUT_PUBLIC_KEY,
-          mode: REVOLUT_MODE,
+          publicToken: revolutPublicKey(),
+          mode: revolutMode(),
           locale: 'auto',
           target: targetRef.current,
           // Order already exists — just hand back its token.
