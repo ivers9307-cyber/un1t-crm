@@ -110,6 +110,8 @@ const CLASS_FUNNEL_DEFAULT = () => ({
   consult_done_title:"You're booked 🎉",
   consult_done_body: "You'll get a WhatsApp confirming your consultation if we have your number. See you soon!",
   consult_slug:      '', // operator picks a booking type; empty ⇒ no consult upsell
+  trial_membership_id: '', // '' ⇒ grant the location's default trial product
+  trial_plan_code:     '',
 })
 
 const STATS_DEFAULT = () => ({

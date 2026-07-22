@@ -325,3 +325,11 @@ describe('class_funnel block type', () => {
     expect(cta.href).toBe('#waitlist')
   })
 })
+
+describe('class_funnel trial product defaults', () => {
+  it('newBlockOfType seeds empty trial fields', () => {
+    const b = newBlockOfType('class_funnel')
+    expect(b.trial_membership_id).toBe('')
+    expect(b.trial_plan_code).toBe('')
+  })
+})

@@ -275,4 +275,49 @@ describe('findOrCreateGlofoxMember — create-and-trial (createIfMissing=true)',
     expect(out.status).toBe('failed')
     expect(out.error).toMatch(/duplicate email/)
   })
+
+  it('prefers a per-funnel trialOverride over the location default trial config', async () => {
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: true })
+    // Location default trial config is present too — the override must
+    // win, not the location's mem-trial/999 pair.
+    const db = makeFakeDb({
+      locationSelect: {
+        data: { settings: { glofox: { trial_membership_id: 'mem-trial', trial_plan_code: 999 } } },
+        error: null,
+      },
+    })
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'booking_form',
+      contact: { id: 'c1', email: 'a@b.com', first_name: 'Alice', last_name: 'Smith' },
+      createIfMissing: true,
+      attachTrial: true,
+      trialOverride: { membershipId: 'block-trial', planCode: 'block-plan' },
+    })
+    expect(out.status).toBe('created')
+    expect(purchaseGlofoxMembership).toHaveBeenCalledWith(VALID_CREDS, 'gx-new', 'block-trial', 'block-plan')
+    expect(out.error).toBeNull()
+  })
+
+  it('falls back to the location default trial config when trialOverride is absent or incomplete', async () => {
+    registerGlofoxMember.mockResolvedValueOnce({ ok: true, member: { _id: 'gx-new' } })
+    purchaseGlofoxMembership.mockResolvedValueOnce({ ok: true })
+    const db = makeFakeDb({
+      locationSelect: {
+        data: { settings: { glofox: { trial_membership_id: 'mem-trial', trial_plan_code: 999 } } },
+        error: null,
+      },
+    })
+    // Half an override (planCode missing) must NOT be treated as a
+    // usable override — falls through to the location default.
+    const out = await findOrCreateGlofoxMember({
+      db, locationId: 'loc1', source: 'booking_form',
+      contact: { id: 'c1', email: 'a@b.com', first_name: 'Alice', last_name: 'Smith' },
+      createIfMissing: true,
+      attachTrial: true,
+      trialOverride: { membershipId: 'block-trial' },
+    })
+    expect(out.status).toBe('created')
+    expect(purchaseGlofoxMembership).toHaveBeenCalledWith(VALID_CREDS, 'gx-new', 'mem-trial', 999)
+  })
 })

@@ -42,6 +42,7 @@ import {
 import {
   BLOCK_TYPES, blocksOrDefault, newBlockOfType, setByPath, newBlockId,
 } from '@/lib/landing-page-blocks'
+import { buildTrialOptions } from '@/lib/glofox-trial-options'
 
 // PostMessage namespace shared with src/components/landing-page/
 // EditModeOverlay.jsx so the iframe and the parent only react to
@@ -453,6 +454,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
                   uploading={uploading}
                   uploadErr={uploadErr}
                   progress={progress}
+                  locationId={locationId}
                 />
               </div>
             ))}
@@ -566,6 +568,7 @@ export default function LandingPageSettingsForm({ locationId, initialSettings, a
 function SortableBlockCard({
   block, expanded, onToggleExpand, onRemove, onUpdate,
   availableBookingTypes, availableEvents, uploadMedia, uploading, uploadErr, progress,
+  locationId,
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: block.id })
   const style = {
@@ -624,6 +627,7 @@ function SortableBlockCard({
             uploading={uploading}
             uploadErr={uploadErr}
             progress={progress}
+            locationId={locationId}
           />
         </div>
       )}
@@ -641,7 +645,10 @@ function summaryFor(block) {
     case 'booking':     return block.slug ? `slug: ${block.slug}` : ''
     case 'event':       return block.slug ? `event: ${block.slug}` : 'no event'
     case 'lead_form':   return block.heading || 'Waitlist'
-    case 'class_funnel': return block.consult_slug ? `consult: ${block.consult_slug}` : 'no consult upsell'
+    case 'class_funnel': {
+      const base = block.consult_slug ? `consult: ${block.consult_slug}` : 'no consult upsell'
+      return block.trial_membership_id ? `${base} · trial set` : base
+    }
     case 'pillars':     return `${(block.items || []).length} items`
     case 'gallery':     return `${(block.items || []).length} photo${(block.items || []).length === 1 ? '' : 's'}`
     case 'embed':       return block.url ? new URL(block.url).hostname.replace(/^www\./, '') : 'no URL'
@@ -814,8 +821,28 @@ function LeadFormEdit({ block, onUpdate }) {
   )
 }
 
-function ClassFunnelEdit({ block, onUpdate, availableBookingTypes }) {
+function ClassFunnelEdit({ block, onUpdate, availableBookingTypes, locationId }) {
   const bts = availableBookingTypes || []
+  const [memberships, setMemberships] = useState([])
+  const [membershipsLoading, setMembershipsLoading] = useState(false)
+  useEffect(() => {
+    if (!locationId) return
+    let alive = true
+    setMembershipsLoading(true)
+    fetch(`/api/locations/${locationId}/glofox-memberships`, { cache: 'no-store' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((j) => { if (alive && j && j.success !== false) setMemberships(j.memberships || j.data || []) })
+      .catch(() => {})
+      .finally(() => { if (alive) setMembershipsLoading(false) })
+    return () => { alive = false }
+  }, [locationId])
+  const trialKey = (block.trial_membership_id && block.trial_plan_code)
+    ? `${block.trial_membership_id}:${block.trial_plan_code}` : ''
+  const setTrial = (value) => {
+    const [mid, pc] = value ? value.split(':') : ['', '']
+    onUpdate({ trial_membership_id: mid || '', trial_plan_code: pc || '' })
+  }
+  const trialOptions = buildTrialOptions(memberships, trialKey)
   return (
     <>
       <Field label="Heading">
@@ -832,6 +859,33 @@ function ClassFunnelEdit({ block, onUpdate, availableBookingTypes }) {
       </Field>
       <Field label="Class booked — message">
         <Textarea value={block.class_done_body || ''} onChange={(v) => onUpdate({ class_done_body: v })} maxLength={400} rows={2} />
+      </Field>
+      <Field
+        label="Trial product granted on booking"
+        hint="Which Glofox membership/plan a NEW member gets on booking. Leave on the location default unless this funnel should grant a different intro offer."
+      >
+        {trialOptions.length > 0 ? (
+          <select
+            value={trialKey}
+            onChange={(e) => setTrial(e.target.value)}
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+          >
+            <option value="">— Use location default —</option>
+            {trialOptions.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        ) : (
+          <Input
+            value={trialKey}
+            onChange={(v) => setTrial(v)}
+            maxLength={120}
+            placeholder={membershipsLoading ? 'Loading Glofox products…' : 'membershipId:planCode (optional)'}
+          />
+        )}
+        {membershipsLoading && trialOptions.length > 0 && (
+          <p className="text-[11px] text-un1t-muted mt-1">Loading membership list…</p>
+        )}
       </Field>
       <Field
         label="Free-consult upsell"

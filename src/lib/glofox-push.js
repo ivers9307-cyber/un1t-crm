@@ -66,6 +66,7 @@ export async function findOrCreateGlofoxMember({
   db, locationId, contact, source,
   createIfMissing = false,
   attachTrial = false,
+  trialOverride = null,
 }) {
   if (!db || !locationId || !contact?.id || !contact?.email) {
     return { status: 'failed', error: 'missing args (db, locationId, contact.id, contact.email)' }
@@ -204,8 +205,11 @@ export async function findOrCreateGlofoxMember({
   if (attachTrial) {
     // INTEG-A2 dual-read: registry row first, legacy settings.glofox
     // otherwise — same settings-shaped object either way.
-    const glofoxCfg = await getGlofoxConfig(db, locationId)
-    const trial = getLocationTrialConfig({ settings: { glofox: glofoxCfg } })
+    // Per-funnel override (from the class_funnel block, captured on the booking
+    // row) wins over the location default when BOTH ids are present.
+    const trial = (trialOverride?.membershipId && trialOverride?.planCode)
+      ? { membershipId: trialOverride.membershipId, planCode: trialOverride.planCode }
+      : getLocationTrialConfig({ settings: { glofox: await getGlofoxConfig(db, locationId) } })
     if (!trial.membershipId || !trial.planCode) {
       trialPurchaseError = 'Trial membership not configured for this location (Settings → Locations → Glofox Integration → Trial membership picker)'
     } else {

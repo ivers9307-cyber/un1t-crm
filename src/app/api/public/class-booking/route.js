@@ -69,7 +69,7 @@ export async function POST(request) {
   // location's class_funnel block (defaults reproduce today's Stillorgan
   // values) — never Stillorgan literals, so a second gym on this block isn't
   // mistagged 'stillorgan-start' or misreported to Meta as /start.
-  const { tag, leadSource, eventSourceUrl } = classFunnelConfigFromBlocks(page.blocks, landingPath)
+  const { tag, leadSource, eventSourceUrl, trialMembershipId, trialPlanCode } = classFunnelConfigFromBlocks(page.blocks, landingPath)
 
   // Validate the chosen class against the live bookable list — never trust the
   // client's event_id / class_name / starts_at. We use the SERVER's name + start
@@ -135,6 +135,7 @@ export async function POST(request) {
     glofox_event_id: b.event_id, class_name: chosen.name,
     starts_at: chosen.starts_at,
     customer_name: name, customer_email: b.email.toLowerCase(), customer_phone: b.phone,
+    trial_membership_id: trialMembershipId, trial_plan_code: trialPlanCode,
     status: 'queued',
   }).select('id').maybeSingle()
   if (insErr) {

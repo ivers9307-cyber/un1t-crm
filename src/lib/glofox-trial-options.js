@@ -1,23 +1,41 @@
-// glofox-trial-options — build the option list for the Glofox trial-
-// membership picker (GlofoxIntegrationTab).
+// glofox-trial-options — build the option list for a Glofox trial-
+// membership picker (Settings → Glofox Integration, and the class_funnel
+// landing-page block).
 //
-// The list comes from the live Glofox membership catalogue, but the
-// currently-saved value MUST always be selectable even when the
+// Input is the live Glofox membership catalogue exactly as
+// listGlofoxMemberships() / GET /api/locations/[id]/glofox-memberships
+// return it: an array of memberships, each with a nested plans[] array:
+//   { _id, name, trial, plans: [{ code, type, price, name }] }
+// We flatten it to one selectable option per membership×plan, keyed by the
+// `${membershipId}:${planCode}` value the pickers persist.
+//
+// The currently-saved value MUST always stay selectable even when the
 // catalogue hasn't loaded (or no longer contains it). Otherwise the
-// <select> falls back to "— None —" while a real value is stored, and
-// a Save would silently overwrite the operator's setting with null.
+// <select> falls back to "— None —" while a real value is stored, and a
+// Save would silently overwrite the operator's setting with null.
 
 /**
- * @param {Array<{membership_id:string, plan_code:string, label?:string}>} memberships
+ * @param {Array<{_id:string, name?:string, plans?:Array<{code:string, name?:string}>}>} memberships
  *   the live Glofox catalogue (may be empty while loading / on error)
- * @param {string} trialKey  the currently-saved `${membership_id}:${plan_code}` (or '')
+ * @param {string} trialKey  the currently-saved `${membershipId}:${planCode}` (or '')
  * @returns {Array<{value:string, label:string}>}
  */
 export function buildTrialOptions(memberships, trialKey) {
-  const opts = (Array.isArray(memberships) ? memberships : []).map((m) => ({
-    value: `${m.membership_id}:${m.plan_code}`,
-    label: m.label || `${m.membership_id} / ${m.plan_code}`,
-  }))
+  const opts = []
+  for (const m of Array.isArray(memberships) ? memberships : []) {
+    const membershipId = m?._id
+    if (!membershipId) continue
+    const mName = m?.name || membershipId
+    for (const p of Array.isArray(m?.plans) ? m.plans : []) {
+      const planCode = p?.code
+      if (!planCode) continue
+      const pName = p?.name
+      opts.push({
+        value: `${membershipId}:${planCode}`,
+        label: pName && pName !== mName ? `${mName} — ${pName}` : mName,
+      })
+    }
+  }
 
   // Guarantee the saved value is present so it never displays as "None"
   // and can never be wiped by a Save that didn't touch the picker.
