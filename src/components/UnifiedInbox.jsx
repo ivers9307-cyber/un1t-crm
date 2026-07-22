@@ -2,8 +2,11 @@
 
 // UIX-P1b — the unified inbox. One queue for WhatsApp + Instagram +
 // Email (docs/UNIFIED_INBOX_2026-06.md; EMAIL-INBOX.1 added email):
-// channel filter chips, the Needs-reply/Everything split from P1a,
-// per-row channel badge + unread + resolved tick. The thread pane is
+// client-side search + the Needs-reply/Everything split from P1a,
+// per-row channel badge + unread + resolved tick. The old channel
+// filter chips (All/WhatsApp/Instagram/Email) were dropped in
+// INBOX-REDESIGN.5 — the per-row ChannelGlyph already makes the
+// channel obvious, so the row was redundant. The thread pane is
 // the EXISTING channel inbox rendered in `embedded` mode —
 // WAInbox/IGInbox/EmailInbox keep owning their composers, templates,
 // 24h-window logic and Resolve buttons, so nothing about sending
@@ -12,14 +15,17 @@
 import { useState, useEffect, useCallback } from 'react'
 import { createBrowserClient } from '@/lib/supabase'
 import { needsReply, isAgentHandoff } from '@/lib/inbox-queues'
+import { matchesSearch } from '@/lib/inbox-search'
 import {
-  MessageCircle, Instagram, Mail, RefreshCw, Check, Inbox as InboxIcon,
-  ArrowLeft,
+  MessageCircle, RefreshCw, Check, Inbox as InboxIcon,
+  ArrowLeft, Search,
 } from 'lucide-react'
 import WAInbox from '@/components/WAInbox'
 import IGInbox from '@/components/IGInbox'
 import EmailInbox from '@/components/EmailInbox'
 import CommandCentre from '@/components/CommandCentre'
+import { ChannelGlyph, ChannelAvatar } from '@/components/inbox/ChannelBits'
+import { channelOf } from '../../shared/channels'
 
 function formatTime(dateStr) {
   if (!dateStr) return ''
@@ -44,12 +50,25 @@ function rowName(conv) {
   return 'Instagram user'
 }
 
-const CHANNELS = [
-  ['all', 'All'],
-  ['wa', 'WhatsApp'],
-  ['ig', 'Instagram'],
-  ['em', 'Email'],
-]
+// Two-letter initials for the queue row's ChannelAvatar tile — first
+// letters of the first two words of the display name (INBOX-REDESIGN.4).
+// Strips a leading "@" and splits on non-alphanumerics so Instagram
+// handles like "@niamh.obrien" yield "NO" instead of a lone "@"
+// (INBOX-REDESIGN.6).
+function initialsOf(name) {
+  return String(name || '').replace(/^@/, '').split(/[^A-Za-z0-9]+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'
+}
+
+// The Approvals queue filter reads the SAME signal as the row's purple
+// "Approval" badge below (conv.pending_approval — stamped server-side from
+// a pending agent_membership_requests row by the wa/ig conversations
+// routes; see src/app/api/whatsapp/conversations/route.js). Deliberately
+// NOT inbox-queues.js's needsAction() — that predicate is the reply/handoff
+// badge signal (needsReply || isAgentHandoff) and is unrelated to pending
+// approvals (INBOX-REDESIGN.6).
+function isPendingApproval(conv) {
+  return !!conv?.pending_approval
+}
 
 const VALID_CHANNELS = new Set(['wa', 'ig', 'em'])
 
@@ -58,8 +77,8 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
   const [igConvs, setIgConvs] = useState([])
   const [emConvs, setEmConvs] = useState([])
   const [loading, setLoading] = useState(true)
-  const [channelFilter, setChannelFilter] = useState('all')
   const [queueFilter, setQueueFilter] = useState('needs_reply')
+  const [search, setSearch] = useState('')
   const [selected, setSelected] = useState(
     initialConversationId
       ? { ch: VALID_CHANNELS.has(initialChannel) ? initialChannel : 'wa', id: initialConversationId }
@@ -151,12 +170,17 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
     ...emConvs.map(c => ({ ...c, _ch: 'em' })),
   ].sort((a, b) => new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0))
 
-  const channelMatched = channelFilter === 'all' ? merged : merged.filter(c => c._ch === channelFilter)
-  const visible = queueFilter === 'all'
-    ? channelMatched
-    : channelMatched.filter(queueFilter === 'handoff' ? isAgentHandoff : needsReply)
+  const queueMatched = queueFilter === 'all'
+    ? merged
+    : queueFilter === 'handoff'
+      ? merged.filter(isAgentHandoff)
+      : queueFilter === 'approvals'
+        ? merged.filter(isPendingApproval)
+        : merged.filter(needsReply)
+  const visible = queueMatched.filter(conv => matchesSearch(`${rowName(conv)} ${conv.last_message_preview || ''}`, search))
   const needsReplyCount = merged.filter(needsReply).length
   const handoffCount = merged.filter(isAgentHandoff).length
+  const approvalsCount = merged.filter(isPendingApproval).length
 
   // UIX-P2 — the command centre needs the selected thread's linked
   // contact. The queue rows already embed contacts!contact_id, so no
@@ -185,48 +209,50 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
               </span>
             )}
           </div>
-          <button onClick={loadConversations} className="text-un1t-subtle hover:text-un1t-text" aria-label="Refresh">
+          <button type="button" onClick={loadConversations} className="text-un1t-subtle hover:text-un1t-text" aria-label="Refresh">
             <RefreshCw size={16} />
           </button>
         </div>
 
-        {/* Channel chips */}
-        <div className="flex gap-1.5 px-3 pt-2">
-          {CHANNELS.map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setChannelFilter(key)}
-              className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                channelFilter === key
-                  ? 'bg-un1t-text text-un1t-bg border-transparent'
-                  : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
-              }`}
-            >
-              {key === 'wa' && <MessageCircle size={11} />}
-              {key === 'ig' && <Instagram size={11} />}
-              {key === 'em' && <Mail size={11} />}
-              {label}
-            </button>
-          ))}
+        {/* Search — client-side over the already-loaded queue (channel is now
+            obvious per-row via ChannelGlyph, so the old channel-filter row
+            was redundant and is gone; INBOX-REDESIGN.5) */}
+        <div className="px-3 pt-2">
+          <div className="flex items-center gap-2 rounded-[9px] border border-un1t-border bg-un1t-surface px-[11px] py-2 text-un1t-subtle">
+            <Search size={15} className="flex-none" />
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search people & messages"
+              className="w-full border-0 bg-transparent text-sm text-un1t-text outline-none placeholder:text-un1t-subtle"
+            />
+          </div>
         </div>
 
-        {/* Queue split chips (P1a semantics; INBOX-HANDOFF.1 added the agent-handoff queue) */}
+        {/* Queue split chips (P1a semantics; INBOX-HANDOFF.1 added the
+            agent-handoff queue; INBOX-REDESIGN.6 added Approvals and
+            relabelled Everything/Agent handoff → All/Handoff per spec §4.2) */}
         <div className="flex gap-1.5 px-3 py-2 border-b border-un1t-border">
-          {[['needs_reply', 'Needs reply'], ['handoff', 'Agent handoff'], ['all', 'Everything']].map(([key, label]) => (
+          {[['all', 'All'], ['needs_reply', 'Needs reply'], ['handoff', 'Handoff'], ['approvals', 'Approvals']].map(([key, label]) => (
             <button
               key={key}
+              type="button"
               onClick={() => setQueueFilter(key)}
               className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
                 queueFilter === key
                   ? key === 'handoff'
                     ? 'bg-amber-500 text-white border-transparent'
-                    : 'bg-un1t-text text-un1t-bg border-transparent'
+                    : key === 'approvals'
+                      ? 'bg-purple-500 text-white border-transparent'
+                      : 'bg-un1t-text text-un1t-bg border-transparent'
                   : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
               }`}
             >
               {label}
               {key === 'needs_reply' && needsReplyCount > 0 && <span className="ml-1">· {needsReplyCount}</span>}
               {key === 'handoff' && handoffCount > 0 && <span className="ml-1">· {handoffCount}</span>}
+              {key === 'approvals' && approvalsCount > 0 && <span className="ml-1">· {approvalsCount}</span>}
             </button>
           ))}
         </div>
@@ -243,30 +269,33 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
 
           {!loading && merged.length > 0 && visible.length === 0 && (
             <p className="p-4 text-xs text-un1t-subtle text-center">
-              {queueFilter === 'handoff'
-                ? 'No agent handoffs waiting — the agent is handling things. 🤖'
-                : 'Queue clear — nothing needs a reply. 🎉'}
+              {search.trim()
+                ? `No matches for "${search.trim()}"`
+                : queueFilter === 'handoff'
+                  ? 'No agent handoffs waiting — the agent is handling things. 🤖'
+                  : 'Queue clear — nothing needs a reply. 🎉'}
             </p>
           )}
 
           {visible.map(conv => {
             const isSelected = selected?.id === conv.id && selected?.ch === conv._ch
+            const name = rowName(conv)
             return (
               <button
                 key={`${conv._ch}:${conv.id}`}
+                type="button"
                 onClick={() => { setSelected({ ch: conv._ch, id: conv.id }); setCcTab('profile') }}
-                className={`w-full text-left px-4 py-3 border-b border-un1t-border/50 transition-colors ${
-                  isSelected ? 'bg-un1t-border/50' : 'hover:bg-un1t-border/20'
+                className={`relative grid grid-cols-[auto_auto_1fr_auto] items-center gap-[11px] w-full text-left px-4 py-3 border-b border-un1t-border/50 transition-colors ${
+                  isSelected
+                    ? 'bg-un1t-surface before:absolute before:inset-y-0 before:left-0 before:w-[2.5px] before:bg-un1t-text before:content-[""]'
+                    : 'hover:bg-un1t-border/20'
                 }`}
               >
-                <div className="flex items-center justify-between gap-2">
+                <ChannelGlyph channel={channelOf(conv)} />
+                <ChannelAvatar channel={channelOf(conv)} initials={initialsOf(name)} />
+                <div className="min-w-0 flex flex-col gap-0.5">
                   <span className="flex items-center gap-1.5 min-w-0">
-                    {conv._ch === 'wa'
-                      ? <MessageCircle size={13} className="text-green-600 shrink-0" />
-                      : conv._ch === 'em'
-                        ? <Mail size={13} className="text-blue-600 shrink-0" />
-                        : <Instagram size={13} className="text-pink-600 shrink-0" />}
-                    <span className="font-medium text-sm truncate">{rowName(conv)}</span>
+                    <span className="font-medium text-sm truncate">{name}</span>
                     {isAgentHandoff(conv) && (
                       <span className="text-[10px] font-semibold text-amber-700 bg-amber-500/10 px-1.5 py-0.5 rounded-full shrink-0">
                         Needs human
@@ -279,10 +308,10 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
                       </span>
                     )}
                   </span>
-                  <span className="text-xs text-un1t-muted shrink-0">{formatTime(conv.last_message_at)}</span>
-                </div>
-                <div className="flex items-center justify-between gap-2 mt-0.5 pl-[19px]">
                   <span className="text-xs text-un1t-subtle truncate">{conv.last_message_preview || '—'}</span>
+                </div>
+                <div className="flex flex-col items-end gap-0.5">
+                  <span className="text-xs text-un1t-muted shrink-0">{formatTime(conv.last_message_at)}</span>
                   <span className="flex items-center gap-1.5 shrink-0">
                     {conv.unread_count > 0 && (
                       <span className="bg-green-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">

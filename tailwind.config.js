@@ -43,7 +43,17 @@ module.exports = {
           cold: '#9CA3AF',
           lost: '#DC2626',
           returning: '#6366F1',
-        }
+        },
+        // Channel identity — the one sanctioned use of colour beyond
+        // semantic state (INBOX-REDESIGN 2026-07). Values darkened from
+        // brand hues for AA text/ring contrast on the light canvas.
+        channel: {
+          wa: '#1F9D57', // WhatsApp
+          ig: '#D6417E', // Instagram
+          em: '#3E6FD6', // Email
+        },
+        // Mia / AI accent (approvals, agent state). Solid, never a gradient.
+        mia: '#6D5CE0',
       }
     }
   },
