@@ -9,7 +9,7 @@
 
 import { useRouter } from 'next/navigation'
 import { useState, useEffect, useRef } from 'react'
-import { Search, User, ArrowRight, Plus } from 'lucide-react'
+import { Search, User, ArrowRight, Plus, Clock } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import { hasPermission } from '@/lib/permissions'
 import {
@@ -18,13 +18,18 @@ import {
   visibleCommands,
   sanitizeSearchTerm,
   MIN_CONTACT_SEARCH_LEN,
+  addRecent,
+  sanitizeRecents,
 } from '@/lib/command-palette'
+
+const RECENTS_KEY = 'un1t:cmdk:recents'
 
 export default function CommandPalette({ user }) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [contacts, setContacts] = useState([])
+  const [recents, setRecents] = useState([])
   const [searching, setSearching] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef(null)
@@ -41,8 +46,15 @@ export default function CommandPalette({ user }) {
         setOpen((o) => !o)
       }
     }
+    // FEAT-LAUNCH.1 — a visible trigger (e.g. the sidebar search button)
+    // dispatches this so operators who don't know the ⌘K shortcut can open it.
+    function onOpenEvent() { setOpen(true) }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('open-command-palette', onOpenEvent)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('open-command-palette', onOpenEvent)
+    }
   }, [])
 
   // Focus the input + reset transient state whenever the palette opens.
@@ -51,6 +63,10 @@ export default function CommandPalette({ user }) {
       setQuery('')
       setContacts([])
       setActiveIndex(0)
+      // Load recents from localStorage (sanitised against corrupt/legacy data).
+      try {
+        setRecents(sanitizeRecents(JSON.parse(localStorage.getItem(RECENTS_KEY) || '[]')))
+      } catch { setRecents([]) }
       // focus after paint so the element exists
       const t = setTimeout(() => inputRef.current?.focus(), 0)
       return () => clearTimeout(t)
@@ -96,9 +112,17 @@ export default function CommandPalette({ user }) {
   // + query filtered via the pure helper; contacts come from the search.
   const createResults = visibleCommands(CREATE_COMMANDS, query, hasPerm)
   const navResults = visibleCommands(NAV_COMMANDS, query, hasPerm)
+  // Recents show only on an empty query (the "where was I" browse state); when
+  // shown, dedupe them out of the nav/create lists so nothing appears twice.
+  const showRecents = !query.trim()
+  const recentResults = showRecents
+    ? recents.map((r) => ({ key: `recent:${r.href}`, type: r.type || 'go', recent: true, label: r.label, href: r.href }))
+    : []
+  const recentHrefs = new Set(recentResults.map((r) => r.href))
   const results = [
-    ...createResults.map((c) => ({ key: `create:${c.id}`, type: 'create', label: c.label, href: c.href })),
-    ...navResults.map((c) => ({ key: `nav:${c.id}`, type: 'go', label: c.label, href: c.href })),
+    ...recentResults,
+    ...createResults.filter((c) => !recentHrefs.has(c.href)).map((c) => ({ key: `create:${c.id}`, type: 'create', label: c.label, href: c.href })),
+    ...navResults.filter((c) => !recentHrefs.has(c.href)).map((c) => ({ key: `nav:${c.id}`, type: 'go', label: c.label, href: c.href })),
     ...contacts.map((c) => ({
       key: `contact:${c.id}`,
       type: 'contact',
@@ -113,6 +137,14 @@ export default function CommandPalette({ user }) {
   function exec(item) {
     if (!item) return
     close()
+    // Record the jump so it surfaces under "Recent" next time.
+    if (item.href) {
+      try {
+        const next = addRecent(recents, { label: item.label, href: item.href, type: item.type === 'contact' ? 'contact' : 'go' })
+        setRecents(next)
+        localStorage.setItem(RECENTS_KEY, JSON.stringify(next))
+      } catch { /* localStorage unavailable — recents are best-effort */ }
+    }
     router.push(item.href)
   }
 
@@ -165,7 +197,7 @@ export default function CommandPalette({ user }) {
             </div>
           ) : (
             results.map((r, i) => {
-              const Icon = ICONS[r.type] || ArrowRight
+              const Icon = r.recent ? Clock : (ICONS[r.type] || ArrowRight)
               return (
                 <button
                   key={r.key}
@@ -182,7 +214,7 @@ export default function CommandPalette({ user }) {
                     ) : null}
                   </span>
                   <span className="text-[10px] uppercase tracking-wide text-un1t-muted shrink-0">
-                    {TYPE_LABEL[r.type]}
+                    {r.recent ? 'Recent' : TYPE_LABEL[r.type]}
                   </span>
                 </button>
               )

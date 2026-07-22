@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LogOut, Activity, ExternalLink, X, ChevronDown, ChevronRight as ChevronRightIcon, Store } from 'lucide-react'
+import { LogOut, Activity, ExternalLink, X, ChevronDown, ChevronRight as ChevronRightIcon, Store, Search } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import LocationSwitcher from './LocationSwitcher'
 import ImpersonatePicker from './ImpersonatePicker'
@@ -306,6 +306,21 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
             </p>
           )}
         </div>
+      </div>
+
+      {/* FEAT-LAUNCH.1 — visible ⌘K launcher trigger. The palette is mounted in
+          AppShell and listens for this event, so operators who don't know the
+          keyboard shortcut can still open it. */}
+      <div className="px-3 pt-3">
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new Event('open-command-palette'))}
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-md bg-un1t-bg border border-un1t-border text-sm text-un1t-subtle hover:text-un1t-text hover:border-un1t-muted transition-colors"
+        >
+          <Search size={14} className="shrink-0" />
+          <span className="flex-1 text-left">Search…</span>
+          <kbd className="hidden md:inline text-[10px] border border-un1t-border rounded px-1.5 py-0.5">⌘K</kbd>
+        </button>
       </div>
 
       {/* Navigation — Dashboard pinned at top, then labelled sections.
