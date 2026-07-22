@@ -13,7 +13,8 @@ import HandledByControl from '@/components/inbox/HandledByControl'
 import {
   ArrowLeft, Send, MessageCircle, Clock, CheckCheck,
   Check, Image as ImageIcon, FileText, Mic, AlertCircle, RefreshCw,
-  UserPlus, X, UserCheck, LayoutTemplate, CalendarPlus, MoreHorizontal
+  UserPlus, X, UserCheck, LayoutTemplate, CalendarPlus, MoreHorizontal,
+  Sparkles
 } from 'lucide-react'
 
 function formatTime(dateStr) {
@@ -877,7 +878,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
             )}
 
             {/* Messages */}
-            <div className="flex-1 overflow-auto p-4 space-y-2 bg-[#0b141a]">
+            <div className="flex-1 overflow-auto p-4 space-y-2 bg-un1t-bg">
               {mergeTimeline(messages, approvals).map(item => {
                 if (item.kind === 'approval') {
                   return (
@@ -894,16 +895,41 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                   )
                 }
                 const msg = item.message
+                // INBOX-REDESIGN.3.1 — an outbound message came from Mia when
+                // source === 'agent' (AGENT_MESSAGE_SOURCE; already the gate
+                // for the thumbs feedback below — confirmed load-bearing by
+                // AGENT-QA.1/AGENT-FIX.1, not a guess). Every other outbound
+                // row was a staff send.
+                const isAgentMsg = msg.direction === 'outbound' && msg.source === 'agent'
                 return (
                   <div
                     key={item.key}
                     className={`flex ${msg.direction === 'outbound' ? 'justify-end' : 'justify-start'}`}
                   >
-                    <div className={`max-w-[65%] rounded-lg px-3 py-2 ${
+                    <div className={`group max-w-[65%] rounded-lg px-3 py-2 ${
                       msg.direction === 'outbound'
-                        ? 'bg-[#005c4b] text-un1t-text'
-                        : 'bg-un1t-surface text-un1t-text'
+                        ? isAgentMsg
+                          ? 'bg-mia/10 text-un1t-text border border-mia/40'
+                          : 'bg-un1t-text/[0.08] text-un1t-text border border-un1t-border'
+                        : 'bg-un1t-surface text-un1t-text border border-un1t-border'
                     }`}>
+                      {/* INBOX-REDESIGN.3.1 — author tag: Mia gets her violet
+                          brand mark, staff sends fall back to "You" (whatsapp_messages.sent_by
+                          is a bare profiles UUID with no name join on this GET
+                          route, so there's no per-message staff name to show yet —
+                          matches HandledByControl's own "You" convention). */}
+                      {msg.direction === 'outbound' && (
+                        <div className="flex items-center gap-1 mb-1">
+                          {isAgentMsg ? (
+                            <span className="flex items-center gap-1 text-[10px] font-semibold text-mia">
+                              <Sparkles size={11} />
+                              MIA
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-medium text-un1t-subtle">You</span>
+                          )}
+                        </div>
+                      )}
                       {msg.message_type === 'template' && (
                         <p className="text-[10px] text-green-300 mb-1">Template: {msg.template_name}</p>
                       )}
@@ -914,9 +940,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                         <p className="text-sm whitespace-pre-wrap">{msg.body || `[${msg.message_type}]`}</p>
                       )}
                       <div className="flex items-center justify-end gap-1 mt-0.5">
-                        {/* C6 — react to a customer message (👍 ❤️ 🔥) */}
+                        {/* C6 — react to a customer message (👍 ❤️ 🔥) — hover/focus reveal only, INBOX-REDESIGN.3.1 */}
                         {msg.direction === 'inbound' && msg.wa_message_id && (
-                          <span className="flex items-center gap-1 mr-auto">
+                          <span className="flex items-center gap-1 mr-auto opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                             {['👍', '❤️', '🔥'].map(emoji => (
                               <button
                                 key={emoji}
@@ -929,9 +955,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                             ))}
                           </span>
                         )}
-                        {/* AGENT-QA.1 — rate Mia's replies; feeds the analytics quality list */}
-                        {msg.source === 'agent' && (
-                          <span className="flex items-center gap-1 mr-auto">
+                        {/* AGENT-QA.1 — rate Mia's replies; feeds the analytics quality list — hover/focus reveal only, INBOX-REDESIGN.3.1 */}
+                        {isAgentMsg && (
+                          <span className="flex items-center gap-1 mr-auto opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                             <button
                               type="button"
                               onClick={() => rateAgentMessage(msg, 'up')}
