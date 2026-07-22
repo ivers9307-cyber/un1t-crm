@@ -226,6 +226,9 @@ export const EXEMPT = {
   'src/app/api/public/funnel-event/route.js': {
     landing_page_settings: 'Public funnel beacon: resolves public_path → location_id and only INSERTS a funnel event for that location; unknown paths are ignored.',
   },
+  'src/app/api/public/class-booking-payments/[id]/route.js': {
+    class_booking_requests: 'Public paid-booking status poll: the row is resolved by its own unguessable UUID (the payment id handed to the payer in the create response) — the id IS the capability token, not enumerable. Returns only display-safe checkout fields (status/provider/token/url/amount/class_name), no contact PII. Mirrors public/event-payments/[id].',
+  },
   'src/app/api/public/branding/route.js': {
     company_settings: 'Anonymous login-screen branding: deliberately serves the FIRST configured row (logo/name only) when no location context exists yet. Known single-tenant shortcut — revisit when a second org onboards, but it exposes no contact/tenant data.',
   },
