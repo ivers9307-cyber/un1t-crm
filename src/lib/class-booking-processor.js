@@ -35,7 +35,13 @@ async function routeToReview(db, request, reason) {
     try {
       const { data: amr } = await db.from('agent_membership_requests').insert({
         location_id: request.location_id, contact_id: request.contact_id, kind: 'class_booking', status: 'pending',
-        details: { event_id: request.glofox_event_id, class_name: request.class_name, class_time: classLabel(request.starts_at), mode: 'draft', source: 'start_funnel', reason },
+        details: {
+          event_id: request.glofox_event_id, class_name: request.class_name, class_time: classLabel(request.starts_at),
+          mode: 'draft', source: 'start_funnel', reason,
+          ...(request.payment_status === 'paid'
+            ? { paid: true, amount_cents: request.amount_cents, currency: request.currency || 'EUR' }
+            : {}),
+        },
       }).select('id').maybeSingle()
       approvalId = amr?.id || null
     } catch (e) { logWarn('cbp', 'review insert failed', { err: e }) }
