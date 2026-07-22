@@ -20,24 +20,27 @@ const stageColors = {
   dormant:      '#6B7280',
 }
 
-// PERF.3 — per-column initial render cap. At 8.1k open deals
-// concentrated mostly in a couple of stages, mounting every card up
-// front blew /pipeline TTI out: each card has a few event listeners
-// + an actions-menu state, so 8k cards = 24k+ event-listener attaches
-// before the page is interactive. We now render only the first N
-// cards per column and let the operator click "Show all" if they
-// want the rest. The PER_COLUMN_CAP value is deliberately generous —
-// most operator workflows only ever look at the top of each column.
-const PER_COLUMN_CAP = 50
+// Cards with no upcoming class sort first — that's the follow-up list; a booked
+// next class means the funnel is working on its own. Stable partition, so a
+// lazily-loaded page appended to a column re-partitions the growing set cleanly.
+function sortColumn(deals) {
+  return [...deals].sort((a, b) =>
+    (a.contacts?.next_class_at ? 1 : 0) - (b.contacts?.next_class_at ? 1 : 0))
+}
 
-// FUNNEL.1 — the board is read-only. Drag-drop was removed
-// deliberately: every column is fully classifier-derived (webhook +
-// nightly cron), so a manual drag would be silently overwritten by
-// the next classify pass.
-export default function KanbanBoard({ initialStages, initialDeals, locationId }) {
-  // Per-column expand state — operator click on "Show all" flips
-  // the stage_id to true and unmasks the rest of that column.
-  const [expandedColumns, setExpandedColumns] = useState({})
+// FUNNEL.1 — the board is read-only (every column is classifier-derived, so a
+// manual drag would be overwritten by the next classify pass).
+// FEAT-PIPELINE-LAZY.1 — the server ships only the first page per column plus a
+// per-stage total count; each column lazily fetches more via /api/pipeline/deals
+// so the client never receives all (≤10k) open deals at once.
+export default function KanbanBoard({ initialStages, initialDeals, stageCounts = {}, view = 'active', locationId }) {
+  // Accumulated deals per column, seeded from the server's first page.
+  const [columnDeals, setColumnDeals] = useState(() => {
+    const m = {}
+    for (const stage of initialStages) m[stage.id] = initialDeals.filter((d) => d.stage_id === stage.id)
+    return m
+  })
+  const [columnLoading, setColumnLoading] = useState({})
 
   // DRAWER.5 — the contact slide-over is URL-driven (?contact=<id>) so
   // back-button, refresh and shared links all restore it. Open pushes a
@@ -61,63 +64,67 @@ export default function KanbanBoard({ initialStages, initialDeals, locationId })
   const navigateContact = useCallback((id) => writeContactParam(id), [writeContactParam])
   const closeContact = useCallback(() => writeContactParam(null), [writeContactParam])
 
-  // Ordered contact ids per column (board render order), so the drawer
-  // can step through the column the open contact belongs to.
+  // Lazily fetch the next page for one column and append it.
+  const loadMore = useCallback(async (stageId) => {
+    setColumnLoading((p) => ({ ...p, [stageId]: true }))
+    try {
+      const offset = (columnDeals[stageId] || []).length
+      const res = await fetch(`/api/pipeline/deals?stage_id=${encodeURIComponent(stageId)}&offset=${offset}&view=${view}`)
+      const json = await res.json()
+      if (json.success) {
+        setColumnDeals((p) => ({ ...p, [stageId]: [...(p[stageId] || []), ...(json.deals || [])] }))
+      }
+    } catch {
+      // best-effort — a failed page leaves the column as-is; the operator can retry.
+    } finally {
+      setColumnLoading((p) => ({ ...p, [stageId]: false }))
+    }
+  }, [columnDeals, view])
+
+  // Ordered contact ids for the open contact's column (board render order), so
+  // the drawer can step through it. Spans the loaded cards.
   const columnContactIds = useMemo(() => {
     if (!openContactId) return []
     for (const stage of initialStages) {
-      const ids = initialDeals
-        .filter(d => d.stage_id === stage.id)
-        .sort((a, b) =>
-          (a.contacts?.next_class_at ? 1 : 0) - (b.contacts?.next_class_at ? 1 : 0))
-        .map(d => d.contacts?.id)
-        .filter(Boolean)
+      const ids = sortColumn(columnDeals[stage.id] || []).map((d) => d.contacts?.id).filter(Boolean)
       if (ids.includes(openContactId)) return ids
     }
     return []
-  }, [openContactId, initialStages, initialDeals])
+  }, [openContactId, initialStages, columnDeals])
 
   return (
     <div className="flex gap-4 overflow-x-auto pb-4 min-h-[calc(100vh-8rem)]">
-      {initialStages.map(stage => {
-        // Cards with no upcoming class sort first — that's the
-        // follow-up list; a booked next class means the funnel is
-        // working on its own.
-        const stageDeals = initialDeals
-          .filter(d => d.stage_id === stage.id)
-          .sort((a, b) =>
-            (a.contacts?.next_class_at ? 1 : 0) - (b.contacts?.next_class_at ? 1 : 0))
+      {initialStages.map((stage) => {
+        const loaded = sortColumn(columnDeals[stage.id] || [])
+        const total = stageCounts[stage.id] ?? loaded.length
         const color = stageColors[stage.slug] || '#6B7280'
+        const hasMore = loaded.length < total
 
         return (
-          <div
-            key={stage.id}
-            className="shrink-0 w-64 bg-un1t-surface rounded-lg border border-un1t-border"
-          >
-            {/* Stage Header */}
+          <div key={stage.id} className="shrink-0 w-64 bg-un1t-surface rounded-lg border border-un1t-border">
+            {/* Stage Header — badge is the server-side total, not the loaded count. */}
             <div className="flex items-center gap-2 p-3 border-b border-un1t-border">
               <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
               <h3 className="text-xs font-semibold uppercase tracking-wider truncate">{stage.name}</h3>
               <span className="ml-auto text-xs text-un1t-subtle bg-un1t-border px-1.5 rounded">
-                {stageDeals.length}
+                {total}
               </span>
             </div>
 
-            {/* Deal Cards — render only the first PER_COLUMN_CAP
-                unless the operator has clicked "Show all" for this
-                column. Mirrors the count badge on the stage header
-                so the operator can see what's hidden. */}
+            {/* Deal Cards — only the loaded pages are mounted; "Load more" fetches
+                the next page from /api/pipeline/deals and appends it. */}
             <div className="p-2 space-y-0 min-h-[100px]">
-              {(expandedColumns[stage.id] ? stageDeals : stageDeals.slice(0, PER_COLUMN_CAP)).map(deal => (
+              {loaded.map((deal) => (
                 <DealCard key={deal.id} deal={deal} locationId={locationId} onOpenContact={openContact} />
               ))}
-              {!expandedColumns[stage.id] && stageDeals.length > PER_COLUMN_CAP && (
+              {hasMore && (
                 <button
                   type="button"
-                  onClick={() => setExpandedColumns((p) => ({ ...p, [stage.id]: true }))}
-                  className="w-full mt-1 py-1.5 text-[11px] text-un1t-subtle hover:text-un1t-text border border-dashed border-un1t-border rounded-md hover:border-un1t-subtle transition-colors"
+                  onClick={() => loadMore(stage.id)}
+                  disabled={columnLoading[stage.id]}
+                  className="w-full mt-1 py-1.5 text-[11px] text-un1t-subtle hover:text-un1t-text border border-dashed border-un1t-border rounded-md hover:border-un1t-subtle transition-colors disabled:opacity-50"
                 >
-                  Show all {stageDeals.length} (+{stageDeals.length - PER_COLUMN_CAP} hidden)
+                  {columnLoading[stage.id] ? 'Loading…' : `Load more (${loaded.length} of ${total})`}
                 </button>
               )}
             </div>
