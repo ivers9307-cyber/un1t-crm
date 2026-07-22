@@ -25,6 +25,7 @@ import { filterVisibleReviews, marqueeDurationSeconds } from '@/lib/google-busin
 import BookingWidget from '@/components/BookingWidget'
 import RaceSignupWidget from '@/components/RaceSignupWidget'
 import WaitlistWidget from '@/components/WaitlistWidget'
+import ClassFunnel from '@/components/ClassFunnel'
 import VideoTestimonials from './VideoTestimonials'
 import CountUp from './CountUp'
 import { parseEmbed } from '@/lib/landing-page-embed'
@@ -81,6 +82,7 @@ export default function BlockRenderer({ block, onEdit, locationId, publicPath, c
     case 'gallery':     return <GalleryBlock     block={block} {...editProps} />
     case 'event':       return <EventBlock       block={block} />
     case 'lead_form':   return <LeadFormBlock    block={block} onEdit={localOnEdit} publicPath={publicPath} campaign={campaign} />
+    case 'class_funnel': return <ClassFunnelBlock block={block} onEdit={localOnEdit} publicPath={publicPath} />
     case 'embed':       return <EmbedBlock       block={block} onEdit={localOnEdit} />
     case 'stats':       return <StatsBlock       block={block} onEdit={localOnEdit} />
     case 'testimonial': return <TestimonialBlock block={block} onEdit={localOnEdit} />
@@ -348,6 +350,38 @@ export function LeadFormBlock({ block, onEdit, publicPath, campaign }) {
             />
           </div>
         </div>
+      </div>
+    </section>
+  )
+}
+
+export function ClassFunnelBlock({ block, onEdit, publicPath }) {
+  return (
+    <section id="start" className="scroll-mt-20 relative min-h-[80svh] flex flex-col overflow-hidden bg-black text-white lp-grain border-t border-white/10">
+      <div
+        className="absolute inset-0 pointer-events-none"
+        aria-hidden="true"
+        style={{ background: 'linear-gradient(180deg, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.5) 45%, rgba(0,0,0,0.85) 100%)' }}
+      />
+      <div className="relative z-10 flex-1 flex items-center justify-center px-5 py-20">
+        {onEdit ? (
+          <div className="w-full max-w-lg rounded-3xl border border-white/12 bg-black/45 backdrop-blur-xl px-6 py-8 text-center">
+            <div className="font-display font-extrabold uppercase text-2xl mb-2">{block.heading || 'Glofox Class Booking Funnel'}</div>
+            <p className="text-white/60 text-sm">Live class-booking funnel — shown to visitors on the published page. Edit copy and the consult upsell in the panel.</p>
+          </div>
+        ) : (
+          <ClassFunnel
+            publicPath={publicPath}
+            consultSlug={block.consult_slug}
+            heading={block.heading}
+            subhead={block.subhead}
+            consentLabel={block.consent_label}
+            classDoneTitle={block.class_done_title}
+            classDoneBody={block.class_done_body}
+            consultDoneTitle={block.consult_done_title}
+            consultDoneBody={block.consult_done_body}
+          />
+        )}
       </div>
     </section>
   )
