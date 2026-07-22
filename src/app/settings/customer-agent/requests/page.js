@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import { formatMoneyMinor } from '@/lib/money-format'
 
 // RADAR-AGENT Phase 2 — operator approval queue. Manager+ reviews the
 // pause / cancellation requests the customer agent captured, and decides:
@@ -136,6 +137,11 @@ function RequestCard({ r, busy, onDecide, focused = false }) {
             {KIND_LABEL[r.kind] || r.kind}
           </span>
           <span className="text-sm font-medium text-un1t-text">{name}</span>
+          {d.paid && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700">
+              Paid {formatMoneyMinor(d.amount_cents, d.currency)}
+            </span>
+          )}
           {r.channel && <span className="text-xs text-un1t-muted">· via {r.channel}</span>}
           {isCancel && r.retention_flagged && <span className="text-xs text-blue-600">· retention</span>}
         </div>
