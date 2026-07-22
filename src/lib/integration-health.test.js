@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { cronStatus, waNumberStatus, backlogStatus, worstStatus } from './integration-health.js'
+import { cronStatus, waNumberStatus, backlogStatus, worstStatus, registryHealth, emailSendStatus } from './integration-health.js'
 
 describe('cronStatus', () => {
   it('ok when nothing is stale', () => {
@@ -46,5 +46,33 @@ describe('worstStatus', () => {
     expect(worstStatus([{ status: 'ok' }, { status: 'down' }, { status: 'warn' }])).toBe('down')
     expect(worstStatus([{ status: 'ok' }, { status: 'ok' }])).toBe('ok')
     expect(worstStatus([{ status: 'unknown' }, { status: 'ok' }])).toBe('unknown')
+  })
+})
+
+describe('registryHealth', () => {
+  it('maps the connection-registry vocabulary onto the pane vocabulary', () => {
+    expect(registryHealth('connected')).toBe('ok')
+    expect(registryHealth('action_needed')).toBe('warn')
+    expect(registryHealth('error')).toBe('down')
+    expect(registryHealth('not_connected')).toBe('unknown')
+    expect(registryHealth(undefined)).toBe('unknown')
+  })
+})
+
+describe('emailSendStatus', () => {
+  it('ok with no traffic (no false alarm)', () => {
+    expect(emailSendStatus({ total: 0 }).status).toBe('ok')
+    expect(emailSendStatus().status).toBe('ok')
+  })
+  it('small samples do not grade the ratio — only a real complaint warns', () => {
+    // 1 bounce of 3 = 33% but not meaningful → ok
+    expect(emailSendStatus({ total: 3, bounced: 1 }).status).toBe('ok')
+    expect(emailSendStatus({ total: 3, complained: 1 }).status).toBe('warn')
+  })
+  it('grades the bounce/complaint ratio above the sample floor', () => {
+    expect(emailSendStatus({ total: 100, bounced: 2 }).status).toBe('ok')     // 2%
+    expect(emailSendStatus({ total: 100, bounced: 7 }).status).toBe('warn')   // 7%
+    expect(emailSendStatus({ total: 100, bounced: 20 }).status).toBe('down')  // 20%
+    expect(emailSendStatus({ total: 100, bounced: 10, complained: 6 }).status).toBe('down') // 16%
   })
 })

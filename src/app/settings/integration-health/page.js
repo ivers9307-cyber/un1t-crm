@@ -2,6 +2,7 @@
 // (FEAT-INTEG-HEALTH.1). Server-rendered from the shared aggregator so there's
 // no client round-trip; the same data is available at /api/integrations/health.
 
+import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
@@ -46,7 +47,7 @@ export default async function IntegrationHealthPage() {
         <span className={`text-xs font-medium px-2 py-0.5 rounded ${o.chip}`}>{o.label}</span>
       </div>
       <p className="text-sm text-un1t-subtle mb-6">
-        One place to see whether anything is silently broken — scheduled jobs, WhatsApp, and webhook processing.
+        One place to see whether anything is silently broken — scheduled jobs, WhatsApp, webhook processing, Glofox, Xero, and email delivery. Anything degraded shows what to do about it.
       </p>
 
       <div className="rounded-lg border border-un1t-border overflow-hidden">
@@ -56,16 +57,24 @@ export default async function IntegrationHealthPage() {
           rows.map((r) => {
             const s = STATUS[r.status] || STATUS.unknown
             return (
-              <div key={r.key} className="flex items-center gap-3 px-4 py-3 border-b border-un1t-border last:border-b-0 bg-un1t-surface">
-                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: s.dot }} />
+              <div key={r.key} className="flex items-start gap-3 px-4 py-3 border-b border-un1t-border last:border-b-0 bg-un1t-surface">
+                <span className="w-2.5 h-2.5 rounded-full shrink-0 mt-1.5" style={{ backgroundColor: s.dot }} />
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-un1t-text truncate">{r.name}</div>
                   <div className="text-xs text-un1t-subtle truncate">{r.detail}</div>
+                  {r.remedy ? (
+                    <div className="text-xs text-un1t-muted mt-1">
+                      {r.remedy}
+                      {r.href ? (
+                        <>{' '}<Link href={r.href} className="text-mia hover:underline font-medium">Fix →</Link></>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
                 {r.lastSuccess ? (
-                  <span className="text-xs text-un1t-subtle shrink-0 hidden sm:inline">last ok {ago(r.lastSuccess)}</span>
+                  <span className="text-xs text-un1t-subtle shrink-0 hidden sm:inline mt-0.5">last ok {ago(r.lastSuccess)}</span>
                 ) : null}
-                <span className={`text-[11px] font-medium px-2 py-0.5 rounded shrink-0 ${s.chip}`}>{s.label}</span>
+                <span className={`text-[11px] font-medium px-2 py-0.5 rounded shrink-0 mt-0.5 ${s.chip}`}>{s.label}</span>
               </div>
             )
           })
@@ -73,7 +82,7 @@ export default async function IntegrationHealthPage() {
       </div>
 
       <p className="text-xs text-un1t-muted mt-4">
-        Signals consolidated from cron heartbeats, WhatsApp number quality/token status, and the webhook dead-letter queue.
+        Signals consolidated from cron heartbeats, WhatsApp number quality/token status, the webhook dead-letter queue, the Glofox &amp; Xero connections, and Postmark bounce/complaint rates (last 24h).
       </p>
     </div>
   )
