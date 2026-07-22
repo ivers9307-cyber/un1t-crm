@@ -641,6 +641,7 @@ function summaryFor(block) {
     case 'booking':     return block.slug ? `slug: ${block.slug}` : ''
     case 'event':       return block.slug ? `event: ${block.slug}` : 'no event'
     case 'lead_form':   return block.heading || 'Waitlist'
+    case 'class_funnel': return block.consult_slug ? `consult: ${block.consult_slug}` : 'no consult upsell'
     case 'pillars':     return `${(block.items || []).length} items`
     case 'gallery':     return `${(block.items || []).length} photo${(block.items || []).length === 1 ? '' : 's'}`
     case 'embed':       return block.url ? new URL(block.url).hostname.replace(/^www\./, '') : 'no URL'
@@ -665,6 +666,7 @@ function BlockEditPanel(props) {
     case 'booking':     return <BookingEdit     {...props} />
     case 'event':       return <EventEdit       {...props} />
     case 'lead_form':   return <LeadFormEdit    {...props} />
+    case 'class_funnel': return <ClassFunnelEdit {...props} />
     case 'pillars':     return <PillarsEdit     {...props} />
     case 'gallery':     return <GalleryEdit     {...props} />
     case 'embed':       return <EmbedEdit       {...props} />
@@ -808,6 +810,63 @@ function LeadFormEdit({ block, onUpdate }) {
       <Field label="Consent checkbox text" hint="Shown beside the opt-in checkbox. Keep it explicit for GDPR — name the channels (email/SMS/WhatsApp).">
         <Textarea value={block.consent_label || ''} onChange={(v) => onUpdate({ consent_label: v })} maxLength={400} rows={3} />
       </Field>
+    </>
+  )
+}
+
+function ClassFunnelEdit({ block, onUpdate, availableBookingTypes }) {
+  const bts = availableBookingTypes || []
+  return (
+    <>
+      <Field label="Heading">
+        <Input value={block.heading || ''} onChange={(v) => onUpdate({ heading: v })} maxLength={200} placeholder="Your first 3 classes are free" />
+      </Field>
+      <Field label="Sub-copy" hint="Line under the heading on the details step.">
+        <Textarea value={block.subhead || ''} onChange={(v) => onUpdate({ subhead: v })} maxLength={400} rows={2} />
+      </Field>
+      <Field label="Consent checkbox text" hint="Beside the opt-in checkbox. Keep it explicit for GDPR — name the channels (email/SMS/WhatsApp).">
+        <Textarea value={block.consent_label || ''} onChange={(v) => onUpdate({ consent_label: v })} maxLength={400} rows={3} />
+      </Field>
+      <Field label="Class booked — title">
+        <Input value={block.class_done_title || ''} onChange={(v) => onUpdate({ class_done_title: v })} maxLength={120} placeholder="You're being booked in 🎉" />
+      </Field>
+      <Field label="Class booked — message">
+        <Textarea value={block.class_done_body || ''} onChange={(v) => onUpdate({ class_done_body: v })} maxLength={400} rows={2} />
+      </Field>
+      <Field
+        label="Free-consult upsell"
+        hint={bts.length === 0
+          ? 'No active booking types here — leave empty for no upsell. Create one under Bookings → Booking types.'
+          : 'Optional. Pick the booking type offered after a class is booked. Leave empty for no upsell.'}
+      >
+        {bts.length > 0 ? (
+          <select
+            value={block.consult_slug || ''}
+            onChange={(e) => onUpdate({ consult_slug: e.target.value })}
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
+          >
+            <option value="">— No consult upsell —</option>
+            {bts.map((bt) => (
+              <option key={bt.id} value={bt.slug}>{bt.name} ({bt.slug})</option>
+            ))}
+            {block.consult_slug && !bts.some((bt) => bt.slug === block.consult_slug) && (
+              <option value={block.consult_slug}>{block.consult_slug} (no longer active)</option>
+            )}
+          </select>
+        ) : (
+          <Input value={block.consult_slug || ''} onChange={(v) => onUpdate({ consult_slug: v })} maxLength={200} placeholder="free-un1t-consultation" />
+        )}
+      </Field>
+      {block.consult_slug && (
+        <>
+          <Field label="Consult booked — title">
+            <Input value={block.consult_done_title || ''} onChange={(v) => onUpdate({ consult_done_title: v })} maxLength={120} placeholder="You're booked 🎉" />
+          </Field>
+          <Field label="Consult booked — message">
+            <Textarea value={block.consult_done_body || ''} onChange={(v) => onUpdate({ consult_done_body: v })} maxLength={400} rows={2} />
+          </Field>
+        </>
+      )}
     </>
   )
 }
