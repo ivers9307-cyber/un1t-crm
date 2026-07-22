@@ -22,6 +22,7 @@ import Link from 'next/link'
 import { Filter, X, Save, Bookmark, Trash2 } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
 import ContactsTable from './ContactsTable'
+import { hasMoreContacts, CONTACTS_PAGE_SIZE } from '@/lib/contacts-pagination'
 
 // FUNNEL.1 — chip values are the canonical classifier-derived funnel
 // slugs (mig 350): four lead columns, the win column, and the three
@@ -56,6 +57,7 @@ export default function ContactsView({
   const [clientCrossoverContext, setClientCrossoverContext] = useState({})
   const [count, setCount] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState(null)
 
   // Saved segments — list loaded once on mount. State for the small
@@ -163,7 +165,6 @@ export default function ContactsView({
     filter: filterRowCount > 0 ? filter : undefined,
     search: search || undefined,
     location_id: locationId,
-    limit: 200,
     // The contacts list shows crossover deal-holders (owned ∪ deal-at-
     // this-studio); other callers of this route (e.g. the send people-
     // picker) omit this and stay owned-only.
@@ -172,36 +173,36 @@ export default function ContactsView({
     primary_only: !showDuplicates,
   }), [filterRowCount, filter, search, locationId, showDuplicates])
 
-  const fetchContacts = useCallback(async () => {
-    setLoading(true)
+  // Fetch one page from the search route. `append` accumulates onto `base`
+  // (captured at click time) so "Load more" grows the list; a fresh
+  // filter/search fetches offset 0 and replaces. The status chip is applied
+  // downstream in visibleContacts, so pages are stored raw.
+  const fetchPage = useCallback(async ({ offset, append, base }) => {
+    if (append) setLoadingMore(true)
+    else setLoading(true)
     setError(null)
     try {
       const res = await fetch('/api/contacts/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, limit: CONTACTS_PAGE_SIZE, offset }),
       })
       const json = await res.json()
       if (!json.success) {
         setError(json.error || 'Search failed')
         return
       }
-      // Apply the simple status chip on top of the API result. The
-      // chip never goes through the API in v1 — it's a UI concept
-      // that pre-dates the audience filter and stays as a quick
-      // filter affordance.
-      const filtered = status
-        ? (json.contacts || []).filter(c => c.pipeline_stage_slug === status)
-        : (json.contacts || [])
-      setClientContacts(filtered)
-      setClientCrossoverContext(json.crossoverContext || {})
+      const incoming = json.contacts || []
       setCount(json.count)
+      setClientCrossoverContext(json.crossoverContext || {})
+      setClientContacts(append ? [...(base || []), ...incoming] : incoming)
     } catch (e) {
       setError(e.message || 'Network error')
     } finally {
-      setLoading(false)
+      if (append) setLoadingMore(false)
+      else setLoading(false)
     }
-  }, [body, status])
+  }, [body])
 
   // Re-fetch when advanced filter or search text changes. Status chip
   // changes don't trigger a fetch — we filter client-side from the
@@ -212,8 +213,8 @@ export default function ContactsView({
       setCount(null)
       return
     }
-    fetchContacts()
-  }, [apiActive, fetchContacts])
+    fetchPage({ offset: 0, append: false })
+  }, [apiActive, fetchPage])
 
   // Status filter + search applied client-side over initialContacts
   // when we're not using the API. Mirrors the server-rendered
@@ -262,6 +263,17 @@ export default function ContactsView({
   // server-rendered initial context. Mirrors the clientContacts vs
   // initialContacts choice in visibleContacts.
   const activeCrossoverContext = clientContacts !== null ? clientCrossoverContext : crossoverContext
+
+  // Pagination (lift the 200-row cap). rawLoaded is the un-overlaid loaded list
+  // — the server initial 200, or the accumulated search pages. "Load more"
+  // appends the next page from the search route (which orders identically, so
+  // paging past 200 stitches cleanly onto the server-rendered first page).
+  const rawLoaded = clientContacts !== null ? clientContacts : initialContacts
+  const hasMore = hasMoreContacts({ loadedLength: rawLoaded.length, count })
+  function loadMore() {
+    const base = clientContacts !== null ? clientContacts : initialContacts
+    fetchPage({ offset: base.length, append: true, base })
+  }
 
   return (
     <div>
@@ -445,6 +457,22 @@ export default function ContactsView({
       )}
 
       <ContactsTable contacts={visibleContacts} locationId={locationId} crossoverContext={activeCrossoverContext} canMerge={canMerge} canDelete={canDelete} />
+
+      {hasMore && (
+        <div className="mt-4 flex flex-col items-center gap-2">
+          <button
+            type="button"
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="px-4 py-2 rounded-md border border-un1t-border text-sm text-un1t-text hover:bg-un1t-border/30 disabled:opacity-50"
+          >
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
+          {count !== null && (
+            <span className="text-xs text-un1t-subtle">Showing {rawLoaded.length} of {count}</span>
+          )}
+        </div>
+      )}
     </div>
   )
 }
