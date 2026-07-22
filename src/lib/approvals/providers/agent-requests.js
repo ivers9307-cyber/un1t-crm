@@ -17,6 +17,7 @@
 // (GET ?conversation_id= form).
 
 import { viewerActiveLocationId } from '../registry'
+import { formatMoneyMinor } from '@/lib/money-format'
 
 const KIND_LABELS = {
   pause: 'Pause membership',
@@ -29,7 +30,9 @@ const KIND_LABELS = {
 export function agentRequestSubtitle(row) {
   const d = row?.details || {}
   if (row?.kind === 'class_booking') {
-    return [d.class_name, d.class_time].filter(Boolean).join(' · ') || 'Class booking request'
+    const parts = [d.class_name, d.class_time].filter(Boolean)
+    if (d.paid) parts.push(`💳 Paid ${formatMoneyMinor(d.amount_cents, d.currency)}`)
+    return parts.join(' · ') || 'Class booking request'
   }
   if (row?.kind === 'consultation') {
     return [d.date, d.start_time].filter(Boolean).join(' · ') || 'Consultation request'
@@ -70,8 +73,8 @@ export const agentRequestsProvider = {
       subtitle: agentRequestSubtitle(r).slice(0, 160),
       meta: 'via the customer agent',
       submittedAt: r.created_at,
-      amount: null,
-      currency: null,
+      amount: r.details?.paid ? (r.details.amount_cents ?? null) : null,
+      currency: r.details?.paid ? (r.details.currency || 'EUR') : null,
       reviewUrl: `/settings/customer-agent/requests?focus=${r.id}`,
     }))
     return { count: items.length, items }
