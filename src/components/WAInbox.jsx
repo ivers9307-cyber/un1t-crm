@@ -14,7 +14,7 @@ import {
   ArrowLeft, Send, MessageCircle, Clock, CheckCheck,
   Check, Image as ImageIcon, FileText, Mic, AlertCircle, RefreshCw,
   UserPlus, X, UserCheck, LayoutTemplate, CalendarPlus, MoreHorizontal,
-  Sparkles
+  Sparkles, Plus
 } from 'lucide-react'
 
 function formatTime(dateStr) {
@@ -146,6 +146,9 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   const [cardSets, setCardSets] = useState(null)
   const [selectedCardSetId, setSelectedCardSetId] = useState('')
   const [sendingCardSet, setSendingCardSet] = useState(false)
+  // INBOX-REDESIGN.3.2 — the card-set picker row is now revealed on demand
+  // from the "+" composer menu rather than always rendered.
+  const [showCardSetPicker, setShowCardSetPicker] = useState(false)
   // FLOW-SEND — drop the location's booking Flow into an open conversation
   // (availability comes back on the conversation GET).
   const [flowAvailable, setFlowAvailable] = useState(false)
@@ -154,6 +157,23 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   const [selectedTemplate, setSelectedTemplate] = useState(null)
   const [templateVars, setTemplateVars] = useState({})
   const [sendingTemplate, setSendingTemplate] = useState(false)
+  // INBOX-REDESIGN.3.2 — unified "+" composer menu (Template / Card set /
+  // Booking Flow), open-window-only. Same click-toggled popover idiom as
+  // the header's ⋯ menu above: trigger + menu refs, outside-click
+  // `mousedown` listener, role="menu"/menuitem.
+  const [showComposerMenu, setShowComposerMenu] = useState(false)
+  const composerMenuButtonRef = useRef(null)
+  const composerMenuRef = useRef(null)
+  useEffect(() => {
+    if (!showComposerMenu) return
+    function onClick(e) {
+      if (composerMenuButtonRef.current?.contains(e.target)) return
+      if (composerMenuRef.current?.contains(e.target)) return
+      setShowComposerMenu(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [showComposerMenu])
   const messagesEndRef = useRef(null)
   // Slow heartbeat — safety net for cases where Realtime drops a row
   // event (network blip, reconnect race). 60s is plenty given that
@@ -302,6 +322,8 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       fetchApprovals(selectedId)
       setShowAddContact(false)
       setShowMoreMenu(false)
+      setShowComposerMenu(false)
+      setShowCardSetPicker(false)
     }
   }, [selectedId])
 
@@ -561,6 +583,119 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
     : null
   const isUnknown = conversation && !conversation.contact_id
   const headerName = conversation?.contacts?.name || conversation?.wa_profile_name || conversation?.wa_phone || ''
+
+  // INBOX-REDESIGN.3.2 — template list + preview/send UI, shared between the
+  // window-closed composer (the only send route when closed) and the
+  // window-open composer's "+" menu → Template item (same picker, now
+  // reachable from both states — defined once so the two call sites can
+  // never drift apart).
+  const templateListJsx = (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs text-un1t-subtle font-semibold uppercase tracking-wider">Select a template</p>
+        <button type="button" onClick={() => setShowTemplatePicker(false)} className="text-un1t-subtle hover:text-un1t-text">
+          <X size={14} />
+        </button>
+      </div>
+      {templates.length === 0 ? (
+        <p className="text-xs text-un1t-muted py-2">No approved templates available. Create one in WhatsApp → Templates.</p>
+      ) : (
+        <div className="space-y-1 max-h-48 overflow-auto">
+          {templates.map(t => {
+            const bodyComp = t.components?.find(c => c.type === 'BODY')
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => selectTemplate(t)}
+                className="w-full text-left px-3 py-2 rounded-md hover:bg-un1t-border/30 transition-colors"
+              >
+                <p className="text-sm font-medium flex items-center gap-1.5">
+                  {t.name}
+                  {t.quality_rating === 'RED' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-700">RED</span>}
+                  {t.quality_rating === 'YELLOW' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-700">YELLOW</span>}
+                </p>
+                <p className="text-xs text-un1t-muted truncate mt-0.5">
+                  {bodyComp?.text || 'No body text'}
+                </p>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+
+  const templateSendJsx = selectedTemplate ? (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs text-un1t-subtle font-semibold uppercase tracking-wider">
+          Template: {selectedTemplate.name}
+        </p>
+        <button
+          type="button"
+          onClick={() => { setSelectedTemplate(null); setShowTemplatePicker(true) }}
+          className="text-xs text-un1t-subtle hover:text-un1t-text"
+        >
+          Change
+        </button>
+      </div>
+
+      {/* Template preview — retokened INBOX-REDESIGN.3.2 off a hard-coded
+          WhatsApp-green hex; matches the inbound/preview bubble style from
+          the sibling INBOX-REDESIGN.3.1 bubble retoken. */}
+      <div className="bg-un1t-surface text-un1t-text border border-un1t-border rounded-lg px-3 py-2 mb-3 max-w-[80%]">
+        <p className="text-sm whitespace-pre-wrap">
+          {(() => {
+            const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY')
+            let text = bodyComp?.text || ''
+            // Replace variables with filled values
+            text = text.replace(/\{\{(\d+)\}\}/g, (match, num) => {
+              return templateVars[num] || `{{${num}}}`
+            })
+            return text
+          })()}
+        </p>
+      </div>
+
+      {/* Variable inputs */}
+      {(() => {
+        const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY')
+        const vars = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
+        if (vars.length === 0) return null
+
+        return (
+          <div className="space-y-2 mb-3">
+            {vars.map((v, i) => {
+              const num = String(i + 1)
+              return (
+                <div key={num} className="flex items-center gap-2">
+                  <span className="text-xs text-un1t-muted w-10">{`{{${num}}}`}</span>
+                  <input
+                    type="text"
+                    value={templateVars[num] || ''}
+                    onChange={e => setTemplateVars({ ...templateVars, [num]: e.target.value })}
+                    placeholder={num === '1' ? 'e.g. first name' : `Variable ${num}`}
+                    className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                  />
+                </div>
+              )
+            })}
+          </div>
+        )
+      })()}
+
+      <button
+        type="button"
+        onClick={handleSendTemplate}
+        disabled={sendingTemplate}
+        className="flex items-center gap-2 text-sm bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 w-full justify-center"
+      >
+        <Send size={14} />
+        {sendingTemplate ? 'Sending...' : 'Send Template'}
+      </button>
+    </div>
+  ) : null
 
   return (
     <div className={`flex ${embedded ? 'h-full' : 'h-screen'}`}>
@@ -987,71 +1122,141 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
             {/* Message input / Template picker */}
             <div className="border-t border-un1t-border bg-un1t-surface shrink-0">
               {windowOpen ? (
-                /* Normal text input when window is open */
-                <div className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={newMessage}
-                      onChange={e => setNewMessage(e.target.value)}
-                      onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
-                      placeholder="Type a message..."
-                      className="flex-1 bg-un1t-bg border border-un1t-border rounded-full px-4 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
-                    />
-                    <button
-                      onClick={handleSend}
-                      disabled={sending || !newMessage.trim()}
-                      className="w-10 h-10 bg-green-600 rounded-full flex items-center justify-center hover:bg-green-700 transition-colors disabled:opacity-50"
-                    >
-                      <Send size={16} className="text-un1t-text ml-0.5" />
-                    </button>
+                showTemplatePicker || selectedTemplate ? (
+                  /* INBOX-REDESIGN.3.2 — Template opened from the "+" menu
+                     below while the window is open. Same list/preview UI as
+                     the window-closed path (shared consts above so the two
+                     states can never drift apart). */
+                  <div className="px-4 py-3">
+                    {showTemplatePicker && !selectedTemplate && templateListJsx}
+                    {templateSendJsx}
                   </div>
-                  {/* C4 — send a curated card set as a media carousel (hidden
-                      when the location has none configured) */}
-                  {Array.isArray(cardSets) && cardSets.length > 0 && (
-                    <div className="flex items-center gap-2 mt-2">
-                      <ImageIcon size={12} className="text-un1t-muted shrink-0" />
-                      <select
-                        value={selectedCardSetId}
-                        onChange={e => setSelectedCardSetId(e.target.value)}
-                        disabled={sendingCardSet}
-                        className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-xs text-un1t-text focus:outline-none focus:border-un1t-muted disabled:opacity-50"
-                      >
-                        <option value="">Send cards…</option>
-                        {cardSets.map(s => (
-                          <option key={s.id} value={s.id}>{s.name} ({s.cards?.length || 0} cards)</option>
-                        ))}
-                      </select>
+                ) : (
+                  /* Normal text input when window is open */
+                  <div className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      {/* INBOX-REDESIGN.3.2 — unified "+" composer menu:
+                          Template / Card set / Booking Flow, replacing the
+                          separate always-visible rows those used to be.
+                          Same popover idiom as the header ⋯ menu above
+                          (trigger + menu refs, outside-click mousedown
+                          listener, role="menu"/menuitem) — anchored
+                          bottom-full instead of top-full since this trigger
+                          sits at the bottom of the pane. */}
+                      <div className="relative shrink-0">
+                        <button
+                          ref={composerMenuButtonRef}
+                          type="button"
+                          onClick={() => setShowComposerMenu(v => !v)}
+                          className="w-9 h-9 flex items-center justify-center text-un1t-subtle hover:text-un1t-text rounded-full border border-un1t-border transition-colors"
+                          aria-haspopup="menu"
+                          aria-expanded={showComposerMenu}
+                          title="More options"
+                        >
+                          <Plus size={18} />
+                        </button>
+                        {showComposerMenu && (
+                          <div
+                            ref={composerMenuRef}
+                            role="menu"
+                            className="absolute bottom-full mb-1 z-20 bg-un1t-surface border border-un1t-border rounded-md shadow-lg py-1 min-w-[180px]"
+                          >
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() => { setShowComposerMenu(false); setShowTemplatePicker(true) }}
+                              className="w-full text-left px-3 py-1.5 text-xs text-un1t-text hover:bg-un1t-border/40 flex items-center gap-2 transition-colors"
+                            >
+                              <LayoutTemplate size={13} />
+                              Template
+                            </button>
+                            {/* C4 — curated card sets (hidden when the location has none configured) */}
+                            {Array.isArray(cardSets) && cardSets.length > 0 && (
+                              <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => { setShowComposerMenu(false); setShowCardSetPicker(true) }}
+                                className="w-full text-left px-3 py-1.5 text-xs text-un1t-text hover:bg-un1t-border/40 flex items-center gap-2 transition-colors"
+                              >
+                                <ImageIcon size={13} />
+                                Card set
+                              </button>
+                            )}
+                            {/* FLOW-SEND — hidden when the location has no Flow
+                                configured, or the sender isn't a contact yet
+                                (the Flow books against the linked contact) */}
+                            {flowAvailable && conversation?.contact_id && (
+                              <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => { setShowComposerMenu(false); handleSendFlow() }}
+                                disabled={sendingFlow}
+                                className="w-full text-left px-3 py-1.5 text-xs text-un1t-text hover:bg-un1t-border/40 flex items-center gap-2 transition-colors disabled:opacity-50"
+                              >
+                                <CalendarPlus size={13} />
+                                {sendingFlow ? 'Sending…' : 'Booking Flow'}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <input
+                        type="text"
+                        value={newMessage}
+                        onChange={e => setNewMessage(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
+                        placeholder="Type a message..."
+                        className="flex-1 bg-un1t-bg border border-un1t-border rounded-full px-4 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                      />
                       <button
-                        type="button"
-                        onClick={handleSendCardSet}
-                        disabled={sendingCardSet || !selectedCardSetId}
-                        className="text-xs bg-green-600 text-white px-3 py-1 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50"
+                        onClick={handleSend}
+                        disabled={sending || !newMessage.trim()}
+                        className="w-10 h-10 bg-green-600 rounded-full flex items-center justify-center hover:bg-green-700 transition-colors disabled:opacity-50"
                       >
-                        {sendingCardSet ? 'Sending…' : 'Send cards'}
+                        <Send size={16} className="text-un1t-text ml-0.5" />
                       </button>
                     </div>
-                  )}
-                  {/* FLOW-SEND — drop the booking Flow into the chat (hidden when
-                      the location has no Flow configured, or the sender isn't a
-                      contact yet — the Flow books against the linked contact) */}
-                  {flowAvailable && conversation?.contact_id && (
-                    <div className="flex items-center gap-2 mt-2">
-                      <CalendarPlus size={12} className="text-un1t-muted shrink-0" />
-                      <button
-                        type="button"
-                        onClick={handleSendFlow}
-                        disabled={sendingFlow}
-                        className="text-xs bg-green-600 text-white px-3 py-1 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50"
-                      >
-                        {sendingFlow ? 'Sending…' : 'Send booking Flow'}
-                      </button>
-                      <span className="text-[11px] text-un1t-muted">In-chat &ldquo;Book your first visit&rdquo;</span>
-                    </div>
-                  )}
-                </div>
+                    {/* C4 — send a curated card set as a media carousel;
+                        revealed on demand from the "+" menu above instead of
+                        always-visible (dismiss via the X). */}
+                    {showCardSetPicker && Array.isArray(cardSets) && cardSets.length > 0 && (
+                      <div className="flex items-center gap-2 mt-2">
+                        <ImageIcon size={12} className="text-un1t-muted shrink-0" />
+                        <select
+                          value={selectedCardSetId}
+                          onChange={e => setSelectedCardSetId(e.target.value)}
+                          disabled={sendingCardSet}
+                          className="bg-un1t-bg border border-un1t-border rounded-md px-2 py-1 text-xs text-un1t-text focus:outline-none focus:border-un1t-muted disabled:opacity-50"
+                        >
+                          <option value="">Send cards…</option>
+                          {cardSets.map(s => (
+                            <option key={s.id} value={s.id}>{s.name} ({s.cards?.length || 0} cards)</option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={handleSendCardSet}
+                          disabled={sendingCardSet || !selectedCardSetId}
+                          className="text-xs bg-green-600 text-white px-3 py-1 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50"
+                        >
+                          {sendingCardSet ? 'Sending…' : 'Send cards'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowCardSetPicker(false)}
+                          className="text-un1t-subtle hover:text-un1t-text"
+                          title="Close"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )
               ) : (
-                /* Template picker when window is closed */
+                /* Template picker when window is closed — the only send
+                   route in this state; unchanged (same shared list/preview
+                   consts as the open-window "+" menu path above). */
                 <div className="px-4 py-3">
                   {!showTemplatePicker && !selectedTemplate && (
                     <div className="text-center">
@@ -1059,6 +1264,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                         The 24h window is closed. Send a template message to start the conversation.
                       </p>
                       <button
+                        type="button"
                         onClick={() => setShowTemplatePicker(true)}
                         className="flex items-center gap-2 mx-auto text-sm bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors"
                       >
@@ -1068,108 +1274,8 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
                     </div>
                   )}
 
-                  {showTemplatePicker && !selectedTemplate && (
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-xs text-un1t-subtle font-semibold uppercase tracking-wider">Select a template</p>
-                        <button onClick={() => setShowTemplatePicker(false)} className="text-un1t-subtle hover:text-un1t-text">
-                          <X size={14} />
-                        </button>
-                      </div>
-                      {templates.length === 0 ? (
-                        <p className="text-xs text-un1t-muted py-2">No approved templates available. Create one in WhatsApp → Templates.</p>
-                      ) : (
-                        <div className="space-y-1 max-h-48 overflow-auto">
-                          {templates.map(t => {
-                            const bodyComp = t.components?.find(c => c.type === 'BODY')
-                            return (
-                              <button
-                                key={t.id}
-                                onClick={() => selectTemplate(t)}
-                                className="w-full text-left px-3 py-2 rounded-md hover:bg-un1t-border/30 transition-colors"
-                              >
-                                <p className="text-sm font-medium flex items-center gap-1.5">
-                                  {t.name}
-                                  {t.quality_rating === 'RED' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-700">RED</span>}
-                                  {t.quality_rating === 'YELLOW' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-700">YELLOW</span>}
-                                </p>
-                                <p className="text-xs text-un1t-muted truncate mt-0.5">
-                                  {bodyComp?.text || 'No body text'}
-                                </p>
-                              </button>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {selectedTemplate && (
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-xs text-un1t-subtle font-semibold uppercase tracking-wider">
-                          Template: {selectedTemplate.name}
-                        </p>
-                        <button
-                          onClick={() => { setSelectedTemplate(null); setShowTemplatePicker(true) }}
-                          className="text-xs text-un1t-subtle hover:text-un1t-text"
-                        >
-                          Change
-                        </button>
-                      </div>
-
-                      {/* Template preview */}
-                      <div className="bg-[#005c4b] rounded-lg px-3 py-2 mb-3 max-w-[80%]">
-                        <p className="text-sm text-un1t-text whitespace-pre-wrap">
-                          {(() => {
-                            const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY')
-                            let text = bodyComp?.text || ''
-                            // Replace variables with filled values
-                            text = text.replace(/\{\{(\d+)\}\}/g, (match, num) => {
-                              return templateVars[num] || `{{${num}}}`
-                            })
-                            return text
-                          })()}
-                        </p>
-                      </div>
-
-                      {/* Variable inputs */}
-                      {(() => {
-                        const bodyComp = selectedTemplate.components?.find(c => c.type === 'BODY')
-                        const vars = bodyComp?.text?.match(/\{\{\d+\}\}/g) || []
-                        if (vars.length === 0) return null
-
-                        return (
-                          <div className="space-y-2 mb-3">
-                            {vars.map((v, i) => {
-                              const num = String(i + 1)
-                              return (
-                                <div key={num} className="flex items-center gap-2">
-                                  <span className="text-xs text-un1t-muted w-10">{`{{${num}}}`}</span>
-                                  <input
-                                    type="text"
-                                    value={templateVars[num] || ''}
-                                    onChange={e => setTemplateVars({ ...templateVars, [num]: e.target.value })}
-                                    placeholder={num === '1' ? 'e.g. first name' : `Variable ${num}`}
-                                    className="flex-1 bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
-                                  />
-                                </div>
-                              )
-                            })}
-                          </div>
-                        )
-                      })()}
-
-                      <button
-                        onClick={handleSendTemplate}
-                        disabled={sendingTemplate}
-                        className="flex items-center gap-2 text-sm bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 w-full justify-center"
-                      >
-                        <Send size={14} />
-                        {sendingTemplate ? 'Sending...' : 'Send Template'}
-                      </button>
-                    </div>
-                  )}
+                  {showTemplatePicker && !selectedTemplate && templateListJsx}
+                  {templateSendJsx}
                 </div>
               )}
             </div>
