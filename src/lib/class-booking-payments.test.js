@@ -29,6 +29,19 @@ describe('createClassBookingPayment', () => {
     expect(res.checkout).toEqual(expect.objectContaining({ token: 'tok', provider: 'revolut' }))
     expect(updates.some((u) => u.payment_provider_ref === 'ord_1' && u.payment_status === 'pending')).toBe(true)
   })
+
+  it('refuses a non-revolut provider (no release path yet) without charging', async () => {
+    const stripeLoc = { id: 'loc1', settings: { payments: { provider: 'stripe_connect', stripe_connected_account_id: 'acct_1' } } }
+    await expect(createClassBookingPayment({ db: makeDb([]), request, location: stripeLoc, amountCents: 2900, currency: 'EUR' }))
+      .rejects.toThrow(/release path/)
+    expect(createPayment).not.toHaveBeenCalled()
+  })
+
+  it('throws if persisting the provider ref fails (never hands back a checkout URL)', async () => {
+    const errDb = { from() { return this }, update() { return this }, eq: async () => ({ error: { message: 'db down' } }) }
+    await expect(createClassBookingPayment({ db: errDb, request, location, amountCents: 2900, currency: 'EUR' }))
+      .rejects.toThrow(/Failed to persist payment ref/)
+  })
 })
 
 describe('markClassBookingPaymentStatus', () => {

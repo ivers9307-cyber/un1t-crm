@@ -22,6 +22,13 @@ import { getAppUrl } from './app-url'
  */
 export async function createClassBookingPayment({ db, request, location, amountCents, currency }) {
   const { provider, connectedAccountId } = resolveLocationPaymentProvider(location)
+  // Phase 1 ships the Revolut release path only (webhook + poll re-check are
+  // Revolut-keyed). Refuse to CHARGE on a rail we can't yet release, so we never
+  // take money against a booking that can't be freed. Stripe Connect lands with
+  // its own release path in a later phase.
+  if (provider !== 'revolut') {
+    throw new Error(`Payment provider '${provider}' has no class-booking release path yet`)
+  }
   const created = await paymentsFor(provider).createPayment({
     amountCents,
     currency: currency || 'EUR',
@@ -32,7 +39,12 @@ export async function createClassBookingPayment({ db, request, location, amountC
     connectedAccountId,
     applicationFeeCents: 0,
   })
-  await db.from('class_booking_requests')
+  // The provider order is now open. Persisting its ref is REQUIRED — the webhook
+  // and poll route find the booking by payment_provider_ref. If this write fails
+  // we must NOT hand back a checkout URL (the customer could pay against a row
+  // nothing can ever release); throw so the caller returns an error and this
+  // unpaid order simply expires.
+  const { error: refErr } = await db.from('class_booking_requests')
     .update({
       payment_status: 'pending',
       payment_provider: provider,
@@ -43,6 +55,9 @@ export async function createClassBookingPayment({ db, request, location, amountC
       currency: currency || 'EUR',
     })
     .eq('id', request.id)
+  if (refErr) {
+    throw new Error(`Failed to persist payment ref for booking ${request.id}: ${refErr.message}`)
+  }
   return {
     paymentId: request.id,
     checkout: {
