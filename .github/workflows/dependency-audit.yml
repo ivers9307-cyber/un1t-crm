@@ -1,0 +1,45 @@
+# Dependency audit (audit this-quarter item CI-2).
+#
+# Fails on a HIGH/critical advisory against RUNTIME deps (--omit=dev). This is
+# the gate that would have caught the undici scare and the live sharp/libvips
+# HIGH. Two triggers a regression can't dodge:
+#   - schedule: catches a NEW advisory published against unchanged, frozen deps
+#     (exactly the sharp case — no dependency change, yet suddenly vulnerable).
+#   - pull_request (only when a lockfile/manifest changes): scans Dependabot
+#     bumps and any PR that touches deps, so a regression can't merge.
+# It deliberately does NOT run on every unrelated PR — only dep-touching ones —
+# so it never blocks feature work that didn't change dependencies.
+#
+# --audit-level=high ignores moderates (the build-time postcss-via-Next
+# moderate stays below the threshold and does not fail CI).
+name: Dependency audit
+
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Monday 06:00 UTC
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - package.json
+      - package-lock.json
+      - mobile/package.json
+      - mobile/package-lock.json
+
+concurrency:
+  group: dep-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: npm audit (runtime, high+)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install dependencies (web)
+        run: npm ci
+      - name: Audit runtime dependencies (web)
+        run: npm audit --omit=dev --audit-level=high
