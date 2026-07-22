@@ -17,6 +17,8 @@ import { isValidMobileNumber } from '@/lib/phone-validate'
 import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
 import { logWarn } from '@/lib/log'
 import { resolveLandingPath, classFunnelConfigFromBlocks } from '@/lib/public-landing'
+import { createClassBookingPayment } from '@/lib/class-booking-payments'
+import { locationCanTakePayments } from '@/lib/location-payments'
 
 export const runtime = 'nodejs'
 
@@ -69,7 +71,19 @@ export async function POST(request) {
   // location's class_funnel block (defaults reproduce today's Stillorgan
   // values) — never Stillorgan literals, so a second gym on this block isn't
   // mistagged 'stillorgan-start' or misreported to Meta as /start.
-  const { tag, leadSource, eventSourceUrl, trialMembershipId, trialPlanCode } = classFunnelConfigFromBlocks(page.blocks, landingPath)
+  const { tag, leadSource, eventSourceUrl, trialMembershipId, trialPlanCode, priceCents, currency } = classFunnelConfigFromBlocks(page.blocks, landingPath)
+
+  // Paid intro? Load the location's payment settings so we can resolve the rail.
+  // `wantsPayment` gates the paid branch; `paid` is only true once we've also
+  // confirmed the location can actually charge (Revolut always; Stripe needs a
+  // connected account).
+  const wantsPayment = Number.isFinite(priceCents) && priceCents > 0
+  let locationForPay = null
+  if (wantsPayment) {
+    const { data: loc } = await db.from('locations').select('id, settings').eq('id', locationId).maybeSingle()
+    locationForPay = loc || null
+  }
+  const paid = wantsPayment && locationCanTakePayments(locationForPay)
 
   // Validate the chosen class against the live bookable list — never trust the
   // client's event_id / class_name / starts_at. We use the SERVER's name + start
@@ -122,10 +136,13 @@ export async function POST(request) {
 
   // Dedupe: if this contact already has an active/booked request for this class
   // (double-submit, refresh, retry), don't create a second. Treat as success.
+  // `awaiting_payment` is included so a double-submit of a PAID booking doesn't
+  // open a second provider order; a failed/expired payment (`payment_failed`) is
+  // deliberately NOT included so the customer can retry checkout.
   try {
     const { data: existing } = await db.from('class_booking_requests')
       .select('id').eq('contact_id', contactId).eq('glofox_event_id', b.event_id)
-      .in('status', ['queued', 'processing', 'booked']).limit(1).maybeSingle()
+      .in('status', ['queued', 'processing', 'booked', 'awaiting_payment']).limit(1).maybeSingle()
     if (existing) return NextResponse.json({ success: true, data: { queued: true, deduped: true } })
   } catch (e) { logWarn('classbook', 'dedupe check failed', { err: e }) }
 
@@ -136,8 +153,8 @@ export async function POST(request) {
     starts_at: chosen.starts_at,
     customer_name: name, customer_email: b.email.toLowerCase(), customer_phone: b.phone,
     trial_membership_id: trialMembershipId, trial_plan_code: trialPlanCode,
-    status: 'queued',
-  }).select('id').maybeSingle()
+    status: paid ? 'awaiting_payment' : 'queued',
+  }).select('id, class_name').maybeSingle()
   if (insErr) {
     // A unique-violation (23505) means a concurrent request won the race for the
     // same (contact, class) — that's a successful dedupe, not an error.
@@ -146,13 +163,31 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Could not start your booking. Please try again.' }, { status: 500 })
   }
 
-  // QSTASH.7 — push delivery. Nudge QStash to deliver this row to the
-  // worker route now instead of waiting for the next cron tick. Fire-
-  // and-forget: env-gated (no QSTASH_TOKEN → skipped), and any failure
-  // leaves the row for the cron — the queue table is the delivery
-  // guarantee, QStash is the latency optimisation. Dedup id is
-  // DASH-ONLY (QStash 400s on colons — the QSTASH.2 lesson).
-  if (queuedRow?.id) {
+  // Paid intro: open a provider payment and hold the booking `awaiting_payment`.
+  // The signed webhook (or the poll route's re-check) releases it to the queue
+  // once the money clears. The CAPI Lead below still fires — a captured lead is
+  // a lead regardless of whether they go on to pay.
+  let paymentResponse = null
+  if (paid && queuedRow?.id) {
+    try {
+      const pay = await createClassBookingPayment({
+        db,
+        request: { id: queuedRow.id, location_id: locationId, class_name: queuedRow.class_name },
+        location: locationForPay,
+        amountCents: priceCents,
+        currency,
+      })
+      paymentResponse = { requiresPayment: true, paymentId: pay.paymentId, checkout: pay.checkout }
+    } catch (e) {
+      logWarn('classbook', 'payment open failed', { err: e })
+      return NextResponse.json({ success: false, error: 'Could not start checkout. Please try again.' }, { status: 502 })
+    }
+  } else if (queuedRow?.id) {
+    // Free booking — QSTASH.7 push delivery: nudge QStash to deliver this row to
+    // the worker now instead of waiting for the next cron tick. Fire-and-forget:
+    // env-gated (no QSTASH_TOKEN → skipped), and any failure leaves the row for
+    // the cron — the queue table is the delivery guarantee. Dedup id is DASH-ONLY
+    // (QStash 400s on colons — the QSTASH.2 lesson).
     try {
       await publishQueuePush({
         path: CLASS_BOOKINGS_WORKER_PATH,
@@ -177,5 +212,7 @@ export async function POST(request) {
     })
   } catch (e) { logWarn('classbook', 'capi lead failed', { err: e }) }
 
+  // Paid: hand the funnel the checkout details. Free: the booking is queued.
+  if (paymentResponse) return NextResponse.json({ success: true, data: paymentResponse })
   return NextResponse.json({ success: true, data: { queued: true } })
 }
