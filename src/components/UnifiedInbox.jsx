@@ -52,8 +52,22 @@ function rowName(conv) {
 
 // Two-letter initials for the queue row's ChannelAvatar tile — first
 // letters of the first two words of the display name (INBOX-REDESIGN.4).
+// Strips a leading "@" and splits on non-alphanumerics so Instagram
+// handles like "@niamh.obrien" yield "NO" instead of a lone "@"
+// (INBOX-REDESIGN.6).
 function initialsOf(name) {
-  return (name || '').trim().split(/\s+/).slice(0, 2).map(w => w[0] || '').join('').toUpperCase()
+  return String(name || '').replace(/^@/, '').split(/[^A-Za-z0-9]+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'
+}
+
+// The Approvals queue filter reads the SAME signal as the row's purple
+// "Approval" badge below (conv.pending_approval — stamped server-side from
+// a pending agent_membership_requests row by the wa/ig conversations
+// routes; see src/app/api/whatsapp/conversations/route.js). Deliberately
+// NOT inbox-queues.js's needsAction() — that predicate is the reply/handoff
+// badge signal (needsReply || isAgentHandoff) and is unrelated to pending
+// approvals (INBOX-REDESIGN.6).
+function isPendingApproval(conv) {
+  return !!conv?.pending_approval
 }
 
 const VALID_CHANNELS = new Set(['wa', 'ig', 'em'])
@@ -158,10 +172,15 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
 
   const queueMatched = queueFilter === 'all'
     ? merged
-    : merged.filter(queueFilter === 'handoff' ? isAgentHandoff : needsReply)
+    : queueFilter === 'handoff'
+      ? merged.filter(isAgentHandoff)
+      : queueFilter === 'approvals'
+        ? merged.filter(isPendingApproval)
+        : merged.filter(needsReply)
   const visible = queueMatched.filter(conv => matchesSearch(`${rowName(conv)} ${conv.last_message_preview || ''}`, search))
   const needsReplyCount = merged.filter(needsReply).length
   const handoffCount = merged.filter(isAgentHandoff).length
+  const approvalsCount = merged.filter(isPendingApproval).length
 
   // UIX-P2 — the command centre needs the selected thread's linked
   // contact. The queue rows already embed contacts!contact_id, so no
@@ -211,9 +230,11 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
           </div>
         </div>
 
-        {/* Queue split chips (P1a semantics; INBOX-HANDOFF.1 added the agent-handoff queue) */}
+        {/* Queue split chips (P1a semantics; INBOX-HANDOFF.1 added the
+            agent-handoff queue; INBOX-REDESIGN.6 added Approvals and
+            relabelled Everything/Agent handoff → All/Handoff per spec §4.2) */}
         <div className="flex gap-1.5 px-3 py-2 border-b border-un1t-border">
-          {[['needs_reply', 'Needs reply'], ['handoff', 'Agent handoff'], ['all', 'Everything']].map(([key, label]) => (
+          {[['all', 'All'], ['needs_reply', 'Needs reply'], ['handoff', 'Handoff'], ['approvals', 'Approvals']].map(([key, label]) => (
             <button
               key={key}
               type="button"
@@ -222,13 +243,16 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
                 queueFilter === key
                   ? key === 'handoff'
                     ? 'bg-amber-500 text-white border-transparent'
-                    : 'bg-un1t-text text-un1t-bg border-transparent'
+                    : key === 'approvals'
+                      ? 'bg-purple-500 text-white border-transparent'
+                      : 'bg-un1t-text text-un1t-bg border-transparent'
                   : 'border-un1t-border text-un1t-subtle hover:text-un1t-text'
               }`}
             >
               {label}
               {key === 'needs_reply' && needsReplyCount > 0 && <span className="ml-1">· {needsReplyCount}</span>}
               {key === 'handoff' && handoffCount > 0 && <span className="ml-1">· {handoffCount}</span>}
+              {key === 'approvals' && approvalsCount > 0 && <span className="ml-1">· {approvalsCount}</span>}
             </button>
           ))}
         </div>
@@ -245,9 +269,11 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
 
           {!loading && merged.length > 0 && visible.length === 0 && (
             <p className="p-4 text-xs text-un1t-subtle text-center">
-              {queueFilter === 'handoff'
-                ? 'No agent handoffs waiting — the agent is handling things. 🤖'
-                : 'Queue clear — nothing needs a reply. 🎉'}
+              {search.trim()
+                ? `No matches for "${search.trim()}"`
+                : queueFilter === 'handoff'
+                  ? 'No agent handoffs waiting — the agent is handling things. 🤖'
+                  : 'Queue clear — nothing needs a reply. 🎉'}
             </p>
           )}
 
@@ -257,9 +283,12 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
             return (
               <button
                 key={`${conv._ch}:${conv.id}`}
+                type="button"
                 onClick={() => { setSelected({ ch: conv._ch, id: conv.id }); setCcTab('profile') }}
-                className={`grid grid-cols-[auto_auto_1fr_auto] items-center gap-[11px] w-full text-left px-4 py-3 border-b border-un1t-border/50 transition-colors ${
-                  isSelected ? 'bg-un1t-border/50' : 'hover:bg-un1t-border/20'
+                className={`relative grid grid-cols-[auto_auto_1fr_auto] items-center gap-[11px] w-full text-left px-4 py-3 border-b border-un1t-border/50 transition-colors ${
+                  isSelected
+                    ? 'bg-un1t-surface before:absolute before:inset-y-0 before:left-0 before:w-[2.5px] before:bg-un1t-text before:content-[""]'
+                    : 'hover:bg-un1t-border/20'
                 }`}
               >
                 <ChannelGlyph channel={channelOf(conv)} />
