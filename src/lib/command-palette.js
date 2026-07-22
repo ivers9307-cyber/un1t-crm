@@ -40,6 +40,11 @@ export const NAV_COMMANDS = [
 // a half-flow here. Jump-to-contact + PersonActionBar cover those.
 export const CREATE_COMMANDS = [
   { id: 'new-contact', label: 'New contact', href: '/contacts/new', permission: 'contacts' },
+  // FEAT-LAUNCH.1 — quick actions beyond new-contact. All are real standalone
+  // destinations (verified routes), permission-gated like the nav commands.
+  { id: 'send-message', label: 'Send a message', href: '/communications/send', anyPermission: ['email', 'whatsapp', 'sms'] },
+  { id: 'new-broadcast', label: 'New WhatsApp broadcast', href: '/whatsapp/broadcasts/new', permission: 'whatsapp' },
+  { id: 'new-event', label: 'New event', href: '/events/new', permission: 'races' },
 ]
 
 /**
@@ -83,3 +88,21 @@ export function sanitizeSearchTerm(term) {
 
 /** Minimum sanitized length before we hit the DB for contact search. */
 export const MIN_CONTACT_SEARCH_LEN = 2
+
+// FEAT-LAUNCH.1 — recents. Track the last few destinations the operator jumped
+// to from the palette so they can return in two keystrokes. Pure list-mgmt
+// (dedup-by-href, most-recent-first, capped); the .jsx owns localStorage I/O.
+export const RECENTS_CAP = 6
+
+export function addRecent(recents, item) {
+  if (!item?.href) return Array.isArray(recents) ? recents : []
+  const rest = (Array.isArray(recents) ? recents : []).filter((r) => r && r.href !== item.href)
+  return [{ label: item.label, href: item.href, type: item.type || 'go' }, ...rest].slice(0, RECENTS_CAP)
+}
+
+// Keep only well-formed recents (defends against corrupt/legacy localStorage).
+export function sanitizeRecents(recents) {
+  return (Array.isArray(recents) ? recents : [])
+    .filter((r) => r && typeof r.href === 'string' && r.href.startsWith('/') && typeof r.label === 'string')
+    .slice(0, RECENTS_CAP)
+}

@@ -6,6 +6,9 @@ import {
   matchesQuery,
   visibleCommands,
   sanitizeSearchTerm,
+  addRecent,
+  sanitizeRecents,
+  RECENTS_CAP,
 } from './command-palette'
 
 // A hasPerm predicate from a set of granted keys.
@@ -102,5 +105,53 @@ describe('sanitizeSearchTerm', () => {
   it('leaves a normal email/name search untouched', () => {
     expect(sanitizeSearchTerm('sarah@example.com')).toBe('sarah@example.com')
     expect(sanitizeSearchTerm('Sarah Doyle')).toBe('Sarah Doyle')
+  })
+})
+
+describe('FEAT-LAUNCH.1 quick actions', () => {
+  it('adds send-message / new-broadcast / new-event as permission-gated commands', () => {
+    const ids = CREATE_COMMANDS.map((c) => c.id)
+    expect(ids).toContain('send-message')
+    expect(ids).toContain('new-broadcast')
+    expect(ids).toContain('new-event')
+    // send-message is any-of comms perms; hidden with none, shown with one.
+    const send = CREATE_COMMANDS.find((c) => c.id === 'send-message')
+    expect(commandAllowed(send, none)).toBe(false)
+    expect(commandAllowed(send, granted('whatsapp'))).toBe(true)
+  })
+})
+
+describe('addRecent', () => {
+  it('prepends, dedupes by href, and caps at RECENTS_CAP', () => {
+    let r = []
+    r = addRecent(r, { label: 'Pipeline', href: '/pipeline', type: 'go' })
+    r = addRecent(r, { label: 'Contacts', href: '/contacts', type: 'go' })
+    expect(r.map((x) => x.href)).toEqual(['/contacts', '/pipeline'])
+    // revisiting moves it back to the front (no duplicate)
+    r = addRecent(r, { label: 'Pipeline', href: '/pipeline', type: 'go' })
+    expect(r.map((x) => x.href)).toEqual(['/pipeline', '/contacts'])
+    // cap
+    for (let i = 0; i < 10; i++) r = addRecent(r, { label: `P${i}`, href: `/p${i}` })
+    expect(r.length).toBe(RECENTS_CAP)
+  })
+  it('ignores items with no href', () => {
+    expect(addRecent([{ label: 'x', href: '/x' }], {})).toEqual([{ label: 'x', href: '/x' }])
+  })
+})
+
+describe('sanitizeRecents', () => {
+  it('drops malformed entries and non-internal hrefs', () => {
+    const out = sanitizeRecents([
+      { label: 'ok', href: '/ok' },
+      { label: 'bad-scheme', href: 'https://evil.com' },
+      { href: '/no-label' },
+      null,
+      'nope',
+    ])
+    expect(out).toEqual([{ label: 'ok', href: '/ok' }])
+  })
+  it('returns [] for non-array', () => {
+    expect(sanitizeRecents(null)).toEqual([])
+    expect(sanitizeRecents(undefined)).toEqual([])
   })
 })
