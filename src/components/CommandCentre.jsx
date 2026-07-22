@@ -54,6 +54,8 @@ export default function CommandCentre({ contactId, locationId, canEditConsent, c
   const [activities, setActivities] = useState([])
   const [consentLog, setConsentLog] = useState([])
   const [eventTypes, setEventTypes] = useState([])
+  const [signals, setSignals] = useState(null)
+  const [latestNote, setLatestNote] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showSequencePicker, setShowSequencePicker] = useState(false)
 
@@ -68,6 +70,8 @@ export default function CommandCentre({ contactId, locationId, canEditConsent, c
       setContact(bundle.contact)
       setActivities(bundle.activities || [])
       setEventTypes(bundle.event_types || [])
+      setSignals(bundle.signals || null)
+      setLatestNote(bundle.latestNote || null)
     }
     if (log?.success) setConsentLog(log.rows || [])
     setLoading(false)
@@ -78,6 +82,8 @@ export default function CommandCentre({ contactId, locationId, canEditConsent, c
     setActivities([])
     setConsentLog([])
     setEventTypes([])
+    setSignals(null)
+    setLatestNote(null)
     setShowSequencePicker(false)
     load()
   }, [load])
@@ -87,6 +93,14 @@ export default function CommandCentre({ contactId, locationId, canEditConsent, c
   const stage = prettyStage(contact?.pipeline_stage_slug)
   const tags = Array.isArray(contact?.tags) ? contact.tags : []
   const optedOut = contact?.wa_status === 'opted_out'
+  // 'overdue' churnClass and tier 'high' are the sharpest signal (red);
+  // 'medium' is amber; anything else (low tier, or a healthy/active
+  // contact with a null churnLabel) reads as low risk (emerald).
+  const churnColor = signals?.churnTier === 'high' || signals?.churnClass === 'overdue'
+    ? 'text-red-700'
+    : signals?.churnTier === 'medium'
+      ? 'text-amber-700'
+      : 'text-emerald-700'
 
   // Activity tab: merge the activities timeline with consent audit
   // lines into one stream, newest first.
@@ -144,6 +158,37 @@ export default function CommandCentre({ contactId, locationId, canEditConsent, c
             </span>
           ))}
         </div>
+
+        {/* INBOX-REDESIGN.4.2 — triage signals strip: churn/arrears/visits
+            at a glance so staff can gauge risk without opening the full
+            record. Reads the 4.1 base-payload fields; guarded for a bundle
+            that predates them (undefined signals) as well as a contact
+            with no signals of note (null fields throughout). */}
+        {signals && (
+          <div className="mt-3">
+            <div className="grid grid-cols-3 gap-2">
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-2">
+                <p className="text-[10px] uppercase tracking-wide text-un1t-subtle">Churn</p>
+                <p className={`text-xs font-semibold mt-0.5 ${churnColor}`}>
+                  {signals.churnLabel || 'Low'}
+                </p>
+              </div>
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-2">
+                <p className="text-[10px] uppercase tracking-wide text-un1t-subtle">Arrears</p>
+                <p className={`text-xs font-semibold mt-0.5 ${signals.arrearsCount > 0 ? 'text-amber-700' : 'text-un1t-text'}`}>
+                  {signals.arrearsCents > 0 ? `€${Math.round(signals.arrearsCents / 100)}` : '€0'}
+                </p>
+              </div>
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-2">
+                <p className="text-[10px] uppercase tracking-wide text-un1t-subtle">Visits 30d</p>
+                <p className="text-xs font-semibold mt-0.5 text-un1t-text">{signals.visits30 ?? 0}</p>
+              </div>
+            </div>
+            {signals.lastAttendedAt && (
+              <p className="text-[10px] text-un1t-muted mt-1.5">seen {timeAgo(signals.lastAttendedAt)}</p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
@@ -206,6 +251,17 @@ export default function CommandCentre({ contactId, locationId, canEditConsent, c
               canEdit={canEditConsent}
               glofoxMembershipStatus={contact?.glofox_membership_status}
             />
+
+            {/* Latest note (INBOX-REDESIGN.4.2) — most recent CRM note, so
+                staff catch context a teammate left without leaving the
+                thread. Absent for a contact with no notes yet. */}
+            {latestNote && (
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-2.5">
+                <p className="text-[10px] uppercase tracking-wide text-un1t-subtle mb-1">Notes</p>
+                <p className="text-xs text-un1t-text line-clamp-3">{latestNote.content}</p>
+                <p className="text-[10px] text-un1t-muted mt-1">{timeAgo(latestNote.created_at)}</p>
+              </div>
+            )}
           </>
         )}
 
