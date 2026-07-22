@@ -3,6 +3,7 @@ import {
   NAV_COMMANDS,
   CREATE_COMMANDS,
   commandAllowed,
+  entityResult,
   matchesQuery,
   visibleCommands,
   sanitizeSearchTerm,
@@ -153,5 +154,27 @@ describe('sanitizeRecents', () => {
   it('returns [] for non-array', () => {
     expect(sanitizeRecents(null)).toEqual([])
     expect(sanitizeRecents(undefined)).toEqual([])
+  })
+})
+
+describe('entityResult', () => {
+  it('shapes a contact row with the right href + fallbacks', () => {
+    expect(entityResult('contact', { id: 'c1', name: 'Ada', email: 'a@x.ie', phone: '+3531' }))
+      .toEqual({ type: 'contact', key: 'contact:c1', label: 'Ada', sublabel: 'a@x.ie', href: '/contacts/c1' })
+    // no name → email; sublabel falls to phone
+    expect(entityResult('contact', { id: 'c2', email: 'b@x.ie', phone: '+3532' }))
+      .toMatchObject({ label: 'b@x.ie', sublabel: 'b@x.ie', href: '/contacts/c2' })
+  })
+  it('shapes a staff row to the settings/staff detail route', () => {
+    expect(entityResult('staff', { id: 's1', full_name: 'Coach Bo', email: 'bo@x.ie' }))
+      .toEqual({ type: 'staff', key: 'staff:s1', label: 'Coach Bo', sublabel: 'bo@x.ie', href: '/settings/staff/s1' })
+  })
+  it('shapes an event row with a passed-through sublabel', () => {
+    expect(entityResult('event', { id: 'e1', name: 'Hyrox', sublabel: '12 Aug' }))
+      .toEqual({ type: 'event', key: 'event:e1', label: 'Hyrox', sublabel: '12 Aug', href: '/events/e1' })
+  })
+  it('returns null for an unknown type or an id-less row', () => {
+    expect(entityResult('invoice', { id: 'x' })).toBeNull()
+    expect(entityResult('contact', {})).toBeNull()
   })
 })

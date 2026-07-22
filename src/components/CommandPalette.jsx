@@ -9,8 +9,7 @@
 
 import { useRouter } from 'next/navigation'
 import { useState, useEffect, useRef } from 'react'
-import { Search, User, ArrowRight, Plus, Clock } from 'lucide-react'
-import { createBrowserClient } from '@/lib/supabase'
+import { Search, User, Users, Calendar, ArrowRight, Plus, Clock } from 'lucide-react'
 import { hasPermission } from '@/lib/permissions'
 import {
   NAV_COMMANDS,
@@ -28,7 +27,7 @@ export default function CommandPalette({ user }) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [contacts, setContacts] = useState([])
+  const [entities, setEntities] = useState([])
   const [recents, setRecents] = useState([])
   const [searching, setSearching] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
@@ -61,7 +60,7 @@ export default function CommandPalette({ user }) {
   useEffect(() => {
     if (open) {
       setQuery('')
-      setContacts([])
+      setEntities([])
       setActiveIndex(0)
       // Load recents from localStorage (sanitised against corrupt/legacy data).
       try {
@@ -76,29 +75,22 @@ export default function CommandPalette({ user }) {
   // Reset the highlighted row whenever the query changes.
   useEffect(() => { setActiveIndex(0) }, [query])
 
-  // Debounced contact search (browser Supabase client — RLS scopes the
-  // read to the caller's locations; we narrow to the active location).
+  // Debounced multi-entity search via the launcher endpoint (contacts + staff
+  // + events). Server-side because profiles has no client grant, and so all
+  // per-entity permission + tenant scoping is enforced in one guarded place.
   useEffect(() => {
     if (!open) return
     const term = sanitizeSearchTerm(query)
-    if (term.length < MIN_CONTACT_SEARCH_LEN || !locId) { setContacts([]); setSearching(false); return }
+    if (term.length < MIN_CONTACT_SEARCH_LEN || !locId) { setEntities([]); setSearching(false); return }
     let cancelled = false
     setSearching(true)
     const t = setTimeout(async () => {
       try {
-        const db = createBrowserClient()
-        const { data } = await db
-          .from('contacts')
-          .select('id, name, email, phone')
-          .eq('location_id', locId)
-          // CONTACT-DEDUP — jump straight to the one unified profile per
-          // person; the non-primary linked accounts route to it anyway.
-          .eq('is_primary_contact', true)
-          .or(`name.ilike.%${term}%,email.ilike.%${term}%,phone.ilike.%${term}%`)
-          .limit(6)
-        if (!cancelled) setContacts(Array.isArray(data) ? data : [])
+        const res = await fetch(`/api/launcher/search?q=${encodeURIComponent(term)}`)
+        const data = await res.json().catch(() => ({}))
+        if (!cancelled) setEntities(res.ok && data.success && Array.isArray(data.results) ? data.results : [])
       } catch {
-        if (!cancelled) setContacts([])
+        if (!cancelled) setEntities([])
       } finally {
         if (!cancelled) setSearching(false)
       }
@@ -123,13 +115,8 @@ export default function CommandPalette({ user }) {
     ...recentResults,
     ...createResults.filter((c) => !recentHrefs.has(c.href)).map((c) => ({ key: `create:${c.id}`, type: 'create', label: c.label, href: c.href })),
     ...navResults.filter((c) => !recentHrefs.has(c.href)).map((c) => ({ key: `nav:${c.id}`, type: 'go', label: c.label, href: c.href })),
-    ...contacts.map((c) => ({
-      key: `contact:${c.id}`,
-      type: 'contact',
-      label: c.name || c.email || 'Contact',
-      sublabel: c.email || c.phone || '',
-      href: `/contacts/${c.id}`,
-    })),
+    // Entity results come pre-shaped from /api/launcher/search (contact/staff/event).
+    ...entities.filter((e) => !recentHrefs.has(e.href)),
   ]
 
   function close() { setOpen(false) }
@@ -140,7 +127,7 @@ export default function CommandPalette({ user }) {
     // Record the jump so it surfaces under "Recent" next time.
     if (item.href) {
       try {
-        const next = addRecent(recents, { label: item.label, href: item.href, type: item.type === 'contact' ? 'contact' : 'go' })
+        const next = addRecent(recents, { label: item.label, href: item.href, type: ['contact', 'staff', 'event'].includes(item.type) ? item.type : 'go' })
         setRecents(next)
         localStorage.setItem(RECENTS_KEY, JSON.stringify(next))
       } catch { /* localStorage unavailable — recents are best-effort */ }
@@ -162,8 +149,8 @@ export default function CommandPalette({ user }) {
     }
   }
 
-  const ICONS = { contact: User, go: ArrowRight, create: Plus }
-  const TYPE_LABEL = { contact: 'Contact', go: 'Go to', create: 'Create' }
+  const ICONS = { contact: User, staff: Users, event: Calendar, go: ArrowRight, create: Plus }
+  const TYPE_LABEL = { contact: 'Contact', staff: 'Staff', event: 'Event', go: 'Go to', create: 'Create' }
 
   return (
     <div
@@ -184,7 +171,7 @@ export default function CommandPalette({ user }) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Search contacts, jump to a page, create…"
+            placeholder="Search contacts, staff, events, jump to a page…"
             className="flex-1 bg-transparent py-3 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none"
           />
           <kbd className="hidden sm:inline text-[10px] text-un1t-muted border border-un1t-border rounded px-1.5 py-0.5 shrink-0">esc</kbd>
