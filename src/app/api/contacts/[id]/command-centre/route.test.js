@@ -4,7 +4,12 @@
 //   - 401 when no user
 //   - 404 when the contact doesn't exist
 //   - 404 when the contact is in a different location (IDOR)
-//   - base scope keeps the original bundle shape (no drawer keys)
+//   - base scope keeps the original bundle shape (no drawer keys), plus
+//     the INBOX-REDESIGN.4.1 `signals` + `latestNote` triage fields
+//   - signals: 'overdue' (+ arrears) wins when the contact has an open
+//     PAST_DUE invoice, proving arrears is resolved BEFORE churn classifies
+//   - signals: an 'active' member tripping a churn-radar signal scores
+//     as at-risk with a label + tier
 //   - ?scope=drawer adds notes / sequences / wa / composer_templates /
 //     permissions; wa.window_open derives from window_expires_at
 //   - whatsapp_templates only queried when the caller holds `whatsapp`
@@ -40,7 +45,7 @@ const CONTACT = { id: 'c1', location_id: 'loc1', name: 'Emma Byrne' }
 // chain; awaiting it resolves the table's canned result.
 function chain(result) {
   const c = {}
-  for (const m of ['select', 'eq', 'order', 'limit']) c[m] = vi.fn(() => c)
+  for (const m of ['select', 'eq', 'order', 'limit', 'range']) c[m] = vi.fn(() => c)
   c.maybeSingle = vi.fn(() => Promise.resolve(result))
   c.then = (resolve, reject) => Promise.resolve(result).then(resolve, reject)
   return c
@@ -90,12 +95,16 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     expect(res.status).toBe(404)
   })
 
-  it('base scope keeps the original bundle shape', async () => {
+  it('base scope keeps the original bundle shape, plus triage signals', async () => {
     getCurrentUser.mockResolvedValue(USER)
     const db = mockDb({
       contacts: { data: CONTACT, error: null },
       activities: { data: [{ id: 'a1' }], error: null },
       event_types: { data: [{ id: 'et1' }], error: null },
+      notes: {
+        data: [{ content: 'Called about renewal', created_at: '2026-07-20T10:00:00.000Z' }],
+        error: null,
+      },
     })
     createServerClient.mockReturnValue(db)
     const res = await GET(req(), props)
@@ -104,9 +113,90 @@ describe('GET /api/contacts/[id]/command-centre', () => {
     expect(j).toMatchObject({ success: true, contact: { id: 'c1' } })
     expect(j.activities).toHaveLength(1)
     expect(j.event_types).toHaveLength(1)
+    // Drawer-only keys (the full notes list, wa window) still stay off the
+    // base bundle — only DRAWER.2's ?scope=drawer branch adds those.
     expect(j.notes).toBeUndefined()
     expect(j.wa).toBeUndefined()
-    expect(db.__queried).not.toContain('notes')
+    // INBOX-REDESIGN.4.1 — signals + latestNote DO ship in the base bundle
+    // (that's the point: the inbox panel gets them without ?scope=drawer),
+    // so the base path now queries `notes` too (for latestNote only — a
+    // single row, distinct from the drawer's full notes list).
+    expect(db.__queried).toContain('notes')
+    expect(j.signals).toEqual({
+      churnClass: 'out',
+      churnLabel: null,
+      churnTier: null,
+      arrearsCents: 0,
+      arrearsCount: 0,
+      visits30: 0,
+      lastAttendedAt: null,
+    })
+    expect(j.latestNote).toEqual({ content: 'Called about renewal', created_at: '2026-07-20T10:00:00.000Z' })
+  })
+
+  it('signals: an open PAST_DUE invoice classifies as overdue (arrears resolved before churn)', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const MEMBER = { id: 'c1', location_id: 'loc1', name: 'Jay Byrne', glofox_membership_status: 'member' }
+    const db = mockDb({
+      contacts: { data: MEMBER, error: null },
+      activities: { data: [], error: null },
+      event_types: { data: [], error: null },
+      // loadContactArrears fires two glofox_invoices reads (PAST_DUE, then
+      // PAID); this table-keyed mock returns the SAME canned rows for both.
+      // Omitting glofox_user_id keeps nettedOutByRetry (src/lib/glofox-
+      // arrears.js) from matching the row against "itself" as a settled
+      // retry — see that module's member-keyed matching — so it survives
+      // netting and lands in arrears as a real PAST_DUE debt.
+      glofox_invoices: {
+        data: [{ id: 'inv1', contact_id: 'c1', amount_cents: 6000, invoice_date: '2026-07-01' }],
+        error: null,
+      },
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await GET(req(), props)
+    const j = await res.json()
+    expect(res.status).toBe(200)
+    // The route can only reach 'overdue' here because arrears (loadContactArrears)
+    // was awaited to completion BEFORE churnCtx/classifyContact ran — proving
+    // the arrears-before-churn ordering the route relies on actually holds.
+    expect(j.signals).toMatchObject({
+      churnClass: 'overdue',
+      churnLabel: 'Payment overdue',
+      churnTier: null,
+      arrearsCents: 6000,
+      arrearsCount: 1,
+    })
+  })
+
+  it('signals: an active member tripping a churn-radar signal scores as at risk', async () => {
+    getCurrentUser.mockResolvedValue(USER)
+    const goneQuietAt = new Date(Date.now() - 20 * 86_400_000).toISOString()
+    const MEMBER = {
+      id: 'c1',
+      location_id: 'loc1',
+      name: 'Sam Byrne',
+      glofox_membership_status: 'member',
+      glofox_membership_type: 'time',
+      last_attended_at: goneQuietAt,
+      total_attended_30d: 0,
+      total_attended_7d: 0,
+      total_noshow_30d: 0,
+    }
+    const db = mockDb({
+      contacts: { data: MEMBER, error: null },
+      activities: { data: [], error: null },
+      event_types: { data: [], error: null },
+    })
+    createServerClient.mockReturnValue(db)
+    const res = await GET(req(), props)
+    const j = await res.json()
+    expect(res.status).toBe(200)
+    expect(j.signals.churnClass).toBe('active')
+    expect(j.signals.churnLabel).toBe('At risk')
+    expect(j.signals.churnTier).toBe('low')
+    expect(j.signals.arrearsCents).toBe(0)
+    expect(j.signals.arrearsCount).toBe(0)
+    expect(j.signals.lastAttendedAt).toBe(goneQuietAt)
   })
 
   it('?scope=drawer adds notes, sequences, wa window and permissions', async () => {
