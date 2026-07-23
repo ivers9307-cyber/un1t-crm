@@ -28,7 +28,7 @@ describe('prompt builders', () => {
     const { system } = buildExpansionPrompt({ week, slot: 1 })
     expect(system).toMatch(/scoreboard/i)
     expect(system).toContain('board.stations[].name')
-    expect(system).toMatch(/under 16 characters/i)
+    expect(system).toMatch(/characters or fewer/i) // compact station values
     expect(system).toContain('full_session') // the coaching prose lives here, not on the board
   })
   it('expansion prompt carries the week stimulus and the two tiers only', () => {
