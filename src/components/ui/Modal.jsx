@@ -61,7 +61,7 @@ export default function Modal({ open, onClose, title, footer, size = 'md', dismi
         className={modalPanelClasses({ size, className }) + ' outline-none'}
       >
         {(title != null) && (
-          <div className="flex items-center justify-between border-b border-un1t-border px-5 py-3">
+          <div className="flex items-center justify-between border-b border-un1t-border px-5 py-3 shrink-0">
             <h2 id={titleId} className="text-sm font-semibold text-un1t-text">{title}</h2>
             {dismissable && (
               <button
@@ -75,9 +75,9 @@ export default function Modal({ open, onClose, title, footer, size = 'md', dismi
             )}
           </div>
         )}
-        <div className="px-5 py-4">{children}</div>
+        <div className="px-5 py-4 flex-1 min-h-0 overflow-y-auto">{children}</div>
         {footer != null && (
-          <div className="flex items-center justify-end gap-2 border-t border-un1t-border px-5 py-3">
+          <div className="flex items-center justify-end gap-2 border-t border-un1t-border px-5 py-3 shrink-0">
             {footer}
           </div>
         )}
