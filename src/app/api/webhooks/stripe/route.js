@@ -19,6 +19,8 @@ import { resolveRacePaymentByProviderRef, markRacePaymentStatus } from '@/lib/ra
 import { syncOrderFromRacePayment } from '@/lib/orders'
 import { sendRaceConfirmations } from '@/lib/race-confirmations'
 import { refundPatchFromCharge } from '@/lib/stripe-refund-sync'
+import { resolveClassBookingPaymentByRef, markClassBookingPaymentStatus } from '@/lib/class-booking-payments'
+import { publishQueuePush, CLASS_BOOKINGS_WORKER_PATH } from '@/lib/qstash'
 import { logWarn, logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
@@ -64,6 +66,34 @@ export async function POST(request) {
       // (idempotent — safe on Stripe retries); then send confirmations once.
       const session = event.data.object
       const db = createServerClient()
+      if (session.metadata?.domain === 'un1t_class_booking') {
+        // A class-funnel intro payment. Separate lifecycle from race_payments
+        // (class_booking_requests) — resolve + release are both idempotent, so
+        // a Stripe retry after a first successful release is a safe no-op.
+        const row = await resolveClassBookingPaymentByRef(db, session.id)
+        if (row) {
+          const { released } = await markClassBookingPaymentStatus({
+            db,
+            request: row,
+            providerState: 'completed',
+            providerAmount: Number.isFinite(session.amount_total) ? session.amount_total : null,
+          })
+          if (released) {
+            try {
+              await publishQueuePush({
+                path: CLASS_BOOKINGS_WORKER_PATH,
+                body: { id: row.id },
+                deduplicationId: `class-booking-${row.id}`,
+              })
+            } catch {
+              // Queue publish is best-effort here — the row is already 'queued'
+              // in the DB, which is the durable guarantee; a drain/poll path
+              // still picks it up. Never let a queue hiccup fail the webhook.
+            }
+          }
+        }
+        return NextResponse.json({ received: true })
+      }
       const payment = await resolveRacePaymentByProviderRef(db, session.id)
       if (payment) {
         const result = await markRacePaymentStatus({
@@ -83,6 +113,11 @@ export async function POST(request) {
     } else if (event.type === 'checkout.session.expired') {
       const session = event.data.object
       const db = createServerClient()
+      if (session.metadata?.domain === 'un1t_class_booking') {
+        const row = await resolveClassBookingPaymentByRef(db, session.id)
+        if (row) await markClassBookingPaymentStatus({ db, request: row, providerState: 'cancelled', providerAmount: null })
+        return NextResponse.json({ received: true })
+      }
       const payment = await resolveRacePaymentByProviderRef(db, session.id)
       if (payment) {
         await markRacePaymentStatus({ db, payment, revolutState: 'cancelled', revolutAmount: null })
