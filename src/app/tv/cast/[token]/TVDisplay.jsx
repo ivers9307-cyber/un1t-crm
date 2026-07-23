@@ -8,6 +8,8 @@
 //   - <img>          for source_type 'storage' or 'url'
 //   - TemplateCanvas for source_type 'template' (TV-TEMPLATE.1) —
 //                    a fixed base image with text zones overlaid
+//   - HyroxBoard     for source_type 'generated' (HYROX-TC.3) —
+//                    the purpose-built portrait Hyrox board
 //   - Idle view      (UN1T mark + live clock) if no content row
 //
 // TV-ROTATION.1 — the whole stage is counter-rotated by
@@ -16,6 +18,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import TemplateCanvas from '@/components/TemplateCanvas'
+import HyroxBoard from '@/components/HyroxBoard'
 import { tvFontFamily } from '@/components/tv-font'
 
 // Content-push display (near-static); runs all day — keep the poll relaxed
@@ -102,6 +105,8 @@ export default function TVDisplay({ token, initial }) {
   let body
   if (content?.source_type === 'template' && content?.resolved_url) {
     body = <TemplateCanvas content={content} />
+  } else if (content?.source_type === 'generated' && content?.board) {
+    body = <HyroxBoard board={content.board} />
   } else if (content?.resolved_url) {
     body = (
       <img
