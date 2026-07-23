@@ -81,4 +81,19 @@ describe('LLM output coercion (regression: session_generation_failed)', () => {
     expect(a.data.dial).toBe('mixed')
     expect(a.data.plan[0].phase).toBe('base')
   })
+  it('flattens a nested-object full_session field into readable text, not raw JSON', () => {
+    const raw = {
+      ...validSession,
+      full_session: {
+        ...validSession.full_session,
+        main: { part_a: { label: 'Aerobic floor', structure: '4 x 500m run' }, part_b: { label: 'Sled circuit', estimated_time_minutes: 18 } },
+      },
+    }
+    const s = parseSession(raw)
+    expect(s.ok).toBe(true)
+    expect(s.data.full_session.main).toContain('Aerobic floor')
+    expect(s.data.full_session.main).toContain('Sled circuit')
+    expect(s.data.full_session.main).not.toContain('{')
+    expect(s.data.full_session.main).not.toContain('"')
+  })
 })
