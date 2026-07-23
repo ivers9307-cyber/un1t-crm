@@ -53,6 +53,7 @@ import { rostersProvider } from './providers/rosters'
 import { invoicesQueueProvider } from './providers/invoices-queue'
 import { issuesProvider } from './providers/issues'
 import { agentRequestsProvider } from './providers/agent-requests'
+import { hyroxSessionsProvider } from './providers/hyrox-sessions'
 import { hasPermission } from '@/lib/permissions'
 
 export const APPROVALS_PROVIDERS = Object.freeze([
@@ -73,6 +74,9 @@ export const APPROVALS_PROVIDERS = Object.freeze([
   timeOffProvider,
   shiftSwapsProvider,
   rostersProvider,
+  // HYROX-TC.2 — coach review of AI-generated Hyrox Training Club
+  // sessions before they publish to the studio TV.
+  hyroxSessionsProvider,
 ])
 
 /**
