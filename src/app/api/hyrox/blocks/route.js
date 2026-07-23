@@ -9,10 +9,12 @@
 // actual network call through the metered wrapper.
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { getCurrentUser } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, isoDate, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike, isoDate } from '@/lib/schemas'
+import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { anthropicMessages } from '@/lib/anthropic'
 import { resolveHyroxSettings } from '@/lib/hyrox/settings'
 import { generateBlock } from '@/lib/hyrox/generate-block'
@@ -38,16 +40,16 @@ const BlockCreateSchema = z.object({
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
-  }
-
   const v = await validateBody(request, BlockCreateSchema)
   if (!v.ok) return v.response
   const body = v.data
 
-  const guard = assertLocationAccess(user, body.location_id)
-  if (guard) return guard
+  // Authorize the grant AT THE TARGET location (not the caller's active one):
+  // a manager at location A must not generate a block for location B where they
+  // lack the grant. Mirrors the per-location gate the session routes use.
+  if (!hasPermissionForLocation(user, body.location_id, APPROVAL_CATEGORY_PERMISSION.hyrox_sessions)) {
+    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
 
   const db = createServerClient()
   const { data: loc } = await db.from('locations').select('id, name, settings').eq('id', body.location_id).single()
