@@ -53,6 +53,25 @@ export function registryHealth(status) {
   return REGISTRY_TO_HEALTH[status] || 'unknown'
 }
 
+// Payment health over a 7d window (lower volume than email). race_payments
+// records a hard failure as failed_at — a genuine provider error, distinct
+// from customer 'abandoned' (walking away isn't a fault). Small-sample
+// guarded, and thresholds are tight because a failing checkout is high-impact.
+export function paymentStatus({ total = 0, failed = 0 } = {}) {
+  const t = Number(total) || 0
+  const f = Number(failed) || 0
+  if (t === 0) return { status: 'ok', detail: 'No payments in last 7 days' }
+  const rate = f / t
+  const pct = Math.round(rate * 100)
+  if (t < 8) {
+    if (f > 0) return { status: 'warn', detail: `${f} of ${t} payment${t === 1 ? '' : 's'} failed (7d)` }
+    return { status: 'ok', detail: `${t} processed (7d)` }
+  }
+  if (rate >= 0.2) return { status: 'down', detail: `${pct}% of payments failed — ${f}/${t} (7d)` }
+  if (rate >= 0.08) return { status: 'warn', detail: `${pct}% of payments failed — ${f}/${t} (7d)` }
+  return { status: 'ok', detail: `${t} processed, ${f} failed (7d)` }
+}
+
 // Postmark deliverability over a 24h window. Bounces + spam complaints hurt
 // sender reputation, so a spike is the "silently broken" signal. Small-sample
 // guarded: a couple of bounces out of a handful of sends isn't a provider
@@ -201,6 +220,24 @@ export async function getIntegrationHealth(db, locationId) {
     rows.push({ key: 'email', name: 'Email (Postmark)', status: s.status, detail: s.detail })
   } catch { rows.push({ key: 'email', name: 'Email (Postmark)', status: 'unknown', detail: 'Unavailable' }) }
 
+  // 7. Payments — hard checkout failures over 7d. race_payments has no
+  // location_id; scope via the parent race_event (inner join). NOT head:true —
+  // an embedded-resource filter under a count-only select returns 0 (known
+  // PostgREST trap), so fetch the (low-volume) rows and count in JS.
+  try {
+    const sinceIso = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+    const { data: pays } = await db
+      .from('race_payments')
+      .select('failed_at, race_events!inner(location_id)')
+      .eq('race_events.location_id', locationId)
+      .gte('created_at', sinceIso)
+      .limit(500)
+    const total = (pays || []).length
+    const failed = (pays || []).filter((p) => p.failed_at).length
+    const s = paymentStatus({ total, failed })
+    rows.push({ key: 'payments', name: 'Payments', status: s.status, detail: s.detail })
+  } catch { rows.push({ key: 'payments', name: 'Payments', status: 'unknown', detail: 'Unavailable' }) }
+
   // Attach a runbook (remedy + fix link) to every degraded/down row so the pane
   // is actionable. Keyed by the row-key prefix; only surfaced when there's
   // genuinely something to do (warn/down — not ok, and not the ambiguous
@@ -223,4 +260,5 @@ const REMEDIES = {
   glofox: { text: 'Reconnect Glofox in Settings → Integrations.', href: '/settings/integrations-hub' },
   xero: { text: 'Reconnect Xero in Settings → Integrations if the sync error persists.', href: '/settings/integrations-hub' },
   email: { text: 'A high bounce/complaint rate hurts deliverability — review recipients and your sending domain.', href: '/settings/email-domain' },
+  payments: { text: 'Checkouts are failing — verify the payment provider (Revolut/Stripe) connection and recent transactions.', href: null },
 }

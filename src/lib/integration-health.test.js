@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { cronStatus, waNumberStatus, backlogStatus, worstStatus, registryHealth, emailSendStatus } from './integration-health.js'
+import { cronStatus, waNumberStatus, backlogStatus, worstStatus, registryHealth, emailSendStatus, paymentStatus } from './integration-health.js'
 
 describe('cronStatus', () => {
   it('ok when nothing is stale', () => {
@@ -74,5 +74,21 @@ describe('emailSendStatus', () => {
     expect(emailSendStatus({ total: 100, bounced: 7 }).status).toBe('warn')   // 7%
     expect(emailSendStatus({ total: 100, bounced: 20 }).status).toBe('down')  // 20%
     expect(emailSendStatus({ total: 100, bounced: 10, complained: 6 }).status).toBe('down') // 16%
+  })
+})
+
+describe('paymentStatus', () => {
+  it('ok with no payments (no news is good news)', () => {
+    expect(paymentStatus({ total: 0 }).status).toBe('ok')
+    expect(paymentStatus().status).toBe('ok')
+  })
+  it('small sample: only a real failure warns, abandonment is not counted here', () => {
+    expect(paymentStatus({ total: 3, failed: 0 }).status).toBe('ok')
+    expect(paymentStatus({ total: 3, failed: 1 }).status).toBe('warn')
+  })
+  it('grades the hard-failure ratio above the sample floor (tight thresholds)', () => {
+    expect(paymentStatus({ total: 50, failed: 2 }).status).toBe('ok')    // 4%
+    expect(paymentStatus({ total: 50, failed: 5 }).status).toBe('warn')  // 10%
+    expect(paymentStatus({ total: 50, failed: 12 }).status).toBe('down') // 24%
   })
 })
