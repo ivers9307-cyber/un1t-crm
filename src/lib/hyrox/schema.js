@@ -9,21 +9,27 @@
 import { z } from 'zod'
 import { PHASES, DIFFICULTY_DIALS, DEFAULT_CAP_MINUTES } from './constants'
 
+// Board fields are TV-scoreboard values, not prose. The .max() caps are a
+// generous BACKSTOP: a paragraph-length value (the 2026-07-23 board looked like a
+// text dump because the model wrote coaching sentences into these) fails
+// validation and the generator retries, so it never reaches the wall. Normal
+// short values ("400m", "9kg x 20", "4 ROUNDS FOR TIME") pass untouched. The
+// tight brevity bar itself lives in the prompt + the eval.
 export const stationSchema = z.object({
-  name: z.string().min(1),
-  performance: z.string().min(1),
-  elite: z.string().min(1),
+  name: z.string().min(1).max(48),
+  performance: z.string().min(1).max(48),
+  elite: z.string().min(1).max(48),
 })
 
 export const boardSchema = z.object({
   wordmark: z.string().min(1).default('HYROX TRAINING CLUB'),
   location_label: z.string().min(1),
-  week_label: z.string().min(1),
-  focus: z.string().min(1),
-  format: z.string().min(1),
+  week_label: z.string().min(1).max(60),
+  focus: z.string().min(1).max(60),
+  format: z.string().min(1).max(60),
   cap_minutes: z.number().int().positive().default(DEFAULT_CAP_MINUTES),
   stations: z.array(stationSchema).min(1),
-  target: z.string().min(1),
+  target: z.string().min(1).max(140),
 })
 
 export const fullSessionSchema = z.object({
@@ -86,6 +92,13 @@ const text = (v) => {
   if (typeof v === 'object') return objectToText(v)
   return String(v)
 }
+// Board values render on a single scoreboard line — collapse any whitespace or
+// newlines the model added so nothing wraps oddly. Tidies only; never truncates
+// (over-long values are rejected by the schema cap, not silently cut).
+const oneLine = (v) => {
+  const t = text(v)
+  return typeof t === 'string' ? t.replace(/\s+/g, ' ').trim() : t
+}
 const intFrom = (v) => {
   if (v == null || v === '') return undefined
   const m = String(v).match(/-?\d+/)
@@ -114,21 +127,21 @@ const clean = (obj) => {
 
 function normalizeStation(s) {
   if (!s || typeof s !== 'object') return s
-  return clean({ ...s, name: text(s.name), performance: text(s.performance), elite: text(s.elite) })
+  return clean({ ...s, name: oneLine(s.name), performance: oneLine(s.performance), elite: oneLine(s.elite) })
 }
 
 function normalizeBoard(b) {
   if (!b || typeof b !== 'object') return b
   return clean({
     ...b,
-    wordmark: b.wordmark == null ? undefined : text(b.wordmark),
-    location_label: text(b.location_label),
-    week_label: text(b.week_label),
-    focus: text(b.focus),
-    format: text(b.format),
+    wordmark: b.wordmark == null ? undefined : oneLine(b.wordmark),
+    location_label: oneLine(b.location_label),
+    week_label: oneLine(b.week_label),
+    focus: oneLine(b.focus),
+    format: oneLine(b.format),
     cap_minutes: intFrom(b.cap_minutes),
     stations: Array.isArray(b.stations) ? b.stations.map(normalizeStation) : b.stations,
-    target: text(b.target),
+    target: oneLine(b.target),
   })
 }
 
