@@ -17,7 +17,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
-import { Dumbbell, AlertCircle, Check, RotateCcw, RefreshCw, ChevronRight } from 'lucide-react'
+import { Dumbbell, AlertCircle, Check, RotateCcw, RefreshCw, ChevronRight, X, Plus, Star } from 'lucide-react'
 import { Button, Modal, Field, Table } from '@/components/ui'
 import { DIFFICULTY_DIALS } from '@/lib/hyrox/constants'
 
@@ -53,13 +53,70 @@ function StatusChip({ status }) {
   )
 }
 
-export default function HyroxPlanner({ initialBlock, initialSessions, locationId, canManage }) {
+export default function HyroxPlanner({ initialBlock, initialSessions, initialSettings, locationId, canManage }) {
   const db = createBrowserClient()
   const searchParams = useSearchParams()
 
   const [block, setBlock] = useState(initialBlock)
   const [sessions, setSessions] = useState(initialSessions || [])
   const [error, setError] = useState(null)
+
+  // ── House style & examples panel ────────────────────────────────────
+  const [houseStyle, setHouseStyle] = useState(initialSettings?.houseStyle || '')
+  const [settingsCharter, setSettingsCharter] = useState(initialSettings?.charter || '')
+  const [examples, setExamples] = useState(initialSettings?.styleExamples || [])
+  const [addingExample, setAddingExample] = useState(false)
+  const [newExampleLabel, setNewExampleLabel] = useState('')
+  const [newExampleText, setNewExampleText] = useState('')
+  const [savingSettings, setSavingSettings] = useState(false)
+  const [settingsSaved, setSettingsSaved] = useState(false)
+  const [settingsError, setSettingsError] = useState(null)
+
+  function addExample() {
+    if (!newExampleText.trim()) return
+    setExamples((rows) => [
+      ...rows,
+      {
+        id: crypto.randomUUID(),
+        source: 'pasted',
+        label: newExampleLabel.trim() || undefined,
+        text: newExampleText.trim(),
+        added_at: new Date().toISOString(),
+      },
+    ])
+    setNewExampleLabel('')
+    setNewExampleText('')
+    setAddingExample(false)
+  }
+
+  function removeExample(index) {
+    setExamples((rows) => rows.filter((_, i) => i !== index))
+  }
+
+  async function handleSaveSettings() {
+    setSavingSettings(true)
+    setSettingsError(null)
+    setSettingsSaved(false)
+    try {
+      const res = await fetch('/api/hyrox/settings', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          location_id: locationId,
+          charter: settingsCharter,
+          house_style: houseStyle,
+          style_examples: examples,
+        }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to save settings.')
+      setSettingsSaved(true)
+    } catch (err) {
+      setSettingsError(err.message)
+    } finally {
+      setSavingSettings(false)
+    }
+  }
 
   const refresh = useCallback(async () => {
     const { data: freshBlock } = await db
@@ -218,6 +275,7 @@ export default function HyroxPlanner({ initialBlock, initialSessions, locationId
   const [editStations, setEditStations] = useState([])
   const [sessionBusy, setSessionBusy] = useState(null)
   const [drawerError, setDrawerError] = useState(null)
+  const [exemplarNote, setExemplarNote] = useState(null)
 
   // Auto-open from the approvals-inbox deep link (?focus=<id>).
   useEffect(() => {
@@ -233,12 +291,14 @@ export default function HyroxPlanner({ initialBlock, initialSessions, locationId
     setEditFocus(s.focus || '')
     setEditStations(Array.isArray(s.board?.stations) ? s.board.stations.map((st) => ({ ...st })) : [])
     setDrawerError(null)
+    setExemplarNote(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedId])
 
   function closeDrawer() {
     setFocusedId(null)
     setDrawerError(null)
+    setExemplarNote(null)
   }
 
   function updateStation(index, field, value) {
@@ -281,6 +341,23 @@ export default function HyroxPlanner({ initialBlock, initialSessions, locationId
       await refresh()
       setEditFocus(json.data?.focus || '')
       setEditStations(Array.isArray(json.data?.board?.stations) ? json.data.board.stations.map((st) => ({ ...st })) : [])
+    } catch (err) {
+      setDrawerError(err.message)
+    } finally {
+      setSessionBusy(null)
+    }
+  }
+
+  async function handleSaveExample() {
+    if (!focusedSession) return
+    setSessionBusy('exemplar')
+    setDrawerError(null)
+    setExemplarNote(null)
+    try {
+      const res = await fetch(`/api/hyrox/sessions/${focusedSession.id}/exemplar`, { method: 'POST' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to save example.')
+      setExemplarNote(json.data?.added ? 'Saved as example' : 'Already saved')
     } catch (err) {
       setDrawerError(err.message)
     } finally {
@@ -349,6 +426,139 @@ export default function HyroxPlanner({ initialBlock, initialSessions, locationId
         <div className="mb-4 flex items-center gap-2 text-xs text-un1t-subtle bg-un1t-surface border border-un1t-border rounded-md px-3 py-2">
           <RefreshCw size={12} className="animate-spin" /> {expandProgress}
         </div>
+      )}
+
+      {canManage && (
+        <details className="bg-un1t-surface border border-un1t-border rounded-lg mb-6 group">
+          <summary className="cursor-pointer list-none px-5 py-4 flex items-center justify-between">
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-un1t-text">House style &amp; examples</div>
+              <div className="text-xs text-un1t-subtle mt-0.5">
+                Teach the generator how this studio actually runs its classes.
+              </div>
+            </div>
+            <ChevronRight size={14} className="text-un1t-subtle transition-transform group-open:rotate-90 shrink-0" />
+          </summary>
+
+          <div className="border-t border-un1t-border p-5 space-y-4">
+            <Field
+              id="hyrox-house-style"
+              label="House style"
+              hint="How you run your classes: structure, cue language, favoured formats, equipment, terminology, do's and don'ts."
+            >
+              {(props) => (
+                <textarea
+                  {...props}
+                  rows={5}
+                  value={houseStyle}
+                  onChange={(e) => setHouseStyle(e.target.value)}
+                  placeholder="e.g. Partner relays most weeks, loud counted cueing, always finish with a team effort."
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                />
+              )}
+            </Field>
+
+            <Field
+              id="hyrox-settings-charter"
+              label="Charter"
+              hint="The hard design rules every session is self-checked against. Blank uses the default charter."
+            >
+              {(props) => (
+                <textarea
+                  {...props}
+                  rows={6}
+                  value={settingsCharter}
+                  onChange={(e) => setSettingsCharter(e.target.value)}
+                  placeholder="Leave blank to use the default charter."
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                />
+              )}
+            </Field>
+
+            <div>
+              <span className="block text-sm font-medium text-un1t-text mb-1">Example sessions</span>
+              {examples.length === 0 ? (
+                <p className="text-xs text-un1t-subtle mb-2">
+                  No saved examples yet. Add one below, or use &quot;Save as style example&quot; on a session in the review drawer.
+                </p>
+              ) : (
+                <ul className="divide-y divide-un1t-border/40 border border-un1t-border rounded-md mb-2">
+                  {examples.map((ex, i) => (
+                    <li key={ex.id || i} className="flex items-start justify-between gap-3 px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-un1t-text truncate">{ex.label || 'Example'}</p>
+                        <p className="text-xs text-un1t-subtle line-clamp-2">
+                          {ex.text.length > 160 ? `${ex.text.slice(0, 160)}…` : ex.text}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeExample(i)}
+                        aria-label="Remove example"
+                        className="text-un1t-muted hover:text-red-700 shrink-0"
+                      >
+                        <X size={14} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {addingExample ? (
+                <div className="bg-un1t-bg border border-un1t-border rounded-md p-3 space-y-2">
+                  <input
+                    type="text"
+                    value={newExampleLabel}
+                    onChange={(e) => setNewExampleLabel(e.target.value)}
+                    placeholder="Label (e.g. Wed engine session)"
+                    className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                  />
+                  <textarea
+                    rows={4}
+                    value={newExampleText}
+                    onChange={(e) => setNewExampleText(e.target.value)}
+                    placeholder="Paste the session text."
+                    className="w-full bg-un1t-surface border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                  />
+                  <div className="flex gap-2">
+                    <Button type="button" size="sm" variant="secondary" disabled={!newExampleText.trim()} onClick={addExample}>
+                      Add
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => { setAddingExample(false); setNewExampleLabel(''); setNewExampleText('') }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Button type="button" size="sm" variant="ghost" icon={Plus} onClick={() => setAddingExample(true)}>
+                  Add example
+                </Button>
+              )}
+            </div>
+
+            {settingsError && (
+              <div className="flex items-center gap-2 text-xs text-red-700 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">
+                <AlertCircle size={12} /> {settingsError}
+              </div>
+            )}
+
+            <div className="flex items-center gap-3 pt-1">
+              <Button type="button" loading={savingSettings} onClick={handleSaveSettings}>
+                Save
+              </Button>
+              {settingsSaved && (
+                <span className="text-xs text-green-700 inline-flex items-center gap-1">
+                  <Check size={12} /> Saved
+                </span>
+              )}
+            </div>
+          </div>
+        </details>
       )}
 
       {!block && canManage && (
@@ -530,6 +740,18 @@ export default function HyroxPlanner({ initialBlock, initialSessions, locationId
           title={`Week ${focusedSession.week_no} · session ${focusedSession.slot}${focusedSession.is_benchmark ? ' · benchmark' : ''}`}
           footer={
             <>
+              {canManage && focusedSession.full_session?.main && (
+                <span className="inline-flex items-center gap-2">
+                  <Button type="button" variant="secondary" icon={Star} loading={sessionBusy === 'exemplar'} onClick={handleSaveExample}>
+                    Save as style example
+                  </Button>
+                  {exemplarNote && (
+                    <span className="text-xs text-green-700 inline-flex items-center gap-1">
+                      <Check size={12} /> {exemplarNote}
+                    </span>
+                  )}
+                </span>
+              )}
               <Button type="button" variant="secondary" onClick={closeDrawer}>Close</Button>
               {!isPublished && (
                 <Button type="button" variant="secondary" icon={RefreshCw} loading={sessionBusy === 'regenerate'} onClick={handleRegenerate}>
