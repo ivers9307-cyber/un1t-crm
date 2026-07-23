@@ -14,6 +14,10 @@
 // content.source_type 'template' (TV-TEMPLATE.1) carries an extra
 // `template` field: { zones, values } — the base image arrives as
 // the usual resolved_url; the client overlays the zone text.
+//
+// content.source_type 'generated' (HYROX-TC.3) carries an extra
+// `board` field re-fetched from hyrox_sessions.board by source_ref
+// (the session id) — no snapshot lives on tv_content itself.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -52,6 +56,7 @@ export async function GET(_request, props) {
   // project URL or build paths.
   let resolvedUrl = null
   let template = null
+  let board = null
   if (content?.source_type === 'storage') {
     resolvedUrl = bucketUrl(content.source_ref)
   } else if (content?.source_type === 'url') {
@@ -73,11 +78,27 @@ export async function GET(_request, props) {
     }
     // tpl missing (template deleted) → resolvedUrl stays null and
     // the client falls back to the idle screen.
+  } else if (content?.source_type === 'generated') {
+    // HYROX-TC.3 — source_ref is the hyrox_sessions.id. Board JSON
+    // stays authoritative on the session row (not snapshotted onto
+    // tv_content), so a coach edit to an approved/published session
+    // reflects here on the next poll instead of going stale.
+    const { data: sess } = await db
+      .from('hyrox_sessions')
+      .select('board')
+      .eq('id', content.source_ref)
+      .maybeSingle()
+    board = sess?.board || null
   }
 
-  // A template push whose template has since been deleted has no
-  // base image — treat it as idle rather than a broken render.
-  const renderable = content && (content.source_type !== 'template' || template)
+  // A template push whose template has since been deleted, or a
+  // generated push whose session board is missing, has nothing to
+  // render — treat it as idle rather than a broken render.
+  const renderable = content && (
+    content.source_type === 'template' ? Boolean(template)
+    : content.source_type === 'generated' ? Boolean(board)
+    : true
+  )
 
   return NextResponse.json({
     display: {
@@ -97,6 +118,8 @@ export async function GET(_request, props) {
           triggered_by: content.triggered_by,
           // Present only for source_type 'template'.
           template,
+          // Present only for source_type 'generated' (HYROX-TC.3).
+          board,
         }
       : null,
   })
