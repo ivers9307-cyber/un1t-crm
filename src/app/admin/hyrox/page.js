@@ -10,6 +10,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
+import { resolveHyroxSettings } from '@/lib/hyrox/settings'
 import HyroxPlanner from './HyroxPlanner'
 
 export const dynamic = 'force-dynamic'
@@ -47,10 +48,17 @@ export default async function HyroxAdmin() {
       .order('slot', { ascending: true })
     : { data: [] }
 
+  const { data: loc } = await db
+    .from('locations')
+    .select('id, settings')
+    .eq('id', locationId)
+    .single()
+
   return (
     <HyroxPlanner
       initialBlock={block || null}
       initialSessions={sessions || []}
+      initialSettings={resolveHyroxSettings(loc)}
       locationId={locationId}
       canManage={['owner', 'manager', 'head_coach', 'master'].includes(user.role)}
     />

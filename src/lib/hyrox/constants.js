@@ -32,3 +32,10 @@ export const DEFAULT_CHARTER = [
   'teams, ladders, races against the clock, the occasional novelty station), and keep a',
   'competitive spark. A member should leave wanting the next one.',
 ].join('\n')
+
+// House-style example limits (HYROX-STYLE): how many/how long examples feed a
+// generation, and the max stored so the settings blob can't grow unbounded.
+export const MAX_STYLE_EXAMPLES = 3
+export const MAX_EXAMPLE_CHARS = 2500
+export const MAX_STORED_EXAMPLES = 20
+export const MAX_STORED_EXAMPLE_CHARS = 8000 // max length of a stored/pasted example (a full hand-written session)

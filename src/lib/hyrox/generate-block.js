@@ -10,9 +10,9 @@ import { slotsForWeek, blockRowFrom, sessionRowFrom } from './plan-block'
 
 // Fast path: generate the 12-week arc and insert the block. No session fan-out.
 // Returns { ok, block } | { ok:false, error }.
-export async function createBlockWithArc(db, { input, charter, caller }) {
+export async function createBlockWithArc(db, { input, charter, houseStyle, caller }) {
   const arcRes = await generateArc(
-    { weeks: input.weeks ?? 12, sessionsPerWeek: input.sessions_per_week ?? 2, dial: input.difficulty_dial ?? 'mixed', charter },
+    { weeks: input.weeks ?? 12, sessionsPerWeek: input.sessions_per_week ?? 2, dial: input.difficulty_dial ?? 'mixed', charter, houseStyle },
     { caller },
   )
   if (!arcRes.ok) return { ok: false, error: 'arc_generation_failed' }
@@ -29,7 +29,7 @@ export async function createBlockWithArc(db, { input, charter, caller }) {
 // Expand ONE week of a block: generate its sessions in parallel and insert the
 // drafts. Idempotent — a week that already has sessions returns skipped:true.
 // Returns { ok, sessionsCreated, skipped? } | { ok:false, error }.
-export async function expandBlockWeek(db, { block, weekNo, charter, caller, locationLabel = 'UN1T' }) {
+export async function expandBlockWeek(db, { block, weekNo, charter, houseStyle, styleExamples, caller, locationLabel = 'UN1T' }) {
   const week = (block.arc?.plan || []).find((w) => w.week_no === weekNo)
   if (!week) return { ok: false, error: 'no_arc_week' }
 
@@ -45,7 +45,7 @@ export async function expandBlockWeek(db, { block, weekNo, charter, caller, loca
   const built = await Promise.all(
     slots.map((slot) =>
       expandSession(
-        { week, slot, dial: block.difficulty_dial ?? 'mixed', locationLabel, charter, autoTuneSignal: null },
+        { week, slot, dial: block.difficulty_dial ?? 'mixed', locationLabel, charter, houseStyle, styleExamples, autoTuneSignal: null },
         { caller },
       ).then((sRes) => (sRes.ok ? sessionRowFrom(block.id, block.location_id, { ...sRes.data, week_no: weekNo, slot }) : null)),
     ),

@@ -24,6 +24,7 @@ import {
   passwordSchema, tenantDomainBrandConfigSchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
+import { MAX_STORED_EXAMPLE_CHARS, MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
 
 // Wire .openapi() onto Zod so we can decorate inline-defined schemas.
 extendZodWithOpenApi(z)
@@ -4012,6 +4013,57 @@ registry.registerPath({
     404: { description: 'Not found (missing, or no permission at this location)', content: { 'application/json': { schema: ErrorResponse } } },
     409: { description: 'Already published, or no arc week for this session', content: { 'application/json': { schema: ErrorResponse } } },
     502: { description: 'Regeneration failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+const HyroxExampleEntry = z.object({
+  id: z.string().max(64).optional(),
+  source: z.enum(['pasted', 'generated']).default('pasted'),
+  label: z.string().max(120).optional(),
+  text: z.string().min(1).max(MAX_STORED_EXAMPLE_CHARS),
+  added_at: z.string().optional(),
+}).openapi('HyroxExampleEntry')
+
+const HyroxSettingsUpdate = z.object({
+  location_id: uuidLike,
+  charter: z.string().max(8000).nullish(),
+  house_style: z.string().max(8000).nullish(),
+  style_examples: z.array(HyroxExampleEntry).max(MAX_STORED_EXAMPLES).optional(),
+}).openapi('HyroxSettingsUpdate')
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/hyrox/settings',
+  tags: ['Hyrox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Operator editor for the Hyrox charter, house style, and style examples',
+  description:
+    'Read-modify-write onto locations.settings.hyrox — merges into the sibling settings keys, never ' +
+    'clobbers them. Collection-style write (location_id in the body): missing the per-location ' +
+    'approvals_hyrox_sessions grant answers 403 (not the detail-routes\' 404 IDOR posture).',
+  request: { body: { content: { 'application/json': { schema: HyroxSettingsUpdate } } } },
+  responses: {
+    200: { description: 'Settings saved', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxSettingsUpdateResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — no approvals_hyrox_sessions grant at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/hyrox/sessions/{id}/exemplar',
+  tags: ['Hyrox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save a generated Hyrox session as a house-style example ("star as style example")',
+  description:
+    'Renders the session server-side via sessionToExampleText and appends it to locations.settings.hyrox.style_examples ' +
+    '(dedupe by session id, capped at MAX_STORED_EXAMPLES). Detail route: a missing session or missing ' +
+    'per-location approvals_hyrox_sessions grant both answer 404 (IDOR posture).',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Example added (or already saved)', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxExemplarResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing session, or no permission at this location)', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

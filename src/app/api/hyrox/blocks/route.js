@@ -53,7 +53,8 @@ export async function POST(request) {
 
   const db = createServerClient()
   const { data: loc } = await db.from('locations').select('id, name, settings').eq('id', body.location_id).single()
-  const charter = body.charter?.trim() || resolveHyroxSettings(loc).charter
+  const { charter: settingsCharter, houseStyle } = resolveHyroxSettings(loc)
+  const charter = body.charter?.trim() || settingsCharter
 
   // Metered caller — generate.js's injectable-caller contract is
   // { system, user, maxTokens } -> { ok, text } | { ok:false, error }.
@@ -76,6 +77,7 @@ export async function POST(request) {
   const out = await createBlockWithArc(db, {
     input: { ...body, created_by: user.id },
     charter,
+    houseStyle,
     caller,
   })
   if (!out.ok) return NextResponse.json({ success: false, error: out.error }, { status: 502 })
