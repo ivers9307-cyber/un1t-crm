@@ -24,14 +24,14 @@ export const provider = 'stripe_connect'
  * a licensed payments business.
  * @returns {Promise<string>} the connected account id (acct_…)
  */
-export async function createConnectedAccount({ name, email, hostId, country = 'IE' }) {
+export async function createConnectedAccount({ name, email, hostId, locationId, country = 'IE' }) {
   const stripe = getStripe()
   const account = await stripe.accounts.create({
     type: 'standard',
     country,
     email: email || undefined,
     business_profile: name ? { name } : undefined,
-    metadata: { un1t_host_id: hostId || '' },
+    metadata: { un1t_host_id: hostId || '', un1t_location_id: locationId || '' },
   })
   return account.id
 }
