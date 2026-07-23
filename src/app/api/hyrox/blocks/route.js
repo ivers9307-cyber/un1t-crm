@@ -17,7 +17,7 @@ import { uuidLike, isoDate } from '@/lib/schemas'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { anthropicMessages } from '@/lib/anthropic'
 import { resolveHyroxSettings } from '@/lib/hyrox/settings'
-import { generateBlock } from '@/lib/hyrox/generate-block'
+import { createBlockWithArc } from '@/lib/hyrox/generate-block'
 import { HYROX_MODEL } from '@/lib/hyrox/generate'
 import { DIFFICULTY_DIALS } from '@/lib/hyrox/constants'
 
@@ -69,12 +69,15 @@ export async function POST(request) {
     return { ok: true, text }
   }
 
-  const out = await generateBlock(db, {
-    input: { ...body, created_by: user.id, location_label: (loc?.name || 'UN1T').toUpperCase() },
+  // Fast path only: arc + insert the block, then return. Session generation is a
+  // long fan-out, so it does NOT run inline here (that timed the request out and
+  // left orphaned blocks). The client drives per-week expansion via
+  // POST /api/hyrox/blocks/[id]/expand; the rolling cron fills the rest.
+  const out = await createBlockWithArc(db, {
+    input: { ...body, created_by: user.id },
     charter,
     caller,
-    expandWeeks: body.expand_weeks ?? 2,
   })
   if (!out.ok) return NextResponse.json({ success: false, error: out.error }, { status: 502 })
-  return NextResponse.json({ success: true, data: { block: out.block, sessionsCreated: out.sessionsCreated } }, { status: 201 })
+  return NextResponse.json({ success: true, data: { block: out.block, sessionsCreated: 0 } }, { status: 201 })
 }

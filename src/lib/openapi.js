@@ -3930,15 +3930,40 @@ registry.registerPath({
   security: [{ CookieAuth: [] }],
   summary: 'Generate + persist a 12-week Hyrox Training Club block (manager+)',
   description:
-    'Generates a block arc (Claude, metered via anthropicMessages) and writes it plus the first ' +
-    '`expand_weeks` weeks of draft sessions to hyrox_blocks / hyrox_sessions. The rolling-expansion ' +
-    'cron that fills weeks beyond the initial window is a later plan.',
+    'Fast path only: generates the block arc (Claude, metered via anthropicMessages) and inserts the ' +
+    'hyrox_blocks row, then returns (sessionsCreated:0). Session generation is a long fan-out and runs ' +
+    'per-week via POST /api/hyrox/blocks/{id}/expand (client-driven) + the rolling-expansion cron — never ' +
+    'inline here, which used to time the request out.',
   request: { body: { content: { 'application/json': { schema: HyroxBlockCreate } } } },
   responses: {
-    201: { description: 'Block + initial sessions created', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxBlockCreateResponse') } } },
+    201: { description: 'Block created (sessions expanded separately)', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxBlockCreateResponse') } } },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Forbidden — manager+ only', content: { 'application/json': { schema: ErrorResponse } } },
-    502: { description: 'Generation failed', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Arc generation failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+const HyroxExpandWeek = z.object({ week_no: z.number().int().min(1).max(52) }).openapi('HyroxExpandWeek')
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/hyrox/blocks/{id}/expand',
+  tags: ['Hyrox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Generate one week of sessions for a Hyrox block',
+  description:
+    'Generates the given week\'s sessions in parallel (bounded, ~one Claude call) and inserts them as ' +
+    'drafts. Idempotent per (block, week): a week that already has sessions returns skipped:true. ' +
+    '404-not-403 detail-route posture on a missing block or missing location permission.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: HyroxExpandWeek } } },
+  },
+  responses: {
+    200: { description: 'Week expanded (or skipped if already present)', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxExpandWeekResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing block, or no permission at this location)', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Session generation failed', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
