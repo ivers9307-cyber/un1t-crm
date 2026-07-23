@@ -4048,6 +4048,24 @@ registry.registerPath({
   },
 })
 
+registry.registerPath({
+  method: 'post',
+  path: '/api/hyrox/sessions/{id}/exemplar',
+  tags: ['Hyrox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save a generated Hyrox session as a house-style example ("star as style example")',
+  description:
+    'Renders the session server-side via sessionToExampleText and appends it to locations.settings.hyrox.style_examples ' +
+    '(dedupe by session id, capped at MAX_STORED_EXAMPLES). Detail route: a missing session or missing ' +
+    'per-location approvals_hyrox_sessions grant both answer 404 (IDOR posture).',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Example added (or already saved)', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxExemplarResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing session, or no permission at this location)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
