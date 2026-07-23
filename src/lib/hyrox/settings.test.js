@@ -17,3 +17,24 @@ describe('resolveHyroxSettings', () => {
     expect(resolveHyroxSettings(loc).charter).toBe(DEFAULT_CHARTER)
   })
 })
+
+describe('resolveHyroxSettings house style + examples', () => {
+  it('defaults house style to empty and examples to []', () => {
+    const s = resolveHyroxSettings({})
+    expect(s.houseStyle).toBe('')
+    expect(s.styleExamples).toEqual([])
+  })
+  it('reads house style and a well-formed examples array', () => {
+    const loc = { settings: { hyrox: { house_style: 'Partner relays, loud cueing.', style_examples: [
+      { id: 'a', source: 'pasted', label: 'Wed engine', text: 'run 500m then...', added_at: '2026-07-01T00:00:00Z' },
+    ] } } }
+    const s = resolveHyroxSettings(loc)
+    expect(s.houseStyle).toBe('Partner relays, loud cueing.')
+    expect(s.styleExamples).toHaveLength(1)
+    expect(s.styleExamples[0].text).toContain('run 500m')
+  })
+  it('drops malformed example entries (no text)', () => {
+    const loc = { settings: { hyrox: { style_examples: [{ id: 'x' }, { text: 'ok text', source: 'pasted' }] } } }
+    expect(resolveHyroxSettings(loc).styleExamples).toHaveLength(1)
+  })
+})
