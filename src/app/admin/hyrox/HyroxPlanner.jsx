@@ -95,6 +95,8 @@ export default function HyroxPlanner({ initialBlock, initialSessions, locationId
   })
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState(null)
+  const [expandProgress, setExpandProgress] = useState(null)
+  const [expandingWeek, setExpandingWeek] = useState(null)
 
   function toggleWeekday(day) {
     setGenForm((f) => ({
@@ -127,11 +129,53 @@ export default function HyroxPlanner({ initialBlock, initialSessions, locationId
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json.success) throw new Error(json.error || 'Failed to generate the block.')
-      await refresh()
+      const newBlock = json.data?.block
+      setBlock(newBlock || null)
+      setSessions([])
+      // The block exists immediately. Now fill the first weeks one bounded
+      // request at a time (each is its own short job, so nothing times out);
+      // sessions appear in the grid as they land.
+      if (newBlock) {
+        const target = Math.min(genForm.expand_weeks || 2, newBlock.weeks || 12)
+        for (let w = 1; w <= target; w += 1) {
+          setExpandProgress(`Generating week ${w} of ${target}…`)
+          try {
+            await callExpand(newBlock.id, w)
+          } catch (err) {
+            setError(`Week ${w}: ${err.message}`)
+          }
+          await refresh()
+        }
+        setExpandProgress(null)
+      }
     } catch (err) {
       setGenError(err.message)
     } finally {
       setGenerating(false)
+    }
+  }
+
+  async function callExpand(blockId, weekNo) {
+    const res = await fetch(`/api/hyrox/blocks/${blockId}/expand`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ week_no: weekNo }),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok || !json.success) throw new Error(json.error || 'generation failed')
+    return json.data
+  }
+
+  async function expandWeek(blockId, weekNo) {
+    setExpandingWeek(weekNo)
+    setError(null)
+    try {
+      await callExpand(blockId, weekNo)
+      await refresh()
+    } catch (err) {
+      setError(`Week ${weekNo}: ${err.message}`)
+    } finally {
+      setExpandingWeek(null)
     }
   }
 
@@ -179,7 +223,6 @@ export default function HyroxPlanner({ initialBlock, initialSessions, locationId
   useEffect(() => {
     const f = searchParams.get('focus')
     if (f) setFocusedId(f)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
   // Seed the editable fields whenever the drawer opens on a (new) session.
@@ -302,6 +345,12 @@ export default function HyroxPlanner({ initialBlock, initialSessions, locationId
         </div>
       )}
 
+      {expandProgress && (
+        <div className="mb-4 flex items-center gap-2 text-xs text-un1t-subtle bg-un1t-surface border border-un1t-border rounded-md px-3 py-2">
+          <RefreshCw size={12} className="animate-spin" /> {expandProgress}
+        </div>
+      )}
+
       {!block && canManage && (
         <form onSubmit={handleGenerate} className="bg-un1t-surface border border-un1t-border rounded-lg p-5 max-w-xl mb-8">
           <h3 className="text-sm font-semibold text-un1t-text mb-3">Generate a 12-week block</h3>
@@ -413,6 +462,7 @@ export default function HyroxPlanner({ initialBlock, initialSessions, locationId
             <tbody>
               {weekRows.map((week) => {
                 const weekDrafts = sessions.filter((s) => s.week_no === week && s.status === 'draft')
+                const weekHasSessions = slotCols.some((slot) => sessionMap.has(`${week}:${slot}`))
                 return (
                   <tr key={week} className="border-b border-un1t-border/60">
                     <td className="py-2 px-3 text-un1t-text font-medium">{week}</td>
@@ -439,7 +489,19 @@ export default function HyroxPlanner({ initialBlock, initialSessions, locationId
                       )
                     })}
                     <td className="py-2 px-3 text-right align-top">
-                      {weekDrafts.length > 0 && (
+                      {!weekHasSessions && canManage ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          icon={Dumbbell}
+                          loading={expandingWeek === week}
+                          disabled={Boolean(expandProgress) || generating}
+                          onClick={() => expandWeek(block.id, week)}
+                        >
+                          Generate
+                        </Button>
+                      ) : weekDrafts.length > 0 ? (
                         <Button
                           type="button"
                           variant="ghost"
@@ -450,7 +512,7 @@ export default function HyroxPlanner({ initialBlock, initialSessions, locationId
                         >
                           Approve all ({weekDrafts.length})
                         </Button>
-                      )}
+                      ) : null}
                     </td>
                   </tr>
                 )
