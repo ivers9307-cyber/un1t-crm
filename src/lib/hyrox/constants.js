@@ -38,3 +38,4 @@ export const DEFAULT_CHARTER = [
 export const MAX_STYLE_EXAMPLES = 3
 export const MAX_EXAMPLE_CHARS = 2500
 export const MAX_STORED_EXAMPLES = 20
+export const MAX_STORED_EXAMPLE_CHARS = 8000 // max length of a stored/pasted example (a full hand-written session)

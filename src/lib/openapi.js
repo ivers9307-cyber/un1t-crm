@@ -24,6 +24,7 @@ import {
   passwordSchema, tenantDomainBrandConfigSchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
+import { MAX_STORED_EXAMPLE_CHARS, MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
 
 // Wire .openapi() onto Zod so we can decorate inline-defined schemas.
 extendZodWithOpenApi(z)
@@ -4019,7 +4020,7 @@ const HyroxExampleEntry = z.object({
   id: z.string().max(64).optional(),
   source: z.enum(['pasted', 'generated']).default('pasted'),
   label: z.string().max(120).optional(),
-  text: z.string().min(1).max(2500),
+  text: z.string().min(1).max(MAX_STORED_EXAMPLE_CHARS),
   added_at: z.string().optional(),
 }).openapi('HyroxExampleEntry')
 
@@ -4027,7 +4028,7 @@ const HyroxSettingsUpdate = z.object({
   location_id: uuidLike,
   charter: z.string().max(8000).nullish(),
   house_style: z.string().max(8000).nullish(),
-  style_examples: z.array(HyroxExampleEntry).max(20).optional(),
+  style_examples: z.array(HyroxExampleEntry).max(MAX_STORED_EXAMPLES).optional(),
 }).openapi('HyroxSettingsUpdate')
 
 registry.registerPath({

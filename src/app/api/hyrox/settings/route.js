@@ -11,7 +11,7 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
-import { MAX_STORED_EXAMPLES, MAX_EXAMPLE_CHARS } from '@/lib/hyrox/constants'
+import { MAX_STORED_EXAMPLES, MAX_STORED_EXAMPLE_CHARS } from '@/lib/hyrox/constants'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,7 +19,7 @@ const ExampleSchema = z.object({
   id: z.string().max(64).optional(),
   source: z.enum(['pasted', 'generated']).default('pasted'),
   label: z.string().max(120).optional(),
-  text: z.string().min(1).max(MAX_EXAMPLE_CHARS),
+  text: z.string().min(1).max(MAX_STORED_EXAMPLE_CHARS),
   added_at: z.string().optional(),
 })
 const SettingsSchema = z.object({

@@ -31,7 +31,7 @@ export async function POST(request, { params }) {
   if (existing.some((e) => e?.id === exampleId)) {
     return NextResponse.json({ success: true, data: { added: false, reason: 'already_saved' } })
   }
-  const entry = { id: exampleId, source: 'generated', label: `Week ${session.week_no} session ${session.slot}${session.focus ? ` — ${session.focus}` : ''}`, text: sessionToExampleText(session), added_at: new Date().toISOString() }
+  const entry = { id: exampleId, source: 'generated', label: `Week ${session.week_no} session ${session.slot}${session.focus ? ` - ${session.focus}` : ''}`, text: sessionToExampleText(session), added_at: new Date().toISOString() }
   hyrox.style_examples = [entry, ...existing].slice(0, MAX_STORED_EXAMPLES)
   settings.hyrox = hyrox
   const { error } = await db.from('locations').update({ settings }).eq('id', session.location_id).select('id').single()

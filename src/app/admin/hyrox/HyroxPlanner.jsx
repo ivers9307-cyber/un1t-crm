@@ -19,7 +19,7 @@ import { useSearchParams } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
 import { Dumbbell, AlertCircle, Check, RotateCcw, RefreshCw, ChevronRight, X, Plus, Star } from 'lucide-react'
 import { Button, Modal, Field, Table } from '@/components/ui'
-import { DIFFICULTY_DIALS } from '@/lib/hyrox/constants'
+import { DIFFICULTY_DIALS, MAX_STORED_EXAMPLE_CHARS } from '@/lib/hyrox/constants'
 
 const WEEKDAY_OPTIONS = [
   { value: 1, label: 'Mon' },
@@ -109,7 +109,7 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
         }),
       })
       const json = await res.json().catch(() => ({}))
-      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to save settings.')
+      if (!res.ok || !json.success) throw new Error((json.error || 'Failed to save settings.') + (Array.isArray(json.issues) && json.issues.length ? ': ' + json.issues.map((i) => i.message || (i.path || []).join('.')).join('; ') : ''))
       setSettingsSaved(true)
     } catch (err) {
       setSettingsError(err.message)
@@ -450,6 +450,7 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
                 <textarea
                   {...props}
                   rows={5}
+                  maxLength={8000}
                   value={houseStyle}
                   onChange={(e) => setHouseStyle(e.target.value)}
                   placeholder="e.g. Partner relays most weeks, loud counted cueing, always finish with a team effort."
@@ -467,6 +468,7 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
                 <textarea
                   {...props}
                   rows={6}
+                  maxLength={8000}
                   value={settingsCharter}
                   onChange={(e) => setSettingsCharter(e.target.value)}
                   placeholder="Leave blank to use the default charter."
@@ -515,6 +517,7 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
                   />
                   <textarea
                     rows={4}
+                    maxLength={MAX_STORED_EXAMPLE_CHARS}
                     value={newExampleText}
                     onChange={(e) => setNewExampleText(e.target.value)}
                     placeholder="Paste the session text."
