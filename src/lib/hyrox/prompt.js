@@ -28,13 +28,20 @@ export function buildArcPrompt({ weeks = 12, sessionsPerWeek = 2, dial = 'mixed'
     'You are a Hyrox strength-and-conditioning coach designing a periodised training block for a gym class.',
     `Design a ${weeks}-week arc across the phases: ${PHASES.join(' -> ')}.`,
     `The Hyrox stations available: ${HYROX_STATIONS.join(', ')}, plus running and compromised running.`,
+    // Keeping the arc terse is LOAD-BEARING, not cosmetic: a verbose arc (which a
+    // detailed charter provokes) overruns the token budget and truncates, so the
+    // whole block fails to generate (the 2026-07-23 arc_generation_failed). The
+    // arc is only a skeleton; the real detail is written later, per session.
+    'This is a HIGH-LEVEL SKELETON only. Do NOT write workouts, movements, sets, reps, or long descriptions here. Each week is one short line of intent; the actual sessions are generated separately afterwards.',
     styleBlock(charter, houseStyle),
+    'The charter and house style above govern how the individual SESSIONS are written later. For THIS plan, use them ONLY to steer each week\'s focus. Do not restate or expand them here.',
     'Include benchmark weeks (a Hyrox-style test) so progress is measurable.',
-    'Output shape: { "weeks": number, "dial": string, "plan": [ { "week_no", "phase", "stimulus", "is_benchmark", "progression" } ] }.',
+    `Return EXACTLY ${weeks} entries in "plan" (one per week, week_no 1 to ${weeks}) and nothing else. Keep "stimulus" and "progression" to a SHORT phrase of about 5 to 12 words each, never a sentence-long paragraph.`,
+    'Output shape, and match this brevity exactly: { "weeks": number, "dial": string, "plan": [ { "week_no": 1, "phase": "base", "stimulus": "Aerobic base and movement quality", "is_benchmark": false, "progression": "Establish baselines at RPE 6" } ] }.',
     NO_EMDASH,
     JSON_ONLY,
   ].join('\n\n')
-  const user = `Design the arc. weeks=${weeks}, sessions_per_week=${sessionsPerWeek}, difficulty_dial=${dial}.`
+  const user = `Design the arc. weeks=${weeks}, sessions_per_week=${sessionsPerWeek}, difficulty_dial=${dial}. Keep every field terse; the detail belongs in the individual sessions, not here.`
   return { system, user }
 }
 
