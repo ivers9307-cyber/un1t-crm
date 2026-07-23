@@ -91,3 +91,35 @@ describe('expandSession', () => {
     expect(res.data.board.wordmark).toBe('HYROX TRAINING CLUB')
   })
 })
+
+describe('output token budget (regression: max_tokens truncation)', () => {
+  // Root cause of the 2026-07-23 arc_generation_failed: max_tokens=1500 truncated
+  // the 12-week arc JSON (output_tokens hit exactly 1500), so it never parsed.
+  it('gives arc generation enough output budget for a full 12-week plan', async () => {
+    let seen = 0
+    const caller = async ({ maxTokens }) => { seen = maxTokens; return { ok: true, text: goodArc } }
+    await generateArc({ weeks: 12, sessionsPerWeek: 2, dial: 'mixed' }, { caller })
+    expect(seen).toBeGreaterThanOrEqual(4000)
+  })
+  it('gives session expansion enough output budget for a full session + board', async () => {
+    let seen = 0
+    const caller = async ({ maxTokens }) => { seen = maxTokens; return { ok: true, text: goodSession } }
+    const week = { week_no: 5, phase: 'build', stimulus: 'Engine', progression: 'add a round', is_benchmark: false }
+    await expandSession({ week, slot: 1, dial: 'mixed', locationLabel: 'X' }, { caller })
+    expect(seen).toBeGreaterThanOrEqual(3000)
+  })
+})
+
+describe('tolerant JSON extraction (defense-in-depth)', () => {
+  it('parses arc JSON wrapped in a ```json code fence', async () => {
+    const fenced = '```json\n' + goodArc + '\n```'
+    const res = await generateArc({ weeks: 12, sessionsPerWeek: 2, dial: 'mixed' }, { caller: async () => ({ ok: true, text: fenced }) })
+    expect(res.ok).toBe(true)
+    expect(res.data.plan[0].phase).toBe('base')
+  })
+  it('parses arc JSON with surrounding prose', async () => {
+    const noisy = 'Here is the 12-week arc:\n' + goodArc + '\nLet me know if you want changes.'
+    const res = await generateArc({ weeks: 12, sessionsPerWeek: 2, dial: 'mixed' }, { caller: async () => ({ ok: true, text: noisy }) })
+    expect(res.ok).toBe(true)
+  })
+})
