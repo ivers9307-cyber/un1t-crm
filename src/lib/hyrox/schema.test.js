@@ -31,3 +31,54 @@ describe('hyrox schemas', () => {
     expect(parseSession(bad).ok).toBe(false)
   })
 })
+
+describe('LLM output coercion (regression: session_generation_failed)', () => {
+  it('coerces numeric station performance/elite to strings', () => {
+    const raw = { ...validSession, board: { ...validSession.board, stations: [{ name: 'Wall balls', performance: 20, elite: 25 }] } }
+    const s = parseSession(raw)
+    expect(s.ok).toBe(true)
+    expect(s.data.board.stations[0]).toMatchObject({ performance: '20', elite: '25' })
+  })
+  it('accepts cues as a single string', () => {
+    const raw = { ...validSession, full_session: { ...validSession.full_session, cues: 'brace and breathe' } }
+    const s = parseSession(raw)
+    expect(s.ok).toBe(true)
+    expect(s.data.full_session.cues).toEqual(['brace and breathe'])
+  })
+  it('parses cap_minutes given as "45 min"', () => {
+    const raw = { ...validSession, board: { ...validSession.board, cap_minutes: '45 min' } }
+    const s = parseSession(raw)
+    expect(s.ok).toBe(true)
+    expect(s.data.board.cap_minutes).toBe(45)
+  })
+  it('accepts a title-cased phase', () => {
+    const s = parseSession({ ...validSession, phase: 'Build' })
+    expect(s.ok).toBe(true)
+    expect(s.data.phase).toBe('build')
+  })
+  it('lifts focus out of the board when omitted at the top level', () => {
+    const noFocus = { ...validSession }
+    delete noFocus.focus
+    const s = parseSession(noFocus)
+    expect(s.ok).toBe(true)
+    expect(s.data.focus).toBe('ENGINE')
+  })
+  it('unwraps a single-key wrapper object', () => {
+    const s = parseSession({ session: validSession })
+    expect(s.ok).toBe(true)
+    expect(s.data.board.stations).toHaveLength(1)
+  })
+  it('joins an array-valued warmup into text', () => {
+    const raw = { ...validSession, full_session: { ...validSession.full_session, warmup: ['row 500m', 'dynamic drills'] } }
+    const s = parseSession(raw)
+    expect(s.ok).toBe(true)
+    expect(s.data.full_session.warmup).toContain('row 500m')
+  })
+  it('coerces arc weeks/dial/phase variances', () => {
+    const raw = { weeks: '12', dial: 'Mixed', plan: [{ ...validWeek, phase: 'Base' }] }
+    const a = parseArc(raw)
+    expect(a.ok).toBe(true)
+    expect(a.data.dial).toBe('mixed')
+    expect(a.data.plan[0].phase).toBe('base')
+  })
+})

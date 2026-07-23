@@ -45,7 +45,13 @@ async function generateValidated({ system, user, maxTokens, validate, opts }) {
     if (!call.ok) { if (attempt === 1) return call; continue }
     const parsed = validate(tryJson(call.text) ?? {})
     if (parsed.ok) return parsed
-    if (attempt === 1) return { ok: false, error: parsed.error }
+    if (attempt === 1) {
+      // Field-level diagnostic only (paths + zod codes, never member content) so
+      // any residual schema mismatch is visible in logs rather than opaque.
+      const paths = (parsed.error?.issues || []).slice(0, 12).map((i) => `${(i.path || []).join('.')}:${i.code}`)
+      console.error('[hyrox] generation output failed validation after retry', { paths })
+      return { ok: false, error: parsed.error }
+    }
   }
   return { ok: false, error: new Error('unreachable') }
 }
