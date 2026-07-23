@@ -53,10 +53,12 @@ export default function HyroxBoard({ board }) {
         .hxb-meta { display: flex; align-items: center; justify-content: space-between; gap: 3cqw; margin-top: 3cqh; flex-shrink: 0; }
         .hxb-wk { font-size: 2.2cqh; font-weight: 700; letter-spacing: 0.25cqw; }
         .hxb-phase { font-size: 1.7cqh; letter-spacing: 0.28cqw; text-transform: uppercase; color: #7c7c84; border: 1px solid #212127; border-radius: 999px; padding: 0.7cqh 2.2cqw; white-space: nowrap; }
-        .hxb-focus { margin-top: 1.8cqh; font-size: 3.1cqh; font-weight: 700; letter-spacing: -0.03cqw; text-transform: uppercase; flex-shrink: 0; }
+        /* Clamp the free-text fields so verbose data (older sessions, or a stray
+           long value) can never expand unbounded and crush the station table. */
+        .hxb-focus { margin-top: 1.8cqh; font-size: 2.9cqh; font-weight: 700; letter-spacing: -0.03cqw; text-transform: uppercase; flex-shrink: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
         .hxb-fmt { display: flex; align-items: flex-end; justify-content: space-between; gap: 4cqw; margin-top: 2.6cqh; padding-bottom: 2.2cqh; border-bottom: 2px solid #212127; flex-shrink: 0; }
         .hxb-lbl { font-size: 1.6cqh; letter-spacing: 0.3cqw; text-transform: uppercase; color: #52525a; }
-        .hxb-fval { font-size: 3.8cqh; font-weight: 800; letter-spacing: -0.05cqw; text-transform: uppercase; line-height: 1.02; margin-top: 0.7cqh; }
+        .hxb-fval { font-size: 3.2cqh; font-weight: 800; letter-spacing: -0.05cqw; text-transform: uppercase; line-height: 1.05; margin-top: 0.7cqh; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
         .hxb-clock { text-align: right; flex-shrink: 0; }
         .hxb-time { font-size: 4.2cqh; font-weight: 800; color: ${GOLD}; letter-spacing: 0.1cqw; font-variant-numeric: tabular-nums; line-height: 1; margin-top: 0.7cqh; }
 
@@ -79,7 +81,7 @@ export default function HyroxBoard({ board }) {
 
         .hxb-tgt { flex-shrink: 0; margin-top: 1.6cqh; padding-top: 2.2cqh; border-top: 2px solid #212127; display: flex; align-items: center; justify-content: center; gap: 2.5cqw; text-align: center; }
         .hxb-tgtk { font-size: 1.7cqh; letter-spacing: 0.3cqw; text-transform: uppercase; color: #52525a; flex-shrink: 0; }
-        .hxb-tgtv { font-size: 2.7cqh; font-weight: 800; letter-spacing: 0.05cqw; text-transform: uppercase; color: ${GOLD}; }
+        .hxb-tgtv { font-size: 2.3cqh; font-weight: 800; letter-spacing: 0.05cqw; text-transform: uppercase; color: ${GOLD}; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
       `}</style>
 
       <div className="hxb-hd">
