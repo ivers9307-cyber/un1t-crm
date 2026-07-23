@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { weeksToExpand, slotsForWeek, blockRowFrom, sessionRowFrom } from './plan-block'
+import { weeksToExpand, slotsForWeek, missingSlots, blockRowFrom, sessionRowFrom } from './plan-block'
 
 const arc = { weeks: 12, dial: 'mixed', plan: [
   { week_no: 1, phase: 'base', stimulus: 'Aerobic base', is_benchmark: true, progression: 'RPE 6-7' },
@@ -14,6 +14,12 @@ describe('plan-block builders', () => {
   })
   it('slotsForWeek returns 1..sessions_per_week', () => {
     expect(slotsForWeek(2)).toEqual([1, 2])
+  })
+  it('missingSlots returns the slots not yet stored', () => {
+    expect(missingSlots(2, [])).toEqual([1, 2])       // nothing generated yet
+    expect(missingSlots(2, [1])).toEqual([2])          // partial failure: slot 2 missing
+    expect(missingSlots(2, [1, 2])).toEqual([])        // week complete
+    expect(missingSlots(2, ['2'])).toEqual([1])        // tolerates string slot values
   })
   it('blockRowFrom builds a persistable block', () => {
     const row = blockRowFrom({ location_id: 'loc1', starts_on: '2026-08-03', weeks: 12, sessions_per_week: 2, session_weekdays: [3, 7], difficulty_dial: 'mixed', auto_tune_enabled: false, title: 'Autumn' }, arc, 'user1', 'claude-x')

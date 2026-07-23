@@ -15,14 +15,15 @@ const block = {
   arc: { plan: [{ week_no: 5, phase: 'build', stimulus: 'Engine', progression: 'add a round', is_benchmark: false }] },
 }
 
-// Minimal fake supabase-js: the idempotency select chain resolves to `existing`;
-// upsert captures the rows + options it's given and returns them via .select().
-// The prev-week query chains .select().eq().eq().order() — order() resolves to
-// an empty list so prevWeekSummary is null/empty and existing expandBlockWeek
-// tests are unaffected.
-function fakeDb({ existing = [] } = {}) {
+// Minimal fake supabase-js. expandBlockWeek makes up to two ordered reads in a
+// fixed order: (1) the slots already stored for THIS week (per-slot idempotency),
+// then (2) last week's sessions for the prev-week summary (only when weekNo > 1).
+// order() resolves the first call to `existing` and the second to `prev`. upsert
+// captures the rows + options it's given and echoes ids back via .select().
+function fakeDb({ existing = [], prev = [] } = {}) {
   const inserted = []
   let upsertOpts = null
+  let orderCalls = 0
   return {
     inserted,
     get upsertOpts() { return upsertOpts },
@@ -30,8 +31,10 @@ function fakeDb({ existing = [] } = {}) {
       return {
         select() { return this },
         eq() { return this },
-        limit() { return Promise.resolve({ data: existing }) },
-        order() { return Promise.resolve({ data: [] }) },
+        order() {
+          orderCalls += 1
+          return Promise.resolve({ data: orderCalls === 1 ? existing : prev })
+        },
         upsert(rows, opts) {
           upsertOpts = opts
           inserted.push(...rows)
@@ -45,8 +48,8 @@ function fakeDb({ existing = [] } = {}) {
 const okCaller = async () => ({ ok: true, text: goodSessionText })
 
 describe('expandBlockWeek', () => {
-  it('skips a week that already has sessions (idempotent)', async () => {
-    const db = fakeDb({ existing: [{ id: 's-existing' }] })
+  it('skips a week whose every slot already exists (idempotent)', async () => {
+    const db = fakeDb({ existing: [{ slot: 1 }, { slot: 2 }] })
     const out = await expandBlockWeek(db, { block, weekNo: 5, charter: 'c', caller: okCaller })
     expect(out).toMatchObject({ ok: true, sessionsCreated: 0, skipped: true })
     expect(db.inserted).toHaveLength(0)
@@ -61,6 +64,17 @@ describe('expandBlockWeek', () => {
     expect(calls).toHaveLength(2)
     expect(db.inserted).toHaveLength(2)
     expect(db.inserted[0]).toMatchObject({ block_id: 'b1', location_id: 'loc1', week_no: 5, status: 'draft' })
+  })
+
+  it('generates ONLY the missing slots when a week is partially filled (recovery)', async () => {
+    const db = fakeDb({ existing: [{ slot: 1 }] }) // slot 1 landed, slot 2 failed last time
+    const calls = []
+    const caller = async (args) => { calls.push(args); return { ok: true, text: goodSessionText } }
+    const out = await expandBlockWeek(db, { block, weekNo: 5, charter: 'c', caller })
+    expect(out).toMatchObject({ ok: true, sessionsCreated: 1 })
+    expect(calls).toHaveLength(1)
+    expect(db.inserted).toHaveLength(1)
+    expect(db.inserted[0]).toMatchObject({ week_no: 5, slot: 2, status: 'draft' })
   })
 
   it('errors when the arc has no such week', async () => {
