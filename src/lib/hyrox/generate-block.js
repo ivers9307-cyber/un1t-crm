@@ -8,6 +8,15 @@
 import { generateArc, expandSession, HYROX_MODEL } from './generate'
 import { slotsForWeek, blockRowFrom, sessionRowFrom } from './plan-block'
 
+// Pure helper: fold last week's generated sessions into one line the model can
+// read as "here's what already happened" (block-context awareness — HYROX-TC).
+export function summarizePrevWeek(sessions) {
+  const items = (Array.isArray(sessions) ? sessions : [])
+    .filter((s) => s && s.focus)
+    .map((s) => `session ${s.slot}: ${s.focus}${s.board?.format ? ` (${s.board.format})` : ''}`)
+  return items.length ? items.join('; ') : null
+}
+
 // Fast path: generate the 12-week arc and insert the block. No session fan-out.
 // Returns { ok, block } | { ok:false, error }.
 export async function createBlockWithArc(db, { input, charter, houseStyle, caller }) {
@@ -41,11 +50,18 @@ export async function expandBlockWeek(db, { block, weekNo, charter, houseStyle, 
     .limit(1)
   if (existing && existing.length) return { ok: true, sessionsCreated: 0, skipped: true }
 
+  let prevWeekSummary = null
+  if (weekNo > 1) {
+    const { data: prev } = await db
+      .from('hyrox_sessions').select('slot, focus, board').eq('block_id', block.id).eq('week_no', weekNo - 1).order('slot', { ascending: true })
+    prevWeekSummary = summarizePrevWeek(prev)
+  }
+
   const slots = slotsForWeek(block.sessions_per_week ?? 2)
   const built = await Promise.all(
     slots.map((slot) =>
       expandSession(
-        { week, slot, dial: block.difficulty_dial ?? 'mixed', locationLabel, charter, houseStyle, styleExamples, autoTuneSignal: null },
+        { week, slot, dial: block.difficulty_dial ?? 'mixed', locationLabel, charter, houseStyle, styleExamples, autoTuneSignal: null, arcPlan: block.arc?.plan, sessionsPerWeek: block.sessions_per_week, prevWeekSummary },
         { caller },
       ).then((sRes) => (sRes.ok ? sessionRowFrom(block.id, block.location_id, { ...sRes.data, week_no: weekNo, slot }) : null)),
     ),

@@ -246,6 +246,18 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
   const weekRows = block ? Array.from({ length: block.weeks }, (_, i) => i + 1) : []
   const slotCols = block ? Array.from({ length: block.sessions_per_week }, (_, i) => i + 1) : []
 
+  async function generateRemaining() {
+    setError(null)
+    const weeksToDo = weekRows.filter((w) => !slotCols.some((slot) => sessionMap.has(`${w}:${slot}`)))
+    for (let i = 0; i < weeksToDo.length; i += 1) {
+      const w = weeksToDo[i]
+      setExpandProgress(`Generating week ${w} (${i + 1} of ${weeksToDo.length})…`)
+      try { await callExpand(block.id, w) } catch (err) { setError(`Week ${w}: ${err.message}`) }
+      await refresh()
+    }
+    setExpandProgress(null)
+  }
+
   const [batchApprovingWeek, setBatchApprovingWeek] = useState(null)
 
   async function approveWeek(weekNo) {
@@ -398,6 +410,8 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
     },
   ]
 
+  const remainingWeeks = weekRows.filter((w) => !slotCols.some((slot) => sessionMap.has(`${w}:${slot}`)))
+
   return (
     <div className="p-6 max-w-5xl">
       <div className="flex items-center gap-2 mb-1">
@@ -414,6 +428,20 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
         <p className="text-sm text-un1t-subtle mb-5">
           No active block for this studio yet.{canManage ? ' Generate one below to start coach review.' : ' Ask a manager to generate one.'}
         </p>
+      )}
+
+      {block && canManage && remainingWeeks.length > 0 && (
+        <div className="mb-5">
+          <Button
+            type="button"
+            icon={Dumbbell}
+            loading={Boolean(expandProgress)}
+            disabled={Boolean(expandProgress) || generating}
+            onClick={generateRemaining}
+          >
+            Generate remaining weeks ({remainingWeeks.length})
+          </Button>
+        </div>
       )}
 
       {error && (

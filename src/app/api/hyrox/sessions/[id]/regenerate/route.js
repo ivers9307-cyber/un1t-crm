@@ -11,6 +11,7 @@ import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
 import { anthropicMessages } from '@/lib/anthropic'
 import { resolveHyroxSettings } from '@/lib/hyrox/settings'
 import { expandSession, HYROX_MODEL } from '@/lib/hyrox/generate'
+import { summarizePrevWeek } from '@/lib/hyrox/generate-block'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -34,12 +35,18 @@ export async function POST(_request, { params }) {
     return NextResponse.json({ success: false, error: 'Already published' }, { status: 409 })
   }
 
-  const { data: block } = await db.from('hyrox_blocks').select('arc, difficulty_dial').eq('id', row.block_id).single()
+  const { data: block } = await db.from('hyrox_blocks').select('arc, difficulty_dial, sessions_per_week').eq('id', row.block_id).single()
   const week = (block?.arc?.plan || []).find((w) => w.week_no === row.week_no)
   if (!week) return NextResponse.json({ success: false, error: 'No arc week' }, { status: 409 })
 
   const { data: loc } = await db.from('locations').select('id, name, settings').eq('id', row.location_id).single()
   const { charter, houseStyle, styleExamples } = resolveHyroxSettings(loc)
+
+  let prevWeekSummary = null
+  if (row.week_no > 1) {
+    const { data: prev } = await db.from('hyrox_sessions').select('slot, focus, board').eq('block_id', row.block_id).eq('week_no', row.week_no - 1).order('slot', { ascending: true })
+    prevWeekSummary = summarizePrevWeek(prev)
+  }
 
   // Same metered-caller closure as the blocks route — anthropicMessages
   // needs a real model (HYROX_MODEL), not undefined.
@@ -54,7 +61,7 @@ export async function POST(_request, { params }) {
   }
 
   const sRes = await expandSession(
-    { week, slot: row.slot, dial: block.difficulty_dial, locationLabel: (loc?.name || 'UN1T').toUpperCase(), charter, houseStyle, styleExamples, autoTuneSignal: null },
+    { week, slot: row.slot, dial: block.difficulty_dial, locationLabel: (loc?.name || 'UN1T').toUpperCase(), charter, houseStyle, styleExamples, autoTuneSignal: null, arcPlan: block.arc?.plan, sessionsPerWeek: block.sessions_per_week, prevWeekSummary },
     { caller },
   )
   if (!sRes.ok) return NextResponse.json({ success: false, error: 'regeneration_failed' }, { status: 502 })

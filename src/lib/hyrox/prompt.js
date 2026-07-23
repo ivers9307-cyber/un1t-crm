@@ -38,7 +38,7 @@ export function buildArcPrompt({ weeks = 12, sessionsPerWeek = 2, dial = 'mixed'
   return { system, user }
 }
 
-export function buildExpansionPrompt({ week, slot = 1, dial = 'mixed', locationLabel = 'UN1T', charter, houseStyle, styleExamples, autoTuneSignal = null } = {}) {
+export function buildExpansionPrompt({ week, slot = 1, dial = 'mixed', locationLabel = 'UN1T', charter, houseStyle, styleExamples, autoTuneSignal = null, arcPlan, sessionsPerWeek, prevWeekSummary } = {}) {
   const capLine = `Every session MUST be completable within a ${DEFAULT_CAP_MINUTES}-minute cap by both tiers.`
   const tuneLine = autoTuneSignal
     ? `Auto-tune signal for this week (adjust difficulty accordingly): ${JSON.stringify(autoTuneSignal)}.`
@@ -50,6 +50,7 @@ export function buildExpansionPrompt({ week, slot = 1, dial = 'mixed', locationL
     capLine,
     styleBlock(charter, houseStyle),
     ...(examplesBlock(styleExamples) ? [examplesBlock(styleExamples)] : []),
+    'BLOCK CONTEXT: you are given the full block plan and this session\'s position below. Place THIS session correctly in that progression: build on the earlier weeks, set up the later ones, do not restart the plan. Label "focus" by the correct block week or a benchmark\'s ordinal; NEVER call a later week "Week 1". Keep the week\'s shared stimulus but make this session DISTINCT in stations, format, or emphasis from the other session(s) that same week.',
     'Output shape: a single JSON session object with these fields and types: { "week_no": number, "slot": number, "phase": string, "focus": short string, "is_benchmark": boolean, "full_session": { "warmup": string, "strength": string, "main": string, "finisher": string, "cues": [string], "why": string }, "board": { "location_label": string, "week_label": string, "focus": short string, "format": short string, "cap_minutes": number, "stations": [ { "name": string, "performance": short string, "elite": short string } ], "target": short string } }.',
     'CRITICAL: every full_session field (warmup, strength, main, finisher, why) is a SINGLE plain-text string written in coaching language, using line breaks for structure where helpful. Do NOT put nested JSON objects, "part_a"/"part_b" keys, or "tiers" objects inside any full_session field. cues is an array of short plain-text strings.',
     'The two difficulty tiers appear ONLY as board.stations[].performance and board.stations[].elite, as SHORT values like "400m", "100kg", "9kg x 20" (never nested objects). You may describe both tiers in the main text as prose, but the structured per-station numbers live on the board.',
@@ -57,10 +58,23 @@ export function buildExpansionPrompt({ week, slot = 1, dial = 'mixed', locationL
     NO_EMDASH,
     JSON_ONLY,
   ].join('\n\n')
+  const weeksTotal = Array.isArray(arcPlan) && arcPlan.length ? arcPlan.length : (week?.week_no || 1)
+  let benchmarkTag = ''
+  if (week?.is_benchmark && Array.isArray(arcPlan)) {
+    const nth = arcPlan.filter((w) => w.is_benchmark && w.week_no <= week.week_no).length
+    const total = arcPlan.filter((w) => w.is_benchmark).length
+    benchmarkTag = `, benchmark ${nth} of ${total}`
+  }
+  const planLine = Array.isArray(arcPlan) && arcPlan.length
+    ? 'Full block plan in order: ' + arcPlan.map((w) => `week ${w.week_no} (${w.phase}${w.is_benchmark ? ', benchmark' : ''}): ${w.stimulus}`).join('; ') + '.'
+    : null
   const user = [
-    `Location label: ${locationLabel}. Dial: ${dial}. Slot: ${slot}.`,
-    `Week ${week?.week_no} (${week?.phase}) stimulus: ${week?.stimulus}. Progression target: ${week?.progression}. Benchmark week: ${Boolean(week?.is_benchmark)}.`,
+    `Location label: ${locationLabel}. Dial: ${dial}.`,
+    `This session is WEEK ${week?.week_no} of ${weeksTotal} (${week?.phase} phase)${benchmarkTag}. It is session ${slot} of ${sessionsPerWeek ?? 1} this week.`,
+    `This week's stimulus: ${week?.stimulus}. Progression target: ${week?.progression}.`,
+    planLine,
+    prevWeekSummary ? `Last week's sessions were: ${prevWeekSummary}. Progress sensibly from them, do not repeat them.` : null,
     tuneLine,
-  ].join('\n')
+  ].filter(Boolean).join('\n')
   return { system, user }
 }

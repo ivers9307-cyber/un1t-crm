@@ -42,4 +42,29 @@ describe('prompt builders', () => {
     const { system } = buildExpansionPrompt({ week, styleExamples: [{ text: long }] })
     expect(system).not.toContain('x'.repeat(3000))  // truncated below MAX_EXAMPLE_CHARS=2500
   })
+  it('places the session in the full block plan: week position, benchmark ordinal, slot, and the plan list', () => {
+    const arcPlan = [
+      { week_no: 1, phase: 'base', stimulus: 'Engine base', progression: 'establish baseline', is_benchmark: false },
+      { week_no: 2, phase: 'base', stimulus: 'Engine base', progression: 'add volume', is_benchmark: false },
+      { week_no: 3, phase: 'base', stimulus: 'Benchmark test', progression: 'measure', is_benchmark: true },
+      { week_no: 4, phase: 'build', stimulus: 'Strength engine', progression: 'add load', is_benchmark: false },
+    ]
+    const week = arcPlan[2] // week 3, the benchmark
+    const { system, user } = buildExpansionPrompt({ week, slot: 1, sessionsPerWeek: 2, arcPlan })
+    const combined = `${system}\n${user}`
+    expect(combined).toContain('WEEK 3 of 4')
+    expect(combined).toContain('benchmark 1 of')
+    expect(combined).toContain('session 1 of 2')
+    expect(combined).toContain('Full block plan in order')
+    expect(combined).toContain('week 4 (build)')
+  })
+  it('carries last week\'s session summary forward when provided', () => {
+    const arcPlan = [
+      { week_no: 1, phase: 'base', stimulus: 'Engine base', progression: 'establish baseline', is_benchmark: false },
+      { week_no: 2, phase: 'base', stimulus: 'Engine base', progression: 'add volume', is_benchmark: false },
+    ]
+    const week = arcPlan[1]
+    const { user } = buildExpansionPrompt({ week, slot: 1, sessionsPerWeek: 2, arcPlan, prevWeekSummary: 'session 1: Engine' })
+    expect(user).toContain('session 1: Engine')
+  })
 })
