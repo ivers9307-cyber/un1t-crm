@@ -6,7 +6,18 @@
 // existing order token and watches for completion. Styled to sit inside the
 // funnel's frosted card.
 import { useEffect, useRef, useState } from 'react'
+import { loadStripe } from '@stripe/stripe-js'
 import { loadRevolutSdk, revolutMode, revolutPublicKey } from '@/lib/revolut-embed'
+
+const stripePromises = new Map()
+function getStripe(pubKey, connectedAccountId) {
+  const key = `${pubKey}::${connectedAccountId || ''}`
+  if (!stripePromises.has(key)) {
+    stripePromises.set(key, loadStripe(pubKey, connectedAccountId ? { stripeAccount: connectedAccountId } : undefined))
+  }
+  return stripePromises.get(key)
+}
+const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || ''
 
 export default function ClassFunnelCheckout({ paymentId, checkout, priceLabel, onPaid, onCancel }) {
   const targetRef = useRef(null)
@@ -18,11 +29,32 @@ export default function ClassFunnelCheckout({ paymentId, checkout, priceLabel, o
 
   // Mount the Revolut embed once.
   useEffect(() => {
-    if (checkout?.provider !== 'revolut') { setError('This payment method is not available yet.'); return }
-    if (!revolutPublicKey()) { setError('Payment is not configured.'); return }
     if (!checkout?.token) { setError('Payment session is missing. Please refresh and try again.'); return }
     if (!targetRef.current || instanceRef.current) return
     let destroyed = false
+
+    // ── Stripe Connect: mount Stripe Embedded Checkout inline ──
+    if (checkout.provider === 'stripe_connect') {
+      if (!STRIPE_PUBLISHABLE_KEY) { setError('Payment is not configured.'); return }
+      getStripe(STRIPE_PUBLISHABLE_KEY, checkout.connectedAccountId)
+        .then(async (stripe) => {
+          if (destroyed) return
+          if (!stripe) throw new Error('Could not load the payment widget.')
+          const embedded = await stripe.createEmbeddedCheckoutPage({
+            clientSecret: checkout.token,
+            onComplete: () => { if (!destroyed) markPaid() },
+          })
+          if (destroyed) { try { embedded.destroy() } catch {} ; return }
+          embedded.mount(targetRef.current)
+          instanceRef.current = embedded
+        })
+        .catch((e) => { if (!destroyed) setError(e.message || 'Could not load the payment widget.') })
+      return () => { destroyed = true; try { instanceRef.current?.destroy?.() } catch {} ; instanceRef.current = null }
+    }
+
+    // ── Revolut: mount the Revolut embed ──
+    if (checkout.provider !== 'revolut') { setError('This payment method is not available yet.'); return }
+    if (!revolutPublicKey()) { setError('Payment is not configured.'); return }
     loadRevolutSdk(revolutMode())
       .then((RC) => {
         if (destroyed) return
