@@ -4,9 +4,10 @@
 // coach's session view, never on the wall). Sized in container-query units so it
 // scales to the TV stage (TVDisplay wraps it in a container-type:size box).
 //
-// The station rows FLEX to fill the space, so a dense loop (9+ stations, runs
-// listed between machines) fits without overflowing into the target footer.
-// Values never wrap — a scoreboard reads in one glance.
+// One TARGET per station (no Performance/Elite split on the wall — tier scaling
+// is coached / lives in the session view). The station rows FLEX to fill the
+// space so any count fits; the target column is wide and wraps to 2 lines, and
+// the free-text fields clamp, so no data is ever hidden or overflows.
 import { tvFontFamily } from './tv-font'
 
 const GOLD = '#e7c24a'
@@ -22,15 +23,20 @@ function splitWeek(weekLabel) {
   return { main, phase }
 }
 
+// The single board value: the dedicated `target`, falling back to the old
+// `performance` field so sessions generated before the single-target change
+// still render (and never show blank).
+function stationTarget(s) {
+  return s?.target ?? s?.performance ?? s?.elite ?? ''
+}
+
 export default function HyroxBoard({ board }) {
   if (!board) return null
   const stations = Array.isArray(board.stations) ? board.stations : []
   const { main: weekMain, phase } = splitWeek(board.week_label)
   const cap = board.cap_minutes
   const capText = cap ? `${String(cap).padStart(2, '0')}:00` : ''
-  // Dense boards (many stations) shrink type a touch so every row stays on one
-  // line without crowding.
-  const dense = stations.length > 7
+  const dense = stations.length > 8
 
   return (
     <div className="hxb" data-dense={dense ? '1' : '0'} style={{ fontFamily: tvFontFamily }}>
@@ -53,8 +59,7 @@ export default function HyroxBoard({ board }) {
         .hxb-meta { display: flex; align-items: center; justify-content: space-between; gap: 3cqw; margin-top: 3cqh; flex-shrink: 0; }
         .hxb-wk { font-size: 2.2cqh; font-weight: 700; letter-spacing: 0.25cqw; }
         .hxb-phase { font-size: 1.7cqh; letter-spacing: 0.28cqw; text-transform: uppercase; color: #7c7c84; border: 1px solid #212127; border-radius: 999px; padding: 0.7cqh 2.2cqw; white-space: nowrap; }
-        /* Clamp the free-text fields so verbose data (older sessions, or a stray
-           long value) can never expand unbounded and crush the station table. */
+        /* Clamp free-text fields so verbose (older) data can never crush the table. */
         .hxb-focus { margin-top: 1.8cqh; font-size: 2.9cqh; font-weight: 700; letter-spacing: -0.03cqw; text-transform: uppercase; flex-shrink: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
         .hxb-fmt { display: flex; align-items: flex-end; justify-content: space-between; gap: 4cqw; margin-top: 2.6cqh; padding-bottom: 2.2cqh; border-bottom: 2px solid #212127; flex-shrink: 0; }
         .hxb-lbl { font-size: 1.6cqh; letter-spacing: 0.3cqw; text-transform: uppercase; color: #52525a; }
@@ -62,22 +67,20 @@ export default function HyroxBoard({ board }) {
         .hxb-clock { text-align: right; flex-shrink: 0; }
         .hxb-time { font-size: 4.2cqh; font-weight: 800; color: ${GOLD}; letter-spacing: 0.1cqw; font-variant-numeric: tabular-nums; line-height: 1; margin-top: 0.7cqh; }
 
-        /* Table fills remaining height; rows share it evenly so any count fits. */
+        /* Station table: two columns (station | target). Rows flex to fill so any
+           count fits; the target is wide and may wrap to 2 lines. */
         .hxb-tbl { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; margin-top: 0.4cqh; }
-        .hxb-cols { display: grid; grid-template-columns: 4cqw 1.3fr 1fr 1fr; align-items: center; gap: 2cqw; }
+        .hxb-cols { display: grid; grid-template-columns: 4cqw 1fr 1.7fr; align-items: center; gap: 2.5cqw; }
         .hxb-thead { flex-shrink: 0; font-size: 1.6cqh; letter-spacing: 0.22cqw; text-transform: uppercase; color: #52525a; padding: 1.8cqh 0 1.2cqh; }
         .hxb-r { text-align: right; }
-        .hxb-thead .hxb-perf { color: ${GOLD}; }
+        .hxb-thead .hxb-tgtcol { color: ${GOLD}; }
         .hxb-rows { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; }
         .hxb-trow { flex: 1 1 0; min-height: 0; border-top: 1px solid #17171b; }
         .hxb-idx { font-size: 1.8cqh; font-weight: 700; color: #52525a; font-variant-numeric: tabular-nums; }
-        .hxb-nm, .hxb-v { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .hxb-nm { font-size: 2.8cqh; font-weight: 600; letter-spacing: -0.02cqw; }
-        .hxb-v { text-align: right; font-size: 2.7cqh; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02cqw; }
+        .hxb-nm { font-size: 2.8cqh; font-weight: 600; letter-spacing: -0.02cqw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .hxb-val { text-align: right; font-size: 2.6cqh; font-weight: 700; color: #f0d689; font-variant-numeric: tabular-nums; letter-spacing: -0.02cqw; line-height: 1.12; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
         .hxb[data-dense="1"] .hxb-nm { font-size: 2.4cqh; }
-        .hxb[data-dense="1"] .hxb-v { font-size: 2.3cqh; }
-        .hxb-vperf { color: #f0d689; }
-        .hxb-velite { color: #f6f6f4; }
+        .hxb[data-dense="1"] .hxb-val { font-size: 2.3cqh; }
 
         .hxb-tgt { flex-shrink: 0; margin-top: 1.6cqh; padding-top: 2.2cqh; border-top: 2px solid #212127; display: flex; align-items: center; justify-content: center; gap: 2.5cqw; text-align: center; }
         .hxb-tgtk { font-size: 1.7cqh; letter-spacing: 0.3cqw; text-transform: uppercase; color: #52525a; flex-shrink: 0; }
@@ -115,16 +118,14 @@ export default function HyroxBoard({ board }) {
         <div className="hxb-cols hxb-thead">
           <div />
           <div>Station</div>
-          <div className="hxb-r hxb-perf">Performance</div>
-          <div className="hxb-r">Elite</div>
+          <div className="hxb-r hxb-tgtcol">Target</div>
         </div>
         <div className="hxb-rows">
           {stations.map((s, i) => (
             <div key={i} className="hxb-cols hxb-trow">
               <div className="hxb-idx">{String(i + 1).padStart(2, '0')}</div>
               <div className="hxb-nm">{s.name}</div>
-              <div className="hxb-v hxb-vperf">{s.performance ?? ''}</div>
-              <div className="hxb-v hxb-velite">{s.elite ?? ''}</div>
+              <div className="hxb-val">{stationTarget(s)}</div>
             </div>
           ))}
         </div>

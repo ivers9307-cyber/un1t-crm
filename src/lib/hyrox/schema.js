@@ -17,8 +17,12 @@ import { PHASES, DIFFICULTY_DIALS, DEFAULT_CAP_MINUTES } from './constants'
 // tight brevity bar itself lives in the prompt + the eval.
 export const stationSchema = z.object({
   name: z.string().min(1).max(48),
-  performance: z.string().min(1).max(48),
-  elite: z.string().min(1).max(48),
+  target: z.string().min(1).max(48),
+  // Deprecated on the board (single-target redesign): the two tiers now live in
+  // full_session. Kept optional so old-shape output still validates (normalize
+  // lifts performance -> target).
+  performance: z.string().max(48).optional(),
+  elite: z.string().max(48).optional(),
 })
 
 export const boardSchema = z.object({
@@ -127,7 +131,12 @@ const clean = (obj) => {
 
 function normalizeStation(s) {
   if (!s || typeof s !== 'object') return s
-  return clean({ ...s, name: oneLine(s.name), performance: oneLine(s.performance), elite: oneLine(s.elite) })
+  const performance = s.performance == null ? undefined : oneLine(s.performance)
+  const elite = s.elite == null ? undefined : oneLine(s.elite)
+  // One board value: prefer the dedicated `target`; fall back to `performance`
+  // so old-style output (and stored sessions) still render.
+  const target = s.target == null ? performance : oneLine(s.target)
+  return clean({ ...s, name: oneLine(s.name), target, performance, elite })
 }
 
 function normalizeBoard(b) {
