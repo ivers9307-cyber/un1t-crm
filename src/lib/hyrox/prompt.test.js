@@ -12,6 +12,17 @@ describe('prompt builders', () => {
     expect(system.toLowerCase()).toContain('json')
     expect(system).not.toContain('—') // no em-dashes leak into member-facing strings
   })
+  it('arc prompt constrains the plan to a terse, exact-count skeleton (guards arc token-overrun)', () => {
+    const { system, user } = buildArcPrompt(input)
+    // The 2026-07-23 arc_generation_failed: a detailed charter made the model
+    // write paragraph-long weeks until it truncated at the token cap. These
+    // instructions keep the arc a short skeleton so it fits the budget.
+    expect(system).toContain('EXACTLY 12 entries')
+    expect(system.toLowerCase()).toContain('skeleton')
+    expect(system).toMatch(/short phrase/i)
+    expect(system.toLowerCase()).toContain('individual sessions') // charter scoped to sessions
+    expect(user).toContain('terse')
+  })
   it('expansion prompt carries the week stimulus and the two tiers only', () => {
     const week = { week_no: 5, phase: 'build', stimulus: 'Engine', progression: 'add a round', is_benchmark: false }
     const { system, user } = buildExpansionPrompt({ ...input, week, slot: 1, autoTuneSignal: null })
