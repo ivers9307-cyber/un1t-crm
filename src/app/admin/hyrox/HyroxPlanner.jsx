@@ -326,7 +326,7 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
     const s = sessions.find((x) => x.id === focusedId)
     if (!s) return
     setEditFocus(s.focus || '')
-    setEditStations(Array.isArray(s.board?.stations) ? s.board.stations.map((st) => ({ ...st })) : [])
+    setEditStations(Array.isArray(s.board?.stations) ? s.board.stations.map((st) => ({ ...st, target: st.target ?? st.performance ?? st.elite ?? '' })) : [])
     setDrawerError(null)
     setExemplarNote(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -378,7 +378,7 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
       if (!res.ok || !json.success) throw new Error(json.error || 'Regeneration failed.')
       await refresh()
       setEditFocus(json.data?.focus || '')
-      setEditStations(Array.isArray(json.data?.board?.stations) ? json.data.board.stations.map((st) => ({ ...st })) : [])
+      setEditStations(Array.isArray(json.data?.board?.stations) ? json.data.board.stations.map((st) => ({ ...st, target: st.target ?? st.performance ?? st.elite ?? '' })) : [])
     } catch (err) {
       setDrawerError(err.message)
     } finally {
@@ -409,27 +409,14 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
   const stationColumns = [
     { key: 'name', header: 'Station', accessor: 'name' },
     {
-      key: 'performance',
-      header: 'Performance',
+      key: 'target',
+      header: 'Target',
       render: (row) => (
         <input
           type="text"
-          value={row.performance || ''}
+          value={row.target ?? row.performance ?? ''}
           disabled={isPublished}
-          onChange={(e) => updateStation(row._i, 'performance', e.target.value)}
-          className="w-full bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-xs text-un1t-text focus:outline-none focus:border-un1t-muted disabled:opacity-50"
-        />
-      ),
-    },
-    {
-      key: 'elite',
-      header: 'Elite',
-      render: (row) => (
-        <input
-          type="text"
-          value={row.elite || ''}
-          disabled={isPublished}
-          onChange={(e) => updateStation(row._i, 'elite', e.target.value)}
+          onChange={(e) => updateStation(row._i, 'target', e.target.value)}
           className="w-full bg-un1t-bg border border-un1t-border rounded px-2 py-1 text-xs text-un1t-text focus:outline-none focus:border-un1t-muted disabled:opacity-50"
         />
       ),
