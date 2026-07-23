@@ -190,6 +190,8 @@
     { "path": "/api/cron/connection-health", "schedule": "40 4 * * *" },
     { "path": "/api/cron/wallet-monthly-reset", "schedule": "10 5 * * *" },
     { "path": "/api/cron/usage-rollup", "schedule": "40 2 * * *" },
-    { "path": "/api/cron/wallet-overage-draws", "schedule": "10 3 * * *" }
+    { "path": "/api/cron/wallet-overage-draws", "schedule": "10 3 * * *" },
+    { "path": "/api/cron/publish-hyrox-board", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/expand-hyrox-weeks", "schedule": "0 3 * * *" }
   ]
 }

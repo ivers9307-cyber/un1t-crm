@@ -31,7 +31,7 @@ export async function runPublishHyroxBoard(db, { nowMs = Date.now() } = {}) {
         .lte('starts_at', new Date(nowMs + LEAD_MS).toISOString())
         .order('starts_at', { ascending: false })
       const live = (occs || []).find((o) => {
-        if (normalizeClassName(o.name) !== 'hyrox') return false
+        if (!normalizeClassName(o.name).includes('hyrox')) return false
         const start = new Date(o.starts_at).getTime()
         const end = o.ends_at ? new Date(o.ends_at).getTime() : start + 60 * 60_000
         return nowMs >= start - LEAD_MS && nowMs <= end + POST_MS
