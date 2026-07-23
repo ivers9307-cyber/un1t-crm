@@ -3968,6 +3968,26 @@ registry.registerPath({
   },
 })
 
+registry.registerPath({
+  method: 'post',
+  path: '/api/hyrox/blocks/{id}/regenerate',
+  tags: ['Hyrox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Start a Hyrox block over with a brand-new plan (manager+)',
+  description:
+    'Re-runs the arc generator for a fresh 12-week plan, deletes every non-published session, and writes the ' +
+    'new arc onto the block. Published sessions (potentially live on a TV) are left untouched. The arc is ' +
+    'generated first, so a failed generation leaves the block fully intact. Destructive: the client confirms ' +
+    'before calling. 404-not-403 detail-route posture on a missing block or missing location permission.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Block regenerated (non-published sessions cleared)', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxBlockRegenerateResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing block, or no permission at this location)', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Arc generation failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 const HyroxSessionUpdate = z.object({
   focus: z.string().max(200).nullish(),
   full_session: z.record(z.string(), z.any()).optional(),

@@ -154,6 +154,8 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
   const [genError, setGenError] = useState(null)
   const [expandProgress, setExpandProgress] = useState(null)
   const [expandingWeek, setExpandingWeek] = useState(null)
+  const [regenOpen, setRegenOpen] = useState(false)
+  const [regenerating, setRegenerating] = useState(false)
 
   function toggleWeekday(day) {
     setGenForm((f) => ({
@@ -248,7 +250,9 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
 
   async function generateRemaining() {
     setError(null)
-    const weeksToDo = weekRows.filter((w) => !slotCols.some((slot) => sessionMap.has(`${w}:${slot}`)))
+    // Any week missing ANY of its slots — this fills partial weeks too, not just
+    // untouched ones, so a week that failed halfway gets its gap filled.
+    const weeksToDo = weekRows.filter((w) => !slotCols.every((slot) => sessionMap.has(`${w}:${slot}`)))
     for (let i = 0; i < weeksToDo.length; i += 1) {
       const w = weeksToDo[i]
       setExpandProgress(`Generating week ${w} (${i + 1} of ${weeksToDo.length})…`)
@@ -256,6 +260,25 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
       await refresh()
     }
     setExpandProgress(null)
+  }
+
+  // Start the whole block over: a fresh arc + wipe of every non-published
+  // session (the route keeps published ones live). Destructive, so confirm-gated.
+  async function handleRegenerateBlock() {
+    if (!block) return
+    setRegenerating(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/hyrox/blocks/${block.id}/regenerate`, { method: 'POST' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to regenerate the block.')
+      setRegenOpen(false)
+      await refresh()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setRegenerating(false)
+    }
   }
 
   const [batchApprovingWeek, setBatchApprovingWeek] = useState(null)
@@ -410,13 +433,28 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
     },
   ]
 
-  const remainingWeeks = weekRows.filter((w) => !slotCols.some((slot) => sessionMap.has(`${w}:${slot}`)))
+  // A week is "remaining" if it is missing ANY slot (empty OR partially failed).
+  const remainingWeeks = weekRows.filter((w) => !slotCols.every((slot) => sessionMap.has(`${w}:${slot}`)))
 
   return (
     <div className="p-6 max-w-5xl">
-      <div className="flex items-center gap-2 mb-1">
-        <Dumbbell size={20} className="text-un1t-subtle" />
-        <h2 className="text-2xl font-bold">Hyrox Training Club</h2>
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <div className="flex items-center gap-2">
+          <Dumbbell size={20} className="text-un1t-subtle" />
+          <h2 className="text-2xl font-bold">Hyrox Training Club</h2>
+        </div>
+        {block && canManage && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            icon={RotateCcw}
+            disabled={Boolean(expandProgress) || generating || regenerating}
+            onClick={() => setRegenOpen(true)}
+          >
+            Regenerate block
+          </Button>
+        )}
       </div>
 
       {block ? (
@@ -703,7 +741,8 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
             <tbody>
               {weekRows.map((week) => {
                 const weekDrafts = sessions.filter((s) => s.week_no === week && s.status === 'draft')
-                const weekHasSessions = slotCols.some((slot) => sessionMap.has(`${week}:${slot}`))
+                const weekComplete = slotCols.every((slot) => sessionMap.has(`${week}:${slot}`))
+                const weekPartial = !weekComplete && slotCols.some((slot) => sessionMap.has(`${week}:${slot}`))
                 return (
                   <tr key={week} className="border-b border-un1t-border/60">
                     <td className="py-2 px-3 text-un1t-text font-medium">{week}</td>
@@ -730,30 +769,33 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
                       )
                     })}
                     <td className="py-2 px-3 text-right align-top">
-                      {!weekHasSessions && canManage ? (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          icon={Dumbbell}
-                          loading={expandingWeek === week}
-                          disabled={Boolean(expandProgress) || generating}
-                          onClick={() => expandWeek(block.id, week)}
-                        >
-                          Generate
-                        </Button>
-                      ) : weekDrafts.length > 0 ? (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          icon={Check}
-                          loading={batchApprovingWeek === week}
-                          onClick={() => approveWeek(week)}
-                        >
-                          Approve all ({weekDrafts.length})
-                        </Button>
-                      ) : null}
+                      <div className="flex flex-col items-end gap-1">
+                        {!weekComplete && canManage && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            icon={Dumbbell}
+                            loading={expandingWeek === week}
+                            disabled={Boolean(expandProgress) || generating}
+                            onClick={() => expandWeek(block.id, week)}
+                          >
+                            {weekPartial ? 'Finish week' : 'Generate'}
+                          </Button>
+                        )}
+                        {weekDrafts.length > 0 && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            icon={Check}
+                            loading={batchApprovingWeek === week}
+                            onClick={() => approveWeek(week)}
+                          >
+                            Approve all ({weekDrafts.length})
+                          </Button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )
@@ -887,6 +929,33 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
               />
             </div>
           </div>
+        </Modal>
+      )}
+
+      {regenOpen && (
+        <Modal
+          open
+          onClose={() => { if (!regenerating) setRegenOpen(false) }}
+          size="md"
+          title="Regenerate this block?"
+          footer={
+            <>
+              <Button type="button" variant="secondary" disabled={regenerating} onClick={() => setRegenOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="button" variant="danger" icon={RotateCcw} loading={regenerating} onClick={handleRegenerateBlock}>
+                Regenerate block
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm text-un1t-text">
+            This designs a brand new 12-week plan and deletes every draft and approved session in this block.
+            Published sessions that may be live on a TV are kept. This cannot be undone.
+          </p>
+          <p className="text-sm text-un1t-subtle mt-2">
+            When it finishes, use &quot;Generate remaining weeks&quot; to write the new sessions.
+          </p>
         </Modal>
       )}
     </div>

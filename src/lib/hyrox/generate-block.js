@@ -6,7 +6,7 @@
 //                         (wall-clock ≈ one call regardless of sessions_per_week).
 // `caller` is the metered anthropic caller injected by the route/cron.
 import { generateArc, expandSession, HYROX_MODEL } from './generate'
-import { slotsForWeek, blockRowFrom, sessionRowFrom } from './plan-block'
+import { missingSlots, blockRowFrom, sessionRowFrom } from './plan-block'
 
 // Pure helper: fold last week's generated sessions into one line the model can
 // read as "here's what already happened" (block-context awareness — HYROX-TC).
@@ -35,8 +35,11 @@ export async function createBlockWithArc(db, { input, charter, houseStyle, calle
   return { ok: true, block }
 }
 
-// Expand ONE week of a block: generate its sessions in parallel and insert the
-// drafts. Idempotent — a week that already has sessions returns skipped:true.
+// Expand ONE week of a block: generate its MISSING sessions in parallel and
+// insert them as drafts. Idempotent per (block, week, slot) — not per week — so
+// a week that failed halfway (one of two sessions generated) is recoverable:
+// re-running fills only the gaps and leaves the finished slots alone. Returns
+// skipped:true only when every slot for the week already exists.
 // Returns { ok, sessionsCreated, skipped? } | { ok:false, error }.
 export async function expandBlockWeek(db, { block, weekNo, charter, houseStyle, styleExamples, caller, locationLabel = 'UN1T' }) {
   const week = (block.arc?.plan || []).find((w) => w.week_no === weekNo)
@@ -44,11 +47,12 @@ export async function expandBlockWeek(db, { block, weekNo, charter, houseStyle, 
 
   const { data: existing } = await db
     .from('hyrox_sessions')
-    .select('id')
+    .select('slot')
     .eq('block_id', block.id)
     .eq('week_no', weekNo)
-    .limit(1)
-  if (existing && existing.length) return { ok: true, sessionsCreated: 0, skipped: true }
+    .order('slot', { ascending: true })
+  const slots = missingSlots(block.sessions_per_week ?? 2, (existing || []).map((r) => r.slot))
+  if (!slots.length) return { ok: true, sessionsCreated: 0, skipped: true }
 
   let prevWeekSummary = null
   if (weekNo > 1) {
@@ -57,7 +61,6 @@ export async function expandBlockWeek(db, { block, weekNo, charter, houseStyle, 
     prevWeekSummary = summarizePrevWeek(prev)
   }
 
-  const slots = slotsForWeek(block.sessions_per_week ?? 2)
   const built = await Promise.all(
     slots.map((slot) =>
       expandSession(

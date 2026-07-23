@@ -12,6 +12,14 @@ export function slotsForWeek(sessionsPerWeek) {
   return Array.from({ length: n }, (_, i) => i + 1)
 }
 
+// Which slots for a week still need generating, given the slots already stored.
+// Drives per-slot (not per-week) recovery: a week whose generation failed
+// halfway keeps its finished slots and only re-generates the gaps.
+export function missingSlots(sessionsPerWeek, existingSlotNums) {
+  const have = new Set((Array.isArray(existingSlotNums) ? existingSlotNums : []).map((n) => Number(n)))
+  return slotsForWeek(sessionsPerWeek).filter((s) => !have.has(s))
+}
+
 export function blockRowFrom(input, arc, userId, modelId) {
   return {
     location_id: input.location_id,
