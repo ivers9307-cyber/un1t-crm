@@ -97,3 +97,27 @@ describe('LLM output coercion (regression: session_generation_failed)', () => {
     expect(s.data.full_session.main).not.toContain('"')
   })
 })
+
+describe('board brevity guards (regression: 2026-07-23 text-dump board)', () => {
+  const longSentence = '600m opening, then 400m between each station at an easy aerobic pace'
+  it('rejects a coaching sentence in a station performance value', () => {
+    const bad = { ...validSession, board: { ...validSession.board, stations: [{ name: 'Run', performance: longSentence, elite: '500m' }] } }
+    expect(parseSession(bad).ok).toBe(false)
+  })
+  it('rejects a paragraph-length board.format', () => {
+    const bad = { ...validSession, board: { ...validSession.board, format: 'Solo timed stations - staggered start - full loop within a 45 minute cap' } }
+    expect(parseSession(bad).ok).toBe(false)
+  })
+  it('still accepts normal short scoreboard values', () => {
+    const ok = { ...validSession, board: { ...validSession.board, stations: [{ name: 'Farmers Carry', performance: '2x16kg', elite: '2x24kg' }] } }
+    expect(parseSession(ok).ok).toBe(true)
+  })
+  it('collapses whitespace/newlines in board values to one line', () => {
+    const raw = { ...validSession, board: { ...validSession.board, format: '4 ROUNDS\n  FOR   TIME', stations: [{ name: 'Ski\nErg', performance: ' 650m ', elite: '720m' }] } }
+    const s = parseSession(raw)
+    expect(s.ok).toBe(true)
+    expect(s.data.board.format).toBe('4 ROUNDS FOR TIME')
+    expect(s.data.board.stations[0].name).toBe('Ski Erg')
+    expect(s.data.board.stations[0].performance).toBe('650m')
+  })
+})

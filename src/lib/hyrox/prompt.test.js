@@ -23,6 +23,14 @@ describe('prompt builders', () => {
     expect(system.toLowerCase()).toContain('individual sessions') // charter scoped to sessions
     expect(user).toContain('terse')
   })
+  it('instructs the board to be a glanceable scoreboard of short values (regression: text-dump board)', () => {
+    const week = { week_no: 5, phase: 'build', stimulus: 'Engine', progression: 'x', is_benchmark: false }
+    const { system } = buildExpansionPrompt({ week, slot: 1 })
+    expect(system).toMatch(/scoreboard/i)
+    expect(system).toContain('board.stations[].name')
+    expect(system).toMatch(/under 16 characters/i)
+    expect(system).toContain('full_session') // the coaching prose lives here, not on the board
+  })
   it('expansion prompt carries the week stimulus and the two tiers only', () => {
     const week = { week_no: 5, phase: 'build', stimulus: 'Engine', progression: 'add a round', is_benchmark: false }
     const { system, user } = buildExpansionPrompt({ ...input, week, slot: 1, autoTuneSignal: null })

@@ -17,9 +17,10 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
-import { Dumbbell, AlertCircle, Check, RotateCcw, RefreshCw, ChevronRight, X, Plus, Star } from 'lucide-react'
+import { Dumbbell, AlertCircle, Check, RotateCcw, RefreshCw, ChevronRight, X, Plus, Star, Tv } from 'lucide-react'
 import { Button, Modal, Field, Table } from '@/components/ui'
 import { DIFFICULTY_DIALS, MAX_STORED_EXAMPLE_CHARS } from '@/lib/hyrox/constants'
+import HyroxBoard from '@/components/HyroxBoard'
 
 const WEEKDAY_OPTIONS = [
   { value: 1, label: 'Mon' },
@@ -305,6 +306,7 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
 
   // ── Review drawer ─────────────────────────────────────────────────────
   const [focusedId, setFocusedId] = useState(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
   const focusedSession = useMemo(() => sessions.find((s) => s.id === focusedId) || null, [sessions, focusedId])
   const [editFocus, setEditFocus] = useState('')
   const [editStations, setEditStations] = useState([])
@@ -332,6 +334,7 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
 
   function closeDrawer() {
     setFocusedId(null)
+    setPreviewOpen(false)
     setDrawerError(null)
     setExemplarNote(null)
   }
@@ -825,6 +828,11 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
                   )}
                 </span>
               )}
+              {focusedSession.board && (
+                <Button type="button" variant="secondary" icon={Tv} onClick={() => setPreviewOpen(true)}>
+                  Preview on TV
+                </Button>
+              )}
               <Button type="button" variant="secondary" onClick={closeDrawer}>Close</Button>
               {!isPublished && (
                 <Button type="button" variant="secondary" icon={RefreshCw} loading={sessionBusy === 'regenerate'} onClick={handleRegenerate}>
@@ -957,6 +965,27 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
             When it finishes, use &quot;Generate remaining weeks&quot; to write the new sessions.
           </p>
         </Modal>
+      )}
+
+      {previewOpen && focusedSession?.board && (
+        <div
+          role="dialog"
+          aria-label="TV board preview"
+          onClick={() => setPreviewOpen(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.86)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '14px', padding: '24px' }}
+        >
+          {/* Portrait frame with container-type:size so the board's cqh/cqw units
+              resolve exactly as they do on the TV stage. */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ position: 'relative', height: 'min(86vh, 880px)', aspectRatio: '9 / 16', containerType: 'size', background: '#0b0b0d', borderRadius: '14px', overflow: 'hidden', outline: '1px solid #232329', boxShadow: '0 30px 70px -30px rgba(0,0,0,0.9)' }}
+          >
+            <HyroxBoard board={focusedSession.board} />
+          </div>
+          <button type="button" onClick={() => setPreviewOpen(false)} className="text-xs text-white/70 hover:text-white">
+            Close preview (this is exactly what the TV shows)
+          </button>
+        </div>
       )}
     </div>
   )
