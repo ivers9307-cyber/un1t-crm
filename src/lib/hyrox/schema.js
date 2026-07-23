@@ -60,10 +60,30 @@ export const arcSchema = z.object({
 })
 
 // ── coercion helpers ────────────────────────────────────────────────
+// Flatten a stray nested object into readable indented text (NOT raw JSON), so a
+// full_session field the model wrongly nested still renders as prose in the drawer.
+const objectToText = (obj, depth = 0) => {
+  const pad = '  '.repeat(depth)
+  const lines = []
+  for (const [k, val] of Object.entries(obj)) {
+    if (val == null) continue
+    const label = String(k).replace(/_/g, ' ')
+    if (Array.isArray(val)) {
+      lines.push(`${pad}${label}:`)
+      for (const item of val) lines.push(item != null && typeof item === 'object' ? objectToText(item, depth + 1) : `${pad}  - ${item}`)
+    } else if (typeof val === 'object') {
+      lines.push(`${pad}${label}:`)
+      lines.push(objectToText(val, depth + 1))
+    } else {
+      lines.push(`${pad}${label}: ${val}`)
+    }
+  }
+  return lines.join('\n')
+}
 const text = (v) => {
   if (v == null) return v
   if (Array.isArray(v)) return v.filter((x) => x != null).map((x) => text(x)).join('\n')
-  if (typeof v === 'object') return JSON.stringify(v)
+  if (typeof v === 'object') return objectToText(v)
   return String(v)
 }
 const intFrom = (v) => {
