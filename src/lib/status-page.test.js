@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { toMemberStatus, buildStatusView, DEFAULT_COPY } from './status-page.js'
+import { toMemberStatus, buildStatusView, DEFAULT_COPY, pruneStatusOverrides } from './status-page.js'
 
 describe('toMemberStatus', () => {
   it('maps internal → member vocabulary, and never alarms on unknown', () => {
@@ -65,5 +65,30 @@ describe('buildStatusView', () => {
     expect(v.services.find((s) => s.key === 'payments').label).toBe('Billing')
     // untouched service keeps its default label
     expect(v.services.find((s) => s.key === 'email').label).toBe(DEFAULT_COPY.services.email.label)
+  })
+})
+
+describe('pruneStatusOverrides', () => {
+  it('keeps only non-empty trimmed strings (blanks fall back to defaults)', () => {
+    const out = pruneStatusOverrides({
+      brand: '  CHAMP  ',
+      services: { payments: { label: 'Billing', ok: '  ', bad: '' }, email: {} },
+      verdict: { down: { headline: 'Hang tight', tag: '' } },
+    })
+    expect(out).toEqual({
+      brand: 'CHAMP',
+      services: { payments: { label: 'Billing' } },
+      verdict: { down: { headline: 'Hang tight' } },
+    })
+  })
+  it('returns {} for empty/garbage input (→ all defaults)', () => {
+    expect(pruneStatusOverrides({})).toEqual({})
+    expect(pruneStatusOverrides(null)).toEqual({})
+    expect(pruneStatusOverrides({ services: { booking: { label: '   ' } } })).toEqual({})
+  })
+  it('round-trips through buildStatusView', () => {
+    const overrides = pruneStatusOverrides({ services: { payments: { label: 'Billing' } } })
+    const v = buildStatusView([{ key: 'payments', status: 'ok' }], overrides)
+    expect(v.services.find((s) => s.key === 'payments').label).toBe('Billing')
   })
 })

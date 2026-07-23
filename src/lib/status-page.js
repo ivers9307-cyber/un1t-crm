@@ -71,6 +71,51 @@ export const DEFAULT_COPY = {
   },
 }
 
+export const OVERRIDE_SERVICE_KEYS = ['booking', 'messaging', 'payments', 'email']
+export const OVERRIDE_SERVICE_FIELDS = ['label', 'ok', 'bad']
+export const OVERRIDE_VERDICT_KEYS = ['operational', 'degraded', 'down']
+export const OVERRIDE_VERDICT_FIELDS = ['tag', 'headline', 'subline']
+
+/**
+ * Reduce a form's copy input to the minimal override object stored on
+ * locations.settings.status_page — keeping ONLY non-empty trimmed strings so
+ * any blank field transparently falls back to the shipped default. Pure; used
+ * by the settings save route so an operator never has to fill in every box.
+ */
+export function pruneStatusOverrides(input) {
+  const src = input && typeof input === 'object' ? input : {}
+  const out = {}
+
+  const brand = typeof src.brand === 'string' ? src.brand.trim() : ''
+  if (brand) out.brand = brand
+
+  const services = {}
+  for (const key of OVERRIDE_SERVICE_KEYS) {
+    const s = (src.services && src.services[key]) || {}
+    const o = {}
+    for (const f of OVERRIDE_SERVICE_FIELDS) {
+      const v = typeof s[f] === 'string' ? s[f].trim() : ''
+      if (v) o[f] = v
+    }
+    if (Object.keys(o).length) services[key] = o
+  }
+  if (Object.keys(services).length) out.services = services
+
+  const verdict = {}
+  for (const key of OVERRIDE_VERDICT_KEYS) {
+    const s = (src.verdict && src.verdict[key]) || {}
+    const o = {}
+    for (const f of OVERRIDE_VERDICT_FIELDS) {
+      const v = typeof s[f] === 'string' ? s[f].trim() : ''
+      if (v) o[f] = v
+    }
+    if (Object.keys(o).length) verdict[key] = o
+  }
+  if (Object.keys(verdict).length) out.verdict = verdict
+
+  return out
+}
+
 // Shallow-merge per section so a partial override (e.g. just one service line)
 // keeps every other default. overrides = locations.settings.status_page.
 function mergeCopy(overrides) {

@@ -315,6 +315,21 @@ export default async function SettingsPage() {
               </div>
               <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text shrink-0" />
             </Link>
+            <Link
+              href="/settings/status-page"
+              className="bg-un1t-surface border border-un1t-border hover:border-un1t-subtle rounded-lg p-4 flex items-center justify-between text-sm group transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <Globe size={16} className="text-un1t-subtle shrink-0" />
+                <div>
+                  <div className="text-un1t-text">Public status page</div>
+                  <div className="text-xs text-un1t-subtle mt-0.5">
+                    The member-facing status page — edit the wording for each service and state. Members see a plain-language operational / degraded status, never internal detail.
+                  </div>
+                </div>
+              </div>
+              <ChevronRight size={16} className="text-un1t-subtle group-hover:text-un1t-text shrink-0" />
+            </Link>
           </div>
         </div>
       )}
