@@ -36,10 +36,20 @@ export default function HyroxBoard({ board }) {
   const { main: weekMain, phase } = splitWeek(board.week_label)
   const cap = board.cap_minutes
   const capText = cap ? `${String(cap).padStart(2, '0')}:00` : ''
-  const dense = stations.length > 8
+  // Auto-size the station rows to the count so the text always fits cleanly
+  // WITHIN each row band, between the separator lines. A short session keeps big
+  // text; a dense 17-station loop shrinks proportionally instead of spilling over
+  // the lines. cqh values injected as CSS variables so the sizing is data-driven.
+  const n = stations.length || 1
+  const nameFont = Math.max(1.3, Math.min(2.4, 24 / n)).toFixed(2)
+  const valFont = Math.max(1.35, Math.min(2.5, 25 / n)).toFixed(2)
+  const idxFont = Math.max(1.05, Math.min(1.8, 16 / n)).toFixed(2)
 
   return (
-    <div className="hxb" data-dense={dense ? '1' : '0'} style={{ fontFamily: tvFontFamily }}>
+    <div
+      className="hxb"
+      style={{ fontFamily: tvFontFamily, '--hxb-nm': `${nameFont}cqh`, '--hxb-val': `${valFont}cqh`, '--hxb-idx': `${idxFont}cqh` }}
+    >
       <style>{`
         .hxb {
           position: absolute; inset: 0; display: flex; flex-direction: column;
@@ -76,11 +86,9 @@ export default function HyroxBoard({ board }) {
         .hxb-thead .hxb-tgtcol { color: ${GOLD}; }
         .hxb-rows { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; }
         .hxb-trow { flex: 1 1 0; min-height: 0; border-top: 1px solid #17171b; }
-        .hxb-idx { font-size: 1.8cqh; font-weight: 700; color: #52525a; font-variant-numeric: tabular-nums; }
-        .hxb-nm { font-size: 2.4cqh; font-weight: 600; letter-spacing: -0.02cqw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .hxb-val { text-align: right; font-size: 2.5cqh; font-weight: 700; color: #f0d689; font-variant-numeric: tabular-nums; letter-spacing: -0.02cqw; line-height: 1.12; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-        .hxb[data-dense="1"] .hxb-nm { font-size: 2.1cqh; }
-        .hxb[data-dense="1"] .hxb-val { font-size: 2.2cqh; }
+        .hxb-idx { font-size: var(--hxb-idx); font-weight: 700; color: #52525a; font-variant-numeric: tabular-nums; }
+        .hxb-nm { font-size: var(--hxb-nm); font-weight: 600; letter-spacing: -0.02cqw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .hxb-val { text-align: right; font-size: var(--hxb-val); font-weight: 700; color: #f0d689; font-variant-numeric: tabular-nums; letter-spacing: -0.02cqw; line-height: 1.1; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 
         .hxb-tgt { flex-shrink: 0; margin-top: 1.6cqh; padding-top: 2.2cqh; border-top: 2px solid #212127; display: flex; align-items: center; justify-content: center; gap: 2.5cqw; text-align: center; }
         .hxb-tgtk { font-size: 1.7cqh; letter-spacing: 0.3cqw; text-transform: uppercase; color: #52525a; flex-shrink: 0; }
