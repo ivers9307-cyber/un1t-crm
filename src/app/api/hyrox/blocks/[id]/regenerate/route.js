@@ -15,7 +15,11 @@ import { resolveHyroxSettings } from '@/lib/hyrox/settings'
 import { generateArc, HYROX_MODEL } from '@/lib/hyrox/generate'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 120
+// Arc generation is the heaviest single Claude call in the feature (max_tokens
+// 8000) and can run well past 2 min. 120s timed the function out mid-call in
+// prod (504, no arc, no wipe). Match the sibling arc/session generation routes
+// (POST /api/hyrox/blocks, sessions/[id]/regenerate), which use 300.
+export const maxDuration = 300
 
 export async function POST(_request, { params }) {
   const { id } = await params
