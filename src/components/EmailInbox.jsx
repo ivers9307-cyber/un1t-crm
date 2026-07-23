@@ -246,7 +246,7 @@ export default function EmailInbox({ locationId, initialConversationId, embedded
       </div>
 
       {/* Thread */}
-      <div className={`${selectedId ? 'flex' : 'hidden md:flex'} flex-col flex-1`}>
+      <div className={`${selectedId ? 'flex' : 'hidden md:flex'} flex-col flex-1 min-w-0`}>
         {!selectedId ? (
           <div className="flex-1 flex items-center justify-center text-un1t-subtle">
             <div className="text-center">

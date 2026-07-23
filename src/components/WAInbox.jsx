@@ -809,8 +809,11 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
         </div>
       </div>
 
-      {/* Chat area */}
-      <div className="flex-1 flex flex-col">
+      {/* Chat area — min-w-0 lets this pane shrink below its content's
+          intrinsic width (flex items default to min-width:auto). Without it
+          the shrink-0 header controls force the pane wider than its column,
+          overflowing rightward under the embedded CommandCentre panel. */}
+      <div className="flex-1 flex flex-col min-w-0">
         {!selectedId ? (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
