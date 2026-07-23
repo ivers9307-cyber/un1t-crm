@@ -82,7 +82,9 @@ export const MODAL_SIZES = Object.freeze({
  */
 export function modalPanelClasses({ size = 'md', className } = {}) {
   return clsx(
-    'w-full rounded-xl bg-white shadow-xl border border-un1t-border',
+    // flex column capped at the viewport so a tall modal scrolls its body
+    // internally (header + footer stay pinned) instead of overflowing the screen.
+    'w-full rounded-xl bg-white shadow-xl border border-un1t-border flex flex-col max-h-[calc(100vh-2rem)]',
     MODAL_SIZES[size] || MODAL_SIZES.md,
     className,
   )
