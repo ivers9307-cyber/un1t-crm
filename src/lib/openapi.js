@@ -3909,6 +3909,39 @@ registry.registerPath({
   },
 })
 
+// Hyrox Training Club (HYROX-TC.2) — generate-a-block + coach review/approve.
+const HyroxBlockCreate = z.object({
+  location_id: uuidLike,
+  starts_on: isoDate,
+  title: z.string().max(120).optional(),
+  weeks: z.number().int().min(1).max(24).optional(),
+  sessions_per_week: z.number().int().min(1).max(7).optional(),
+  session_weekdays: z.array(z.number().int().min(1).max(7)).min(1).max(7),
+  difficulty_dial: z.enum(['beginner_heavy', 'mixed', 'competitive']).optional(),
+  auto_tune_enabled: z.boolean().optional(),
+  charter: z.string().max(8000).optional(),
+  expand_weeks: z.number().int().min(1).max(12).optional(),
+}).openapi('HyroxBlockCreate')
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/hyrox/blocks',
+  tags: ['Hyrox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Generate + persist a 12-week Hyrox Training Club block (manager+)',
+  description:
+    'Generates a block arc (Claude, metered via anthropicMessages) and writes it plus the first ' +
+    '`expand_weeks` weeks of draft sessions to hyrox_blocks / hyrox_sessions. The rolling-expansion ' +
+    'cron that fills weeks beyond the initial window is a later plan.',
+  request: { body: { content: { 'application/json': { schema: HyroxBlockCreate } } } },
+  responses: {
+    201: { description: 'Block + initial sessions created', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxBlockCreateResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — manager+ only', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Generation failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
