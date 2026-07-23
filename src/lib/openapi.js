@@ -3942,6 +3942,54 @@ registry.registerPath({
   },
 })
 
+const HyroxSessionUpdate = z.object({
+  focus: z.string().max(200).nullish(),
+  full_session: z.record(z.string(), z.any()).optional(),
+  board: z.record(z.string(), z.any()).optional(),
+  status: z.enum(['draft', 'approved']).optional(),
+}).openapi('HyroxSessionUpdate')
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/hyrox/sessions/{id}',
+  tags: ['Hyrox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Coach edit and/or approve a generated Hyrox session',
+  description:
+    'Detail route: a missing session or a session at a location the caller lacks approvals_hyrox_sessions ' +
+    'for both answer 404 (IDOR posture). status:"approved" stamps approved_by/approved_at; status:"draft" clears them.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: HyroxSessionUpdate } } },
+  },
+  responses: {
+    200: { description: 'Session updated', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxSessionUpdateResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or no permission at this location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Already published', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/hyrox/sessions/{id}/regenerate',
+  tags: ['Hyrox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Regenerate a single Hyrox session',
+  description:
+    'Re-runs generation for the session\'s week_no/slot against its block\'s arc + difficulty dial, ' +
+    'forcing the result back to status:"draft" (approved_by/approved_at cleared) so it re-enters coach review. ' +
+    'Same 404-not-403 detail-route posture as the PUT route.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Session regenerated', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxSessionRegenerateResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or no permission at this location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Already published, or no arc week for this session', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Regeneration failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
