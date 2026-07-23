@@ -22,13 +22,6 @@ import { getAppUrl } from './app-url'
  */
 export async function createClassBookingPayment({ db, request, location, amountCents, currency }) {
   const { provider, connectedAccountId } = resolveLocationPaymentProvider(location)
-  // Phase 1 ships the Revolut release path only (webhook + poll re-check are
-  // Revolut-keyed). Refuse to CHARGE on a rail we can't yet release, so we never
-  // take money against a booking that can't be freed. Stripe Connect lands with
-  // its own release path in a later phase.
-  if (provider !== 'revolut') {
-    throw new Error(`Payment provider '${provider}' has no class-booking release path yet`)
-  }
   const created = await paymentsFor(provider).createPayment({
     amountCents,
     currency: currency || 'EUR',
@@ -53,6 +46,7 @@ export async function createClassBookingPayment({ db, request, location, amountC
       payment_checkout_url: created.checkoutUrl || null,
       amount_cents: amountCents,
       currency: currency || 'EUR',
+      connected_account_id: connectedAccountId || null,
     })
     .eq('id', request.id)
   if (refErr) {

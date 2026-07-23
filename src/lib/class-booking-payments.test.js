@@ -30,11 +30,13 @@ describe('createClassBookingPayment', () => {
     expect(updates.some((u) => u.payment_provider_ref === 'ord_1' && u.payment_status === 'pending')).toBe(true)
   })
 
-  it('refuses a non-revolut provider (no release path yet) without charging', async () => {
+  it('charges stripe with the connected account and persists it on the row', async () => {
+    const updates = []
     const stripeLoc = { id: 'loc1', settings: { payments: { provider: 'stripe_connect', stripe_connected_account_id: 'acct_1' } } }
-    await expect(createClassBookingPayment({ db: makeDb([]), request, location: stripeLoc, amountCents: 2900, currency: 'EUR' }))
-      .rejects.toThrow(/release path/)
-    expect(createPayment).not.toHaveBeenCalled()
+    const res = await createClassBookingPayment({ db: makeDb(updates), request, location: stripeLoc, amountCents: 2900, currency: 'EUR' })
+    expect(createPayment).toHaveBeenCalledWith(expect.objectContaining({ amountCents: 2900, connectedAccountId: 'acct_1' }))
+    expect(res.checkout).toEqual(expect.objectContaining({ provider: 'stripe_connect', connectedAccountId: 'acct_1' }))
+    expect(updates.some((u) => u.payment_provider === 'stripe_connect' && u.connected_account_id === 'acct_1')).toBe(true)
   })
 
   it('throws if persisting the provider ref fails (never hands back a checkout URL)', async () => {
