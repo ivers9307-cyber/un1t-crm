@@ -19,7 +19,7 @@
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
   Plug, Zap, DoorOpen, Snowflake, FileCheck, MessageSquare, MessageCircle,
-  AlertCircle, CheckCircle2, Megaphone, Instagram,
+  AlertCircle, CheckCircle2, Megaphone, Instagram, CreditCard,
 } from 'lucide-react'
 import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
@@ -32,6 +32,7 @@ import BcaIntegrationTab from './integrations/BcaIntegrationTab'
 import TwilioIntegrationTab from './integrations/TwilioIntegrationTab'
 import WhatsAppIntegrationTab from './integrations/WhatsAppIntegrationTab'
 import AdsIntegrationTab from './integrations/AdsIntegrationTab'
+import PaymentsIntegrationTab from './integrations/PaymentsIntegrationTab'
 
 export default function LocationIntegrations({ location, xeroConnection, user, sampleBcaCar }) {
   const router = useRouter()
@@ -67,6 +68,18 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
       label: 'Glofox',
       Icon: Zap,
       status: location.settings?.glofox?.api_key ? 'connected' : 'not-configured',
+    })
+  }
+  // PAID-INTRO-P3C.5 — payments settings (Stripe Connect for the class
+  // funnel paid intro offer). Gated owner-or-master like Xero/Ads above.
+  if (isOwnerOrMaster) {
+    tabs.push({
+      key: 'payments',
+      label: 'Payments',
+      Icon: CreditCard,
+      status: location.settings?.payments?.provider === 'stripe_connect'
+        ? (location.settings?.payments?.stripe_connected_account_id ? 'connected' : 'not-configured')
+        : 'connected',
     })
   }
   // Twilio (SMS) — alpha sender ID. Twilio account creds are global
@@ -201,6 +214,9 @@ export default function LocationIntegrations({ location, xeroConnection, user, s
           )}
           {activeKey === 'ads' && (
             <AdsIntegrationTab location={location} canEdit={isOwnerOrMaster} />
+          )}
+          {activeKey === 'payments' && (
+            <PaymentsIntegrationTab location={location} canEdit={isOwnerOrMaster} />
           )}
           {activeKey === 'unifi' && (
             <UnifiIntegrationTab location={location} canEdit={isMaster} />
