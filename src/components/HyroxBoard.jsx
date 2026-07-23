@@ -70,17 +70,17 @@ export default function HyroxBoard({ board }) {
         /* Station table: two columns (station | target). Rows flex to fill so any
            count fits; the target is wide and may wrap to 2 lines. */
         .hxb-tbl { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; margin-top: 0.4cqh; }
-        .hxb-cols { display: grid; grid-template-columns: 4cqw 1fr 1.7fr; align-items: center; gap: 2.5cqw; }
+        .hxb-cols { display: grid; grid-template-columns: 4cqw 1.15fr 1.45fr; align-items: center; gap: 2.5cqw; }
         .hxb-thead { flex-shrink: 0; font-size: 1.6cqh; letter-spacing: 0.22cqw; text-transform: uppercase; color: #52525a; padding: 1.8cqh 0 1.2cqh; }
         .hxb-r { text-align: right; }
         .hxb-thead .hxb-tgtcol { color: ${GOLD}; }
         .hxb-rows { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; }
         .hxb-trow { flex: 1 1 0; min-height: 0; border-top: 1px solid #17171b; }
         .hxb-idx { font-size: 1.8cqh; font-weight: 700; color: #52525a; font-variant-numeric: tabular-nums; }
-        .hxb-nm { font-size: 2.8cqh; font-weight: 600; letter-spacing: -0.02cqw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .hxb-val { text-align: right; font-size: 2.6cqh; font-weight: 700; color: #f0d689; font-variant-numeric: tabular-nums; letter-spacing: -0.02cqw; line-height: 1.12; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-        .hxb[data-dense="1"] .hxb-nm { font-size: 2.4cqh; }
-        .hxb[data-dense="1"] .hxb-val { font-size: 2.3cqh; }
+        .hxb-nm { font-size: 2.4cqh; font-weight: 600; letter-spacing: -0.02cqw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .hxb-val { text-align: right; font-size: 2.5cqh; font-weight: 700; color: #f0d689; font-variant-numeric: tabular-nums; letter-spacing: -0.02cqw; line-height: 1.12; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+        .hxb[data-dense="1"] .hxb-nm { font-size: 2.1cqh; }
+        .hxb[data-dense="1"] .hxb-val { font-size: 2.2cqh; }
 
         .hxb-tgt { flex-shrink: 0; margin-top: 1.6cqh; padding-top: 2.2cqh; border-top: 2px solid #212127; display: flex; align-items: center; justify-content: center; gap: 2.5cqw; text-align: center; }
         .hxb-tgtk { font-size: 1.7cqh; letter-spacing: 0.3cqw; text-transform: uppercase; color: #52525a; flex-shrink: 0; }
