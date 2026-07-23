@@ -39,7 +39,7 @@ export async function POST(_request, { params }) {
   if (!week) return NextResponse.json({ success: false, error: 'No arc week' }, { status: 409 })
 
   const { data: loc } = await db.from('locations').select('id, name, settings').eq('id', row.location_id).single()
-  const charter = resolveHyroxSettings(loc).charter
+  const { charter, houseStyle, styleExamples } = resolveHyroxSettings(loc)
 
   // Same metered-caller closure as the blocks route — anthropicMessages
   // needs a real model (HYROX_MODEL), not undefined.
@@ -54,7 +54,7 @@ export async function POST(_request, { params }) {
   }
 
   const sRes = await expandSession(
-    { week, slot: row.slot, dial: block.difficulty_dial, locationLabel: (loc?.name || 'UN1T').toUpperCase(), charter, autoTuneSignal: null },
+    { week, slot: row.slot, dial: block.difficulty_dial, locationLabel: (loc?.name || 'UN1T').toUpperCase(), charter, houseStyle, styleExamples, autoTuneSignal: null },
     { caller },
   )
   if (!sRes.ok) return NextResponse.json({ success: false, error: 'regeneration_failed' }, { status: 502 })

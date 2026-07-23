@@ -35,7 +35,7 @@ export async function POST(request, { params }) {
   if (!v.ok) return v.response
 
   const { data: loc } = await db.from('locations').select('id, name, settings').eq('id', block.location_id).single()
-  const charter = resolveHyroxSettings(loc).charter
+  const { charter, houseStyle, styleExamples } = resolveHyroxSettings(loc)
 
   const caller = async ({ system, user: userMsg, maxTokens }) => {
     const { res, data } = await anthropicMessages(
@@ -51,6 +51,8 @@ export async function POST(request, { params }) {
     block,
     weekNo: v.data.week_no,
     charter,
+    houseStyle,
+    styleExamples,
     caller,
     locationLabel: (loc?.name || 'UN1T').toUpperCase(),
   })
