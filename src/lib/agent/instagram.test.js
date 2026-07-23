@@ -1,6 +1,7 @@
 // RADAR-AGENT — unit tests for the Instagram pure helper.
 import { describe, it, expect } from 'vitest'
 import { parseInstagramEvents } from './instagram'
+import { mediaRenderKind } from '@shared/whatsapp-media'
 
 const baseEntry = (messaging) => ({ object: 'instagram', entry: [{ id: 'IGBIZ1', messaging }] })
 
@@ -57,14 +58,64 @@ describe('parseInstagramEvents', () => {
     expect(parseInstagramEvents(body)).toEqual([])
   })
 
-  it('marks attachment-only messages as type attachment', () => {
+  it('captures an image attachment: type = image + mediaUrl from payload', () => {
     const body = baseEntry([{
       sender: { id: 'C' }, recipient: { id: 'IGBIZ1' },
-      message: { mid: 'm3', attachments: [{ type: 'image', payload: { url: 'x' } }] },
+      message: { mid: 'm3', attachments: [{ type: 'image', payload: { url: 'https://lookaside.fbsbx.com/a.jpg' } }] },
     }])
     const out = parseInstagramEvents(body)
-    expect(out[0].type).toBe('attachment')
-    expect(out[0].text).toBe('')
+    expect(out[0]).toMatchObject({ type: 'image', mediaUrl: 'https://lookaside.fbsbx.com/a.jpg', text: '' })
+  })
+
+  it('maps video / audio / file attachment types to render kinds', () => {
+    const kinds = [
+      ['video', 'video'],
+      ['audio', 'audio'],
+      ['file', 'document'], // IG "file" → document so mediaRenderKind → file
+    ]
+    for (const [igType, expected] of kinds) {
+      const body = baseEntry([{
+        sender: { id: 'C' }, recipient: { id: 'IGBIZ1' },
+        message: { mid: `m-${igType}`, attachments: [{ type: igType, payload: { url: `u-${igType}` } }] },
+      }])
+      const out = parseInstagramEvents(body)
+      expect(out[0]).toMatchObject({ type: expected, mediaUrl: `u-${igType}` })
+    }
+  })
+
+  it('keeps the caption text when an attachment also carries text', () => {
+    const body = baseEntry([{
+      sender: { id: 'C' }, recipient: { id: 'IGBIZ1' },
+      message: { mid: 'm4', text: 'check this out', attachments: [{ type: 'image', payload: { url: 'x' } }] },
+    }])
+    const out = parseInstagramEvents(body)
+    expect(out[0]).toMatchObject({ type: 'image', mediaUrl: 'x', text: 'check this out' })
+  })
+
+  it('takes the first attachment when several are present (one media per message)', () => {
+    const body = baseEntry([{
+      sender: { id: 'C' }, recipient: { id: 'IGBIZ1' },
+      message: { mid: 'm5', attachments: [
+        { type: 'image', payload: { url: 'first' } },
+        { type: 'image', payload: { url: 'second' } },
+      ] },
+    }])
+    expect(parseInstagramEvents(body)[0].mediaUrl).toBe('first')
+  })
+
+  it('non-media attachment (story_mention/share) keeps its raw type and does not render as media', () => {
+    const body = baseEntry([{
+      sender: { id: 'C' }, recipient: { id: 'IGBIZ1' },
+      message: { mid: 'm6', attachments: [{ type: 'story_mention', payload: { url: 'sm' } }] },
+    }])
+    const out = parseInstagramEvents(body)
+    expect(out[0].type).toBe('story_mention')
+    expect(mediaRenderKind(out[0].type)).toBeNull()
+  })
+
+  it('text messages carry no media', () => {
+    const body = baseEntry([{ sender: { id: 'C' }, recipient: { id: 'IGBIZ1' }, message: { mid: 'm7', text: 'hi' } }])
+    expect(parseInstagramEvents(body)[0]).toMatchObject({ type: 'text', mediaUrl: null })
   })
 
   it('handles multiple entries and events in order', () => {

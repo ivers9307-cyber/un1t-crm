@@ -16,6 +16,21 @@ import { AGENT_MESSAGE_SOURCE } from './core'
 import { sendPush, sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
 import { stampConnectionOk, stampConnectionError, isMetaAuthError } from '@/lib/connection-health'
+import { ensureInstagramMediaRehosted } from '@/lib/instagram-media-server'
+import { mediaRenderKind } from '@shared/whatsapp-media'
+
+// IG-MEDIA.1 — map an inbound IG attachment type to the message_type we
+// store. Chosen so the shared mediaRenderKind() (also used by WhatsApp)
+// resolves the right inline renderer. IG "file" → "document" because
+// mediaRenderKind classifies documents by MIME (image/pdf/etc). Anything
+// not here (share, story_mention, reel…) has no inline renderer and keeps
+// its raw type, rendering as a text placeholder.
+const IG_ATTACHMENT_TYPE_TO_MESSAGE_TYPE = {
+  image: 'image',
+  video: 'video',
+  audio: 'audio',
+  file: 'document',
+}
 
 /**
  * Normalise a Meta Instagram webhook body into a flat list of message
@@ -25,7 +40,7 @@ import { stampConnectionOk, stampConnectionError, isMetaAuthError } from '@/lib/
  * receipts, and events with no `message`.
  *
  * @param {object} body  the parsed webhook JSON
- * @returns {Array<{accountId:string, customerId:string, messageId:string|null, text:string, type:string, timestamp:number|null, isEcho:boolean}>}
+ * @returns {Array<{accountId:string, customerId:string, messageId:string|null, text:string, type:string, mediaUrl:string|null, timestamp:number|null, isEcho:boolean}>}
  */
 export function parseInstagramEvents(body) {
   const out = []
@@ -45,13 +60,24 @@ export function parseInstagramEvents(body) {
       const accountId = entry.id || (isEcho ? ev.sender?.id : ev.recipient?.id) || null
       const customerId = (isEcho ? ev.recipient?.id : ev.sender?.id) || null
       const text = typeof msg.text === 'string' ? msg.text : ''
-      const hasAttachments = Array.isArray(msg.attachments) && msg.attachments.length > 0
+      // IG delivers media inline as a direct CDN URL in the FIRST attachment's
+      // payload (one media per message, mirroring how we store WA media). Map
+      // the IG attachment type to the message_type we persist, chosen so the
+      // shared mediaRenderKind() resolves the right inline renderer. Types with
+      // no inline renderer (share, story_mention, reel…) keep their raw type
+      // and fall back to a text placeholder. (IG-MEDIA.1)
+      const attachment = Array.isArray(msg.attachments) ? msg.attachments[0] : null
+      const mediaUrl = attachment?.payload?.url || null
+      const type = attachment
+        ? (IG_ATTACHMENT_TYPE_TO_MESSAGE_TYPE[attachment.type] || attachment.type || 'attachment')
+        : 'text'
       out.push({
         accountId,
         customerId,
         messageId: msg.mid || null,
         text,
-        type: hasAttachments && !text ? 'attachment' : 'text',
+        type,
+        mediaUrl,
         timestamp: ev.timestamp || null,
         isEcho,
       })
@@ -200,7 +226,15 @@ export async function handleInstagramInbound(db, event) {
 
   const ts = event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString()
   const messageType = event.type || 'text'
-  const body = event.text || (messageType !== 'text' ? `[${messageType}]` : '')
+  const mediaUrl = event.mediaUrl || null
+  // Stored body is: the caption for renderable media (image/video/audio —
+  // the media itself renders from its own columns, so no placeholder), a
+  // "[type]" label for attachment kinds we can't render inline (shares,
+  // story-mentions) so the bubble isn't blank, and the text otherwise.
+  // previewText always yields a "[type]" fallback for the conversation list
+  // + push when there's no caption. (IG-MEDIA.1)
+  const body = event.text || (messageType !== 'text' && !mediaRenderKind(messageType) ? `[${messageType}]` : '')
+  const previewText = (body || `[${messageType}]`).slice(0, 100)
 
   // ── Echo path: a message WE sent, reflected back by Meta ────────────
   // Two sources: our own CRM/agent send (already persisted — dedup and
@@ -243,7 +277,7 @@ export async function handleInstagramInbound(db, event) {
     await db.from('instagram_conversations').update({
       last_message_at: ts,
       last_message_direction: 'outbound',
-      last_message_preview: body.substring(0, 100),
+      last_message_preview: previewText,
       agent_active: false,
       agent_handed_off_at: existingHandoffAt || ts,
       updated_at: ts,
@@ -251,7 +285,7 @@ export async function handleInstagramInbound(db, event) {
     return { handled: true, conversationId, echo: true }
   }
 
-  await db.from('instagram_messages').insert({
+  const { data: insertedInbound } = await db.from('instagram_messages').insert({
     conversation_id: conversationId,
     contact_id: contactId,
     location_id: locationId,
@@ -259,9 +293,30 @@ export async function handleInstagramInbound(db, event) {
     direction: 'inbound',
     message_type: messageType,
     body,
+    media_url: mediaUrl,
     status: 'delivered',
     sent_at: ts,
-  })
+  }).select('id').single()
+
+  // IG-MEDIA.1 — re-host inbound media into the private whatsapp-media
+  // bucket now, while the IG CDN URL is still fresh (it expires fast), so
+  // the inbox shows it without a first-view round-trip. Best-effort and
+  // bounded: never block or fail the webhook — /api/instagram/media
+  // re-hosts lazily if this misses. Gated to renderable kinds — shares and
+  // story-mentions carry a url but have no inline renderer.
+  if (mediaUrl && insertedInbound?.id && mediaRenderKind(messageType)) {
+    try {
+      await ensureInstagramMediaRehosted(db, {
+        id: insertedInbound.id,
+        location_id: locationId,
+        message_type: messageType,
+        media_url: mediaUrl,
+        media_storage_path: null,
+      }, { token: connection?.access_token })
+    } catch (e) {
+      console.error('[instagram inbound] media rehost failed (will lazy-load):', e?.message)
+    }
+  }
 
   // INTEG-A3 — a delivered inbound proves the connection is alive.
   // Best-effort; never blocks the inbound path.
@@ -272,7 +327,7 @@ export async function handleInstagramInbound(db, event) {
     last_message_at: ts,
     last_message_direction: 'inbound',
     resolved_at: null,
-    last_message_preview: body.substring(0, 100),
+    last_message_preview: previewText,
   }).eq('id', conversationId)
   // Atomic unread bump (best-effort) — replaces the read-modify-write above.
   try { await db.rpc('increment_instagram_conversation_unread', { p_conversation_id: conversationId }) } catch {}

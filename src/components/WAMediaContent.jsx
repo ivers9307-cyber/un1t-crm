@@ -1,17 +1,20 @@
 'use client'
 
-// WA-MEDIA.1 — render inbound WhatsApp media inline in the web inbox.
+// WA-MEDIA.1 / IG-MEDIA.1 — render inbound WhatsApp OR Instagram media
+// inline in the web inbox.
 //
-// Fetches a short-lived signed URL from /api/whatsapp/media/[id] (which
-// re-hosts the bytes from Meta on first view) and renders the right
-// element for the kind. Image/video/audio play inline; documents show a
-// download link. Falls back to a small "unavailable" note if Meta has
-// expired the media or the fetch fails — never a broken-image icon.
+// Fetches a short-lived signed URL from the channel's media endpoint
+// (`endpoint`/[id]) — /api/whatsapp/media by default, /api/instagram/media
+// for IG — which re-hosts the bytes into the private bucket on first view,
+// then renders the right element for the kind. Image/video/audio play
+// inline; documents show a download link. Falls back to a small
+// "unavailable" note if the media expired or the fetch fails — never a
+// broken-image icon.
 
 import { useEffect, useState } from 'react'
 import { mediaRenderKind } from '@shared/whatsapp-media'
 
-export default function WAMediaContent({ message }) {
+export default function WAMediaContent({ message, endpoint = '/api/whatsapp/media' }) {
   const kind = mediaRenderKind(message.message_type, message.media_mime_type)
   const [status, setStatus] = useState('loading') // loading | ready | error
   const [url, setUrl] = useState(null)
@@ -20,7 +23,7 @@ export default function WAMediaContent({ message }) {
     let cancelled = false
     setStatus('loading')
     setUrl(null)
-    fetch(`/api/whatsapp/media/${message.id}`)
+    fetch(`${endpoint}/${message.id}`)
       .then(r => (r.ok ? r.json() : null))
       .then(data => {
         if (cancelled) return
@@ -33,7 +36,7 @@ export default function WAMediaContent({ message }) {
       })
       .catch(() => { if (!cancelled) setStatus('error') })
     return () => { cancelled = true }
-  }, [message.id])
+  }, [message.id, endpoint])
 
   if (!kind) return null
 
