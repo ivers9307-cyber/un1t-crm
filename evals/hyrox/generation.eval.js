@@ -40,6 +40,9 @@ function expectGlanceableBoard(s) {
     expect(typeof st.target).toBe('string')      // one target per station, no tiers on the board
     expect(st.target.length).toBeGreaterThan(0)
     expect(st.target.length).toBeLessThan(28)    // "9kg x 20", not a coaching sentence
+    // A concrete figure, never a "see pace"/"log reps" pointer to the coach notes.
+    expect(st.target).not.toMatch(/\bsee (pace|load|target|weight|below)\b|\blog reps\b|\bas coached\b|\btbd\b/i)
+    expect(st.target).toMatch(/\d/)              // must contain an actual number
   }
   // The how-to must live in the coach's view, not on the board.
   expect(s.full_session.main.length).toBeGreaterThan(80)
