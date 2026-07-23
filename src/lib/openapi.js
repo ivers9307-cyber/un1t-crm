@@ -4015,6 +4015,39 @@ registry.registerPath({
   },
 })
 
+const HyroxExampleEntry = z.object({
+  id: z.string().max(64).optional(),
+  source: z.enum(['pasted', 'generated']).default('pasted'),
+  label: z.string().max(120).optional(),
+  text: z.string().min(1).max(2500),
+  added_at: z.string().optional(),
+}).openapi('HyroxExampleEntry')
+
+const HyroxSettingsUpdate = z.object({
+  location_id: uuidLike,
+  charter: z.string().max(8000).nullish(),
+  house_style: z.string().max(8000).nullish(),
+  style_examples: z.array(HyroxExampleEntry).max(20).optional(),
+}).openapi('HyroxSettingsUpdate')
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/hyrox/settings',
+  tags: ['Hyrox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Operator editor for the Hyrox charter, house style, and style examples',
+  description:
+    'Read-modify-write onto locations.settings.hyrox — merges into the sibling settings keys, never ' +
+    'clobbers them. Collection-style write (location_id in the body): missing the per-location ' +
+    'approvals_hyrox_sessions grant answers 403 (not the detail-routes\' 404 IDOR posture).',
+  request: { body: { content: { 'application/json': { schema: HyroxSettingsUpdate } } } },
+  responses: {
+    200: { description: 'Settings saved', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxSettingsUpdateResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — no approvals_hyrox_sessions grant at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
