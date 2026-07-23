@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { expandBlockWeek } from './generate-block'
+import { expandBlockWeek, summarizePrevWeek } from './generate-block'
 
 const goodSessionText = JSON.stringify({
   week_no: 5, slot: 1, phase: 'build', focus: 'Engine', is_benchmark: false,
@@ -17,6 +17,9 @@ const block = {
 
 // Minimal fake supabase-js: the idempotency select chain resolves to `existing`;
 // upsert captures the rows + options it's given and returns them via .select().
+// The prev-week query chains .select().eq().eq().order() — order() resolves to
+// an empty list so prevWeekSummary is null/empty and existing expandBlockWeek
+// tests are unaffected.
 function fakeDb({ existing = [] } = {}) {
   const inserted = []
   let upsertOpts = null
@@ -28,6 +31,7 @@ function fakeDb({ existing = [] } = {}) {
         select() { return this },
         eq() { return this },
         limit() { return Promise.resolve({ data: existing }) },
+        order() { return Promise.resolve({ data: [] }) },
         upsert(rows, opts) {
           upsertOpts = opts
           inserted.push(...rows)
@@ -79,5 +83,31 @@ describe('expandBlockWeek', () => {
     const out = await expandBlockWeek(db, { block, weekNo: 5, charter: 'c', caller: okCaller })
     expect(out.ok).toBe(true)
     expect(db.upsertOpts).toEqual({ onConflict: 'block_id,week_no,slot', ignoreDuplicates: true })
+  })
+})
+
+describe('summarizePrevWeek', () => {
+  it('joins each session\'s slot, focus, and format into one line', () => {
+    const sessions = [
+      { slot: 1, focus: 'Engine', board: { format: '4 RFT' } },
+      { slot: 2, focus: 'Strength', board: { format: 'EMOM' } },
+    ]
+    expect(summarizePrevWeek(sessions)).toBe('session 1: Engine (4 RFT); session 2: Strength (EMOM)')
+  })
+
+  it('omits the format when board.format is missing', () => {
+    expect(summarizePrevWeek([{ slot: 1, focus: 'Engine', board: {} }])).toBe('session 1: Engine')
+  })
+
+  it('returns null for an empty list', () => {
+    expect(summarizePrevWeek([])).toBeNull()
+  })
+
+  it('returns null when no sessions have a focus', () => {
+    expect(summarizePrevWeek([{ slot: 1, focus: null, board: {} }])).toBeNull()
+  })
+
+  it('returns null for a non-array input', () => {
+    expect(summarizePrevWeek(undefined)).toBeNull()
   })
 })
