@@ -124,7 +124,7 @@ describe('Studio Management group', () => {
   it('keeps only studio surfaces as children — imports + landing-page settings moved to Settings', () => {
     const group = itemsIn('studio')[0]
     const childHrefs = group.children.map((c) => c.href)
-    expect(childHrefs).toEqual(['/admin/contracts', '/admin/tv-displays', '/presentations', '/welcome'])
+    expect(childHrefs).toEqual(['/admin/contracts', '/admin/tv-displays', '/presentations', '/welcome', '/admin/hyrox'])
     expect(childHrefs).not.toContain('/admin/glofox-import')
     expect(childHrefs).not.toContain('/admin/marketing-import')
     expect(childHrefs).not.toContain('/settings/landing-page')

@@ -30,7 +30,9 @@ export const dynamic = 'force-dynamic'
 // Permissions that grant access to the /admin/* tree. Each target
 // page enforces its own specific permission; we only need ONE of
 // these here to let the user past the parent layout.
-const ADMIN_CHILD_PERMS = ['contracts', 'tv_displays', 'glofox_import', 'preferences_import']
+// HYROX-TC.2 — approvals_hyrox_sessions joined the list so /admin/hyrox
+// isn't blocked by this parent layout before its own page-level gate runs.
+const ADMIN_CHILD_PERMS = ['contracts', 'tv_displays', 'glofox_import', 'preferences_import', 'approvals_hyrox_sessions']
 
 export default async function AdminLayout({ children }) {
   const user = await getCurrentUser()

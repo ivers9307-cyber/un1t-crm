@@ -23,7 +23,7 @@ import {
   LayoutDashboard, Users, Columns3, CheckSquare, Calendar, MessagesSquare,
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
   Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
-  Workflow, Timer, Projector, Trophy, Activity, Landmark, Building2,
+  Workflow, Timer, Projector, Trophy, Activity, Landmark, Building2, Dumbbell,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -203,6 +203,10 @@ export const ALL_NAV = [
       // Public landing page — preview link, opens in new tab. (The
       // edit form moved to Settings → Landing page in SIDEBAR-IA.1.)
       { href: '/welcome',                 label: 'Landing page',          icon: Globe,         permission: 'landing_page', openInNewTab: true },
+      // HYROX-TC.2 — coach planner: generate a 12-week Hyrox Training Club
+      // block and review/approve/regenerate each AI-generated session
+      // before it can publish to the studio TV.
+      { href: '/admin/hyrox',             label: 'Hyrox Training Club',   icon: Dumbbell,      permission: 'approvals_hyrox_sessions' },
     ],
   },
 

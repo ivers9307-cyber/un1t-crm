@@ -68,6 +68,15 @@ describe('generateArc', () => {
     expect(res.ok).toBe(false)
     expect(f).not.toHaveBeenCalled()
   })
+  it('uses an injected caller when provided (bypasses fetch)', async () => {
+    const calls = []
+    const caller = async ({ system, user, maxTokens }) => { calls.push({ system, user, maxTokens }); return { ok: true, text: goodArc } }
+    const noFetch = () => { throw new Error('fetch must not be called') }
+    const res = await generateArc({ weeks: 12, sessionsPerWeek: 2, dial: 'mixed' }, { caller, fetchImpl: noFetch, apiKey: 'k' })
+    expect(res.ok).toBe(true)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].system).toContain('tough, challenging, but doable, and always fun')
+  })
 })
 
 describe('expandSession', () => {

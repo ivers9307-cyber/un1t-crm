@@ -3909,6 +3909,87 @@ registry.registerPath({
   },
 })
 
+// Hyrox Training Club (HYROX-TC.2) — generate-a-block + coach review/approve.
+const HyroxBlockCreate = z.object({
+  location_id: uuidLike,
+  starts_on: isoDate,
+  title: z.string().max(120).optional(),
+  weeks: z.number().int().min(1).max(24).optional(),
+  sessions_per_week: z.number().int().min(1).max(7).optional(),
+  session_weekdays: z.array(z.number().int().min(1).max(7)).min(1).max(7),
+  difficulty_dial: z.enum(['beginner_heavy', 'mixed', 'competitive']).optional(),
+  auto_tune_enabled: z.boolean().optional(),
+  charter: z.string().max(8000).optional(),
+  expand_weeks: z.number().int().min(1).max(12).optional(),
+}).openapi('HyroxBlockCreate')
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/hyrox/blocks',
+  tags: ['Hyrox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Generate + persist a 12-week Hyrox Training Club block (manager+)',
+  description:
+    'Generates a block arc (Claude, metered via anthropicMessages) and writes it plus the first ' +
+    '`expand_weeks` weeks of draft sessions to hyrox_blocks / hyrox_sessions. The rolling-expansion ' +
+    'cron that fills weeks beyond the initial window is a later plan.',
+  request: { body: { content: { 'application/json': { schema: HyroxBlockCreate } } } },
+  responses: {
+    201: { description: 'Block + initial sessions created', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxBlockCreateResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — manager+ only', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Generation failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+const HyroxSessionUpdate = z.object({
+  focus: z.string().max(200).nullish(),
+  full_session: z.record(z.string(), z.any()).optional(),
+  board: z.record(z.string(), z.any()).optional(),
+  status: z.enum(['draft', 'approved']).optional(),
+}).openapi('HyroxSessionUpdate')
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/hyrox/sessions/{id}',
+  tags: ['Hyrox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Coach edit and/or approve a generated Hyrox session',
+  description:
+    'Detail route: a missing session or a session at a location the caller lacks approvals_hyrox_sessions ' +
+    'for both answer 404 (IDOR posture). status:"approved" stamps approved_by/approved_at; status:"draft" clears them.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: HyroxSessionUpdate } } },
+  },
+  responses: {
+    200: { description: 'Session updated', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxSessionUpdateResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or no permission at this location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Already published', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/hyrox/sessions/{id}/regenerate',
+  tags: ['Hyrox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Regenerate a single Hyrox session',
+  description:
+    'Re-runs generation for the session\'s week_no/slot against its block\'s arc + difficulty dial, ' +
+    'forcing the result back to status:"draft" (approved_by/approved_at cleared) so it re-enters coach review. ' +
+    'Same 404-not-403 detail-route posture as the PUT route.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Session regenerated', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxSessionRegenerateResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or no permission at this location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Already published, or no arc week for this session', content: { 'application/json': { schema: ErrorResponse } } },
+    502: { description: 'Regeneration failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
