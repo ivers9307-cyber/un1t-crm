@@ -13,7 +13,6 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { createBrowserClient } from '@/lib/supabase'
 import { Save, Loader2, Check, AlertCircle, ExternalLink, RefreshCw } from 'lucide-react'
 
 export default function PaymentsIntegrationTab({ location, canEdit }) {
@@ -49,31 +48,26 @@ export default function PaymentsIntegrationTab({ location, canEdit }) {
   }, [location.id, hasStripeAccount])
 
   async function save() {
+    // The rail routes real money, so the write goes through a LOCATION-SCOPED
+    // server route (not a raw client settings write, which the broad locations
+    // RLS would let an operator aim at any location). The route also re-checks
+    // charges_enabled server-side before committing Stripe.
     setSaving(true); setError(null); setSavedAt(null)
-    if (provider === 'stripe_connect' && !status?.charges_enabled) {
-      setError('Finish Stripe onboarding (charges must be enabled) before switching this location to Stripe.')
+    try {
+      const r = await fetch(`/api/locations/${location.id}/stripe-connect/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider }),
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || !j.success) { setError(j.error || 'Could not save.'); return }
+      setSavedAt(new Date())
+      router.refresh()
+    } catch (e) {
+      setError(e.message || 'Could not save.')
+    } finally {
       setSaving(false)
-      return
     }
-    const db = createBrowserClient()
-    // Re-read current settings so we merge rather than clobber any
-    // other tab's slice.
-    const { data: row, error: readErr } = await db
-      .from('locations').select('settings').eq('id', location.id).single()
-    if (readErr) { setError(readErr.message); setSaving(false); return }
-    const prevPayments = row?.settings?.payments || {}
-    const nextSettings = {
-      ...(row?.settings || {}),
-      payments: { ...prevPayments, provider },
-    }
-    const { error: upErr } = await db
-      .from('locations')
-      .update({ settings: nextSettings, updated_at: new Date().toISOString() })
-      .eq('id', location.id)
-    setSaving(false)
-    if (upErr) { setError(upErr.message); return }
-    setSavedAt(new Date())
-    router.refresh()
   }
 
   async function connectStripe() {

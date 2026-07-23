@@ -38,8 +38,8 @@ export async function POST(_request, props) {
     const base = getAppUrl()
     const url = await createOnboardingLink({
       accountId,
-      refreshUrl: `${base}/api/locations/${locationId}/stripe-connect/connect`,
-      returnUrl: `${base}/settings/integrations?tab=payments&stripe=return`,
+      refreshUrl: `${base}/api/locations/${locationId}/stripe-connect/refresh`,
+      returnUrl: `${base}/settings/locations/${locationId}?section=integrations&tab=payments&stripe=return`,
     })
     return NextResponse.json({ success: true, data: { url } })
   } catch (e) {
