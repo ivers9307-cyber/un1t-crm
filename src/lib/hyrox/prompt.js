@@ -13,7 +13,7 @@ function charterBlock(charter) {
 export function buildArcPrompt({ weeks = 12, sessionsPerWeek = 2, dial = 'mixed', charter } = {}) {
   const system = [
     'You are a Hyrox strength-and-conditioning coach designing a periodised training block for a gym class.',
-    `Design a ${weeks}-week arc across the phases: ${PHASES.join(' -> ')} (base -> build -> peak -> taper).`,
+    `Design a ${weeks}-week arc across the phases: ${PHASES.join(' -> ')}.`,
     `The Hyrox stations available: ${HYROX_STATIONS.join(', ')}, plus running and compromised running.`,
     charterBlock(charter),
     'Include benchmark weeks (a Hyrox-style test) so progress is measurable.',

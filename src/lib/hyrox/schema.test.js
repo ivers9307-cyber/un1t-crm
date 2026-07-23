@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { arcSchema, sessionSchema, parseArc, parseSession } from './schema'
+import { parseArc, parseSession } from './schema'
 
 const validWeek = { week_no: 1, phase: 'base', stimulus: 'Aerobic base', is_benchmark: false, progression: 'RPE 6-7, build volume' }
 const validArc = { weeks: 12, dial: 'mixed', plan: [validWeek] }
@@ -15,7 +15,7 @@ const validSession = {
   },
 }
 
-describe('arcSchema', () => {
+describe('hyrox schemas', () => {
   it('accepts a valid arc and defaults wordmark on the board', () => {
     expect(parseArc(validArc).ok).toBe(true)
     const s = parseSession(validSession)

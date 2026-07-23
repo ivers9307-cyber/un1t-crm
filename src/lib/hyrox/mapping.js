@@ -35,14 +35,15 @@ export function daysBetween(a, b) {
   return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000)
 }
 
-/** 1-based week number for an occurrence; null if before start or past `weeks`. */
+/** 1-based week number for an occurrence; null if before start, past `weeks`, or startsOn is malformed. */
 export function weekNoFor(startsOn, occurrenceIso, weeks) {
   const ymd = dublinDateStr(occurrenceIso)
   if (!ymd) return null
   const diff = daysBetween(startsOn, ymd)
+  if (!Number.isFinite(diff)) return null
   if (diff < 0) return null
   const wk = Math.floor(diff / 7) + 1
-  if (weeks && wk > weeks) return null
+  if (weeks != null && wk > weeks) return null
   return wk
 }
 
