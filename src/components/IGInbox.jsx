@@ -1,9 +1,17 @@
 'use client'
 
-// Operator Instagram inbox. Mirrors WAInbox but simpler: Instagram DMs are
-// text-only here (no 24h-window templates, media, or broadcasts). Staff can
+// Operator Instagram inbox. Mirrors WAInbox but simpler: no 24h-window
+// templates or broadcasts. Inbound media (images/video/audio) received via
+// DM renders inline (IG-MEDIA.1); outbound is still text-only. Staff can
 // read threads the agent is handling, send a manual reply (which takes the
 // thread OVER from the agent), and hand it back.
+
+// IG-MEDIA.1 — an inbound message carries renderable media when it has a
+// media render kind AND a source to serve from (a re-hosted bucket object,
+// or the original IG CDN url the media route can still lazily re-host).
+function igHasMedia(m) {
+  return !!mediaRenderKind(m.message_type, m.media_mime_type) && (!!m.media_storage_path || !!m.media_url)
+}
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
@@ -14,6 +22,8 @@ import ApprovalActionCard from '@/components/ApprovalActionCard'
 import { ChannelAvatar } from '@/components/inbox/ChannelBits'
 import HandledByControl from '@/components/inbox/HandledByControl'
 import MiaDecisionTrace from '@/components/inbox/MiaDecisionTrace'
+import WAMediaContent from '@/components/WAMediaContent'
+import { mediaRenderKind } from '@shared/whatsapp-media'
 import {
   ArrowLeft, Send, MessageCircle, Clock, Check, AlertCircle,
   RefreshCw, Bot, UserCheck, Instagram,
@@ -411,7 +421,8 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
                 return (
                   <div key={item.key} className={`flex ${outbound ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${outbound ? 'bg-un1t-accent text-un1t-bg' : 'bg-un1t-surface text-un1t-text'}`}>
-                      {m.body}
+                      {igHasMedia(m) && <WAMediaContent message={m} endpoint="/api/instagram/media" />}
+                      {m.body && <div className={igHasMedia(m) ? 'mt-1' : ''}>{m.body}</div>}
                       <div className={`flex items-center gap-1 mt-1 text-[10px] ${outbound ? 'text-un1t-bg/70' : 'text-un1t-muted'}`}>
                         {m.source === 'agent' && (
                           <span className="flex items-center gap-1">
