@@ -26,9 +26,15 @@ describe('hyrox schemas', () => {
     const bad = { ...validSession, phase: 'endurance' }
     expect(parseSession(bad).ok).toBe(false)
   })
-  it('rejects a station missing the elite tier', () => {
-    const bad = { ...validSession, board: { ...validSession.board, stations: [{ name: 'Run', performance: '400m' }] } }
+  it('rejects a station with no target or performance value', () => {
+    const bad = { ...validSession, board: { ...validSession.board, stations: [{ name: 'Run' }] } }
     expect(parseSession(bad).ok).toBe(false)
+  })
+  it('lifts an old-style performance value into target (back-compat)', () => {
+    const raw = { ...validSession, board: { ...validSession.board, stations: [{ name: 'Run', performance: '400m', elite: '500m' }] } }
+    const s = parseSession(raw)
+    expect(s.ok).toBe(true)
+    expect(s.data.board.stations[0].target).toBe('400m')
   })
 })
 
@@ -100,8 +106,8 @@ describe('LLM output coercion (regression: session_generation_failed)', () => {
 
 describe('board brevity guards (regression: 2026-07-23 text-dump board)', () => {
   const longSentence = '600m opening, then 400m between each station at an easy aerobic pace'
-  it('rejects a coaching sentence in a station performance value', () => {
-    const bad = { ...validSession, board: { ...validSession.board, stations: [{ name: 'Run', performance: longSentence, elite: '500m' }] } }
+  it('rejects a coaching sentence in a station target value', () => {
+    const bad = { ...validSession, board: { ...validSession.board, stations: [{ name: 'Run', target: longSentence }] } }
     expect(parseSession(bad).ok).toBe(false)
   })
   it('rejects a paragraph-length board.format', () => {
@@ -109,15 +115,15 @@ describe('board brevity guards (regression: 2026-07-23 text-dump board)', () => 
     expect(parseSession(bad).ok).toBe(false)
   })
   it('still accepts normal short scoreboard values', () => {
-    const ok = { ...validSession, board: { ...validSession.board, stations: [{ name: 'Farmers Carry', performance: '2x16kg', elite: '2x24kg' }] } }
+    const ok = { ...validSession, board: { ...validSession.board, stations: [{ name: 'Farmers Carry', target: '2x16kg' }] } }
     expect(parseSession(ok).ok).toBe(true)
   })
   it('collapses whitespace/newlines in board values to one line', () => {
-    const raw = { ...validSession, board: { ...validSession.board, format: '4 ROUNDS\n  FOR   TIME', stations: [{ name: 'Ski\nErg', performance: ' 650m ', elite: '720m' }] } }
+    const raw = { ...validSession, board: { ...validSession.board, format: '4 ROUNDS\n  FOR   TIME', stations: [{ name: 'Ski\nErg', target: ' 650m ' }] } }
     const s = parseSession(raw)
     expect(s.ok).toBe(true)
     expect(s.data.board.format).toBe('4 ROUNDS FOR TIME')
     expect(s.data.board.stations[0].name).toBe('Ski Erg')
-    expect(s.data.board.stations[0].performance).toBe('650m')
+    expect(s.data.board.stations[0].target).toBe('650m')
   })
 })

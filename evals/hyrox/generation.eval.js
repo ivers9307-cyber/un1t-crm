@@ -37,10 +37,9 @@ function expectGlanceableBoard(s) {
   for (const st of s.board.stations) {
     expect(st.name.length).toBeGreaterThan(0)
     expect(st.name.length).toBeLessThan(32)      // "Wall Balls", not "Wall Balls - 5 min max reps"
-    expect(st.performance.length).toBeGreaterThan(0)
-    expect(st.elite.length).toBeGreaterThan(0)
-    expect(st.performance.length).toBeLessThan(28) // "9kg x 20", not a coaching sentence
-    expect(st.elite.length).toBeLessThan(28)
+    expect(typeof st.target).toBe('string')      // one target per station, no tiers on the board
+    expect(st.target.length).toBeGreaterThan(0)
+    expect(st.target.length).toBeLessThan(28)    // "9kg x 20", not a coaching sentence
   }
   // The how-to must live in the coach's view, not on the board.
   expect(s.full_session.main.length).toBeGreaterThan(80)
