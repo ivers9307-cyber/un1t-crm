@@ -20,10 +20,12 @@ const SUB_KEYS = [
   'approvals_time_off',
   'approvals_shift_swaps',
   'approvals_rosters',
+  // HYROX-TC.2 — seventh sub-key, added alongside the others.
+  'approvals_hyrox_sessions',
 ]
 
 describe('per-category approval permissions', () => {
-  it('registers the six sub-keys and the provider→permission map', () => {
+  it('registers the sub-keys and the provider→permission map', () => {
     for (const k of SUB_KEYS) expect(WEB_PERMISSION_KEYS).toContain(k)
     expect(APPROVAL_SUBPERMISSION_KEYS).toEqual(SUB_KEYS)
     expect(APPROVAL_CATEGORY_PERMISSION).toEqual({
@@ -33,17 +35,18 @@ describe('per-category approval permissions', () => {
       time_off: 'approvals_time_off',
       shift_swaps: 'approvals_shift_swaps',
       rosters: 'approvals_rosters',
+      hyrox_sessions: 'approvals_hyrox_sessions',
     })
   })
 
-  it('the six sub-keys are NOT location-gated (approvals_inbox is the only gate)', () => {
+  it('the sub-keys are NOT location-gated (approvals_inbox is the only gate)', () => {
     for (const k of SUB_KEYS) expect(isFeatureGatedByLocation(k)).toBe(false)
     expect(isFeatureGatedByLocation('approvals_inbox')).toBe(true)
   })
 
   it('seeds role defaults from current source-route approver sets', () => {
     const finance = ['approvals_contractor_invoices', 'approvals_fte_expenses', 'approvals_rosters']
-    const managerish = ['approvals_agent_requests', 'approvals_time_off', 'approvals_shift_swaps']
+    const managerish = ['approvals_agent_requests', 'approvals_time_off', 'approvals_shift_swaps', 'approvals_hyrox_sessions']
     for (const role of ['owner', 'master']) {
       for (const k of SUB_KEYS) expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE[role][k]).toBe(true)
     }
