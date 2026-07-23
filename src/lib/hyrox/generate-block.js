@@ -53,7 +53,15 @@ export async function expandBlockWeek(db, { block, weekNo, charter, houseStyle, 
   const rows = built.filter(Boolean)
   if (!rows.length) return { ok: false, error: 'session_generation_failed' }
 
-  const { error: sessErr } = await db.from('hyrox_sessions').insert(rows)
+  // Race-safe: two expansions of the same week running at once (e.g. the
+  // post-create auto-loop overlapping a manual Generate click) both pass the
+  // check above, so a plain insert would collide on the (block_id, week_no, slot)
+  // unique constraint. ON CONFLICT DO NOTHING makes the loser a no-op instead of
+  // a duplicate-key error; sessionsCreated reflects what THIS call actually wrote.
+  const { data: insertedRows, error: sessErr } = await db
+    .from('hyrox_sessions')
+    .upsert(rows, { onConflict: 'block_id,week_no,slot', ignoreDuplicates: true })
+    .select('id')
   if (sessErr) return { ok: false, error: sessErr.message }
-  return { ok: true, sessionsCreated: rows.length }
+  return { ok: true, sessionsCreated: (insertedRows || []).length }
 }

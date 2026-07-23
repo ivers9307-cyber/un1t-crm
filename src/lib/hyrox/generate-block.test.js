@@ -16,17 +16,23 @@ const block = {
 }
 
 // Minimal fake supabase-js: the idempotency select chain resolves to `existing`;
-// insert captures the rows it's given.
+// upsert captures the rows + options it's given and returns them via .select().
 function fakeDb({ existing = [] } = {}) {
   const inserted = []
+  let upsertOpts = null
   return {
     inserted,
+    get upsertOpts() { return upsertOpts },
     from() {
       return {
         select() { return this },
         eq() { return this },
         limit() { return Promise.resolve({ data: existing }) },
-        insert(rows) { inserted.push(...rows); return Promise.resolve({ error: null }) },
+        upsert(rows, opts) {
+          upsertOpts = opts
+          inserted.push(...rows)
+          return { select: () => Promise.resolve({ data: rows.map((_, i) => ({ id: `new-${i}` })), error: null }) }
+        },
       }
     },
   }
@@ -66,5 +72,12 @@ describe('expandBlockWeek', () => {
     expect(out.ok).toBe(false)
     expect(out.error).toBe('session_generation_failed')
     expect(db.inserted).toHaveLength(0)
+  })
+
+  it('inserts race-safely via upsert on the unique key (ignore duplicates)', async () => {
+    const db = fakeDb({ existing: [] })
+    const out = await expandBlockWeek(db, { block, weekNo: 5, charter: 'c', caller: okCaller })
+    expect(out.ok).toBe(true)
+    expect(db.upsertOpts).toEqual({ onConflict: 'block_id,week_no,slot', ignoreDuplicates: true })
   })
 })
