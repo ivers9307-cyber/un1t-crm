@@ -14,6 +14,7 @@ import { loadContactJourney } from '@/lib/onboarding-journey-data'
 import { nextBookedClass } from '@/lib/pipeline-classifier'
 import ContactActions from '@/components/ContactActions'
 import ContactComposer from '@/components/ContactComposer'
+import ContactBookingCard from '@/components/ContactBookingCard'
 import { extractTemplateBody, isSendableUtilityTemplate } from '@/lib/radar-outreach'
 import StartWhatsAppButton from '@/components/StartWhatsAppButton'
 import ContactConsentHistoryCard from '@/components/ContactConsentHistoryCard'
@@ -77,12 +78,15 @@ export default async function ContactDetailPage(props) {
     if (pg?.group?.id) person = await aggregatePerson(db, pg.group.id)
   } catch { person = null }
 
-  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, contactArrears] = await Promise.all([
+  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears] = await Promise.all([
     db.from('deals').select('*, pipeline_stages(name, color)').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('bookings').select('*, event_types(name, color)').eq('contact_id', id).order('booking_date', { ascending: true }),
     db.from('whatsapp_conversations').select('id, wa_phone, last_message_at, last_message_preview, last_message_direction, unread_count, status, window_expires_at').eq('contact_id', id).order('last_message_at', { ascending: false }),
+    // BOOK-ON-PROFILE.1 — bookable consultation event types for this
+    // studio, so the profile's Book card matches the inbox Book tab.
+    db.from('event_types').select('id, name, slug, duration_minutes, availability, active').eq('location_id', contact.location_id).eq('active', true).order('name'),
     // PROFILE-ARREARS.1 — this contact's open past-due total (netted), so the
     // profile shows the SAME arrears the Overdue chase-list flags. Previously
     // arrears were only computed for grouped contacts, so an ungrouped member
@@ -110,6 +114,7 @@ export default async function ContactDetailPage(props) {
   const activities = activitiesRes.data || []
   const bookings = bookingsRes.data || []
   const waConversations = waConvRes.data || []
+  const bookableEventTypes = eventTypesRes?.data || []
 
   // CHURN-CONTACT.1 — make the contact page prospective, not just a
   // retrospective timeline: surface the SAME at-risk signal the radar
@@ -484,6 +489,17 @@ export default async function ContactDetailPage(props) {
               hasUserAccount: Boolean(contact.user_id),
               canEditDevices: user?.isMaster || ['owner', 'manager', 'head_coach'].includes(user?.role),
             }}
+          />
+
+          {/* BOOK-ON-PROFILE.1 — book this contact into a consultation or
+              Glofox class, same engine as the inbox Book tab. */}
+          <ContactBookingCard
+            contactId={contact.id}
+            locationId={contact.location_id}
+            glofoxMemberId={contact.glofox_member_id || null}
+            eventTypes={bookableEventTypes}
+            waConversationId={latestWaConversation?.id || null}
+            waWindowOpen={whatsappWindowOpen}
           />
         </div>
       </div>
