@@ -7,7 +7,7 @@ import { parseArc, parseSession } from './schema'
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 // Confirm against the current model list (claude-api skill). Batch generation
 // can afford a higher tier than Mia's chat model (spec §9).
-const HYROX_MODEL = 'claude-sonnet-4-6'
+export const HYROX_MODEL = 'claude-sonnet-4-6'
 
 async function callClaude({ system, user, maxTokens = 1500, fetchImpl = fetch, apiKey = process.env.ANTHROPIC_API_KEY }) {
   if (!apiKey) return { ok: false, error: new Error('missing ANTHROPIC_API_KEY') }
@@ -29,7 +29,9 @@ function tryJson(text) {
 // Generic: build -> call -> parse-json -> validate, with ONE retry.
 async function generateValidated({ system, user, maxTokens, validate, opts }) {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const call = await callClaude({ system, user, maxTokens, ...opts })
+    const call = opts.caller
+      ? await opts.caller({ system, user, maxTokens })
+      : await callClaude({ system, user, maxTokens, ...opts })
     if (!call.ok) { if (attempt === 1) return call; continue }
     const parsed = validate(tryJson(call.text) ?? {})
     if (parsed.ok) return parsed
