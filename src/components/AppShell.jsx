@@ -7,6 +7,7 @@ import AccountShell from './account/AccountShell'
 import PlatformShell from './platform/PlatformShell'
 import ImpersonationBanner from './ImpersonationBanner'
 import SupportBanner from './SupportBanner'
+import PendingContractsAlert from './PendingContractsAlert'
 import CommandPalette from './CommandPalette'
 import AssistantBubble from './AssistantBubble'
 import { hasPermission } from '@/lib/permissions'
@@ -162,6 +163,13 @@ export default function AppShell({ user, children, isLinkedHost = false }) {
         {user?.supportSession
           ? <SupportBanner user={user} />
           : user?.impersonatingFrom && <ImpersonationBanner user={user} />}
+        {/* CONTRACTS-SIGN.1 — global unsigned-contract alert (first-load
+            modal, then a persistent top banner). Re-mounted here after it
+            was dropped as collateral in the null-user redirect refactor
+            (commit d1842096), which is why recipients stopped being
+            prompted to sign. It fetches the caller's OWN pending contracts
+            and hides itself on /account/contracts. */}
+        <PendingContractsAlert />
         {/* Keying the page subtree on the active location remounts it
             when the location switches. The Sidebar already updates from
             the refreshed `user` prop, but client components inside a
