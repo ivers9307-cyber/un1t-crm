@@ -24,13 +24,22 @@ export default async function TemplatesPage() {
   if (!user) redirect('/login')
   if (!isOwnerOrMaster(user)) redirect('/')
 
+  // CONTRACTS-SCOPE.1 — service role bypasses RLS; scope templates to the
+  // viewer's org so one tenant's owner never sees another tenant's
+  // templates. Master sees all. (The /api/contract-templates route already
+  // scopes the same way.)
+  const orgId = user.activeOrganization?.id
   const db = createServerClient()
-  const { data: templates } = await db
-    .from('contract_templates')
-    .select('id, name, description, employment_type, version, active, updated_at')
-    .order('updated_at', { ascending: false })
-
-  const rows = templates || []
+  let rows = []
+  if (user.isMaster || orgId) {
+    let query = db
+      .from('contract_templates')
+      .select('id, name, description, employment_type, version, active, updated_at')
+      .order('updated_at', { ascending: false })
+    if (!user.isMaster) query = query.eq('organization_id', orgId)
+    const { data: templates } = await query
+    rows = templates || []
+  }
 
   return (
     <div className="p-6 md:p-8 max-w-5xl">
