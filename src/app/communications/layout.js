@@ -13,6 +13,7 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import CommunicationsTabs from '@/components/communications/CommunicationsTabs'
+import CommsShell from '@/components/communications/CommsShell'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,7 +27,7 @@ export default async function CommunicationsLayout({ children }) {
   if (!canEmail && !canWhatsapp && !canSms) redirect('/')
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <CommsShell>
       <h1 className="text-2xl font-bold text-un1t-text mb-1">Communications</h1>
       <p className="text-sm text-un1t-subtle mb-5">
         {[
@@ -37,6 +38,6 @@ export default async function CommunicationsLayout({ children }) {
       </p>
       <CommunicationsTabs canSms={canSms} canEmail={canEmail} canWhatsapp={canWhatsapp} />
       {children}
-    </div>
+    </CommsShell>
   )
 }
