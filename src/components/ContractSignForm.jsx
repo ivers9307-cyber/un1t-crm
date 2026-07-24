@@ -17,13 +17,29 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Check, X } from 'lucide-react'
 
-export default function ContractSignForm({ contract, recipientName }) {
+export default function ContractSignForm({ contract, recipientName, impersonating = false }) {
   const router = useRouter()
   const [signature, setSignature] = useState(recipientName || '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [showDecline, setShowDecline] = useState(false)
   const [declineReason, setDeclineReason] = useState('')
+
+  // CONTRACTS-SIGN.1 — a legal signature must be the recipient's OWN act, so
+  // the form is inert while viewing as another user (a master "View as" or a
+  // support session). The /sign route enforces this server-side too (403);
+  // this just avoids presenting a signature box that would fail.
+  if (impersonating) {
+    return (
+      <div className="bg-amber-500/5 border border-amber-500/30 rounded-lg p-4 print:hidden">
+        <h3 className="text-sm font-semibold text-amber-800 mb-1">Signing is disabled here</h3>
+        <p className="text-xs text-un1t-subtle">
+          You&apos;re viewing as {recipientName || 'this user'}. A contract can only be signed by the
+          recipient signed in as themselves, so the signature box is hidden.
+        </p>
+      </div>
+    )
+  }
 
   async function handleSign() {
     if (!signature.trim()) {

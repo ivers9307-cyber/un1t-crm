@@ -121,7 +121,11 @@ export default async function AccountContractDetail(props) {
       </article>
 
       {pending && (
-        <ContractSignForm contract={c} recipientName={user.full_name} />
+        <ContractSignForm
+          contract={c}
+          recipientName={user.full_name}
+          impersonating={!!(user.impersonatingFrom || user.supportSession)}
+        />
       )}
 
       <div className="flex flex-wrap items-center gap-2 mt-4 print:hidden">

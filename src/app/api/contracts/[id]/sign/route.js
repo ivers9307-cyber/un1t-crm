@@ -30,6 +30,15 @@ export async function POST(request, props) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
+  // CONTRACTS-SIGN.1 — a legal e-signature must be the recipient's OWN act.
+  // Refuse while the session is impersonating someone (a master "View as"
+  // or a support session — both set impersonatingFrom), even though the
+  // effective recipient id would match. The real user signs on their own
+  // login. Belt-and-braces: support sessions are read-only anyway.
+  if (user.impersonatingFrom || user.supportSession) {
+    return NextResponse.json({ success: false, error: 'You cannot sign a contract while viewing as another user. The recipient must sign in themselves.' }, { status: 403 })
+  }
+
   const validation = await validateBody(request, contractSignSchema)
   if (!validation.ok) return validation.response
   const parsed = { data: validation.data }
