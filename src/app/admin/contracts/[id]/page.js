@@ -40,8 +40,14 @@ export default async function ContractDetailAdmin(props) {
   if (!user) redirect('/login')
   if (!isOwnerOrMaster(user)) redirect('/')
 
+  // CONTRACTS-SCOPE.1 — service role bypasses RLS, so scope by org in app
+  // code: a non-master (e.g. an owner of one studio) must not be able to
+  // open another tenant's contract by guessing its id. 404 (notFound)
+  // keeps ids non-enumerable.
+  const orgId = user.activeOrganization?.id
+  if (!user.isMaster && !orgId) notFound()
   const db = createServerClient()
-  const { data: c } = await db
+  let q = db
     .from('contracts')
     .select(`
       *,
@@ -50,7 +56,8 @@ export default async function ContractDetailAdmin(props) {
       template:contract_templates!template_id (name, version)
     `)
     .eq('id', params.id)
-    .maybeSingle()
+  if (!user.isMaster) q = q.eq('organization_id', orgId)
+  const { data: c } = await q.maybeSingle()
   if (!c) notFound()
 
   const badge = STATUS_BADGE[c.status] || { label: c.status, class: 'bg-un1t-border text-un1t-subtle' }

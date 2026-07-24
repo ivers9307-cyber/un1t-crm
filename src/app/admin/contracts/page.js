@@ -1,6 +1,14 @@
-// /admin/contracts — issuer-side hub. Shows all issued contracts
-// for the org (RLS handles the filter) plus a button to issue a
-// new one and a link to the templates manager.
+// /admin/contracts — issuer-side hub. Lists issued contracts for the
+// viewer's ORGANIZATION plus a button to issue a new one and a link to
+// the templates manager.
+//
+// CONTRACTS-SCOPE.1 — the list is scoped in app code, NOT by RLS. This
+// page renders via createServerClient() (service role), which BYPASSES
+// RLS, so the mig 106 policies do nothing here. Without an app-layer
+// filter the query returned EVERY org's contracts (recipient names,
+// emails, templates, statuses) to anyone who could reach the page —
+// mirrors the app-layer model already documented on /api/contracts.
+//   master → every contract; else → their active organization only.
 //
 // STUDIO-GROUP.1 — was master/owner role-gated; now uses the
 // `contracts` permission. Default still owner/master via the role
@@ -39,17 +47,26 @@ export default async function ContractsAdminPage() {
   if (!user) redirect('/login')
   if (!hasPermission(user, 'contracts')) redirect('/')
 
+  // CONTRACTS-SCOPE.1 — replicate mig 106's tenant boundary in app code
+  // (service role bypasses RLS). Master sees every contract; everyone else
+  // is limited to their active organization. A non-master with no active
+  // org context has nothing to administer, so we skip the query entirely.
   const db = createServerClient()
-  const { data: contracts } = await db
-    .from('contracts')
-    .select(`
-      id, status, issued_at, signed_at, declined_at, revoked_at,
-      profile:profiles!profile_id (id, full_name, email, employment_type),
-      template:contract_templates!template_id (name)
-    `)
-    .order('issued_at', { ascending: false })
-
-  const rows = contracts || []
+  const orgId = user.activeOrganization?.id
+  let rows = []
+  if (user.isMaster || orgId) {
+    let query = db
+      .from('contracts')
+      .select(`
+        id, status, issued_at, signed_at, declined_at, revoked_at,
+        profile:profiles!profile_id (id, full_name, email, employment_type),
+        template:contract_templates!template_id (name)
+      `)
+      .order('issued_at', { ascending: false })
+    if (!user.isMaster) query = query.eq('organization_id', orgId)
+    const { data: contracts } = await query
+    rows = contracts || []
+  }
 
   return (
     <div className="p-6 md:p-8 max-w-5xl">
