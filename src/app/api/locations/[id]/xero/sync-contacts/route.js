@@ -9,11 +9,12 @@ import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { pullContacts } from '@/lib/xero/contacts-sync'
 import { XeroError } from '@/lib/xero/client'
+import { serverErrorResponse } from '@/lib/error-events'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, props) {
+export async function POST(request, props) {
   const params = await props.params
   const locationId = params?.id
   if (!locationId) {
@@ -42,9 +43,15 @@ export async function POST(_request, props) {
     const status = e instanceof XeroError && e.status
       ? Math.min(Math.max(e.status, 400), 599)
       : 500
-    return NextResponse.json(
-      { success: false, error: e.message || 'Sync failed' },
-      { status },
-    )
+    // OBS-HANDLED.1 — a failed Xero pull (including 401 token-death and
+    // 429s, the classes that keep biting silently) now leaves an
+    // error_events row. Same public body/status as before.
+    return serverErrorResponse({
+      module: 'xero-sync-contacts',
+      error: e,
+      request,
+      status,
+      publicMessage: e.message || 'Sync failed',
+    })
   }
 }

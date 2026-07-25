@@ -19,11 +19,12 @@ import { pushQueueRowToXero } from '@/lib/invoices-queue/push-xero'
 import { hasResolvedVatRate } from '@/lib/invoices-queue/vat'
 import { recordSupplierDefault } from '@/lib/invoices-queue/supplier-defaults'
 import { XeroError } from '@/lib/xero/client'
+import { serverErrorResponse } from '@/lib/error-events'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function POST(_request, { params }) {
+export async function POST(request, { params }) {
   const { id } = await params
   const ctx = await loadInvoiceForUser(id)
   if (ctx.response) return ctx.response
@@ -72,7 +73,7 @@ export async function POST(_request, { params }) {
       .eq('status', 'extracted')
       .select('id, status')
       .single()
-    if (stepErr) return NextResponse.json({ success: false, error: stepErr.message }, { status: 500 })
+    if (stepErr) return serverErrorResponse({ module: 'invoice-data-approve', error: stepErr, request })
     if (!stepped) {
       return NextResponse.json({
         success: false,
@@ -114,7 +115,9 @@ export async function POST(_request, { params }) {
       .from('invoices_queue')
       .update({ xero_error: msg })
       .eq('id', id)
-    return NextResponse.json({ success: false, error: msg }, { status: 502 })
+    // OBS-HANDLED.1 — the Xero push failure now leaves an error_events
+    // row (this exact 502 fired in prod with zero observability rows).
+    return serverErrorResponse({ module: 'invoice-data-approve', error: e, request, status: 502, publicMessage: msg })
   }
 
   // The bill was created in Xero, but the source file failed to
@@ -134,10 +137,13 @@ export async function POST(_request, { params }) {
         xero_error: `Bill created in Xero, but attaching the source file failed: ${pushResult.attachmentError}. Click "Retry send to Xero" to attach it.`,
       })
       .eq('id', id)
-    return NextResponse.json({
-      success: false,
-      error: `Bill created in Xero, but the source file didn't attach: ${pushResult.attachmentError}. Retry to attach it.`,
-    }, { status: 502 })
+    return serverErrorResponse({
+      module: 'invoice-data-approve',
+      error: { name: 'XeroAttachmentError', message: `Bill created but source file failed to attach: ${pushResult.attachmentError}` },
+      request,
+      status: 502,
+      publicMessage: `Bill created in Xero, but the source file didn't attach: ${pushResult.attachmentError}. Retry to attach it.`,
+    })
   }
 
   // Stamp success state with the bill_id + deep link.
@@ -156,7 +162,7 @@ export async function POST(_request, { params }) {
     .eq('status', 'data_approved')
     .select('id, status, forwarded_at, xero_bill_id, xero_bill_number, xero_deep_link_url, xero_synced_at')
     .single()
-  if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })
+  if (updErr) return serverErrorResponse({ module: 'invoice-data-approve', error: updErr, request })
   if (!updated) {
     return NextResponse.json({
       success: false,

@@ -21,6 +21,7 @@
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { serverErrorResponse } from '@/lib/error-events'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -90,7 +91,8 @@ export async function GET(request, props) {
     .limit(limit)
 
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    // OBS-HANDLED.1 — same body/status as before, plus log + error_events.
+    return serverErrorResponse({ module: 'xero-contacts', error, request })
   }
 
   return NextResponse.json({
