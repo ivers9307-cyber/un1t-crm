@@ -212,7 +212,7 @@ export async function handleInstagramInbound(db, event) {
     // Capture the customer's IG display name once, so the agent can use
     // the surname as a verification factor without making them retype it.
     const profile = await fetchInstagramProfile(event.customerId, connection)
-    const { data: created } = await db.from('instagram_conversations').insert({
+    const { data: created, error: createError } = await db.from('instagram_conversations').insert({
       location_id: locationId,
       channel_connection_id: connection?.id || null,
       ig_user_id: event.customerId,
@@ -221,6 +221,23 @@ export async function handleInstagramInbound(db, event) {
       status: 'active',
     }).select('id').single()
     conversationId = created?.id
+    if (!conversationId) {
+      // Lost the first-message create race: two concurrent first-ever
+      // messages from one IGSID both miss the lookup above and both insert,
+      // and the loser trips the unique idx_ig_conv_location_user (mig 231).
+      // Bailing here dropped the customer's first message PERMANENTLY — the
+      // route records msg:<mid> in webhook_events before processing, so
+      // Meta's retry is deduped. Re-read the winner's row and carry on.
+      const { data: raced } = await db.from('instagram_conversations')
+        .select('id')
+        .eq('location_id', locationId)
+        .eq('ig_user_id', event.customerId)
+        .maybeSingle()
+      conversationId = raced?.id || null
+      if (!conversationId) {
+        console.error('[instagram inbound] conversation create failed', createError?.message || 'unknown')
+      }
+    }
   }
   if (!conversationId) return { handled: false, reason: 'no_conversation' }
 
@@ -285,7 +302,7 @@ export async function handleInstagramInbound(db, event) {
     return { handled: true, conversationId, echo: true }
   }
 
-  const { data: insertedInbound } = await db.from('instagram_messages').insert({
+  const { data: insertedInbound, error: inboundInsertError } = await db.from('instagram_messages').insert({
     conversation_id: conversationId,
     contact_id: contactId,
     location_id: locationId,
@@ -297,6 +314,15 @@ export async function handleInstagramInbound(db, event) {
     status: 'delivered',
     sent_at: ts,
   }).select('id').single()
+  // supabase-js returns { error } without throwing — an unchecked rejected
+  // insert (the 2026-06-12 amnesia class) left the agent answering history
+  // that was MISSING the triggering message. Log it and skip the agent turn
+  // below; the conversation bump and the staff push still run so a human
+  // picks the thread up, and the handler still returns normally (the route
+  // must answer 200 or Meta disables the hook).
+  if (inboundInsertError) {
+    console.error('[instagram inbound] message insert failed (agent turn skipped):', inboundInsertError.message)
+  }
 
   // IG-MEDIA.1 — re-host inbound media into the private whatsapp-media
   // bucket now, while the IG CDN URL is still fresh (it expires fast), so
@@ -343,7 +369,7 @@ export async function handleInstagramInbound(db, event) {
   // channels, and test_mode's allowlist is phone-based (IG senders have
   // IGSIDs), so the connection row is the right per-channel switch.
   let agentResult = null
-  if (isAgentEnabledForConnection(connection)) {
+  if (isAgentEnabledForConnection(connection) && !inboundInsertError) {
     try {
       agentResult = await runChannelAgent(db, instagramAdapter, {
         conversationId,

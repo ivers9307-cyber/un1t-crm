@@ -227,6 +227,14 @@ export default function CustomerAgentSettingsPage() {
               onChange={e => setField('test_mode', e.target.checked)} />
             <span className="text-sm text-un1t-text">Test mode — reply only to the numbers below (while not live)</span>
           </label>
+          {/* Live-despite-test-mode tripwire: both flags on means the
+              allowlist is NOT in effect. Documented behaviour, but operators
+              read "test mode" as scoping and get surprised. */}
+          {!!settings.enabled && !!settings.test_mode && (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
+              Live is on, so test mode is not scoping anything — Mia is replying to every customer, not just the numbers below. Turn Live off to use the test list.
+            </div>
+          )}
           <div>
             <label className="block text-xs text-un1t-muted mb-1">Test numbers (comma-separated, e.g. +353871234567)</label>
             <input className={inputCls} value={(settings.test_phones || []).join(', ')}

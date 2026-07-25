@@ -362,8 +362,24 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
       body = `[${messageType} message]`
   }
 
+  // WA-DEDUP.2 — second idempotency layer behind recordWebhookEvent, which
+  // fails OPEN on any non-23505 DB error. idx_wa_messages_wa_id is a plain
+  // (non-unique) index, so during a webhook_events blip a Meta retry would
+  // re-insert this message and run a SECOND agent turn on it — Mia answering
+  // the same inbound twice. Instagram gets this free from its unique
+  // idx_ig_msg_mid. One indexed lookup per inbound.
+  if (messageId) {
+    const { data: alreadyStored } = await db.from('whatsapp_messages')
+      .select('id')
+      .eq('wa_message_id', messageId)
+      .eq('direction', 'inbound')
+      .limit(1)
+      .maybeSingle()
+    if (alreadyStored) return
+  }
+
   // Save message (contact_id is null for unknown senders)
-  const { data: insertedMessage } = await db.from('whatsapp_messages').insert({
+  const { data: insertedMessage, error: inboundInsertError } = await db.from('whatsapp_messages').insert({
     conversation_id: conversationId,
     contact_id: contact?.id || null,
     location_id: locationId,
@@ -376,6 +392,15 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
     status: 'delivered',
     sent_at: timestamp.toISOString(),
   }).select('id').single()
+  // Mirror recordAgentMessage's loud-failure posture: supabase-js returns
+  // { error } without throwing, so an unchecked rejected insert (the
+  // 2026-06-12 amnesia class) left the agent answering history that was
+  // MISSING the message it was answering. Log it and skip the turn below;
+  // the webhook still returns 200 (Meta disables hooks on non-2xx) and the
+  // staff push still fires, so a human picks the thread up.
+  if (inboundInsertError) {
+    console.error('[wa-webhook] inbound message insert failed (agent turn skipped):', inboundInsertError.message, messageId)
+  }
 
   // Update conversation
   await db.from('whatsapp_conversations').update({
@@ -440,7 +465,7 @@ async function handleIncomingMessage(db, message, contacts, defaultLocationId) {
   // soft-handoff acknowledgement to someone who hasn't said anything. The
   // open-event gets the instant greeting below instead.
   let agentResult = null
-  if (messageType !== 'request_welcome') {
+  if (messageType !== 'request_welcome' && !inboundInsertError) {
     try {
       agentResult = await maybeAutoReply(db, {
         conversationId,

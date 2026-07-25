@@ -4,7 +4,7 @@
 // gated by the same customer_agent switches as the auto-reply so a disabled
 // or test-mode agent never greets strangers.
 import { sendTextMessage } from '@/lib/whatsapp'
-import { phoneMatchesAllowlist, isWithinQuietHours, stripEmDashes, AGENT_MESSAGE_SOURCE } from './core'
+import { phoneMatchesAllowlist, isWithinQuietHours, stripEmDashes, resolveAgentGate, AGENT_MESSAGE_SOURCE } from './core'
 
 // HUMANIZE.1 — no em dash, no emoji, low-key: this is shipped customer copy on
 // the click-to-WhatsApp path, and the deterministic scrub below covers the
@@ -17,8 +17,9 @@ export const DEFAULT_WELCOME_GREETING =
 // brand new by definition).
 export function shouldSendWelcome({ settings, senderPhone, now = new Date() }) {
   const s = settings || {}
-  const enabled = !!s.enabled
-  const testMode = !!s.test_mode
+  // Shared combine (core.resolveAgentGate) so this gate can't drift from
+  // shouldAgentReply — enabled+test_mode is live for everyone on both.
+  const { enabled, testMode } = resolveAgentGate(s)
   if (!enabled && !testMode) return { send: false, reason: 'disabled' }
   if (!enabled && testMode && !phoneMatchesAllowlist(senderPhone, s.test_phones)) {
     return { send: false, reason: 'not_in_test_allowlist' }

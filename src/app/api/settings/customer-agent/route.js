@@ -146,6 +146,11 @@ export async function GET() {
   return NextResponse.json({
     success: true,
     settings,
+    // Live-despite-test-mode tripwire: `enabled` + `test_mode` together mean
+    // the agent answers EVERY customer (the allowlist only scopes an agent
+    // that is not enabled). Deliberate semantics, surfaced so the UI can warn
+    // the operator who believes test mode still scopes it.
+    live_despite_test_mode: settings.enabled === true && settings.test_mode === true,
     checkin_stats: checkinStats,
     location: { id: locationId, name: loc?.name || null },
   })
