@@ -84,7 +84,7 @@ jobs:
           node-version: '22'
 
       - name: Set up EAS CLI
-        uses: expo/expo-github-action@v8
+        uses: expo/expo-github-action@v9
         with:
           # Pinned (was `latest`). The OTA toolchain must be deterministic and
           # match the version that builds the binary (eas.json cli.version).
