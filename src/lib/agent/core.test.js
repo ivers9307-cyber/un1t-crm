@@ -119,10 +119,27 @@ describe('shouldAgentReply', () => {
     expect(shouldAgentReply({ ...base, settings: quiet, message: { type: 'image', body: '' } }).reason).toBe('quiet_hours')
   })
   it('test mode: replies only to allow-listed numbers', () => {
+    // The allowlist ONLY applies when enabled=false — see the pin below.
     const s = { enabled: false, test_mode: true, test_phones: ['+353871234567'] }
     expect(shouldAgentReply({ ...base, settings: s }).reply).toBe(true)
     expect(shouldAgentReply({ ...base, settings: s, senderPhone: '+353879999999' }))
       .toEqual({ reply: false, reason: 'not_in_test_allowlist' })
+  })
+  // ⚠️ OWNER INVARIANT (CLAUDE.md): `enabled=true` + `test_mode=true` is LIVE
+  // FOR EVERYONE — the test allowlist only scopes an agent that is NOT enabled;
+  // real test mode is enabled=false. Do NOT "fix" core.js's `if (!enabled &&
+  // testMode)` to `if (testMode)`: that would silently stop Mia replying to
+  // every customer outside a tiny allowlist in production, which looks like a
+  // traffic decline rather than an outage.
+  it('enabled=true + test_mode=true is LIVE for everyone (allowlist ignored)', () => {
+    const s = { enabled: true, test_mode: true, test_phones: ['+353871234567'] }
+    expect(shouldAgentReply({ ...base, settings: s, senderPhone: '+353879999999' }).reply).toBe(true)
+    expect(shouldAgentReply({ ...base, settings: s, senderPhone: '+353871234567' }).reply).toBe(true)
+  })
+  it('enabled=false + test_mode=true is the real test mode (allowlist enforced)', () => {
+    const s = { enabled: false, test_mode: true, test_phones: ['+353871234567'] }
+    expect(shouldAgentReply({ ...base, settings: s, senderPhone: '+353879999999' }).reason)
+      .toBe('not_in_test_allowlist')
   })
   it('respects quiet hours even when enabled', () => {
     const s = { enabled: true, quiet_hours: { start: '00:00', end: '23:59', tz: 'UTC' } }
@@ -449,8 +466,11 @@ describe('isHandoffExpired', () => {
 
 describe('resolveRearmPatch', () => {
   it('re-arms the agent when resolving a handed-off thread', () => {
+    // MIA-REVIEW.3 — handoff_escalated_at clears with the handoff. Without it
+    // the SLA sweep could escalate a conversation only ONCE in its lifetime,
+    // so every later handoff on the same thread breached in silence.
     expect(resolveRearmPatch({ resolved: true, agent_handed_off_at: '2026-06-12T17:24:11Z' }))
-      .toEqual({ agent_active: true, agent_handed_off_at: null })
+      .toEqual({ agent_active: true, agent_handed_off_at: null, handoff_escalated_at: null })
   })
   it('does nothing when resolving a thread that was never handed off', () => {
     expect(resolveRearmPatch({ resolved: true, agent_handed_off_at: null })).toEqual({})

@@ -17,6 +17,14 @@
 //     sequence traffic), or resolved_at after the handoff.
 // A conversation the cooldown already re-armed (agent_active back to
 // true / stamp cleared) simply drops out of the candidate query.
+//
+// MIA-REVIEW.3 — "once per handoff" is now true. handoff_escalated_at was
+// written here and cleared NOWHERE, so a conversation (one per contact per
+// channel, long-lived) could only ever escalate once in its lifetime; every
+// later handoff on that thread could breach silently forever. It is now
+// cleared wherever the handoff resolves: the cooldown re-arm and the operator
+// resolve (core.resolveRearmPatch), and it is reset when handoff() stamps a
+// NEW agent_handed_off_at.
 
 import { sendPushToRolesAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -33,6 +41,30 @@ export function resolveHandoffSlaMinutes(settings) {
   const raw = Number(settings?.handoff_sla_minutes)
   if (!Number.isFinite(raw)) return HANDOFF_SLA_DEFAULT_MINUTES
   return raw > 0 ? Math.round(raw) : 0
+}
+
+/**
+ * Should this location be swept at all, and with what SLA? Pure.
+ *
+ * MIA-REVIEW.3 — deliberately NOT gated on the agent being ENABLED any more.
+ * Conversations handed off while Mia was live still have customers waiting for
+ * a human, and `enabled=false` is the documented panic response to an agent
+ * incident — so the operator action most likely to coincide with a pile of
+ * unattended handoffs used to silence the escalation built for exactly them.
+ *
+ * The gate is now: the location has a customer_agent config at all (a studio
+ * that never set Mia up has no Mia handoffs to chase) AND the SLA is not
+ * disabled. Manual operator takeovers also stamp agent_handed_off_at, but they
+ * never escalate: the operator's own message is the human reply
+ * (classifyHandoffBreach + TAKEOVER_SKEW_MS).
+ *
+ * @returns {{ sweep: boolean, reason?: string, slaMinutes?: number }}
+ */
+export function shouldSweepLocation(settings) {
+  if (!settings) return { sweep: false, reason: 'no_agent_config' }
+  const slaMinutes = resolveHandoffSlaMinutes(settings)
+  if (!slaMinutes) return { sweep: false, reason: 'sla_disabled' }
+  return { sweep: true, slaMinutes }
 }
 
 /**
@@ -116,9 +148,9 @@ export async function runHandoffSlaSweep(db, { nowMs = Date.now() } = {}) {
 
   for (const location of locations || []) {
     const settings = location?.settings?.customer_agent || null
-    if (!settings?.enabled && !settings?.test_mode) continue
-    const slaMinutes = resolveHandoffSlaMinutes(settings)
-    if (!slaMinutes) continue
+    const gate = shouldSweepLocation(settings)
+    if (!gate.sweep) continue
+    const slaMinutes = gate.slaMinutes
     const cutoffIso = new Date(nowMs - slaMinutes * MIN_MS).toISOString()
 
     for (const channel of CHANNELS) {

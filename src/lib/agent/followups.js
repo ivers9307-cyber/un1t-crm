@@ -22,7 +22,7 @@
 // structured reason — silence must always be explainable (#478).
 
 import { buildCachedSystem, SKIP_PREFIX } from './prompt'
-import { formatHistoryForClaude, parseAgentResponse, phoneMatchesAllowlist, isSkipResponse } from './core'
+import { formatHistoryForClaude, parseAgentResponse, phoneMatchesAllowlist, isSkipResponse, isWithinQuietHours } from './core'
 import { getLocationBranding } from '@/lib/location-branding'
 import { anthropicMessages } from '@/lib/anthropic'
 import { dublinTodayStr } from '@/lib/dublin-time'
@@ -134,6 +134,26 @@ const DUBLIN_HOUR_FMT = new Intl.DateTimeFormat('en-IE', {
 export function withinDublinDaytime(nowMs) {
   const hour = Number(DUBLIN_HOUR_FMT.format(new Date(nowMs)))
   return hour >= 9 && hour < 20
+}
+
+/**
+ * MIA-REVIEW.3 — may this LOCATION receive a Mia-initiated message right now?
+ * Pure. Two gates, both must be open:
+ *   1. the hard 09:00-19:59 Dublin daytime band (unchanged), and
+ *   2. the operator's own settings.customer_agent.quiet_hours — the live REPLY
+ *      path has always honoured it (core.isWithinQuietHours), and a message Mia
+ *      starts herself must respect it at least as strictly. A studio that goes
+ *      quiet at 18:00 was still getting nudges until 20:00.
+ * A closed window is never a lost send: the runner rides a 15-minute cron and
+ * the same candidate qualifies on the next tick inside the window.
+ * @returns {{ open: boolean, reason?: string }}
+ */
+export function proactiveWindowOpen(nowMs, settings) {
+  if (!withinDublinDaytime(nowMs)) return { open: false, reason: 'outside_daytime' }
+  if (isWithinQuietHours(new Date(nowMs), settings?.quiet_hours)) {
+    return { open: false, reason: 'operator_quiet_hours' }
+  }
+  return { open: true }
 }
 
 /**
@@ -416,6 +436,13 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
     if (!followups.enabled) continue
     // Follow-ups ride the agent: agent fully off ⇒ no proactive sends.
     if (!settings?.enabled && !settings?.test_mode) continue
+    // MIA-REVIEW.3 — the operator's quiet_hours apply to Mia-initiated sends
+    // too, not just replies (the global daytime band is checked above).
+    const window = proactiveWindowOpen(nowMs, settings)
+    if (!window.open) {
+      console.warn('[radar-agent] followup-skip', JSON.stringify({ locationId: location.id, reason: window.reason }))
+      continue
+    }
 
     const sinceIso = new Date(nowMs - (TEMPLATE_MAX_H + 2) * H_MS).toISOString()
     // wa_status is the hard opt-out signal (whatsapp-consent.js) — there is
@@ -504,9 +531,32 @@ function checkinInstruction(className) {
   )
 }
 
+/**
+ * How many of today's check-in activity rows were actual SENDS. Pure.
+ * stampCheckin writes the `via` label into the note ('in-window' / 'template'
+ * for a send, 'skipped — …' for a non-send).
+ */
+export function countCheckinSends(rows) {
+  return (rows || []).filter((r) => !/skipped/i.test(String(r?.note || ''))).length
+}
+
+// MIA-REVIEW.3 — the daily cap must measure SENDS. contacts
+// .first_class_checkin_at is the once-ever marker and stampCheckin stamps it
+// for non-sends too ('skipped — already discussed', 'skipped — no marketing
+// consent'), so counting stamps let a consent-poor day eat the cap and stop
+// genuine check-ins early. The activities row carries the via label, so count
+// those; if that read fails we fall back to the old stamp count (over-counting
+// under-sends, which is the safe direction).
 async function checkinsSentToday(db, locationId, nowMs) {
   const d = new Date(nowMs)
   const dayStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString()
+  const { data, error } = await db.from('activities')
+    .select('note')
+    .eq('location_id', locationId)
+    .eq('type', 'agent_checkin')
+    .gte('created_at', dayStart)
+    .limit(500)
+  if (!error && Array.isArray(data)) return countCheckinSends(data)
   const { count } = await db.from('contacts')
     .select('id', { count: 'exact', head: true })
     .eq('location_id', locationId)
@@ -555,6 +605,9 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
     const checkin = { ...CHECKIN_DEFAULTS, ...(settings?.first_class_checkin || {}) }
     if (!checkin.enabled) continue
     if (!settings?.enabled && !settings?.test_mode) continue
+    // MIA-REVIEW.3 — operator quiet_hours apply to check-ins too.
+    const window = proactiveWindowOpen(nowMs, settings)
+    if (!window.open) { bump(window.reason); continue }
 
     const sinceIso = new Date(nowMs - CHECKIN_MAX_AGE_H * H_MS).toISOString()
     // wa_status, NOT opted_out — same phantom-column trap as the followups
@@ -604,14 +657,22 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
         const firstName = (contact.first_name || String(contact.name || '').split(/\s+/)[0] || 'there').trim()
 
         // Existing conversation? (Case A needs one with a live window.)
+        // MIA-REVIEW.3 — the same guards the followup candidate query applies:
+        // a sticky operator pause (mig 435 agent_paused_at) deliberately does
+        // NOT stamp agent_handed_off_at, and shouldAgentReply's contract is
+        // that a paused thread stays FULLY silent. Skipping only on
+        // agent_handed_off_at let Mia send a proactive check-in into a thread
+        // an operator had explicitly paused or switched off.
         const { data: convRows } = await db.from('whatsapp_conversations')
-          .select('id, contact_id, location_id, agent_handed_off_at')
+          .select('id, contact_id, location_id, agent_active, agent_paused_at, agent_handed_off_at')
           .eq('location_id', location.id)
           .eq('contact_id', contact.id)
           .order('last_message_at', { ascending: false })
           .limit(1)
         const existingConv = convRows?.[0] || null
         if (existingConv?.agent_handed_off_at) { bump('handed_off'); results.skipped++; continue }
+        if (existingConv?.agent_paused_at) { bump('agent_paused'); results.skipped++; continue }
+        if (existingConv && existingConv.agent_active === false) { bump('agent_inactive'); results.skipped++; continue }
 
         let facts = { rows: [], lastInboundAtMs: null, humanSpokeAfterInbound: false }
         if (existingConv) facts = await lastInboundFacts(db, existingConv.id)

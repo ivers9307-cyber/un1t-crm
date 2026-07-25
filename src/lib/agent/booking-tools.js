@@ -10,8 +10,9 @@
 //   'draft' queues a pending agent_membership_requests row for a
 //   one-tap staff approval that executes it. EVERY booking attempt —
 //   auto or draft, success or failure — writes an
-//   agent_membership_requests row, so the audit trail is complete
-//   regardless of mode.
+//   agent_membership_requests row BEFORE the Glofox call and finalises
+//   it after, so a crash mid-call leaves a visible 'pending' intent row
+//   rather than an untracked booking (MIA-REVIEW.3).
 //
 //   CONSULTATIONS (leads — no verification needed, this is the point):
 //   list available slots + book one. Reuses the public booking
@@ -24,6 +25,7 @@
 // does the IO and never throws (mirrors executeAccountTool).
 
 import { GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
+import { formatDublinClassTime } from './dublin-format'
 
 // ── Anthropic tool definitions ──────────────────────────────────────
 export const BOOKING_TOOLS = [
@@ -181,30 +183,11 @@ export function classBookingGuard({ verifiedContactId, glofoxMemberId, eventId }
 // (Dean, 2026-06-30). 60 rows covers 7 days of a full timetable.
 const MAX_CLASS_LIST = 60
 
-const DUBLIN_TIME_FMT = new Intl.DateTimeFormat('en-IE', {
-  timeZone: 'Europe/Dublin',
-  weekday: 'short',
-  day: 'numeric',
-  month: 'short',
-  hour: '2-digit',
-  minute: '2-digit',
-  hour12: false,
-})
-
-/**
- * Format a unix-seconds instant as a Dublin wall-clock label the model
- * can relay verbatim, e.g. "Sat 13 Jun, 07:00". Glofox time_start is an
- * absolute instant — the original raw .toISOString() handed the model
- * UTC, so it told customers a 7am summer class was at "6am" (live test
- * 2026-06-12). The model must never do timezone math. Pure.
- */
-export function formatDublinClassTime(unixSec) {
-  const parts = {}
-  for (const p of DUBLIN_TIME_FMT.formatToParts(new Date(unixSec * 1000))) {
-    parts[p.type] = p.value
-  }
-  return `${parts.weekday} ${parts.day} ${parts.month}, ${parts.hour}:${parts.minute}`
-}
+// MIA-REVIEW.3 — the formatter moved to ./dublin-format so account-tools
+// (which can't import this module: it statically pulls @/lib/glofox) shares
+// the exact same Dublin labelling. Re-exported so the public surface of
+// booking-tools is unchanged.
+export { formatDublinClassTime }
 
 // CAPACITY-SECRECY.1 — a class with this many spaces or fewer is "limited".
 // Coarse on purpose: it lets Mia create honest urgency without ever handing
@@ -382,6 +365,15 @@ async function resolveConsultationEventType(db, locationId, settings) {
 // queue/audit table the pause/cancel requests use (mig 258 extended
 // kind + status). Best-effort: an audit hiccup never blocks the
 // customer-facing outcome.
+//
+// MIA-REVIEW.3 — auto mode now writes the INTENT row (status 'pending',
+// details.stage 'executing') BEFORE the Glofox call and finalises it after,
+// the way the draft path already did. Writing only afterwards meant a crash
+// or timeout between the Glofox call and the log left a real booking /
+// cancellation with no audit row at all, so the trail could never be treated
+// as complete for reconciliation. A row left behind by a crash stays
+// 'pending' and surfaces in the approvals queue, where approving it re-runs
+// the action (Glofox is the arbiter of double-booking).
 async function logBookingRequest(db, ctx, { kind, status, details, customerNote = null }) {
   try {
     const { data } = await db.from('agent_membership_requests').insert({
@@ -398,6 +390,28 @@ async function logBookingRequest(db, ctx, { kind, status, details, customerNote 
   } catch (e) {
     console.warn(`[agent][booking] audit insert failed: ${e?.message || e}`)
     return null
+  }
+}
+
+// Close out the intent row written before the side effect. Falls back to a
+// fresh insert when the pre-write failed (or returned no id), so the outcome
+// is always recorded somewhere. Best-effort, same as the writer above — but
+// a failure here is now LOUD, because it means a real Glofox action has no
+// complete audit row.
+async function finalizeBookingRequest(db, ctx, requestId, { kind, status, details }) {
+  if (!requestId) {
+    await logBookingRequest(db, ctx, { kind, status, details })
+    return
+  }
+  try {
+    const { error } = await db.from('agent_membership_requests')
+      .update({ status, details, updated_at: new Date().toISOString() })
+      .eq('id', requestId)
+    if (error) {
+      console.error(`[agent][booking] audit finalise failed (${kind} ${requestId}): ${error.message}`)
+    }
+  } catch (e) {
+    console.error(`[agent][booking] audit finalise threw (${kind} ${requestId}): ${e?.message || e}`)
   }
 }
 
@@ -462,13 +476,17 @@ export async function executeBookingTool(toolName, input, ctx) {
     if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
       return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
     }
+    // Intent BEFORE the side effect (see logBookingRequest).
+    const auditId = await logBookingRequest(db, ctx, {
+      kind: 'class_booking', status: 'pending', details: { ...baseDetails, stage: 'executing' },
+    })
     const result = await createBooking(creds, {
       user_id: glofoxMemberId,
       model: GLOFOX_BOOKING_MODEL,
       model_id: input.event_id,
     })
     const messageCode = result?.body?.message_code || result?.body?.message || null
-    await logBookingRequest(db, ctx, {
+    await finalizeBookingRequest(db, ctx, auditId, {
       kind: 'class_booking',
       status: result.ok ? 'actioned' : 'failed',
       details: { ...baseDetails, result: { ok: result.ok, status: result.status, message_code: messageCode } },
@@ -545,9 +563,13 @@ export async function executeBookingTool(toolName, input, ctx) {
     if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
       return { error: 'no_booking_system', message: 'Class booking is not connected at this studio — hand off to the team.' }
     }
+    // Intent BEFORE the side effect (see logBookingRequest).
+    const auditId = await logBookingRequest(db, ctx, {
+      kind: 'class_cancellation', status: 'pending', details: { ...baseDetails, stage: 'executing' },
+    })
     const result = await cancelBooking(creds, input.booking_id, glofoxMemberId)
     const messageCode = result?.body?.message_code || result?.body?.message || null
-    await logBookingRequest(db, ctx, {
+    await finalizeBookingRequest(db, ctx, auditId, {
       kind: 'class_cancellation',
       status: result.ok ? 'actioned' : 'failed',
       details: { ...baseDetails, result: { ok: result.ok, status: result.status, message_code: messageCode } },

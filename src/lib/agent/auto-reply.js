@@ -260,7 +260,14 @@ async function countAgentReplies(db, adapter, { field, value, sinceIso }) {
  * @param {object} ctx
  */
 export async function runChannelAgent(db, adapter, ctx) {
-  let result = await runChannelAgentInner(db, adapter, ctx)
+  // MIA-REVIEW.3 — the turn fills this in so the decision row can name the
+  // account Mia actually ACTED AS (the person-group primary after a phone
+  // match or the email quiz), not just the contact the thread is bound to.
+  // agent_decisions has no JSONB column, so the fuller per-turn trace (tool
+  // names + inputs, model stop_reason) is NOT persisted — see docs/CHANGELOG
+  // #407; it needs a migration and this batch ships none.
+  const trace = { actingContactId: null }
+  let result = await runChannelAgentInner(db, adapter, ctx, trace)
 
   // Missed-inbound sweep: if the customer sent more while we were composing
   // (their webhook lost the concurrency claim and bailed), run another turn
@@ -276,7 +283,7 @@ export async function runChannelAgent(db, adapter, ctx) {
     console.warn('[radar-agent] missed-inbound rerun', JSON.stringify({
       channel: adapter.name, conversationId: ctx?.conversationId || null, rerun: reruns,
     }))
-    result = await runChannelAgentInner(db, adapter, ctx)
+    result = await runChannelAgentInner(db, adapter, ctx, trace)
   }
 
   if (result?.handled === false) {
@@ -292,7 +299,10 @@ export async function runChannelAgent(db, adapter, ctx) {
   await recordAgentDecision(db, {
     channel: adapter.name,
     conversationId: ctx?.conversationId,
-    contactId: ctx?.contactId,
+    // The acting (verified) account when the turn resolved one — that is the
+    // contact whose data the read tools disclosed. Falls back to the thread's
+    // contact for turns that never verified.
+    contactId: trace.actingContactId || ctx?.contactId,
     locationId: ctx?.locationId,
     decision: result?.handled === true && result?.action === 'reply' ? 'reply' : 'silent',
     reason: result?.reason,
@@ -352,7 +362,7 @@ export async function humanTookOverDuringTurn(db, adapter, conversationId, since
   }
 }
 
-async function runChannelAgentInner(db, adapter, ctx) {
+async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
   const { conversationId, locationId, recipient, contactId, messageType, body, connection } = ctx
 
   const apiKey = process.env.ANTHROPIC_API_KEY
@@ -412,7 +422,9 @@ async function runChannelAgentInner(db, adapter, ctx) {
   if (decision.rearm) {
     try {
       await db.from(adapter.conversationsTable)
-        .update({ agent_active: true, agent_handed_off_at: null, agent_verify_attempts: 0 })
+        // MIA-REVIEW.3 — handoff_escalated_at clears with the handoff stamp,
+        // or the SLA sweep could only ever escalate this thread once, ever.
+        .update({ agent_active: true, agent_handed_off_at: null, agent_verify_attempts: 0, handoff_escalated_at: null })
         .eq('id', conversationId)
     } catch { /* next turn retries */ }
   }
@@ -667,6 +679,8 @@ async function runChannelAgentInner(db, adapter, ctx) {
       // consultation type from the agent settings blob.
       settings,
     }
+    // MIA-REVIEW.3 — surface the acting account to the decision log.
+    trace.actingContactId = toolCtx.verifiedContactId || null
 
     let verifyFails = conv?.agent_verify_attempts ?? 0
     let modelText = ''
@@ -781,6 +795,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
                 toolCtx.verifiedContactId = resolveActingContactId({
                   contactId: rawVerified, groupOf: r.groupOf, primaryOf: r.primaryOf,
                 }) || rawVerified
+                trace.actingContactId = toolCtx.verifiedContactId
               }
             }
             toolResults.push({
@@ -1020,6 +1035,10 @@ async function handoff(db, adapter, { conversationId, locationId, recipient, con
   await db.from(adapter.conversationsTable).update({
     agent_active: false,
     agent_handed_off_at: now,
+    // MIA-REVIEW.3 — a NEW handoff re-arms the SLA escalation. The stamp is
+    // per-handoff by design (handoff-sla.js), but nothing ever cleared it, so
+    // the second and every later handoff on a thread could breach in silence.
+    handoff_escalated_at: null,
   }).eq('id', conversationId)
 
   try {

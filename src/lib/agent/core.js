@@ -113,7 +113,11 @@ export function isHandoffExpired(handedOffAt, cooldownHours, now = new Date()) {
  */
 export function resolveRearmPatch({ resolved, agent_handed_off_at } = {}) {
   if (resolved === true && agent_handed_off_at) {
-    return { agent_active: true, agent_handed_off_at: null }
+    // MIA-REVIEW.3 — clear the SLA escalation stamp too. It was written by the
+    // handoff-SLA sweep and cleared nowhere, so after one escalation the thread
+    // could never escalate again for the rest of its life (conversations are
+    // one per contact per channel). The handoff is over; re-arm the safety net.
+    return { agent_active: true, agent_handed_off_at: null, handoff_escalated_at: null }
   }
   return {}
 }

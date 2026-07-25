@@ -21,6 +21,8 @@
 // Pure helpers (identityMatches, formatMembership, formatNextClass,
 // formatRecentAttendance) are unit-tested; the executor does the IO.
 
+import { formatDublinClassTime } from './dublin-format'
+
 // ── Anthropic tool definitions ──────────────────────────────────────
 export const ACCOUNT_TOOLS = [
   {
@@ -276,6 +278,11 @@ export function formatMembership(contact) {
  * Format the next upcoming class from the contact's recent_bookings jsonb
  * array (each row: { event_name, model_name, time_start unix-sec, status }).
  * Pure. now injectable for tests.
+ *
+ * class_time is a DUBLIN WALL-CLOCK label ("Sat 13 Jun, 07:00"), never a raw
+ * UTC ISO string: handing the model UTC is what told a customer their 7am
+ * summer class was at "6am" (live test 2026-06-12, fixed for the booking
+ * tools then and for this one in MIA-REVIEW.3). Same helper both sides.
  */
 export function formatNextClass(recentBookings, now = new Date()) {
   const nowSec = Math.floor(now.getTime() / 1000)
@@ -287,7 +294,7 @@ export function formatNextClass(recentBookings, now = new Date()) {
   return {
     found: true,
     class_name: next.event_name || next.model_name || 'your class',
-    class_time: new Date(Number(next.time_start) * 1000).toISOString(),
+    class_time: formatDublinClassTime(Number(next.time_start)),
   }
 }
 
@@ -374,39 +381,80 @@ async function contactsForSender(db, { contactId, locationId }) {
   return pool
 }
 
+/**
+ * Escape the LIKE wildcards (% and _) in customer-supplied text before it
+ * goes into .ilike. Pure. Underscores are common in real email addresses, and
+ * unescaped they match ANY character — with the old .limit(1) that could fetch
+ * a different member's row as the single candidate and fail a legitimate
+ * verification; '%' scanned broadly. Never a bypass (emailPathVerifies
+ * re-checks strict equality), but the query must still mean what it says.
+ */
+export function escapeLikePattern(s) {
+  return String(s ?? '').replace(/[\\%_]/g, (c) => `\\${c}`)
+}
+
+// Contacts at this location whose email the customer just supplied. Escaped
+// pattern + a small pool (not .limit(1)) so a wildcard-ish input can never
+// silently decide WHICH row gets tested — pickVerifiedContact does the exact
+// matching over whatever comes back.
+async function contactsByEmail(db, locationId, email) {
+  const { data } = await db.from('contacts')
+    .select('id, email, last_name')
+    .eq('location_id', locationId)
+    .ilike('email', escapeLikePattern(email))
+    .limit(5)
+  return data || []
+}
+
+// Tool results are written FOR the model (the card-tools convention): a raw
+// PostgREST/Postgres string would put constraint, column and RLS detail into
+// the model's context, and the model has been known to paraphrase what it
+// sees. Clean message to the model, real error to the server log.
+function queueFailed(kind, error) {
+  console.error(`[agent][account] ${kind} request insert failed: ${error?.message || error}`)
+  return {
+    error: 'queue_failed',
+    message: 'The request could not be queued. Apologise briefly and hand off to the team.',
+  }
+}
+
 // ── executor (IO) ───────────────────────────────────────────────────
-// ctx: { db, conversationId, conversationsTable, contactId, verifiedContactId, locationId }
+// ctx: { db, conversationId, conversationsTable, contactId, verifiedContactId, locationId, channel }
 export async function executeAccountTool(toolName, input, ctx) {
   const { db, conversationId, conversationsTable, contactId, verifiedContactId, locationId } = ctx
 
   if (toolName === 'verify_identity') {
+    // AGENT-AUTH — what "linked" actually means: the sender's PHONE NUMBER is
+    // already on a contact, so the channel itself is the second factor and an
+    // email match alone verifies. That is a WhatsApp property, not a
+    // contact_id property: instagram_conversations also carries a contact_id
+    // (nothing writes it today, but the column and the read path exist), and
+    // keying on !!contactId would silently downgrade any future IG contact
+    // link from email+surname to email-only. Emails are not secret, so the
+    // predicate is the phone factor, not the link.
+    const linked = ctx.channel === 'whatsapp' && !!contactId
+
     // Candidate pool = the contacts belonging to THIS sender.
-    // Linked (a WhatsApp number already on a contact) → EVERY contact sharing
-    // the sender's number at this location, so a thread pinned to a duplicate
-    // whose email differs from the member's can still verify (the linked-path
-    // check used to look at the bound contact_id alone, which made the quiz
-    // unwinnable for members with duplicate contact rows on one number).
-    // Unlinked (Instagram / unknown number) → the single contact whose email
-    // the customer supplies (email + surname required, see pickVerifiedContact).
-    let candidates = []
-    if (contactId) {
-      candidates = await contactsForSender(db, { contactId, locationId })
-    } else if (normEmail(input?.email)) {
-      const { data } = await db.from('contacts')
-        .select('id, email, last_name')
-        .eq('location_id', locationId)
-        .ilike('email', normEmail(input.email))
-        .limit(1)
-        .maybeSingle()
-      candidates = data ? [data] : []
+    // Linked → EVERY contact sharing the sender's number at this location, so
+    // a thread pinned to a duplicate whose email differs from the member's can
+    // still verify (the linked-path check used to look at the bound contact_id
+    // alone, which made the quiz unwinnable for members with duplicate contact
+    // rows on one number).
+    // Unlinked (Instagram / unknown number) → the contacts whose email the
+    // customer supplies (email + surname required, see pickVerifiedContact),
+    // plus any contact bound to the thread.
+    const emailInput = normEmail(input?.email)
+    let candidates = contactId ? await contactsForSender(db, { contactId, locationId }) : []
+    if (!linked && emailInput) {
+      candidates = [...candidates, ...(await contactsByEmail(db, locationId, emailInput))]
     }
 
     const matchedContact = pickVerifiedContact(candidates, input || {}, {
-      linked: !!contactId,
+      linked,
       nameHint: ctx.nameHint,
     })
     if (!matchedContact) {
-      return { verified: false, hint: verifyFailureHint(!!contactId) }
+      return { verified: false, hint: verifyFailureHint(linked) }
     }
 
     // Stamp the matched contact. auto-reply resolves this to the person-group
@@ -437,7 +485,7 @@ export async function executeAccountTool(toolName, input, ctx) {
       customer_note: details.note || details.offer || null,
       status: 'pending',
     })
-    if (error) return { error: 'queue_failed', message: error.message }
+    if (error) return queueFailed('membership_purchase', error)
     return {
       requested: true,
       kind: 'membership_purchase',
@@ -509,7 +557,7 @@ export async function executeAccountTool(toolName, input, ctx) {
       // human can try a save before it's actioned.
       retention_flagged: kind === 'cancellation',
     })
-    if (error) return { error: 'queue_failed', message: error.message }
+    if (error) return queueFailed(kind, error)
     return { requested: true, kind }
   }
 

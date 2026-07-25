@@ -13,11 +13,17 @@
 // CI without the network; the live path POSTs the same body shape as
 // src/lib/agent/auto-reply.js.
 
-import { buildCustomerSystemPrompt } from '@/lib/agent/prompt'
-import { formatHistoryForClaude, parseAgentResponse } from '@/lib/agent/core'
+import { buildCachedSystem } from '@/lib/agent/prompt'
+import { formatHistoryForClaude, parseAgentResponse, resolveAgentEffort } from '@/lib/agent/core'
 import { ALL_AGENT_TOOLS, AGENT_MODEL, MAX_TOOL_ITERATIONS } from '@/lib/agent/auto-reply'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
+
+// MIA-REVIEW.3 — production sends output_config.effort (operator-tunable per
+// location, default 'medium'); the runner used to omit it entirely, so every
+// eval ran at the API default and the documented "eval before switching to
+// effort:low" workflow was impossible. Override per run with AGENT_EFFORT=low.
+export const EVAL_EFFORT = resolveAgentEffort(process.env.AGENT_EFFORT)
 
 // Same shape as production: mark the LAST tool ephemeral so the whole
 // byte-identical tool block caches across the eval run (saves ~90% of
@@ -30,7 +36,10 @@ const CACHED_TOOLS = ALL_AGENT_TOOLS.map((tool, i) =>
 
 export function buildScenarioRequest(scenario) {
   const p = scenario.prompt || {}
-  const system = buildCustomerSystemPrompt({
+  // MIA-REVIEW.3 — the CACHED block form production sends (buildCachedSystem),
+  // not a flattened string: the split point and the cache_control marker are
+  // part of the request the model actually sees.
+  const system = buildCachedSystem({
     businessName: p.businessName ?? 'UN1T',
     locationName: p.locationName ?? 'UN1T Stillorgan',
     agentName: p.agentName ?? 'Mia',
@@ -44,12 +53,19 @@ export function buildScenarioRequest(scenario) {
     // Fixed date so scenario wording ("tomorrow") stays coherent run to run.
     today: p.today ?? '2026-06-13',
     identityPreverified: !!p.identityPreverified,
+    // AGENT-AUTH.3 — the sender's number is on more than one PERSON, so Mia
+    // must ask WHICH account by email and never read out what is on file.
+    // Dropping this (and knownContact) made those prompt blocks unreachable
+    // from the harness, so no scenario could ever test the behaviour they
+    // mandate — only prompt.test.js's "the text renders" check existed.
+    multipleAccounts: !!p.multipleAccounts,
+    knownContact: p.knownContact ?? null,
   })
   const messages = formatHistoryForClaude(scenario.history || [], { maxMessages: 20 })
   return { system, messages }
 }
 
-async function liveCallModel({ system, messages, apiKey }) {
+async function liveCallModel({ system, messages, apiKey, effort = EVAL_EFFORT }) {
   const res = await fetch(ANTHROPIC_API_URL, {
     method: 'POST',
     headers: {
@@ -60,6 +76,7 @@ async function liveCallModel({ system, messages, apiKey }) {
     body: JSON.stringify({
       model: AGENT_MODEL,
       max_tokens: 600,
+      output_config: { effort },
       system,
       messages,
       tools: CACHED_TOOLS,
@@ -85,7 +102,7 @@ function dispatchMock(scenario, name, input, outcome) {
  * Run one scenario through the real agent loop.
  * @returns outcome { toolCalls, unexpectedTools, action, text, reason, options, iterationsExhausted, turns }
  */
-export async function runScenario(scenario, { apiKey, callModel = liveCallModel } = {}) {
+export async function runScenario(scenario, { apiKey, callModel = liveCallModel, effort = EVAL_EFFORT } = {}) {
   const { system, messages } = buildScenarioRequest(scenario)
   const outcome = {
     toolCalls: [],
@@ -98,7 +115,7 @@ export async function runScenario(scenario, { apiKey, callModel = liveCallModel 
   let iterations = MAX_TOOL_ITERATIONS
   let done = false
   while (iterations-- > 0 && !done) {
-    const data = await callModel({ system, messages, apiKey })
+    const data = await callModel({ system, messages, apiKey, effort })
     const content = data.content || []
     outcome.turns.push(content)
 

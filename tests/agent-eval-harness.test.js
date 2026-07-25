@@ -76,6 +76,39 @@ describe('evaluateOutcome', () => {
     expect(evaluateOutcome({}, { ...baseOutcome, iterationsExhausted: true }).pass).toBe(false)
   })
 
+  // MIA-REVIEW.3 (3.20) — the runner always captured outcome.options and no
+  // assertion class read it, so the prompt's tap-button rules were unguarded.
+  describe('options ([[OPTIONS]]) assertions', () => {
+    const withOptions = (options) => ({ ...baseOutcome, options })
+
+    it('optionsRequired fails when no buttons were emitted', () => {
+      const res = evaluateOutcome({ optionsRequired: true }, baseOutcome)
+      expect(res.pass).toBe(false)
+      expect(res.failures[0]).toContain('expected tap options')
+    })
+    it('optionsRequired passes on a valid 2-10 button set', () => {
+      expect(evaluateOutcome({ optionsRequired: true }, withOptions(['06:30 LIFT45', '07:15 SWEAT45'])).pass).toBe(true)
+    })
+    it('optionsRequired enforces the count and label-length caps', () => {
+      expect(evaluateOutcome({ optionsRequired: true }, withOptions(['only one'])).pass).toBe(false)
+      expect(evaluateOutcome({ optionsRequired: true }, withOptions(['ok', 'this label is far too long for a button'])).pass).toBe(false)
+    })
+    it('optionsRequired:false flags unexpected buttons', () => {
+      expect(evaluateOutcome({ optionsRequired: false }, withOptions(['a', 'b'])).pass).toBe(false)
+      expect(evaluateOutcome({ optionsRequired: false }, baseOutcome).pass).toBe(true)
+    })
+    it('optionsNotMatch keeps a FULL class off a tap button', () => {
+      const res = evaluateOutcome({ optionsNotMatch: ['SWEAT'] }, withOptions(['06:30 LIFT45', '07:15 SWEAT45']))
+      expect(res.pass).toBe(false)
+      expect(res.failures[0]).toContain('forbidden')
+      expect(evaluateOutcome({ optionsNotMatch: ['SWEAT'] }, withOptions(['06:30 LIFT45'])).pass).toBe(true)
+    })
+    it('optionsMatch requires at least one matching label', () => {
+      expect(evaluateOutcome({ optionsMatch: ['LIFT'] }, withOptions(['06:30 LIFT45', 'Something else'])).pass).toBe(true)
+      expect(evaluateOutcome({ optionsMatch: ['LIFT'] }, withOptions(['Something else'])).pass).toBe(false)
+    })
+  })
+
   it('argMatch checks a field on the first matching call', () => {
     const outcome = {
       ...baseOutcome,
@@ -164,10 +197,43 @@ describe('scenario fixtures stay valid', () => {
   it('every scenario builds a real request (prompt renders, history non-empty)', () => {
     for (const s of SCENARIOS) {
       const { system, messages } = buildScenarioRequest(s)
-      expect(system, s.id).toContain('Mia')
+      // MIA-REVIEW.3 — `system` is now production's CACHED BLOCK form
+      // (buildCachedSystem), not a flattened string.
+      expect(Array.isArray(system), s.id).toBe(true)
+      expect(system[0], s.id).toMatchObject({ type: 'text', cache_control: { type: 'ephemeral' } })
+      expect(system.map(b => b.text).join('\n'), s.id).toContain('Mia')
       expect(messages.length, s.id).toBeGreaterThan(0)
       expect(messages[0].role, s.id).toBe('user')
     }
+  })
+
+  // MIA-REVIEW.3 (3.3) — buildScenarioRequest forwarded only
+  // identityPreverified, so the AGENT-AUTH.3 (number on >1 account) and
+  // known-contact prompt blocks could never render in an eval: the harness
+  // structurally could not express the scenario.
+  it('forwards multipleAccounts and knownContact into the prompt', () => {
+    const text = (s) => s.map(b => b.text).join('\n')
+    const dupe = buildScenarioRequest({ prompt: { multipleAccounts: true }, history: [{ direction: 'inbound', body: 'hi' }] })
+    expect(text(dupe.system)).toMatch(/more than one account/i)
+    const known = buildScenarioRequest({ prompt: { knownContact: { firstName: 'Edel', hasEmail: true } }, history: [{ direction: 'inbound', body: 'hi' }] })
+    expect(text(known.system)).toContain('Edel')
+    const plain = buildScenarioRequest({ history: [{ direction: 'inbound', body: 'hi' }] })
+    expect(text(plain.system)).not.toMatch(/more than one account/i)
+  })
+
+  it('the live request carries production output_config.effort', async () => {
+    // Not a live call — assert the runner threads the effort through to the
+    // model caller, which is where production diverged (evals always ran at
+    // the API default, so "eval before switching to effort:low" was impossible).
+    let seen = null
+    await runScenario(
+      { id: 'x', history: [{ direction: 'inbound', body: 'hi' }], tools: {}, expect: {} },
+      {
+        effort: 'low',
+        callModel: async (args) => { seen = args; return { stop_reason: 'end_turn', content: [{ type: 'text', text: 'hi' }] } },
+      },
+    )
+    expect(seen.effort).toBe('low')
   })
 
   it('every mocked or referenced tool name exists on the production tool surface', () => {
@@ -184,10 +250,11 @@ describe('scenario fixtures stay valid', () => {
 
   it('regex assertions compile', () => {
     for (const s of SCENARIOS) {
-      const all = [
-        ...(s.expect.match || []), ...(s.expect.notMatch || []),
-        ...(s.expect.anyOf || []).flatMap(b => [...(b.match || []), ...(b.notMatch || [])]),
+      const branch = (b) => [
+        ...(b.match || []), ...(b.notMatch || []),
+        ...(b.optionsMatch || []), ...(b.optionsNotMatch || []),
       ]
+      const all = [...branch(s.expect), ...(s.expect.anyOf || []).flatMap(branch)]
       for (const p of all) expect(() => new RegExp(p, 'i'), `${s.id}: /${p}/`).not.toThrow()
     }
   })

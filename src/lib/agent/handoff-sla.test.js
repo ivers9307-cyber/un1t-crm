@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import {
   classifyHandoffBreach,
   resolveHandoffSlaMinutes,
+  shouldSweepLocation,
   waitingLabel,
   HANDOFF_SLA_DEFAULT_MINUTES,
 } from './handoff-sla'
@@ -20,6 +21,28 @@ describe('resolveHandoffSlaMinutes', () => {
     expect(resolveHandoffSlaMinutes({ handoff_sla_minutes: 30 })).toBe(30)
     expect(resolveHandoffSlaMinutes({ handoff_sla_minutes: 0 })).toBe(0)
     expect(resolveHandoffSlaMinutes({ handoff_sla_minutes: -5 })).toBe(0)
+  })
+})
+
+// MIA-REVIEW.3 (3.7) — the sweep used to skip the whole location the moment
+// the agent was disabled, abandoning customers already waiting for a human.
+// enabled=false is the documented panic response to an agent incident, i.e.
+// exactly when a pile of unattended handoffs is most likely.
+describe('shouldSweepLocation', () => {
+  it('keeps sweeping when the agent has been DISABLED (customers are still waiting)', () => {
+    expect(shouldSweepLocation({ enabled: false, test_mode: false }))
+      .toEqual({ sweep: true, slaMinutes: 60 })
+  })
+  it('sweeps a live agent and honours the per-location SLA', () => {
+    expect(shouldSweepLocation({ enabled: true, handoff_sla_minutes: 30 }))
+      .toEqual({ sweep: true, slaMinutes: 30 })
+  })
+  it('skips a location that never configured the agent', () => {
+    expect(shouldSweepLocation(null)).toEqual({ sweep: false, reason: 'no_agent_config' })
+  })
+  it('skips when the operator disabled the SLA itself', () => {
+    expect(shouldSweepLocation({ enabled: true, handoff_sla_minutes: 0 }))
+      .toEqual({ sweep: false, reason: 'sla_disabled' })
   })
 })
 

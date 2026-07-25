@@ -9,6 +9,25 @@
 // entry. Phase 2 adds direct booking for events that are free for
 // the person asking; phase 3 adds cancel/reschedule.
 //
+// AUTH MODEL (MIA-REVIEW.3) — who may act on what:
+//   list_upcoming_events        public listing, no identity needed.
+//   get_my_event_registrations  reads the registrations of the contact
+//     this conversation is bound to (verified contact preferred). Read
+//     only, event name/date/wave only — no account or billing data.
+//   book_event                  a brand-new person entering a FREE event
+//     with their name + email needs NO verification (same call as
+//     consultations: demanding a quiz mid-signup kills the entry). But
+//     acting on an EXISTING MEMBER's account — a contact linked to the
+//     studio's booking system — requires verify_identity, exactly like
+//     the class tools.
+//   cancel_event_registration /
+//   reschedule_event_wave       ALWAYS require verify_identity, like
+//     cancel_class_booking. These change something the customer already
+//     has; the previous `verifiedContactId || contactId` gate let an
+//     unverified sender on a thread bound to a contact (a duplicate /
+//     shared WhatsApp number, where auto-verify deliberately bails) cancel
+//     that contact's race entry on channel possession alone.
+//
 // Pure helpers tested in event-tools.test.js; executor does the IO
 // and never throws (mirrors executeBookingTool).
 
@@ -39,7 +58,8 @@ export const EVENT_TOOLS = [
       'ONLY when the event is free for them (the tool refuses paid entries and tells you to ' +
       'share the signup link instead; team entries also go via the link). CRITICAL: restate ' +
       'the exact event, date and wave time and get a clear yes before calling. For someone ' +
-      'new, collect their full name and email first — the confirmation goes there.',
+      'new, collect their full name and email first — the confirmation goes there. For an ' +
+      'existing member, identity must be verified first (the tool says so if it is not).',
     input_schema: {
       type: 'object',
       properties: {
@@ -56,8 +76,9 @@ export const EVENT_TOOLS = [
   {
     name: 'cancel_event_registration',
     description:
-      "Cancel one of the customer's own upcoming event registrations from " +
-      'get_my_event_registrations. CRITICAL: restate the exact event and date and get a clear ' +
+      "Cancel one of the VERIFIED customer's own upcoming event registrations from " +
+      'get_my_event_registrations (identity must be verified first, same as cancelling a ' +
+      'class). CRITICAL: restate the exact event and date and get a clear ' +
       'yes before calling. FREE entries cancel immediately. PAID entries are passed to the ' +
       'team to confirm (they also handle any refund question) — tell the customer the team ' +
       "will confirm shortly and NEVER promise a refund yourself.",
@@ -74,8 +95,9 @@ export const EVENT_TOOLS = [
   {
     name: 'reschedule_event_wave',
     description:
-      "Move the customer's registration to a DIFFERENT START WAVE of the SAME event (e.g. from " +
-      'the 9am wave to the 10:30 wave), capacity permitting. Get the wave_id from ' +
+      "Move the VERIFIED customer's registration to a DIFFERENT START WAVE of the SAME event " +
+      '(e.g. from the 9am wave to the 10:30 wave), capacity permitting, once their identity ' +
+      'is verified. Get the wave_id from ' +
       'list_upcoming_events and confirm the new time with them first. Moving to a different ' +
       'EVENT is a cancel + a new booking — handle those separately with their own confirmations.',
     input_schema: {
@@ -322,10 +344,22 @@ export async function executeEventTool(toolName, input, ctx) {
 
     // Fill-empty contact details from the conversation, then read back.
     const { data: existing } = await db.from('contacts')
-      .select('id, name, first_name, last_name, email, phone')
+      .select('id, name, first_name, last_name, email, phone, glofox_member_id')
       .eq('id', targetContactId)
       .maybeSingle()
     if (!existing) return { error: 'no_contact', message: 'Contact not found — hand off to the team.' }
+
+    // AUTH (MIA-REVIEW.3) — see the file header. A brand-new person entering a
+    // free event stays verification-free (that is the designed flow, same as
+    // consultations), but the moment we would act on an EXISTING MEMBER's
+    // account the class-tool rule applies: verify first. Membership is the
+    // signal, because that is the account with something to lose.
+    if (!verifiedContactId && existing.glofox_member_id) {
+      return {
+        error: 'not_verified',
+        message: 'This is an existing member account — run verify_identity first, then book the entry.',
+      }
+    }
     const patch = {}
     const emailIn = String(input?.email || '').trim().toLowerCase()
     if (emailIn && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailIn) && !String(existing.email || '').trim()) patch.email = emailIn
@@ -391,9 +425,17 @@ export async function executeEventTool(toolName, input, ctx) {
   }
 
   if (toolName === 'cancel_event_registration' || toolName === 'reschedule_event_wave') {
-    const targetContactId = verifiedContactId || contactId || null
+    // AUTH (MIA-REVIEW.3) — changing something the customer already HAS needs
+    // the same hard verification as cancel_class_booking. The old
+    // `verifiedContactId || contactId` gate let an unverified sender on a
+    // thread bound to a contact (a duplicate / shared WhatsApp number, where
+    // auto-verify deliberately bails) cancel that contact's entry on channel
+    // possession alone.
+    const targetContactId = verifiedContactId || null
     if (!targetContactId) {
-      return { error: 'no_contact', message: 'No contact linked to this conversation — hand off to the team.' }
+      return contactId
+        ? { error: 'not_verified', message: 'Identity not verified yet. Call verify_identity first, then retry.' }
+        : { error: 'no_contact', message: 'No contact linked to this conversation — hand off to the team.' }
     }
     const { data: reg } = await db.from('race_registrations')
       .select('id, status, contact_id, wave_id, race_events!inner(id, name, race_date, location_id)')

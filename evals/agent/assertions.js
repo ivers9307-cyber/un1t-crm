@@ -6,6 +6,8 @@
 //   2. never-say rules (notMatch) — the compliance guarantees
 //   3. hard tokens (match) — URLs, names, times echoed from mocks
 //   4. handoff expectations (the [[HANDOFF]] sentinel parsed upstream)
+//   5. tap-button rules (optionsRequired / optionsMatch / optionsNotMatch)
+//      against the parsed [[OPTIONS]] payload
 // `anyOf` allows alternatives where two model behaviours are both
 // acceptable (e.g. sentinel handoff OR a safe "I'll check with the
 // team" reply). Pure — unit-tested in the main CI suite.
@@ -53,6 +55,36 @@ function evaluateBranch(expect, outcome) {
         : `unexpected handoff (reason: ${outcome.reason || 'unspecified'})`)
     }
   }
+  // MIA-REVIEW.3 — [[OPTIONS]] grading. The runner always captured
+  // outcome.options and nothing ever read it, so the prompt's button rules
+  // (offer buttons for class/slot lists and confirmations, 2-10 choices, under
+  // 20 chars each, and NEVER put a full class on a tap button) were completely
+  // unguarded. core.normalizeAgentOptions already enforces the count/length
+  // caps at runtime; asserting them here catches a prompt regression that
+  // stops emitting buttons at all, or puts the wrong thing on one.
+  const options = outcome.options || null
+  if (expect.optionsRequired === true) {
+    if (!options) failures.push('expected tap options ([[OPTIONS]]) and none were emitted')
+    else if (options.length < 2 || options.length > 10) {
+      failures.push(`options count out of range (2-10): ${options.length}`)
+    } else {
+      const tooLong = options.filter(o => o.length > 20)
+      if (tooLong.length) failures.push(`option labels over 20 chars: ${tooLong.join(', ')}`)
+    }
+  }
+  if (expect.optionsRequired === false && options) {
+    failures.push(`unexpected tap options: ${options.join(' | ')}`)
+  }
+  for (const pattern of asArray(expect.optionsMatch)) {
+    if (!(options || []).some(o => rx(pattern).test(o))) {
+      failures.push(`no option matched /${pattern}/i (options: ${(options || []).join(' | ') || 'none'})`)
+    }
+  }
+  for (const pattern of asArray(expect.optionsNotMatch)) {
+    const hit = (options || []).find(o => rx(pattern).test(o))
+    if (hit) failures.push(`option "${hit}" matched forbidden /${pattern}/i`)
+  }
+
   for (const { tool, field, pattern } of asArray(expect.argMatch)) {
     const call = calls.find(c => c.name === tool)
     if (!call) {
