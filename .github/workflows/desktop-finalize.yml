@@ -76,7 +76,7 @@ jobs:
         # checking out lets us reuse the certificate setup pattern
         # without copy-pasting it, and lets us write the workflow
         # summary against a known $GITHUB_WORKSPACE.
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Pull the artefacts the build workflow uploaded for the
       # specified run. The pattern handles the embedded run_number
