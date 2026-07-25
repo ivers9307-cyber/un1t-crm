@@ -192,6 +192,7 @@
     { "path": "/api/cron/usage-rollup", "schedule": "40 2 * * *" },
     { "path": "/api/cron/wallet-overage-draws", "schedule": "10 3 * * *" },
     { "path": "/api/cron/publish-hyrox-board", "schedule": "*/5 * * * *" },
-    { "path": "/api/cron/expand-hyrox-weeks", "schedule": "0 3 * * *" }
+    { "path": "/api/cron/expand-hyrox-weeks", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/contract-reminders", "schedule": "0 8 * * *" }
   ]
 }

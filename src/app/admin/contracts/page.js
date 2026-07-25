@@ -42,6 +42,30 @@ function fmtDate(iso) {
   })
 }
 
+const MS_PER_DAY = 1000 * 60 * 60 * 24
+
+// CONTRACTS-REMIND.1 — "awaiting Nd" annotation for issued/viewed rows.
+// Diffs two Date instants directly via getTime() (never a
+// new Date(`${d}T${t}Z`) template-string parse, never a
+// new Date().toISOString().slice/split "today" — both lint-enforced).
+function daysAwaiting(issuedAtIso) {
+  if (!issuedAtIso) return null
+  const ms = Date.now() - new Date(issuedAtIso).getTime()
+  if (!Number.isFinite(ms) || ms < 0) return null
+  return Math.floor(ms / MS_PER_DAY)
+}
+
+function AwaitingAnnotation({ status, issuedAt }) {
+  if (status !== 'issued' && status !== 'viewed') return null
+  const days = daysAwaiting(issuedAt)
+  if (days == null) return null
+  return (
+    <span className="text-[11px] text-un1t-subtle">
+      awaiting {days}d
+    </span>
+  )
+}
+
 export default async function ContractsAdminPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
@@ -129,9 +153,12 @@ export default async function ContractsAdminPage() {
                       <td className="p-3 text-un1t-subtle">{r.template?.name || '—'}</td>
                       <td className="p-3 text-un1t-subtle whitespace-nowrap">{fmtDate(r.issued_at)}</td>
                       <td className="p-3">
-                        <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${badge.class}`}>
-                          {badge.label}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full ${badge.class}`}>
+                            {badge.label}
+                          </span>
+                          <AwaitingAnnotation status={r.status} issuedAt={r.issued_at} />
+                        </div>
                       </td>
                       <td className="p-3 text-right">
                         <Link
@@ -167,7 +194,10 @@ export default async function ContractsAdminPage() {
                       {badge.label}
                     </span>
                   </div>
-                  <div className="text-[11px] text-un1t-subtle mt-1">{fmtDate(r.issued_at)}</div>
+                  <div className="text-[11px] text-un1t-subtle mt-1 flex items-center gap-2">
+                    <span>{fmtDate(r.issued_at)}</span>
+                    <AwaitingAnnotation status={r.status} issuedAt={r.issued_at} />
+                  </div>
                 </Link>
               )
             })}

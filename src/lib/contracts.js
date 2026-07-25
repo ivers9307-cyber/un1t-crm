@@ -239,3 +239,55 @@ const ALLOWED_TRANSITIONS = {
 export function canTransition(from, to) {
   return ALLOWED_TRANSITIONS[from]?.has(to) === true
 }
+
+// =============================================================
+// CONTRACTS-REMIND.1 — unsigned-contract reminder due-predicate
+// =============================================================
+
+const MS_PER_DAY = 1000 * 60 * 60 * 24
+
+// Statuses eligible for a reminder — anything else (draft/signed/
+// declined/revoked) is either not yet issued or already resolved.
+const REMINDABLE_STATUSES = new Set(['issued', 'viewed'])
+
+// Day-since-issued threshold for each reminder, indexed by the
+// contract's CURRENT reminder_count (0 -> first reminder at 3 days,
+// 1 -> second/final reminder at 7 days). A count of 2+ has no entry,
+// so reminderDue() returns false — the hard cap.
+const REMINDER_THRESHOLD_DAYS = [3, 7]
+
+/**
+ * Pure due-predicate for the unsigned-contract reminder cron
+ * (/api/cron/contract-reminders). Given a contract row (or the
+ * subset of fields it needs: status, issued_at, reminder_count) and
+ * the current instant, returns true when a reminder should fire now.
+ *
+ * Rules:
+ *   - Only 'issued'/'viewed' contracts are ever reminded.
+ *   - reminder_count 0 -> due once issued_at is >= 3 days old.
+ *   - reminder_count 1 -> due once issued_at is >= 7 days old.
+ *   - reminder_count >= 2 -> never (capped at 2 reminders total).
+ *
+ * Diffs two Date instants directly via getTime() — no string
+ * parsing, so this is timezone-agnostic (issued_at is a UTC
+ * timestamptz; "days old" is the same wall-clock-independent
+ * duration regardless of the caller's local timezone).
+ *
+ * @param {object} contract — { status, issued_at, reminder_count }
+ * @param {Date|number|string} [now=new Date()]
+ * @returns {boolean}
+ */
+export function reminderDue(contract, now = new Date()) {
+  if (!contract) return false
+  if (!REMINDABLE_STATUSES.has(contract.status)) return false
+  if (!contract.issued_at) return false
+
+  const count = contract.reminder_count || 0
+  const thresholdDays = REMINDER_THRESHOLD_DAYS[count]
+  if (thresholdDays == null) return false // capped at 2 reminders
+
+  const issuedAt = contract.issued_at instanceof Date ? contract.issued_at : new Date(contract.issued_at)
+  const nowDate = now instanceof Date ? now : new Date(now)
+  const ageDays = (nowDate.getTime() - issuedAt.getTime()) / MS_PER_DAY
+  return ageDays >= thresholdDays
+}
