@@ -112,7 +112,7 @@ jobs:
       #
       # Setup guide for the certificate secrets: desktop/SIGNING_SETUP.md
       - name: Tauri build (universal, signed but not notarised)
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           # Code-signing — base64-encoded .p12 export of the
           # Developer ID Application certificate + the export
