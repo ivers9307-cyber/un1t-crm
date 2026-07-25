@@ -32,10 +32,11 @@
 import { useCallback, useState } from 'react'
 import Link from 'next/link'
 import {
-  Zap, MessageCircle, Instagram as InstagramIcon, Landmark, Megaphone,
+  Zap, MessageCircle, Landmark, Megaphone,
   Music2, Bot, Mail, MessageSquare, Bell, DoorOpen, Snowflake,
   CreditCard, FileCheck, Activity,
 } from 'lucide-react'
+import { Instagram as InstagramIcon } from '@/components/icons/InstagramIcon'
 import { buttonClasses } from '@/components/ui'
 import IntegrationsHubDrawer from './IntegrationsHubDrawer'
 

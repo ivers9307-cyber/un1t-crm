@@ -26,8 +26,9 @@ import WAMediaContent from '@/components/WAMediaContent'
 import { mediaRenderKind } from '@shared/whatsapp-media'
 import {
   ArrowLeft, Send, MessageCircle, Clock, Check, AlertCircle,
-  RefreshCw, Bot, UserCheck, Instagram,
+  RefreshCw, Bot, UserCheck,
 } from 'lucide-react'
+import { Instagram } from '@/components/icons/InstagramIcon'
 
 function formatTime(dateStr) {
   if (!dateStr) return ''
