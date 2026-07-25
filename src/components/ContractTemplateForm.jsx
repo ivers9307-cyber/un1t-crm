@@ -51,6 +51,16 @@ const PROFILE_VAR_HELP = [
   { group: 'Compensation', key: 'overtime_rate_raw',       sample: '42',       desc: 'Raw numeric.' },
   { group: 'Compensation', key: 'contracted_hours_per_week', sample: '37.5',   desc: 'Contracted weekly hours.' },
   { group: 'Dates',    key: 'today',               sample: '2026-05-08',                      desc: 'Today\'s date in ISO format. Auto-filled.' },
+  // CONTRACTS-VARS.2 — resolved server-side at issue time from the
+  // recipient's location (public.locations) + getLocationBranding().
+  // Omitted entirely from the merged map when the field isn't set on
+  // the location (or its org default), same "empty means unresolved"
+  // convention as every other auto-fill here.
+  { group: 'Location', key: 'location_name',       sample: 'UN1T Stillorgan',                 desc: 'The recipient\'s primary location\'s name.' },
+  { group: 'Location', key: 'location_address',    sample: 'Stillorgan Shopping Centre, Dublin', desc: 'The location\'s address.' },
+  { group: 'Location', key: 'location_phone',      sample: '01 234 5678',                     desc: 'The location\'s phone number.' },
+  { group: 'Location', key: 'location_email',      sample: 'stillorgan@un1tdublin.com',        desc: 'The location\'s email address.' },
+  { group: 'Location', key: 'company_name',        sample: 'UN1T',                             desc: 'Operator-configured brand name (location, falling back to org default).' },
 ]
 
 export default function ContractTemplateForm({ initial, isEdit = false }) {
@@ -78,7 +88,7 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
   }, [body, vars])
 
   function addVar() {
-    setVars(v => [...v, { key: '', label: '', type: 'text', required: false }])
+    setVars(v => [...v, { key: '', label: '', type: 'text', required: false, default: '' }])
   }
 
   function updateVar(idx, patch) {
@@ -97,7 +107,13 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
       name,
       description: description || null,
       body_markdown: body,
-      variables_schema: vars.filter(v => v.key && v.label),
+      // CONTRACTS-VARS.2 — omit `default` entirely when the issuer
+      // left it blank rather than persisting an empty string; the
+      // wizard/schemas treat "key absent" as "no default" (Zod's
+      // `.optional()`, not a falsy-but-present value).
+      variables_schema: vars
+        .filter(v => v.key && v.label)
+        .map(({ default: def, ...rest }) => (def ? { ...rest, default: def } : rest)),
       employment_type: employmentType,
       active,
     }
@@ -186,14 +202,14 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
                   value={v.key}
                   onChange={e => updateVar(idx, { key: e.target.value.replace(/[^a-zA-Z0-9_]/g, '') })}
                   placeholder="key (e.g. start_date)"
-                  className="sm:col-span-3 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs font-mono"
+                  className="sm:col-span-2 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs font-mono"
                 />
                 <input
                   type="text"
                   value={v.label}
                   onChange={e => updateVar(idx, { label: e.target.value })}
                   placeholder="label shown in wizard"
-                  className="sm:col-span-4 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs"
+                  className="sm:col-span-3 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs"
                 />
                 <select
                   value={v.type}
@@ -204,6 +220,18 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
                   <option value="number">number</option>
                   <option value="date">date</option>
                 </select>
+                {/* CONTRACTS-VARS.2 — optional per-variable default,
+                    pre-filled into the issue wizard's input unless a
+                    re-issue prefill or the issuer's own typing
+                    supplies a value. Date type gets a date input to
+                    match the wizard's own input rendering. */}
+                <input
+                  type={v.type === 'date' ? 'date' : 'text'}
+                  value={v.default || ''}
+                  onChange={e => updateVar(idx, { default: e.target.value })}
+                  placeholder="default (optional)"
+                  className="sm:col-span-2 bg-un1t-bg border border-un1t-border rounded-md px-2 py-1.5 text-xs"
+                />
                 <label className="sm:col-span-2 flex items-center gap-1.5 text-xs text-un1t-subtle">
                   <input
                     type="checkbox"

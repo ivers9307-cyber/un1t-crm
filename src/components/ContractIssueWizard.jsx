@@ -12,11 +12,27 @@
 // Recipient list is fetched from /api/staff. Templates from
 // /api/contract-templates.
 
-import { useState, useEffect, useMemo, Fragment } from 'react'
+import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
 import { ChevronRight, FileText, AlertCircle, Info } from 'lucide-react'
-import { renderTemplate, profileVariables, unresolvedPlaceholders, extractPlaceholders, customVariablesFrom } from '@/lib/contracts'
+import { renderTemplate, profileVariables, unresolvedPlaceholders, extractPlaceholders, customVariablesFrom, LOCATION_VAR_KEYS } from '@/lib/contracts'
 import ContractBody from '@/components/ContractBody'
+
+// CONTRACTS-VARS.2 — the wizard has no way to know the recipient's
+// location fields client-side (they're resolved server-side at issue
+// time from the recipient's location + getLocationBranding() — see
+// locationVariables() in /api/contracts). Bracket placeholders here
+// stand in for the real values so the preview shows the issuer WHERE
+// they'll land in the final document, and LOCATION_VAR_KEYS is passed
+// as unresolvedPlaceholders()'s assumeKeys so these never show up as
+// "still needs a value" prompts.
+const LOCATION_VAR_PREVIEW = {
+  location_name: '[location name]',
+  location_address: '[location address]',
+  location_phone: '[location phone]',
+  location_email: '[location email]',
+  company_name: '[company name]',
+}
 
 export default function ContractIssueWizard({ issuerName, fromContractId }) {
   const router = useRouter()
@@ -38,6 +54,15 @@ export default function ContractIssueWizard({ issuerName, fromContractId }) {
   // BODY is never prefilled — a hand-edited body only ever comes from
   // the B1 editor on THIS issue, never carried forward.
   const [prefillNote, setPrefillNote] = useState(false)
+
+  // CONTRACTS-VARS.2 — holds the re-issue prefill's custom variables
+  // between the moment the /api/contracts/[id] fetch resolves and the
+  // moment `template` itself resolves (the two fetches — staff+templates
+  // vs. the prefill contract — run in parallel, so whichever finishes
+  // last is what actually unblocks the defaults-seeding effect below).
+  // Consumed (nulled) the first time it's read so a later manual
+  // template switch doesn't keep re-applying a stale prefill.
+  const pendingPrefillVarsRef = useRef(null)
 
   // CONTRACTS-EDIT.1 — per-contract body edit at step 3. null means
   // "untouched" (issue with the plain rendered preview); once set it
@@ -75,7 +100,11 @@ export default function ContractIssueWizard({ issuerName, fromContractId }) {
         const c = json.data
         if (c.profile_id) setProfileId(c.profile_id)
         if (c.template_id) setTemplateId(c.template_id)
-        setVars(customVariablesFrom(c.variables_data, c.profile))
+        // CONTRACTS-VARS.2 — stash for the defaults-seeding effect below
+        // instead of setting vars directly here: that effect knows how
+        // to merge "prefill wins over default" once `template` resolves,
+        // which may happen after this fetch (see the ref's doc comment).
+        pendingPrefillVarsRef.current = customVariablesFrom(c.variables_data, c.profile)
         setPrefillNote(true)
       })
       .catch(() => {
@@ -109,6 +138,30 @@ export default function ContractIssueWizard({ issuerName, fromContractId }) {
     [customVarDefs],
   )
 
+  // CONTRACTS-VARS.2 — (re)seed `vars` whenever the SELECTED TEMPLATE
+  // actually changes (not on every render — `template` is a stable
+  // reference from the `templates` array as long as templateId/templates
+  // haven't changed). Precedence: per-key template default < re-issue
+  // prefill (consumed once from the ref above, if one is pending) —
+  // issuer typing wins over both simply because nothing runs this
+  // effect again until templateId changes, so a later setVar() call is
+  // never clobbered. Switching to a genuinely different template (no
+  // pending prefill) resets to just that template's defaults — old
+  // values typed for the previous template don't leak across.
+  useEffect(() => {
+    if (!template) {
+      setVars({})
+      return
+    }
+    const defaults = {}
+    for (const row of customVarDefs) {
+      if (row.default != null && row.default !== '') defaults[row.key] = row.default
+    }
+    const prefillVars = pendingPrefillVarsRef.current
+    pendingPrefillVarsRef.current = null
+    setVars({ ...defaults, ...(prefillVars || {}) })
+  }, [template, customVarDefs])
+
   // CONTRACT-VARS.1 — placeholders in the body that are NEITHER
   // auto-fillable from the profile NOR declared in variables_schema.
   // Recomputed whenever the issuer fills more values so the list
@@ -122,15 +175,29 @@ export default function ContractIssueWizard({ issuerName, fromContractId }) {
     // issuer is currently typing into. Then subtract declared keys
     // (those have their own field) — what's left is "this template
     // references {{foo}} but {{foo}} isn't declared anywhere".
-    const undeclared = unresolvedPlaceholders(template.body_markdown, recipient, {})
+    // CONTRACTS-VARS.2 — location vars are auto-filled server-side, so
+    // they never belong in this "still needs a value" list even though
+    // the wizard has no way to resolve them itself.
+    const undeclared = unresolvedPlaceholders(template.body_markdown, recipient, {}, { assumeKeys: LOCATION_VAR_KEYS })
       .filter((k) => !declaredKeys.has(k))
     return undeclared
   }, [template, recipient, declaredKeys])
 
-  // Live preview using merged variables for step 3.
+  // CONTRACTS-VARS.2 — does this template reference any location var?
+  // Gates the "filled in automatically" hint and the override warning
+  // below so they only show up when relevant.
+  const templateUsesLocationVars = useMemo(() => {
+    if (!template) return false
+    return extractPlaceholders(template.body_markdown).some((k) => LOCATION_VAR_KEYS.includes(k))
+  }, [template])
+
+  // Live preview using merged variables for step 3. Location vars get
+  // a bracketed stand-in ([location name] etc.) rather than a real
+  // value — the wizard can't resolve them client-side; see the module
+  // doc comment on LOCATION_VAR_PREVIEW.
   const preview = useMemo(() => {
     if (!template || !recipient) return ''
-    const merged = { ...profileVariables(recipient), ...vars }
+    const merged = { ...profileVariables(recipient), ...LOCATION_VAR_PREVIEW, ...vars }
     return renderTemplate(template.body_markdown, merged)
   }, [template, recipient, vars])
 
@@ -139,7 +206,7 @@ export default function ContractIssueWizard({ issuerName, fromContractId }) {
   // in the preview.
   const stillUnfilled = useMemo(() => {
     if (!template || !recipient) return []
-    return unresolvedPlaceholders(template.body_markdown, recipient, vars)
+    return unresolvedPlaceholders(template.body_markdown, recipient, vars, { assumeKeys: LOCATION_VAR_KEYS })
   }, [template, recipient, vars])
 
   // CONTRACTS-EDIT.1 — once the issuer hand-edits the body, the
@@ -508,6 +575,24 @@ export default function ContractIssueWizard({ issuerName, fromContractId }) {
               <div className="bg-white text-gray-900 border border-un1t-border rounded-md p-4 max-h-[400px] overflow-auto">
                 <ContractBody markdown={effectiveBody} />
               </div>
+            )}
+            {/* CONTRACTS-VARS.2 — location vars are never resolvable
+                client-side. Plain preview: a reassurance that the
+                bracketed stand-ins become real values at issue time.
+                Hand-edited (bodyOverride) text is sent verbatim
+                instead — no server-side substitution happens into an
+                override — so that case gets a stronger warning to
+                replace the brackets manually. */}
+            {templateUsesLocationVars && bodyOverride == null && (
+              <p className="text-[11px] text-un1t-muted mt-1">
+                Location details are filled in automatically when the contract is issued.
+              </p>
+            )}
+            {templateUsesLocationVars && bodyOverride != null && (
+              <p className="text-[11px] text-amber-700 mt-1">
+                This text was seeded with bracketed placeholders (e.g. <code>[location name]</code>) for location details.
+                Hand-edited text is sent exactly as written, with no automatic fill-in. Replace those brackets with the real values before issuing.
+              </p>
             )}
           </div>
           <div>
