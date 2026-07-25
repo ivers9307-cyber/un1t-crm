@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { recordAgentDecision } from './decision-log.js'
+import { recordAgentDecision, compactDecisionMeta } from './decision-log.js'
 
 function mockDb() {
   const insert = vi.fn(async () => ({ error: null }))
@@ -34,5 +34,52 @@ describe('recordAgentDecision', () => {
 
   it('never throws on a malformed db', async () => {
     await expect(recordAgentDecision(null, { decision: 'reply' })).resolves.toBeUndefined()
+  })
+
+  it('writes meta when provided, null when omitted', async () => {
+    const { db, insert } = mockDb()
+    const meta = { tools: [{ name: 'verify_identity', input: '{}' }], stop_reason: 'end_turn' }
+    await recordAgentDecision(db, { decision: 'reply', meta })
+    expect(insert.mock.calls[0][0].meta).toEqual(meta)
+    await recordAgentDecision(db, { decision: 'reply' })
+    expect(insert.mock.calls[1][0].meta).toBeNull()
+  })
+})
+
+// Mig 444 — the trace-to-meta compaction.
+describe('compactDecisionMeta', () => {
+  it('returns null for an empty or model-free trace', () => {
+    expect(compactDecisionMeta()).toBeNull()
+    expect(compactDecisionMeta({})).toBeNull()
+    expect(compactDecisionMeta({ actingContactId: 'c1', tools: [], stopReason: null, iterations: 0 })).toBeNull()
+  })
+
+  it('stringifies tool inputs and records stop_reason + iterations', () => {
+    const meta = compactDecisionMeta({
+      tools: [{ name: 'book_class', input: { event_id: 'e1' } }],
+      stopReason: 'end_turn',
+      iterations: 2,
+    })
+    expect(meta).toEqual({
+      tools: [{ name: 'book_class', input: '{"event_id":"e1"}' }],
+      stop_reason: 'end_turn',
+      iterations: 2,
+    })
+  })
+
+  it('clips oversized inputs and caps the tool list', () => {
+    const big = { note: 'x'.repeat(1000) }
+    const tools = Array.from({ length: 20 }, (_, i) => ({ name: `t${i}`, input: big }))
+    const meta = compactDecisionMeta({ tools, stopReason: 'tool_use', iterations: 6 })
+    expect(meta.tools).toHaveLength(12)
+    expect(meta.tools[0].input.length).toBeLessThanOrEqual(201) // cap + ellipsis
+    expect(meta.tools_truncated).toBe(20)
+  })
+
+  it('survives an unserialisable input', () => {
+    const loop = {}
+    loop.self = loop
+    const meta = compactDecisionMeta({ tools: [{ name: 'save_lead_details', input: loop }] })
+    expect(meta.tools[0].input).toBe('{}')
   })
 })
