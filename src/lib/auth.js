@@ -5,6 +5,7 @@ import { cookies, headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { mergeTemplates } from '@shared/permissions'
 import { isApiKeyToken } from './api-keys'
+import { hasPermission } from './permissions'
 import { SUPPORT_COOKIE, verifySupportCookie } from './support-session-edge'
 
 // React 18's `cache()` is only exported from the server build of react.
@@ -801,6 +802,47 @@ export function assertLocationAccessOr404(user, locationId) {
   const allowed = (user.locations || []).some(l => l.id === locationId)
   if (!allowed) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  return null
+}
+
+// ─── Unified-inbox channel guard (INBOX-PERM.1) ─────────────────────
+// Every /api/{whatsapp,instagram,email}/conversations* route uses the
+// service-role client, so RLS does nothing there — hasPermission in app
+// code is the ONLY channel gate. The /communications/inbox page gates
+// all three channels on the `whatsapp` permission; this map keeps the
+// API contract identical to that page gate so neither can drift. When
+// Instagram / email-inbox get their own WEB_PERMISSIONS keys, changing
+// the mapping here re-gates every conversation route at once.
+const INBOX_CHANNEL_PERMISSION_KEYS = Object.freeze({
+  wa: 'whatsapp',
+  ig: 'whatsapp',
+  em: 'whatsapp',
+})
+
+/**
+ * Channel-permission guard for unified-inbox conversation routes.
+ * Same call contract as assertLocationAccess: null means continue,
+ * otherwise return the NextResponse.
+ *
+ * Fails CLOSED on an unknown channel (403 even for master) — a typo'd
+ * channel in a new route must never silently skip the gate.
+ *
+ * Usage (after getCurrentUser, before any DB work):
+ *   const perm = requireInboxPermission(user, 'wa')
+ *   if (perm) return perm
+ *
+ * @param {object|null} user  getCurrentUser() result
+ * @param {'wa'|'ig'|'em'} channel
+ * @returns {NextResponse | null}
+ */
+export function requireInboxPermission(user, channel) {
+  if (!user) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  }
+  const key = INBOX_CHANNEL_PERMISSION_KEYS[channel]
+  if (!key || !hasPermission(user, key)) {
+    return NextResponse.json({ success: false, error: 'Forbidden — inbox permission required' }, { status: 403 })
   }
   return null
 }
