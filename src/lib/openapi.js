@@ -2413,6 +2413,22 @@ registry.registerPath({
   },
 })
 
+// CONTRACTS-PDF.1 — download the dual-signed PDF artifact
+registry.registerPath({
+  method: 'get',
+  path: '/api/contracts/{id}/pdf',
+  tags: ['Contracts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Download the dual-signed contract PDF (recipient, master, or org owner)',
+  description: "302-redirects to a 60-second Supabase Storage signed URL for contracts/<id>/signed.pdf, written by the sign route. The bucket is private and no public URL is ever produced. Authorization mirrors GET /api/contracts/{id} exactly: recipient, master, or an owner of the contract's organization; everyone else gets 404 so ids stay non-enumerable. Also 404 when signed_pdf_path is null (unsigned, or sign-time generation degraded to a warning).",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    302: { description: 'Redirect to the short-lived signed download URL' },
+    404: { description: 'Not found (incl. cross-tenant ids and contracts with no stored PDF)', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Signed-URL mint failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/admin/orgs/{id}/suspend',

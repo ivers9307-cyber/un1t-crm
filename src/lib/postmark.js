@@ -115,6 +115,12 @@ export function toListUnsubscribeUrl(pageUrl) {
  * @param {Array<{Name: string, Value: string}>} options.headers - extra SMTP
  *   headers (EMAIL-INBOX.1 — inbox replies pass In-Reply-To/References so the
  *   reply threads correctly in the recipient's mail client)
+ * @param {Array<{Name: string, Content: string, ContentType: string}>} options.attachments
+ *   - CONTRACTS-PDF.1 — Postmark file attachments, already in Postmark's own
+ *   shape: Content is the base64-encoded file. Purely additive; omitting it
+ *   (every pre-existing caller) leaves the request body byte-identical.
+ *   Postmark caps a message at 10MB TOTAL including the base64 overhead, so
+ *   callers must size-check before passing anything here.
  */
 export async function sendEmail({
   to,
@@ -128,6 +134,7 @@ export async function sendEmail({
   metadata = {},
   unsubscribeUrl,
   headers: extraHeaders,
+  attachments,
   // INTEG-B3 — optional per-tenant routing. Pass `locationId` to resolve
   // the location's org sending config, or a pre-resolved `sender`. When a
   // LIVE tenant email domain exists the send goes out on that org's Postmark
@@ -181,6 +188,13 @@ export async function sendEmail({
   // replies). Appended after the compliance headers, never replacing them.
   if (Array.isArray(extraHeaders) && extraHeaders.length) {
     body.Headers = [...(body.Headers || []), ...extraHeaders]
+  }
+
+  // CONTRACTS-PDF.1 — optional file attachments (the signed-contract PDF).
+  // The key is only added when the caller actually supplies attachments, so
+  // an existing caller's payload is unchanged.
+  if (Array.isArray(attachments) && attachments.length) {
+    body.Attachments = attachments
   }
 
   const response = await fetch(`${POSTMARK_API_URL}/email`, {

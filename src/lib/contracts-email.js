@@ -1,8 +1,10 @@
 // Contract notification emails — issued, signed, declined, revoked.
 //
-// Sends via the existing postmark sendEmail() helper in src/lib/postmark.js
-// (no attachments in v1 — both parties view the live HTML at
-// /account/contracts/[id] and can print-to-PDF in their browser).
+// Sends via the existing postmark sendEmail() helper in src/lib/postmark.js.
+// CONTRACTS-PDF.1 — the two SIGNED emails now carry the dual-signed PDF as
+// an attachment when the sign route managed to generate one; every other
+// sender here is attachment-free and both parties can still read the live
+// HTML at /account/contracts/[id] (or print it) as before.
 //
 // All four senders are best-effort: if Postmark is down or the
 // recipient bounces, we still record the contract action in the DB
@@ -20,6 +22,11 @@ import { getLocationBranding } from './location-branding.js'
 function appUrl() {
   return process.env.NEXT_PUBLIC_APP_URL || 'https://crm.un1tdublin.com'
 }
+
+// CONTRACTS-PDF.1 — raw-bytes ceiling for an email attachment. Postmark's
+// documented limit is 10MB for the entire message, and base64 inflates the
+// payload by roughly a third, so 8MB of raw PDF is the practical cutoff.
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 
 /**
  * Resolve the contract's anchor location's operator-configured branding
@@ -168,12 +175,37 @@ export async function sendContractReminderEmail({ contract, recipient, templateN
  * "Sarah signed her contract" notification. Both link to the
  * dual-signed document at /admin/contracts/[id] (issuer) or
  * /account/contracts/[id] (recipient).
+ *
+ * CONTRACTS-PDF.1 — when the caller passes `pdfBuffer` (the dual-signed
+ * PDF the sign route just generated and stored) BOTH emails carry it as
+ * a `signed-contract.pdf` attachment, so each party has an offline copy
+ * without logging back in. Omit it and behaviour is exactly as before.
+ *
+ * @param {Buffer|Uint8Array|null} [args.pdfBuffer] optional signed PDF
  */
-export async function sendContractSignedEmails({ contract, recipient, issuer, templateName }) {
+export async function sendContractSignedEmails({ contract, recipient, issuer, templateName, pdfBuffer = null }) {
   const branding = await getBranding(contract.location_id)
   const recipientUrl = `${appUrl()}/account/contracts/${contract.id}`
   const issuerUrl = `${appUrl()}/admin/contracts/${contract.id}`
   const results = { recipient: null, issuer: null }
+
+  // Postmark's hard limit is 10MB for the WHOLE message including the
+  // ~33% base64 inflation, so we gate the raw buffer well under it at
+  // 8MB. Over that we send the email without the attachment rather than
+  // losing the notification entirely: the signed contract is always
+  // available in-app and via /api/contracts/<id>/pdf.
+  let attachments
+  if (pdfBuffer && pdfBuffer.length) {
+    if (pdfBuffer.length > MAX_ATTACHMENT_BYTES) {
+      results.warning = `Signed PDF was too large to attach (${(pdfBuffer.length / 1024 / 1024).toFixed(1)}MB); the emails link to it instead.`
+    } else {
+      attachments = [{
+        Name: 'signed-contract.pdf',
+        Content: Buffer.from(pdfBuffer).toString('base64'),
+        ContentType: 'application/pdf',
+      }]
+    }
+  }
 
   // 1. Recipient confirmation
   if (recipient?.email) {
@@ -197,6 +229,7 @@ export async function sendContractSignedEmails({ contract, recipient, issuer, te
         stream: 'outbound',
         tag: 'contract-signed',
         metadata: { contract_id: contract.id, profile_id: contract.profile_id },
+        attachments,
       })
       results.recipient = { ok: true }
     } catch (e) {
@@ -226,6 +259,7 @@ export async function sendContractSignedEmails({ contract, recipient, issuer, te
         stream: 'outbound',
         tag: 'contract-signed-issuer',
         metadata: { contract_id: contract.id, profile_id: contract.profile_id },
+        attachments,
       })
       results.issuer = { ok: true }
     } catch (e) {
