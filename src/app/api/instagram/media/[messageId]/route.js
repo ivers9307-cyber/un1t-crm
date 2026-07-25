@@ -1,6 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
 import { mediaRenderKind } from '@shared/whatsapp-media'
 import { ensureInstagramMediaRehosted } from '@/lib/instagram-media-server'
 import { signedMediaUrl } from '@/lib/whatsapp-media-server'
@@ -23,6 +23,10 @@ export async function GET(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
+  const perm = requireInboxPermission(user, 'ig')
+  if (perm) return perm
 
   const db = createServerClient()
   const { data: message, error } = await db.from('instagram_messages')

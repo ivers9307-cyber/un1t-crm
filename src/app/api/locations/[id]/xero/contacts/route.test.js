@@ -15,6 +15,14 @@ vi.mock('@/lib/auth', () => ({
 const mockDb = { from: vi.fn() }
 vi.mock('@/lib/supabase', () => ({ createServerClient: () => mockDb }))
 
+// OBS-HANDLED.1 — the failure path must route through serverErrorResponse
+// (log + error_events row + same public body). Mocked here: the helper's
+// own behaviour is pinned in src/lib/error-events.test.js; this file only
+// pins that the route DELEGATES to it.
+const serverErrorResponse = vi.fn(async ({ error, status = 500 }) =>
+  Response.json({ success: false, error: error?.message }, { status }))
+vi.mock('@/lib/error-events', () => ({ serverErrorResponse: (args) => serverErrorResponse(args) }))
+
 let GET
 beforeEach(async () => {
   vi.resetModules()
@@ -76,6 +84,20 @@ describe('GET /api/locations/[id]/xero/contacts', () => {
     const eqCalls = contactsChain.eq.mock.calls.map((c) => c[0] + '=' + c[1])
     expect(eqCalls).toContain('is_supplier=true')
     expect(eqCalls).toContain('status=ACTIVE')
+  })
+
+  it('a DB read failure 500s through serverErrorResponse (OBS-HANDLED.1)', async () => {
+    const getCurrentUser = await getMock()
+    getCurrentUser.mockResolvedValueOnce({ id: 'u1', role: 'master', locations: [] })
+    const contactsChain = makeChain({ data: null, error: { message: 'pg exploded' } })
+    const connChain = makeChain({ data: { contacts_last_synced_at: new Date().toISOString() }, error: null })
+    mockDb.from.mockImplementation((t) => t === 'xero_contacts' ? contactsChain : connChain)
+
+    const res = await GET(fakeReq('http://localhost/?q=acme'), fakeProps)
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe('pg exploded')
+    expect(serverErrorResponse).toHaveBeenCalledTimes(1)
+    expect(serverErrorResponse.mock.calls[0][0].module).toBe('xero-contacts')
   })
 
   it('escapes special characters in the search query', async () => {

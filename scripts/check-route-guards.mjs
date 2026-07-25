@@ -97,6 +97,29 @@ const EXEMPT = {
     'WhatsApp Flow data-exchange endpoint — RSA/AES encryption is the credential (only Meta, holding our registered public key, can produce a request we can decrypt; 421 on failure). No tenant data is read before decrypt.',
 }
 
+// ─── Inbox channel-permission pass (INBOX-PERM.1) ────────────────────
+// Session auth alone is NOT enough on the unified-inbox conversation
+// surface: every route there runs on the service-role client (no RLS),
+// so an assigned staff user with the channel toggled OFF could still
+// list/send via direct API calls unless the route checks the channel
+// permission itself. Any route under these prefixes must call
+// requireInboxPermission( (the shared guard in src/lib/auth.js) or a
+// direct hasPermission( check.
+const INBOX_ROUTE_PREFIXES = [
+  'src/app/api/whatsapp/conversations',
+  'src/app/api/instagram/conversations',
+  'src/app/api/instagram/media',
+  'src/app/api/email/conversations',
+]
+const INBOX_PERMISSION_GUARDS = ['requireInboxPermission(', 'hasPermission(']
+
+function checkInboxPermission(file) {
+  const rel = file.split(path.sep).join('/')
+  if (!INBOX_ROUTE_PREFIXES.some((p) => rel.startsWith(p))) return true
+  const src = fs.readFileSync(file, 'utf8')
+  return INBOX_PERMISSION_GUARDS.some((t) => src.includes(t))
+}
+
 function walk(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, entry.name)
@@ -124,17 +147,20 @@ const files = walk(API_ROOT)
 const failures = []
 const counts = { public: 0, exempt: 0, webhook: 0, cron: 0, session: 0 }
 
+const inboxFailures = []
+
 for (const file of files) {
   const res = classify(file)
   counts[res.kind]++
   if (!res.ok) failures.push({ file, kind: res.kind })
+  if (!checkInboxPermission(file)) inboxFailures.push(file)
 }
 
 // Stale-exemption check — an EXEMPT path whose file is gone means the map
 // is rotting (route moved/deleted but the exemption lingered).
 const stale = Object.keys(EXEMPT).filter((p) => !fs.existsSync(p))
 
-if (failures.length === 0 && stale.length === 0) {
+if (failures.length === 0 && stale.length === 0 && inboxFailures.length === 0) {
   console.log(
     `✓ route guards: ${files.length} routes — ` +
     `${counts.session} session-guarded, ${counts.cron} cron, ` +
@@ -162,5 +188,18 @@ ${failures.length} route(s) have no detectable auth guard. Fix by either:
 }
 for (const p of stale) {
   console.error(`✗ STALE EXEMPTION (file no longer exists): ${p}`)
+}
+for (const f of inboxFailures) {
+  console.error(`✗ INBOX ROUTE WITHOUT CHANNEL PERMISSION: ${f}`)
+}
+if (inboxFailures.length) {
+  console.error(`
+${inboxFailures.length} unified-inbox conversation route(s) authenticate but never
+check the channel permission. These routes use the service-role client, so
+hasPermission is the ONLY channel gate. Fix: after getCurrentUser(), add
+  const perm = requireInboxPermission(user, 'wa' | 'ig' | 'em')
+  if (perm) return perm
+(requireInboxPermission lives in src/lib/auth.js.)
+`)
 }
 process.exit(1)

@@ -12,26 +12,9 @@
 // incident worse. Every side effect is wrapped and swallowed.
 
 import { logError } from '@/lib/log'
-import { createServerClient } from '@/lib/supabase'
-
-// Storm guard: a broken deploy can throw on every request. logError is cheap so
-// it always fires, but cap the DB writes per serverless instance so an error
-// storm can't hammer Postgres. Instances are ephemeral, so this is a per-instance
-// floor, not a global limit — that's enough to blunt a storm.
-const MAX_INSERTS_PER_MIN = 30
-let windowStart = 0
-let windowCount = 0
-
-function mayPersist() {
-  const now = Date.now()
-  if (now - windowStart > 60_000) {
-    windowStart = now
-    windowCount = 0
-  }
-  if (windowCount >= MAX_INSERTS_PER_MIN) return false
-  windowCount += 1
-  return true
-}
+// Storm-guarded persist shared with the HANDLED-failure path (OBS-HANDLED.1,
+// src/lib/error-events.js) — one per-instance write cap covers both producers.
+import { recordErrorEvent } from '@/lib/error-events'
 
 export async function onRequestError(error, request, context) {
   const vercelId = request?.headers?.['x-vercel-id'] || null
@@ -48,20 +31,16 @@ export async function onRequestError(error, request, context) {
   } catch { /* logging must never throw */ }
 
   // (2) Best-effort persist for correlation + alerting.
-  if (!mayPersist()) return
-  try {
-    const message = typeof error?.message === 'string' ? error.message.slice(0, 500) : null
-    const digest = error && typeof error === 'object' && typeof error.digest === 'string' ? error.digest : null
-    const db = createServerClient()
-    await db.from('error_events').insert({
-      vercel_id: vercelId,
-      runtime: process.env.NEXT_RUNTIME || null,
-      route_path: context?.routePath || null,
-      route_type: context?.routeType || null,
-      method: request?.method || null,
-      name: error?.name || null,
-      message,
-      digest,
-    })
-  } catch { /* swallow — never worsen an incident */ }
+  const message = typeof error?.message === 'string' ? error.message.slice(0, 500) : null
+  const digest = error && typeof error === 'object' && typeof error.digest === 'string' ? error.digest : null
+  await recordErrorEvent({
+    vercel_id: vercelId,
+    runtime: process.env.NEXT_RUNTIME || null,
+    route_path: context?.routePath || null,
+    route_type: context?.routeType || null,
+    method: request?.method || null,
+    name: error?.name || null,
+    message,
+    digest,
+  })
 }

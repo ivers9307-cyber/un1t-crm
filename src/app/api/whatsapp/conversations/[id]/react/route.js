@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { sendReaction } from '@/lib/whatsapp'
 
@@ -16,6 +16,10 @@ export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
+  const perm = requireInboxPermission(user, 'wa')
+  if (perm) return perm
 
   const validation = await validateBody(request, ReactSchema)
   if (!validation.ok) return validation.response
