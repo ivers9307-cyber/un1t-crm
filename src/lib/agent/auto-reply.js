@@ -20,7 +20,7 @@
 // Never throws.
 
 import { sendTextMessage, sendInteractiveOptions, sendTypingIndicator, sendCtaUrlMessage, splitTrailingUrl } from '@/lib/whatsapp'
-import { recordAgentDecision } from './decision-log'
+import { recordAgentDecision, compactDecisionMeta } from './decision-log'
 import { dublinTodayStr } from '@/lib/dublin-time'
 import { sendPushToRolesAtLocation, sendPushToInboxStaffAtLocation } from '@/lib/push'
 import { MANAGER_ROLES } from '@/lib/schemas'
@@ -263,10 +263,11 @@ export async function runChannelAgent(db, adapter, ctx) {
   // MIA-REVIEW.3 — the turn fills this in so the decision row can name the
   // account Mia actually ACTED AS (the person-group primary after a phone
   // match or the email quiz), not just the contact the thread is bound to.
-  // agent_decisions has no JSONB column, so the fuller per-turn trace (tool
-  // names + inputs, model stop_reason) is NOT persisted — see docs/CHANGELOG
-  // #407; it needs a migration and this batch ships none.
-  const trace = { actingContactId: null }
+  // Mig 444: tools/stopReason/iterations land in agent_decisions.meta
+  // (compacted by compactDecisionMeta) so a decision row can also say WHAT
+  // the turn did, not just whether it replied. A rerun keeps appending to
+  // the same trace — the row describes the whole customer-visible exchange.
+  const trace = { actingContactId: null, tools: [], stopReason: null, iterations: 0 }
   let result = await runChannelAgentInner(db, adapter, ctx, trace)
 
   // Missed-inbound sweep: if the customer sent more while we were composing
@@ -306,6 +307,7 @@ export async function runChannelAgent(db, adapter, ctx) {
     locationId: ctx?.locationId,
     decision: result?.handled === true && result?.action === 'reply' ? 'reply' : 'silent',
     reason: result?.reason,
+    meta: compactDecisionMeta(trace),
   })
 
   return result
@@ -740,6 +742,10 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
           })
         }
         const content = data.content || []
+        // Mig 444 — decision-log trace: last stop_reason wins (it's the one
+        // that ended the turn); iterations count actual API responses.
+        trace.stopReason = data.stop_reason || null
+        trace.iterations += 1
 
         if (data.stop_reason === 'tool_use') {
           messages.push({ role: 'assistant', content })
@@ -747,6 +753,9 @@ async function runChannelAgentInner(db, adapter, ctx, trace = {}) {
           let toolFailed = null
           for (const block of content) {
             if (block.type !== 'tool_use') continue
+            // Mig 444 — record the call before executing so even a thrown
+            // executor leaves its footprint in the decision trace.
+            trace.tools.push({ name: block.name, input: block.input || {} })
             // A THROWN executor (dynamic-import failure, an unexpected
             // TypeError) used to abort the turn through the outer catch and
             // page managers with "model API failure" copy while Anthropic was

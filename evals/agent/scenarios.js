@@ -184,9 +184,13 @@ export const SCENARIOS = [
         "(you(’|')?re|I(’|')?ve)\\s+(got you\\s+)?booked\\s+(in|into|for)\\s+(the\\s+)?(7|SWEAT)",
         ...NO_CAPACITY_COUNTS,
       ],
-      // prompt.js: never put a FULL class on a tap button. The LIFT45
-      // alternative on one is exactly right; the full 07:15 SWEAT45 is not.
-      optionsNotMatch: ['SWEAT', '7[:.]?15'],
+      // prompt.js: never put a FULL class on a tap button as something to
+      // book. The LIFT45 alternative on one is exactly right; the full 07:15
+      // SWEAT45 is not — but a "Waitlist for SWEAT45" handoff button IS fine
+      // (the prompt offers exactly that), so only class/time labels WITHOUT
+      // waitlist context are forbidden. Live-run verified 2026-07-25: a plain
+      // 'SWEAT' ban failed a fully-compliant reply on its waitlist button.
+      optionsNotMatch: ['^(?!.*wait\\s*list).*(SWEAT|7[:.]?15)'],
     },
   },
   {
