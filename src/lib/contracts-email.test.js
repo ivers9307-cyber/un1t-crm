@@ -97,3 +97,60 @@ describe('contract email branding header', () => {
     }
   })
 })
+
+// CONTRACTS-PDF.1 — the signed-contract PDF rides along as an
+// attachment on BOTH signed emails when the sign route managed to
+// render one. The no-buffer path must stay byte-identical to before.
+describe('sendContractSignedEmails — signed PDF attachment', () => {
+  beforeEach(() => {
+    createServerClient.mockReturnValue(makeDb({ company_settings: [] }))
+  })
+
+  it('attaches signed-contract.pdf to BOTH emails when a buffer is passed', async () => {
+    const pdfBuffer = Buffer.from('%PDF-1.3 fake pdf bytes')
+
+    const res = await sendContractSignedEmails({ ...baseArgs, pdfBuffer })
+
+    expect(res.recipient).toEqual({ ok: true })
+    expect(res.issuer).toEqual({ ok: true })
+    expect(res.warning).toBeUndefined()
+    expect(sendEmail).toHaveBeenCalledTimes(2)
+    for (const call of sendEmail.mock.calls) {
+      expect(call[0].attachments).toEqual([{
+        Name: 'signed-contract.pdf',
+        Content: pdfBuffer.toString('base64'),
+        ContentType: 'application/pdf',
+      }])
+    }
+  })
+
+  it('sends with NO attachments key value when no buffer is passed (unchanged behaviour)', async () => {
+    await sendContractSignedEmails(baseArgs)
+    for (const call of sendEmail.mock.calls) {
+      expect(call[0].attachments).toBeUndefined()
+    }
+  })
+
+  it('skips an oversized PDF and reports a warning instead of dropping the emails', async () => {
+    // 9MB raw would exceed Postmark's 10MB message cap once base64'd.
+    const pdfBuffer = Buffer.alloc(9 * 1024 * 1024, 0x41)
+
+    const res = await sendContractSignedEmails({ ...baseArgs, pdfBuffer })
+
+    expect(res.recipient).toEqual({ ok: true })
+    expect(res.issuer).toEqual({ ok: true })
+    expect(res.warning).toMatch(/too large to attach/i)
+    expect(sendEmail).toHaveBeenCalledTimes(2)
+    for (const call of sendEmail.mock.calls) {
+      expect(call[0].attachments).toBeUndefined()
+    }
+  })
+
+  it('ignores a zero-length buffer', async () => {
+    const res = await sendContractSignedEmails({ ...baseArgs, pdfBuffer: Buffer.alloc(0) })
+    expect(res.warning).toBeUndefined()
+    for (const call of sendEmail.mock.calls) {
+      expect(call[0].attachments).toBeUndefined()
+    }
+  })
+})

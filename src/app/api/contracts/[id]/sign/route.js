@@ -8,10 +8,9 @@
 //     re-signed)
 //
 // The route stamps signed_at + IP + UA + signature_method/value
-// and flips status to 'signed'. PDF generation + email are
-// triggered after this returns successfully (commit 3 work — the
-// stub below logs and falls through so the sign still completes
-// before the PDF pipeline lands).
+// and flips status to 'signed', then (CONTRACTS-PDF.1) renders the
+// dual-signed PDF, stores it at contracts/<id>/signed.pdf, records
+// the path on the row, and attaches it to both confirmation emails.
 
 import { NextResponse } from 'next/server'
 import { headers } from 'next/headers'
@@ -20,6 +19,8 @@ import { getCurrentUser } from '@/lib/auth'
 import { contractSignSchema } from '@/lib/schemas'
 import { canTransition } from '@/lib/contracts'
 import { sendContractSignedEmails } from '@/lib/contracts-email'
+import { renderContractPdf } from '@/lib/contract-pdf'
+import { getLocationBranding } from '@/lib/location-branding'
 import { logAuditEvent } from '@/lib/audit'
 import { validateBody } from '@/lib/validate'
 
@@ -123,20 +124,62 @@ export async function POST(request, props) {
     request,
   })
 
+  const warnings = []
+
+  // CONTRACTS-PDF.1 — dual-signed PDF artifact.
+  //
+  // THE DB ROW IS STILL THE LEGAL RECORD. body_rendered + the
+  // signature metadata + ip/ua/timestamp are what make this a valid
+  // simple electronic signature under eIDAS Art. 25; the PDF is a
+  // convenience artifact rendered FROM that record (and both detail
+  // pages still render the same content as print-friendly HTML).
+  // So the whole step is wrapped: a renderer bug, a Storage outage,
+  // or a failed path write degrades to a warning on an otherwise
+  // successful sign. Failing the sign here would be strictly worse
+  // than having no PDF, because the recipient would be told their
+  // signature did not go through when in fact the row is committed.
+  //
+  // Note the buffer deliberately survives a STORAGE failure: if the
+  // render succeeded we can still attach the PDF to the confirmation
+  // emails even though it is not downloadable from /pdf yet.
+  let pdfBuffer = null
+  try {
+    const branding = await getLocationBranding(db, updated.location_id)
+    pdfBuffer = await renderContractPdf({
+      bodyRendered: updated.body_rendered,
+      issuerSignature: updated.issuer_signature,
+      issuedAt: updated.issued_at,
+      recipientSignature: updated.signature_value,
+      signedAt: updated.signed_at,
+      signedIp: updated.signed_ip,
+      templateName: detail?.template?.name,
+      companyName: branding?.companyName,
+    })
+    const pdfPath = `${updated.id}/signed.pdf`
+    const { error: upErr } = await db.storage
+      .from('contracts')
+      .upload(pdfPath, pdfBuffer, { contentType: 'application/pdf', upsert: true })
+    if (upErr) throw new Error(upErr.message)
+    // Must be awaited — a bare .update() thenable never fires.
+    const { error: pathErr } = await db
+      .from('contracts')
+      .update({ signed_pdf_path: pdfPath })
+      .eq('id', updated.id)
+    if (pathErr) throw new Error(pathErr.message)
+    updated.signed_pdf_path = pdfPath
+  } catch (e) {
+    warnings.push(`Signed PDF could not be generated or stored: ${e?.message || 'unknown error'}`)
+  }
+
   const emailResults = await sendContractSignedEmails({
     contract: updated,
     recipient: detail?.profile,
     issuer: detail?.issuer,
     templateName: detail?.template?.name,
+    pdfBuffer,
   })
 
-  // PDF generation is deliberately deferred — body_rendered +
-  // signature metadata + ip/ua/timestamp are the actual legal
-  // record. Both /admin/contracts/[id] and /account/contracts/[id]
-  // render that to print-friendly HTML so either party can
-  // browser-save-as-PDF whenever they need a tangible copy.
-
-  const warnings = []
+  if (emailResults.warning) warnings.push(emailResults.warning)
   if (emailResults.recipient && !emailResults.recipient.ok) {
     warnings.push(`Recipient email failed: ${emailResults.recipient.error}`)
   }

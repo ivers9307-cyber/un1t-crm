@@ -159,6 +159,15 @@ export default async function ContractDetailAdmin(props) {
 
       <div className="flex flex-wrap items-center gap-2 print:hidden">
         <ContractPrintButton />
+        {/* CONTRACTS-PDF.1 — the stored dual-signed artifact. Plain <a>
+            (not <Link>) because the route 302s to a signed Storage URL,
+            which is a real navigation, not a client-side route. */}
+        {c.signed_pdf_path && (
+          <a
+            href={`/api/contracts/${c.id}/pdf`}
+            className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
+          >Download PDF</a>
+        )}
         {canResend && <ContractResendButton contractId={c.id} />}
         {canRevoke && (
           <>
