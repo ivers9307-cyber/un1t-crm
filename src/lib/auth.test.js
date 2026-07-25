@@ -10,6 +10,7 @@ import {
   assertOrganizationAdmin,
   getUserLocationIds,
   getOwnerOrganizationIds,
+  requireInboxPermission,
 } from './auth.js'
 
 // Per-location roles landed in mig 051. The IO-heavy getCurrentUser()
@@ -608,5 +609,53 @@ describe('getOwnerOrganizationIds', () => {
       rolesByLocation: { 'loc-a': 'manager' },
       locations: [{ id: 'loc-a', organization_id: 'org-a' }],
     })).toEqual([])
+  })
+})
+
+// ─── requireInboxPermission (INBOX-PERM.1) ──────────────────────────────
+// Channel-permission guard for the unified-inbox conversation routes.
+// Service-role routes get NO RLS, so this is the ONLY thing standing
+// between an authenticated-but-unpermissioned staff user and reading /
+// sending on a channel that's toggled off for them.
+
+describe('requireInboxPermission', () => {
+  // staff with an explicit per-user override — tier 2 wins, so these
+  // fixtures exercise the REAL resolver, no permission mocking.
+  const staffWith = (perms) => ({
+    role: 'staff',
+    activeLocation: { id: 'loc-1', features: {} },
+    activeAssignment: { permissions: perms },
+    locations: [{ id: 'loc-1' }],
+  })
+
+  it('401s a null user (same contract as assertLocationAccess)', async () => {
+    const r = requireInboxPermission(null, 'wa')
+    expect(r.status).toBe(401)
+    expect((await r.json()).success).toBe(false)
+  })
+
+  it('403s a user without the whatsapp permission on the wa channel', async () => {
+    const r = requireInboxPermission(staffWith({ whatsapp: false }), 'wa')
+    expect(r.status).toBe(403)
+    expect((await r.json()).success).toBe(false)
+  })
+
+  it('passes (null) a user holding the whatsapp permission on the wa channel', () => {
+    expect(requireInboxPermission(staffWith({ whatsapp: true }), 'wa')).toBeNull()
+  })
+
+  it('ig and em currently ride the whatsapp key (matches the /communications/inbox page gate)', () => {
+    const granted = staffWith({ whatsapp: true })
+    const denied = staffWith({ whatsapp: false })
+    expect(requireInboxPermission(granted, 'ig')).toBeNull()
+    expect(requireInboxPermission(granted, 'em')).toBeNull()
+    expect(requireInboxPermission(denied, 'ig')?.status).toBe(403)
+    expect(requireInboxPermission(denied, 'em')?.status).toBe(403)
+  })
+
+  it('fails CLOSED on an unknown channel — even for master', () => {
+    const master = { role: 'master', activeLocation: { id: 'loc-1', features: {} }, activeAssignment: null }
+    expect(requireInboxPermission(master, 'sms')?.status).toBe(403)
+    expect(requireInboxPermission(master, undefined)?.status).toBe(403)
   })
 })

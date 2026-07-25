@@ -1,6 +1,6 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccess, getUserLocationIds, requireInboxPermission } from '@/lib/auth'
 
 // GET /api/email/conversations — list email conversations (operator
 // inbox, EMAIL-INBOX.1). Mirrors /api/instagram/conversations: reads
@@ -11,6 +11,10 @@ import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/
 export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
+  const perm = requireInboxPermission(user, 'em')
+  if (perm) return perm
 
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')

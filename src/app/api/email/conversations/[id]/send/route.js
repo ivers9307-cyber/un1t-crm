@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { sendEmail } from '@/lib/postmark'
 import { replySubject, buildReplyHeaders, inboundPreview } from '@/lib/email-inbox'
@@ -36,6 +36,10 @@ export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
+  const perm = requireInboxPermission(user, 'em')
+  if (perm) return perm
 
   const validation = await validateBody(request, SendSchema)
   if (!validation.ok) return validation.response

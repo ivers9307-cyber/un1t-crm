@@ -21,6 +21,16 @@ vi.mock('@/lib/auth', () => ({
     if (ids.includes(locationId)) return null
     return new Response(JSON.stringify({ success: false, error: 'forbidden' }), { status: 404 })
   },
+  // Mirrors the real guard's contract (INBOX-PERM.1): 403 Response when the
+  // channel permission is explicitly off, null otherwise. Real resolver
+  // behaviour is pinned in src/lib/auth.test.js; here we only need the
+  // route to HONOUR the guard's verdict.
+  requireInboxPermission: (user, _channel) => {
+    if (user?.permissions?.whatsapp === false) {
+      return new Response(JSON.stringify({ success: false, error: 'forbidden' }), { status: 403 })
+    }
+    return null
+  },
 }))
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 
@@ -132,6 +142,20 @@ describe('GET /api/whatsapp/conversations/[id] — authz gate', () => {
     const res = await GET(req(), props)
     const body = await res.json()
     expect(body.flow_available).toBe(true)
+  })
+
+  it('403 when the caller lacks the whatsapp channel permission — no DB touched (INBOX-PERM.1)', async () => {
+    getCurrentUser.mockResolvedValue({
+      role: 'staff',
+      locations: [{ id: 'loc-1' }],
+      permissions: { whatsapp: false },
+    })
+    const db = mockDb({ conversation: { id: 'c1', location_id: 'loc-1' } })
+    createServerClient.mockReturnValue(db)
+    const res = await GET(req(), props)
+    expect(res.status).toBe(403)
+    expect(db.from).not.toHaveBeenCalled()
+    expect(db.updateEq).not.toHaveBeenCalled()
   })
 
   it('master can read any conversation', async () => {
