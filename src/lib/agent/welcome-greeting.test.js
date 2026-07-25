@@ -112,6 +112,19 @@ describe('maybeSendWelcomeGreeting', () => {
     })
   })
 
+  // HUMANIZE.1 — this is shipped customer copy on the click-to-WhatsApp path.
+  it('the default greeting carries no dash and no emoji', () => {
+    expect(DEFAULT_WELCOME_GREETING).not.toMatch(/[—–]/)
+    expect(DEFAULT_WELCOME_GREETING).not.toMatch(/\p{Extended_Pictographic}/u)
+  })
+
+  it('scrubs an em dash out of an operator-set greeting before sending', async () => {
+    const db = fakeDb({ customerAgent: { enabled: true, welcome_greeting: "Hi — I'm Mia, ask away." } })
+    await maybeSendWelcomeGreeting(db, CTX)
+    expect(sendTextMessage).toHaveBeenCalledWith(PHONE, "Hi, I'm Mia, ask away.", { locationId: 'loc1' })
+    expect(db.inserted[0].body).toBe("Hi, I'm Mia, ask away.")
+  })
+
   it('custom welcome_greeting is used when set', async () => {
     const db = fakeDb({ customerAgent: { enabled: true, welcome_greeting: '  Howdy from UN1T!  ' } })
     const r = await maybeSendWelcomeGreeting(db, CTX)

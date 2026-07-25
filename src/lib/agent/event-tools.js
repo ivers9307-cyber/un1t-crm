@@ -17,8 +17,9 @@ export const EVENT_TOOLS = [
     name: 'list_upcoming_events',
     description:
       "List the studio's upcoming special events — races (e.g. Hyrox sims), workshops, " +
-      'seminars, open days, masterclasses — with dates, start waves, spaces left, pricing and ' +
-      'the signup link. No verification needed. Use when someone asks about races/events, or ' +
+      'seminars, open days, masterclasses — with dates, start waves, pricing and ' +
+      'the signup link. Waves carry full and limited flags, never a count: never tell the ' +
+      'customer how many spaces are left. No verification needed. Use when someone asks about races/events, or ' +
       'AFTER answering their question when an event is genuinely relevant to their interests. ' +
       'For paid events, share the signup link — payment happens securely on that page.',
     input_schema: { type: 'object', properties: {} },
@@ -171,10 +172,19 @@ function dublinToday(nowMs) {
 const MAX_EVENTS = 8
 const MAX_DESCRIPTION = 200
 
+// CAPACITY-SECRECY.1 — a wave with this many places or fewer is "limited".
+// Same coarse signal as the class list: urgency without a number.
+const LIMITED_SPOTS_THRESHOLD = 3
+
 /**
  * Shape race_events rows (waves embedded) for the agent: open-for-
  * registration future events with per-wave availability, pricing and
  * the public signup link. Pure.
+ *
+ * CAPACITY-SECRECY.1 — per-wave availability is the `full` / `limited`
+ * booleans ONLY (matching the public signup widget's is_full, CHANGELOG #94).
+ * The model is never handed a count, so it can never relay one — and the
+ * counts here were wrong for customers anyway (a TEAM count on team events).
  *
  * @param {Array} events    race_events rows with `waves` embedded
  * @param {Object} takenByWave  wave_id → non-cancelled registration count
@@ -199,8 +209,10 @@ export function shapeEventsForAgent(events, takenByWave, nowMs, appUrl) {
           wave_id: w.id,
           time: String(w.start_time || '').slice(0, 5),
           ...(w.label ? { label: w.label } : {}),
-          spots_left: spotsLeft == null ? 'unlimited' : spotsLeft,
           ...(spotsLeft === 0 ? { full: true } : {}),
+          ...(spotsLeft != null && spotsLeft > 0 && spotsLeft <= LIMITED_SPOTS_THRESHOLD
+            ? { limited: true }
+            : {}),
         }
       })
     out.push({
@@ -260,7 +272,7 @@ export async function executeEventTool(toolName, input, ctx) {
     const waveIds = events.flatMap((e) => (e.waves || []).map((w) => w.id))
     const takenByWave = {}
     if (waveIds.length) {
-      // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- agent informational spots-left across a race's waves; domain-bounded under 1000
+      // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- counts only derive the full/limited flags across a race's waves; domain-bounded under 1000
       const { data: regs } = await db.from('race_registrations')
         .select('wave_id, status')
         .in('wave_id', waveIds)

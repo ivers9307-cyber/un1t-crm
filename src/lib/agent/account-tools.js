@@ -30,9 +30,9 @@ export const ACCOUNT_TOOLS = [
       'Call this when the customer asks about THEIR OWN account (membership status, plan, ' +
       'next class, recent attendance) and they have not been verified yet this ' +
       'conversation. Provide whatever identifying details the customer gives. Verification ' +
-      'uses the email on their account together with their surname. NEVER ask for a date of ' +
-      'birth — the studio does not hold one. If it fails, ask for the missing detail — ' +
-      'usually the email on the account.',
+      'uses the email on their account, plus their surname on channels the studio cannot ' +
+      'already tie to an account. NEVER ask for a date of birth — the studio does not hold ' +
+      'one. If it fails, ask for exactly what the returned hint says and nothing more.',
     input_schema: {
       type: 'object',
       properties: {
@@ -211,6 +211,22 @@ export function emailPathVerifies(contact, provided, opts = {}) {
  * @param {object} [opts]                   { linked, nameHint }
  * @returns {object|null} the matched contact
  */
+/**
+ * The retry hint for a failed verify_identity. Context-aware, because the two
+ * paths need different things: on the LINKED path the number is the second
+ * factor and email alone verifies (and when the number carries more than one
+ * account the prompt mandates asking for the email ONLY), so asking for a
+ * surname there contradicts the flow and confuses the customer — the surname is
+ * only genuinely required on the UNLINKED path (Instagram / unknown number).
+ * Never reveals which detail did or did not match. Pure.
+ * @param {boolean} linked  the sender's number/handle is already on a contact
+ */
+export function verifyFailureHint(linked) {
+  return linked
+    ? 'No match yet. Ask them to double-check the email on the account and send it again. Do NOT ask for a surname on this path. Never reveal which detail did or did not match.'
+    : 'No match yet. Ask for the email on the account together with the surname. Never ask for a date of birth. Never reveal which detail did or did not match.'
+}
+
 export function pickVerifiedContact(candidates, provided, { linked = false, nameHint = null } = {}) {
   const pool = Array.isArray(candidates) ? candidates.filter(Boolean) : []
   const test = linked
@@ -390,7 +406,7 @@ export async function executeAccountTool(toolName, input, ctx) {
       nameHint: ctx.nameHint,
     })
     if (!matchedContact) {
-      return { verified: false, hint: 'No match yet. Ask for the email on the account together with the surname. Never ask for a date of birth. Never reveal which detail did or did not match.' }
+      return { verified: false, hint: verifyFailureHint(!!contactId) }
     }
 
     // Stamp the matched contact. auto-reply resolves this to the person-group

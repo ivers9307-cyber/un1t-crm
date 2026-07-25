@@ -81,6 +81,17 @@ export async function PATCH(request, { params }) {
   let details = row.details || {}
   let executed = null
 
+  // Operator-editable confirmation copy — loaded lazily (only the execution
+  // branches that actually message the customer pay for the read) and once.
+  let confirmationCopy = null
+  async function confirmationTemplate(key) {
+    if (!confirmationCopy) {
+      const { agentConfirmationTemplates } = await import('@/lib/agent/notify')
+      confirmationCopy = await agentConfirmationTemplates(db, row.location_id)
+    }
+    return confirmationCopy[key]
+  }
+
   // AGENT-EVENTS.3 — approving a drafted PAID-entry cancellation
   // executes it. The refund (if any) stays a human decision processed
   // manually in Revolut Business — this only frees the spot.
@@ -96,7 +107,11 @@ export async function PATCH(request, { params }) {
         await sendAgentThreadMessage(db, {
           channel: row.channel,
           conversationId: row.conversation_id,
-          text: buildCancellationConfirmationText({ className: details.event_name, classTime: details.event_date }),
+          text: buildCancellationConfirmationText({
+            className: details.event_name,
+            classTime: details.event_date,
+            template: await confirmationTemplate('cancellation'),
+          }),
         })
       } catch (e) {
         console.warn(`[agent-requests] event cancellation confirmation send error: ${e?.message || e}`)
@@ -129,7 +144,11 @@ export async function PATCH(request, { params }) {
           await sendAgentThreadMessage(db, {
             channel: row.channel,
             conversationId: row.conversation_id,
-            text: buildBookingConfirmationText({ className: details.event_name, classTime: details.event_date }),
+            text: buildBookingConfirmationText({
+              className: details.event_name,
+              classTime: details.event_date,
+              template: await confirmationTemplate('booking'),
+            }),
           })
         } catch (e) {
           console.warn(`[agent-requests] event confirmation send error: ${e?.message || e}`)
@@ -166,6 +185,7 @@ export async function PATCH(request, { params }) {
             text: buildCancellationConfirmationText({
               className: details.class_name,
               classTime: details.class_time,
+              template: await confirmationTemplate('cancellation'),
             }),
           })
         } catch (e) {
@@ -222,6 +242,7 @@ export async function PATCH(request, { params }) {
             text: buildBookingConfirmationText({
               className: details.class_name,
               classTime: details.class_time,
+              template: await confirmationTemplate('booking'),
             }),
           })
         } catch (e) {

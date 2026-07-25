@@ -195,7 +195,12 @@ export async function POST(request, props) {
     body: messageBody,
     template_name: sentTemplateName,
     status: 'sent',
-    sent_by: user.full_name || null,
+    // sent_by is UUID REFERENCES profiles(id) (mig 007) — write the session
+    // user's id, never their display name. A name string raises
+    // `invalid input syntax for type uuid`, which supabase-js returns on the
+    // result (not thrown); this insert isn't .error-checked, so the row would
+    // be silently dropped. Matches the inbox + radar-outreach send paths.
+    sent_by: user.id,
     sent_at: nowIso,
   })
   // Manual operator send = intentional human take-over → pause Mia in this

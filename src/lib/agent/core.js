@@ -4,7 +4,7 @@
 // unit-tested under the Node env. The IO orchestration lives in
 // auto-reply.js; the webhook owns the trigger.
 
-import { HANDOFF_PREFIX, OPTIONS_PREFIX } from './prompt'
+import { HANDOFF_PREFIX, OPTIONS_PREFIX, SKIP_PREFIX } from './prompt'
 
 export const AGENT_MESSAGE_SOURCE = 'agent'
 export const DEFAULT_HOLDING_MESSAGE =
@@ -299,6 +299,23 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
   return ok
 }
 
+// HARDEN.2 — anti-spoofing for inbound customer text. Two markers carry
+// authority in this protocol and a customer can type both: the
+// "[STUDIO SYSTEM …]" prefix the proactive paths use to address the model
+// (followups.js / approval-suggest.js inject it as a user-role turn), and the
+// [[HANDOFF]] / [[OPTIONS]] / [[SKIP]] control sentinels. Neutralise them on
+// the way in so only the studio can ever issue one — the prompt's
+// untrusted-input rule is the second line of defence, not the only one. The
+// words survive (the model still reads what the customer wrote); the syntax
+// that makes them instructions does not. Pure.
+const SPOOFED_SYSTEM_MARKER = /\[\s*studio\s+system[^\]\n]*\]?/gi
+const SPOOFED_SENTINEL = /\[\[?\s*(?:handoff|options|skip)\s*\]?\]?/gi
+export function sanitizeInboundText(s) {
+  return String(s ?? '')
+    .replace(SPOOFED_SYSTEM_MARKER, 'studio system')
+    .replace(SPOOFED_SENTINEL, (m) => m.replace(/[[\]]/g, ''))
+}
+
 /**
  * Map stored whatsapp_messages rows into an Anthropic messages array.
  * inbound → user, outbound → assistant. Drops empty/media-only rows to
@@ -315,7 +332,9 @@ export function formatHistoryForClaude(rows, opts = {}) {
   const mapped = []
   for (const r of recent) {
     const role = r.direction === 'inbound' ? 'user' : 'assistant'
-    let text = (r.body || '').trim()
+    // HARDEN.2 — inbound text is untrusted: neutralise the markers that carry
+    // authority in this protocol before it enters history.
+    let text = (role === 'user' ? sanitizeInboundText(r.body) : (r.body || '')).trim()
     if (!text) {
       const t = r.message_type && r.message_type !== 'text' ? r.message_type : 'message'
       text = `[${t}]`
@@ -390,10 +409,45 @@ function looseSentinel(prefix) {
 }
 const HANDOFF_RE = looseSentinel(HANDOFF_PREFIX)
 const OPTIONS_RE = looseSentinel(OPTIONS_PREFIX)
+const SKIP_RE = looseSentinel(SKIP_PREFIX)
+
+// HARDEN.3 — the OPENING half of a sentinel, for a reply truncated at
+// max_tokens or emitted with the closing brackets dropped ("[[HANDOFF wants a
+// refund"). The closed forms above are matched first; whatever is left that
+// still opens a sentinel must never reach the customer as body text.
+const HANDOFF_OPEN_RE = /\[\[\s*HANDOFF/i
+const OPTIONS_OPEN_RE = /\[\[\s*OPTIONS/i
+
+/**
+ * Does this model output carry the [[SKIP]] sentinel? Matched as leniently as
+ * the other two (case + bracket padding + a dropped closing pair), because the
+ * proactive paths SEND whatever isn't a skip — a missed "[[skip]]" ships the
+ * literal token to the customer as a proactive message. Pure.
+ */
+export function isSkipResponse(raw) {
+  const s = String(raw || '')
+  return SKIP_RE.test(s) || /\[\[\s*SKIP/i.test(s)
+}
+
 // Markdown emphasis / whitespace that can wrap a sentinel or trail a line —
 // stripped at the edges so '**[[OPTIONS]]**' or '[[options]] 7am' don't drag
 // markup into the customer text or a button label.
 const SENTINEL_WRAP = /^[\s*_`~]+|[\s*_`~]+$/g
+
+/**
+ * Cut the first `match` and the remainder of its line out of `text`. Returns
+ * the cut payload (that line's remainder) plus the surviving text. A leading
+ * ']' survives a half-closed sentinel, so it's trimmed off the payload. Pure.
+ */
+function cutSentinelLine(text, match) {
+  const after = text.slice(match.index + match[0].length)
+  const newline = after.indexOf('\n')
+  const payload = (newline === -1 ? after : after.slice(0, newline))
+    .replace(/^[\]\s]+/, '')
+    .replace(SENTINEL_WRAP, '')
+  const rest = newline === -1 ? '' : after.slice(newline + 1)
+  return { payload, text: (text.slice(0, match.index) + rest).replace(SENTINEL_WRAP, '').trim() }
+}
 
 // AGENT-ACTIVITY.1 — "customer is chatting with Mia" staff ping is debounced to
 // once per active chat: after we notify, stay quiet until this long has passed
@@ -435,25 +489,36 @@ export function parseAgentResponse(raw) {
   // Detect the sentinel ANYWHERE, not just at the start — if the model
   // emits a sentence before it (occasionally happens), we must still hand
   // off rather than leak the raw "[[HANDOFF]] reason" to the customer.
-  const h = text.match(HANDOFF_RE)
+  const h = text.match(HANDOFF_RE) || text.match(HANDOFF_OPEN_RE)
   if (h) {
-    const reason = text.slice(h.index + h[0].length).replace(SENTINEL_WRAP, '').trim()
+    const reason = text.slice(h.index + h[0].length)
+      .replace(/^[\]\s]+/, '')
+      .replace(SENTINEL_WRAP, '')
+      .trim()
     return { action: 'handoff', text: '', reason: reason || 'unspecified' }
   }
 
   // AGENT-UX.1 — a trailing [[OPTIONS]] a | b | c line becomes tap
   // buttons. Strip the sentinel from the text UNCONDITIONALLY (even if
-  // the payload is unusable) so it can never leak to the customer.
+  // the payload is unusable) so it can never leak to the customer — and
+  // strip EVERY occurrence, not just the first: a model that restates the
+  // choices used to send its second options line verbatim to the customer.
+  // Only the first payload is the options source (the prompt asks for one
+  // line); later ones are dropped with their sentinel.
   let options = null
-  const o = text.match(OPTIONS_RE)
-  if (o) {
-    const after = text.slice(o.index + o[0].length)
-    const newline = after.indexOf('\n')
-    const payload = (newline === -1 ? after : after.slice(0, newline)).replace(SENTINEL_WRAP, '')
-    const rest = newline === -1 ? '' : after.slice(newline + 1)
+  for (let m = text.match(OPTIONS_RE); m; m = text.match(OPTIONS_RE)) {
+    const cut = cutSentinelLine(text, m)
     // Scrub dashes from button labels too ("Yes — book me in" → "Yes, book me in").
-    options = normalizeAgentOptions(stripEmDashes(payload))
-    text = (text.slice(0, o.index) + rest).replace(SENTINEL_WRAP, '').trim()
+    if (!options) options = normalizeAgentOptions(stripEmDashes(cut.payload))
+    text = cut.text
+  }
+  // HARDEN.3 — same for a bracket-dropped "[[OPTIONS 7am | 8am": it would
+  // otherwise render as body text.
+  const openOptions = text.match(OPTIONS_OPEN_RE)
+  if (openOptions) {
+    const cut = cutSentinelLine(text, openOptions)
+    if (!options) options = normalizeAgentOptions(stripEmDashes(cut.payload))
+    text = cut.text
   }
 
   if (!text) return { action: 'handoff', text: '', reason: 'empty_model_response' }

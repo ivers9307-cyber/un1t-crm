@@ -63,6 +63,8 @@ export default function CustomerAgentSettingsPage() {
         tone: settings.tone || null,
         extra_rules: settings.extra_rules || null,
         holding_message: settings.holding_message || null,
+        booking_confirmation_text: settings.booking_confirmation_text || null,
+        cancellation_confirmation_text: settings.cancellation_confirmation_text || null,
         welcome_greeting: settings.welcome_greeting || null,
         link_button_text: (settings.link_button_text || '').trim() || null,
         quiet_hours: settings.quiet_hours?.start && settings.quiet_hours?.end
@@ -337,6 +339,25 @@ export default function CustomerAgentSettingsPage() {
           <p className="text-xs text-un1t-muted mt-1">Sent to the customer when the agent hands the chat to a human.</p>
         </div>
 
+        {/* AGENT-HANDS.1 / AGENT-CANCEL.1 — in-thread texts sent once staff
+            approve a drafted booking / cancellation. Placeholders mirror the
+            defaults in src/lib/agent/notify.js. */}
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Booking confirmation message</label>
+          <input className={inputCls} maxLength={500} value={settings.booking_confirmation_text || ''}
+            onChange={e => setField('booking_confirmation_text', e.target.value)}
+            placeholder="Good news, you're booked in for {class}. See you there." />
+          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you approve a booking the agent drafted. <code>{'{class}'}</code> becomes the class name and time. Leave blank to use the default shown.</p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Cancellation confirmation message</label>
+          <input className={inputCls} maxLength={500} value={settings.cancellation_confirmation_text || ''}
+            onChange={e => setField('cancellation_confirmation_text', e.target.value)}
+            placeholder="All sorted, your booking for {class} has been cancelled. Hope to see you at another class soon." />
+          <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you approve a cancellation the agent drafted. <code>{'{class}'}</code> becomes the class name and time. Leave blank to use the default shown.</p>
+        </div>
+
         {/* C2 — request_welcome instant greeting. Placeholder mirrors
             DEFAULT_WELCOME_GREETING in src/lib/agent/welcome-greeting.js
             (inlined — that module pulls server-only WhatsApp code). */}
@@ -344,7 +365,7 @@ export default function CustomerAgentSettingsPage() {
           <label className="block text-sm font-medium text-un1t-text mb-1">Welcome greeting (sent when someone opens the chat without typing)</label>
           <textarea className={inputCls} rows={2} maxLength={500} value={settings.welcome_greeting || ''}
             onChange={e => setField('welcome_greeting', e.target.value)}
-            placeholder="Hi! 👋 Welcome to UN1T. I'm Mia, the studio's assistant — ask me anything, or tell me if you'd like to book a free class or a consultation." />
+            placeholder="Hi, I'm Mia, the studio's assistant at UN1T. Ask me anything, or tell me if you'd like to book a free class or a consultation." />
           <p className="text-xs text-un1t-muted mt-1">
             Sent instantly when someone opens a brand-new chat (e.g. from a click-to-WhatsApp ad) without sending a message.
             Uses the agent&apos;s on/off, test-mode, and quiet-hours switches above. Leave blank to use the default shown.

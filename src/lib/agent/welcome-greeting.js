@@ -4,10 +4,13 @@
 // gated by the same customer_agent switches as the auto-reply so a disabled
 // or test-mode agent never greets strangers.
 import { sendTextMessage } from '@/lib/whatsapp'
-import { phoneMatchesAllowlist, isWithinQuietHours, resolveAgentGate, AGENT_MESSAGE_SOURCE } from './core'
+import { phoneMatchesAllowlist, isWithinQuietHours, stripEmDashes, resolveAgentGate, AGENT_MESSAGE_SOURCE } from './core'
 
+// HUMANIZE.1 — no em dash, no emoji, low-key: this is shipped customer copy on
+// the click-to-WhatsApp path, and the deterministic scrub below covers the
+// operator's override too.
 export const DEFAULT_WELCOME_GREETING =
-  "Hi! 👋 Welcome to UN1T. I'm Mia, the studio's assistant — ask me anything, or tell me if you'd like to book a free class or a consultation."
+  "Hi, I'm Mia, the studio's assistant at UN1T. Ask me anything, or tell me if you'd like to book a free class or a consultation."
 
 // Pure gate: mirrors shouldAgentReply's on-duty rules (enabled/test allowlist/
 // quiet hours) without the per-conversation state (a request_welcome thread is
@@ -41,7 +44,9 @@ export async function maybeSendWelcomeGreeting(db, { conversationId, locationId,
       .eq('direction', 'outbound')
     if ((count || 0) > 0) return { sent: false, reason: 'already_greeted' }
 
-    const text = (settings?.welcome_greeting || '').trim() || DEFAULT_WELCOME_GREETING
+    // Scrubbed like every other agent message (core.js parseAgentResponse) so
+    // an operator-typed greeting can't ship an em dash either.
+    const text = stripEmDashes((settings?.welcome_greeting || '').trim() || DEFAULT_WELCOME_GREETING)
     const result = await sendTextMessage(senderPhone, text, { locationId })
     await db.from('whatsapp_messages').insert({
       conversation_id: conversationId,

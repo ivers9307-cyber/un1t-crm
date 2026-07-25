@@ -13,8 +13,8 @@
 // keeps this module ownership-independent, per the plan's note that
 // mirroring beyond ~30 lines should be flagged — see report.
 
-import { buildCachedSystem } from './prompt'
-import { formatHistoryForClaude } from './core'
+import { buildCachedSystem, SKIP_PREFIX } from './prompt'
+import { formatHistoryForClaude, isSkipResponse, parseAgentResponse } from './core'
 import { formatNextClass } from './account-tools'
 import { getLocationBranding } from '@/lib/location-branding'
 import { anthropicMessages } from '@/lib/anthropic'
@@ -51,7 +51,7 @@ export function buildSuggestionInstruction(kind, outcome, ctx = {}) {
   const action = KIND_LABELS[kind] || kind || 'their request'
   const outcomeText = OUTCOME_LABELS[outcome] || outcome || 'decided'
   const lines = [
-    '[STUDIO SYSTEM — not the customer] A staff member just reviewed this customer\'s ' +
+    '[STUDIO SYSTEM - not the customer] A staff member just reviewed this customer\'s ' +
       `request to ${action}, and the decision was: ${outcomeText}.`,
   ]
   if (ctx.reason) lines.push(`Their stated reason: "${ctx.reason}".`)
@@ -65,22 +65,30 @@ export function buildSuggestionInstruction(kind, outcome, ctx = {}) {
     'Write ONE short, warm follow-up message to the customer in your own voice, first ' +
       'person, ≤2 sentences, that lets them know where things stand and closes the loop ' +
       'naturally. No placeholders or brackets, no re-introducing yourself. If there is ' +
-      'genuinely nothing useful to say, reply with exactly [[SKIP]] and nothing else.',
+      `genuinely nothing useful to say, reply with exactly ${SKIP_PREFIX} and nothing else.`,
   )
   return lines.join(' ')
 }
 
 /**
  * Clean up the model's raw suggestion text. Pure, unit-tested.
- * Returns null for anything unusable (empty, [[SKIP]], whitespace-only).
+ * Returns null for anything unusable (empty, [[SKIP]], a handoff, whitespace-only).
+ *
+ * Staff click this straight into the composer and usually send it unedited, so
+ * it gets the SAME deterministic treatment as a live reply: parseAgentResponse
+ * scrubs em dashes (the prompt rule alone isn't reliable — core.js) and strips
+ * the control sentinels, and a [[HANDOFF]] suggestion has nothing to prefill.
  * @param {string} text
  * @returns {string|null}
  */
 export function sanitizeSuggestion(text) {
   if (!text || typeof text !== 'string') return null
-  let s = text.trim()
-  if (!s) return null
-  if (/\[\[SKIP\]\]/.test(s)) return null
+  if (!text.trim()) return null
+  if (isSkipResponse(text)) return null
+
+  const parsed = parseAgentResponse(text)
+  if (parsed.action !== 'reply' || !parsed.text) return null
+  let s = parsed.text
 
   // Strip a single pair of surrounding quotes (straight or curly) if the
   // WHOLE message is quoted — the model sometimes wraps its reply.

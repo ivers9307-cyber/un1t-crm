@@ -30,10 +30,11 @@ export const BOOKING_TOOLS = [
   {
     name: 'list_upcoming_classes',
     description:
-      "List the studio's upcoming classes over the next few days (name, time, spots left) so a " +
+      "List the studio's upcoming classes over the next few days (name and time) so a " +
       'VERIFIED member can pick one to book. Only works after verify_identity has succeeded ' +
       'this conversation. Use when a member asks "what classes are on", "can I book a class", ' +
-      '"what\'s available tomorrow". Full classes are marked — offer an alternative instead.',
+      '"what\'s available tomorrow". Classes carry full and limited flags, never a count — ' +
+      'never tell the customer how many spaces are left. Offer an alternative to a full class.',
     input_schema: {
       type: 'object',
       properties: {
@@ -205,9 +206,20 @@ export function formatDublinClassTime(unixSec) {
   return `${parts.weekday} ${parts.day} ${parts.month}, ${parts.hour}:${parts.minute}`
 }
 
+// CAPACITY-SECRECY.1 — a class with this many spaces or fewer is "limited".
+// Coarse on purpose: it lets Mia create honest urgency without ever handing
+// the model a number it could relay.
+const LIMITED_SPOTS_THRESHOLD = 3
+
 /**
  * Shape a Glofox /2.0/events list for the agent: upcoming, public,
- * active classes with spots-left, time-sorted, capped. Pure.
+ * active classes, time-sorted, capped. Pure.
+ *
+ * CAPACITY-SECRECY.1 — availability is exposed as the `full` / `limited`
+ * booleans ONLY. Customers must never be told how many spaces are left, and
+ * the surest way to guarantee that is to never put the count in the model's
+ * context (the prompt rule is the second line of defence). Operator surfaces
+ * that legitimately need counts read Glofox directly, not through here.
  */
 export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST) {
   const nowSec = Math.floor(nowMs / 1000)
@@ -220,13 +232,14 @@ export function shapeClassListForAgent(events, nowMs, limit = MAX_CLASS_LIST) {
     const size = Number(e.size) || 0
     const booked = Number(e.booked) || 0
     const spotsLeft = Math.max(0, size - booked)
+    const full = size > 0 && spotsLeft === 0
     out.push({
       event_id: e._id || e.id || null,
       name: e.name || 'Class',
       start_sec: startSec,
       time: formatDublinClassTime(startSec),
-      spots_left: spotsLeft,
-      full: size > 0 && spotsLeft === 0,
+      full,
+      ...(!full && size > 0 && spotsLeft <= LIMITED_SPOTS_THRESHOLD ? { limited: true } : {}),
     })
   }
   // Sort on the numeric instant — the Dublin label doesn't sort lexically.

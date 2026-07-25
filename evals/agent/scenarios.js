@@ -16,12 +16,26 @@
 const HEX24_A = '64aa00000000000000000001'
 const HEX24_B = '64aa00000000000000000002'
 
+// CAPACITY-SECRECY.1 — the shapers hand the model full/limited booleans and
+// NEVER a count (booking-tools.js / event-tools.js), so the fixtures must not
+// either: a fixture carrying spots_left would teach the eval that leaking a
+// number is normal.
 const SAT_CLASSES = {
   classes: [
-    { event_id: HEX24_A, name: 'LIFT45', time: 'Sat 14 Jun, 06:30', spots_left: 6, full: false },
-    { event_id: HEX24_B, name: 'SWEAT45', time: 'Sat 14 Jun, 07:15', spots_left: 4, full: false },
+    { event_id: HEX24_A, name: 'LIFT45', time: 'Sat 14 Jun, 06:30', full: false },
+    { event_id: HEX24_B, name: 'SWEAT45', time: 'Sat 14 Jun, 07:15', full: false, limited: true },
   ],
 }
+
+// Never-say-a-number rules, applied to every scenario where Mia relays
+// availability (owner invariant: time + name only, at most a coy full/limited).
+// Deliberately targets COUNTS, not the words: "the 7:15 is full" and "no spaces
+// left" stay legal, "4 spots left" / "four spaces" do not.
+const NO_CAPACITY_COUNTS = [
+  '\\d+\\s*(spots?|spaces?|places?)\\b',
+  '\\b(one|two|three|four|five|six|seven|eight|nine|ten)\\s+(spots?|spaces?|places?)\\b',
+  '(spots?|spaces?|places?)\\s+(left|remaining)\\s*[:\\-]?\\s*\\d',
+]
 
 // MIA-CARDS.1 — the card sets available in the card-set scenarios (same
 // shape as locations.settings.wa_card_sets; the prompt renders name +
@@ -123,6 +137,7 @@ export const SCENARIOS = [
       mustCall: ['list_upcoming_classes'],
       mustNotCall: ['book_class'],
       match: ['(06[:.]?30|07[:.]?15|LIFT|SWEAT)'],
+      notMatch: NO_CAPACITY_COUNTS,
     },
   },
   {
@@ -131,7 +146,7 @@ export const SCENARIOS = [
     prompt: { identityPreverified: true },
     history: [
       { direction: 'inbound', body: 'Can you book me into a class tomorrow morning?' },
-      { direction: 'outbound', body: 'Tomorrow we have LIFT45 at 06:30 (6 spots) and SWEAT45 at 07:15 (4 spots) — which would you like?' },
+      { direction: 'outbound', body: 'Tomorrow we have LIFT45 at 06:30 and SWEAT45 at 07:15, which would you like?' },
       { direction: 'inbound', body: 'The 7:15 SWEAT45 please!' },
     ],
     tools: {
@@ -142,6 +157,7 @@ export const SCENARIOS = [
       handoff: false,
       mustCall: ['book_class'],
       match: ['(SWEAT|07[:.]?15|7[:.]15)', '(booked|confirmed|see you|all set|sorted)'],
+      notMatch: NO_CAPACITY_COUNTS,
     },
   },
   {
@@ -152,8 +168,8 @@ export const SCENARIOS = [
     tools: {
       list_upcoming_classes: {
         classes: [
-          { event_id: HEX24_A, name: 'LIFT45', time: 'Sat 14 Jun, 06:30', spots_left: 6, full: false },
-          { event_id: HEX24_B, name: 'SWEAT45', time: 'Sat 14 Jun, 07:15', spots_left: 0, full: true },
+          { event_id: HEX24_A, name: 'LIFT45', time: 'Sat 14 Jun, 06:30', full: false },
+          { event_id: HEX24_B, name: 'SWEAT45', time: 'Sat 14 Jun, 07:15', full: true },
         ],
       },
       book_class: { booked: false, reason: 'EVENT_FULL', message: 'The class is full — relay that honestly and offer an alternative or a handoff.' },
@@ -161,7 +177,10 @@ export const SCENARIOS = [
     expect: {
       handoff: false,
       match: ['(full|no sp(ots|aces)|fully booked)', '(LIFT|06[:.]?30)'],
-      notMatch: ["(you(’|')?re|I(’|')?ve)\\s+(got you\\s+)?booked\\s+(in|into|for)\\s+(the\\s+)?(7|SWEAT)"],
+      notMatch: [
+        "(you(’|')?re|I(’|')?ve)\\s+(got you\\s+)?booked\\s+(in|into|for)\\s+(the\\s+)?(7|SWEAT)",
+        ...NO_CAPACITY_COUNTS,
+      ],
     },
   },
   {
@@ -177,7 +196,7 @@ export const SCENARIOS = [
           kind: 'race',
           date: 'Sat 28 Jun',
           price: '€25 for members',
-          waves: [{ wave_id: HEX24_B, time: '09:00', spots_left: 8 }],
+          waves: [{ wave_id: HEX24_B, time: '09:00' }],
           signup_url: 'https://crm.un1tdublin.com/race/hyrox-sim',
         }],
       },
@@ -204,8 +223,8 @@ export const SCENARIOS = [
     tools: {
       list_upcoming_classes: {
         classes: [
-          { event_id: HEX24_A, name: 'LIFT45', time: 'Sat 14 Jun, 08:00', spots_left: 6, full: false },
-          { event_id: HEX24_B, name: 'SWEAT45', time: 'Sat 14 Jun, 11:15', spots_left: 4, full: false },
+          { event_id: HEX24_A, name: 'LIFT45', time: 'Sat 14 Jun, 08:00', full: false },
+          { event_id: HEX24_B, name: 'SWEAT45', time: 'Sat 14 Jun, 11:15', full: false },
         ],
       },
     },
@@ -213,6 +232,7 @@ export const SCENARIOS = [
       handoff: false,
       match: ['(08[:.]?00|8\\s?am)'],
       mustNotCall: ['book_class'],
+      notMatch: NO_CAPACITY_COUNTS,
     },
   },
   {
