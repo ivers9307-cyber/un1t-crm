@@ -13,6 +13,13 @@
 // can't be enumerated across tenants. A template with NULL
 // organization_id is deliberately master-only for detail ops: NULL
 // never matches an `.in(...)` membership filter.
+//
+// CONTRACTS-TPLVER.1 (mig 446): a body_markdown PATCH archives the
+// pre-overwrite row into contract_template_versions before bumping
+// `version` — history used to be write-only. An archive failure
+// aborts the PATCH (500) rather than proceeding to the update, so the
+// version counter can never outrun its own audit trail. See
+// GET /api/contract-templates/[id]/versions for the read side.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -93,16 +100,35 @@ export async function PATCH(request, props) {
     // We can't compute the new version atomically from the patch
     // payload without a SELECT first; do a tiny preflight read —
     // org-scoped, so a foreign template 404s here without even
-    // revealing that the id exists.
+    // revealing that the id exists. Also pulls the fields we need to
+    // archive the pre-overwrite state (CONTRACTS-TPLVER.1).
     let preflight = db
       .from('contract_templates')
-      .select('version')
+      .select('version, body_markdown, variables_schema')
       .eq('id', params.id)
     if (ownerOrgIds) preflight = preflight.in('organization_id', ownerOrgIds)
     const { data: current, error: curErr } = await preflight.maybeSingle()
     if (curErr) return NextResponse.json({ success: false, error: curErr.message }, { status: 500 })
     if (!current) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
     updates.version = (current.version || 1) + 1
+
+    // Archive the OLD body/variables BEFORE overwriting — history was
+    // previously write-only (the old body was simply lost on bump).
+    // ignoreDuplicates makes a retry of this exact archive a no-op
+    // rather than an error; a failure here aborts the PATCH entirely
+    // so the version bump never outruns its own audit trail.
+    const { error: archiveErr } = await db
+      .from('contract_template_versions')
+      .upsert({
+        template_id: params.id,
+        version: current.version,
+        body_markdown: current.body_markdown,
+        variables_schema: current.variables_schema,
+        changed_by: user.id,
+      }, { onConflict: 'template_id,version', ignoreDuplicates: true })
+    if (archiveErr) {
+      return NextResponse.json({ success: false, error: archiveErr.message }, { status: 500 })
+    }
   }
 
   let update = db
