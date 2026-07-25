@@ -51,7 +51,7 @@ concurrency:
   group: desktop-finalize-${{ inputs.build_run_id }}
   cancel-in-progress: false
 
-# `actions: read` is required for actions/download-artifact@v4 to
+# `actions: read` is required for actions/download-artifact@v8 to
 # pull artefacts from a DIFFERENT workflow run (the build run) via
 # its run-id input. `contents: read` is the default but stated
 # explicitly so the permission surface is self-documenting.
@@ -82,7 +82,7 @@ jobs:
       # specified run. The pattern handles the embedded run_number
       # in the artefact name without having to know it in advance.
       - name: Download signed app + notarisation UUID
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: cf-studio-mac-*-signed
           path: ${{ runner.temp }}/build-artefacts
