@@ -19,7 +19,8 @@
     "check:location-scoping": "node scripts/check-location-scoping.mjs",
     "check:guardrails": "eslint --config eslint.guardrails.config.mjs 'src/**/*.{js,jsx}'",
     "postinstall": "node scripts/copy-ffmpeg-core.mjs",
-    "eval:agent": "vitest run --config vitest.evals.config.mjs"
+    "eval:agent": "vitest run --config vitest.evals.config.mjs",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^8.5.0",
@@ -50,6 +51,7 @@
     "zod": "^4.4.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.0",
     "@testing-library/react": "^16.3.2",
     "autoprefixer": "^10.4.0",
     "eslint": "^9.39.4",
