@@ -180,9 +180,22 @@ export default ({ config }) => ({
       'expo-camera',
       { cameraPermission: 'Scan attendee check-in QR codes at events.', recordAudioAndroid: false },
     ],
+    // SDK 57 — these packages now ship config plugins that must be registered
+    // explicitly. `expo install --fix` flagged them but can't auto-edit a
+    // dynamic app.config.js, so they're declared here by hand.
+    'expo-splash-screen',
+    'expo-status-bar',
+    'expo-web-browser',
   ],
   experiments: {
     typedRoutes: true,
+    // SDK 57 / Metro 0.84: the new on-demand file map (default since SDK 56)
+    // does NOT include the sibling ../shared source folder that metro.config.js
+    // adds via watchFolders, breaking the web/mobile shared seam with "Unable
+    // to resolve" / "Failed to get the SHA-1". Turning it off restores the
+    // eager watchFolders crawl SDK 54 relied on. Revisit if the shared code
+    // ever moves into a proper workspace package.
+    onDemandFilesystem: false,
   },
   // Over-the-air updates via EAS Update. The project ID is the public
   // identifier of the EAS project at https://expo.dev/projects/<id> —
@@ -234,7 +247,12 @@ export default ({ config }) => ({
   // 1.3.x installs stop receiving OTAs (frozen, NOT crashed) until users
   // install the 1.4.0 binary from the stores. Merge this PR only as part of
   // that native release (see the Face ID release playbook).
-  runtimeVersion: '1.4.0',
+  //
+  // 2.0.0 — Expo SDK 54→57 upgrade (RN 0.81→0.86, React 19.1→19.2). A whole-SDK
+  // native change, so a fresh OTA lane is mandatory. ⚠️ Align this string with
+  // the actual store-release version you cut for the SDK 57 binary before
+  // shipping; existing 1.4.x installs freeze (NOT crash) until users update.
+  runtimeVersion: '2.0.0',
   extra: {
     // Supabase URL + anon key are PUBLIC by design — the anon key is
     // protected by Row-Level Security on the database, not by secrecy

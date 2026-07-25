@@ -9,6 +9,10 @@ const config = getDefaultConfig(__dirname)
 // maps from a single source of truth (../shared/permissions.js).
 // Without this Metro only walks the project root (mobile/) and the
 // import would fail with "Unable to resolve".
+//
+// SDK 57 note: this watchFolders seam only works with the eager file-map
+// crawl. The new on-demand filesystem (SDK 56+) does NOT map this sibling
+// folder, so `experiments.onDemandFilesystem` is disabled in app.config.js.
 const sharedRoot = path.resolve(__dirname, '..', 'shared')
 config.watchFolders = [...(config.watchFolders || []), sharedRoot]
 config.resolver.nodeModulesPaths = [

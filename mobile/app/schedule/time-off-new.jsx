@@ -15,7 +15,7 @@ import {
   View, Text, Pressable, ScrollView, TextInput, ActivityIndicator,
   Alert, KeyboardAvoidingView, Platform,
 } from 'react-native'
-import { useHeaderHeight } from '@react-navigation/elements'
+import { useHeaderHeight } from 'expo-router/react-navigation'
 import { useAuth } from '../../lib/auth-context'
 import { createTimeOffRequest } from '../../lib/schedule-api'
 import { isoDate } from '../../lib/dates'
