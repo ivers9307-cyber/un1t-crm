@@ -6,6 +6,7 @@
 import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
 import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import ContractRevokeButton from '@/components/ContractRevokeButton'
 import ContractPrintButton from '@/components/ContractPrintButton'
@@ -39,7 +40,10 @@ export default async function ContractDetailAdmin(props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!isOwnerOrMaster(user)) redirect('/')
+  // CONTRACTS-GATES.1 — read surface follows the grantable `contracts`
+  // permission (mirrors the list page); the Revoke action below stays
+  // owner/master-only via the local isOwnerOrMaster check.
+  if (!hasPermission(user, 'contracts')) redirect('/')
 
   // CONTRACTS-SCOPE.1 — service role bypasses RLS, so scope by org in app
   // code: a non-master (e.g. an owner of one studio) must not be able to
@@ -62,7 +66,7 @@ export default async function ContractDetailAdmin(props) {
   if (!c) notFound()
 
   const badge = STATUS_BADGE[c.status] || { label: c.status, class: 'bg-un1t-border text-un1t-subtle' }
-  const canRevoke = c.status === 'issued' || c.status === 'viewed'
+  const canRevoke = (c.status === 'issued' || c.status === 'viewed') && isOwnerOrMaster(user)
 
   return (
     <div className="p-6 md:p-8 max-w-3xl print:p-0 print:max-w-none">

@@ -24,6 +24,10 @@ import { createServerClient } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 
+function isOwnerOrMaster(user) {
+  return user?.role === 'master' || user?.role === 'owner'
+}
+
 const STATUS_BADGE = {
   issued:   { label: 'Sent',     class: 'bg-blue-500/15 text-blue-700' },
   viewed:   { label: 'Viewed',   class: 'bg-amber-500/15 text-amber-700' },
@@ -70,6 +74,10 @@ export default async function ContractsAdminPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!hasPermission(user, 'contracts')) redirect('/')
+  // CONTRACTS-GATES.1 — issuing/templates stay owner/master-only; a
+  // permission-granted non-owner sees the list and can open rows
+  // read-only but gets no write affordances.
+  const canWrite = isOwnerOrMaster(user)
 
   // CONTRACTS-SCOPE.1 — replicate mig 106's tenant boundary in app code
   // (service role bypasses RLS). Master sees every contract; everyone else
@@ -96,20 +104,22 @@ export default async function ContractsAdminPage() {
     <div className="p-6 md:p-8 max-w-5xl">
       <div className="flex flex-wrap items-start justify-between gap-3 mb-2">
         <h2 className="text-2xl font-bold">Contracts</h2>
-        <div className="flex items-center gap-2">
-          <Link
-            href="/admin/contracts/templates"
-            className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
-          >
-            <SettingsIcon size={12} /> Templates
-          </Link>
-          <Link
-            href="/admin/contracts/issue"
-            className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
-          >
-            <Plus size={12} /> Issue contract
-          </Link>
-        </div>
+        {canWrite && (
+          <div className="flex items-center gap-2">
+            <Link
+              href="/admin/contracts/templates"
+              className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
+            >
+              <SettingsIcon size={12} /> Templates
+            </Link>
+            <Link
+              href="/admin/contracts/issue"
+              className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
+            >
+              <Plus size={12} /> Issue contract
+            </Link>
+          </div>
+        )}
       </div>
       <p className="text-sm text-un1t-subtle mb-6">
         Send digital contracts to staff and contractors. Each one is countersigned at issue and
@@ -120,12 +130,14 @@ export default async function ContractsAdminPage() {
         <div className="bg-un1t-surface border border-un1t-border rounded-lg p-8 text-center">
           <FileText size={28} className="mx-auto text-un1t-subtle mb-3" />
           <p className="text-sm text-un1t-subtle mb-4">No contracts issued yet.</p>
-          <Link
-            href="/admin/contracts/issue"
-            className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
-          >
-            <Plus size={12} /> Issue your first contract
-          </Link>
+          {canWrite && (
+            <Link
+              href="/admin/contracts/issue"
+              className="inline-flex items-center gap-1.5 text-xs bg-un1t-text text-un1t-bg px-3 py-1.5 rounded-md hover:bg-un1t-accent font-medium"
+            >
+              <Plus size={12} /> Issue your first contract
+            </Link>
+          )}
         </div>
       ) : (
         <>
