@@ -37,6 +37,8 @@ import { GET, POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { logAuditEvent } from '@/lib/audit'
+import { sendContractIssuedEmail } from '@/lib/contracts-email'
+import { sendPush } from '@/lib/push'
 
 const ORG_A = 'org-a'
 const LOC_A1 = 'loc-a1'
@@ -49,11 +51,12 @@ const LOC_B1 = 'loc-b1'
 // master awaits straight after .order(). We record which filter was
 // applied so the test can assert the scoping branch taken.
 function mockDb({ data = [], error = null } = {}) {
-  const calls = { or: [], eq: [] }
+  const calls = { or: [], eq: [], neq: [] }
   const result = { data, error }
   const builder = {}
   builder.or = vi.fn((arg) => { calls.or.push(arg); return builder })
   builder.eq = vi.fn((...args) => { calls.eq.push(args); return builder })
+  builder.neq = vi.fn((...args) => { calls.neq.push(args); return builder })
   // Thenable: `await query` resolves to the PostgREST-shaped result.
   builder.then = (resolve, reject) => Promise.resolve(result).then(resolve, reject)
   const order = vi.fn(() => builder)
@@ -106,7 +109,9 @@ describe('GET /api/contracts — list scoping', () => {
     const res = await GET(FAKE_REQUEST)
     expect(res.status).toBe(200)
     expect(calls.or).toHaveLength(1)
-    // Both arms present: own contracts AND owned-org contracts.
+    // Both arms present: own contracts (drafts excluded — see the
+    // CONTRACTS-DRAFT.1 test below) AND owned-org contracts (drafts
+    // included there — that's the issuer/admin view).
     expect(calls.or[0]).toContain('profile_id.eq.owner-a')
     expect(calls.or[0]).toContain(`organization_id.in.(${ORG_A})`)
     // No bare .eq scoping — the owner uses the .or() branch.
@@ -126,6 +131,51 @@ describe('GET /api/contracts — list scoping', () => {
     expect(res.status).toBe(200)
     expect(calls.or).toHaveLength(0)
     expect(calls.eq).toContainEqual(['profile_id', 'staff-1'])
+    expect(calls.neq).toContainEqual(['status', 'draft'])
+  })
+
+  // CONTRACTS-DRAFT.1 — a draft must never appear in a recipient's OWN
+  // list (this route is what mobile's listContracts() hits for "my
+  // contracts"). The org-owner arm is deliberately NOT excluded —
+  // an owner reviewing their org's contracts still needs to see
+  // drafts so they can send or discard them.
+  describe('CONTRACTS-DRAFT.1 — drafts excluded from the recipient-self arm', () => {
+    it("excludes drafts from a plain staff caller's own-contracts filter", async () => {
+      getCurrentUser.mockResolvedValue({
+        id: 'staff-1', isMaster: false, role: 'staff',
+        rolesByLocation: { [LOC_B1]: 'staff' },
+        locations: [{ id: LOC_B1, organization_id: 'org-b' }],
+      })
+      const { db, calls } = mockDb({ data: [] })
+      createServerClient.mockReturnValue(db)
+      await GET(FAKE_REQUEST)
+      expect(calls.neq).toContainEqual(['status', 'draft'])
+    })
+
+    it("excludes drafts from the profile_id arm of an owner's .or() filter (org arm untouched)", async () => {
+      getCurrentUser.mockResolvedValue({
+        id: 'owner-a', isMaster: false, role: 'owner',
+        rolesByLocation: { [LOC_A1]: 'owner' },
+        locations: [{ id: LOC_A1, organization_id: ORG_A }],
+      })
+      const { db, calls } = mockDb({ data: [] })
+      createServerClient.mockReturnValue(db)
+      await GET(FAKE_REQUEST)
+      expect(calls.or[0]).toContain('and(profile_id.eq.owner-a,status.neq.draft)')
+      expect(calls.or[0]).toContain(`organization_id.in.(${ORG_A})`)
+    })
+
+    it('master still gets an unfiltered query (drafts visible everywhere for master)', async () => {
+      getCurrentUser.mockResolvedValue({
+        id: 'm1', isMaster: true, role: 'master', rolesByLocation: {}, locations: [],
+      })
+      const { db, calls } = mockDb({ data: [] })
+      createServerClient.mockReturnValue(db)
+      await GET(FAKE_REQUEST)
+      expect(calls.or).toHaveLength(0)
+      expect(calls.eq).toHaveLength(0)
+      expect(calls.neq).toHaveLength(0)
+    })
   })
 
   it('surfaces a DB error as a 500', async () => {
@@ -402,6 +452,68 @@ describe('POST /api/contracts — CONTRACTS-EDIT.1 body_override', () => {
 
     expect(logAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
       details: expect.objectContaining({ body_edited: false }),
+    }))
+  })
+})
+
+// ─── POST (issue) — CONTRACTS-DRAFT.1 save_as_draft ──────────────
+//
+// A save_as_draft:true request must insert with status:'draft' and
+// SKIP the notification path entirely — no email, no push — logging
+// contract.drafted instead of contract.issued. The response carries
+// no `warning` (nothing was attempted, so there's nothing to warn
+// about).
+
+describe('POST /api/contracts — CONTRACTS-DRAFT.1 save_as_draft', () => {
+  it("inserts with status: 'draft' and returns it with no warning key", async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db, calls } = issueHappyPathMockDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(issueReqFull({ save_as_draft: true }))
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(calls.contractsInsert).toHaveLength(1)
+    expect(calls.contractsInsert[0].status).toBe('draft')
+    expect(body.warning).toBeUndefined()
+  })
+
+  it('never sends the issue email or push for a draft', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db } = issueHappyPathMockDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(issueReqFull({ save_as_draft: true }))
+    expect(res.status).toBe(200)
+    expect(sendContractIssuedEmail).not.toHaveBeenCalled()
+    expect(sendPush).not.toHaveBeenCalled()
+  })
+
+  it('logs contract.drafted instead of contract.issued', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db } = issueHappyPathMockDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(issueReqFull({ save_as_draft: true }))
+    expect(res.status).toBe(200)
+    expect(logAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'contract.drafted',
+    }))
+  })
+
+  it('a normal issue (no save_as_draft) still inserts with no explicit status key and DOES notify', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db, calls } = issueHappyPathMockDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(issueReqFull())
+    expect(res.status).toBe(200)
+    expect(calls.contractsInsert[0].status).toBeUndefined()
+    expect(sendContractIssuedEmail).toHaveBeenCalledTimes(1)
+    expect(logAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'contract.issued',
     }))
   })
 })

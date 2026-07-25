@@ -4,11 +4,18 @@
 // page. Inline confirmation captures the reason then POSTs to
 // /api/contracts/[id]/revoke. Recipient gets an email about the
 // withdrawal automatically.
+//
+// CONTRACTS-DRAFT.1 — optional `reissueAfter` prop turns this into
+// the "Revoke & re-issue" variant: after a successful revoke it
+// routes straight to the issue wizard prefilled from this contract
+// instead of just refreshing the page. The detail page renders both
+// a plain instance and a reissueAfter instance side by side rather
+// than adding a second component.
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 
-export default function ContractRevokeButton({ contractId }) {
+export default function ContractRevokeButton({ contractId, reissueAfter, label = 'Revoke' }) {
   const router = useRouter()
   const [confirming, setConfirming] = useState(false)
   const [reason, setReason] = useState('')
@@ -21,7 +28,7 @@ export default function ContractRevokeButton({ contractId }) {
         type="button"
         onClick={() => setConfirming(true)}
         className="text-xs px-3 py-1.5 rounded-md border border-red-500/40 text-red-700 hover:bg-red-500/10"
-      >Revoke</button>
+      >{label}</button>
     )
   }
 
@@ -40,7 +47,11 @@ export default function ContractRevokeButton({ contractId }) {
       })
       const json = await res.json()
       if (!res.ok || !json.success) throw new Error(json.error || `HTTP ${res.status}`)
-      router.refresh()
+      if (reissueAfter) {
+        router.push(`/admin/contracts/issue?from=${reissueAfter}`)
+      } else {
+        router.refresh()
+      }
     } catch (e) {
       setError(e.message)
       setBusy(false)
@@ -66,7 +77,7 @@ export default function ContractRevokeButton({ contractId }) {
         onClick={handleRevoke}
         disabled={busy}
         className="text-xs bg-red-600 text-white px-3 py-1 rounded font-medium disabled:opacity-50"
-      >{busy ? 'Revoking…' : 'Confirm revoke'}</button>
+      >{busy ? 'Revoking…' : reissueAfter ? 'Revoke & re-issue' : 'Confirm revoke'}</button>
       {error && <span className="text-xs text-red-700 w-full">{error}</span>}
     </div>
   )

@@ -12,6 +12,14 @@
 //        contract is still 'issued', flip it to 'viewed' + stamp
 //        viewed_at. This gives the issuer signal that the recipient
 //        has at least opened the document.
+//
+//        CONTRACTS-DRAFT.1 — this is also what the re-issue wizard
+//        (?from=<id>) fetches to prefill recipient/template/custom
+//        vars. The profile embed carries the compensation fields
+//        (annual_salary etc.) too, not just identity — customVariablesFrom()
+//        needs them to recognise which frozen variables_data keys are
+//        profile-derived (and so should NOT be re-typed as "custom").
+//        Access model is unchanged: same recipient/master/owner gate.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -35,7 +43,10 @@ export async function GET(_request, props) {
       viewed_at, signed_at, signed_ip, signature_method, signature_value,
       signed_pdf_path, declined_at, declined_reason,
       revoked_at, revoked_by, revoked_reason,
-      profile:profiles!profile_id (full_name, email, role, employment_type),
+      profile:profiles!profile_id (
+        full_name, email, role, employment_type,
+        annual_salary, hourly_rate, overtime_rate, contracted_hours_per_week
+      ),
       issuer:profiles!issued_by (full_name, email, role),
       template:contract_templates!template_id (name, version)
     `)
@@ -55,10 +66,26 @@ export async function GET(_request, props) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
 
+  // CONTRACTS-DRAFT.1 — a draft is issuer-side only. A caller who
+  // clears the gate above SOLELY as the recipient (not also master
+  // or an org owner) must get the same 404 a stranger would — the
+  // recipient was never notified this row exists, and "the id is
+  // hard to guess" is not a access-control boundary we rely on
+  // (that's exactly the residual this hardens against). Master and
+  // org-owner callers still resolve it — they need the row to send
+  // or discard it, and the re-issue wizard's ?from=<id> prefill
+  // fetches this route as one of them.
+  if (contract.status === 'draft' && isRecipient && !user.isMaster && !isOrgOwner) {
+    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+
   // First-view tick — only when the recipient is the caller and
   // the contract is still in 'issued'. Quietly best-effort: if
   // the update fails (race condition, RLS edge case) we still
-  // return the read.
+  // return the read. Can never fire for a draft: the explicit
+  // `contract.status === 'issued'` check already excludes it, and a
+  // recipient-only caller never even reaches this line for a draft —
+  // the gate above 404s first.
   if (
     contract.profile_id === user.id
     && canTransition(contract.status, 'viewed')

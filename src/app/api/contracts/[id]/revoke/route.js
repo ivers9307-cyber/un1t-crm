@@ -50,6 +50,19 @@ export async function POST(request, props) {
   if (!user.isMaster && !getOwnerOrganizationIds(user).includes(contract.organization_id)) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
   }
+  // CONTRACTS-DRAFT.1 — drafts are NOT revoked here even though
+  // canTransition(draft, revoked) is technically legal in the pure
+  // state machine (draft -> revoked is how the state machine models
+  // "killed before ever being sent"). This route emails the
+  // recipient (sendContractRevokedEmail below) — for a draft that's
+  // wrong, since the recipient never knew it existed. Drafts go
+  // through /api/contracts/[id]/discard instead, which is silent.
+  if (contract.status === 'draft') {
+    return NextResponse.json({
+      success: false,
+      error: 'Cannot revoke a draft contract — use the discard action instead.',
+    }, { status: 409 })
+  }
   if (!canTransition(contract.status, 'revoked')) {
     return NextResponse.json({
       success: false,
@@ -66,7 +79,7 @@ export async function POST(request, props) {
       revoked_reason: parsed.data.revoked_reason,
     })
     .eq('id', contract.id)
-    .in('status', ['issued', 'viewed', 'draft'])
+    .in('status', ['issued', 'viewed'])
     .select()
     .single()
   if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 500 })

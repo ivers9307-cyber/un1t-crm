@@ -13,6 +13,7 @@ import ContractResendButton from '@/components/ContractResendButton'
 import ContractPrintButton from '@/components/ContractPrintButton'
 import ContractBody from '@/components/ContractBody'
 import ContractIssueWarningBanner from '@/components/ContractIssueWarningBanner'
+import ContractDraftActions from '@/components/ContractDraftActions'
 
 export const dynamic = 'force-dynamic'
 
@@ -75,6 +76,9 @@ export default async function ContractDetailAdmin(props) {
   const canManage = (c.status === 'issued' || c.status === 'viewed') && isOwnerOrMaster(user)
   const canRevoke = canManage
   const canResend = canManage
+  // CONTRACTS-DRAFT.1 — draft management + re-issue affordances.
+  const canManageDraft = c.status === 'draft' && isOwnerOrMaster(user)
+  const canReissue = (c.status === 'revoked' || c.status === 'declined') && isOwnerOrMaster(user)
 
   return (
     <div className="p-6 md:p-8 max-w-3xl print:p-0 print:max-w-none">
@@ -108,6 +112,11 @@ export default async function ContractDetailAdmin(props) {
         </div>
       </div>
 
+      {c.status === 'draft' && (
+        <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-4 mb-4 print:hidden">
+          <p className="text-sm font-semibold text-purple-700">Draft. The recipient has not been notified yet.</p>
+        </div>
+      )}
       {c.status === 'declined' && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-4 print:hidden">
           <p className="text-xs font-semibold text-red-700">Declined {fmtDate(c.declined_at)}</p>
@@ -151,7 +160,19 @@ export default async function ContractDetailAdmin(props) {
       <div className="flex flex-wrap items-center gap-2 print:hidden">
         <ContractPrintButton />
         {canResend && <ContractResendButton contractId={c.id} />}
-        {canRevoke && <ContractRevokeButton contractId={c.id} />}
+        {canRevoke && (
+          <>
+            <ContractRevokeButton contractId={c.id} />
+            <ContractRevokeButton contractId={c.id} reissueAfter={c.id} label="Revoke & re-issue" />
+          </>
+        )}
+        {canManageDraft && <ContractDraftActions contractId={c.id} />}
+        {canReissue && (
+          <Link
+            href={`/admin/contracts/issue?from=${c.id}`}
+            className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
+          >Re-issue</Link>
+        )}
       </div>
 
       <style>{`

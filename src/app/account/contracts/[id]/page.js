@@ -48,10 +48,17 @@ export default async function AccountContractDetail(props) {
   // Hard guard — RLS would block this anyway, but the explicit
   // check gives a friendlier 404 than a SELECT-no-rows.
   if (c.profile_id !== user.id) notFound()
+  // CONTRACTS-DRAFT.1 — this page is recipient-only (no master/owner
+  // branch exists here, unlike the admin detail page), so the check
+  // is unconditional: a draft is issuer-side work-in-progress the
+  // recipient was never notified about, full stop.
+  if (c.status === 'draft') notFound()
 
   // First-time view-tracking — best-effort flip from issued -> viewed
   // straight from this page so the issuer sees signal even if the
-  // recipient never hits the API GET separately.
+  // recipient never hits the API GET separately. Can never touch a
+  // draft: guarded on status === 'issued', and a draft is already
+  // notFound()'d above.
   if (c.status === 'issued') {
     await db.from('contracts')
       .update({ status: 'viewed', viewed_at: new Date().toISOString() })

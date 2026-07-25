@@ -166,6 +166,51 @@ describe('GET /api/contracts/[id] — authorization gate', () => {
   })
 })
 
+// CONTRACTS-DRAFT.1 — a draft must be invisible to its own recipient
+// even though profile_id matches (they were never notified it
+// exists), while the issuer side (master/owner) still needs it to
+// send or discard it, and the re-issue wizard's ?from=<id> prefill
+// (an owner/master fetch) must keep working.
+describe('GET /api/contracts/[id] — CONTRACTS-DRAFT.1 draft visibility', () => {
+  it('returns 404 (not 403) when the recipient tries to read their OWN draft', async () => {
+    getCurrentUser.mockResolvedValue(recipientUser)
+    const { db, update } = mockDb({ contract: contractFixture({ status: 'draft' }) })
+    createServerClient.mockReturnValue(db)
+
+    const res = await GET(FAKE_REQUEST, { params: { id: 'c1' } })
+    const body = await res.json()
+
+    expect(res.status).toBe(404)
+    expect(body.success).toBe(false)
+    expect(body.error).toBe('Not found')
+    expect(body.data).toBeUndefined()
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('lets an owner of the contract org read a draft (200) — needed to send/discard it', async () => {
+    getCurrentUser.mockResolvedValue(ownerOfAUser)
+    createServerClient.mockReturnValue(mockDb({ contract: contractFixture({ status: 'draft' }) }).db)
+    const res = await GET(FAKE_REQUEST, { params: { id: 'c1' } })
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.status).toBe('draft')
+  })
+
+  it('lets a master read a draft (200)', async () => {
+    getCurrentUser.mockResolvedValue(masterUser)
+    createServerClient.mockReturnValue(mockDb({ contract: contractFixture({ status: 'draft' }) }).db)
+    const res = await GET(FAKE_REQUEST, { params: { id: 'c1' } })
+    expect(res.status).toBe(200)
+  })
+
+  it('still 404s a foreign-org outsider on a draft (ordinary gate, unchanged)', async () => {
+    getCurrentUser.mockResolvedValue(outsiderUser)
+    createServerClient.mockReturnValue(mockDb({ contract: contractFixture({ status: 'draft' }) }).db)
+    const res = await GET(FAKE_REQUEST, { params: { id: 'c1' } })
+    expect(res.status).toBe(404)
+  })
+})
+
 describe('GET /api/contracts/[id] — first-view tick', () => {
   it('flips an issued contract to viewed when the recipient opens it', async () => {
     getCurrentUser.mockResolvedValue(recipientUser)

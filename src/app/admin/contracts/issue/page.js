@@ -1,4 +1,12 @@
 // /admin/contracts/issue — issue-a-contract wizard host page.
+//
+// CONTRACTS-DRAFT.1 — accepts ?from=<contractId> (re-issue prefill,
+// linked from a revoked/declined contract's detail page, or from
+// "Revoke & re-issue" on an issued/viewed one). Read here via
+// searchParams (server component) and passed down as a plain prop —
+// the wizard itself is a client component and can't call
+// useSearchParams without also being wrapped in its own Suspense
+// boundary, so threading it through the host page is simpler.
 
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
@@ -11,10 +19,13 @@ function isOwnerOrMaster(user) {
   return user?.role === 'master' || user?.role === 'owner'
 }
 
-export default async function IssueContractPage() {
+export default async function IssueContractPage(props) {
+  const searchParams = await props.searchParams
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   if (!isOwnerOrMaster(user)) redirect('/')
+
+  const fromContractId = searchParams?.from || null
 
   return (
     <div className="p-6 md:p-8 max-w-3xl">
@@ -25,7 +36,7 @@ export default async function IssueContractPage() {
       <p className="text-sm text-un1t-subtle mb-6">
         Pick a recipient and template, fill any custom variables, countersign, and send.
       </p>
-      <ContractIssueWizard issuerName={user.full_name} />
+      <ContractIssueWizard issuerName={user.full_name} fromContractId={fromContractId} />
     </div>
   )
 }

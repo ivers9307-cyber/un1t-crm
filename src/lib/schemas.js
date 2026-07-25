@@ -309,6 +309,12 @@ export const contractIssueSchema = z.object({
   // template output entirely (see /api/contracts POST); omitted when
   // the issuer never touched the "Edit text" affordance.
   body_override: z.string().min(1).optional(),
+  // CONTRACTS-DRAFT.1 — save without notifying the recipient. When
+  // true the route inserts with status='draft' and skips the email
+  // + push entirely; the issuer sends it later via
+  // /api/contracts/[id]/send or discards it via
+  // /api/contracts/[id]/discard.
+  save_as_draft: z.boolean().optional(),
 })
 
 // Sign payload — typed-name only in the MVP. The route adds IP

@@ -112,6 +112,41 @@ export function mergeVariables(profile, customVariables) {
 }
 
 /**
+ * CONTRACTS-DRAFT.1 — given a contract's stored variables_data and
+ * the (possibly stale, possibly null) recipient profile it was
+ * issued to, return just the CUSTOM variables an issuer typed in at
+ * issue time — i.e. variables_data minus everything profileVariables()
+ * would auto-derive from a profile, minus `today` (always
+ * regenerated fresh at re-issue time, never carried forward).
+ *
+ * Used by the re-issue wizard prefill: we want to restore "notice
+ * period was 4 weeks" but NOT restore a frozen `full_name`/`today`/
+ * salary snapshot that the fresh recipient lookup will re-derive
+ * correctly anyway (and that may be stale if the profile changed
+ * since the original contract).
+ *
+ * Pure — no Supabase, no fetch. A null/undefined recipientProfile
+ * still strips `today` (it's never a real custom variable) but
+ * can't identify any profile-derived keys, so everything else in
+ * variablesData passes through untouched.
+ *
+ * @param {Record<string, unknown>|null|undefined} variablesData
+ * @param {object|null} recipientProfile
+ * @returns {Record<string, unknown>}
+ */
+export function customVariablesFrom(variablesData, recipientProfile) {
+  if (!variablesData) return {}
+  const derivedKeys = new Set(Object.keys(profileVariables(recipientProfile || {})))
+  derivedKeys.add('today')
+  const out = {}
+  for (const [key, value] of Object.entries(variablesData)) {
+    if (derivedKeys.has(key)) continue
+    out[key] = value
+  }
+  return out
+}
+
+/**
  * Substitute {{variable}} placeholders in the template body with
  * values from the merged map. Unknown placeholders are left as-is
  * so the issuer notices them in the preview and can either fill
