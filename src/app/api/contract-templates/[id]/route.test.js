@@ -68,7 +68,13 @@ const master = () => ({
 // PostgREST semantics: an UPDATE only touches rows the filters match,
 // and `.in('organization_id', [...])` never matches a NULL value —
 // which is exactly the property the NULL-org tests lean on.
-function fakeTemplatesDb(rows) {
+//
+// CONTRACTS-TPLVER.1 — also stubs contract_template_versions.upsert()
+// so PATCH's archive-before-overwrite step can be exercised: upsertLog
+// records every call (payload + onConflict/ignoreDuplicates options)
+// for assertions, and archiveError lets a test force the archive to
+// fail (mirrors a real PostgREST error shape).
+function fakeTemplatesDb(rows, { archiveError = null } = {}) {
   function builder(mode, updates) {
     const filters = []
     const b = {
@@ -91,21 +97,36 @@ function fakeTemplatesDb(rows) {
     }
     return b
   }
+  const upsertLog = []
   const from = vi.fn((table) => {
-    if (table !== 'contract_templates') throw new Error(`unexpected table ${table}`)
-    return {
-      select: vi.fn(() => builder('select')),
-      update: vi.fn((updates) => builder('update', updates)),
+    if (table === 'contract_templates') {
+      return {
+        select: vi.fn(() => builder('select')),
+        update: vi.fn((updates) => builder('update', updates)),
+      }
     }
+    if (table === 'contract_template_versions') {
+      return {
+        upsert: vi.fn((payload, options) => {
+          upsertLog.push({ payload, options })
+          return {
+            then: (resolve, reject) => Promise.resolve(
+              archiveError ? { data: null, error: archiveError } : { data: [payload], error: null }
+            ).then(resolve, reject),
+          }
+        }),
+      }
+    }
+    throw new Error(`unexpected table ${table}`)
   })
-  return { db: { from } }
+  return { db: { from }, upsertLog }
 }
 
-function setup(user, rows = twoOrgRows()) {
+function setup(user, rows = twoOrgRows(), opts = {}) {
   getCurrentUser.mockResolvedValue(user)
-  const { db } = fakeTemplatesDb(rows)
+  const { db, upsertLog } = fakeTemplatesDb(rows, opts)
   createServerClient.mockReturnValue(db)
-  return { rows, db }
+  return { rows, db, upsertLog }
 }
 
 const props = (id) => ({ params: Promise.resolve({ id }) })
@@ -246,6 +267,48 @@ describe('PATCH /api/contract-templates/[id] — detail scoping', () => {
     const row = rows.find(r => r.id === TPL_NULL)
     expect(row.body_markdown).toBe('v2 legacy')
     expect(row.version).toBe(2)
+  })
+
+  // ─── CONTRACTS-TPLVER.1 — archive-before-overwrite ────────────────
+
+  it('a body_markdown patch archives the OLD row before bumping version', async () => {
+    const { rows, upsertLog } = setup(ownerA())
+    const res = await PATCH(patchReq({ body_markdown: 'new body' }), props(TPL_A))
+    expect(res.status).toBe(200)
+
+    expect(upsertLog).toHaveLength(1)
+    expect(upsertLog[0].payload).toMatchObject({
+      template_id: TPL_A,
+      version: 3,          // the OLD version, not the bumped one
+      body_markdown: 'A body', // the OLD body, not the new one
+      changed_by: 'owner-a',
+    })
+    expect(upsertLog[0].options).toMatchObject({ onConflict: 'template_id,version', ignoreDuplicates: true })
+
+    // The update itself still lands as normal.
+    const rowA = rows.find(r => r.id === TPL_A)
+    expect(rowA.body_markdown).toBe('new body')
+    expect(rowA.version).toBe(4)
+  })
+
+  it('a name-only patch never touches contract_template_versions', async () => {
+    const { upsertLog } = setup(ownerA())
+    const res = await PATCH(patchReq({ name: 'Renamed' }), props(TPL_A))
+    expect(res.status).toBe(200)
+    expect(upsertLog).toHaveLength(0)
+  })
+
+  it('an archive failure 500s and the template update never runs', async () => {
+    const { rows } = setup(ownerA(), twoOrgRows(), { archiveError: { message: 'archive failed' } })
+    const res = await PATCH(patchReq({ body_markdown: 'new body' }), props(TPL_A))
+    const body = await res.json()
+    expect(res.status).toBe(500)
+    expect(body.error).toBe('archive failed')
+    // The row is untouched — version bump never landed, audit trail
+    // can't be outrun.
+    const rowA = rows.find(r => r.id === TPL_A)
+    expect(rowA.body_markdown).toBe('A body')
+    expect(rowA.version).toBe(3)
   })
 
   it('a missing id 404s the same as a foreign one', async () => {
