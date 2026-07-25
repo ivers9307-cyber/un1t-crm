@@ -16,6 +16,8 @@ import {
   unresolvedPlaceholders,
   canTransition,
   reminderDue,
+  locationVariables,
+  LOCATION_VAR_KEYS,
 } from './contracts.js'
 
 describe('formatEuro', () => {
@@ -107,6 +109,87 @@ describe('mergeVariables', () => {
     expect(mergeVariables({ full_name: 'X' }, undefined)).toEqual(
       expect.objectContaining({ full_name: 'X' }),
     )
+  })
+
+  // CONTRACTS-VARS.2 — the API route composes location vars into the
+  // "custom" argument (mergeVariables' own signature stays
+  // profile/custom — see /api/contracts route.js). Pin the resulting
+  // three-way precedence: custom > location > profile.
+  describe('composed with locationVariables (route call-site pattern)', () => {
+    it('custom overrides a same-named location variable, which overrides profile', () => {
+      const profile = { full_name: 'Sarah Doe' }
+      const loc = locationVariables({
+        location: { name: 'UN1T Stillorgan' },
+        branding: { companyName: 'UN1T' },
+      })
+      const custom = { company_name: 'Custom Brand Override' }
+      const merged = mergeVariables(profile, { ...loc, ...custom })
+      // custom wins over location
+      expect(merged.company_name).toBe('Custom Brand Override')
+      // location passes through where custom doesn't override it
+      expect(merged.location_name).toBe('UN1T Stillorgan')
+      // profile passes through untouched
+      expect(merged.full_name).toBe('Sarah Doe')
+    })
+
+    it('location variables appear when custom has nothing for that key', () => {
+      const profile = { full_name: 'Sarah Doe' }
+      const loc = locationVariables({
+        location: { name: 'UN1T Stillorgan', address: '2 Main St' },
+        branding: { companyName: 'UN1T' },
+      })
+      const merged = mergeVariables(profile, { ...loc, start_date: '2026-08-01' })
+      expect(merged.location_name).toBe('UN1T Stillorgan')
+      expect(merged.location_address).toBe('2 Main St')
+      expect(merged.company_name).toBe('UN1T')
+      expect(merged.start_date).toBe('2026-08-01')
+    })
+  })
+})
+
+// CONTRACTS-VARS.2 — location auto-fill variables. Pure function —
+// the API route resolves the location row + branding and passes them
+// in; this just does the "only non-empty keys" shaping.
+describe('locationVariables', () => {
+  it('returns all five keys when every field is present', () => {
+    const v = locationVariables({
+      location: { name: 'UN1T Stillorgan', address: 'Stillorgan SC, Dublin', phone: '01 234 5678', email: 'stillorgan@un1tdublin.com' },
+      branding: { companyName: 'UN1T' },
+    })
+    expect(v).toEqual({
+      location_name: 'UN1T Stillorgan',
+      location_address: 'Stillorgan SC, Dublin',
+      location_phone: '01 234 5678',
+      location_email: 'stillorgan@un1tdublin.com',
+      company_name: 'UN1T',
+    })
+  })
+
+  it('omits keys whose source field is null/empty', () => {
+    const v = locationVariables({
+      location: { name: 'UN1T Stillorgan', address: '', phone: null, email: undefined },
+      branding: { companyName: 'UN1T' },
+    })
+    expect(v).toEqual({ location_name: 'UN1T Stillorgan', company_name: 'UN1T' })
+  })
+
+  it('returns an empty object when location and branding are both absent', () => {
+    expect(locationVariables({})).toEqual({})
+    expect(locationVariables()).toEqual({})
+    expect(locationVariables({ location: null, branding: null })).toEqual({})
+  })
+
+  it('resolves company_name from branding independently of location fields', () => {
+    const v = locationVariables({ location: null, branding: { companyName: 'CCF Autos' } })
+    expect(v).toEqual({ company_name: 'CCF Autos' })
+  })
+
+  it('LOCATION_VAR_KEYS lists exactly the five keys this function can produce', () => {
+    const v = locationVariables({
+      location: { name: 'a', address: 'b', phone: 'c', email: 'd' },
+      branding: { companyName: 'e' },
+    })
+    expect(Object.keys(v).sort()).toEqual([...LOCATION_VAR_KEYS].sort())
   })
 })
 
@@ -307,6 +390,34 @@ describe('unresolvedPlaceholders', () => {
   it('handles missing recipient defensively (no auto-fills available)', () => {
     const body = 'Hello {{full_name}}.'
     expect(unresolvedPlaceholders(body, null, {})).toEqual(['full_name'])
+  })
+
+  // CONTRACTS-VARS.2 — opts.assumeKeys lets a caller (the issue
+  // wizard, for LOCATION_VAR_KEYS) declare placeholders as resolved
+  // even though neither the profile nor customVariables supplies them.
+  describe('opts.assumeKeys', () => {
+    it('treats an assumed key as resolved even with no profile/custom value', () => {
+      const body = 'At {{location_name}}, hi {{full_name}}.'
+      expect(unresolvedPlaceholders(body, recipient, {}, { assumeKeys: ['location_name'] }))
+        .toEqual([])
+    })
+
+    it('only suppresses the assumed keys — everything else still reports', () => {
+      const body = 'At {{location_name}}, sign by {{commencement_date}}.'
+      expect(unresolvedPlaceholders(body, recipient, {}, { assumeKeys: ['location_name'] }))
+        .toEqual(['commencement_date'])
+    })
+
+    it('defaults to no assumed keys when opts is omitted', () => {
+      const body = 'At {{location_name}}.'
+      expect(unresolvedPlaceholders(body, recipient, {})).toEqual(['location_name'])
+    })
+
+    it('an empty assumeKeys array behaves the same as omitting opts', () => {
+      const body = 'At {{location_name}}.'
+      expect(unresolvedPlaceholders(body, recipient, {}, { assumeKeys: [] }))
+        .toEqual(['location_name'])
+    })
   })
 })
 

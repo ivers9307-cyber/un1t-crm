@@ -6,13 +6,18 @@
 // variable-derivation and substitution logic so it can be reused
 // from the API route, the email/PDF pipeline, and the unit tests.
 //
-// Three sources of variables, merged in this priority (later
+// Four sources of variables, merged in this priority (later
 // wins):
 //   1. Profile-derived auto-fills (full_name, email, role, ...)
 //   2. Compensation-derived auto-fills (annual_salary, hourly_rate,
 //      contracted_rate, contracted_hours_per_week)
-//   3. Custom variables provided by the issuer at issue time
-//      (declared in the template's variables_schema JSONB).
+//   3. CONTRACTS-VARS.2 — location-derived auto-fills (location_name,
+//      location_address, location_phone, location_email,
+//      company_name), resolved server-side only from the recipient's
+//      location + getLocationBranding() — see locationVariables().
+//   4. Custom variables provided by the issuer at issue time
+//      (declared in the template's variables_schema JSONB, or
+//      defaulted per-key via variables_schema[].default).
 //
 // Once the contract is issued the merged map is stored in
 // `contracts.variables_data` and the rendered body is stored in
@@ -109,6 +114,48 @@ export function mergeVariables(profile, customVariables) {
     ...profileVariables(profile),
     ...(customVariables || {}),
   }
+}
+
+// =============================================================
+// CONTRACTS-VARS.2 — location auto-fill variables
+// =============================================================
+
+// Keys locationVariables() may produce. Exported so callers (the
+// issue wizard) can treat these as "resolved elsewhere" without
+// hard-coding the list in two places — e.g. unresolvedPlaceholders()'s
+// assumeKeys option.
+export const LOCATION_VAR_KEYS = [
+  'location_name',
+  'location_address',
+  'location_phone',
+  'location_email',
+  'company_name',
+]
+
+/**
+ * Build the location-derived auto-fill variable map. Pure — caller
+ * passes the location row (from `public.locations`: name, address,
+ * phone, email) and the resolved branding object (from
+ * getLocationBranding(), which already inherits location ->
+ * organisation -> 'UN1T' defaults). Only keys that resolve to a
+ * non-empty string are included, same convention as
+ * profileVariables() — a template referencing an unset field falls
+ * through to the "still unresolved" path instead of rendering an
+ * empty line.
+ *
+ * @param {object} [opts]
+ * @param {object|null} [opts.location] — { name, address, phone, email }
+ * @param {object|null} [opts.branding] — { companyName } (from getLocationBranding)
+ * @returns {Record<string, string>}
+ */
+export function locationVariables({ location, branding } = {}) {
+  const v = {}
+  if (location?.name) v.location_name = String(location.name)
+  if (location?.address) v.location_address = String(location.address)
+  if (location?.phone) v.location_phone = String(location.phone)
+  if (location?.email) v.location_email = String(location.email)
+  if (branding?.companyName) v.company_name = String(branding.companyName)
+  return v
 }
 
 /**
@@ -236,10 +283,21 @@ export function extractPlaceholders(bodyMarkdown) {
  * server-side (the API rejects issue if any remain). Keeping the
  * detection in one place keeps both layers in sync.
  *
+ * CONTRACTS-VARS.2 — `opts.assumeKeys` names placeholders that count
+ * as resolved regardless of profile/custom values, e.g. the wizard
+ * passes LOCATION_VAR_KEYS because it has no way to know the
+ * recipient's location fields client-side (they're filled in
+ * server-side at issue time — see locationVariables() in the API
+ * route). Server-side, location vars are merged into the variable
+ * map BEFORE this check runs against the rendered body, so the
+ * server never needs assumeKeys — it's a client-only affordance.
+ *
  * Returns [] when everything resolves.
  */
-export function unresolvedPlaceholders(bodyMarkdown, recipient, customVariables) {
+export function unresolvedPlaceholders(bodyMarkdown, recipient, customVariables, opts) {
+  const assumeKeys = opts?.assumeKeys || []
   const declared = new Set(Object.keys(profileVariables(recipient || {}) || {}))
+  for (const k of assumeKeys) declared.add(k)
   for (const k of Object.keys(customVariables || {})) {
     // Only count a key as "supplied" if it has a non-empty value.
     // Empty string or null should still trigger the prompt.

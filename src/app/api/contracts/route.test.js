@@ -32,6 +32,14 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/contracts-email', () => ({ sendContractIssuedEmail: vi.fn(async () => ({ ok: true })) }))
 vi.mock('@/lib/push', () => ({ sendPush: vi.fn(async () => {}) }))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => ({ logged: true })) }))
+// CONTRACTS-VARS.2 — every issue-path test below goes through
+// getLocationBranding(); stub it so tests don't need a
+// company_settings/org_settings mock on every `db.from`. Individual
+// tests override the resolved value with mockResolvedValueOnce where
+// the company_name substitution itself is under test.
+vi.mock('@/lib/location-branding', () => ({
+  getLocationBranding: vi.fn(async () => ({ companyName: 'UN1T', logoUrl: null, faviconUrl: null })),
+}))
 
 import { GET, POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
@@ -39,6 +47,7 @@ import { createServerClient } from '@/lib/supabase'
 import { logAuditEvent } from '@/lib/audit'
 import { sendContractIssuedEmail } from '@/lib/contracts-email'
 import { sendPush } from '@/lib/push'
+import { getLocationBranding } from '@/lib/location-branding'
 
 const ORG_A = 'org-a'
 const LOC_A1 = 'loc-a1'
@@ -453,6 +462,159 @@ describe('POST /api/contracts — CONTRACTS-EDIT.1 body_override', () => {
     expect(logAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
       details: expect.objectContaining({ body_edited: false }),
     }))
+  })
+})
+
+// ─── POST (issue) — CONTRACTS-VARS.2 location auto-fill variables ──
+//
+// Location vars (location_name/_address/_phone/_email/company_name)
+// are resolved server-side from the recipient's profile_locations
+// embed (the SAME location row the route already picks as
+// locationId) + getLocationBranding(), then folded into the merged
+// variable map BEFORE the render — so a template referencing
+// {{location_name}} renders clean with no issuer input required.
+
+const TPL_LOC = 'ffffffff-0000-0000-0000-000000000001'
+
+function issueLocationVarsMockDb({ locationOverrides = {} } = {}) {
+  const recipient = {
+    id: RECIPIENT,
+    full_name: 'Jane Doe',
+    email: 'jane@example.com',
+    role: 'staff',
+    employment_type: 'fte',
+    annual_salary: 50000,
+    hourly_rate: null,
+    overtime_rate: null,
+    contracted_hours_per_week: 40,
+    profile_locations: [
+      {
+        location_id: LOC_A1,
+        is_default: true,
+        location: {
+          id: LOC_A1,
+          organization_id: ORG_A,
+          name: 'UN1T Stillorgan',
+          address: 'Stillorgan SC, Dublin',
+          phone: '01 234 5678',
+          email: 'stillorgan@un1tdublin.com',
+          ...locationOverrides,
+        },
+      },
+    ],
+  }
+  const templates = [
+    {
+      id: TPL_LOC,
+      organization_id: ORG_A,
+      body_markdown: 'Welcome {{full_name}} to {{location_name}} at {{location_address}}, issued by {{company_name}}.',
+      variables_schema: [],
+      employment_type: 'both',
+      active: true,
+    },
+  ]
+  const calls = { contractsInsert: [] }
+  const from = vi.fn((table) => {
+    if (table === 'contract_templates') {
+      const filters = []
+      const b = {
+        eq: vi.fn((col, val) => { filters.push(r => r[col] === val); return b }),
+        maybeSingle: vi.fn(async () => ({
+          data: templates.find(r => filters.every(f => f(r))) || null,
+          error: null,
+        })),
+      }
+      return { select: vi.fn(() => b) }
+    }
+    if (table === 'profiles') {
+      const filters = []
+      const b = {
+        eq: vi.fn((col, val) => { filters.push(r => r[col] === val); return b }),
+        maybeSingle: vi.fn(async () => ({
+          data: filters.every(f => f(recipient)) ? recipient : null,
+          error: null,
+        })),
+      }
+      return { select: vi.fn(() => b) }
+    }
+    if (table === 'contracts') {
+      const insert = vi.fn((row) => {
+        calls.contractsInsert.push(row)
+        const b = { select: vi.fn(() => b), single: vi.fn(async () => ({ data: { id: 'c-new', ...row }, error: null })) }
+        return b
+      })
+      return { insert }
+    }
+    throw new Error(`unexpected table ${table}`)
+  })
+  return { db: { from }, calls }
+}
+
+const issueLocReq = (extra = {}) => new Request('https://example.com/api/contracts', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    template_id: TPL_LOC,
+    profile_id: RECIPIENT,
+    variables: {},
+    issuer_signature: 'Richard Ivers',
+    ...extra,
+  }),
+})
+
+describe('POST /api/contracts — CONTRACTS-VARS.2 location auto-fill variables', () => {
+  it("renders {{location_name}}/{{location_address}} from the recipient's resolved location and {{company_name}} from branding, with variables_data reflecting the same values", async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db, calls } = issueLocationVarsMockDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(issueLocReq())
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(calls.contractsInsert[0].body_rendered).toBe(
+      'Welcome Jane Doe to UN1T Stillorgan at Stillorgan SC, Dublin, issued by UN1T.'
+    )
+    expect(calls.contractsInsert[0].variables_data.location_name).toBe('UN1T Stillorgan')
+    expect(calls.contractsInsert[0].variables_data.location_address).toBe('Stillorgan SC, Dublin')
+    expect(calls.contractsInsert[0].variables_data.company_name).toBe('UN1T')
+    expect(getLocationBranding).toHaveBeenCalledWith(db, LOC_A1)
+  })
+
+  it('a same-named custom variable overrides the auto-filled location value', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db, calls } = issueLocationVarsMockDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(issueLocReq({ variables: { location_name: 'Custom Venue Name' } }))
+    expect(res.status).toBe(200)
+    expect(calls.contractsInsert[0].body_rendered).toContain('Custom Venue Name')
+    expect(calls.contractsInsert[0].body_rendered).not.toContain('UN1T Stillorgan')
+  })
+
+  it('resolves branding-derived company_name even when getLocationBranding returns a different brand', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    getLocationBranding.mockResolvedValueOnce({ companyName: 'CCF Autos', logoUrl: null, faviconUrl: null })
+    const { db, calls } = issueLocationVarsMockDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(issueLocReq())
+    expect(res.status).toBe(200)
+    expect(calls.contractsInsert[0].body_rendered).toContain('issued by CCF Autos.')
+  })
+
+  it('a location field left unset leaves that placeholder unresolved — issue is rejected, not silently blank', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db, calls } = issueLocationVarsMockDb({ locationOverrides: { name: null } })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(issueLocReq())
+    const body = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(body.unmapped_keys).toEqual(['location_name'])
+    expect(calls.contractsInsert).toHaveLength(0)
   })
 })
 

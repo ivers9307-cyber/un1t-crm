@@ -31,7 +31,9 @@ import {
   renderTemplate,
   validateCustomVariables,
   extractPlaceholders,
+  locationVariables,
 } from '@/lib/contracts'
+import { getLocationBranding } from '@/lib/location-branding'
 import { notifyContractIssued } from '@/lib/contracts-notify'
 import { logAuditEvent } from '@/lib/audit'
 
@@ -142,7 +144,7 @@ export async function POST(request) {
       id, full_name, email, role, employment_type,
       annual_salary, hourly_rate, overtime_rate, contracted_hours_per_week,
       profile_locations:profile_locations(location_id, is_default,
-        location:locations!location_id(id, organization_id))
+        location:locations!location_id(id, organization_id, name, address, phone, email))
     `)
     .eq('id', parsed.data.profile_id)
     .maybeSingle()
@@ -179,6 +181,17 @@ export async function POST(request) {
     }, { status: 400 })
   }
 
+  // 3a. CONTRACTS-VARS.2 — location auto-fill variables. Resolve the
+  //     SAME location row already picked above as locationId (falls
+  //     through to {} fields if an explicit request-body location_id
+  //     isn't actually one of the recipient's own links — an edge case
+  //     that just means fewer location vars resolve, not an error).
+  //     Branding is location -> org -> 'UN1T' inheritance (see
+  //     getLocationBranding); fetch once, reused by the render below.
+  const locationRow = recipientLinks.find(l => l.location_id === locationId)?.location || null
+  const branding = await getLocationBranding(db, locationId)
+  const locVars = locationVariables({ location: locationRow, branding })
+
   // 4. Validate custom variables required by the template.
   const customCheck = validateCustomVariables(template.variables_schema, parsed.data.variables)
   if (!customCheck.ok) {
@@ -188,18 +201,28 @@ export async function POST(request) {
     }, { status: 400 })
   }
 
-  // 5. Render — merge profile auto-fills + custom variables, then
+  // 5. Render — merge profile auto-fills, location auto-fills, and
+  //    custom variables (in that priority — custom always wins), then
   //    substitute. body_rendered is what gets stored; the recipient
-  //    sees this exact text on their signing page.
-  const merged = mergeVariables(recipient, parsed.data.variables)
+  //    sees this exact text on their signing page. Location vars are
+  //    folded into the "custom" argument here (mergeVariables' own
+  //    signature stays profile/custom) so a same-named custom variable
+  //    can still override a location auto-fill if a template ever
+  //    declares one.
+  const merged = mergeVariables(recipient, { ...locVars, ...parsed.data.variables })
   let bodyRendered = renderTemplate(template.body_markdown, merged)
 
   // 5a. CONTRACT-VARS.1 — reject if any placeholder remains in the
-  //     rendered body. The wizard surfaces these in step 2 as an
-  //     "Unmapped variables" form, so an issuer who's made it this
-  //     far has had a chance to fill them in. This server check is
-  //     the safety net for any other client (API consumer, bulk
-  //     script, future mobile-issuer flow) that might miss it.
+  //     rendered body. Location placeholders were already substituted
+  //     above (locVars is folded into `merged` before this render), so
+  //     no assumeKeys are needed here — by the time we reach this
+  //     check the rendered text genuinely contains no location
+  //     placeholders to account for. The wizard surfaces any OTHER
+  //     unresolved placeholder in step 2 as an "Unmapped variables"
+  //     form, so an issuer who's made it this far has had a chance to
+  //     fill them in. This server check is the safety net for any
+  //     other client (API consumer, bulk script, future mobile-issuer
+  //     flow) that might miss it.
   const leftover = extractPlaceholders(bodyRendered)
   if (leftover.length > 0) {
     return NextResponse.json({

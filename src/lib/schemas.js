@@ -281,6 +281,13 @@ export const contractVariableDefSchema = z.object({
   label: z.string().min(1).max(120),
   type: z.enum(['text', 'number', 'date']).default('text'),
   required: z.boolean().default(false),
+  // CONTRACTS-VARS.2 — optional per-variable default, pre-filled into
+  // the issue wizard's input (prefill from a re-issue and issuer
+  // typing both still win over this). Stored as a string regardless
+  // of `type` (matches how the wizard's number/date inputs read their
+  // value); omitted entirely when the template author leaves it blank
+  // — see ContractTemplateForm's payload builder.
+  default: z.string().max(500).optional(),
 })
 
 export const contractTemplateSchema = z.object({
