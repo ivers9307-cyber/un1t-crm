@@ -214,7 +214,7 @@ jobs:
       # uploading the directory could break Apple's code-signing
       # resource layout.
       - name: Upload signed app + notarisation metadata
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cf-studio-mac-${{ github.run_number }}-signed
           path: |
