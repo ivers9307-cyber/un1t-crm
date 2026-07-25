@@ -19,8 +19,9 @@
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
   Plug, Zap, DoorOpen, Snowflake, FileCheck, MessageSquare, MessageCircle,
-  AlertCircle, CheckCircle2, Megaphone, Instagram, CreditCard,
+  AlertCircle, CheckCircle2, Megaphone, CreditCard,
 } from 'lucide-react'
+import { Instagram } from '@/components/icons/InstagramIcon'
 import ConnectionsSection from '@/components/customer-agent/ConnectionsSection'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 
