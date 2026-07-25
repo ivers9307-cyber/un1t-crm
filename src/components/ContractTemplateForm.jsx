@@ -20,6 +20,7 @@ import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, Trash2, FileText } from 'lucide-react'
 import { renderTemplate, profileVariables } from '@/lib/contracts'
+import ContractBody from '@/components/ContractBody'
 
 const SAMPLE_PROFILE = {
   full_name: 'Sample Recipient',
@@ -300,8 +301,8 @@ export default function ContractTemplateForm({ initial, isEdit = false }) {
         </div>
         <div className={`${tab === 'write' ? 'hidden md:block' : ''}`}>
           <label className="block text-sm text-un1t-subtle mb-1">Live preview</label>
-          <div className="bg-white text-gray-900 border border-un1t-border rounded-md p-4 min-h-[400px] whitespace-pre-wrap text-sm leading-relaxed">
-            {preview || <span className="text-gray-400">Start typing in the body…</span>}
+          <div className="bg-white text-gray-900 border border-un1t-border rounded-md p-4 min-h-[400px]">
+            {preview ? <ContractBody markdown={preview} /> : <span className="text-gray-400 text-sm">Start typing in the body…</span>}
           </div>
           <p className="text-[10px] text-un1t-muted mt-1">
             Preview uses sample profile data ({SAMPLE_PROFILE.full_name}, salary {`{{annual_salary}}`} etc.). At issue time the recipient&apos;s real values replace these.

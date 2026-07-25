@@ -16,6 +16,7 @@ import { useState, useEffect, useMemo, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
 import { ChevronRight, FileText, AlertCircle } from 'lucide-react'
 import { renderTemplate, profileVariables, unresolvedPlaceholders } from '@/lib/contracts'
+import ContractBody from '@/components/ContractBody'
 
 export default function ContractIssueWizard({ issuerName }) {
   const router = useRouter()
@@ -321,12 +322,22 @@ export default function ContractIssueWizard({ issuerName }) {
           )}
           <div>
             <label className="block text-sm text-un1t-subtle mb-1">Preview</label>
-            <div className="bg-white text-gray-900 border border-un1t-border rounded-md p-4 max-h-[400px] overflow-auto whitespace-pre-wrap text-sm leading-relaxed">
-              {/* Highlight any {{placeholder}} that's still literal,
-                  so the issuer can see exactly where they'll appear
-                  in the final document. */}
-              {renderPreviewWithHighlights(preview)}
-            </div>
+            {stillUnfilled.length > 0 ? (
+              // Raw view — while placeholders are still unresolved we
+              // show the literal markdown source with each unfilled
+              // {{placeholder}} highlighted, so the issuer can see
+              // exactly where they'll appear in the final document.
+              // Rendering this through ContractBody would hide the
+              // literal {{...}} runs inside markdown formatting, so
+              // the raw view stays plain text until everything resolves.
+              <div className="bg-white text-gray-900 border border-un1t-border rounded-md p-4 max-h-[400px] overflow-auto whitespace-pre-wrap text-sm leading-relaxed">
+                {renderPreviewWithHighlights(preview)}
+              </div>
+            ) : (
+              <div className="bg-white text-gray-900 border border-un1t-border rounded-md p-4 max-h-[400px] overflow-auto">
+                <ContractBody markdown={preview} />
+              </div>
+            )}
           </div>
           <div>
             <label className="block text-sm text-un1t-subtle mb-1">
