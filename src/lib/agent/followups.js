@@ -21,10 +21,11 @@
 // (settings.customer_agent.followups.enabled). Every skip logs a
 // structured reason — silence must always be explainable (#478).
 
-import { buildCachedSystem } from './prompt'
-import { formatHistoryForClaude, parseAgentResponse, phoneMatchesAllowlist } from './core'
+import { buildCachedSystem, SKIP_PREFIX } from './prompt'
+import { formatHistoryForClaude, parseAgentResponse, phoneMatchesAllowlist, isSkipResponse } from './core'
 import { getLocationBranding } from '@/lib/location-branding'
 import { anthropicMessages } from '@/lib/anthropic'
+import { dublinTodayStr } from '@/lib/dublin-time'
 
 const AGENT_MODEL = 'claude-sonnet-4-6'
 const H_MS = 3600_000
@@ -170,12 +171,16 @@ export function renderFollowupBody(template, values) {
   return body.replace(/\{\{(\d+)\}\}/g, (_, i) => String(values?.[Number(i) - 1] ?? last))
 }
 
+// The "[STUDIO SYSTEM]" marker is the studio's own channel into the model on
+// the proactive paths. A customer cannot forge it: core.js sanitizeInboundText
+// neutralises the marker (and the control sentinels) in inbound text before it
+// reaches history (HARDEN.2).
 const NUDGE_INSTRUCTION =
-  '[STUDIO SYSTEM — not the customer] The customer has gone quiet since your last message. ' +
-  'Write ONE short, warm follow-up (1–2 sentences) that gently moves their open request ' +
-  "forward — reference what they were asking about. No new topics, no pressure, don't " +
+  '[STUDIO SYSTEM - not the customer] The customer has gone quiet since your last message. ' +
+  'Write ONE short, warm follow-up (1-2 sentences) that gently moves their open request ' +
+  "forward, referencing what they were asking about. No new topics, no pressure, don't " +
   'introduce yourself again. If there is genuinely nothing open to follow up on, reply with ' +
-  'exactly [[SKIP]] and nothing else.'
+  `exactly ${SKIP_PREFIX} and nothing else.`
 
 // ── the runner (IO) ─────────────────────────────────────────────────
 
@@ -263,9 +268,29 @@ async function stampStage(db, conversationId, stage, sent) {
     .eq('id', conversationId)
 }
 
+/**
+ * The location's enabled knowledge, same query the live reply path runs
+ * (auto-reply.js). Best-effort: a failure just yields an empty list.
+ */
+async function loadAgentKnowledge(db, locationId) {
+  const { data } = await db.from('agent_knowledge')
+    .select('category, title, content, enabled, sort_order')
+    .eq('location_id', locationId)
+    .eq('enabled', true)
+    .order('sort_order', { ascending: true })
+  return data || []
+}
+
 // One short proactive message in Mia's voice, given the thread + an
 // instruction. Returns the text or null (callers log the reason).
-async function composeAgentText(location, settings, historyRows, instruction, companyName) {
+//
+// The prompt must match the live reply path: omitting `knowledge` rendered the
+// "No knowledge has been added yet. You cannot answer factual questions" notice
+// into every nudge and check-in, which is false whenever the location HAS
+// knowledge and biases the model straight to [[SKIP]]/handoff (the first-class
+// check-in's intro-offer framing depends on those facts). `today` is the Dublin
+// business day for the same reason.
+async function composeAgentText({ location, settings, historyRows, instruction, companyName, knowledge }) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { error: 'no_api_key' }
   // CACHE.2 — cache the stable prefix (no tools on this path, so it caches the
@@ -277,7 +302,8 @@ async function composeAgentText(location, settings, historyRows, instruction, co
     membershipUrl: settings?.membership_signup_url || null,
     tone: settings?.tone || null,
     extraRules: settings?.extra_rules || null,
-    today: new Date().toDateString(),
+    knowledge: knowledge || [],
+    today: dublinTodayStr(),
   })
   const messages = [
     ...formatHistoryForClaude(historyRows || []),
@@ -299,11 +325,15 @@ async function composeAgentText(location, settings, historyRows, instruction, co
 
 async function sendNudge(db, conv, location, settings, facts) {
   const branding = await getLocationBranding(db, location.id)
-  const composed = await composeAgentText(location, settings, facts.rows, NUDGE_INSTRUCTION, branding.companyName)
+  const composed = await composeAgentText({
+    location, settings, historyRows: facts.rows, instruction: NUDGE_INSTRUCTION,
+    companyName: branding.companyName,
+    knowledge: await loadAgentKnowledge(db, location.id),
+  })
   if (composed.error) return skipLog(conv.id, `nudge_${composed.error}`)
   const text = composed.text
 
-  if (!text || /\[\[SKIP\]\]/.test(text)) {
+  if (!text || isSkipResponse(text)) {
     await stampStage(db, conv.id, 3, false) // nothing open — close the cycle quietly
     return skipLog(conv.id, 'nothing_open')
   }
@@ -467,10 +497,10 @@ export async function runAgentFollowups(db, { nowMs = Date.now() } = {}) {
 
 function checkinInstruction(className) {
   return (
-    '[STUDIO SYSTEM — not the customer] This customer attended their first ' +
-    `${className} class earlier today. Send ONE short, warm check-in asking how it went — ` +
-    'reference the class by name. No selling in this message; just genuine interest. ' +
-    'If the conversation already covered how it went, reply with exactly [[SKIP]].'
+    '[STUDIO SYSTEM - not the customer] This customer attended their first ' +
+    `${className} class earlier today. Send ONE short, warm check-in asking how it went, ` +
+    'referencing the class by name. No selling in this message; just genuine interest. ' +
+    `If the conversation already covered how it went, reply with exactly ${SKIP_PREFIX}.`
   )
 }
 
@@ -543,6 +573,7 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
     }
 
     const branding = await getLocationBranding(db, location.id)
+    const knowledge = await loadAgentKnowledge(db, location.id)
 
     for (const contact of contacts || []) {
       try {
@@ -589,14 +620,16 @@ export async function runFirstClassCheckins(db, { nowMs = Date.now() } = {}) {
 
         if (windowOpen) {
           // Case A — free-form, in Mia's voice, referencing the class.
-          const composed = await composeAgentText(
-            location, settings, facts.rows, checkinInstruction(className), branding.companyName,
-          )
+          const composed = await composeAgentText({
+            location, settings, historyRows: facts.rows,
+            instruction: checkinInstruction(className),
+            companyName: branding.companyName, knowledge,
+          })
           if (composed.error) {
             console.warn('[radar-agent] checkin-skip', JSON.stringify({ contactId: contact.id, reason: composed.error }))
             bump('compose_error'); results.skipped++; continue
           }
-          if (/\[\[SKIP\]\]/.test(composed.text || '')) {
+          if (isSkipResponse(composed.text)) {
             await stampCheckin(db, contact, location.id, className, 'skipped — already discussed')
             bump('already_discussed'); results.skipped++; continue
           }

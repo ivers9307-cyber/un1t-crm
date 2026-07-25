@@ -11,28 +11,77 @@
 // message row so the thread history is complete. Fail-soft
 // throughout — a send hiccup never breaks the approval.
 
-/** Friendly booking-confirmed text. Pure — unit-tested. */
-export function buildBookingConfirmationText({ className, classTime } = {}) {
-  const what = [className, classTime].filter(Boolean).join(' — ')
-  return what
-    ? `Good news — you're booked in for ${what}. See you there! 💪`
-    : "Good news — you're booked in. See you there! 💪"
+import { stripEmDashes } from './core'
+
+// HUMANIZE.1 — customer-visible copy: no em dashes, no emoji, low-key. Both
+// texts are operator-editable (settings.customer_agent.booking_confirmation_text
+// / .cancellation_confirmation_text, same settings-field-plus-default pattern as
+// holding_message); these are the fallbacks. {class} is the only placeholder:
+// it renders the class name + time, and when neither is known the "for {class}"
+// clause is dropped rather than shipping a dangling "for .".
+export const DEFAULT_BOOKING_CONFIRMATION_TEXT =
+  "Good news, you're booked in for {class}. See you there."
+export const DEFAULT_CANCELLATION_CONFIRMATION_TEXT =
+  'All sorted, your booking for {class} has been cancelled. Hope to see you at another class soon.'
+
+function renderConfirmation(template, className, classTime) {
+  const what = [className, classTime].filter(Boolean).join(', ')
+  const base = String(template || '').trim()
+  const filled = what
+    ? base.replace(/\{class\}/g, what)
+    : base.replace(/\s*\bfor\s+\{class\}/gi, '').replace(/\s*\{class\}/g, '')
+  return stripEmDashes(filled).trim()
+}
+
+/**
+ * Friendly booking-confirmed text. Pure — unit-tested.
+ * @param {{className?:string, classTime?:string, template?:string|null}} [args]
+ *   template = the operator's booking_confirmation_text, if set.
+ */
+export function buildBookingConfirmationText({ className, classTime, template } = {}) {
+  return renderConfirmation(
+    String(template || '').trim() || DEFAULT_BOOKING_CONFIRMATION_TEXT,
+    className, classTime,
+  )
 }
 
 /** AGENT-CANCEL.1 — in-thread confirmation once an approved cancellation executes. */
-export function buildCancellationConfirmationText({ className, classTime } = {}) {
-  const what = [className, classTime].filter(Boolean).join(' — ')
-  return what
-    ? `All sorted — your booking for ${what} has been cancelled. Hope to see you at another class soon!`
-    : 'All sorted — your booking has been cancelled. Hope to see you at another class soon!'
+export function buildCancellationConfirmationText({ className, classTime, template } = {}) {
+  return renderConfirmation(
+    String(template || '').trim() || DEFAULT_CANCELLATION_CONFIRMATION_TEXT,
+    className, classTime,
+  )
+}
+
+/**
+ * The location's operator-set confirmation copy (null when unset → the
+ * defaults above). Best-effort: a read failure just uses the defaults.
+ * @returns {Promise<{booking: string|null, cancellation: string|null}>}
+ */
+export async function agentConfirmationTemplates(db, locationId) {
+  if (!locationId) return { booking: null, cancellation: null }
+  try {
+    const { data } = await db.from('locations').select('settings').eq('id', locationId).maybeSingle()
+    const s = data?.settings?.customer_agent || {}
+    return {
+      booking: String(s.booking_confirmation_text || '').trim() || null,
+      cancellation: String(s.cancellation_confirmation_text || '').trim() || null,
+    }
+  } catch {
+    return { booking: null, cancellation: null }
+  }
 }
 
 /**
  * Send `text` into an agent conversation thread.
  * @returns {{ sent: boolean, reason?: string }}
  */
-export async function sendAgentThreadMessage(db, { channel, conversationId, text }) {
-  if (!conversationId || !text) return { sent: false, reason: 'missing_args' }
+export async function sendAgentThreadMessage(db, { channel, conversationId, text: rawText }) {
+  if (!conversationId || !rawText) return { sent: false, reason: 'missing_args' }
+  // This path never goes through parseAgentResponse, so the em-dash scrub the
+  // live reply loop relies on has to happen here — every customer-bound agent
+  // message gets the same deterministic treatment.
+  const text = stripEmDashes(rawText)
   try {
     if (channel === 'whatsapp') {
       const { data: conversation } = await db.from('whatsapp_conversations')

@@ -58,10 +58,30 @@ describe('shapeEventsForAgent', () => {
     expect(out[0].date).toMatch(/Sat 20 Jun/)
     expect(out[0].price).toBe('Free')
     expect(out[0].signup_url).toBe('https://crm.example.com/race/summer-hyrox')
+    // CAPACITY-SECRECY.1 — full/limited booleans only, never a count.
     expect(out[0].waves).toEqual([
-      { wave_id: 'w1', time: '09:00', label: 'Wave 1', spots_left: 15 },
-      { wave_id: 'w2', time: '10:30', label: 'Wave 2', spots_left: 0, full: true },
+      { wave_id: 'w1', time: '09:00', label: 'Wave 1' },
+      { wave_id: 'w2', time: '10:30', label: 'Wave 2', full: true },
     ])
+  })
+
+  // The model must never receive a number it could relay to a customer
+  // (owner invariant 2). `limited` is the coarse urgency signal instead.
+  it('never exposes a spot count, and flags a nearly-full wave as limited', () => {
+    const nearlyFull = {
+      ...base,
+      waves: [
+        { id: 'w1', start_time: '09:00:00', capacity: 20, label: 'Wave 1' },
+        { id: 'w2', start_time: '10:30:00', capacity: 10, label: 'Wave 2' },
+        { id: 'w3', start_time: '12:00:00', capacity: null, label: 'Wave 3' },
+      ],
+    }
+    const out = shapeEventsForAgent([nearlyFull], { w1: 1, w2: 8 }, now, 'https://x.com')
+    expect(JSON.stringify(out)).not.toMatch(/spots?_left|unlimited/)
+    expect(out[0].waves[0].limited).toBeUndefined()   // 19 left
+    expect(out[0].waves[1].limited).toBe(true)        // 2 left
+    expect(out[0].waves[2].limited).toBeUndefined()   // uncapped
+    expect(out[0].waves[2].full).toBeUndefined()
   })
   it('filters inactive, past, and closed-registration events', () => {
     const out = shapeEventsForAgent([
