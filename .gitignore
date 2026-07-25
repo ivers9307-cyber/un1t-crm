@@ -26,3 +26,7 @@ graphify-out/
 # ffmpeg.wasm core/worker — self-hosted at install time (~25MB), never committed
 public/ffmpeg/
 evals/output/
+
+# Playwright smoke pack (E2E-SMOKE.1) — run artifacts, never source
+playwright-report/
+test-results/
