@@ -79,6 +79,12 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
   const [loading, setLoading] = useState(true)
   const [queueFilter, setQueueFilter] = useState('needs_reply')
   const [search, setSearch] = useState('')
+  // INBOX-SEARCH.1 — server hits for the current query, or null when not
+  // searching. The plain lists cap at the latest 50 per channel, so the
+  // old client-only filter silently missed everything older; a 2+ char
+  // query now also asks the server for the most-recent 50 MATCHES per
+  // channel (contact name/phone/email + thread fields).
+  const [serverHits, setServerHits] = useState(null)
   const [selected, setSelected] = useState(
     initialConversationId
       ? { ch: VALID_CHANNELS.has(initialChannel) ? initialChannel : 'wa', id: initialConversationId }
@@ -140,6 +146,29 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
     return () => clearInterval(t)
   }, [loadConversations])
 
+  // INBOX-SEARCH.1 — debounced server search. Below 2 chars the server
+  // hits clear and the queue falls back to the instant client filter
+  // over the loaded lists (which also bridges the debounce gap).
+  useEffect(() => {
+    const q = search.trim()
+    if (q.length < 2) { setServerHits(null); return undefined }
+    let cancelled = false
+    const t = setTimeout(async () => {
+      const base = locationId ? `location_id=${encodeURIComponent(locationId)}&` : ''
+      const qs = `?${base}q=${encodeURIComponent(q)}`
+      const [wa, ig, em] = await Promise.all([
+        fetch(`/api/whatsapp/conversations${qs}`).then(r => r.json()).then(d => (d.success ? d.conversations || [] : null), () => null),
+        fetch(`/api/instagram/conversations${qs}`).then(r => r.json()).then(d => (d.success ? d.conversations || [] : null), () => null),
+        fetch(`/api/email/conversations${qs}`).then(r => r.json()).then(d => (d.success ? d.conversations || [] : null), () => null),
+      ])
+      if (cancelled) return
+      // A failed channel degrades to no server hits for that channel —
+      // the client filter over its loaded rows still applies via merge.
+      setServerHits({ wa: wa || [], ig: ig || [], em: em || [] })
+    }, 300)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [search, locationId])
+
   // Quick-resolve from the queue (no need to open the thread) — for
   // messages that don't need a reply, e.g. a plain acknowledgement.
   async function quickResolve(conv) {
@@ -177,7 +206,30 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
       : queueFilter === 'approvals'
         ? merged.filter(isPendingApproval)
         : merged.filter(needsReply)
-  const visible = queueMatched.filter(conv => matchesSearch(`${rowName(conv)} ${conv.last_message_preview || ''}`, search))
+
+  // INBOX-SEARCH.1 — while a server search is active, rows are the
+  // server hits UNIONed with client matches from the loaded lists
+  // (dedup by channel:id), and the queue chips are bypassed: search is
+  // global, not scoped to Needs-reply. Server hits are NOT re-filtered
+  // client-side — they can match on contact phone/email, which the
+  // client haystack (name + preview) doesn't contain.
+  const searchActive = search.trim().length >= 2 && serverHits !== null
+  let visible
+  if (searchActive) {
+    const hits = [
+      ...serverHits.wa.map(c => ({ ...c, _ch: 'wa' })),
+      ...serverHits.ig.map(c => ({ ...c, _ch: 'ig' })),
+      ...serverHits.em.map(c => ({ ...c, _ch: 'em' })),
+    ]
+    const seen = new Set(hits.map(c => `${c._ch}:${c.id}`))
+    for (const conv of merged) {
+      if (seen.has(`${conv._ch}:${conv.id}`)) continue
+      if (matchesSearch(`${rowName(conv)} ${conv.last_message_preview || ''}`, search)) hits.push(conv)
+    }
+    visible = hits.sort((a, b) => new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0))
+  } else {
+    visible = queueMatched.filter(conv => matchesSearch(`${rowName(conv)} ${conv.last_message_preview || ''}`, search))
+  }
   const needsReplyCount = merged.filter(needsReply).length
   const handoffCount = merged.filter(isAgentHandoff).length
   const approvalsCount = merged.filter(isPendingApproval).length
@@ -187,7 +239,8 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
   // extra lookup: resolve from the merged list (null until the list
   // has loaded on a cold deep link — the pane shows a stub meanwhile).
   const selectedConv = selected
-    ? merged.find(c => c._ch === selected.ch && c.id === selected.id)
+    ? (merged.find(c => c._ch === selected.ch && c.id === selected.id)
+      || (searchActive ? visible.find(c => c._ch === selected.ch && c.id === selected.id) : null))
     : null
   const selectedContactId = selectedConv?.contacts?.id || null
 
@@ -214,9 +267,11 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
           </button>
         </div>
 
-        {/* Search — client-side over the already-loaded queue (channel is now
-            obvious per-row via ChannelGlyph, so the old channel-filter row
-            was redundant and is gone; INBOX-REDESIGN.5) */}
+        {/* Search — instant client filter over the loaded queue, plus a
+            debounced server search (?q=, INBOX-SEARCH.1) so matches beyond
+            each channel's latest-50 window surface too. (Channel is obvious
+            per-row via ChannelGlyph — the old channel-filter row is gone;
+            INBOX-REDESIGN.5) */}
         <div className="px-3 pt-2">
           <div className="flex items-center gap-2 rounded-[9px] border border-un1t-border bg-un1t-surface px-[11px] py-2 text-un1t-subtle">
             <Search size={15} className="flex-none" />

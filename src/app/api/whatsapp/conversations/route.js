@@ -1,6 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccess , getUserLocationIds, requireInboxPermission } from '@/lib/auth'
+import { INBOX_SEARCH_MIN_LENGTH, buildInboxSearchOr, searchInboxContactIds } from '@/lib/inbox-search-server'
 
 // GET /api/whatsapp/conversations — list conversations (inbox)
 export async function GET(request) {
@@ -28,6 +29,17 @@ export async function GET(request) {
     const userLocationIds = getUserLocationIds(user)
     if (userLocationIds.length === 0) return NextResponse.json({ success: true, conversations: [] })
     query = query.in('location_id', userLocationIds)
+  }
+
+  // INBOX-SEARCH.1 — ?q= turns the latest-50 window into the most-recent
+  // 50 MATCHES: linked-contact hits (name/phone/email, via a scoped id
+  // lookup — embedded-resource filters are unreliable, see CLAUDE.md) OR
+  // the conversation's own denormalised fields.
+  const q = (searchParams.get('q') || '').trim()
+  if (q.length >= INBOX_SEARCH_MIN_LENGTH) {
+    const scopeIds = locationId ? [locationId] : getUserLocationIds(user)
+    const contactIds = await searchInboxContactIds(db, { q, locationIds: scopeIds })
+    query = query.or(buildInboxSearchOr('whatsapp_conversations', q, contactIds))
   }
 
   const { data, error } = await query
