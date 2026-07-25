@@ -310,6 +310,81 @@ export function unresolvedPlaceholders(bodyMarkdown, recipient, customVariables,
 }
 
 // =============================================================
+// CONTRACTS-BULK.1 — bulk-issue helpers
+// =============================================================
+
+/**
+ * Given a set of selected recipients and the full template list,
+ * return the templates that are valid for issuing to EVERY
+ * recipient in one go — a template qualifies if it's
+ * `employment_type === 'both'`, or its employment_type matches
+ * a given recipient's employment_type, for ALL recipients.
+ *
+ * A recipient with a missing/unknown employment_type only matches
+ * 'both' templates (mirrors the single-recipient eligibility check
+ * the API route enforces — an unknown type never equals a specific
+ * template employment_type).
+ *
+ * Empty recipients → every template is "eligible" (nothing to
+ * filter against yet — matches the pre-selection state of the
+ * step-1 template dropdown).
+ *
+ * Pure — no Supabase, no fetch. Recipients only need an
+ * `employment_type` field; templates only need `employment_type`.
+ *
+ * @param {Array<{employment_type?: string|null}>} recipients
+ * @param {Array<{employment_type: string}>} templates
+ * @returns {Array}
+ */
+export function eligibleTemplatesFor(recipients, templates) {
+  const all = templates || []
+  if (!recipients || recipients.length === 0) return all
+  return all.filter((t) =>
+    recipients.every((r) => t.employment_type === 'both' || t.employment_type === r?.employment_type)
+  )
+}
+
+/**
+ * CONTRACTS-BULK.1 — per-recipient union of unresolvedPlaceholders().
+ *
+ * Profile-derived auto-fills differ per recipient (e.g. one coach
+ * might have `annual_salary` set and another might not), so a bulk
+ * issue's "still needs a value" check can't just look at one
+ * recipient — a key that resolves fine for recipient A might still
+ * render literally for recipient B. This runs unresolvedPlaceholders()
+ * once per recipient and unions the results, remembering which
+ * recipient(s) each unresolved key belongs to (for the UI to name
+ * them in the warning, e.g. "annual_salary (Sarah Doe)").
+ *
+ * Order: keys appear in first-encountered order (recipient order,
+ * then placeholder order within that recipient) — stable for
+ * rendering. With a single recipient this reduces to exactly
+ * `unresolvedPlaceholders(...)`'s own key list (each entry's
+ * `recipients` array has just that one recipient).
+ *
+ * @param {string} bodyMarkdown
+ * @param {Array<object>} recipients
+ * @param {Record<string, unknown>} customVariables — shared across recipients
+ * @param {{assumeKeys?: string[]}} [opts]
+ * @returns {Array<{key: string, recipients: object[]}>}
+ */
+export function unresolvedPlaceholdersUnion(bodyMarkdown, recipients, customVariables, opts) {
+  const order = []
+  const byKey = new Map()
+  for (const recipient of recipients || []) {
+    const keys = unresolvedPlaceholders(bodyMarkdown, recipient, customVariables, opts)
+    for (const key of keys) {
+      if (!byKey.has(key)) {
+        byKey.set(key, [])
+        order.push(key)
+      }
+      byKey.get(key).push(recipient)
+    }
+  }
+  return order.map((key) => ({ key, recipients: byKey.get(key) }))
+}
+
+// =============================================================
 // Pure status-machine helpers
 // =============================================================
 // The API route imports these to validate transitions. Keeping

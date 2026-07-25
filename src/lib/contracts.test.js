@@ -14,6 +14,8 @@ import {
   validateCustomVariables,
   extractPlaceholders,
   unresolvedPlaceholders,
+  eligibleTemplatesFor,
+  unresolvedPlaceholdersUnion,
   canTransition,
   reminderDue,
   locationVariables,
@@ -418,6 +420,103 @@ describe('unresolvedPlaceholders', () => {
       expect(unresolvedPlaceholders(body, recipient, {}, { assumeKeys: [] }))
         .toEqual(['location_name'])
     })
+  })
+})
+
+describe('eligibleTemplatesFor (CONTRACTS-BULK.1)', () => {
+  const fte = { id: 't-fte', name: 'FTE contract', employment_type: 'fte' }
+  const contractor = { id: 't-con', name: 'Contractor agreement', employment_type: 'contractor' }
+  const both = { id: 't-both', name: 'Universal NDA', employment_type: 'both' }
+  const templates = [fte, contractor, both]
+
+  it('returns every template when no recipients are selected', () => {
+    expect(eligibleTemplatesFor([], templates)).toEqual(templates)
+    expect(eligibleTemplatesFor(null, templates)).toEqual(templates)
+    expect(eligibleTemplatesFor(undefined, templates)).toEqual(templates)
+  })
+
+  it('a single fte recipient gets fte + both templates', () => {
+    const recipients = [{ id: 'r1', employment_type: 'fte' }]
+    expect(eligibleTemplatesFor(recipients, templates)).toEqual([fte, both])
+  })
+
+  it('a single contractor recipient gets contractor + both templates', () => {
+    const recipients = [{ id: 'r1', employment_type: 'contractor' }]
+    expect(eligibleTemplatesFor(recipients, templates)).toEqual([contractor, both])
+  })
+
+  it('mixed fte + contractor recipients only leaves the "both" template', () => {
+    const recipients = [
+      { id: 'r1', employment_type: 'fte' },
+      { id: 'r2', employment_type: 'contractor' },
+    ]
+    expect(eligibleTemplatesFor(recipients, templates)).toEqual([both])
+  })
+
+  it('a recipient with unknown/null employment_type only matches "both"', () => {
+    expect(eligibleTemplatesFor([{ id: 'r1', employment_type: null }], templates)).toEqual([both])
+    expect(eligibleTemplatesFor([{ id: 'r1' }], templates)).toEqual([both])
+  })
+
+  it('same-type recipients keep every template that matches that type', () => {
+    const recipients = [
+      { id: 'r1', employment_type: 'fte' },
+      { id: 'r2', employment_type: 'fte' },
+    ]
+    expect(eligibleTemplatesFor(recipients, templates)).toEqual([fte, both])
+  })
+
+  it('handles an empty template list', () => {
+    expect(eligibleTemplatesFor([{ id: 'r1', employment_type: 'fte' }], [])).toEqual([])
+  })
+})
+
+describe('unresolvedPlaceholdersUnion (CONTRACTS-BULK.1)', () => {
+  const sarah = { id: 'p1', full_name: 'Sarah Doe', email: 'sarah@example.com', annual_salary: 60000 }
+  const john = { id: 'p2', full_name: 'John Smith', email: 'john@example.com' } // no annual_salary
+
+  it('reduces to unresolvedPlaceholders()\'s own list for a single recipient', () => {
+    const body = 'Hi {{full_name}}, salary {{annual_salary}}, notice {{notice_period}}.'
+    const result = unresolvedPlaceholdersUnion(body, [sarah], { notice_period: '4 weeks' })
+    expect(result.map((r) => r.key)).toEqual(
+      unresolvedPlaceholders(body, sarah, { notice_period: '4 weeks' })
+    )
+  })
+
+  it('unions keys missing for ANY recipient even if resolved for others', () => {
+    const body = 'Hi {{full_name}}, salary {{annual_salary}}.'
+    const result = unresolvedPlaceholdersUnion(body, [sarah, john], {})
+    // annual_salary resolves for sarah but not john — still surfaces.
+    expect(result.map((r) => r.key)).toEqual(['annual_salary'])
+  })
+
+  it('attributes each unresolved key to the recipient(s) it applies to', () => {
+    const body = 'Hi {{full_name}}, salary {{annual_salary}}.'
+    const result = unresolvedPlaceholdersUnion(body, [sarah, john], {})
+    const entry = result.find((r) => r.key === 'annual_salary')
+    expect(entry.recipients).toEqual([john])
+  })
+
+  it('a key missing for every recipient lists all of them', () => {
+    const body = 'Notice: {{notice_period}}.'
+    const result = unresolvedPlaceholdersUnion(body, [sarah, john], {})
+    const entry = result.find((r) => r.key === 'notice_period')
+    expect(entry.recipients).toEqual([sarah, john])
+  })
+
+  it('returns [] when every recipient resolves every placeholder', () => {
+    const body = 'Hi {{full_name}}.'
+    expect(unresolvedPlaceholdersUnion(body, [sarah, john], {})).toEqual([])
+  })
+
+  it('handles an empty recipients list', () => {
+    expect(unresolvedPlaceholdersUnion('Hi {{full_name}}.', [], {})).toEqual([])
+  })
+
+  it('respects opts.assumeKeys the same way unresolvedPlaceholders does', () => {
+    const body = 'At {{location_name}}, hi {{full_name}}.'
+    expect(unresolvedPlaceholdersUnion(body, [sarah, john], {}, { assumeKeys: ['location_name'] }))
+      .toEqual([])
   })
 })
 
