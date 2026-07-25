@@ -1,7 +1,7 @@
 import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
 import { resolveRearmPatch } from '@/lib/agent/core'
 import { validateBody } from '@/lib/validate'
 
@@ -15,6 +15,10 @@ export async function GET(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
+  const perm = requireInboxPermission(user, 'ig')
+  if (perm) return perm
 
   const db = createServerClient()
   const { searchParams } = new URL(request.url)
@@ -62,6 +66,10 @@ export async function PATCH(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
+  const perm = requireInboxPermission(user, 'ig')
+  if (perm) return perm
 
   const validation = await validateBody(request, PatchConversationBody)
   if (!validation.ok) return validation.response
