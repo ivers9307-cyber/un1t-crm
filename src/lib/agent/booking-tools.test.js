@@ -62,13 +62,28 @@ describe('shapeClassListForAgent', () => {
     time_start: Math.floor(NOW / 1000) + 7200, size: 16, booked: 10,
     active: true, private: false, ...over,
   })
-  it('lists upcoming public classes with spots left, time-sorted', () => {
+  it('lists upcoming public classes with a full flag, time-sorted', () => {
     const late = ev({ _id: 'f'.repeat(24), time_start: Math.floor(NOW / 1000) + 9000, booked: 16 })
     const out = shapeClassListForAgent([late, ev()], NOW)
     expect(out).toHaveLength(2)
-    expect(out[0]).toMatchObject({ event_id: 'e'.repeat(24), name: 'UN1T Strength', spots_left: 6, full: false })
-    expect(out[1]).toMatchObject({ full: true, spots_left: 0 })
+    expect(out[0]).toMatchObject({ event_id: 'e'.repeat(24), name: 'UN1T Strength', full: false })
+    expect(out[1]).toMatchObject({ full: true })
     expect(typeof out[0].time).toBe('string')
+  })
+
+  // CAPACITY-SECRECY.1 — owner invariant 2: the model must never receive a
+  // spaces count, so it can never relay one. `limited` is the urgency signal.
+  it('never exposes a spot count, and flags a nearly-full class as limited', () => {
+    const out = shapeClassListForAgent([
+      ev({ booked: 10 }),                                                    // 6 left
+      ev({ _id: 'f'.repeat(24), time_start: Math.floor(NOW / 1000) + 9000, booked: 14 }), // 2 left
+      ev({ _id: '0'.repeat(24), time_start: Math.floor(NOW / 1000) + 10800, booked: 16 }), // full
+    ], NOW)
+    expect(JSON.stringify(out)).not.toMatch(/spots?_left|booked|size/)
+    expect(out[0].limited).toBeUndefined()
+    expect(out[1]).toMatchObject({ full: false, limited: true })
+    expect(out[2]).toMatchObject({ full: true })
+    expect(out[2].limited).toBeUndefined()   // full is never also "limited"
   })
   it('skips past, private, and inactive events + junk', () => {
     expect(shapeClassListForAgent([
@@ -175,16 +190,42 @@ describe('agentRequestSubtitle', () => {
 })
 
 // In-thread confirmation text (notify.js).
-import { buildBookingConfirmationText } from './notify'
+import { buildBookingConfirmationText, buildCancellationConfirmationText } from './notify'
 
 describe('buildBookingConfirmationText', () => {
   it('includes the confirmed class + time when known', () => {
     const t = buildBookingConfirmationText({ className: 'UN1T Strength', classTime: 'Sat 09:00' })
-    expect(t).toContain('UN1T Strength — Sat 09:00')
+    expect(t).toContain('UN1T Strength, Sat 09:00')
     expect(t.toLowerCase()).toContain('booked')
   })
-  it('still reads well with no details', () => {
-    expect(buildBookingConfirmationText({}).toLowerCase()).toContain('booked')
+  it('still reads well with no details (the "for {class}" clause is dropped)', () => {
+    const t = buildBookingConfirmationText({})
+    expect(t.toLowerCase()).toContain('booked')
+    expect(t).not.toMatch(/\{class\}|\bfor\s*\./)
+  })
+  // HUMANIZE.1 — customer-visible copy: no em/en dash, no emoji.
+  it('ships no dashes or emoji in either default', () => {
+    for (const t of [
+      buildBookingConfirmationText({ className: 'ARENA', classTime: 'Sat 09:00' }),
+      buildBookingConfirmationText({}),
+      buildCancellationConfirmationText({ className: 'ARENA', classTime: 'Sat 09:00' }),
+      buildCancellationConfirmationText({}),
+    ]) {
+      expect(t).not.toMatch(/[—–]/)
+      expect(t).not.toMatch(/\p{Extended_Pictographic}/u)
+    }
+  })
+  it('uses the operator template when set, and scrubs a dash the operator typed', () => {
+    const t = buildBookingConfirmationText({
+      className: 'ARENA', classTime: 'Sat 09:00',
+      template: 'You are in for {class} — see you on the floor.',
+    })
+    expect(t).toBe('You are in for ARENA, Sat 09:00, see you on the floor.')
+  })
+  it('cancellation honours its own operator template', () => {
+    expect(buildCancellationConfirmationText({ className: 'ARENA', template: 'Cancelled: {class}.' }))
+      .toBe('Cancelled: ARENA.')
+    expect(buildCancellationConfirmationText({ template: '   ' }).toLowerCase()).toContain('cancelled')
   })
 })
 

@@ -17,6 +17,11 @@ const DEFAULTS = {
   tone: null,
   extra_rules: null,
   holding_message: null,
+  // AGENT-HANDS.1 / AGENT-CANCEL.1 — the in-thread texts sent to the customer
+  // when staff approve a drafted booking / cancellation. Null → the code
+  // defaults in lib/agent/notify.js. {class} renders the class + time.
+  booking_confirmation_text: null,
+  cancellation_confirmation_text: null,
   // C2 — instant greeting sent when someone opens the chat without typing
   // (request_welcome). Null → code default (DEFAULT_WELCOME_GREETING).
   welcome_greeting: null,
@@ -53,6 +58,8 @@ const SettingsSchema = z.object({
   tone: z.string().max(2000).nullable().optional(),
   extra_rules: z.string().max(2000).nullable().optional(),
   holding_message: z.string().max(500).nullable().optional(),
+  booking_confirmation_text: z.string().max(500).nullable().optional(),
+  cancellation_confirmation_text: z.string().max(500).nullable().optional(),
   welcome_greeting: z.string().max(500).nullable().optional(),
   link_button_text: z.string().max(25).nullable().optional(),
   quiet_hours: z.object({
@@ -171,6 +178,8 @@ export async function PUT(request) {
     tone: v.data.tone?.trim() || null,
     extra_rules: v.data.extra_rules?.trim() || null,
     holding_message: v.data.holding_message?.trim() || null,
+    booking_confirmation_text: v.data.booking_confirmation_text?.trim() || null,
+    cancellation_confirmation_text: v.data.cancellation_confirmation_text?.trim() || null,
     welcome_greeting: v.data.welcome_greeting?.trim() || null,
     link_button_text: v.data.link_button_text?.trim() || null,
     quiet_hours: v.data.quiet_hours || null,
