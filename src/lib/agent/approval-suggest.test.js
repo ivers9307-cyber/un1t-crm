@@ -66,6 +66,24 @@ describe('sanitizeSuggestion', () => {
     expect(sanitizeSuggestion('[[SKIP]]')).toBeNull()
     expect(sanitizeSuggestion('  [[SKIP]]  ')).toBeNull()
     expect(sanitizeSuggestion('Some preamble [[SKIP]] trailing')).toBeNull()
+    // …and its near misses, matched as leniently as the other sentinels.
+    expect(sanitizeSuggestion('[[skip]]')).toBeNull()
+    expect(sanitizeSuggestion('[[ SKIP ]]')).toBeNull()
+  })
+
+  // HUMANIZE.1 — staff click this straight into the composer and usually send
+  // it unedited, so it gets the same deterministic treatment as a live reply.
+  it('scrubs em dashes the model emitted', () => {
+    expect(sanitizeSuggestion("All sorted — you're back on for Saturday."))
+      .toBe("All sorted, you're back on for Saturday.")
+  })
+  it('strips a stray [[OPTIONS]] line instead of prefilling the raw sentinel', () => {
+    expect(sanitizeSuggestion('Want another slot?\n[[OPTIONS]] Yes | No'))
+      .toBe('Want another slot?')
+  })
+  it('returns null for a suggestion that is really a handoff', () => {
+    expect(sanitizeSuggestion('[[HANDOFF]] wants to talk to a person')).toBeNull()
+    expect(sanitizeSuggestion('Sorry about that. [[HANDOFF]] upset customer')).toBeNull()
   })
 
   it('trims surrounding whitespace on an otherwise good message', () => {

@@ -216,7 +216,27 @@ describe('buildMembershipPurchaseDetails', () => {
 // with several contact rows (duplicates) that gets pinned to one whose email
 // differs from the member's would otherwise make the email quiz unwinnable:
 // the customer can only ever type their own real email, never the dupe's.
-import { pickVerifiedContact, executeAccountTool } from './account-tools'
+import { pickVerifiedContact, executeAccountTool, verifyFailureHint } from './account-tools'
+
+// AGENT-AUTH.3 — the retry hint used to demand a surname on EVERY failed path,
+// including the linked shared-number one where the prompt mandates asking for
+// the email ONLY (and where the surname is ignored by the matcher anyway).
+describe('verifyFailureHint', () => {
+  it('LINKED: asks only for the email, never a surname', () => {
+    const hint = verifyFailureHint(true)
+    expect(hint).toMatch(/email/i)
+    expect(hint).toMatch(/do not ask for a surname/i)
+    expect(hint).not.toMatch(/together with the surname/i)
+  })
+  it('UNLINKED: still asks for email + surname (the second factor is real there)', () => {
+    expect(verifyFailureHint(false)).toMatch(/email on the account together with the surname/i)
+  })
+  it('never reveals which detail matched, on either path', () => {
+    for (const linked of [true, false]) {
+      expect(verifyFailureHint(linked)).toMatch(/never reveal which detail/i)
+    }
+  })
+})
 
 describe('pickVerifiedContact', () => {
   const member = { id: 'm1', email: 'richard@richardivers.com', last_name: 'Ivers' }
