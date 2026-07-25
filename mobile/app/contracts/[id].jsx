@@ -12,10 +12,44 @@ import {
   View, Text, ScrollView, TextInput, Pressable, ActivityIndicator,
   KeyboardAvoidingView, Platform, Alert,
 } from 'react-native'
+import Markdown from 'react-native-markdown-display'
 import { Ionicons } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { getContract, signContract, declineContract } from '../../lib/contracts-api'
+
+// CONTRACTS-MD.1 — markdown styles for the frozen body_rendered.
+// Mirrors the web ContractBody component (src/components/ContractBody.jsx)
+// so the document reads the same on web and mobile. react-native-markdown-display
+// wraps markdown-it, which defaults to `html: false` — any raw HTML in a
+// template body (e.g. a stray <script>) is rendered as inert literal text,
+// never parsed or executed.
+const BODY_FONT = Platform.OS === 'ios' ? 'Georgia' : 'serif'
+const markdownStyles = {
+  body: { fontSize: 15, lineHeight: 24, color: '#111827', fontFamily: BODY_FONT },
+  heading1: { fontSize: 22, fontWeight: 'bold', marginTop: 16, marginBottom: 8, color: '#111827' },
+  heading2: { fontSize: 19, fontWeight: 'bold', marginTop: 14, marginBottom: 6, color: '#111827' },
+  heading3: { fontSize: 17, fontWeight: '600', marginTop: 12, marginBottom: 6, color: '#111827' },
+  heading4: { fontSize: 16, fontWeight: '600', marginTop: 10, marginBottom: 4, color: '#111827' },
+  heading5: { fontSize: 15, fontWeight: '600', marginTop: 8, marginBottom: 4, color: '#111827' },
+  heading6: { fontSize: 15, fontWeight: '600', marginTop: 8, marginBottom: 4, color: '#111827' },
+  paragraph: { marginTop: 0, marginBottom: 12 },
+  strong: { fontWeight: 'bold' },
+  em: { fontStyle: 'italic' },
+  bullet_list: { marginBottom: 12 },
+  ordered_list: { marginBottom: 12 },
+  list_item: { marginBottom: 4 },
+  hr: { backgroundColor: '#D1D5DB', height: 1, marginVertical: 16 },
+  link: { textDecorationLine: 'underline', color: '#111827' },
+  blockquote: {
+    borderLeftWidth: 2, borderLeftColor: '#D1D5DB', paddingLeft: 12,
+    fontStyle: 'italic', color: '#374151', marginBottom: 12,
+  },
+  code_inline: {
+    backgroundColor: '#F3F4F6', paddingHorizontal: 4, borderRadius: 4,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+}
 
 const STATUS_LABEL = {
   issued:   'Awaiting your signature',
@@ -155,13 +189,13 @@ export default function ContractDetail() {
           )}
         </View>
 
-        {/* Body — frozen at issue time. Render as plain text in a
-            white "paper" panel so it visually feels like a document
-            on top of the dark app. */}
+        {/* Body — frozen at issue time. Rendered as real markdown
+            (headings, lists, emphasis, rules) in a white "paper"
+            panel so it visually feels like a document on top of
+            the dark app, and so recipients don't sign something
+            showing literal `#`/`**`/`---`. */}
         <View className="bg-white rounded-xl p-4 mb-4">
-          <Text className="text-[15px] leading-6 text-gray-900" style={{ fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif' }}>
-            {c.body_rendered}
-          </Text>
+          <Markdown style={markdownStyles}>{c.body_rendered || ''}</Markdown>
 
           {/* Dual-signature block */}
           <View className="mt-8 pt-4 border-t border-gray-300">

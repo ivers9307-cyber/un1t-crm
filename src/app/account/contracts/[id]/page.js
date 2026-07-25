@@ -15,6 +15,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import ContractSignForm from '@/components/ContractSignForm'
 import ContractPrintButton from '@/components/ContractPrintButton'
+import ContractBody from '@/components/ContractBody'
 
 export const dynamic = 'force-dynamic'
 
@@ -92,9 +93,7 @@ export default async function AccountContractDetail(props) {
 
       {/* Print-friendly contract body */}
       <article className="bg-white text-gray-900 rounded-lg p-6 md:p-8 mb-6 print:rounded-none print:p-0 print:bg-white">
-        <div className="whitespace-pre-wrap font-serif text-sm md:text-base leading-relaxed">
-          {c.body_rendered}
-        </div>
+        <ContractBody markdown={c.body_rendered} />
 
         <div className="mt-10 pt-6 border-t border-gray-300 grid grid-cols-1 sm:grid-cols-2 gap-6">
           <SignatureBlock
