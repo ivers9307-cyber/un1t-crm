@@ -194,6 +194,11 @@ export { formatDublinClassTime }
 // the model a number it could relay.
 const LIMITED_SPOTS_THRESHOLD = 3
 
+// CAPACITY-SECRECY.1 — a class with this many spaces or fewer is "limited".
+// Coarse on purpose: it lets Mia create honest urgency without ever handing
+// the model a number it could relay.
+const LIMITED_SPOTS_THRESHOLD = 3
+
 /**
  * Shape a Glofox /2.0/events list for the agent: upcoming, public,
  * active classes, time-sorted, capped. Pure.
