@@ -2362,6 +2362,23 @@ registry.registerPath({
   },
 })
 
+// CONTRACTS-EDIT.1 — resend the issue-notification email
+registry.registerPath({
+  method: 'post',
+  path: '/api/contracts/{id}/resend',
+  tags: ['Contracts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Resend the contract-issued notification email (master/owner only)',
+  description: "Re-fires sendContractIssuedEmail plus the issue route's push block for a contract still at issued/viewed. Never mutates the contract row — a pure notification replay. Org-scoped like revoke (404 not 403 for a foreign-org id, non-enumerable); 409 once the contract has moved past issued/viewed (signed/declined/revoked).",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Resent (warning present if the email itself failed)' },
+    403: { description: 'Master or owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (incl. cross-tenant ids)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Contract is not in issued/viewed status', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/admin/orgs/{id}/suspend',
