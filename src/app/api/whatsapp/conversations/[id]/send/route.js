@@ -16,7 +16,6 @@ const SendMessageSchema = z.object({
   template_components: z.array(z.unknown()).optional(),
   media_url: url.optional(),
   caption: z.string().max(1024).optional(),
-  sent_by: z.string().max(200).nullable().optional(),
 })
 
 // POST /api/whatsapp/conversations/[id]/send — send a message in a conversation
@@ -147,7 +146,13 @@ export async function POST(request, props) {
       template_name: templateName,
       template_variables: body.template_components || null,
       status: 'sent',
-      sent_by: body.sent_by || null,
+      // sent_by is UUID REFERENCES profiles(id) — take the operator from the
+      // SESSION, never the request body. Writing a client string would be
+      // rejected by Postgres (supabase-js swallows the error → the send goes
+      // unlogged), and trusting body.sent_by let a mobile send (which posts
+      // no sent_by) log NULL, excluding it from the human-outbound /
+      // handoff-SLA scans. Matches the composer send + radar-outreach.
+      sent_by: user.id,
       sent_at: new Date().toISOString(),
     })
 
