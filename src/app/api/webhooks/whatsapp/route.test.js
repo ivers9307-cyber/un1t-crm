@@ -199,6 +199,61 @@ describe('POST /api/webhooks/whatsapp — inbound message routing', () => {
   })
 })
 
+// MIA-REVIEW.2 — the inbound-message insert is the agent's only source of
+// truth for what it is answering. Both a duplicate delivery and a rejected
+// insert must stop the turn (the webhook still 200s either way).
+describe('POST /api/webhooks/whatsapp — inbound persistence guards', () => {
+  it('skips a wamid already stored inbound (second dedup layer behind webhook_events)', async () => {
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    const dupDb = makeDb({
+      contacts: { data: [], error: null },
+      whatsapp_conversations: (ops, terminal) => {
+        if (ops.some(([m]) => m === 'insert')) return { data: { id: 'conv-1' }, error: null }
+        if (terminal === 'single') return { data: null, error: null }
+        return { data: null, error: null }
+      },
+      // The pre-insert lookup finds the message from Meta's first delivery.
+      whatsapp_messages: (ops) => {
+        if (ops.some(([m]) => m === 'insert')) return { data: { id: 'msg-row-1' }, error: null }
+        return { data: { id: 'msg-row-1' }, error: null }
+      },
+    })
+    createServerClient.mockReturnValue(dupDb)
+
+    const res = await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(res.status).toBe(200)
+
+    expect(dupDb.calls.find((c) => c.table === 'whatsapp_messages' && c.ops.some(([m]) => m === 'insert'))).toBeFalsy()
+    expect(maybeAutoReply).not.toHaveBeenCalled()
+  })
+
+  it('does not run the agent when the inbound insert failed (no answering history it cannot see)', async () => {
+    resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)
+    const failDb = makeDb({
+      contacts: { data: [], error: null },
+      whatsapp_conversations: (ops, terminal) => {
+        if (ops.some(([m]) => m === 'insert')) return { data: { id: 'conv-1' }, error: null }
+        if (terminal === 'single') return { data: null, error: null }
+        return { data: null, error: null }
+      },
+      whatsapp_messages: (ops) => {
+        if (ops.some(([m]) => m === 'insert')) return { data: null, error: { message: 'violates check constraint' } }
+        return { data: null, error: null }
+      },
+    })
+    createServerClient.mockReturnValue(failDb)
+
+    const res = await POST(reqFor(inboundText(REGISTERED_PNI)))
+    expect(res.status).toBe(200)
+
+    expect(maybeAutoReply).not.toHaveBeenCalled()
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining('inbound message insert failed'),
+      expect.anything(), expect.anything(),
+    )
+  })
+})
+
 describe('POST /api/webhooks/whatsapp — status updates', () => {
   it('still applies a status update for a registered number (unchanged live path)', async () => {
     resolveWhatsAppNumberByPhoneNumberId.mockResolvedValue(STILLORGAN)

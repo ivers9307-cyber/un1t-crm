@@ -41,6 +41,7 @@ import {
   resolveVerifyFailHandoff,
   shouldHandoffAfterVerifyFail,
   nextVerifyAttempts,
+  warnLiveDespiteTestMode,
 } from './core'
 import { personGroupResolver } from '@/lib/person-links'
 import { ACCOUNT_TOOLS, ACCOUNT_TOOL_NAMES, executeAccountTool } from './account-tools'
@@ -84,9 +85,26 @@ export const MAX_TOOL_ITERATIONS = 6
 // me in" and got silence, 2026-06-14).
 const MAX_MISSED_INBOUND_RERUNS = 2
 
-// A claim older than this is treated as stale (e.g. a crashed turn) and
-// reclaimable, so a single failed run can't wedge a thread forever.
+// A claim older than this is treated as stale (e.g. a CRASHED turn) and
+// reclaimable, so a single failed run can't wedge a thread forever. It is a
+// crash-recovery threshold, NOT a turn budget: a live turn heartbeats the
+// claim between model calls (heartbeatAgentTurn), so a slow-but-alive turn is
+// never reclaimed and two runners can never generate on one thread.
 const STALE_CLAIM_MS = 90_000
+// Per-API-call abort. Without it a hung fetch (undici's defaults are minutes)
+// could outlive both the claim and Meta's webhook timeout.
+const MODEL_TIMEOUT_MS = 60_000
+// Initial attempt + 2 retries. 429/5xx/network blips are routine and
+// self-heal in seconds; escalating on the first one costs the customer their
+// answer and pages a manager for nothing.
+const MODEL_MAX_ATTEMPTS = 3
+const MODEL_RETRY_BASE_MS = 250
+const MODEL_RETRY_AFTER_CAP_MS = 5_000
+// max_tokens for the reply. 600 is right for the "a sentence or two" house
+// style; a truncated turn retries once at the raised cap before handing off
+// rather than sending a cut-off (possibly sentinel-splitting) reply.
+const MODEL_MAX_TOKENS = 600
+const MODEL_MAX_TOKENS_RETRY = 1000
 // Cost/abuse ceilings (operator-overridable via settings.customer_agent.limits).
 const DEFAULT_LIMITS = { convHour: 20, locDay: 500 }
 
@@ -114,7 +132,7 @@ function hoursAgoIso(h) {
 
 // Optimistic per-conversation lock via agent_processing_at: claim only if
 // it's unset or stale. Concurrent claimers serialise on the row, so exactly
-// one wins. Returns true if this caller owns the turn.
+// one wins. Returns the stamp this caller wrote (its claim token) or null.
 async function claimAgentTurn(db, adapter, conversationId) {
   const nowIso = new Date().toISOString()
   const staleIso = new Date(Date.now() - STALE_CLAIM_MS).toISOString()
@@ -123,15 +141,99 @@ async function claimAgentTurn(db, adapter, conversationId) {
     .eq('id', conversationId)
     .or(`agent_processing_at.is.null,agent_processing_at.lt.${staleIso}`)
     .select('id')
-  return Array.isArray(data) && data.length > 0
+  return Array.isArray(data) && data.length > 0 ? nowIso : null
 }
 
-async function releaseAgentTurn(db, adapter, conversationId) {
+// Re-stamp the claim mid-turn so a long-but-live turn never reads as stale.
+// Compare-and-set on our own stamp: null means another runner owns the thread
+// now (only reachable if a single call ever outlasts STALE_CLAIM_MS) and this
+// turn must stand down. A DB blip keeps the existing stamp — a transient read
+// failure must not abandon a turn that is otherwise fine.
+async function heartbeatAgentTurn(db, adapter, conversationId, claimStamp) {
+  if (!claimStamp) return null
+  const nowIso = new Date().toISOString()
   try {
-    await db.from(adapter.conversationsTable)
+    const { data } = await db.from(adapter.conversationsTable)
+      .update({ agent_processing_at: nowIso })
+      .eq('id', conversationId)
+      .eq('agent_processing_at', claimStamp)
+      .select('id')
+    return Array.isArray(data) && data.length > 0 ? nowIso : null
+  } catch {
+    return claimStamp
+  }
+}
+
+// Compare-and-clear: only release the claim while it is still OURS. An
+// unconditional clear let a turn that had been reclaimed as stale wipe the
+// reclaimer's claim in its finally block, opening the thread to a third
+// concurrent runner.
+async function releaseAgentTurn(db, adapter, conversationId, claimStamp) {
+  try {
+    let q = db.from(adapter.conversationsTable)
       .update({ agent_processing_at: null })
       .eq('id', conversationId)
+    if (claimStamp) q = q.eq('agent_processing_at', claimStamp)
+    await q
   } catch { /* best-effort — a stale claim self-expires after STALE_CLAIM_MS */ }
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// 429 and 5xx are transient (rate-limit / overloaded / gateway); every other
+// 4xx is a request the retry would re-send unchanged.
+function isRetryableStatus(status) {
+  return status === 429 || status >= 500
+}
+
+function retryAfterMs(res) {
+  const raw = res?.headers?.get?.('retry-after')
+  if (!raw) return null
+  const secs = Number(raw)
+  if (!Number.isFinite(secs) || secs <= 0) return null
+  return Math.min(secs * 1000, MODEL_RETRY_AFTER_CAP_MS)
+}
+
+// Exponential with jitter, so a shared outage doesn't resynchronise every
+// in-flight turn onto the same retry instant.
+function backoffMs(attempt) {
+  return MODEL_RETRY_BASE_MS * 2 ** (attempt - 1) + Math.floor(Math.random() * MODEL_RETRY_BASE_MS)
+}
+
+/**
+ * One metered Anthropic call with a per-attempt abort timeout and bounded
+ * retries on transient failures. Returns the same { res, data } shape as
+ * anthropicMessages (the caller keeps its !res.ok branch) plus
+ * { aborted: true } when `beforeAttempt` says the claim was lost. A thrown
+ * fetch (network / abort) is retried too and only rethrown on the last
+ * attempt, so the caller's model_exception path still catches it.
+ */
+async function callAgentModel(body, meta, { beforeAttempt } = {}) {
+  for (let attempt = 1; attempt <= MODEL_MAX_ATTEMPTS; attempt++) {
+    if (beforeAttempt && (await beforeAttempt()) === false) return { aborted: true }
+    try {
+      const { res, data } = await anthropicMessages(body, {
+        ...meta,
+        signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
+      })
+      if (res.ok || attempt === MODEL_MAX_ATTEMPTS || !isRetryableStatus(res.status)) {
+        return { res, data }
+      }
+      const detail = await res.text().catch(() => '')
+      console.warn('[radar-agent] Anthropic transient error, retrying', JSON.stringify({
+        status: res.status, attempt, detail: detail.slice(0, 200),
+      }))
+      await sleep(retryAfterMs(res) ?? backoffMs(attempt))
+    } catch (err) {
+      if (attempt === MODEL_MAX_ATTEMPTS) throw err
+      console.warn('[radar-agent] Anthropic call threw, retrying', JSON.stringify({
+        attempt, message: err?.message || String(err),
+      }))
+      await sleep(backoffMs(attempt))
+    }
+  }
+  // Unreachable — the loop always returns or throws on the last attempt.
+  return { res: null, data: null }
 }
 
 // Count agent-sent replies in a window for a cap check. Single-table head
@@ -262,6 +364,10 @@ async function runChannelAgentInner(db, adapter, ctx) {
     .eq('id', locationId)
     .single()
   const settings = loc?.settings?.customer_agent || null
+  // Tripwire only — enabled+test_mode being live for everyone is the
+  // documented invariant, not a bug. Logged once per process per location so
+  // the half-configured state is greppable when an operator is surprised by it.
+  warnLiveDespiteTestMode(locationId, settings)
   const branding = await getLocationBranding(db, locationId)
 
   // Conversation state: kill switch + linked contact + verification.
@@ -368,8 +474,8 @@ async function runChannelAgentInner(db, adapter, ctx) {
   // both running a turn on this thread (double reply / double spend /
   // verify race). The loser bails; the winner reads fresh history (which
   // already includes the burst), so nothing is lost.
-  const claimed = await claimAgentTurn(db, adapter, conversationId)
-  if (!claimed) return { handled: false, reason: 'in_flight' }
+  let claimStamp = await claimAgentTurn(db, adapter, conversationId)
+  if (!claimStamp) return { handled: false, reason: 'in_flight' }
   // AGENT-REARM.3 — remember when this turn began so we can tell, just before
   // sending, whether a human took the thread over WHILE the model was thinking.
   const turnStartIso = new Date().toISOString()
@@ -384,7 +490,19 @@ async function runChannelAgentInner(db, adapter, ctx) {
     // cap catches a single chatty/looping sender.
     const limits = resolveLimits(settings)
     const locReplies = await countAgentReplies(db, adapter, { field: 'location_id', value: locationId, sinceIso: startOfUtcDayIso() })
-    if (locReplies >= limits.locDay) return { handled: false, reason: 'location_daily_cap' }
+    if (locReplies >= limits.locDay) {
+      // Dead air the customer can't see: no holding message (the cap is a
+      // cost ceiling, not an escalation) and Mia stays silent for EVERY
+      // thread at this location until UTC midnight. Page managers once a day
+      // so the cap can be raised instead of the silence going unnoticed.
+      await notifyDeadAir(db, adapter, {
+        locationId, conversationId, reason: 'location_daily_cap',
+        sinceIso: startOfUtcDayIso(),
+        title: `${adapter.label} · agent paused (daily cap)`,
+        body: `Mia has hit this location's daily reply cap (${limits.locDay}) and is silent until midnight UTC. Customers are not being answered — raise the cap in Settings → Customer agent, or reply manually.`,
+      })
+      return { handled: false, reason: 'location_daily_cap' }
+    }
 
     const convReplies = await countAgentReplies(db, adapter, { field: 'conversation_id', value: conversationId, sinceIso: hoursAgoIso(1) })
     if (convReplies >= limits.convHour) {
@@ -552,23 +670,47 @@ async function runChannelAgentInner(db, adapter, ctx) {
 
     let verifyFails = conv?.agent_verify_attempts ?? 0
     let modelText = ''
+    // A stop_reason / tool outcome that must NOT become a customer reply.
+    // Set inside the loop, actioned as a soft handoff just after it.
+    let stopFailure = null
     try {
       let iterations = MAX_TOOL_ITERATIONS
       let done = false
+      let claimLost = false
+      let maxTokens = MODEL_MAX_TOKENS
+      let raisedTokenCap = false
+      // The tool_result block currently carrying the intra-turn cache
+      // breakpoint — moved forward each iteration so we stay inside the
+      // 4-breakpoint cap (the tool block + stable system block hold two).
+      let cachedToolResult = null
+      // Per-tool throw counter: one bad call is recoverable, the same tool
+      // failing twice in a turn is not.
+      const toolThrows = new Map()
       while (iterations-- > 0 && !done) {
         // SAAS4-M1 — metered via the shared wrapper (source: mia_auto_reply);
         // each tool-loop iteration is one API call and one usage event.
-        const { res, data } = await anthropicMessages(
+        const { res, data, aborted } = await callAgentModel(
           {
             model: AGENT_MODEL,
-            max_tokens: 600,
+            max_tokens: maxTokens,
             output_config: { effort: agentEffort },
             system,
             messages,
             tools: CACHED_ACCOUNT_TOOLS,
           },
-          { apiKey, locationId, source: 'mia_auto_reply' }
+          { apiKey, locationId, source: 'mia_auto_reply' },
+          {
+            // Heartbeat before every attempt (not just every iteration) so a
+            // retry chain can't drift past STALE_CLAIM_MS either.
+            beforeAttempt: async () => {
+              const beat = await heartbeatAgentTurn(db, adapter, conversationId, claimStamp)
+              if (!beat) return false
+              claimStamp = beat
+              return true
+            },
+          },
         )
+        if (aborted) { claimLost = true; break }
         if (!res.ok) {
           console.error('[radar-agent] Anthropic error', res.status, await res.text().catch(() => ''))
           // COMMS-AUDIT 2026-07-10 — a model outage must not mean dead air:
@@ -588,15 +730,39 @@ async function runChannelAgentInner(db, adapter, ctx) {
         if (data.stop_reason === 'tool_use') {
           messages.push({ role: 'assistant', content })
           const toolResults = []
+          let toolFailed = null
           for (const block of content) {
             if (block.type !== 'tool_use') continue
-            const result = ACCOUNT_TOOL_NAMES.has(block.name)
-              ? await executeAccountTool(block.name, block.input || {}, toolCtx)
-              : EVENT_TOOL_NAMES.has(block.name)
-                ? await executeEventTool(block.name, block.input || {}, toolCtx)
-                : CARD_TOOL_NAMES.has(block.name)
-                  ? await executeCardTool(block.name, block.input || {}, toolCtx)
-                  : await executeBookingTool(block.name, block.input || {}, toolCtx)
+            // A THROWN executor (dynamic-import failure, an unexpected
+            // TypeError) used to abort the turn through the outer catch and
+            // page managers with "model API failure" copy while Anthropic was
+            // fine. Hand the failure back to the model as an is_error
+            // tool_result instead, so it can retry or hand off in its own
+            // words; ops keep the real signal in the log line.
+            let result
+            try {
+              result = ACCOUNT_TOOL_NAMES.has(block.name)
+                ? await executeAccountTool(block.name, block.input || {}, toolCtx)
+                : EVENT_TOOL_NAMES.has(block.name)
+                  ? await executeEventTool(block.name, block.input || {}, toolCtx)
+                  : CARD_TOOL_NAMES.has(block.name)
+                    ? await executeCardTool(block.name, block.input || {}, toolCtx)
+                    : await executeBookingTool(block.name, block.input || {}, toolCtx)
+            } catch (err) {
+              const throws = (toolThrows.get(block.name) || 0) + 1
+              toolThrows.set(block.name, throws)
+              console.error('[radar-agent] tool threw', JSON.stringify({
+                tool: block.name, throws, message: err?.message || String(err),
+              }))
+              if (throws >= 2) { toolFailed = block.name; break }
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: block.id,
+                content: JSON.stringify({ error: 'tool_failed', message: 'That lookup failed unexpectedly. Try once more or hand off to the team.' }),
+                is_error: true,
+              })
+              continue
+            }
             if (block.name === 'verify_identity') {
               // AGENT-VERIFY-HANDOFF.1 — track consecutive failures so a stuck
               // quiz hands off (reset on success, +1 on failure).
@@ -623,15 +789,51 @@ async function runChannelAgentInner(db, adapter, ctx) {
               content: JSON.stringify(result),
             })
           }
+          if (toolFailed) { stopFailure = 'tool_error'; break }
+          // CACHE.3 — tool results (timetables, account payloads) are the
+          // bulkiest part of the request and every iteration re-sends all of
+          // them. A breakpoint on the newest one lets the next iteration read
+          // the whole accumulated prefix from cache; the marker moves rather
+          // than accumulating so the 4-breakpoint cap holds.
+          if (toolResults.length) {
+            if (cachedToolResult) delete cachedToolResult.cache_control
+            cachedToolResult = toolResults[toolResults.length - 1]
+            cachedToolResult.cache_control = { type: 'ephemeral' }
+          }
           messages.push({ role: 'user', content: toolResults })
           continue
         }
 
+        // The model declined. Any partial text it emitted is part of the
+        // refusal, not an answer — discard it and hand off under its own
+        // reason so the decision trace names the real cause.
+        if (data.stop_reason === 'refusal') {
+          stopFailure = 'model_refusal'
+          break
+        }
+
+        // Truncated mid-reply. Never send it: the cut can land inside a
+        // trailing [[OPTIONS]]/[[HANDOFF]] sentinel and leak the fragment.
+        // One retry at a raised cap, then hand off.
+        if (data.stop_reason === 'max_tokens') {
+          if (!raisedTokenCap) {
+            raisedTokenCap = true
+            maxTokens = MODEL_MAX_TOKENS_RETRY
+            continue
+          }
+          stopFailure = 'model_truncated'
+          break
+        }
+
+        // NOTE: 'pause_turn' cannot occur today (no server-side tools in
+        // CACHED_ACCOUNT_TOOLS). Adding one requires handling it here —
+        // it would otherwise fall through as an empty final turn.
         // Final turn — collect text.
         modelText = content.filter(b => b.type === 'text').map(b => b.text).join('\n')
         done = true
       }
-      if (!done) {
+      if (claimLost) return { handled: false, reason: 'claim_lost' }
+      if (!done && !stopFailure) {
         // Ran out of tool iterations without a final text turn — hand off.
         modelText = ''
       }
@@ -645,6 +847,22 @@ async function runChannelAgentInner(db, adapter, ctx) {
         lastReplyAt: conv?.agent_last_reply_at,
         reason: 'model_exception',
         notify: modelFailureNotify(adapter),
+      })
+    }
+
+    // A refusal / twice-truncated / twice-throwing-tool turn owes the customer
+    // an acknowledgement but must not send what the model produced. Same
+    // soft-handoff floor as a model outage, but under a reason of its own so
+    // staff and the decision trace can tell the three apart.
+    if (stopFailure) {
+      console.warn('[radar-agent] turn abandoned', JSON.stringify({
+        channel: adapter.name, conversationId, reason: stopFailure,
+      }))
+      return await softHandoff(db, adapter, {
+        conversationId, locationId, recipient, contactId, connection, settings,
+        lastReplyAt: conv?.agent_last_reply_at,
+        reason: stopFailure,
+        notify: abandonedTurnNotify(adapter, stopFailure),
       })
     }
 
@@ -695,7 +913,19 @@ async function runChannelAgentInner(db, adapter, ctx) {
     }
 
     const sent = await sendAndLog(db, adapter, { ...common, text: parsed.text, options: parsed.options, settings })
-    if (!sent) return { handled: false, reason: 'send_failed' }
+    if (!sent) {
+      // The reply existed and never reached the customer (the 2026-06-12
+      // dead-token class). Staff pages ride a different provider than the
+      // customer channel, so a WhatsApp outage doesn't block this. Debounced
+      // hourly — a dead token fails every thread at once.
+      await notifyDeadAir(db, adapter, {
+        locationId, conversationId, reason: 'send_failed',
+        sinceIso: hoursAgoIso(1),
+        title: `${adapter.label} · reply could not be sent`,
+        body: 'Mia composed a reply but the channel rejected the send, so the customer got nothing. Check the channel connection and follow up manually.',
+      })
+      return { handled: false, reason: 'send_failed' }
+    }
 
     // AGENT-ACTIVITY.1 — let inbox staff know a customer is chatting with Mia,
     // so an agent-handled thread isn't invisible on their phone. Debounced to
@@ -721,7 +951,7 @@ async function runChannelAgentInner(db, adapter, ctx) {
 
     return { handled: true, action: 'reply', lastInboundSeenIso }
   } finally {
-    await releaseAgentTurn(db, adapter, conversationId)
+    await releaseAgentTurn(db, adapter, conversationId, claimStamp)
   }
 }
 
@@ -828,6 +1058,64 @@ function modelFailureNotify(adapter) {
   }
 }
 
+// Distinct copy per abandoned-turn cause, so "the model refused", "the reply
+// was too long" and "a lookup kept failing" don't all read as an outage.
+const ABANDONED_TURN_BODY = {
+  model_refusal: 'The AI agent declined to answer this message (model refusal). The customer got the holding message — needs a human.',
+  model_truncated: 'The AI agent\'s reply was cut off by the length limit twice, so it was not sent. The customer got the holding message — needs a human.',
+  tool_error: 'An agent lookup failed repeatedly during this conversation. The customer got the holding message — needs a human.',
+}
+
+function abandonedTurnNotify(adapter, reason) {
+  return {
+    title: `${adapter.label} · agent unavailable`,
+    body: ABANDONED_TURN_BODY[reason] || ABANDONED_TURN_BODY.tool_error,
+  }
+}
+
+// Debounced staff page for an outcome the CUSTOMER cannot see (a cap that
+// silences Mia, a send that never landed). Keyed off agent_decisions rather
+// than process memory so the debounce holds across serverless instances; the
+// decision row for THIS turn is written by the wrapper after we return, so the
+// first turn in the window pages and the rest don't. Never affects the turn.
+async function notifyDeadAir(db, adapter, { locationId, conversationId, reason, sinceIso, title, body }) {
+  try {
+    if (!locationId) return
+    const { count } = await db.from('agent_decisions')
+      .select('id', { count: 'exact', head: true })
+      .eq('location_id', locationId)
+      .eq('reason', reason)
+      .gte('created_at', sinceIso)
+    if ((count || 0) > 0) return
+    await sendPushToRolesAtLocation(locationId, MANAGER_ROLES, {
+      title, body,
+      category: adapter.pushCategory,
+      data: { type: adapter.handoffType, conversation_id: conversationId },
+    })
+  } catch (err) {
+    console.error(`[radar-agent] ${adapter.name} ${reason} push failed`, err?.message)
+  }
+}
+
+// Conditional stamp of agent_last_reply_at — the atomic half of the
+// soft-handoff debounce. True means this caller won the window and owes the
+// customer the holding message. Fails OPEN: a DB error must not swallow the
+// acknowledgement (a duplicate ack beats dead air).
+async function claimSoftHandoff(db, adapter, conversationId) {
+  const nowIso = new Date().toISOString()
+  const gapIso = new Date(Date.now() - SOFT_NOTIFY_GAP_MS).toISOString()
+  try {
+    const { data } = await db.from(adapter.conversationsTable)
+      .update({ agent_last_reply_at: nowIso })
+      .eq('id', conversationId)
+      .or(`agent_last_reply_at.is.null,agent_last_reply_at.lt.${gapIso}`)
+      .select('id')
+    return Array.isArray(data) && data.length > 0
+  } catch {
+    return true
+  }
+}
+
 // The agent is on duty but can't produce a real reply: a non-text message
 // it can't read (photo / voice / sticker), or — COMMS-AUDIT 2026-07-10 —
 // a model API failure. Acknowledge the customer with the holding message
@@ -837,6 +1125,14 @@ function modelFailureNotify(adapter) {
 // string of them. `notify` overrides the push copy per cause.
 async function softHandoff(db, adapter, { conversationId, locationId, recipient, contactId, connection, settings, lastReplyAt, reason = 'unsupported_type', notify = null }) {
   if (lastReplyAt && Date.now() - new Date(lastReplyAt).getTime() < SOFT_NOTIFY_GAP_MS) {
+    return { handled: false, reason: 'soft_handoff_debounced' }
+  }
+  // The read above uses agent_last_reply_at as it was at the TOP of the turn,
+  // and the unsupported_type / ai_cap / wallet_empty paths run BEFORE the
+  // concurrency claim — two parallel webhook POSTs would both pass it. Win the
+  // stamp atomically (same optimistic pattern as claimAgentTurn) before
+  // sending anything.
+  if (!(await claimSoftHandoff(db, adapter, conversationId))) {
     return { handled: false, reason: 'soft_handoff_debounced' }
   }
   const holding = (settings?.holding_message || '').trim() || DEFAULT_HOLDING_MESSAGE

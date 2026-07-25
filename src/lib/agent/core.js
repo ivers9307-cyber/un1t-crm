@@ -173,10 +173,57 @@ export function isLikelyBusinessAutoReply(body) {
   return false
 }
 
-export function shouldAgentReply({ settings, conversation, message, senderPhone, lastOutboundHuman = false, now = new Date() }) {
+/**
+ * The enabled/test_mode combine, in ONE place so shouldAgentReply and
+ * shouldSendWelcome can't drift. Semantics are the documented invariant and
+ * do NOT change here: `enabled=true` + `test_mode=true` is LIVE FOR EVERYONE
+ * (the allowlist only scopes an agent that is NOT enabled). Pure.
+ */
+export function resolveAgentGate(settings) {
   const s = settings || {}
   const enabled = !!s.enabled
   const testMode = !!s.test_mode
+  return {
+    enabled,
+    testMode,
+    off: !enabled && !testMode,
+    allowlistScoped: !enabled && testMode,
+    liveDespiteTestMode: enabled && testMode,
+  }
+}
+
+// One tripwire log per (process, location) — a warn per turn would drown the
+// live path in a state that is, by design, allowed to persist.
+const LIVE_TEST_MODE_WARNED = new Set()
+
+/**
+ * Tripwire for the operator foot-gun: an agent saved as enabled AND test_mode
+ * answers EVERY customer, not just the allowlist. Behaviour is unchanged (the
+ * invariant is deliberate) — this just makes the state greppable in logs the
+ * first time a location hits it. Returns whether the state is live-despite-test.
+ */
+export function warnLiveDespiteTestMode(locationId, settings) {
+  if (!resolveAgentGate(settings).liveDespiteTestMode) return false
+  const key = String(locationId || 'unknown')
+  if (!LIVE_TEST_MODE_WARNED.has(key)) {
+    LIVE_TEST_MODE_WARNED.add(key)
+    console.error('[radar-agent] live_despite_test_mode', JSON.stringify({
+      locationId: key,
+      detail: 'customer_agent is enabled AND test_mode — the test allowlist is NOT in effect; the agent replies to every customer.',
+    }))
+  }
+  return true
+}
+
+// Message types that are content-bearing enough to be worth acknowledging with
+// the soft handoff. A REACTION is not a message needing an answer — a 👍 on
+// Mia's confirmation used to earn the customer a holding message and managers
+// a "sent a photo / voice / attachment" page.
+const IGNORABLE_MESSAGE_TYPES = new Set(['reaction'])
+
+export function shouldAgentReply({ settings, conversation, message, senderPhone, lastOutboundHuman = false, now = new Date() }) {
+  const s = settings || {}
+  const { enabled, testMode } = resolveAgentGate(s)
   if (!enabled && !testMode) return { reply: false, reason: 'disabled' }
 
   // INBOX-REDESIGN.2.3 — sticky operator pause (mig 435: whatsapp_conversations
@@ -229,6 +276,11 @@ export function shouldAgentReply({ settings, conversation, message, senderPhone,
   // audio takes the soft-handoff path below, so Mia acknowledges the
   // voice note and the thread lands in the team's review queue.
   const type = message?.type || 'text'
+  // MIA-REVIEW.2 — a tapped reaction is a no-op, not an unreadable message:
+  // stay fully silent (no holding message, no manager page).
+  if (IGNORABLE_MESSAGE_TYPES.has(type)) {
+    return { reply: false, reason: 'ignorable_type' }
+  }
   if (type !== 'text' && type !== 'interactive') {
     return { reply: false, reason: 'unsupported_type', onDuty: true }
   }

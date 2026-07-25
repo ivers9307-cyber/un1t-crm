@@ -13,8 +13,8 @@
 //   - data: the parsed JSON body when res.ok (null if the body wasn't
 //     JSON); always null when !res.ok (the error body is left on res
 //     for the caller to read).
-// Network errors propagate unchanged. Usage recording is fire-and-
-// forget and can never break the reply path.
+// Network errors propagate unchanged. Usage recording is awaited but
+// wrapped, so it can never break the reply path.
 
 import { recordUsage } from './usage.js'
 
@@ -49,18 +49,20 @@ export async function anthropicMessages(body, meta = {}) {
   const data = await res.json().catch(() => null)
 
   if (data?.usage) {
+    // MIA-REVIEW.2 — awaited, not fire-and-forget. Vercel gives no guarantee
+    // that an unawaited promise completes once the response resolves, and the
+    // AI hard cap + wallet gate both read usage_events — a dropped write
+    // under-meters spend invisibly (both gates fail open). The "never breaks
+    // the reply" property comes from the try/catch, not from not-awaiting;
+    // recordUsage is one insert and swallows its own errors.
     try {
-      // Not awaited on purpose — metering must never add latency or
-      // failure modes to the reply path.
-      Promise.resolve(
-        recordUsage({
-          locationId: meta.locationId ?? null,
-          organizationId: meta.organizationId ?? null,
-          source: meta.source,
-          model: body?.model,
-          usage: data.usage,
-        })
-      ).catch(() => {})
+      await recordUsage({
+        locationId: meta.locationId ?? null,
+        organizationId: meta.organizationId ?? null,
+        source: meta.source,
+        model: body?.model,
+        usage: data.usage,
+      })
     } catch {
       /* metering must never break the call */
     }
