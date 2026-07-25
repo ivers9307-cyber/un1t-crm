@@ -11,6 +11,8 @@ import {
   renderFollowupBody,
   classifyCheckinCandidate,
   attendedClassName,
+  proactiveWindowOpen,
+  countCheckinSends,
 } from './followups'
 
 const H = 3600_000
@@ -63,6 +65,47 @@ describe('withinDublinDaytime', () => {
     expect(withinDublinDaytime(Date.UTC(2026, 5, 12, 13, 0))).toBe(true)  // 14:00 Dublin
     expect(withinDublinDaytime(Date.UTC(2026, 5, 12, 21, 30))).toBe(false) // 22:30 Dublin
     expect(withinDublinDaytime(Date.UTC(2026, 5, 12, 6, 0))).toBe(false)  // 07:00 Dublin
+  })
+})
+
+// MIA-REVIEW.3 (3.17) — a Mia-INITIATED message must respect the operator's
+// quiet_hours, which only the live reply path honoured. A studio configured to
+// go quiet at 18:00 was still getting nudges and check-ins until 20:00.
+describe('proactiveWindowOpen', () => {
+  const noon = Date.UTC(2026, 5, 12, 13, 0)   // 14:00 Dublin
+  it('opens in Dublin daytime with no quiet hours configured', () => {
+    expect(proactiveWindowOpen(noon, {})).toEqual({ open: true })
+    expect(proactiveWindowOpen(noon, null)).toEqual({ open: true })
+  })
+  it('closes inside the operator quiet-hours window', () => {
+    const quiet = { quiet_hours: { start: '13:00', end: '09:00', tz: 'Europe/Dublin' } }
+    expect(proactiveWindowOpen(noon, quiet)).toEqual({ open: false, reason: 'operator_quiet_hours' })
+  })
+  it('still closes outside the hard daytime band regardless of settings', () => {
+    expect(proactiveWindowOpen(Date.UTC(2026, 5, 12, 21, 30), {}))
+      .toEqual({ open: false, reason: 'outside_daytime' })
+  })
+  it('an incomplete quiet_hours config never blocks a send', () => {
+    expect(proactiveWindowOpen(noon, { quiet_hours: { start: '21:00' } })).toEqual({ open: true })
+  })
+})
+
+// MIA-REVIEW.3 (3.19) — the daily cap must count SENDS. stampCheckin also
+// stamps the once-ever marker for skips ('skipped — no marketing consent'),
+// which used to eat the cap and stop genuine check-ins early.
+describe('countCheckinSends', () => {
+  it('counts real sends and ignores skip stamps', () => {
+    expect(countCheckinSends([
+      { note: 'ARENA (in-window)' },
+      { note: 'ARENA (template)' },
+      { note: 'ARENA (skipped — no marketing consent)' },
+      { note: 'ARENA (skipped — already discussed)' },
+    ])).toBe(2)
+  })
+  it('handles empty / missing input', () => {
+    expect(countCheckinSends([])).toBe(0)
+    expect(countCheckinSends(null)).toBe(0)
+    expect(countCheckinSends([{}])).toBe(1)
   })
 })
 

@@ -5,8 +5,12 @@
 // the easily-missed /settings/customer-agent/requests page. Bookings
 // are time-sensitive — a class can start within hours — so they need
 // the badge + Today-feed pickup the registry provides for free.
-// Auto-mode bookings and consultations are written as already
-// actioned/failed (audit trail) and never appear here.
+// Auto-mode bookings and consultations finalise to actioned/failed
+// (audit trail) and normally never appear here — MIA-REVIEW.3 writes
+// their intent row as 'pending' for the duration of the Glofox call, so
+// the only auto-mode rows that linger in this queue are ones whose
+// execution crashed mid-flight. Approving such a row re-runs the action
+// (Glofox arbitrates double-booking), which is the intended recovery.
 //
 // Visibility here is INTENTIONALLY narrower than who can act: the PATCH
 // /api/agent/membership-requests/[id] route accepts any staff at the

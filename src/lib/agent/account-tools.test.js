@@ -1,5 +1,5 @@
 // RADAR-AGENT Phase 1 — unit tests for account-tool pure helpers.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   identityMatches,
   surnameInName,
@@ -113,7 +113,10 @@ describe('formatNextClass (recent_bookings jsonb shape)', () => {
     const r = formatNextClass(rows, now)
     expect(r.found).toBe(true)
     expect(r.class_name).toBe('Soonest')
-    expect(r.class_time).toBe('2026-06-01T18:00:00.000Z')
+    // MIA-REVIEW.3 — a DUBLIN wall-clock label, never the raw UTC ISO the
+    // model used to be handed (18:00Z in June = 19:00 Dublin; the UTC form
+    // is what told a customer their 7am class was at "6am", 2026-06-12).
+    expect(r.class_time).toBe('Mon 1 Jun, 19:00')
   })
   it('falls back to model_name when event_name absent', () => {
     const rows = [{ model_name: 'RALLY - CONDITIONING', time_start: sec('2026-06-02T18:00:00Z'), status: 'BOOKED' }]
@@ -216,7 +219,7 @@ describe('buildMembershipPurchaseDetails', () => {
 // with several contact rows (duplicates) that gets pinned to one whose email
 // differs from the member's would otherwise make the email quiz unwinnable:
 // the customer can only ever type their own real email, never the dupe's.
-import { pickVerifiedContact, executeAccountTool, verifyFailureHint } from './account-tools'
+import { pickVerifiedContact, executeAccountTool, verifyFailureHint, escapeLikePattern } from './account-tools'
 
 // AGENT-AUTH.3 — the retry hint used to demand a surname on EVERY failed path,
 // including the linked shared-number one where the prompt mandates asking for
@@ -279,21 +282,22 @@ describe('pickVerifiedContact', () => {
 // Minimal thenable-builder mock mirroring the two contacts reads + one
 // conversations update that verify_identity performs. supabase-js builders are
 // thenables, so the mock resolves on await via `then`.
-function makeVerifyMockDb({ bound, siblings, onUpdate }) {
+function makeVerifyMockDb({ bound, siblings, byEmail = [], onUpdate, onIlike }) {
   return {
     from(table) {
       const b = {
-        _table: table, _update: false, _or: false, _payload: null,
+        _table: table, _update: false, _or: false, _ilike: false, _payload: null,
         select() { return b },
         update(payload) { b._update = true; b._payload = payload; return b },
         eq() { return b },
         or() { b._or = true; return b },
-        ilike() { return b },
+        ilike(col, pattern) { b._ilike = true; onIlike && onIlike(col, pattern); return b },
         limit() { return b },
         async maybeSingle() { return { data: bound, error: null } },
         then(resolve, reject) {
           try {
             if (b._update) { onUpdate && onUpdate(b._payload); resolve({ data: null, error: null }) }
+            else if (b._ilike) { resolve({ data: byEmail, error: null }) }
             else if (b._or) { resolve({ data: siblings, error: null }) }
             else { resolve({ data: null, error: null }) }
           } catch (e) { reject(e) }
@@ -317,7 +321,7 @@ describe('executeAccountTool · verify_identity across duplicate contacts', () =
     const res = await executeAccountTool(
       'verify_identity',
       { email: 'richard@richardivers.com', last_name: 'Ivers' },
-      { db, conversationId: 'c1', conversationsTable: 'whatsapp_conversations', contactId: 'd1', locationId: 'loc1' },
+      { db, conversationId: 'c1', conversationsTable: 'whatsapp_conversations', contactId: 'd1', locationId: 'loc1', channel: 'whatsapp' },
     )
     expect(res).toEqual({ verified: true })
     expect(stamped.agent_verified_contact_id).toBe('m1')
@@ -329,9 +333,116 @@ describe('executeAccountTool · verify_identity across duplicate contacts', () =
     const res = await executeAccountTool(
       'verify_identity',
       { email: 'attacker@evil.com', last_name: 'Ivers' },
-      { db, conversationId: 'c1', conversationsTable: 'whatsapp_conversations', contactId: 'd1', locationId: 'loc1' },
+      { db, conversationId: 'c1', conversationsTable: 'whatsapp_conversations', contactId: 'd1', locationId: 'loc1', channel: 'whatsapp' },
     )
     expect(res.verified).toBe(false)
     expect(stamped).toBeNull()
+  })
+})
+
+// MIA-REVIEW.3 (3.5) — the email-only "linked" relaxation is justified by the
+// WhatsApp NUMBER being a second factor, not by the conversation carrying a
+// contact_id. instagram_conversations has a contact_id column too, so keying on
+// !!contactId would silently downgrade any future IG contact link from
+// email+surname to email-only. Emails are not secret.
+describe('executeAccountTool · verify_identity keys "linked" on the phone factor', () => {
+  const bound = { id: 'ig1', email: 'jane@example.com', last_name: 'Murphy', wa_phone: null, phone: null }
+
+  const ctxFor = (channel) => ({
+    db: null, conversationId: 'c1', conversationsTable: `${channel}_conversations`,
+    contactId: 'ig1', locationId: 'loc1', channel,
+  })
+
+  it('WhatsApp + a bound contact: email alone verifies (the number is the 2nd factor)', async () => {
+    let stamped = null
+    const db = makeVerifyMockDb({ bound, siblings: [bound], onUpdate: (p) => { stamped = p } })
+    const res = await executeAccountTool('verify_identity', { email: 'jane@example.com' },
+      { ...ctxFor('whatsapp'), db })
+    expect(res).toEqual({ verified: true })
+    expect(stamped.agent_verified_contact_id).toBe('ig1')
+  })
+
+  it('Instagram + a bound contact: email alone is NOT enough — surname still required', async () => {
+    let stamped = null
+    const db = makeVerifyMockDb({ bound, siblings: [bound], byEmail: [bound], onUpdate: (p) => { stamped = p } })
+    const res = await executeAccountTool('verify_identity', { email: 'jane@example.com' },
+      { ...ctxFor('instagram'), db })
+    expect(res.verified).toBe(false)
+    expect(res.hint).toMatch(/surname/i)
+    expect(stamped).toBeNull()
+  })
+
+  it('Instagram: email + surname still verifies', async () => {
+    let stamped = null
+    const db = makeVerifyMockDb({ bound, siblings: [bound], byEmail: [bound], onUpdate: (p) => { stamped = p } })
+    const res = await executeAccountTool('verify_identity', { email: 'jane@example.com', last_name: 'Murphy' },
+      { ...ctxFor('instagram'), db })
+    expect(res).toEqual({ verified: true })
+    expect(stamped.agent_verified_contact_id).toBe('ig1')
+  })
+})
+
+// MIA-REVIEW.3 (3.15) — customer-supplied email goes into .ilike; % and _ are
+// LIKE wildcards there. Never a bypass (emailPathVerifies re-checks strict
+// equality), but an unescaped '_' matches any character and could fetch the
+// wrong row, failing a legitimate member's verification.
+describe('escapeLikePattern', () => {
+  it('escapes the LIKE wildcards and the escape character itself', () => {
+    expect(escapeLikePattern('jo_smith@example.com')).toBe('jo\\_smith@example.com')
+    expect(escapeLikePattern('%')).toBe('\\%')
+    expect(escapeLikePattern('a\\b')).toBe('a\\\\b')
+    expect(escapeLikePattern('plain@example.com')).toBe('plain@example.com')
+    expect(escapeLikePattern(null)).toBe('')
+  })
+
+  it('the unlinked email lookup queries the ESCAPED pattern', async () => {
+    const seen = []
+    const db = makeVerifyMockDb({
+      bound: null, siblings: [], byEmail: [],
+      onIlike: (col, pattern) => seen.push([col, pattern]),
+    })
+    await executeAccountTool('verify_identity', { email: 'jo_smith@example.com', last_name: 'Smith' },
+      { db, conversationId: 'c1', conversationsTable: 'instagram_conversations', contactId: null, locationId: 'loc1', channel: 'instagram' })
+    expect(seen).toEqual([['email', 'jo\\_smith@example.com']])
+  })
+})
+
+// MIA-REVIEW.3 (3.13) — tool results are written FOR the model: a raw
+// PostgREST/Postgres string would put constraint/column/RLS detail into the
+// model's context (card-tools convention). Clean message out, real error logged.
+describe('executeAccountTool · request queue failures never leak the raw DB error', () => {
+  function insertFailDb(message) {
+    return {
+      from() {
+        const b = {
+          select() { return b }, eq() { return b }, limit() { return b },
+          async maybeSingle() { return { data: null, error: null } },
+          async insert() { return { error: { message } } },
+          then(resolve) { resolve({ data: null, error: null }) },
+        }
+        return b
+      },
+    }
+  }
+  const RAW = 'duplicate key value violates unique constraint "agent_membership_requests_pkey"'
+
+  it('request_membership_purchase returns a clean message and logs the real error', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const res = await executeAccountTool('request_membership_purchase', { offer: 'Kickstarter' },
+      { db: insertFailDb(RAW), conversationId: 'c1', conversationsTable: 'whatsapp_conversations', contactId: 'c-1', locationId: 'loc1', channel: 'whatsapp' })
+    expect(res.error).toBe('queue_failed')
+    expect(res.message).not.toContain('constraint')
+    expect(res.message).toMatch(/hand off/i)
+    expect(spy.mock.calls.flat().join(' ')).toContain(RAW)
+    spy.mockRestore()
+  })
+
+  it('request_pause does the same on the verified path', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const res = await executeAccountTool('request_pause', { reason: 'travelling' },
+      { db: insertFailDb(RAW), conversationId: 'c1', conversationsTable: 'whatsapp_conversations', contactId: 'c-1', verifiedContactId: 'c-1', locationId: 'loc1', channel: 'whatsapp' })
+    expect(res.error).toBe('queue_failed')
+    expect(res.message).not.toContain('constraint')
+    spy.mockRestore()
   })
 })

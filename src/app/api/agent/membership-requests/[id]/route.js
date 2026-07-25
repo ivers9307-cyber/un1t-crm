@@ -5,6 +5,12 @@ import { createServerClient } from '@/lib/supabase'
 import { validateBody } from '@/lib/validate'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { APPROVAL_CATEGORY_PERMISSION } from '@shared/permissions'
+import {
+  EXECUTING_KINDS,
+  stuckExecutionStartedAt,
+  executingMarker,
+  finishedMarker,
+} from '@/lib/agent/request-recovery'
 
 // PATCH /api/agent/membership-requests/[id] — staff decides a queued
 // agent request. Decision rights follow the comms surface (any staff
@@ -52,7 +58,15 @@ export async function PATCH(request, { params }) {
   const v = await validateBody(request, DecisionSchema)
   if (!v.ok) return v.response
 
-  if (row.status !== 'pending') {
+  // MIA-REVIEW.3 — a row stuck at 'approved' with details.execution.stage
+  // 'executing' is a crashed approval (the process died between the claim and
+  // the Glofox call finishing): never actioned, never failed, no confirmation
+  // sent, and previously unrecoverable because every re-decision 409'd. Such a
+  // row may be RE-approved to retry the execution. Everything else keeps the
+  // strict once-only rule.
+  const retryStartedAt = stuckExecutionStartedAt(row, Date.now())
+  const isRetry = !!retryStartedAt && v.data.status === 'approved'
+  if (row.status !== 'pending' && !isRetry) {
     return NextResponse.json({ success: false, error: 'Already decided' }, { status: 409 })
   }
 
@@ -60,25 +74,36 @@ export async function PATCH(request, { params }) {
   // decision loses the .eq('status','pending') predicate and 409s, so
   // outcomes can't clobber each other and executions can't double-run
   // (claim-before-execute, same pattern as claim-before-send in comms).
+  // A RETRY claims on the stale marker instead: two concurrent retries both
+  // read the same started_at, the first rewrites it, the second's predicate no
+  // longer matches and 409s. The double-execution guard is unchanged.
   const nowIso = new Date().toISOString()
-  const { data: claimed } = await db.from('agent_membership_requests')
-    .update({
-      status: v.data.status,
-      decision_note: v.data.decision_note?.trim() || null,
-      decided_by: user.id,
-      decided_at: nowIso,
-      updated_at: nowIso,
-    })
-    .eq('id', id)
-    .eq('status', 'pending')
-    .select('id')
-    .maybeSingle()
+  // Executing kinds carry an intent marker for the duration of the side
+  // effect, so a crash is visible (and retryable) rather than silent.
+  const executing = v.data.status === 'approved' && EXECUTING_KINDS.has(row.kind)
+  const claimPatch = {
+    status: v.data.status,
+    decision_note: v.data.decision_note?.trim() || null,
+    decided_by: user.id,
+    decided_at: nowIso,
+    updated_at: nowIso,
+  }
+  if (executing) claimPatch.details = executingMarker(row.details, { startedAt: nowIso, by: user.id })
+
+  let claimQuery = db.from('agent_membership_requests').update(claimPatch).eq('id', id)
+  claimQuery = isRetry
+    ? claimQuery.eq('status', 'approved').eq('details->execution->>started_at', retryStartedAt)
+    : claimQuery.eq('status', 'pending')
+  const { data: claimed } = await claimQuery.select('id').maybeSingle()
   if (!claimed) {
     return NextResponse.json({ success: false, error: 'Already decided' }, { status: 409 })
   }
+  if (isRetry) {
+    console.warn(`[agent-requests] retrying crashed execution ${id} (${row.kind}), stalled since ${retryStartedAt}`)
+  }
 
   let finalStatus = v.data.status
-  let details = row.details || {}
+  let details = claimPatch.details || row.details || {}
   let executed = null
 
   // Operator-editable confirmation copy — loaded lazily (only the execution
@@ -95,7 +120,7 @@ export async function PATCH(request, { params }) {
   // AGENT-EVENTS.3 — approving a drafted PAID-entry cancellation
   // executes it. The refund (if any) stays a human decision processed
   // manually in Revolut Business — this only frees the spot.
-  if (v.data.status === 'approved' && row.kind === 'event_cancellation' && row.status === 'pending') {
+  if (executing && row.kind === 'event_cancellation') {
     const { cancelRaceRegistration } = await import('@/lib/race-cancel')
     const result = await cancelRaceRegistration(db, details.registration_id)
     executed = { ok: result.ok, error: result.error || null }
@@ -120,7 +145,7 @@ export async function PATCH(request, { params }) {
   }
 
   // AGENT-EVENTS.2 — approving a drafted event booking executes it.
-  if (v.data.status === 'approved' && row.kind === 'event_booking' && row.status === 'pending') {
+  if (executing && row.kind === 'event_booking') {
     const { registerSoloEventEntry } = await import('@/lib/race-register-solo')
     const { data: contact } = await db.from('contacts')
       .select('id, name, first_name, last_name, email, phone')
@@ -158,7 +183,7 @@ export async function PATCH(request, { params }) {
   }
 
   // AGENT-CANCEL.1 — approving a drafted cancellation executes it.
-  if (v.data.status === 'approved' && row.kind === 'class_cancellation' && row.status === 'pending') {
+  if (executing && row.kind === 'class_cancellation') {
     const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, cancelBooking } =
       await import('@/lib/glofox')
     const { data: contact } = await db.from('contacts')
@@ -196,7 +221,7 @@ export async function PATCH(request, { params }) {
   }
 
   // AGENT-HANDS.1 — approving a drafted class booking executes it.
-  if (v.data.status === 'approved' && row.kind === 'class_booking' && row.status === 'pending') {
+  if (executing && row.kind === 'class_booking') {
     const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, GLOFOX_BOOKING_MODEL } =
       await import('@/lib/glofox')
     const { data: contact } = await db.from('contacts')
@@ -277,11 +302,14 @@ export async function PATCH(request, { params }) {
 
   // The claim above owns decided_by/decided_at/decision_note; this only
   // persists the execution outcome (finalStatus === v.data.status when
-  // nothing executed — harmless rewrite of the claimed value).
+  // nothing executed — harmless rewrite of the claimed value). The execution
+  // marker is closed out here: a row still reading 'executing' after this
+  // point is one whose request died mid-flight (MIA-REVIEW.3).
+  const finishedIso = new Date().toISOString()
   const { data, error } = await db.from('agent_membership_requests').update({
     status: finalStatus,
-    details,
-    updated_at: new Date().toISOString(),
+    details: executing ? finishedMarker(details, { finishedAt: finishedIso }) : details,
+    updated_at: finishedIso,
   }).eq('id', id).select('id, status, decided_at, decision_note, details').single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   return NextResponse.json({ success: true, request: data, executed })

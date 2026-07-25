@@ -8,6 +8,7 @@ import {
   eventOpenForRegistration,
   waveSpotsLeft,
   classifyEventCancellation,
+  executeEventTool,
 } from './event-tools'
 
 const now = Date.UTC(2026, 5, 12, 12, 0, 0)
@@ -155,5 +156,78 @@ describe('classifyEventCancellation', () => {
     expect(classifyEventCancellation({ ...base, isOwner: false }).reason).toBe('not_yours')
     expect(classifyEventCancellation({ ...base, eventDate: '2026-06-01' }).reason).toBe('event_past')
     expect(classifyEventCancellation({ ...base, status: 'cancelled' }).reason).toBe('already_cancelled')
+  })
+})
+
+// MIA-REVIEW.3 (3.4) — the event auth model (see the file header of
+// event-tools.js). Free-entry NEW people stay verification-free; anything
+// touching an existing member's account or an existing registration needs
+// verify_identity, exactly like the class tools.
+describe('executeEventTool · identity gates', () => {
+  // Minimal thenable-builder mock: results keyed by table.
+  function eventDb({ race = null, contact = null } = {}) {
+    return {
+      from(table) {
+        const b = {
+          select() { return b }, eq() { return b }, gte() { return b },
+          in() { return b }, not() { return b }, order() { return b }, limit() { return b },
+          update() { return b },
+          async insert() { return { error: null } },
+          async maybeSingle() {
+            if (table === 'race_events') return { data: race, error: null }
+            if (table === 'contacts') return { data: contact, error: null }
+            return { data: null, error: null }
+          },
+          then(resolve) { resolve({ data: [], error: null }) },
+        }
+        return b
+      },
+    }
+  }
+
+  const FUTURE_RACE = {
+    id: 'race-1', name: 'Hyrox Sim', kind: 'race', slug: 'hyrox-sim', race_date: '2099-06-20',
+    active: true, location_id: 'loc1', waves: [],
+  }
+  const baseCtx = { locationId: 'loc1', contactId: 'c-1', verifiedContactId: null, channel: 'whatsapp' }
+
+  it('cancel_event_registration refuses an unverified sender on a contact-bound thread', async () => {
+    const res = await executeEventTool('cancel_event_registration', { registration_id: 'r-1' },
+      { ...baseCtx, db: eventDb() })
+    expect(res.error).toBe('not_verified')
+  })
+
+  it('reschedule_event_wave refuses an unverified sender the same way', async () => {
+    const res = await executeEventTool('reschedule_event_wave', { registration_id: 'r-1', new_wave_id: 'w-2' },
+      { ...baseCtx, db: eventDb() })
+    expect(res.error).toBe('not_verified')
+  })
+
+  it('with no contact at all it is still no_contact, not not_verified', async () => {
+    const res = await executeEventTool('cancel_event_registration', { registration_id: 'r-1' },
+      { ...baseCtx, contactId: null, db: eventDb() })
+    expect(res.error).toBe('no_contact')
+  })
+
+  it('book_event refuses an unverified sender when the bound contact is an existing MEMBER', async () => {
+    const db = eventDb({ race: FUTURE_RACE, contact: { id: 'c-1', name: 'Jane Murphy', email: 'jane@example.com', glofox_member_id: 'gf-9' } })
+    const res = await executeEventTool('book_event', { event_id: 'race-1' }, { ...baseCtx, db })
+    expect(res.error).toBe('not_verified')
+  })
+
+  it('book_event still lets a brand-new person enter a free event with name + email', async () => {
+    // No glofox_member_id => no member account to protect, so the designed
+    // consultation-style flow (name + email, no quiz) must survive the auth
+    // change. The turn continues past the gate into the real registration
+    // call, which this unit test does not stub — either way it must NOT be
+    // refused as not_verified.
+    const db = eventDb({ race: FUTURE_RACE, contact: { id: 'c-1', name: 'New Person', email: 'new@example.com', glofox_member_id: null } })
+    let res
+    try {
+      res = await executeEventTool('book_event', { event_id: 'race-1' }, { ...baseCtx, db })
+    } catch {
+      res = { error: null }   // got past the identity gate, then hit unstubbed IO
+    }
+    expect(res.error).not.toBe('not_verified')
   })
 })

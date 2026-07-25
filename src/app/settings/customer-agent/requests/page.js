@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { formatMoneyMinor } from '@/lib/money-format'
+import { isStuckExecuting } from '@/lib/agent/request-recovery'
 
 // RADAR-AGENT Phase 2 — operator approval queue. Manager+ reviews the
 // pause / cancellation requests the customer agent captured, and decides:
@@ -71,7 +72,13 @@ export default function AgentRequestsPage() {
   if (loading) return <div className="p-6 text-sm text-un1t-muted">Loading…</div>
 
   const pending = requests.filter(r => r.status === 'pending')
-  const decided = requests.filter(r => r.status !== 'pending')
+  // MIA-REVIEW.3 — approvals whose execution crashed mid-flight (claimed as
+  // 'approved', never actioned or failed). They used to be invisible and
+  // unrecoverable: the customer was told the team would confirm and nothing
+  // was ever booked. Approving again retries the execution.
+  const stuck = requests.filter(r => isStuckExecuting(r, Date.now()))
+  const stuckIds = new Set(stuck.map(r => r.id))
+  const decided = requests.filter(r => r.status !== 'pending' && !stuckIds.has(r.id))
 
   return (
     <div className="max-w-3xl">
@@ -87,6 +94,21 @@ export default function AgentRequestsPage() {
       {pending.length === 0 && (
         <div className="text-sm text-un1t-muted border border-dashed border-un1t-border rounded-md p-4 mb-6">
           No pending requests. 🎉
+        </div>
+      )}
+
+      {stuck.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-sm font-semibold text-amber-700 uppercase tracking-wider mb-2">Needs a retry</h2>
+          <p className="text-xs text-un1t-muted mb-3">
+            These were approved but the booking never completed (the request timed out or crashed
+            part-way). The customer has not been confirmed. Approve again to re-run it.
+          </p>
+          <div className="space-y-3">
+            {stuck.map(r => (
+              <RequestCard key={r.id} r={r} busy={busyId === r.id} onDecide={decide} focused={r.id === focusId} />
+            ))}
+          </div>
         </div>
       )}
 
