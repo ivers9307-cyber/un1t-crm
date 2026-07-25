@@ -118,6 +118,22 @@ describe('anthropicMessages', () => {
     expect(fetchMock.mock.calls[0][1].signal).toBe(controller.signal)
   })
 
+  // MIA-REVIEW.2 — the usage write used to be fire-and-forget, which Vercel
+  // gives no guarantee of completing once the response resolves. The caps and
+  // wallet gates read usage_events, so a dropped write under-meters invisibly.
+  it('awaits the usage write before returning', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => okResponse()))
+    let landed = false
+    recordUsage.mockImplementationOnce(async () => {
+      await new Promise((r) => setTimeout(r, 5))
+      landed = true
+    })
+
+    await anthropicMessages({ model: 'm', max_tokens: 1, messages: [] }, { apiKey: 'k', source: 'test' })
+
+    expect(landed).toBe(true)
+  })
+
   it('a recordUsage failure never breaks the reply path', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => okResponse()))
     recordUsage.mockImplementationOnce(async () => {

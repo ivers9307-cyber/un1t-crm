@@ -4,7 +4,7 @@
 // gated by the same customer_agent switches as the auto-reply so a disabled
 // or test-mode agent never greets strangers.
 import { sendTextMessage } from '@/lib/whatsapp'
-import { phoneMatchesAllowlist, isWithinQuietHours, AGENT_MESSAGE_SOURCE } from './core'
+import { phoneMatchesAllowlist, isWithinQuietHours, resolveAgentGate, AGENT_MESSAGE_SOURCE } from './core'
 
 export const DEFAULT_WELCOME_GREETING =
   "Hi! 👋 Welcome to UN1T. I'm Mia, the studio's assistant — ask me anything, or tell me if you'd like to book a free class or a consultation."
@@ -14,8 +14,9 @@ export const DEFAULT_WELCOME_GREETING =
 // brand new by definition).
 export function shouldSendWelcome({ settings, senderPhone, now = new Date() }) {
   const s = settings || {}
-  const enabled = !!s.enabled
-  const testMode = !!s.test_mode
+  // Shared combine (core.resolveAgentGate) so this gate can't drift from
+  // shouldAgentReply — enabled+test_mode is live for everyone on both.
+  const { enabled, testMode } = resolveAgentGate(s)
   if (!enabled && !testMode) return { send: false, reason: 'disabled' }
   if (!enabled && testMode && !phoneMatchesAllowlist(senderPhone, s.test_phones)) {
     return { send: false, reason: 'not_in_test_allowlist' }

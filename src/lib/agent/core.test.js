@@ -1,5 +1,5 @@
 // RADAR-AGENT.0 — unit tests for the pure agent runtime helpers.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   normalisePhone,
   phoneMatchesAllowlist,
@@ -24,6 +24,8 @@ import {
   shouldHandoffAfterVerifyFail,
   nextVerifyAttempts,
   VERIFY_FAIL_HANDOFF_DEFAULT,
+  resolveAgentGate,
+  warnLiveDespiteTestMode,
 } from './core'
 import { HANDOFF_PREFIX, OPTIONS_PREFIX } from './prompt'
 
@@ -476,6 +478,49 @@ describe('isVerificationFresh', () => {
 
 // Voice notes route to the team's review queue (soft handoff) — no
 // transcription vendor by design (Richard, 2026-06-12).
+// MIA-REVIEW.2 — a tapped 👍 on Mia's confirmation used to earn the customer
+// the holding message and managers a "sent a photo / voice / attachment" page.
+describe('shouldAgentReply — reactions are a no-op', () => {
+  const base = {
+    settings: { enabled: true },
+    conversation: { agent_active: true },
+    senderPhone: '+353871234567',
+  }
+  it('stays fully silent on a reaction: no reply, no onDuty acknowledgement', () => {
+    expect(shouldAgentReply({ ...base, message: { type: 'reaction', body: 'Reacted: 👍' } }))
+      .toEqual({ reply: false, reason: 'ignorable_type' })
+  })
+  it('still soft-hands-off the content-bearing types', () => {
+    for (const type of ['image', 'audio', 'video', 'document', 'location', 'contacts']) {
+      expect(shouldAgentReply({ ...base, message: { type, body: '' } }))
+        .toEqual({ reply: false, reason: 'unsupported_type', onDuty: true })
+    }
+  })
+})
+
+// MIA-REVIEW.2 — enabled + test_mode is LIVE FOR EVERYONE (documented
+// invariant). The semantics don't change; the tripwire makes the
+// half-configured state visible.
+describe('resolveAgentGate / warnLiveDespiteTestMode', () => {
+  it('only scopes to the allowlist when the agent is NOT enabled', () => {
+    expect(resolveAgentGate({ enabled: false, test_mode: true }))
+      .toMatchObject({ allowlistScoped: true, liveDespiteTestMode: false })
+    expect(resolveAgentGate({ enabled: true, test_mode: true }))
+      .toMatchObject({ allowlistScoped: false, liveDespiteTestMode: true })
+    expect(resolveAgentGate(null)).toMatchObject({ off: true, liveDespiteTestMode: false })
+  })
+  it('logs the live-despite-test-mode state once per location', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const settings = { enabled: true, test_mode: true }
+    expect(warnLiveDespiteTestMode('loc-tripwire', settings)).toBe(true)
+    expect(warnLiveDespiteTestMode('loc-tripwire', settings)).toBe(true)
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy.mock.calls[0][0]).toContain('live_despite_test_mode')
+    expect(warnLiveDespiteTestMode('loc-tripwire', { enabled: true })).toBe(false)
+    spy.mockRestore()
+  })
+})
+
 describe('shouldAgentReply — voice notes', () => {
   it('soft-hands-off a voice note for human review', () => {
     const d = shouldAgentReply({
