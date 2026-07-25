@@ -9,8 +9,10 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import ContractRevokeButton from '@/components/ContractRevokeButton'
+import ContractResendButton from '@/components/ContractResendButton'
 import ContractPrintButton from '@/components/ContractPrintButton'
 import ContractBody from '@/components/ContractBody'
+import ContractIssueWarningBanner from '@/components/ContractIssueWarningBanner'
 
 export const dynamic = 'force-dynamic'
 
@@ -66,10 +68,17 @@ export default async function ContractDetailAdmin(props) {
   if (!c) notFound()
 
   const badge = STATUS_BADGE[c.status] || { label: c.status, class: 'bg-un1t-border text-un1t-subtle' }
-  const canRevoke = (c.status === 'issued' || c.status === 'viewed') && isOwnerOrMaster(user)
+  // Both actions share the same gate (issued/viewed + owner/master) —
+  // resend is the notification-replay twin of revoke, so it stays
+  // owner/master-only rather than following the grantable read
+  // permission that gates this page.
+  const canManage = (c.status === 'issued' || c.status === 'viewed') && isOwnerOrMaster(user)
+  const canRevoke = canManage
+  const canResend = canManage
 
   return (
     <div className="p-6 md:p-8 max-w-3xl print:p-0 print:max-w-none">
+      <ContractIssueWarningBanner contractId={c.id} />
       <div className="print:hidden">
         <Link href="/admin/contracts" className="text-xs text-un1t-subtle hover:text-un1t-text">
           ← Contracts
@@ -141,6 +150,7 @@ export default async function ContractDetailAdmin(props) {
 
       <div className="flex flex-wrap items-center gap-2 print:hidden">
         <ContractPrintButton />
+        {canResend && <ContractResendButton contractId={c.id} />}
         {canRevoke && <ContractRevokeButton contractId={c.id} />}
       </div>
 

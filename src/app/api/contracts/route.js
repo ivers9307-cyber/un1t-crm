@@ -186,7 +186,7 @@ export async function POST(request) {
   //    substitute. body_rendered is what gets stored; the recipient
   //    sees this exact text on their signing page.
   const merged = mergeVariables(recipient, parsed.data.variables)
-  const bodyRendered = renderTemplate(template.body_markdown, merged)
+  let bodyRendered = renderTemplate(template.body_markdown, merged)
 
   // 5a. CONTRACT-VARS.1 — reject if any placeholder remains in the
   //     rendered body. The wizard surfaces these in step 2 as an
@@ -201,6 +201,30 @@ export async function POST(request) {
       error: `Unmapped variables in the rendered body: ${leftover.map((k) => `{{${k}}}`).join(', ')}. Fill values for each before issuing.`,
       unmapped_keys: leftover,
     }, { status: 400 })
+  }
+
+  // 5b. CONTRACTS-EDIT.1 — per-contract body override. The issuer may
+  //     hand-edit the rendered text in the wizard's step-3 preview
+  //     (a one-off clause tweak) without touching the shared
+  //     template. When present it REPLACES bodyRendered entirely;
+  //     variables_data still stores the merged auto-fill + custom
+  //     map either way (kept for audit/reference even though the
+  //     literal stored text now diverges from a fresh render of that
+  //     map). Re-run the same leftover check against the override —
+  //     a hand-edit can just as easily introduce or leave behind a
+  //     stray {{placeholder}} as the template render could.
+  let bodyEdited = false
+  if (parsed.data.body_override) {
+    const overrideLeftover = extractPlaceholders(parsed.data.body_override)
+    if (overrideLeftover.length > 0) {
+      return NextResponse.json({
+        success: false,
+        error: `Unmapped variables in the rendered body: ${overrideLeftover.map((k) => `{{${k}}}`).join(', ')}. Fill values for each before issuing.`,
+        unmapped_keys: overrideLeftover,
+      }, { status: 400 })
+    }
+    bodyRendered = parsed.data.body_override
+    bodyEdited = true
   }
 
   // 6. Insert. status defaults to 'issued' via the column default.
@@ -243,6 +267,7 @@ export async function POST(request) {
     details: {
       template_id: template.id,
       template_name: tplRow?.name || null,
+      body_edited: bodyEdited,
     },
     request,
   })

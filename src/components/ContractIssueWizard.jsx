@@ -15,7 +15,7 @@
 import { useState, useEffect, useMemo, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
 import { ChevronRight, FileText, AlertCircle } from 'lucide-react'
-import { renderTemplate, profileVariables, unresolvedPlaceholders } from '@/lib/contracts'
+import { renderTemplate, profileVariables, unresolvedPlaceholders, extractPlaceholders } from '@/lib/contracts'
 import ContractBody from '@/components/ContractBody'
 
 export default function ContractIssueWizard({ issuerName }) {
@@ -29,6 +29,17 @@ export default function ContractIssueWizard({ issuerName }) {
   const [issuerSig, setIssuerSig] = useState(issuerName || '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
+
+  // CONTRACTS-EDIT.1 — per-contract body edit at step 3. null means
+  // "untouched" (issue with the plain rendered preview); once set it
+  // holds the issuer's hand-edited text and is what actually gets
+  // issued. editingBody toggles the textarea; editPreviewMode only
+  // matters while editingBody is true (Formatted renders bodyOverride
+  // through ContractBody, Raw shows the literal source with any
+  // remaining {{placeholder}} highlighted).
+  const [bodyOverride, setBodyOverride] = useState(null)
+  const [editingBody, setEditingBody] = useState(false)
+  const [editPreviewMode, setEditPreviewMode] = useState('formatted')
 
   useEffect(() => {
     let active = true
@@ -102,8 +113,36 @@ export default function ContractIssueWizard({ issuerName }) {
     return unresolvedPlaceholders(template.body_markdown, recipient, vars)
   }, [template, recipient, vars])
 
+  // CONTRACTS-EDIT.1 — once the issuer hand-edits the body, the
+  // "still unresolved" check moves from the template-render
+  // placeholders to whatever's literally still in the edited text
+  // (the override is the final text — there's no further variable
+  // merge to reason about).
+  const overrideUnresolvedKeys = useMemo(() => {
+    if (bodyOverride == null) return []
+    return extractPlaceholders(bodyOverride)
+  }, [bodyOverride])
+  const effectiveUnresolved = bodyOverride != null ? overrideUnresolvedKeys : stillUnfilled
+  const effectiveBody = bodyOverride != null ? bodyOverride : preview
+
   function setVar(key, val) {
     setVars(v => ({ ...v, [key]: val }))
+  }
+
+  // Shared by both "← Back" buttons (step2→1 and step3→2). A
+  // non-null override means the issuer has hand-edited the body —
+  // changing recipient/template/variables invalidates those edits,
+  // so confirm before silently discarding them.
+  function goBack(targetStep) {
+    if (bodyOverride != null) {
+      const ok = window.confirm(
+        'Going back will discard your manual edits to the contract text. Continue?'
+      )
+      if (!ok) return
+      setBodyOverride(null)
+      setEditingBody(false)
+    }
+    setStep(targetStep)
   }
 
   function canAdvanceStep1() {
@@ -128,18 +167,38 @@ export default function ContractIssueWizard({ issuerName }) {
     setBusy(true)
     setError(null)
     try {
+      const payload = {
+        template_id: templateId,
+        profile_id: profileId,
+        variables: vars,
+        issuer_signature: issuerSig,
+      }
+      // Only send an override when it's actually a hand-edit — a
+      // toggled-on-then-untouched textarea equals the plain rendered
+      // preview and shouldn't count as an edit server-side.
+      if (bodyOverride != null && bodyOverride !== preview) {
+        payload.body_override = bodyOverride
+      }
       const res = await fetch('/api/contracts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          template_id: templateId,
-          profile_id: profileId,
-          variables: vars,
-          issuer_signature: issuerSig,
-        }),
+        body: JSON.stringify(payload),
       })
       const json = await res.json()
       if (!res.ok || !json.success) throw new Error(json.error || `HTTP ${res.status}`)
+      // CONTRACTS-EDIT.1 — handleIssue used to read json.warning (e.g.
+      // "email could not be sent") and drop it on the floor before
+      // navigating away. Stash it for the detail page's
+      // ContractIssueWarningBanner to pick up on mount.
+      if (json.warning) {
+        try {
+          window.sessionStorage.setItem(`contract-issue-warning:${json.data.id}`, json.warning)
+        } catch {
+          // Private-browsing storage block — the warning just won't
+          // surface on the detail page; the issue itself still went
+          // through fine.
+        }
+      }
       router.push(`/admin/contracts/${json.data.id}`)
       router.refresh()
     } catch (e) {
@@ -286,7 +345,7 @@ export default function ContractIssueWizard({ issuerName }) {
           <div className="flex justify-between pt-2">
             <button
               type="button"
-              onClick={() => setStep(1)}
+              onClick={() => goBack(1)}
               className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
             >← Back</button>
             <button
@@ -301,17 +360,18 @@ export default function ContractIssueWizard({ issuerName }) {
 
       {step === 3 && (
         <div className="space-y-4 mt-5">
-          {stillUnfilled.length > 0 && (
+          {effectiveUnresolved.length > 0 && (
             <div className="bg-amber-500/10 border border-amber-500/30 rounded-md p-3 flex items-start gap-2">
               <AlertCircle size={14} className="text-amber-700 mt-0.5 shrink-0" />
               <div className="text-xs text-amber-700">
                 <div className="font-semibold">
-                  {stillUnfilled.length === 1
+                  {effectiveUnresolved.length === 1
                     ? 'One placeholder still has no value.'
-                    : `${stillUnfilled.length} placeholders still have no value.`}
+                    : `${effectiveUnresolved.length} placeholders still have no value.`}
                 </div>
                 <div className="mt-0.5">
-                  Go back and fill: {stillUnfilled.map((k) => (
+                  {bodyOverride != null ? 'Edit the text below to fill: ' : 'Go back and fill: '}
+                  {effectiveUnresolved.map((k) => (
                     <Fragment key={k}>
                       <code className="bg-amber-500/15 text-amber-800 rounded px-1 mr-1">{`{{${k}}}`}</code>
                     </Fragment>
@@ -321,8 +381,74 @@ export default function ContractIssueWizard({ issuerName }) {
             </div>
           )}
           <div>
-            <label className="block text-sm text-un1t-subtle mb-1">Preview</label>
-            {stillUnfilled.length > 0 ? (
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-sm text-un1t-subtle">
+                Preview
+                {bodyOverride != null && (
+                  <span className="ml-2 text-[10px] uppercase tracking-wider bg-blue-500/10 text-blue-700 rounded-full px-1.5 py-0.5 align-middle">
+                    Edited
+                  </span>
+                )}
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  if (editingBody) {
+                    setEditingBody(false)
+                    return
+                  }
+                  setBodyOverride((prev) => (prev == null ? preview : prev))
+                  setEditingBody(true)
+                }}
+                className="text-xs text-un1t-subtle hover:text-un1t-text underline"
+              >{editingBody ? 'Done editing' : 'Edit text'}</button>
+            </div>
+
+            {editingBody ? (
+              <div className="space-y-2">
+                <textarea
+                  value={bodyOverride ?? ''}
+                  onChange={(e) => setBodyOverride(e.target.value)}
+                  rows={12}
+                  className="w-full bg-white text-gray-900 border border-un1t-border rounded-md p-3 font-mono text-xs leading-relaxed"
+                />
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setEditPreviewMode('formatted')}
+                      className={`px-2 py-1 rounded-md ${editPreviewMode === 'formatted' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
+                    >Formatted</button>
+                    <button
+                      type="button"
+                      onClick={() => setEditPreviewMode('raw')}
+                      className={`px-2 py-1 rounded-md ${editPreviewMode === 'raw' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'}`}
+                    >Raw</button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const ok = window.confirm(
+                        'Reset to the template text? Your manual edits will be discarded.'
+                      )
+                      if (!ok) return
+                      setBodyOverride(null)
+                      setEditingBody(false)
+                    }}
+                    className="text-xs text-red-700 hover:text-red-800"
+                  >Reset to template</button>
+                </div>
+                <div className="bg-white text-gray-900 border border-un1t-border rounded-md p-4 max-h-[300px] overflow-auto">
+                  {editPreviewMode === 'raw' ? (
+                    <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                      {renderPreviewWithHighlights(bodyOverride || '')}
+                    </div>
+                  ) : (
+                    <ContractBody markdown={bodyOverride || ''} />
+                  )}
+                </div>
+              </div>
+            ) : effectiveUnresolved.length > 0 ? (
               // Raw view — while placeholders are still unresolved we
               // show the literal markdown source with each unfilled
               // {{placeholder}} highlighted, so the issuer can see
@@ -331,11 +457,11 @@ export default function ContractIssueWizard({ issuerName }) {
               // literal {{...}} runs inside markdown formatting, so
               // the raw view stays plain text until everything resolves.
               <div className="bg-white text-gray-900 border border-un1t-border rounded-md p-4 max-h-[400px] overflow-auto whitespace-pre-wrap text-sm leading-relaxed">
-                {renderPreviewWithHighlights(preview)}
+                {renderPreviewWithHighlights(effectiveBody)}
               </div>
             ) : (
               <div className="bg-white text-gray-900 border border-un1t-border rounded-md p-4 max-h-[400px] overflow-auto">
-                <ContractBody markdown={preview} />
+                <ContractBody markdown={effectiveBody} />
               </div>
             )}
           </div>
@@ -359,16 +485,16 @@ export default function ContractIssueWizard({ issuerName }) {
           <div className="flex justify-between pt-2">
             <button
               type="button"
-              onClick={() => setStep(2)}
+              onClick={() => goBack(2)}
               className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
             >← Back</button>
             <button
               type="button"
-              disabled={!issuerSig || busy || stillUnfilled.length > 0}
+              disabled={!issuerSig || busy || effectiveUnresolved.length > 0}
               onClick={handleIssue}
               title={
-                stillUnfilled.length > 0
-                  ? `Fill ${stillUnfilled.length} remaining placeholder${stillUnfilled.length === 1 ? '' : 's'} before issuing.`
+                effectiveUnresolved.length > 0
+                  ? `Fill ${effectiveUnresolved.length} remaining placeholder${effectiveUnresolved.length === 1 ? '' : 's'} before issuing.`
                   : undefined
               }
               className="text-xs bg-un1t-text text-un1t-bg px-4 py-1.5 rounded-md font-medium hover:bg-un1t-accent disabled:opacity-50 inline-flex items-center gap-1"

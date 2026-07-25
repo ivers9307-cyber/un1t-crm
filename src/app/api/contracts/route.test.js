@@ -29,10 +29,14 @@ vi.mock('@/lib/auth', async (importOriginal) => {
 })
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/contracts-email', () => ({ sendContractIssuedEmail: vi.fn(async () => ({ ok: true })) }))
+vi.mock('@/lib/push', () => ({ sendPush: vi.fn(async () => {}) }))
+vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => ({ logged: true })) }))
 
 import { GET, POST } from './route.js'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { logAuditEvent } from '@/lib/audit'
 
 const ORG_A = 'org-a'
 const LOC_A1 = 'loc-a1'
@@ -257,5 +261,147 @@ describe('POST /api/contracts — template-pick scoping', () => {
       expect(res.status).toBe(404)
       expect(body.error).toBe('Recipient not found')
     }
+  })
+})
+
+// ─── POST (issue) — CONTRACTS-EDIT.1 body_override ──────────────
+//
+// A happy-path mock that resolves the recipient (unlike issueMockDb
+// above, which deliberately stops at the template gate) so the flow
+// reaches the render + insert step. TPL_EDIT has a body with a
+// {{full_name}} placeholder (auto-fillable from the recipient, so a
+// plain issue with no override renders clean) — the override tests
+// then swap in either a clean or a placeholder-carrying replacement
+// body to exercise CONTRACTS-EDIT.1's leftover check.
+
+const TPL_EDIT = 'dddddddd-0000-0000-0000-000000000001'
+
+function issueHappyPathMockDb() {
+  const recipient = {
+    id: RECIPIENT,
+    full_name: 'Jane Doe',
+    email: 'jane@example.com',
+    role: 'staff',
+    employment_type: 'fte',
+    annual_salary: 50000,
+    hourly_rate: null,
+    overtime_rate: null,
+    contracted_hours_per_week: 40,
+    profile_locations: [
+      { location_id: LOC_A1, is_default: true, location: { id: LOC_A1, organization_id: ORG_A } },
+    ],
+  }
+  const templates = [
+    { id: TPL_EDIT, organization_id: ORG_A, body_markdown: 'Hello {{full_name}}, salary {{annual_salary}}.', variables_schema: [], employment_type: 'both', active: true },
+  ]
+  const calls = { contractsInsert: [] }
+  const from = vi.fn((table) => {
+    if (table === 'contract_templates') {
+      // Both the initial template lookup and the post-insert
+      // name-for-the-email-subject lookup land here; both filter by
+      // 'id' only, so one mock handles both call sites.
+      const filters = []
+      const b = {
+        eq: vi.fn((col, val) => { filters.push(r => r[col] === val); return b }),
+        maybeSingle: vi.fn(async () => ({
+          data: templates.find(r => filters.every(f => f(r))) || null,
+          error: null,
+        })),
+      }
+      return { select: vi.fn(() => b) }
+    }
+    if (table === 'profiles') {
+      const filters = []
+      const b = {
+        eq: vi.fn((col, val) => { filters.push(r => r[col] === val); return b }),
+        maybeSingle: vi.fn(async () => ({
+          data: filters.every(f => f(recipient)) ? recipient : null,
+          error: null,
+        })),
+      }
+      return { select: vi.fn(() => b) }
+    }
+    if (table === 'contracts') {
+      const insert = vi.fn((row) => {
+        calls.contractsInsert.push(row)
+        const b = { select: vi.fn(() => b), single: vi.fn(async () => ({ data: { id: 'c-new', ...row }, error: null })) }
+        return b
+      })
+      return { insert }
+    }
+    throw new Error(`unexpected table ${table}`)
+  })
+  return { db: { from }, calls }
+}
+
+const issueReqFull = (extra = {}) => new Request('https://example.com/api/contracts', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    template_id: TPL_EDIT,
+    profile_id: RECIPIENT,
+    variables: {},
+    issuer_signature: 'Richard Ivers',
+    ...extra,
+  }),
+})
+
+describe('POST /api/contracts — CONTRACTS-EDIT.1 body_override', () => {
+  it('accepts body_override and stores it as body_rendered verbatim (variables_data still the merged auto-fill map)', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db, calls } = issueHappyPathMockDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(issueReqFull({ body_override: 'Custom hand-edited text for Jane.' }))
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(calls.contractsInsert).toHaveLength(1)
+    expect(calls.contractsInsert[0].body_rendered).toBe('Custom hand-edited text for Jane.')
+    // variables_data is unaffected by the override — it's still the
+    // merged profile-auto-fill + custom-variable map.
+    expect(calls.contractsInsert[0].variables_data.full_name).toBe('Jane Doe')
+  })
+
+  it('rejects a body_override that still has an unmapped {{placeholder}} — 400 with unmapped_keys', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db, calls } = issueHappyPathMockDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(issueReqFull({ body_override: 'Still has {{mystery_var}} left in it.' }))
+    const body = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(body.success).toBe(false)
+    expect(body.unmapped_keys).toEqual(['mystery_var'])
+    expect(calls.contractsInsert).toHaveLength(0)
+  })
+
+  it('records details.body_edited: true on the audit event when an override was used', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db } = issueHappyPathMockDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(issueReqFull({ body_override: 'Custom hand-edited text for Jane.' }))
+    expect(res.status).toBe(200)
+
+    expect(logAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'contract.issued',
+      details: expect.objectContaining({ body_edited: true }),
+    }))
+  })
+
+  it('records details.body_edited: false when no override was used', async () => {
+    getCurrentUser.mockResolvedValue(MASTER)
+    const { db } = issueHappyPathMockDb()
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(issueReqFull())
+    expect(res.status).toBe(200)
+
+    expect(logAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+      details: expect.objectContaining({ body_edited: false }),
+    }))
   })
 })

@@ -304,6 +304,11 @@ export const contractIssueSchema = z.object({
   // Issuer's typed name for the countersign block. Recipient sees
   // a fully-employer-signed document on first view.
   issuer_signature: z.string().min(1).max(200),
+  // CONTRACTS-EDIT.1 — issuer's hand-edited rendered body from the
+  // wizard's step-3 preview. When present it REPLACES the rendered
+  // template output entirely (see /api/contracts POST); omitted when
+  // the issuer never touched the "Edit text" affordance.
+  body_override: z.string().min(1).optional(),
 })
 
 // Sign payload — typed-name only in the MVP. The route adds IP
