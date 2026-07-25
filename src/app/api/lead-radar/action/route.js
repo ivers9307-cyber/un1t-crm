@@ -89,7 +89,7 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Pick a template to send.' }, { status: 400 })
     }
     try {
-      await sendRadarOutreach({ db, contact, templateName, locationId })
+      await sendRadarOutreach({ db, contact, templateName, locationId, sentBy: user.id })
     } catch (e) {
       logWarn('lead-radar', 'outreach send failed', { err: e, contactId })
       return NextResponse.json({

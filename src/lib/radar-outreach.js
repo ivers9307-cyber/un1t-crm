@@ -17,6 +17,7 @@
 // unit testing; sendRadarOutreach does the DB lookup + the send.
 
 import { headerComponentFor, sendTemplateMessage, getOrCreateConversation } from '@/lib/whatsapp'
+import { manualTakeoverPatch } from '@/lib/agent/core'
 
 /**
  * Pull the body text + variable shape out of a whatsapp_templates
@@ -124,10 +125,12 @@ function firstNameOf(contact) {
  * @param {object} args.contact       { name, first_name, wa_phone, phone }
  * @param {string} args.templateName
  * @param {string} args.locationId
+ * @param {string} [args.sentBy]     operator user id — stamped on the outbound
+ *                                   and pauses Mia on the thread (human take-over)
  * @returns {Promise<{ messageId: string|null, templateName: string }>}
  * @throws  {Error} with a human-readable message on any failure
  */
-export async function sendRadarOutreach({ db, contact, templateName, locationId }) {
+export async function sendRadarOutreach({ db, contact, templateName, locationId, sentBy }) {
   if (!templateName) throw new Error('Pick a template to send.')
   const to = contact?.wa_phone || contact?.phone
   if (!to) throw new Error('This contact has no phone number on file.')
@@ -171,20 +174,35 @@ export async function sendRadarOutreach({ db, contact, templateName, locationId 
   // fails the send the operator just clicked.
   try {
     const conversationId = await getOrCreateConversation(db, contact, locationId)
-    if (conversationId && res?.messageId) {
-      const { error: recErr } = await db.from('whatsapp_messages').insert({
-        conversation_id: conversationId,
-        contact_id: contact.id,
-        location_id: locationId,
-        wa_message_id: res.messageId,
-        direction: 'outbound',
-        message_type: 'template',
-        template_name: template.name,
-        body: renderRadarBody(template, firstNameOf(contact)) || `[Template: ${template.name}]`,
-        status: 'sent',
-        sent_at: new Date().toISOString(),
-      })
-      if (recErr) console.error('[radar-outreach] failed to record outreach in thread:', recErr.message)
+    if (conversationId) {
+      if (res?.messageId) {
+        const { error: recErr } = await db.from('whatsapp_messages').insert({
+          conversation_id: conversationId,
+          contact_id: contact.id,
+          location_id: locationId,
+          wa_message_id: res.messageId,
+          direction: 'outbound',
+          message_type: 'template',
+          template_name: template.name,
+          body: renderRadarBody(template, firstNameOf(contact)) || `[Template: ${template.name}]`,
+          status: 'sent',
+          // RADAR-TAKEOVER.1 — attribute to the operator so the thread's last
+          // outbound reads as human-owned (isHumanOutbound needs sent_by != null),
+          // keeping Mia out even after the handoff cooldown would otherwise re-arm her.
+          sent_by: sentBy || null,
+          sent_at: new Date().toISOString(),
+        })
+        if (recErr) console.error('[radar-outreach] failed to record outreach in thread:', recErr.message)
+      }
+      // RADAR-TAKEOVER.1 — an operator pressing send is an intentional human
+      // take-over of the thread: pause Mia here (same posture as the contact
+      // composer + inbox reply routes) so a reply to a 1:1 outreach / dunning
+      // chase reaches the team, not the agent. Auto re-arms after the handoff
+      // cooldown / on resolve. Best-effort — never fail the send just clicked.
+      const { error: convErr } = await db.from('whatsapp_conversations')
+        .update(manualTakeoverPatch())
+        .eq('id', conversationId)
+      if (convErr) console.error('[radar-outreach] failed to pause agent on outreach thread:', convErr.message)
     }
   } catch (e) {
     console.error('[radar-outreach] thread recording failed:', e?.message || e)
