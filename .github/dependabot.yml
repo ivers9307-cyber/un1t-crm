@@ -23,7 +23,10 @@ updates:
   # specific Expo SDK — a blind transitive bump can break the native build.
   # Kept grouped + low-volume; every mobile bump MUST be reviewed against
   # Expo's expected versions before merge (never blind-merge). The planned
-  # SDK 54→56 jump is handled separately, not by Dependabot.
+  # SDK jump is handled separately, not by Dependabot: SDK-coupled packages
+  # (expo*, react-native*, react/react-dom, nativewind/tailwind, babel) are
+  # ignored below — PR #1041 (2026-07-25) was a disguised SDK 54→57 upgrade
+  # swept in by the '*' group, incl. tailwind v4 which NativeWind rejects.
   - package-ecosystem: npm
     directory: /mobile
     schedule:
@@ -33,6 +36,21 @@ updates:
     groups:
       mobile-grouped:
         patterns: ['*']
+        update-types: [minor, patch]
+    ignore:
+      # Versions of these track the Expo SDK; they only move in the
+      # isolated SDK-upgrade task (which also ships a native release).
+      - dependency-name: 'expo'
+      - dependency-name: 'expo-*'
+      - dependency-name: '@expo/*'
+      - dependency-name: 'react-native'
+      - dependency-name: 'react-native-*'
+      - dependency-name: '@react-native-*'
+      - dependency-name: 'react'
+      - dependency-name: 'react-dom'
+      - dependency-name: 'nativewind'
+      - dependency-name: 'tailwindcss'
+      - dependency-name: '@babel/core'
     labels: [dependencies, mobile]
 
   # Keep GitHub Actions pinned versions current (near-zero risk).
