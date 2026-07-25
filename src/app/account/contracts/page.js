@@ -2,6 +2,13 @@
 // Lists everything regardless of status so they can re-open
 // signed contracts later (employer copy lives elsewhere; this is
 // the employee's persistent record of their signed agreements).
+//
+// CONTRACTS-DRAFT.1 — EXCEPT 'draft': a draft is an issuer-side
+// work-in-progress that was never sent to this recipient. Without
+// the .neq('status', 'draft') filter below it would still show up
+// here (it fell through to the "archive" bucket since it's neither
+// issued nor viewed) even though the recipient has no idea it
+// exists yet.
 
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
@@ -39,6 +46,7 @@ export default async function MyContractsPage() {
       template:contract_templates!template_id (name)
     `)
     .eq('profile_id', user.id)
+    .neq('status', 'draft')
     .order('issued_at', { ascending: false })
 
   const rows = contracts || []

@@ -2379,6 +2379,40 @@ registry.registerPath({
   },
 })
 
+// CONTRACTS-DRAFT.1 — send a draft (its first-ever notification)
+registry.registerPath({
+  method: 'post',
+  path: '/api/contracts/{id}/send',
+  tags: ['Contracts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Send a draft contract to its recipient (master/owner only)',
+  description: "Flips a draft to issued (issued_at reset to the send time — the draft's own issued_at is just its creation timestamp, since the column is NOT NULL) and fires notifyContractIssued (email + push) — the recipient's very first notification, since a draft never emailed or pushed anyone. Org-scoped like resend/revoke (404 not 403 for a foreign-org id, non-enumerable); 409 for any status other than draft.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Sent (warning present if the email itself failed)' },
+    403: { description: 'Master or owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (incl. cross-tenant ids)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Contract is not a draft', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// CONTRACTS-DRAFT.1 — discard a draft (silent — no recipient email)
+registry.registerPath({
+  method: 'post',
+  path: '/api/contracts/{id}/discard',
+  tags: ['Contracts'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Discard a draft contract (master/owner only)',
+  description: "Revokes a draft with NO recipient notification (they never knew it existed). Non-draft contracts must go through /revoke instead, which does email the recipient. Org-scoped (404 not 403 for a foreign-org id, non-enumerable); 409 for any status other than draft.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: "Discarded (status -> revoked, revoked_reason 'Draft discarded')" },
+    403: { description: 'Master or owner only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (incl. cross-tenant ids)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Contract is not a draft', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/admin/orgs/{id}/suspend',

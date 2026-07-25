@@ -9,6 +9,7 @@ import {
   profileVariables,
   formatEuro,
   mergeVariables,
+  customVariablesFrom,
   renderTemplate,
   validateCustomVariables,
   extractPlaceholders,
@@ -106,6 +107,66 @@ describe('mergeVariables', () => {
     expect(mergeVariables({ full_name: 'X' }, undefined)).toEqual(
       expect.objectContaining({ full_name: 'X' }),
     )
+  })
+})
+
+// CONTRACTS-DRAFT.1 — re-issue prefill uses this to strip
+// profile-derived auto-fills out of a previous contract's frozen
+// variables_data, leaving only what the issuer actually typed in.
+describe('customVariablesFrom', () => {
+  const recipient = {
+    full_name: 'Sarah Doe',
+    email: 'sarah@un1tdublin.com',
+    role: 'staff',
+    employment_type: 'fte',
+    annual_salary: 60000,
+    hourly_rate: null,
+    overtime_rate: null,
+    contracted_hours_per_week: 40,
+  }
+
+  it('strips every key profileVariables(recipient) would produce', () => {
+    const frozen = {
+      ...profileVariables(recipient),
+      notice_period_weeks: '4',
+      commission_rate: '10',
+    }
+    const out = customVariablesFrom(frozen, recipient)
+    expect(out).toEqual({ notice_period_weeks: '4', commission_rate: '10' })
+  })
+
+  it('always strips `today` even though it is profile-derived', () => {
+    const frozen = { today: '25 Jul 2026', start_date: '2026-08-01' }
+    const out = customVariablesFrom(frozen, recipient)
+    expect(out).toEqual({ start_date: '2026-08-01' })
+  })
+
+  it('keeps custom variables untouched', () => {
+    const frozen = { notice_period_weeks: '4', commission_rate: '10', bonus_clause: 'yes' }
+    const out = customVariablesFrom(frozen, recipient)
+    expect(out).toEqual(frozen)
+  })
+
+  it('handles a null/undefined recipient profile — strips only `today`, keeps the rest', () => {
+    const frozen = { today: '25 Jul 2026', full_name: 'Sarah Doe', notice_period_weeks: '4' }
+    expect(customVariablesFrom(frozen, null)).toEqual({
+      full_name: 'Sarah Doe',
+      notice_period_weeks: '4',
+    })
+    expect(customVariablesFrom(frozen, undefined)).toEqual({
+      full_name: 'Sarah Doe',
+      notice_period_weeks: '4',
+    })
+  })
+
+  it('handles null/undefined variablesData gracefully', () => {
+    expect(customVariablesFrom(null, recipient)).toEqual({})
+    expect(customVariablesFrom(undefined, recipient)).toEqual({})
+  })
+
+  it('returns an empty object when everything was profile-derived', () => {
+    const frozen = { ...profileVariables(recipient) }
+    expect(customVariablesFrom(frozen, recipient)).toEqual({})
   })
 })
 

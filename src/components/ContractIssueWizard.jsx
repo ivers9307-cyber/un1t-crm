@@ -14,11 +14,11 @@
 
 import { useState, useEffect, useMemo, Fragment } from 'react'
 import { useRouter } from 'next/navigation'
-import { ChevronRight, FileText, AlertCircle } from 'lucide-react'
-import { renderTemplate, profileVariables, unresolvedPlaceholders, extractPlaceholders } from '@/lib/contracts'
+import { ChevronRight, FileText, AlertCircle, Info } from 'lucide-react'
+import { renderTemplate, profileVariables, unresolvedPlaceholders, extractPlaceholders, customVariablesFrom } from '@/lib/contracts'
 import ContractBody from '@/components/ContractBody'
 
-export default function ContractIssueWizard({ issuerName }) {
+export default function ContractIssueWizard({ issuerName, fromContractId }) {
   const router = useRouter()
   const [step, setStep] = useState(1)
   const [staff, setStaff] = useState([])
@@ -28,7 +28,16 @@ export default function ContractIssueWizard({ issuerName }) {
   const [vars, setVars] = useState({})
   const [issuerSig, setIssuerSig] = useState(issuerName || '')
   const [busy, setBusy] = useState(false)
+  const [pendingAction, setPendingAction] = useState(null) // 'issue' | 'draft' | null
   const [error, setError] = useState(null)
+
+  // CONTRACTS-DRAFT.1 — re-issue prefill. ?from=<contractId> is
+  // passed down from the host page; on mount we fetch that contract
+  // (owner/master GET — same route the detail page uses) and prefill
+  // recipient + template + custom variables from it. The rendered
+  // BODY is never prefilled — a hand-edited body only ever comes from
+  // the B1 editor on THIS issue, never carried forward.
+  const [prefillNote, setPrefillNote] = useState(false)
 
   // CONTRACTS-EDIT.1 — per-contract body edit at step 3. null means
   // "untouched" (issue with the plain rendered preview); once set it
@@ -55,6 +64,26 @@ export default function ContractIssueWizard({ issuerName }) {
       .catch(() => {})
     return () => { active = false }
   }, [])
+
+  useEffect(() => {
+    if (!fromContractId) return
+    let active = true
+    fetch(`/api/contracts/${fromContractId}`)
+      .then(r => r.json())
+      .then(json => {
+        if (!active || !json?.success || !json.data) return
+        const c = json.data
+        if (c.profile_id) setProfileId(c.profile_id)
+        if (c.template_id) setTemplateId(c.template_id)
+        setVars(customVariablesFrom(c.variables_data, c.profile))
+        setPrefillNote(true)
+      })
+      .catch(() => {
+        // A failed prefill just leaves the wizard blank — the issuer
+        // can still fill everything in manually.
+      })
+    return () => { active = false }
+  }, [fromContractId])
 
   const recipient = useMemo(
     () => staff.find(s => s.id === profileId) || null,
@@ -163,8 +192,13 @@ export default function ContractIssueWizard({ issuerName }) {
     return true
   }
 
-  async function handleIssue() {
+  // CONTRACTS-DRAFT.1 — shared submit for both "Issue contract" and
+  // "Save as draft"; the only difference is save_as_draft in the
+  // payload (and there's never a warning to stash for a draft — the
+  // server never attempts an email/push for one).
+  async function handleIssue(asDraft = false) {
     setBusy(true)
+    setPendingAction(asDraft ? 'draft' : 'issue')
     setError(null)
     try {
       const payload = {
@@ -179,6 +213,7 @@ export default function ContractIssueWizard({ issuerName }) {
       if (bodyOverride != null && bodyOverride !== preview) {
         payload.body_override = bodyOverride
       }
+      if (asDraft) payload.save_as_draft = true
       const res = await fetch('/api/contracts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -204,12 +239,22 @@ export default function ContractIssueWizard({ issuerName }) {
     } catch (e) {
       setError(e.message)
       setBusy(false)
+      setPendingAction(null)
     }
   }
 
   return (
     <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5">
       <StepHeader step={step} />
+
+      {prefillNote && (
+        <div className="bg-blue-500/10 border border-blue-500/30 rounded-md p-3 mt-4 flex items-start gap-2">
+          <Info size={14} className="text-blue-700 mt-0.5 shrink-0" />
+          <p className="text-xs text-blue-700">
+            Details restored from the previous contract. Review before issuing.
+          </p>
+        </div>
+      )}
 
       {step === 1 && (
         <div className="space-y-4 mt-5">
@@ -488,19 +533,38 @@ export default function ContractIssueWizard({ issuerName }) {
               onClick={() => goBack(2)}
               className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text"
             >← Back</button>
-            <button
-              type="button"
-              disabled={!issuerSig || busy || effectiveUnresolved.length > 0}
-              onClick={handleIssue}
-              title={
-                effectiveUnresolved.length > 0
-                  ? `Fill ${effectiveUnresolved.length} remaining placeholder${effectiveUnresolved.length === 1 ? '' : 's'} before issuing.`
-                  : undefined
-              }
-              className="text-xs bg-un1t-text text-un1t-bg px-4 py-1.5 rounded-md font-medium hover:bg-un1t-accent disabled:opacity-50 inline-flex items-center gap-1"
-            >
-              <FileText size={11} /> {busy ? 'Issuing…' : 'Issue contract'}
-            </button>
+            <div className="flex items-center gap-2">
+              {/* CONTRACTS-DRAFT.1 — same validation gates as issuing
+                  (placeholders resolved, countersign filled); the only
+                  difference server-side is save_as_draft in the
+                  payload, which skips the email/push entirely. */}
+              <button
+                type="button"
+                disabled={!issuerSig || busy || effectiveUnresolved.length > 0}
+                onClick={() => handleIssue(true)}
+                title={
+                  effectiveUnresolved.length > 0
+                    ? `Fill ${effectiveUnresolved.length} remaining placeholder${effectiveUnresolved.length === 1 ? '' : 's'} before saving.`
+                    : undefined
+                }
+                className="text-xs px-4 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text disabled:opacity-50 inline-flex items-center gap-1"
+              >
+                {busy && pendingAction === 'draft' ? 'Saving…' : 'Save as draft'}
+              </button>
+              <button
+                type="button"
+                disabled={!issuerSig || busy || effectiveUnresolved.length > 0}
+                onClick={() => handleIssue(false)}
+                title={
+                  effectiveUnresolved.length > 0
+                    ? `Fill ${effectiveUnresolved.length} remaining placeholder${effectiveUnresolved.length === 1 ? '' : 's'} before issuing.`
+                    : undefined
+                }
+                className="text-xs bg-un1t-text text-un1t-bg px-4 py-1.5 rounded-md font-medium hover:bg-un1t-accent disabled:opacity-50 inline-flex items-center gap-1"
+              >
+                <FileText size={11} /> {busy && pendingAction === 'issue' ? 'Issuing…' : 'Issue contract'}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -32,8 +32,7 @@ import {
   validateCustomVariables,
   extractPlaceholders,
 } from '@/lib/contracts'
-import { sendContractIssuedEmail } from '@/lib/contracts-email'
-import { sendPush } from '@/lib/push'
+import { notifyContractIssued } from '@/lib/contracts-notify'
 import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
@@ -68,14 +67,21 @@ export async function GET() {
     `)
     .order('issued_at', { ascending: false })
 
+  // CONTRACTS-DRAFT.1 — a draft is only visible to the org/issuer
+  // side (the organization_id arm below); the recipient must NEVER
+  // see it in their own list (this is the route mobile's
+  // listContracts() hits for "my contracts" — recipients would
+  // otherwise see a contract that was never actually sent to them).
+  // The org-owner arm is unaffected: an owner reviewing their org's
+  // contracts still needs to see drafts to send/discard them.
   if (!user.isMaster) {
     const ownerOrgIds = getOwnerOrganizationIds(user)
     if (ownerOrgIds.length > 0) {
       query = query.or(
-        `profile_id.eq.${user.id},organization_id.in.(${ownerOrgIds.join(',')})`
+        `and(profile_id.eq.${user.id},status.neq.draft),organization_id.in.(${ownerOrgIds.join(',')})`
       )
     } else {
-      query = query.eq('profile_id', user.id)
+      query = query.eq('profile_id', user.id).neq('status', 'draft')
     }
   }
 
@@ -227,36 +233,46 @@ export async function POST(request) {
     bodyEdited = true
   }
 
-  // 6. Insert. status defaults to 'issued' via the column default.
+  // CONTRACTS-DRAFT.1 — save_as_draft skips the notification path
+  // entirely; the recipient must never know a draft exists until an
+  // issuer explicitly sends it (/api/contracts/[id]/send) or it's
+  // dropped (/api/contracts/[id]/discard). status otherwise defaults
+  // to 'issued' via the column default.
+  const isDraft = !!parsed.data.save_as_draft
+  const insertRow = {
+    template_id: template.id,
+    profile_id: recipient.id,
+    location_id: locationId,
+    organization_id: organizationId,
+    variables_data: merged,
+    body_rendered: bodyRendered,
+    issued_by: user.id,
+    issuer_signature: parsed.data.issuer_signature,
+  }
+  if (isDraft) insertRow.status = 'draft'
+
+  // 6. Insert.
   const { data: contract, error: insErr } = await db
     .from('contracts')
-    .insert({
-      template_id: template.id,
-      profile_id: recipient.id,
-      location_id: locationId,
-      organization_id: organizationId,
-      variables_data: merged,
-      body_rendered: bodyRendered,
-      issued_by: user.id,
-      issuer_signature: parsed.data.issuer_signature,
-    })
+    .insert(insertRow)
     .select()
     .single()
   if (insErr) return NextResponse.json({ success: false, error: insErr.message }, { status: 500 })
 
-  // Look up template name for the email subject. Best-effort —
-  // the contract is already in the DB; an email failure surfaces
-  // as a warning but doesn't roll back the issue.
+  // Look up template name for the audit details. Best-effort — the
+  // contract is already in the DB either way.
   const { data: tplRow } = await db
     .from('contract_templates')
     .select('name')
     .eq('id', template.id)
     .maybeSingle()
 
-  // AUDIT-EXPAND.1 — record the contract issue in the unified log.
+  // AUDIT-EXPAND.1 — record the contract issue/draft in the unified
+  // log. CONTRACTS-DRAFT.1 — a saved draft logs contract.drafted
+  // instead of contract.issued so the trail reads correctly.
   await logAuditEvent({
     category: 'business',
-    action: 'contract.issued',
+    action: isDraft ? 'contract.drafted' : 'contract.issued',
     actor: { id: user.id, full_name: user.full_name, email: user.email },
     target: {
       id: recipient.id,
@@ -272,35 +288,18 @@ export async function POST(request) {
     request,
   })
 
-  const emailResult = await sendContractIssuedEmail({
-    contract,
-    recipient: { full_name: recipient.full_name, email: recipient.email },
-    issuer: { full_name: user.full_name },
-    templateName: tplRow?.name,
-  })
-
-  // Push notification (best effort, never blocks). sendPush honours
-  // the recipient's permissions.mobile.push_notifications master
-  // switch + their notify_contract_issued category toggle. If the
-  // mobile app isn't installed (no device tokens) it's a quiet
-  // no-op. Tap deep-links to /contracts/<id> via expo-router so
-  // the recipient lands directly on the sign screen.
-  try {
-    await sendPush([recipient.id], {
-      title: 'Contract awaiting signature',
-      body: tplRow?.name
-        ? `${user.full_name || 'UN1T'} issued you "${tplRow.name}" — tap to review and sign.`
-        : `${user.full_name || 'UN1T'} issued you a contract — tap to review and sign.`,
-      category: 'contract_issued',
-      data: {
-        type: 'contract_issued',
-        contract_id: contract.id,
-        path: `/contracts/${contract.id}`,
-      },
-    })
-  } catch {
-    // Push is non-blocking; intentionally swallow.
+  // CONTRACTS-DRAFT.1 — a draft is never emailed or pushed; `warning`
+  // stays undefined (there's nothing to warn about — nothing was
+  // attempted).
+  if (isDraft) {
+    return NextResponse.json({ success: true, data: contract })
   }
+
+  const { emailResult } = await notifyContractIssued({
+    db,
+    contract: { ...contract, profile: { full_name: recipient.full_name, email: recipient.email } },
+    issuer: { full_name: user.full_name },
+  })
 
   return NextResponse.json({
     success: true,
