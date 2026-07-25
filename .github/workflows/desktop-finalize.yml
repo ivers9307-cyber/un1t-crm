@@ -325,7 +325,7 @@ jobs:
 
       # The final, shippable DMG.
       - name: Upload notarised DMG
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cf-studio-mac-${{ github.run_number }}-dmg
           path: ${{ steps.dmg.outputs.dmg_path }}
@@ -335,7 +335,7 @@ jobs:
       # The stapled .app, in case someone wants to skip the DMG and
       # drop it straight into /Applications.
       - name: Upload notarised .app
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cf-studio-mac-${{ github.run_number }}-app
           path: ${{ steps.staple-app.outputs.app_path }}
