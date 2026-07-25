@@ -14,6 +14,7 @@ import {
   extractPlaceholders,
   unresolvedPlaceholders,
   canTransition,
+  reminderDue,
 } from './contracts.js'
 
 describe('formatEuro', () => {
@@ -278,5 +279,54 @@ describe('canTransition (state machine)', () => {
   it('blocks unknown statuses', () => {
     expect(canTransition('made_up', 'signed')).toBe(false)
     expect(canTransition('issued', 'on_fire')).toBe(false)
+  })
+})
+
+describe('reminderDue', () => {
+  const NOW = new Date('2026-07-25T12:00:00.000Z')
+  const daysAgo = (n) => new Date(NOW.getTime() - n * 24 * 60 * 60 * 1000).toISOString()
+
+  it('is false when issued less than 3 days ago (reminder_count 0)', () => {
+    expect(reminderDue({ status: 'issued', issued_at: daysAgo(1), reminder_count: 0 }, NOW)).toBe(false)
+    expect(reminderDue({ status: 'issued', issued_at: daysAgo(2.9), reminder_count: 0 }, NOW)).toBe(false)
+  })
+
+  it('is true when issued 3+ days ago with reminder_count 0', () => {
+    expect(reminderDue({ status: 'issued', issued_at: daysAgo(3), reminder_count: 0 }, NOW)).toBe(true)
+    expect(reminderDue({ status: 'viewed', issued_at: daysAgo(5), reminder_count: 0 }, NOW)).toBe(true)
+  })
+
+  it('is false when issued 3+ but less than 7 days ago with reminder_count 1', () => {
+    expect(reminderDue({ status: 'issued', issued_at: daysAgo(3), reminder_count: 1 }, NOW)).toBe(false)
+    expect(reminderDue({ status: 'issued', issued_at: daysAgo(6.9), reminder_count: 1 }, NOW)).toBe(false)
+  })
+
+  it('is true when issued 7+ days ago with reminder_count 1', () => {
+    expect(reminderDue({ status: 'issued', issued_at: daysAgo(7), reminder_count: 1 }, NOW)).toBe(true)
+    expect(reminderDue({ status: 'viewed', issued_at: daysAgo(10), reminder_count: 1 }, NOW)).toBe(true)
+  })
+
+  it('is never due once reminder_count reaches the cap of 2', () => {
+    expect(reminderDue({ status: 'issued', issued_at: daysAgo(100), reminder_count: 2 }, NOW)).toBe(false)
+    expect(reminderDue({ status: 'issued', issued_at: daysAgo(365), reminder_count: 5 }, NOW)).toBe(false)
+  })
+
+  it('is never due for terminal or pre-issue statuses, regardless of age', () => {
+    for (const status of ['signed', 'declined', 'revoked', 'draft']) {
+      expect(reminderDue({ status, issued_at: daysAgo(30), reminder_count: 0 }, NOW)).toBe(false)
+    }
+  })
+
+  it('is false with no issued_at, defensively', () => {
+    expect(reminderDue({ status: 'issued', issued_at: null, reminder_count: 0 }, NOW)).toBe(false)
+  })
+
+  it('is false for a null/undefined contract', () => {
+    expect(reminderDue(null, NOW)).toBe(false)
+    expect(reminderDue(undefined, NOW)).toBe(false)
+  })
+
+  it('defaults reminder_count to 0 when absent', () => {
+    expect(reminderDue({ status: 'issued', issued_at: daysAgo(3) }, NOW)).toBe(true)
   })
 })

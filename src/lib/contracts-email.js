@@ -114,6 +114,55 @@ export async function sendContractIssuedEmail({ contract, recipient, issuer, tem
 }
 
 /**
+ * Nudge email for a contract still sitting at 'issued'/'viewed' with no
+ * signature. Fired by the /api/cron/contract-reminders cron
+ * (CONTRACTS-REMIND.1), capped at 2 reminders per contract — see
+ * reminderDue() in contracts.js for the due-predicate. Mirrors
+ * sendContractIssuedEmail's shell/branding exactly; only the copy and the
+ * Postmark tag differ, and the link points at /account/contracts/<id>
+ * (the recipient's own signing page) same as the issue email.
+ *
+ * @param {object} args
+ * @param {object} args.contract     — row from contracts table
+ * @param {object} args.recipient    — { full_name, email }
+ * @param {string} args.templateName — for the subject line
+ */
+export async function sendContractReminderEmail({ contract, recipient, templateName }) {
+  if (!recipient?.email) return { ok: false, error: 'No recipient email' }
+  const branding = await getBranding(contract.location_id)
+  const reviewUrl = `${appUrl()}/account/contracts/${contract.id}`
+  const subject = `Reminder: ${templateName || 'Your contract'} is awaiting your signature`
+  const innerHtml = `
+    <h2 style="font-size:20px;margin:0 0 16px 0;">Your contract is still awaiting signature</h2>
+    <p>Hi ${escapeHtml(recipient.full_name || 'there')},</p>
+    <p>This is a reminder that the following contract is still waiting on your
+    signature:</p>
+    <p style="background:#f9fafb;border-left:3px solid #111827;padding:12px 16px;margin:16px 0;font-weight:600;">
+      ${escapeHtml(templateName || 'Contract')}
+    </p>
+    <p>Please open the link below to read the contract in full and add your
+    signature.</p>
+    <p style="text-align:center;margin:28px 0;">
+      <a href="${reviewUrl}" style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;">Review &amp; sign</a>
+    </p>
+    <p style="font-size:12px;color:#6b7280;">If the button doesn't work, copy this link into your browser:<br />
+      <a href="${reviewUrl}" style="color:#6b7280;word-break:break-all;">${reviewUrl}</a></p>`
+  try {
+    await sendEmail({
+      to: recipient.email,
+      subject,
+      htmlBody: emailShell(innerHtml, branding),
+      stream: 'outbound',
+      tag: 'contract-reminder',
+      metadata: { contract_id: contract.id, profile_id: contract.profile_id },
+    })
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e?.message || 'Postmark send failed' }
+  }
+}
+
+/**
  * Two emails after the recipient signs: the recipient gets a
  * "thanks, here's your copy" confirmation, and the issuer gets a
  * "Sarah signed her contract" notification. Both link to the
