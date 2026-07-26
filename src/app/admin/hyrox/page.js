@@ -11,6 +11,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { redirect } from 'next/navigation'
 import { resolveHyroxSettings } from '@/lib/hyrox/settings'
+import { weekNoFor, slotFor } from '@/lib/hyrox/mapping'
 import HyroxPlanner from './HyroxPlanner'
 
 export const dynamic = 'force-dynamic'
@@ -54,6 +55,27 @@ export default async function HyroxAdmin() {
     .eq('id', locationId)
     .single()
 
+  // The session the NEXT upcoming Hyrox class maps to (same date -> week/slot
+  // logic the publish cron uses), so the planner can flag it as "next up".
+  let nextUpId = null
+  if (block) {
+    const { data: nextClasses } = await db
+      .from('class_occurrences')
+      .select('starts_at')
+      .eq('location_id', locationId)
+      .is('cancelled_at', null)
+      .ilike('name', '%hyrox%')
+      .gte('starts_at', new Date().toISOString())
+      .order('starts_at', { ascending: true })
+      .limit(1)
+    const startsAt = nextClasses?.[0]?.starts_at
+    if (startsAt) {
+      const wk = weekNoFor(block.starts_on, startsAt, block.weeks)
+      const slot = slotFor(block.session_weekdays || [], startsAt)
+      nextUpId = (sessions || []).find((s) => s.week_no === wk && s.slot === slot)?.id || null
+    }
+  }
+
   return (
     <HyroxPlanner
       initialBlock={block || null}
@@ -61,6 +83,7 @@ export default async function HyroxAdmin() {
       initialSettings={resolveHyroxSettings(loc)}
       locationId={locationId}
       canManage={['owner', 'manager', 'head_coach', 'master'].includes(user.role)}
+      nextUpId={nextUpId}
     />
   )
 }

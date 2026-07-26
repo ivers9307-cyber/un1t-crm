@@ -4103,6 +4103,25 @@ registry.registerPath({
   },
 })
 
+registry.registerPath({
+  method: 'post',
+  path: '/api/hyrox/sessions/{id}/push',
+  tags: ['Hyrox'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Manually push a session\'s board to the location\'s Hyrox TV(s)',
+  description:
+    'Upserts tv_content (source_type:"generated") onto the location\'s active Hyrox display(s) now, the same ' +
+    'way the publish cron does at class time, but on demand. Only approved/published sessions may be pushed. ' +
+    'Marked triggered_by:"manual:<user>" so the cron will not auto-revert it. 404-not-403 detail-route posture.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Pushed to the TV(s)', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('HyroxSessionPushResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or no permission at this location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Not approved, or no active TV at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 const HyroxExampleEntry = z.object({
   id: z.string().max(64).optional(),
   source: z.enum(['pasted', 'generated']).default('pasted'),
