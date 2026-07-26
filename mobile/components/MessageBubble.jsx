@@ -8,7 +8,7 @@
 import { View, Text, Pressable } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { mediaLabel } from '../lib/inbox'
-import { isServableMedia } from '../../shared/whatsapp-media'
+import { isServableMedia } from 'shared/whatsapp-media'
 import WAMediaThumb from './WAMediaThumb'
 
 // C6 — same three emoji the web inbox offers.

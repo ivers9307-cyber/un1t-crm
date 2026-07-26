@@ -22,9 +22,10 @@
 //     needed here.
 //
 // The list of valid keys + their default-by-role values lives in
-// ../../shared/permissions.js and is also imported by the web admin
-// UI (StaffForm.jsx). Adding a new feature in that one file
-// auto-flows here and to the parity linter (npm run check:mobile-parity).
+// shared/permissions (repo-root shared/, the web/mobile seam package)
+// and is also imported by the web admin UI (StaffForm.jsx). Adding a
+// new feature in that one file auto-flows here and to the parity
+// linter (npm run check:mobile-parity).
 
 import {
   MOBILE_PERMISSION_KEYS,
@@ -32,7 +33,7 @@ import {
   CROSS_PLATFORM_KEYS,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE, DEFAULT_WEB_PERMISSIONS_BY_ROLE,
   resolvePermission,
-} from '../../shared/permissions'
+} from 'shared/permissions'
 
 // ── SECURITY BOUNDARY NOTE (MOBILE-AUDIT.5) ─────────────────────────
 // This resolver controls UI ONLY — which tabs/screens the app renders.
@@ -56,7 +57,7 @@ export {
   MOBILE_PERMISSION_KEYS,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
   CROSS_PLATFORM_DASHBOARD_KEYS,
-} from '../../shared/permissions'
+} from 'shared/permissions'
 
 /**
  * @param {object|null|undefined} profile     The safe profile from /api/mobile/me

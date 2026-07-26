@@ -6,6 +6,11 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
       '@shared': path.resolve(__dirname, './shared'),
+      // mobile/lib tests import the shared seam the way the app does —
+      // bare 'shared/<module>' (the mobile file: package). Alias it so
+      // vitest resolves those imports without needing mobile/node_modules
+      // (its symlink) to exist, e.g. in CI jobs that only install root deps.
+      shared: path.resolve(__dirname, './shared'),
     },
   },
   test: {

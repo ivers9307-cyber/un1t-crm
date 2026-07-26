@@ -9,7 +9,7 @@ import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-rou
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
-import { classifyBookingState, elapsedWithPenalties, formatElapsed } from '../../../shared/race-control'
+import { classifyBookingState, elapsedWithPenalties, formatElapsed } from 'shared/race-control'
 import { getControlBoard, raceAction } from '../../lib/races-api'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 

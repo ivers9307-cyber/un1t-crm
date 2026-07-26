@@ -17,7 +17,7 @@ import {
 } from 'react-native'
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
-import { useHeaderHeight } from '@react-navigation/elements'
+import { useHeaderHeight } from 'expo-router/react-navigation'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 // Explicit headerLeft so the back chevron is always visible — see the
@@ -42,7 +42,7 @@ import {
 } from '../../lib/whatsapp-api'
 import { listConversationApprovals } from '../../lib/inbox-approvals-api'
 import { needsReply, isAgentHandoff } from '../../lib/inbox'
-import { mergeTimeline } from '../../../shared/approval-cards'
+import { mergeTimeline } from 'shared/approval-cards'
 import MessageBubble from '../../components/MessageBubble'
 import ThreadApprovalCard from '../../components/ThreadApprovalCard'
 

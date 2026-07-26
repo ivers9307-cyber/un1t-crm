@@ -3,7 +3,7 @@ import { buildStaffAssignmentsPatch, hydratePermissions } from './staff-edit.js'
 import {
   DEFAULT_WEB_PERMISSIONS_BY_ROLE,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
-} from '../../shared/permissions.js'
+} from 'shared/permissions'
 
 const current = [
   { location_id: 'loc-1', role: 'staff', is_default: true, permissions: { pipeline: true }, unifi_door_access: true, unifi_user_id: 'u1', unifi_door_ids: ['d1'] },

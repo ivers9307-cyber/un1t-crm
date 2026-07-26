@@ -13,7 +13,7 @@ import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
 import { getCheckinRoster } from '../../lib/event-checkin-api'
 import { eventDateLabel, eventKindBadgeClasses } from '../../lib/events-api'
-import { eventKindLabel, isRaceKind } from '../../../shared/events'
+import { eventKindLabel, isRaceKind } from 'shared/events'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 
 function MetaRow({ icon, children }) {

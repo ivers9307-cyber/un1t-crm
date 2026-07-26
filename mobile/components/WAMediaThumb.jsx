@@ -10,7 +10,7 @@
 import { useEffect, useState } from 'react'
 import { View, Text, Image, Pressable, Linking, ActivityIndicator } from 'react-native'
 import { api } from '../lib/api'
-import { mediaRenderKind } from '../../shared/whatsapp-media'
+import { mediaRenderKind } from 'shared/whatsapp-media'
 
 export default function WAMediaThumb({ msg }) {
   const kind = mediaRenderKind(msg.message_type, msg.media_mime_type)

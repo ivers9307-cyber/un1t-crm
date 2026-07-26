@@ -10,12 +10,13 @@
 // The 7-col grid is built by reusing shared/roster-month.js (the same
 // matrix the Today dashboard month view uses) so day/week/in-month/past
 // logic can't drift. We pass [] for shifts — we only need the day cells.
-// Mobile CANNOT use the web `@shared` alias; relative import is required.
+// Mobile cannot use the web `@shared` bundler alias (Metro doesn't read
+// jsconfig) — it consumes the same file via the `shared` package import.
 
 import { useState } from 'react'
 import { View, Text, Pressable } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { monthBounds, buildMonthMatrix } from '../../shared/roster-month'
+import { monthBounds, buildMonthMatrix } from 'shared/roster-month'
 
 const WEEKDAY_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
 

@@ -35,7 +35,7 @@ import { useRef, useState, useEffect } from 'react'
 import { View, Text, Image, PanResponder } from 'react-native'
 import {
   resolveZone, textSegments, seedFitPx, fitStepFromLines, MIN_FIT_PX, FLEX_V, FLEX_H,
-} from '../../shared/tv-template'
+} from 'shared/tv-template'
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
 

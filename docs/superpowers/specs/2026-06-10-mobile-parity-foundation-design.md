@@ -81,7 +81,7 @@ Mobile's current direct-to-Supabase operator paths (pipeline CRUD, etc.) migrate
 - **Structure:** one module per domain, mirroring the route tree (`shared/sdk/staff.js`, `shared/sdk/contacts.js`, …).
 - **Authoring:** hand-written (not codegen — overkill for this codebase and adds build complexity). The parity linter (§5) asserts every session-auth route has a matching SDK method so they can't drift.
 - **Errors:** normalized to the existing `{ success: false, error, issues }` envelope so all callers handle uniformly.
-- **Imports:** web via `@shared/sdk/*` (jsconfig alias); mobile via the metro `watchFolders` shared mechanism already in place.
+- **Imports:** web via `@shared/sdk/*` (jsconfig alias); mobile via the metro `watchFolders` shared mechanism already in place. *[Superseded 2026-07-26 / SDK 57: mobile imports `'shared/<module>'` via the `shared` file: package — watchFolders is dev hot-reload only, not resolution.]*
 
 ---
 

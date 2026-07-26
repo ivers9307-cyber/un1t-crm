@@ -17,7 +17,7 @@ import * as Notifications from 'expo-notifications'
 import Constants from 'expo-constants'
 import { Platform } from 'react-native'
 import { api } from './api'
-import { ANDROID_CHANNELS } from '../../shared/push-channels'
+import { ANDROID_CHANNELS } from 'shared/push-channels'
 
 // Show notifications even when the app is in the foreground (default
 // is to silence them). Iconic "banner from the top" iOS behaviour.

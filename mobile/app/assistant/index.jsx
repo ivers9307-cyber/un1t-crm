@@ -22,7 +22,7 @@ import {
 } from 'react-native'
 import { Stack, useRouter, usePathname } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
-import { useHeaderHeight } from '@react-navigation/elements'
+import { useHeaderHeight } from 'expo-router/react-navigation'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth-context'
 import { sendAssistantChat } from '../../lib/assistant-api'

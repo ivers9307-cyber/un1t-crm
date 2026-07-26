@@ -17,7 +17,7 @@ import { sdk } from '../../../lib/sdk'
 import { buildStaffAssignmentsPatch, hydratePermissions } from '../../../lib/staff-edit'
 import { Button } from '../../../components/ui'
 import BackHeaderLeft from '../../../components/BackHeaderLeft'
-import { WEB_PERMISSIONS, MOBILE_PERMISSIONS } from '../../../../shared/permissions'
+import { WEB_PERMISSIONS, MOBILE_PERMISSIONS } from 'shared/permissions'
 
 // Categories derived from the shared model — never hardcode the keys, so a
 // new permission flows here automatically. Web keys live top-level on the

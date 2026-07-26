@@ -37,7 +37,7 @@ name: EAS Update
 # preview-channel boot-gate and no staged rollout, so a bad JS bundle reaches
 # all devices on next launch. The pipeline mitigates the boot-crash class
 # (pinned `npm ci` + eas-cli so OTA Hermes bytecode matches the binary;
-# runtimeVersion `sdkVersion` so only same-SDK builds get it). If a bad bundle
+# an explicit runtimeVersion string so only same-lane binaries get it). If a bad bundle
 # ever ships: `eas update:roll-back-to-embedded --channel production`
 # (instant), then publish a fix. Future hardening: publish to a `preview`
 # channel first + add `--rollout`. See mobile/docs/OTA_BOOT_CRASH_FINDINGS.md.

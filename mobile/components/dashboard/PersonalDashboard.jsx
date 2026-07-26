@@ -15,9 +15,9 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { fetchPersonalDashboard } from '../../lib/dashboard-api'
-import { pickLocationColor } from '../../../shared/location-colors'
-import { buildMonthMatrix, shiftDurationHours } from '../../../shared/roster-month'
-import { groupTeamShiftsByCoach, coachSpanLabel } from '../../../shared/team-today'
+import { pickLocationColor } from 'shared/location-colors'
+import { buildMonthMatrix, shiftDurationHours } from 'shared/roster-month'
+import { groupTeamShiftsByCoach, coachSpanLabel } from 'shared/team-today'
 import {
   KpiCard, KpiRow, SectionHeader, ListCard,
 } from './cards'

@@ -180,16 +180,21 @@ export default ({ config }) => ({
       'expo-camera',
       { cameraPermission: 'Scan attendee check-in QR codes at events.', recordAudioAndroid: false },
     ],
+    // SDK 57 — these packages now ship config plugins that must be registered
+    // explicitly. `expo install --fix` flagged them but can't auto-edit a
+    // dynamic app.config.js, so they're declared here by hand.
+    'expo-splash-screen',
+    'expo-status-bar',
+    'expo-web-browser',
   ],
   experiments: {
     typedRoutes: true,
   },
   // Over-the-air updates via EAS Update. The project ID is the public
   // identifier of the EAS project at https://expo.dev/projects/<id> —
-  // not a secret, safe to commit. The runtimeVersion policy
-  // 'sdkVersion' means each Expo SDK gets its own update lane — an
-  // update built for SDK 54 won't be served to a phone running an
-  // SDK 53 build, preventing native/JS skew.
+  // not a secret, safe to commit. The explicit runtimeVersion string
+  // below defines the update lane — an update published for one lane is
+  // never served to a binary on another, preventing native/JS skew.
   updates: {
     url: 'https://u.expo.dev/6256a4d8-03ff-4898-9d47-b4de6c9c20e1',
     enabled: true,
@@ -209,7 +214,8 @@ export default ({ config }) => ({
     // (gitignored) + the EXPO_UPDATES_PRIVATE_KEY GitHub secret.
     // Runbook (incl. the plan gotcha): mobile/docs/eas-update-code-signing.md
   },
-  // OTA runtime-version policy. Kept at 'sdkVersion' for now.
+  // OTA runtime-version policy: an EXPLICIT string (history below — it
+  // started as the 'sdkVersion' policy, then went explicit at 1.3.0).
   //
   // 'fingerprint' is the better long-term choice — it WITHHOLDS a native/ABI-
   // mismatched update instead of serving it into a boot-crash. We tried it
@@ -234,7 +240,12 @@ export default ({ config }) => ({
   // 1.3.x installs stop receiving OTAs (frozen, NOT crashed) until users
   // install the 1.4.0 binary from the stores. Merge this PR only as part of
   // that native release (see the Face ID release playbook).
-  runtimeVersion: '1.4.0',
+  //
+  // 2.0.0 — Expo SDK 54→57 upgrade (RN 0.81→0.86, React 19.1→19.2). A whole-SDK
+  // native change, so a fresh OTA lane is mandatory. ⚠️ Align this string with
+  // the actual store-release version you cut for the SDK 57 binary before
+  // shipping; existing 1.4.x installs freeze (NOT crash) until users update.
+  runtimeVersion: '2.0.0',
   extra: {
     // Supabase URL + anon key are PUBLIC by design — the anon key is
     // protected by Row-Level Security on the database, not by secrecy

@@ -16,7 +16,7 @@ import {
 } from 'react-native'
 import { useAuth } from '../../lib/auth-context'
 import { canDashboard, hasAnyMobileFeature } from '../../lib/permissions'
-import { resolveLandingPreference } from '../../../shared/permissions'
+import { resolveLandingPreference } from 'shared/permissions'
 import PersonalDashboard from '../../components/dashboard/PersonalDashboard'
 import StudioDashboard from '../../components/dashboard/StudioDashboard'
 import BusinessDashboard from '../../components/dashboard/BusinessDashboard'
