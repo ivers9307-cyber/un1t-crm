@@ -31,12 +31,12 @@ describe('prompt builders', () => {
     expect(system).toContain('board.stations[].target') // single target per station, no tiers on the board
     expect(system).toContain('full_session') // the coaching prose lives here, not on the board
   })
-  it('expansion prompt carries the week stimulus and the two tiers only', () => {
+  it('expansion prompt carries the week stimulus and prescribes ONE level (no Perf/Elite tiers, no warmup)', () => {
     const week = { week_no: 5, phase: 'build', stimulus: 'Engine', progression: 'add a round', is_benchmark: false }
     const { system, user } = buildExpansionPrompt({ ...input, week, slot: 1, autoTuneSignal: null })
     expect(user).toContain('Engine')
-    expect(system.toLowerCase()).toContain('performance')
-    expect(system.toLowerCase()).toContain('elite')
+    expect(system).toMatch(/ONE level for the whole class/i)   // single level, no tiers
+    expect(system).toMatch(/no warmup section/i)               // warmup dropped
     expect(system.toLowerCase()).not.toContain('foundation')
   })
   it('folds house style into both arc and expansion prompts', () => {

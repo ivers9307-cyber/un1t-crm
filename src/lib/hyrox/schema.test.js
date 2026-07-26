@@ -36,6 +36,12 @@ describe('hyrox schemas', () => {
     expect(s.ok).toBe(true)
     expect(s.data.board.stations[0].target).toBe('400m')
   })
+  it('accepts a session with no warmup (leaner single-level card)', () => {
+    const fs = { ...validSession.full_session }
+    delete fs.warmup
+    const s = parseSession({ ...validSession, full_session: fs })
+    expect(s.ok).toBe(true)
+  })
 })
 
 describe('LLM output coercion (regression: session_generation_failed)', () => {
