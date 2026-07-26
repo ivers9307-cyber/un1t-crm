@@ -1,7 +1,7 @@
 // HYROX-TC.1 — pure prompt builders. Return { system, user } content strings
 // for the Anthropic Messages API. The charter is stated as HARD constraints and
 // the model is told to self-check against it and return JSON only.
-import { HYROX_STATIONS, TIERS, PHASES, DEFAULT_CAP_MINUTES, DEFAULT_CHARTER, MAX_STYLE_EXAMPLES, MAX_EXAMPLE_CHARS } from './constants'
+import { HYROX_STATIONS, PHASES, DEFAULT_CAP_MINUTES, DEFAULT_CHARTER, MAX_STYLE_EXAMPLES, MAX_EXAMPLE_CHARS } from './constants'
 
 const JSON_ONLY = 'Return ONLY valid JSON matching the requested shape. No prose, no code fences.'
 const NO_EMDASH = 'Never use em-dashes or en-dashes in any member-facing string (title, focus, target). Use plain punctuation.'
@@ -46,28 +46,29 @@ export function buildArcPrompt({ weeks = 12, sessionsPerWeek = 2, dial = 'mixed'
 }
 
 export function buildExpansionPrompt({ week, slot = 1, dial = 'mixed', locationLabel = 'UN1T', charter, houseStyle, styleExamples, autoTuneSignal = null, arcPlan, sessionsPerWeek, prevWeekSummary } = {}) {
-  const capLine = `Every session MUST be completable within a ${DEFAULT_CAP_MINUTES}-minute cap by both tiers.`
+  const capLine = `Every session MUST be completable by the class within the ${DEFAULT_CAP_MINUTES}-minute cap.`
   const tuneLine = autoTuneSignal
     ? `Auto-tune signal for this week (adjust difficulty accordingly): ${JSON.stringify(autoTuneSignal)}.`
     : 'No auto-tune signal; build difficulty from the phase, stimulus, and dial only.'
   const system = [
     'You are a Hyrox coach writing ONE class session that fits an existing periodised arc.',
-    `Scale to exactly these two tiers only, no others: ${TIERS.join(' and ')}. Performance is achievable for a committed regular; Elite stretches the strong.`,
+    'Prescribe ONE level for the whole class: a single target per movement, NO Performance/Elite split. The coach scales individuals verbally on the day; you never write two tiers.',
     `Stations available: ${HYROX_STATIONS.join(', ')}, plus running and compromised running.`,
     capLine,
     styleBlock(charter, houseStyle),
     ...(examplesBlock(styleExamples) ? [examplesBlock(styleExamples)] : []),
     'BLOCK CONTEXT: you are given the full block plan and this session\'s position below. Place THIS session correctly in that progression: build on the earlier weeks, set up the later ones, do not restart the plan. Label "focus" by the correct block week or a benchmark\'s ordinal; NEVER call a later week "Week 1". Keep the week\'s shared stimulus but make this session DISTINCT in stations, format, or emphasis from the other session(s) that same week.',
-    'Output shape: a single JSON session object with these fields and types: { "week_no": number, "slot": number, "phase": string, "focus": short string, "is_benchmark": boolean, "full_session": { "warmup": string, "strength": string, "main": string, "finisher": string, "cues": [string], "why": string }, "board": { "location_label": string, "week_label": string, "focus": short string, "format": short string, "cap_minutes": number, "stations": [ { "name": string, "target": short string } ], "target": short string } }.',
-    'CRITICAL: every full_session field (warmup, strength, main, finisher, why) is a SINGLE plain-text string written in coaching language, using line breaks for structure where helpful. Do NOT put nested JSON objects, "part_a"/"part_b" keys, or "tiers" objects inside any full_session field. cues is an array of short plain-text strings.',
+    'Output shape: a single JSON session object with these fields and types: { "week_no": number, "slot": number, "phase": string, "focus": short string, "is_benchmark": boolean, "full_session": { "strength": string, "main": string, "finisher": string, "cues": [string], "why": string }, "board": { "location_label": string, "week_label": string, "focus": short string, "format": short string, "cap_minutes": number, "stations": [ { "name": string, "target": short string } ], "target": short string } }.',
+    'Keep the coach session SHORT - it is a quick reference, not an essay. NO warmup section. "main" is the workout in brief (movements, order, reps or time). "strength" only if the session has a real strength block, else omit it. "finisher" optional. "cues" is 2 to 3 short coaching lines. "why" is ONE short line.',
+    'CRITICAL: every full_session field (strength, main, finisher, why) is a SINGLE plain-text string written in coaching language, using line breaks for structure where helpful. Do NOT put nested JSON objects, "part_a"/"part_b" keys, or "tiers" objects inside any full_session field. cues is an array of short plain-text strings.',
     'The BOARD is a glanceable TV scoreboard read from across a gym floor, NOT a place for coaching detail. Every board field is a SHORT label or number, never a sentence:',
     '- board.stations[].name: the movement ONLY, 1 to 3 words ("Run", "SkiErg", "Wall Balls", "Farmers Carry"). No protocol, timing, reps, or notes baked into the name.',
-    '- board.stations[].target: the ONE concrete target the athlete reads off the wall - the ACTUAL figure, up to about 20 characters: a distance, pace, load, reps, or calories. Examples: "800m", "2:30/500m", "9kg x 60", "60 cal", "2x16kg". It MUST be the real number. NEVER a placeholder or pointer such as "see pace", "see load", "log reps", "as coached" or "TBD", and do NOT just repeat the station duration the format already states. Show a SINGLE target (do not split Performance/Elite here): use the main class figure. If Elite scales differently, put that Performance-vs-Elite detail in full_session.main - but the board target itself is always a concrete, usable number.',
+    '- board.stations[].target: the ONE concrete target the athlete reads off the wall - the ACTUAL figure, up to about 20 characters: a distance, pace, load, reps, or calories. Examples: "800m", "2:30/500m", "9kg x 60", "60 cal", "2x16kg". It MUST be the real number. NEVER a placeholder or pointer such as "see pace", "see load", "log reps", "as coached" or "TBD", and do NOT just repeat the station duration the format already states. There is ONE class target per station - no Performance/Elite split.',
     '- board.format: a short workout header, about 5 words max, like "4 ROUNDS FOR TIME", "45 MIN AMRAP", "6 STATIONS x 3 MIN". Not a description of the protocol.',
     '- board.focus: 1 to 4 words ("Aerobic Base", "Threshold Engine", "Benchmark 1").',
     '- board.target: ONE short line, about 8 words max ("RPE 6, finish strong", "sub 32:00").',
-    'ALL the how-to (pacing, cues, the reasoning, the prose describing each tier and its numbers) goes in full_session, which ONLY the coach sees, never on the board. If a value reads like a sentence, it belongs in full_session.main, not on the board.',
-    'The "why" must state both the training stimulus AND what makes the session engaging.',
+    'ALL the how-to (pacing, cues, the reasoning) goes in full_session, which ONLY the coach sees, never on the board. If a value reads like a sentence, it belongs in full_session.main, not on the board.',
+    'The "why" states the training stimulus AND what makes the session engaging, in ONE short line.',
     NO_EMDASH,
     JSON_ONLY,
   ].join('\n\n')

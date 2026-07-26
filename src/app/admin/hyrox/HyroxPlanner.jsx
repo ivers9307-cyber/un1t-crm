@@ -872,10 +872,6 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
             <div>
               <h4 className="text-xs uppercase tracking-wide text-un1t-muted mb-2">Coach session</h4>
               <dl className="space-y-2 text-sm">
-                <div>
-                  <dt className="text-xs text-un1t-subtle">Warmup</dt>
-                  <dd className="text-un1t-text whitespace-pre-wrap">{focusedSession.full_session?.warmup || '—'}</dd>
-                </div>
                 {focusedSession.full_session?.strength && (
                   <div>
                     <dt className="text-xs text-un1t-subtle">Strength</dt>

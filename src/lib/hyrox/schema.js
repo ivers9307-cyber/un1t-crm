@@ -37,7 +37,9 @@ export const boardSchema = z.object({
 })
 
 export const fullSessionSchema = z.object({
-  warmup: z.string().min(1),
+  // warmup removed from the coach card (leaner, single-level session). Kept
+  // optional so older stored sessions still validate; new output omits it.
+  warmup: z.string().nullish(),
   strength: z.string().nullish(),
   main: z.string().min(1),
   finisher: z.string().nullish(),

@@ -83,7 +83,9 @@ describe.skipIf(!API_KEY)('Hyrox generation evals (live model)', () => {
     const s = res.data
 
     // full_session fields are readable prose strings, NOT nested-object/JSON blobs.
-    for (const key of ['warmup', 'main', 'why']) {
+    // No warmup section any more (leaner single-level card).
+    expect(s.full_session.warmup == null).toBe(true)
+    for (const key of ['main', 'why']) {
       expect(typeof s.full_session[key]).toBe('string')
       expect(s.full_session[key].length).toBeGreaterThan(30)
       expect(s.full_session[key].trim().startsWith('{')).toBe(false)
