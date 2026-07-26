@@ -5,7 +5,7 @@ import { normalizeClassName } from '@/lib/hr-analytics'
 import { pickSessionForOccurrence, resolveHyroxDisplayIds } from './publish'
 import { logWarn } from '@/lib/log'
 
-const LEAD_MS = 15 * 60_000   // put the board up 15 min before class
+const LEAD_MS = 30 * 60_000   // put the board up 30 min before class
 const POST_MS = 5 * 60_000    // keep it a few min after the start
 const TRIGGER = 'cron:hyrox-publish'
 
