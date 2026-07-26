@@ -56,7 +56,7 @@ export default ({ config }) => ({
   // 1.4.0 (EVENT-CHECKIN.D) — adds the in-app QR scanner for event check-in
   // (expo-camera, a NATIVE module). Ships only in a new EAS Build + store
   // release, NOT over OTA; runtimeVersion bumps to 1.4.0 to isolate its lane.
-  version: '1.4.0',
+  version: '2.0.0',
   // We ship iOS + Android only. Without this, Expo defaults to
   // ['ios','android','web'] and `eas update` exports for web too —
   // which crashes the publish because react-native-web isn't installed.
