@@ -4,7 +4,7 @@ import { Stack, useRouter } from 'expo-router'
 import { useAuth } from '../lib/auth-context'
 import { resolveLayoutForUser } from '../lib/mobile-layout'
 import { saveBarLayout } from '../lib/layout-api'
-import { MOBILE_NAV_FEATURES } from '../../shared/mobile-nav'
+import { MOBILE_NAV_FEATURES } from 'shared/mobile-nav'
 import BackHeaderLeft from '../components/BackHeaderLeft'
 
 const LABEL = Object.fromEntries(MOBILE_NAV_FEATURES.map(f => [f.key, f.label]))

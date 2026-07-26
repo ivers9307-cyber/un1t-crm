@@ -10,7 +10,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
 import { listEvents, eventDateLabel, eventKindBadgeClasses } from '../../lib/events-api'
-import { eventKindLabel, isRaceKind } from '../../../shared/events'
+import { eventKindLabel, isRaceKind } from 'shared/events'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 
 function EventRow({ event, onPress }) {

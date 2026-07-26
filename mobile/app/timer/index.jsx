@@ -20,7 +20,7 @@ import {
   computeEffectiveElapsedMs,
   resolveTimerState,
   SEG_COLOR,
-} from '../../../shared/class-timer'
+} from 'shared/class-timer'
 import {
   listTimerTemplates,
   createTimerTemplate,

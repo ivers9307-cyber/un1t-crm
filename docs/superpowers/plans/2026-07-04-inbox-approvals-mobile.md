@@ -10,7 +10,7 @@
 **Spec:** Wave 2 section of `docs/superpowers/specs/2026-07-03-inbox-inline-approvals-design.md`
 
 ## Read-first invariants
-- Mobile CANNOT import `src/lib` — only `shared/` (verify the import style by copying an existing `shared/` import in `mobile/` — e.g. `mobile/lib/mobile-layout.js` uses relative `../../shared/mobile-nav`; use the SAME style, do not invent an alias).
+- Mobile CANNOT import `src/lib` — only `shared/` (verify the import style by copying an existing `shared/` import in `mobile/` — e.g. `mobile/lib/mobile-layout.js` imports `'shared/mobile-nav'` via the `shared` file: package; use the SAME style, do not invent an alias. Updated 2026-07-26: relative `../../shared/*` paths no longer resolve under SDK 57).
 - Every mobile `/api/*` wrapper builds headers via `authHeaders()` from `mobile/lib/api.js` (hand-rolled Bearer drops `x-impersonate-target`). Copy `mobile/lib/issues-api.js` shape incl. the `.catch(() => ({ success:false, ... }))` json guard.
 - CI mirror gates: `check:mobile-imports`, `check:mobile-parity` (we add NO new WEB_PERMISSIONS key, so parity should pass untouched — verify), plus tests/lint/route-guards/guardrails and `npm run build`.
 - If `mobile/package.json` changes (it should NOT for this work): re-sync the lock.

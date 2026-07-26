@@ -7,7 +7,7 @@ import { useRouter, Stack, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
-import { classifyBookingState } from '../../../shared/race-control'
+import { classifyBookingState } from 'shared/race-control'
 import { listRaces, raceDateLabel } from '../../lib/races-api'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 

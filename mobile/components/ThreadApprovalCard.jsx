@@ -15,8 +15,8 @@
 // steps are filtered to type === 'composer' only.
 import { useState } from 'react'
 import { View, Text, Pressable, TextInput, ActivityIndicator } from 'react-native'
-import { getNextSteps, buildDeclineDraft, DECLINE_REASONS, BOOKING_KINDS } from '../../shared/approvals-next-steps'
-import { approvalCardSummary, APPROVAL_KIND_LABELS } from '../../shared/approval-cards'
+import { getNextSteps, buildDeclineDraft, DECLINE_REASONS, BOOKING_KINDS } from 'shared/approvals-next-steps'
+import { approvalCardSummary, APPROVAL_KIND_LABELS } from 'shared/approval-cards'
 import { decideApproval } from '../lib/inbox-approvals-api'
 
 // House tone-object idiom (see ISSUE_STATUS_TONE in mobile/lib/issues-api.js):

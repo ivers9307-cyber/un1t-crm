@@ -1,5 +1,5 @@
 import Constants from 'expo-constants'
-import { createSdk } from '../../shared/sdk'
+import { createSdk } from 'shared/sdk'
 import { authHeaders } from './api'
 
 // Mobile binding: Bearer-JWT transport. authHeaders() attaches the

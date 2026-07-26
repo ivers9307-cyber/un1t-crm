@@ -9,7 +9,7 @@ import { View, Text, ScrollView, Switch, ActivityIndicator } from 'react-native'
 import { Stack } from 'expo-router'
 import { useAuth } from '../lib/auth-context'
 import { api } from '../lib/api'
-import { WEB_PERMISSIONS, MOBILE_PERMISSIONS, isFeatureGatedByLocation } from '../../shared/permissions'
+import { WEB_PERMISSIONS, MOBILE_PERMISSIONS, isFeatureGatedByLocation } from 'shared/permissions'
 import BackHeaderLeft from '../components/BackHeaderLeft'
 
 // Notification keys are personal prefs, never location-gated — so the

@@ -4,7 +4,7 @@
 
 ## Mobile app (`mobile/`)
 
-The iOS app is an Expo (React Native) project living in `mobile/` as a sibling to `src/`. Single repo, separate `package.json` (Expo can't share Next's deps), shared schemas/constants imported via relative paths from `../src/lib/schemas.js`. NativeWind re-exports the same `un1t-*` Tailwind tokens used on web.
+The iOS app is an Expo (React Native) project living in `mobile/` as a sibling to `src/`. Single repo, separate `package.json` (Expo can't share Next's deps). Cross-platform constants/helpers come from the repo-root `shared/` folder, consumed as the `shared` file: package (`"shared": "file:../shared"` in `mobile/package.json`, imported as `'shared/<module>'`) — mobile never imports `src/`. NativeWind re-exports the same `un1t-*` Tailwind tokens used on web.
 
 ### First-time setup
 

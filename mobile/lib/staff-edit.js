@@ -1,4 +1,4 @@
-import { hydratePermissions } from '../../shared/permissions'
+import { hydratePermissions } from 'shared/permissions'
 
 // Pure helpers for the mobile staff editors — the role editor (Plan
 // C2c-i) and the permissions editor (Plan C2c-ii). Builds the

@@ -23,7 +23,7 @@ import { hasAnyMobileFeature, canMobile } from './permissions.js'
 import {
   MOBILE_PERMISSION_KEYS,
   CROSS_PLATFORM_DASHBOARD_KEYS,
-} from '../../shared/permissions.js'
+} from 'shared/permissions'
 
 // Construct a per-user permissions blob that explicitly denies every
 // mobile and every dashboard key — the most aggressive "off" baseline

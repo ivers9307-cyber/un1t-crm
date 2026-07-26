@@ -24,7 +24,7 @@ import {
 } from '../../lib/instagram-api'
 import { listConversationApprovals } from '../../lib/inbox-approvals-api'
 import { needsReply, isAgentHandoff } from '../../lib/inbox'
-import { mergeTimeline } from '../../../shared/approval-cards'
+import { mergeTimeline } from 'shared/approval-cards'
 import MessageBubble from '../../components/MessageBubble'
 import ThreadApprovalCard from '../../components/ThreadApprovalCard'
 import BackHeaderLeft from '../../components/BackHeaderLeft'

@@ -15,7 +15,7 @@ import { api } from './api'
 import {
   fetchPersonalDashboardData,
   fetchStudioDashboardData,
-} from '../../shared/dashboard-data'
+} from 'shared/dashboard-data'
 
 export function fetchPersonalDashboard(profileId, locationId) {
   return fetchPersonalDashboardData(supabase, profileId, locationId)

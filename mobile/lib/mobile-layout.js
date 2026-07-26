@@ -3,7 +3,7 @@
 // permission helpers the screens already use (canMobile routes cross-platform
 // keys like studio_management through canDashboard), reads the per-assignment
 // override from the serialized permissions blob, and runs the shared resolver.
-import { MOBILE_NAV_FEATURES, resolveMobileLayout } from '../../shared/mobile-nav'
+import { MOBILE_NAV_FEATURES, resolveMobileLayout } from 'shared/mobile-nav'
 import { canMobile } from './permissions'
 
 function navFeatureEnabled(profile, feature, activeLocation) {

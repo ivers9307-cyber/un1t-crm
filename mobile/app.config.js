@@ -189,13 +189,6 @@ export default ({ config }) => ({
   ],
   experiments: {
     typedRoutes: true,
-    // SDK 57 / Metro 0.84: the new on-demand file map (default since SDK 56)
-    // does NOT include the sibling ../shared source folder that metro.config.js
-    // adds via watchFolders, breaking the web/mobile shared seam with "Unable
-    // to resolve" / "Failed to get the SHA-1". Turning it off restores the
-    // eager watchFolders crawl SDK 54 relied on. Revisit if the shared code
-    // ever moves into a proper workspace package.
-    onDemandFilesystem: false,
   },
   // Over-the-air updates via EAS Update. The project ID is the public
   // identifier of the EAS project at https://expo.dev/projects/<id> —

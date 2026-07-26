@@ -19,7 +19,7 @@ import { useHeaderHeight } from 'expo-router/react-navigation'
 import { useAuth } from '../../lib/auth-context'
 import { createTimeOffRequest } from '../../lib/schedule-api'
 import { isoDate } from '../../lib/dates'
-import { timeOffTypesFor, defaultTimeOffTypeFor } from '../../../shared/time-off'
+import { timeOffTypesFor, defaultTimeOffTypeFor } from 'shared/time-off'
 import MonthCalendar from '../../components/MonthCalendar'
 
 export default function TimeOffNew() {

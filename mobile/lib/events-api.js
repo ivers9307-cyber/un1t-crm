@@ -5,7 +5,7 @@
 // check-in GET already returns the event metadata + live counts.
 
 import { api } from './api'
-import { eventKindTone } from '../../shared/events'
+import { eventKindTone } from 'shared/events'
 
 /** GET /api/events?location_id= → { success, data: events[] } */
 export function listEvents({ locationId } = {}) {

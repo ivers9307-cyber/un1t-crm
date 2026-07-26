@@ -41,6 +41,11 @@ const config = [
       'out/**',
       'dist/**',
       'build/**',
+      // Claude Code session worktrees — each is a FULL repo checkout, so
+      // without this `eslint .` in the primary repo lints the codebase once
+      // per worktree (observed: 44 copies ≈ 15+ min, plus nondeterministic
+      // results from agents' in-flight code). CI never has this dir.
+      '.claude/**',
     ],
   },
   ...nextCoreWebVitals,

@@ -214,7 +214,7 @@ The existing `byType[req.type] = (byType[req.type]||0)+…` already tolerates an
   - Use NativeWind `un1t-*` classes consistent with the app (blue for selected, like `MonthRoster`/`CalCell`).
 
 - [ ] **Step 2: time-off-new.jsx** —
-  - Pull `profile` from `useAuth()` (alongside `activeLocation`). Replace the hard-coded `TYPES` with `timeOffTypesFor(profile?.employment_type)` from `../../shared/time-off` (relative path — mobile can't use the `@shared` alias), and initialise `type` via `defaultTimeOffTypeFor(...)`. When only one type, render a single static row ("Type: Unavailable") instead of the segmented control.
+  - Pull `profile` from `useAuth()` (alongside `activeLocation`). Replace the hard-coded `TYPES` with `timeOffTypesFor(profile?.employment_type)` from `../../shared/time-off` (relative path — mobile can't use the `@shared` alias) *[superseded 2026-07-26: now `'shared/time-off'` via the `shared` file: package]*, and initialise `type` via `defaultTimeOffTypeFor(...)`. When only one type, render a single static row ("Type: Unavailable") instead of the segmented control.
   - Replace the two `DateRow` steppers (and the `DateRow` component) with `<MonthCalendar startDate={start} endDate={end} minDate={today} onChange={({start,end}) => { setStart(start); setEnd(end || start) }} />`.
   - Keep the submit flow (`createTimeOffRequest`) unchanged; ensure `start`/`end` are still ISO strings.
   - Remove the now-unused `addDays`/`dateMath` if nothing else uses them (leave `isoDate`).

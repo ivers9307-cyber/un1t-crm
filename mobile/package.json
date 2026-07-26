@@ -49,6 +49,7 @@
     "react-native-screens": "~4.26.0",
     "react-native-url-polyfill": "^2.0.0",
     "react-native-worklets": "0.10.0",
+    "shared": "file:../shared",
     "tailwindcss": "^3.4.0",
     "zod": "^4.4.1"
   },

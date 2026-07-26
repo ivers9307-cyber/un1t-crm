@@ -20,7 +20,7 @@ import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import {
   setRunStyle, clearRunStyle, rangeStyle, lineRangeAt, shiftRuns,
-} from '../../shared/tv-template'
+} from 'shared/tv-template'
 import {
   listTvTemplates, seedTemplateValues, tvImageUrl, uploadTvImage, pushTvContent,
 } from '../lib/tv-api'
