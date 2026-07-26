@@ -183,4 +183,16 @@ describe('runBathroomClimateForLocation', () => {
     const out = await runBathroomClimateForLocation(db, row, { nowMs: NOW })
     expect(out.actions).toEqual([expect.objectContaining({ status: 'fired' })])
   })
+
+  it('derived lookback catches an oversized delay (class started 160 min ago, delay 150)', async () => {
+    // delay 150 + duration 30 puts the window at start+150..start+180. A
+    // fixed 2h lookback would exclude this class from the occurrence query
+    // entirely (starts_at is 160 min before NOW), so the automation would
+    // silently never fire — the lookback must be derived from the config.
+    const row = { location_id: LOC, config: { device_ids: ['dev1'], delay_after_start_min: 150, run_duration_min: 30 } }
+    const db = makeDb({ class_occurrences: [{ ...OCC, starts_at: '2026-07-27T08:10:00.000Z' }] })
+    // now 10:50 → class started 160 min back; window 10:40–11:10, NOW is inside it.
+    const out = await runBathroomClimateForLocation(db, row, { nowMs: NOW })
+    expect(out.actions).toEqual([expect.objectContaining({ status: 'fired' })])
+  })
 })

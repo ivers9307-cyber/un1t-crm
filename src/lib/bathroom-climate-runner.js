@@ -20,9 +20,11 @@ import { resolveConfig, planBathroomClimate, autoOffAtFor } from '@/lib/bathroom
 
 export const AUTOMATION_KEY = 'bathroom_climate'
 const OCCURRENCE_LOOKAHEAD_MS = 6 * 60 * 60_000 // classes within the next 6h
-// Lookback is 2h (not class-climate's 1h): a window opens up to
+// Lookback floor is 2h (not class-climate's 1h): a window opens up to
 // delay_after_start_min AFTER a class starts, so a 1h lookback would miss
-// e.g. a 06:00 class when the cron ticks at 07:10 with delay 65.
+// e.g. a 06:00 class when the cron ticks at 07:10 with delay 65. It's only
+// a floor — an oversized operator delay/duration derives a larger lookback
+// below so the class never outruns the occurrence query.
 const OCCURRENCE_LOOKBACK_MS = 2 * 60 * 60_000
 
 /**
@@ -41,7 +43,14 @@ export async function runBathroomClimateForLocation(db, automationRow, { nowMs =
     return result
   }
 
-  const sinceIso = new Date(nowMs - OCCURRENCE_LOOKBACK_MS).toISOString()
+  // Lookback must cover the whole window: a class can still need firing up
+  // to delay+duration after it starts. The 2h floor keeps the query bounded
+  // for sane configs; the derived term covers oversized operator values.
+  const lookbackMs = Math.max(
+    OCCURRENCE_LOOKBACK_MS,
+    (config.delay_after_start_min + config.run_duration_min + 10) * 60_000,
+  )
+  const sinceIso = new Date(nowMs - lookbackMs).toISOString()
   const untilIso = new Date(nowMs + OCCURRENCE_LOOKAHEAD_MS).toISOString()
   const { data: occurrences, error: occErr } = await db
     .from('class_occurrences')
