@@ -3,7 +3,7 @@
 // CLASS-CLIMATE.1 — read the synced class-schedule "spine"
 // (class_occurrences) for a location so the operator can SEE the
 // timetable the automation runs off. Read-only; the cron / Run-now keep
-// the table fresh. Only class_climate uses it today.
+// the table fresh. class_climate and bathroom_climate use it today.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -20,7 +20,7 @@ export async function GET(request, { params }) {
   }
 
   const { key } = await params
-  if (key !== 'class_climate') {
+  if (key !== 'class_climate' && key !== 'bathroom_climate') {
     return NextResponse.json({ success: false, error: 'not supported for this automation' }, { status: 400 })
   }
 
