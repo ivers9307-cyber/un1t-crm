@@ -468,6 +468,11 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // tv_displays key, dropping it from WEB_ONLY_OK. Master/owner/manager by
   // default (mirrors the web tv_displays role defaults).
   { key: 'tv_displays',        label: 'TV Displays',              hint: 'View studio TVs + what each is showing, copy the cast URL, clear a TV. Authoring (templates / uploads) stays on web.', webEquivalent: 'tv_displays' },
+  // HYROX-MOBILE — the Hyrox Training Club planner on the phone. Review,
+  // approve / send back, regenerate and push a class session to the studio TV.
+  // Mirrors the web /admin/hyrox planner; webEquivalent links it to the web
+  // approvals_hyrox_sessions key for the parity linter.
+  { key: 'hyrox',              label: 'Hyrox Training Club',      hint: 'Review, approve, regenerate and push AI-designed Hyrox class sessions to the studio TV from your phone. Mirrors the web Hyrox planner.', webEquivalent: 'approvals_hyrox_sessions' },
   // NOTIF.2: mobile mirror of the web 'activities' feature (Tasks tab).
   // Different name from the web key because 'tasks' reads better on a
   // small screen — the parity linter uses webEquivalent='activities'
@@ -612,6 +617,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   // Platform super-admin (mig 033) — every mobile feature on. canMobile
   // also short-circuits true for master regardless of these values.
   master: {
+    hyrox: true,
     schedule: true, pipeline: true, whatsapp: true, assistant: true,
     sms: true, email: true,
     tv_displays: true,
@@ -640,6 +646,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_issue_submitted: true, notify_issue_resolved: true,
   },
   staff: {
+    hyrox: false,
     schedule: true, pipeline: false, whatsapp: false, assistant: false,
     sms: false, email: false,
     tv_displays: false,
@@ -681,6 +688,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
   // screen). Notification defaults follow: WhatsApp + booking
   // reminders on; everything oversight/approval stays off.
   reception: {
+    hyrox: false,
     schedule: true, pipeline: false, whatsapp: true, assistant: false,
     sms: false, email: false,
     tv_displays: false,
@@ -709,6 +717,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_issue_submitted: false, notify_issue_resolved: true,
   },
   head_coach: {
+    hyrox: true,
     schedule: true, pipeline: true, whatsapp: true, assistant: true,    // explicit opt-in, mirrors web
     sms: true, email: true,
     tv_displays: false,
@@ -743,6 +752,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_issue_submitted: false, notify_issue_resolved: true,
   },
   manager: {
+    hyrox: true,
     schedule: true, pipeline: true, whatsapp: true, assistant: true,
     sms: true, email: true,
     tv_displays: true,
@@ -779,6 +789,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_issue_submitted: false, notify_issue_resolved: true,
   },
   owner: {
+    hyrox: true,
     schedule: true, pipeline: true, whatsapp: true, assistant: true,
     sms: true, email: true,
     tv_displays: true,
