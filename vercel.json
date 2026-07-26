@@ -145,6 +145,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/cron/bathroom-climate",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/credit-attendance",
       "schedule": "0 3 * * *"
     },
