@@ -84,7 +84,7 @@ git commit -am "TICKET.X — summary"   # subject, blank line, body citing migs/
 git push -u origin HEAD
 gh pr create --base main --fill        # pushing is NOT shipping — open the PR, report its URL
 ```
-Worktrees (rationalised 2026-06-25): primary `~/code/un1t-crm` = `main`; `~/code/un1t-crm-ct` = active feature branch. A stale local `origin/main` caused a real incident — always `git fetch` then branch off `origin/main`. Follow-up after a PR merges = a **new** branch off main (pushing to a merged branch strands the commit).
+Worktrees: `~/code/un1t-crm` is the primary checkout, but no checkout reliably holds `main` — it sits wherever it was last checked out (one of the two-dozen `~/code/un1t-crm-*` feature worktrees, usually stale there). Never build on a local `main`: a stale one caused a real incident — always `git fetch` then branch off `origin/main` from the worktree you're in. Follow-up after a PR merges = a **new** branch off main (pushing to a merged branch strands the commit).
 
 ---
 
