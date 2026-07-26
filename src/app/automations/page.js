@@ -9,6 +9,7 @@ import { AUTOMATIONS, automationStatus, glofoxConnected } from '@/lib/automation
 import AutomationsView from '@/components/automations/AutomationsView'
 import AutomationsFlowList from '@/components/automations/AutomationsFlowList'
 import ClassClimateCard from '@/components/automations/ClassClimateCard'
+import BathroomClimateCard from '@/components/automations/BathroomClimateCard'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,10 +28,11 @@ export default async function AutomationsPage() {
   const db = createServerClient()
 
   // Curated toggle cards (only when the user has the automations perm).
-  // class_climate is rendered by its own card (it needs config), so it's
-  // filtered out of the generic toggle list.
+  // class_climate + bathroom_climate are rendered by their own cards (they
+  // need config), so they're filtered out of the generic toggle list.
   let cards = []
   let climate = null
+  let bathroom = null
   let climateDevices = []
   if (canCurated) {
     const { data: rows } = await db
@@ -40,7 +42,7 @@ export default async function AutomationsPage() {
     const byKey = Object.fromEntries((rows || []).map((r) => [r.automation_key, r]))
 
     cards = AUTOMATIONS
-      .filter((a) => a.key !== 'class_climate')
+      .filter((a) => a.key !== 'class_climate' && a.key !== 'bathroom_climate')
       .map((a) => ({
         key: a.key, label: a.label, description: a.description,
         supportsBackfill: a.supportsBackfill, reviewBase: a.reviewBase,
@@ -56,6 +58,8 @@ export default async function AutomationsPage() {
     climateDevices = devices || []
     const row = byKey['class_climate']
     climate = { enabled: Boolean(row?.enabled), config: row?.config || {} }
+    const bathroomRow = byKey['bathroom_climate']
+    bathroom = { enabled: Boolean(bathroomRow?.enabled), config: bathroomRow?.config || {} }
   }
 
   // Custom flows (only when the user has email/whatsapp).
@@ -84,6 +88,13 @@ export default async function AutomationsPage() {
             devices={climateDevices}
             initialEnabled={climate?.enabled}
             initialConfig={climate?.config}
+          />
+          <BathroomClimateCard
+            locationId={location?.id || null}
+            glofoxConnected={glofoxConnected(location)}
+            devices={climateDevices}
+            initialEnabled={bathroom?.enabled}
+            initialConfig={bathroom?.config}
           />
         </div>
       )}
