@@ -25,6 +25,13 @@ export const AUTOMATIONS = Object.freeze([
     supportsBackfill: false,
     reviewBase: '/automations',
   },
+  {
+    key: 'bathroom_climate',
+    label: 'Bathroom climate control',
+    description: 'Turn the bathroom AC on after each class starts and off on a timer — automatically, on the class schedule.',
+    supportsBackfill: false,
+    reviewBase: '/automations',
+  },
 ])
 
 export function getAutomation(key) {
@@ -54,7 +61,7 @@ export function automationStatus(key, location) {
       trialConfigured: Boolean(g.trial_membership_id && g.trial_plan_code),
     }
   }
-  if (key === 'class_climate') {
+  if (key === 'class_climate' || key === 'bathroom_climate') {
     // Needs the Glofox schedule as its trigger source. AC-device presence
     // is surfaced in the dedicated card (which has the device list); here
     // we only gate on the schedule source being connected.

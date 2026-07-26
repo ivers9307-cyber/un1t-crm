@@ -1,5 +1,5 @@
 // POST /api/automations/[key]/run-now — operator-triggered "Run check now".
-// Only class_climate supports it today. Refreshes the location's Glofox
+// Supported keys are listed in RUNNERS. Refreshes the location's Glofox
 // class schedule, then runs the climate logic so the operator can watch
 // the AC respond on demand instead of waiting for the cron. { dry_run:true }
 // previews what WOULD fire without touching the AC.
@@ -13,6 +13,15 @@ import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
 import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation } from '@/lib/glofox'
 import { syncOccurrencesForLocation } from '@/lib/class-occurrences'
 import { runClassClimate } from '@/lib/class-climate-runner'
+import { runBathroomClimate } from '@/lib/bathroom-climate-runner'
+
+// Automations that support the operator "Run check now" button, mapped to
+// their runner. Both are class-schedule-driven, so both get the
+// schedule-refresh-first step below.
+const RUNNERS = {
+  class_climate: runClassClimate,
+  bathroom_climate: runBathroomClimate,
+}
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -29,7 +38,8 @@ export async function POST(request, { params }) {
   }
 
   const { key } = await params
-  if (key !== 'class_climate') {
+  const runner = RUNNERS[key]
+  if (!runner) {
     return NextResponse.json({ success: false, error: 'run-now is not supported for this automation' }, { status: 400 })
   }
 
@@ -50,7 +60,7 @@ export async function POST(request, { params }) {
     synced = await syncOccurrencesForLocation(db, { locationId: location_id, creds })
   }
 
-  const out = await runClassClimate(db, { locationId: location_id, dryRun: Boolean(dry_run) })
+  const out = await runner(db, { locationId: location_id, dryRun: Boolean(dry_run) })
   const loc = out.locations?.[0] || { planned: [], actions: [], errors: [] }
 
   return NextResponse.json({
