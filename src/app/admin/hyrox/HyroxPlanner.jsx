@@ -17,7 +17,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
-import { Dumbbell, AlertCircle, Check, RotateCcw, RefreshCw, ChevronRight, X, Plus, Star, Tv } from 'lucide-react'
+import { Dumbbell, AlertCircle, Check, RotateCcw, RefreshCw, ChevronRight, X, Plus, Star, Tv, Cast } from 'lucide-react'
 import { Button, Modal, Field, Table } from '@/components/ui'
 import { DIFFICULTY_DIALS, MAX_STORED_EXAMPLE_CHARS } from '@/lib/hyrox/constants'
 import HyroxBoard from '@/components/HyroxBoard'
@@ -54,7 +54,7 @@ function StatusChip({ status }) {
   )
 }
 
-export default function HyroxPlanner({ initialBlock, initialSessions, initialSettings, locationId, canManage }) {
+export default function HyroxPlanner({ initialBlock, initialSessions, initialSettings, locationId, canManage, nextUpId = null }) {
   const db = createBrowserClient()
   const searchParams = useSearchParams()
 
@@ -313,6 +313,7 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
   const [sessionBusy, setSessionBusy] = useState(null)
   const [drawerError, setDrawerError] = useState(null)
   const [exemplarNote, setExemplarNote] = useState(null)
+  const [pushNote, setPushNote] = useState(null)
 
   // Auto-open from the approvals-inbox deep link (?focus=<id>).
   useEffect(() => {
@@ -329,6 +330,7 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
     setEditStations(Array.isArray(s.board?.stations) ? s.board.stations.map((st) => ({ ...st, target: st.target ?? st.performance ?? st.elite ?? '' })) : [])
     setDrawerError(null)
     setExemplarNote(null)
+    setPushNote(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedId])
 
@@ -337,6 +339,7 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
     setPreviewOpen(false)
     setDrawerError(null)
     setExemplarNote(null)
+    setPushNote(null)
   }
 
   function updateStation(index, field, value) {
@@ -403,7 +406,26 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
     }
   }
 
+  async function handlePushToTv() {
+    if (!focusedSession) return
+    setSessionBusy('push')
+    setDrawerError(null)
+    setPushNote(null)
+    try {
+      const res = await fetch(`/api/hyrox/sessions/${focusedSession.id}/push`, { method: 'POST' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok || !json.success) throw new Error(json.error || 'Failed to push to the TV.')
+      const n = json.data?.pushed || 1
+      setPushNote(`Live on the TV (${n} screen${n === 1 ? '' : 's'})`)
+    } catch (err) {
+      setDrawerError(err.message)
+    } finally {
+      setSessionBusy(null)
+    }
+  }
+
   const isPublished = focusedSession?.status === 'published'
+  const canPush = focusedSession?.board && (focusedSession?.status === 'approved' || focusedSession?.status === 'published')
 
   const stationRows = editStations.map((st, i) => ({ ...st, _i: i }))
   const stationColumns = [
@@ -738,16 +760,18 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
                     <td className="py-2 px-3 text-un1t-text font-medium">{week}</td>
                     {slotCols.map((slot) => {
                       const s = sessionMap.get(`${week}:${slot}`)
+                      const isNextUp = s && s.id === nextUpId
                       return (
                         <td key={slot} className="py-2 px-3 align-top">
                           {s ? (
                             <button
                               type="button"
                               onClick={() => setFocusedId(s.id)}
-                              className="text-left hover:bg-un1t-surface rounded-md px-2 py-1.5 -mx-2 w-full"
+                              className={`text-left rounded-md px-2 py-1.5 -mx-2 w-full ${isNextUp ? 'bg-amber-500/10 ring-1 ring-amber-500/40' : 'hover:bg-un1t-surface'}`}
                             >
                               <span className="flex items-center gap-1.5">
                                 <StatusChip status={s.status} />
+                                {isNextUp && <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-700">Next up</span>}
                                 <ChevronRight size={12} className="text-un1t-muted" />
                               </span>
                               <span className="block text-xs text-un1t-subtle mt-0.5 truncate max-w-[180px]">{s.focus || '—'}</span>
@@ -819,6 +843,16 @@ export default function HyroxPlanner({ initialBlock, initialSessions, initialSet
                 <Button type="button" variant="secondary" icon={Tv} onClick={() => setPreviewOpen(true)}>
                   Preview on TV
                 </Button>
+              )}
+              {canPush && (
+                <span className="inline-flex items-center gap-2">
+                  <Button type="button" variant="secondary" icon={Cast} loading={sessionBusy === 'push'} onClick={handlePushToTv}>
+                    Push to TV
+                  </Button>
+                  {pushNote && (
+                    <span className="text-xs text-green-700 inline-flex items-center gap-1"><Check size={12} /> {pushNote}</span>
+                  )}
+                </span>
               )}
               <Button type="button" variant="secondary" onClick={closeDrawer}>Close</Button>
               {!isPublished && (
