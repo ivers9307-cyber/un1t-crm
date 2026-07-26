@@ -13,8 +13,9 @@
 # Expo account / EXPO_TOKEN needed), so it runs on PRs fine.
 #
 # NOTE (the other half of P0-4 — OPERATOR action): the OTA lane is
-# runtimeVersion 1.4.0 but installed binaries are on 1.3.x, so OTAs reach zero
-# devices until a 1.4.0 binary ships. Close it with a production build + submit:
+# runtimeVersion 2.0.0 (Expo SDK 57, MOBILE-SDK57.2); installed binaries are on
+# the older 1.x lanes, so OTAs reach zero devices until a 2.0.0 (SDK 57) binary
+# ships. Close it with a production build + submit:
 #   cd mobile && eas build -p ios --profile production --submit
 
 name: Mobile bundle export

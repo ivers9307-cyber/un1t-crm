@@ -4,8 +4,9 @@
 // and corrects on its existing ~2s poll.
 //
 // Lives in shared/ so BOTH web (via the `@shared/class-timer` alias / the
-// `src/lib/class-timer.js` re-export shim) AND mobile (relative
-// `../../shared/class-timer`) use one copy. Pure — no React/Next/RN deps.
+// `src/lib/class-timer.js` re-export shim) AND mobile (the `shared`
+// file: package — `'shared/class-timer'`) use one copy. Pure — no
+// React/Next/RN deps.
 
 export const TIMER_SEGMENT_TYPES = ['prep', 'work', 'rest', 'station', 'custom']
 

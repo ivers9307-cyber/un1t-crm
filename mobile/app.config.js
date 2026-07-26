@@ -192,10 +192,9 @@ export default ({ config }) => ({
   },
   // Over-the-air updates via EAS Update. The project ID is the public
   // identifier of the EAS project at https://expo.dev/projects/<id> —
-  // not a secret, safe to commit. The runtimeVersion policy
-  // 'sdkVersion' means each Expo SDK gets its own update lane — an
-  // update built for SDK 54 won't be served to a phone running an
-  // SDK 53 build, preventing native/JS skew.
+  // not a secret, safe to commit. The explicit runtimeVersion string
+  // below defines the update lane — an update published for one lane is
+  // never served to a binary on another, preventing native/JS skew.
   updates: {
     url: 'https://u.expo.dev/6256a4d8-03ff-4898-9d47-b4de6c9c20e1',
     enabled: true,
@@ -215,7 +214,8 @@ export default ({ config }) => ({
     // (gitignored) + the EXPO_UPDATES_PRIVATE_KEY GitHub secret.
     // Runbook (incl. the plan gotcha): mobile/docs/eas-update-code-signing.md
   },
-  // OTA runtime-version policy. Kept at 'sdkVersion' for now.
+  // OTA runtime-version policy: an EXPLICIT string (history below — it
+  // started as the 'sdkVersion' policy, then went explicit at 1.3.0).
   //
   // 'fingerprint' is the better long-term choice — it WITHHOLDS a native/ABI-
   // mismatched update instead of serving it into a boot-crash. We tried it
