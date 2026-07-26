@@ -44,7 +44,7 @@ The "if you miss one, you break prod or burn a session" list. Terse on purpose; 
 - **Every `<button>` in a `<form>` defaults to `type="submit"`** — set `type="button"` on every non-submit (tab pills, close X, secondary actions).
 
 **Crons & webhooks**
-- **Every cron with a `cron_heartbeats` row MUST call `stampHeartbeat(name)`** on success or it goes "stale" while running fine. `grep -L stampHeartbeat src/app/api/cron/*/route.js` should list only `health-check`.
+- **Every cron with a `cron_heartbeats` row MUST call `stampHeartbeat(name)`** on success or it goes "stale" while running fine. `grep -L stampHeartbeat src/app/api/cron/*/route.js` should list only `health-check` and `ad-insights-backfill` (manual-only backfill: no vercel.json entry, no heartbeat row — confirmed by the CRON-HB-AUDIT.1 audit, mig 406).
 - **Webhook handlers: idempotent, and return 200 for unrecognised events** (providers auto-disable hooks on non-2xx). High-volume webhooks defer (queue table + drain cron), never inline N writes. Long fan-outs run on cron, not the request thread.
 
 **Conventions that bite**
