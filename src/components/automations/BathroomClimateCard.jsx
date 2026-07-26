@@ -332,7 +332,7 @@ export default function BathroomClimateCard({ locationId, glofoxConnected, devic
             <div className="mt-2 text-[11px] space-y-0.5">
               {!run.glofox_configured && <p className="text-amber-700">Glofox isn&apos;t connected — no schedule to check.</p>}
               {run.glofox_configured && (run.planned?.length || 0) === 0 && (
-                <p className="text-un1t-light">No class is within its lead window right now — nothing to turn on yet.</p>
+                <p className="text-un1t-light">No class is within its shower window right now — nothing to turn on yet.</p>
               )}
               {(run.actions || []).map((a, i) => (
                 <p key={i} className={a.status === 'fired' ? 'text-emerald-700' : a.status === 'failed' ? 'text-red-700' : 'text-un1t-light'}>
