@@ -215,6 +215,7 @@ export default function More() {
   if (inMore.has('contracts')) tiles.push({ key: 'contracts', icon: 'document-text-outline', label: 'Contracts', onPress: () => router.push('/contracts') })
   if (inMore.has('policies'))  tiles.push({ key: 'policies', icon: 'book-outline', label: 'Policies', badge: outstandingPolicies > 0 ? String(outstandingPolicies) : null, onPress: () => router.push('/policies') })
   if (canMobile(profile, 'approvals', activeLocation)) tiles.push({ key: 'approvals', icon: 'checkmark-done-outline', label: 'Approvals', badge: outstandingApprovals > 0 ? String(outstandingApprovals) : null, onPress: () => router.push('/approvals') })
+  if (canMobile(profile, 'hyrox', activeLocation)) tiles.push({ key: 'hyrox', icon: 'barbell-outline', label: 'Hyrox', onPress: () => router.push('/hyrox') })
   // Staff & access management (STAFF-C1 directory + C2c role/permission
   // editors). Gated by the `staff_management` mobile permission (STAFF-C3
   // parity inversion) — defaults to master/owner/manager so behaviour is

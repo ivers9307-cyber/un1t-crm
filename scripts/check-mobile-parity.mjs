@@ -200,9 +200,8 @@ const WEB_ONLY_OK = {
   approvals_time_off: 'Per-category approval grant (APPROVALS-PERCAT.1). Mobile approvals surface is still gated by the aggregate `approvals` permission; no per-category mobile split yet.',
   approvals_shift_swaps: 'Per-category approval grant (APPROVALS-PERCAT.1). Mobile approvals surface is still gated by the aggregate `approvals` permission; no per-category mobile split yet.',
   approvals_rosters: 'Per-category approval grant (APPROVALS-PERCAT.1). Mobile approvals surface is still gated by the aggregate `approvals` permission; no per-category mobile split yet.',
-  // HYROX-TC.2 — coach review of AI-generated Hyrox Training Club sessions.
-  // Desktop-only planner surface; no mobile counterpart yet.
-  approvals_hyrox_sessions: 'Coach review of AI-generated Hyrox sessions lives in the /admin/hyrox desktop planner; the mobile app has no counterpart yet.',
+  // approvals_hyrox_sessions dropped from WEB_ONLY_OK: the mobile `hyrox`
+  // feature (webEquivalent: 'approvals_hyrox_sessions') now covers it.
 }
 
 const webDrift = []
