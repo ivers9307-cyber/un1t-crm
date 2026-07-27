@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHmac } from 'node:crypto'
-import { verifyGlofoxSignature, parseGlofoxEvent, tagsForGlofoxEvent, generateGlofoxPasscode, purchaseGlofoxMembership, createGlofoxInteraction } from './glofox.js'
+import { verifyGlofoxSignature, parseGlofoxEvent, tagsForGlofoxEvent, generateGlofoxPasscode, purchaseGlofoxMembership, createGlofoxInteraction, interpretBookingResult } from './glofox.js'
 
 function sign(secret, body) {
   return createHmac('sha256', secret).update(body).digest('hex')
@@ -437,5 +437,38 @@ describe('createGlofoxInteraction', () => {
   it('returns { ok:false } on missing creds/userId (no throw)', async () => {
     expect((await createGlofoxInteraction(null, 'x', { type: 'NOTE', description: 'y' })).ok).toBe(false)
     expect((await createGlofoxInteraction(creds, '', { type: 'NOTE', description: 'y' })).ok).toBe(false)
+  })
+})
+
+describe('interpretBookingResult (MIA-BOOK.1)', () => {
+  const call = (over) => interpretBookingResult({ ok: true, status: 200, body: {}, ...over })
+  it('2xx with a booking id is a success (all harvest shapes)', () => {
+    expect(call({ body: { id: 'b1' } })).toMatchObject({ success: true, bookingId: 'b1' })
+    expect(call({ body: { _id: 'b2' } }).bookingId).toBe('b2')
+    expect(call({ body: { booking_id: 'b3' } }).bookingId).toBe('b3')
+    expect(call({ body: { data: { id: 'b4' } } }).bookingId).toBe('b4')
+  })
+  it('a clean 2xx with no code and no id still succeeds', () => {
+    expect(call({ body: {} })).toMatchObject({ success: true, bookingId: null, messageCode: null })
+    expect(call({ body: null })).toMatchObject({ success: true })
+  })
+  it('the live-observed 200 + YOU_HAVE_NO_CREDITS_LEFT shape is a FAILURE', () => {
+    expect(call({ body: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } }))
+      .toMatchObject({ success: false, messageCode: 'YOU_HAVE_NO_CREDITS_LEFT' })
+  })
+  it('an unknown code on a 2xx without a booking id fails safe', () => {
+    expect(call({ body: { message_code: 'SOME_NEW_CODE' } }).success).toBe(false)
+  })
+  it('a code accompanied by a booking id stays a success', () => {
+    expect(call({ body: { message_code: 'ANYTHING', id: 'b1' } }).success).toBe(true)
+  })
+  it('already-booked is a success even on a non-2xx', () => {
+    expect(call({ ok: false, status: 422, body: { message_code: 'YOU_HAVE_BOOKED_FOR_THIS_EVENT' } }))
+      .toMatchObject({ success: true, alreadyBooked: true })
+  })
+  it('non-2xx / network shapes are failures', () => {
+    expect(call({ ok: false, status: 500, body: { error: 'boom' } }).success).toBe(false)
+    expect(interpretBookingResult({ ok: false, status: 0, body: { error: 'network error' } }).success).toBe(false)
+    expect(interpretBookingResult(null).success).toBe(false)
   })
 })

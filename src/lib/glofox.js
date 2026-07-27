@@ -1030,6 +1030,30 @@ export async function createBooking(creds, bookingRequest) {
   }
 }
 
+export const GLOFOX_ALREADY_BOOKED_CODE = 'YOU_HAVE_BOOKED_FOR_THIS_EVENT'
+
+/**
+ * MIA-BOOK.1 — single source of truth for "did /2.0/bookings actually book?".
+ * Glofox reports failures IN-BODY with an HTTP 200 (live-observed 2026-07-27:
+ * 200 + YOU_HAVE_NO_CREDITS_LEFT booked nothing), so HTTP ok alone lies.
+ * Rules: already-booked = success (Glofox dedupes member+event server-side);
+ * non-2xx = failure; a clean 2xx (no message code) = success even without a
+ * harvestable id (some success shapes carry none); a 2xx WITH a message code
+ * only succeeds when a booking id came back too — otherwise it's the
+ * 200-with-error shape, and unknown codes deliberately fail safe (a spurious
+ * approval card beats another customer told a lie).
+ * @param {{ok:boolean,status:number,body:any}|null} result createBooking's return
+ * @returns {{success:boolean,bookingId:string|null,messageCode:string|null,alreadyBooked:boolean}}
+ */
+export function interpretBookingResult(result) {
+  const body = result?.body || {}
+  const messageCode = body.message_code || body.message || null
+  const alreadyBooked = messageCode === GLOFOX_ALREADY_BOOKED_CODE
+  const bookingId = body.id || body._id || body.booking_id || body.data?.id || null
+  const success = alreadyBooked || (!!result?.ok && (!messageCode || !!bookingId))
+  return { success, bookingId, messageCode, alreadyBooked }
+}
+
 /**
  * UIX-P3b — upcoming classes for the unified inbox's Book tab.
  *
