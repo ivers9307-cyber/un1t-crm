@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHmac } from 'node:crypto'
-import { verifyGlofoxSignature, parseGlofoxEvent, tagsForGlofoxEvent, generateGlofoxPasscode, purchaseGlofoxMembership, createGlofoxInteraction } from './glofox.js'
+import { verifyGlofoxSignature, parseGlofoxEvent, tagsForGlofoxEvent, generateGlofoxPasscode, purchaseGlofoxMembership, createGlofoxInteraction, interpretBookingResult } from './glofox.js'
 
 function sign(secret, body) {
   return createHmac('sha256', secret).update(body).digest('hex')
@@ -437,5 +437,49 @@ describe('createGlofoxInteraction', () => {
   it('returns { ok:false } on missing creds/userId (no throw)', async () => {
     expect((await createGlofoxInteraction(null, 'x', { type: 'NOTE', description: 'y' })).ok).toBe(false)
     expect((await createGlofoxInteraction(creds, '', { type: 'NOTE', description: 'y' })).ok).toBe(false)
+  })
+})
+
+// MIA-BOOKCHECK — Glofox can return HTTP 200 with a failure body
+// (message_code YOU_HAVE_NO_CREDITS_LEFT, live 2026-07-27), so booking
+// success is "HTTP ok AND a created-booking id", never HTTP ok alone.
+describe('interpretBookingResult', () => {
+  it('HTTP 200 + a booking id → booked, id harvested', () => {
+    expect(interpretBookingResult({ ok: true, status: 200, body: { _id: 'bk1' } }))
+      .toEqual({ booked: true, bookingId: 'bk1', messageCode: null })
+  })
+
+  it('harvests the id across every live response shape', () => {
+    for (const body of [
+      { id: 'bk1' }, { _id: 'bk1' }, { booking_id: 'bk1' },
+      { data: { id: 'bk1' } }, { data: { _id: 'bk1' } },
+    ]) {
+      expect(interpretBookingResult({ ok: true, status: 200, body })).toMatchObject({ booked: true, bookingId: 'bk1' })
+    }
+  })
+
+  it('HTTP 200 with a failure message_code and no id → NOT booked (the Lucinda case)', () => {
+    const r = interpretBookingResult({ ok: true, status: 200, body: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } })
+    expect(r).toEqual({ booked: false, bookingId: null, messageCode: 'YOU_HAVE_NO_CREDITS_LEFT' })
+  })
+
+  it('HTTP 200 with an empty/idless body → NOT booked', () => {
+    expect(interpretBookingResult({ ok: true, status: 200, body: {} }).booked).toBe(false)
+    expect(interpretBookingResult({ ok: true, status: 200, body: null }).booked).toBe(false)
+  })
+
+  it('non-2xx → not booked, message_code surfaced (message as fallback)', () => {
+    expect(interpretBookingResult({ ok: false, status: 400, body: { message_code: 'EVENT_FULL' } }))
+      .toMatchObject({ booked: false, messageCode: 'EVENT_FULL' })
+    expect(interpretBookingResult({ ok: false, status: 400, body: { message: 'The selected model is invalid' } }))
+      .toMatchObject({ booked: false, messageCode: 'The selected model is invalid' })
+  })
+
+  it('an id on a non-2xx response is still not booked', () => {
+    expect(interpretBookingResult({ ok: false, status: 500, body: { _id: 'bk1' } }).booked).toBe(false)
+  })
+
+  it('tolerates a missing result entirely', () => {
+    expect(interpretBookingResult(null)).toEqual({ booked: false, bookingId: null, messageCode: null })
   })
 })

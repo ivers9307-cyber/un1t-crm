@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-vi.mock('@/lib/glofox', () => ({
+// Partial mock: interpretBookingResult stays REAL (it decides booked vs review).
+vi.mock('@/lib/glofox', async (importOriginal) => ({
+  ...(await importOriginal()),
   glofoxCredentialsForLocation: vi.fn(async () => ({ branchId: 'b', apiKey: 'k', apiToken: 't' })),
   missingGlofoxCredentialsForLocation: vi.fn(() => []),
-  createBooking: vi.fn(async () => ({ ok: true, status: 200, body: {} })),
+  createBooking: vi.fn(async () => ({ ok: true, status: 200, body: { _id: 'gfb-1' } })),
   fetchUserCredits: vi.fn(async () => [{ active: true, available: 3 }]),
   fetchUserBookingsResult: vi.fn(async () => ({ ok: true, bookings: [] })),
   GLOFOX_BOOKING_MODEL: 'event',
@@ -75,6 +77,14 @@ describe('processClassBookingRequest', () => {
     const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
     expect(r.outcome).toBe('needs_review')
     expect(createBooking).not.toHaveBeenCalled()
+  })
+  // MIA-BOOKCHECK — Glofox can 200 with a failure body; without a created
+  // booking id that is a FAILURE, not a booking (never confirm to the lead).
+  it('HTTP 200 with a failure body (no booking id) → review, no WhatsApp confirm', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } })
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
+    expect(r.outcome).toBe('needs_review')
+    expect(maybeSendBookingWhatsappConfirm).not.toHaveBeenCalled()
   })
   it('Glofox "already booked" (reaper re-run) → booked, not review', async () => {
     createBooking.mockResolvedValueOnce({ ok: false, status: 400, body: { message_code: 'YOU_HAVE_BOOKED_FOR_THIS_EVENT' } })

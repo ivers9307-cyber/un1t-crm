@@ -470,7 +470,7 @@ export async function executeBookingTool(toolName, input, ctx) {
       }
     }
 
-    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking } =
+    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult } =
       await import('@/lib/glofox')
     const creds = await glofoxCredentialsForLocation(db, locationId)
     if (!creds || missingGlofoxCredentialsForLocation(creds).length) {
@@ -485,13 +485,15 @@ export async function executeBookingTool(toolName, input, ctx) {
       model: GLOFOX_BOOKING_MODEL,
       model_id: input.event_id,
     })
-    const messageCode = result?.body?.message_code || result?.body?.message || null
+    // Glofox can 200 with a failure body (YOU_HAVE_NO_CREDITS_LEFT) —
+    // success needs the created booking id, not just HTTP ok.
+    const { booked, bookingId, messageCode } = interpretBookingResult(result)
     await finalizeBookingRequest(db, ctx, auditId, {
       kind: 'class_booking',
-      status: result.ok ? 'actioned' : 'failed',
-      details: { ...baseDetails, result: { ok: result.ok, status: result.status, message_code: messageCode } },
+      status: booked ? 'actioned' : 'failed',
+      details: { ...baseDetails, result: { ok: booked, status: result.status, message_code: messageCode, glofox_booking_id: bookingId } },
     })
-    if (!result.ok) {
+    if (!booked) {
       return {
         booked: false,
         reason: messageCode || 'BOOKING_FAILED',
