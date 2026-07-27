@@ -7,9 +7,10 @@
 // finalised afterwards, the way the draft path always worked.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// Partial mock: interpretBookingResult stays REAL — these tests assert the
+// booked/failed/pending-fallback judgement, so the actual body-interpretation
+// logic must run (MIA-BOOKCHECK.1 + MIA-BOOK.1).
 vi.mock('@/lib/glofox', async (importOriginal) => ({
-  // real interpretBookingResult / GLOFOX_ALREADY_BOOKED_CODE (MIA-BOOK.1) —
-  // the success-detection rules are part of what these tests pin down.
   ...(await importOriginal()),
   GLOFOX_BOOKING_MODEL: 'events',
   glofoxCredentialsForLocation: vi.fn(),
@@ -51,7 +52,10 @@ function auditDb(trace, { insertId = 'req-1', insertThrows = false } = {}) {
         },
         update(patch) {
           selected = false
-          trace.push({ step: 'audit_update', table, status: patch.status, details: patch.details })
+          trace.push({
+            step: 'audit_update', table, status: patch.status, details: patch.details,
+            glofoxBookingId: patch.details?.result?.glofox_booking_id ?? null,
+          })
           return b
         },
         then(resolve) {
@@ -86,7 +90,7 @@ describe('auto-mode class booking writes the audit intent BEFORE the Glofox call
     const trace = []
     glofox.createBooking.mockImplementation(async () => {
       trace.push({ step: 'glofox_createBooking' })
-      return { ok: true, status: 200, body: {} }
+      return { ok: true, status: 200, body: { _id: 'gfb-1' } }
     })
 
     const res = await executeBookingTool('book_class', { event_id: EVENT_ID, class_name: 'ARENA' }, ctx(trace))
@@ -94,7 +98,40 @@ describe('auto-mode class booking writes the audit intent BEFORE the Glofox call
     expect(res).toMatchObject({ booked: true })
     expect(trace.map(t => t.step)).toEqual(['audit_insert', 'glofox_createBooking', 'audit_update'])
     expect(trace[0]).toMatchObject({ status: 'pending', stage: 'executing' })
-    expect(trace[2]).toMatchObject({ status: 'actioned' })
+    // The harvested Glofox booking id lands in details.result so agent
+    // bookings can be reconciled against Glofox.
+    expect(trace[2]).toMatchObject({ status: 'actioned', glofoxBookingId: 'gfb-1' })
+  })
+
+  // MIA-BOOKCHECK — Glofox 200s with a failure body (message_code
+  // YOU_HAVE_NO_CREDITS_LEFT, live 2026-07-27 Lucinda Kinghan / 2026-07-22
+  // Colm Keegan): HTTP ok alone must NOT finalize as actioned/booked.
+  it('HTTP 200 with a failure body → booked:false, audit row failed (never actioned)', async () => {
+    const trace = []
+    glofox.createBooking.mockImplementation(async () => {
+      trace.push({ step: 'glofox_createBooking' })
+      return { ok: true, status: 200, body: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } }
+    })
+
+    const res = await executeBookingTool('book_class', { event_id: EVENT_ID, class_name: 'ARENA' }, ctx(trace))
+
+    // MIA-BOOK.1 — account-shaped rejections now fall back to a PENDING
+    // approval instead of a plain failure (never actioned either way).
+    expect(res).toMatchObject({ booked: false, reason: 'YOU_HAVE_NO_CREDITS_LEFT', requested: true })
+    expect(trace.at(-1)).toMatchObject({ step: 'audit_update', status: 'pending' })
+  })
+
+  it('HTTP 200 with no booking id in the body → booked:false, falls back to approval (unknown shape, fail safe)', async () => {
+    const trace = []
+    glofox.createBooking.mockImplementation(async () => {
+      trace.push({ step: 'glofox_createBooking' })
+      return { ok: true, status: 200, body: {} }
+    })
+
+    const res = await executeBookingTool('book_class', { event_id: EVENT_ID }, ctx(trace))
+
+    expect(res).toMatchObject({ booked: false, requested: true })
+    expect(trace.at(-1)).toMatchObject({ step: 'audit_update', status: 'pending' })
   })
 
   it('a FAILED booking finalises the same row as failed (still one row, not two)', async () => {
@@ -116,7 +153,7 @@ describe('auto-mode class booking writes the audit intent BEFORE the Glofox call
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     glofox.createBooking.mockImplementation(async () => {
       trace.push({ step: 'glofox_createBooking' })
-      return { ok: true, status: 200, body: {} }
+      return { ok: true, status: 200, body: { _id: 'gfb-2' } }
     })
 
     const res = await executeBookingTool('book_class', { event_id: EVENT_ID }, ctx(trace, { insertThrows: true }))

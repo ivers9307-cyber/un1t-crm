@@ -440,35 +440,57 @@ describe('createGlofoxInteraction', () => {
   })
 })
 
-describe('interpretBookingResult (MIA-BOOK.1)', () => {
-  const call = (over) => interpretBookingResult({ ok: true, status: 200, body: {}, ...over })
-  it('2xx with a booking id is a success (all harvest shapes)', () => {
-    expect(call({ body: { id: 'b1' } })).toMatchObject({ success: true, bookingId: 'b1' })
-    expect(call({ body: { _id: 'b2' } }).bookingId).toBe('b2')
-    expect(call({ body: { booking_id: 'b3' } }).bookingId).toBe('b3')
-    expect(call({ body: { data: { id: 'b4' } } }).bookingId).toBe('b4')
+// MIA-BOOKCHECK — Glofox can return HTTP 200 with a failure body
+// (message_code YOU_HAVE_NO_CREDITS_LEFT, live 2026-07-27), so booking
+// success is "HTTP ok AND a created-booking id", never HTTP ok alone.
+describe('interpretBookingResult', () => {
+  it('HTTP 200 + a booking id → booked, id harvested', () => {
+    expect(interpretBookingResult({ ok: true, status: 200, body: { _id: 'bk1' } }))
+      .toEqual({ booked: true, bookingId: 'bk1', messageCode: null, alreadyBooked: false })
   })
-  it('a clean 2xx with no code and no id still succeeds', () => {
-    expect(call({ body: {} })).toMatchObject({ success: true, bookingId: null, messageCode: null })
-    expect(call({ body: null })).toMatchObject({ success: true })
+
+  it('harvests the id across every live response shape', () => {
+    for (const body of [
+      { id: 'bk1' }, { _id: 'bk1' }, { booking_id: 'bk1' },
+      { data: { id: 'bk1' } }, { data: { _id: 'bk1' } },
+    ]) {
+      expect(interpretBookingResult({ ok: true, status: 200, body })).toMatchObject({ booked: true, bookingId: 'bk1' })
+    }
   })
-  it('the live-observed 200 + YOU_HAVE_NO_CREDITS_LEFT shape is a FAILURE', () => {
-    expect(call({ body: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } }))
-      .toMatchObject({ success: false, messageCode: 'YOU_HAVE_NO_CREDITS_LEFT' })
+
+  it('HTTP 200 with a failure message_code and no id → NOT booked (the Lucinda case)', () => {
+    const r = interpretBookingResult({ ok: true, status: 200, body: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } })
+    expect(r).toEqual({ booked: false, bookingId: null, messageCode: 'YOU_HAVE_NO_CREDITS_LEFT', alreadyBooked: false })
   })
-  it('an unknown code on a 2xx without a booking id fails safe', () => {
-    expect(call({ body: { message_code: 'SOME_NEW_CODE' } }).success).toBe(false)
+
+  it('HTTP 200 with an empty/idless body → NOT booked', () => {
+    expect(interpretBookingResult({ ok: true, status: 200, body: {} }).booked).toBe(false)
+    expect(interpretBookingResult({ ok: true, status: 200, body: null }).booked).toBe(false)
   })
-  it('a code accompanied by a booking id stays a success', () => {
-    expect(call({ body: { message_code: 'ANYTHING', id: 'b1' } }).success).toBe(true)
+
+  it('non-2xx → not booked, message_code surfaced (message as fallback)', () => {
+    expect(interpretBookingResult({ ok: false, status: 400, body: { message_code: 'EVENT_FULL' } }))
+      .toMatchObject({ booked: false, messageCode: 'EVENT_FULL' })
+    expect(interpretBookingResult({ ok: false, status: 400, body: { message: 'The selected model is invalid' } }))
+      .toMatchObject({ booked: false, messageCode: 'The selected model is invalid' })
   })
-  it('already-booked is a success even on a non-2xx', () => {
-    expect(call({ ok: false, status: 422, body: { message_code: 'YOU_HAVE_BOOKED_FOR_THIS_EVENT' } }))
-      .toMatchObject({ success: true, alreadyBooked: true })
+
+  it('an id on a non-2xx response is still not booked', () => {
+    expect(interpretBookingResult({ ok: false, status: 500, body: { _id: 'bk1' } }).booked).toBe(false)
   })
-  it('non-2xx / network shapes are failures', () => {
-    expect(call({ ok: false, status: 500, body: { error: 'boom' } }).success).toBe(false)
-    expect(interpretBookingResult({ ok: false, status: 0, body: { error: 'network error' } }).success).toBe(false)
-    expect(interpretBookingResult(null).success).toBe(false)
+
+  it('tolerates a missing result entirely', () => {
+    expect(interpretBookingResult(null)).toEqual({ booked: false, bookingId: null, messageCode: null, alreadyBooked: false })
+  })
+
+  // MIA-BOOK.1 — alreadyBooked flags Glofox's member+event dedupe: booked
+  // stays false (no new id), but callers treat it as success — the member
+  // IS in the class (re-run, or staff booked manually before approving).
+  it('flags YOU_HAVE_BOOKED_FOR_THIS_EVENT as alreadyBooked on any status', () => {
+    const on200 = interpretBookingResult({ ok: true, status: 200, body: { message_code: 'YOU_HAVE_BOOKED_FOR_THIS_EVENT' } })
+    expect(on200).toMatchObject({ booked: false, alreadyBooked: true })
+    const on422 = interpretBookingResult({ ok: false, status: 422, body: { message_code: 'YOU_HAVE_BOOKED_FOR_THIS_EVENT' } })
+    expect(on422).toMatchObject({ booked: false, alreadyBooked: true })
+    expect(interpretBookingResult({ ok: true, status: 200, body: { _id: 'bk1' } }).alreadyBooked).toBe(false)
   })
 })

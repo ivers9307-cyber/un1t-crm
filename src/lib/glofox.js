@@ -1033,25 +1033,27 @@ export async function createBooking(creds, bookingRequest) {
 export const GLOFOX_ALREADY_BOOKED_CODE = 'YOU_HAVE_BOOKED_FOR_THIS_EVENT'
 
 /**
- * MIA-BOOK.1 — single source of truth for "did /2.0/bookings actually book?".
- * Glofox reports failures IN-BODY with an HTTP 200 (live-observed 2026-07-27:
- * 200 + YOU_HAVE_NO_CREDITS_LEFT booked nothing), so HTTP ok alone lies.
- * Rules: already-booked = success (Glofox dedupes member+event server-side);
- * non-2xx = failure; a clean 2xx (no message code) = success even without a
- * harvestable id (some success shapes carry none); a 2xx WITH a message code
- * only succeeds when a booking id came back too — otherwise it's the
- * 200-with-error shape, and unknown codes deliberately fail safe (a spurious
- * approval card beats another customer told a lie).
- * @param {{ok:boolean,status:number,body:any}|null} result createBooking's return
- * @returns {{success:boolean,bookingId:string|null,messageCode:string|null,alreadyBooked:boolean}}
+ * Interpret a createBooking result. Glofox returns HTTP 200 with a
+ * failure body (message_code YOU_HAVE_NO_CREDITS_LEFT — seen live
+ * 2026-07-27) when the member cannot book, so HTTP ok alone is NOT
+ * booking success: a real booking carries the created booking's id.
+ * The id is harvested best-effort across the response shapes seen
+ * live (flat and data-wrapped, `id`/`_id`/`booking_id`).
+ *
+ * MIA-BOOK.1 — `alreadyBooked` flags Glofox's server-side member+event
+ * dedupe: `booked` stays false (no new booking id comes back), but most
+ * callers should treat it as success — the member IS in the class (e.g.
+ * a re-run whose first attempt landed, or staff booked manually before
+ * approving a pending fallback card).
+ *
+ * Returns { booked, bookingId, messageCode, alreadyBooked }.
  */
 export function interpretBookingResult(result) {
-  const body = result?.body || {}
-  const messageCode = body.message_code || body.message || null
+  const body = result?.body
+  const bookingId = body?._id || body?.id || body?.booking_id || body?.data?._id || body?.data?.id || null
+  const messageCode = body?.message_code || body?.message || null
   const alreadyBooked = messageCode === GLOFOX_ALREADY_BOOKED_CODE
-  const bookingId = body.id || body._id || body.booking_id || body.data?.id || null
-  const success = alreadyBooked || (!!result?.ok && (!messageCode || !!bookingId))
-  return { success, bookingId, messageCode, alreadyBooked }
+  return { booked: !!result?.ok && !!bookingId, bookingId, messageCode, alreadyBooked }
 }
 
 /**

@@ -222,7 +222,7 @@ export async function PATCH(request, { params }) {
 
   // AGENT-HANDS.1 — approving a drafted class booking executes it.
   if (executing && row.kind === 'class_booking') {
-    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, GLOFOX_BOOKING_MODEL, interpretBookingResult } =
+    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, GLOFOX_BOOKING_MODEL } =
       await import('@/lib/glofox')
     const { data: contact } = await db.from('contacts')
       .select('glofox_member_id')
@@ -252,18 +252,18 @@ export async function PATCH(request, { params }) {
         model: GLOFOX_BOOKING_MODEL,
         model_id: details.event_id,
       })
-      // MIA-BOOK.1 — Glofox reports rejections in-body with an HTTP 200, so
-      // approving a still-broken account must finalise failed, not actioned.
-      const outcome = interpretBookingResult(result)
-      executed = {
-        ok: outcome.success, status: result.status, message_code: outcome.messageCode,
-        ...(outcome.bookingId ? { glofox_booking_id: outcome.bookingId } : {}),
-      }
+      // Glofox can 200 with a failure body (YOU_HAVE_NO_CREDITS_LEFT) —
+      // success needs the created booking id, not just HTTP ok. alreadyBooked
+      // counts as success: the member IS in the class (MIA-BOOK.1 — staff may
+      // have booked them manually before approving a fallback card).
+      const { booked, bookingId, messageCode, alreadyBooked } = interpretBookingResult(result)
+      const success = booked || alreadyBooked
+      executed = { ok: success, status: result.status, message_code: messageCode, glofox_booking_id: bookingId }
       details = { ...details, result: executed }
-      finalStatus = outcome.success ? 'actioned' : 'failed'
+      finalStatus = success ? 'actioned' : 'failed'
 
       // Close the loop with the customer in-thread — best-effort.
-      if (outcome.success && row.conversation_id) {
+      if (success && row.conversation_id) {
         try {
           const { sendAgentThreadMessage, buildBookingConfirmationText } = await import('@/lib/agent/notify')
           await sendAgentThreadMessage(db, {

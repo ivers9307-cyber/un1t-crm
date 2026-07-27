@@ -18,6 +18,8 @@ When Glofox rejects a booking for an account-shaped reason, the agent must NOT c
 
 ## Design
 
+> **Post-merge note (2026-07-27, after PR #1140 merged):** a parallel session shipped the honest-failure half first (MIA-BOOKCHECK.1, #1140) with a stricter interpreter contract — `booked` requires HTTP ok **and** a harvested booking id (now a CLAUDE.md invariant). This branch adopts that contract as the base and layers on: the `alreadyBooked` flag (treated as success by the agent tool + approval route), the approval fallback, routing, dedup, and the operator-editable handoff copy. §1's original success rules below are superseded by #1140's id-required rule.
+
 ### 1. `interpretBookingResult(result)` — shared truth about a Glofox booking response
 
 New export in `src/lib/glofox.js` beside `createBooking`. Input: `{ ok, status, body }`. Output: `{ success, bookingId, messageCode, alreadyBooked }`.
