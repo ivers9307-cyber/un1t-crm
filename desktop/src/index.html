@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CF Studio</title>
+  <title>Repset</title>
   <style>
     html, body {
       margin: 0;
@@ -50,8 +50,8 @@
       // session-cookie + idle-lock overlay drive UI state.
       var target = 'https://crm.un1tdublin.com/studio-login'
       // Allow override at build time for staging by injecting a
-      // <meta name="cf-studio-base"> tag (CI step can swap it).
-      var meta = document.querySelector('meta[name="cf-studio-base"]')
+      // <meta name="repset-base"> tag (CI step can swap it).
+      var meta = document.querySelector('meta[name="repset-base"]')
       if (meta && meta.content) target = meta.content
       window.location.replace(target)
     })()

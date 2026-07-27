@@ -84,7 +84,7 @@ jobs:
       - name: Download signed app + notarisation UUID
         uses: actions/download-artifact@v8
         with:
-          pattern: cf-studio-mac-*-signed
+          pattern: repset-mac-*-signed
           path: ${{ runner.temp }}/build-artefacts
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ inputs.build_run_id }}
@@ -97,11 +97,11 @@ jobs:
           ART="${RUNNER_TEMP}/build-artefacts"
           ls -lh "$ART"
 
-          ZIP="$ART/cf-studio.zip"
+          ZIP="$ART/repset.zip"
           UUID_FILE="$ART/notarization-uuid.txt"
 
           if [ ! -f "$ZIP" ] || [ ! -f "$UUID_FILE" ]; then
-            echo "::error::Expected cf-studio.zip and notarization-uuid.txt under $ART"
+            echo "::error::Expected repset.zip and notarization-uuid.txt under $ART"
             exit 1
           fi
 
@@ -218,7 +218,7 @@ jobs:
 
           APP_PATH=$(ls -d "$STAGE"/*.app | head -n1)
           if [ -z "$APP_PATH" ]; then
-            echo "::error::No .app inside cf-studio.zip"
+            echo "::error::No .app inside repset.zip"
             exit 1
           fi
           echo "Extracted .app: $APP_PATH"
@@ -254,9 +254,9 @@ jobs:
           # Standard "drag the app to Applications" affordance.
           ln -s /Applications "$DMG_SRC/Applications"
 
-          DMG_OUT="$RUNNER_TEMP/CF Studio_${{ github.run_number }}.dmg"
+          DMG_OUT="$RUNNER_TEMP/Repset_${{ github.run_number }}.dmg"
           hdiutil create \
-            -volname "CF Studio" \
+            -volname "Repset" \
             -srcfolder "$DMG_SRC" \
             -ov \
             -format UDZO \
@@ -327,7 +327,7 @@ jobs:
       - name: Upload notarised DMG
         uses: actions/upload-artifact@v7
         with:
-          name: cf-studio-mac-${{ github.run_number }}-dmg
+          name: repset-mac-${{ github.run_number }}-dmg
           path: ${{ steps.dmg.outputs.dmg_path }}
           if-no-files-found: error
           retention-days: 90
@@ -337,7 +337,7 @@ jobs:
       - name: Upload notarised .app
         uses: actions/upload-artifact@v7
         with:
-          name: cf-studio-mac-${{ github.run_number }}-app
+          name: repset-mac-${{ github.run_number }}-app
           path: ${{ steps.staple-app.outputs.app_path }}
           if-no-files-found: warn
           retention-days: 90
@@ -356,6 +356,6 @@ jobs:
             echo ""
             echo "Download from the **Artifacts** section of this run page:"
             echo ""
-            echo "- \`cf-studio-mac-${{ github.run_number }}-dmg\` — the signed + notarised DMG"
-            echo "- \`cf-studio-mac-${{ github.run_number }}-app\` — the stapled .app bundle"
+            echo "- \`repset-mac-${{ github.run_number }}-dmg\` — the signed + notarised DMG"
+            echo "- \`repset-mac-${{ github.run_number }}-app\` — the stapled .app bundle"
           } >> "$GITHUB_STEP_SUMMARY"

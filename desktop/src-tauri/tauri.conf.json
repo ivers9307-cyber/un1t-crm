@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "CF Studio",
+  "productName": "Repset",
   "version": "1.0.0",
-  "//": "STUDIO-MAC.8 — identifier matches the iOS app's bundle ID for Universal Purchase. Apple's Universal Purchase model lets one App Store Connect record cover both iOS and macOS binaries when the bundle identifier matches; users see a single 'CF Studio' app icon and family-sharing works across devices.",
+  "//": "STUDIO-MAC.8 — identifier matches the iOS app's bundle ID for Universal Purchase. Apple's Universal Purchase model lets one App Store Connect record cover both iOS and macOS binaries when the bundle identifier matches; users see a single 'Repset' app icon and family-sharing works across devices.",
   "identifier": "com.un1tdublin.crm",
 
   "build": {
@@ -17,7 +17,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "CF Studio",
+        "title": "Repset",
         "url": "https://crm.un1tdublin.com/studio-login",
         "width": 1400,
         "height": 900,
@@ -43,8 +43,8 @@
     "//": "STUDIO-MAC.8 — bundle targets app only. The .app is what gets wrapped in a .pkg by productbuild in the desktop-appstore CI workflow; the DMG target is not produced for App Store distribution.",
     "targets": ["app"],
     "category": "public.app-category.productivity",
-    "shortDescription": "CF Studio — UN1T Dublin / CCF Autos CRM",
-    "longDescription": "Native Mac shell for the CF Studio CRM. Wraps the web app in a dock-resident window with a persistent session that survives restart, so reception staff can return to where they left off without re-authenticating each morning.",
+    "shortDescription": "Repset — UN1T Dublin / CCF Autos CRM",
+    "longDescription": "Native Mac shell for the Repset CRM. Wraps the web app in a dock-resident window with a persistent session that survives restart, so reception staff can return to where they left off without re-authenticating each morning.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

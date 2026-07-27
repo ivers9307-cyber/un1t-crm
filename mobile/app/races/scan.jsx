@@ -71,7 +71,7 @@ export default function MobileCheckinScanner() {
           <Text className="text-xs text-un1t-subtle text-center mt-1 mb-5">
             {permission.canAskAgain
               ? 'Allow camera access to scan attendee check-in codes.'
-              : 'Enable camera access for CF Studio in Settings to scan check-in codes.'}
+              : 'Enable camera access for Repset in Settings to scan check-in codes.'}
           </Text>
           {permission.canAskAgain && (
             <Pressable onPress={requestPermission} className="bg-blue-600 rounded-xl px-5 py-2.5 active:opacity-80">

@@ -113,7 +113,7 @@ export default function Login() {
     <SafeAreaView className="flex-1 bg-un1t-bg">
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} className="flex-1">
         <View className="flex-1 px-6 justify-center">
-          <Text className="text-3xl font-bold text-un1t-text mb-1">CF Studio</Text>
+          <Text className="text-3xl font-bold text-un1t-text mb-1">Repset</Text>
           <Text className="text-base text-un1t-subtle mb-10">Sign in to continue</Text>
 
           {error ? (

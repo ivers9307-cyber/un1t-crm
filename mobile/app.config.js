@@ -11,6 +11,13 @@
 
 export default ({ config }) => ({
   ...config,
+  // REBRAND.2 (2026-07-27) — "CF Studio" → "Repset", the platform brand
+  // (repset.ie). Same Bundle ID, same ASC record — only the user-facing
+  // name + icon/splash change (name is edited on the ASC record, see
+  // docs/repset-asc-metadata.md). Native-level change → ships in the
+  // next store build, NOT over OTA; runtimeVersion is untouched because
+  // no native module ABI changes (icons/name don't affect the JS lane).
+  //
   // REBRAND.1 — display name flipped from "UN1T CRM" to "CF Studio" for
   // the new App Store Connect app record (Path 1 rebrand: same Bundle
   // ID, new ASC record after the previous Custom App record is removed).
@@ -37,7 +44,7 @@ export default ({ config }) => ({
   // This bundles the studio-device PIN auth foundation
   // (STUDIO-PIN.1/2/3) from a mobile perspective: a paired iPad
   // can now PIN-login from the web shell at /studio-login.
-  name: 'CF Studio',
+  name: 'Repset',
   slug: 'un1t-crm-mobile',
   // 1.3.2 — Android-manifest fix: blockedPermissions drops the unused
   // RECORD_AUDIO that expo-image-picker adds by default (2026-06-10 audit).
@@ -56,7 +63,12 @@ export default ({ config }) => ({
   // 1.4.0 (EVENT-CHECKIN.D) — adds the in-app QR scanner for event check-in
   // (expo-camera, a NATIVE module). Ships only in a new EAS Build + store
   // release, NOT over OTA; runtimeVersion bumps to 1.4.0 to isolate its lane.
-  version: '2.0.0',
+  //
+  // 2.1.0 (REBRAND.2) — Repset rebrand binary (name + icons + splash).
+  // Bumped past 2.0.0 in case the SDK-57 binary is already in review on
+  // ASC (a higher version is always accepted; runtimeVersion stays
+  // 2.0.0 so both binaries share one OTA lane — the JS is identical).
+  version: '2.1.0',
   // We ship iOS + Android only. Without this, Expo defaults to
   // ['ios','android','web'] and `eas update` exports for web too —
   // which crashes the publish because react-native-web isn't installed.
@@ -70,15 +82,18 @@ export default ({ config }) => ({
   // canvas.
   orientation: 'default',
   icon: './assets/icon.png',
-  // Deep-link scheme — `cfstudio://...`. Renamed from un1tcrm. Safe to
-  // change today because no existing code/email/push payload references
-  // the old scheme (verified by grep across the repo before the rename).
-  scheme: 'cfstudio',
+  // Deep-link schemes — `repset://...` is the brand scheme going
+  // forward; `cfstudio` stays registered so any link/QR minted while
+  // the app was CF Studio keeps resolving (unlike the un1tcrm→cfstudio
+  // rename, cfstudio:// has been live in the wild). Expo accepts an
+  // array here and registers every entry in CFBundleURLTypes / the
+  // Android intent filter.
+  scheme: ['repset', 'cfstudio'],
   userInterfaceStyle: 'automatic',
   splash: {
     image: './assets/splash.png',
     resizeMode: 'contain',
-    backgroundColor: '#000000',
+    backgroundColor: '#131316',
   },
   assetBundlePatterns: ['**/*'],
   ios: {
@@ -118,7 +133,7 @@ export default ({ config }) => ({
       // Developer account is wired up. Until then, Expo Go uses Expo's
       // own push channel for development.
       UIBackgroundModes: ['remote-notification'],
-      // US export-control declaration. CF Studio uses only HTTPS
+      // US export-control declaration. Repset uses only HTTPS
       // (standard) and the iOS Keychain (standard) — no custom or
       // proprietary cryptography — so the app is EXEMPT from export
       // compliance review. Setting this to `false` here means we
@@ -140,10 +155,10 @@ export default ({ config }) => ({
     blockedPermissions: ['android.permission.RECORD_AUDIO'],
     adaptiveIcon: {
       foregroundImage: './assets/adaptive-icon.png',
-      // Android adaptive icon background — CF Studio identity is black/white
-      // and the foreground is a white wordmark, so the background must
-      // be black to match the iOS icon visually.
-      backgroundColor: '#000000',
+      // Android adaptive icon background — Repset ink (#131316); the
+      // foreground is the tally mark (bone bars + volt strike) so the
+      // background must match the iOS icon's ink field visually.
+      backgroundColor: '#131316',
     },
   },
   plugins: [
@@ -161,7 +176,7 @@ export default ({ config }) => ({
         // Android notification tray icon — must be a white silhouette
         // on transparent (Android masks it). iOS uses the app icon.
         icon: './assets/notification-icon.png',
-        color: '#111827',
+        color: '#131316',
       },
     ],
     // FACE-ID — biometric app-lock. faceIDPermission writes
@@ -170,7 +185,7 @@ export default ({ config }) => ({
     // requires a new EAS Build (not an OTA).
     [
       'expo-local-authentication',
-      { faceIDPermission: 'Unlock CF Studio with Face ID.' },
+      { faceIDPermission: 'Unlock Repset with Face ID.' },
     ],
     // EVENT-CHECKIN.D — in-app QR scanner for event check-in. cameraPermission
     // writes NSCameraUsageDescription (iOS); expo-camera adds the CAMERA

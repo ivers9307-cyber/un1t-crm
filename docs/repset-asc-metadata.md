@@ -1,6 +1,8 @@
-# CF Studio — App Store Connect metadata
+# Repset — App Store Connect metadata
 
-Copy-paste reference for filling in App Store Connect's version 1.0.0 metadata for the CF Studio iOS app (bundle ID `com.un1tdublin.crm`, ASC record `6770890839`).
+Copy-paste reference for the App Store Connect metadata of the Repset iOS app (bundle ID `com.un1tdublin.crm`, ASC record `6770890839`). Originally written for the 1.0.0 submission under the app's former name **"CF Studio"**; renamed to Repset with the 2.1.0 rebrand build (REBRAND.2, 2026-07-27).
+
+> **Rename checklist (one-time, alongside the 2.1.0 submission):** ASC only allows editing the app Name while a version is in an editable state (Prepare for Submission). Create the 2.1.0 version → App Information → change Name to `Repset` → attach the rebrand build → submit. The Mac app shares the record (Universal Purchase), so the name change covers both platforms.
 
 This is an **internal staff tool**, not a consumer-facing product. The metadata tone reflects that — descriptive of what staff use it for, not promotional. Apple's review team is fine with internal tools as long as the metadata makes the intended audience clear.
 
@@ -14,9 +16,9 @@ These fields are set once on the app record and persist across versions.
 
 ### Name
 ```
-CF Studio
+Repset
 ```
-(30-char limit; this is what shows on the home screen. Already set when the app record was created.)
+(30-char limit; this is what shows on the home screen. The record was created as "CF Studio" — see the rename checklist at the top.)
 
 ### Subtitle
 ```
@@ -53,7 +55,7 @@ com.un1tdublin.crm
 (All content shown in the app is data UN1T staff have entered into the CRM themselves.)
 
 ### Age Rating Questionnaire
-Apple shows ~15 yes/no questions. For CF Studio, every answer is **No** (no gambling, no violence, no profanity, no mature themes, no user-generated content, no contests, no unrestricted web access, etc.). The resulting rating is **4+**.
+Apple shows ~15 yes/no questions. For Repset, every answer is **No** (no gambling, no violence, no profanity, no mature themes, no user-generated content, no contests, no unrestricted web access, etc.). The resulting rating is **4+**.
 
 ---
 
@@ -67,7 +69,7 @@ Internal operations tool for UN1T Dublin staff and contractors. Updated independ
 
 ### Description
 ```
-CF Studio is the iOS companion to UN1T Dublin's internal CRM. It is designed exclusively for UN1T staff, coaches, and authorised contractors to manage the day-to-day operations of the gym.
+Repset is the iOS companion to UN1T Dublin's internal CRM. It is designed exclusively for UN1T staff, coaches, and authorised contractors to manage the day-to-day operations of the gym.
 
 Staff sign in with their existing UN1T account to:
 
@@ -78,7 +80,7 @@ Staff sign in with their existing UN1T account to:
 • Update studio management settings, dashboards, and team rosters at their assigned locations
 • Receive push notifications for messages, schedule changes, and policy updates
 
-CF Studio mirrors the permission model of the UN1T CRM web app — what each staff member can see and do inside the app is controlled by their role and location assignments. Master and owner accounts can also impersonate other staff to troubleshoot what an employee is seeing on their own device.
+Repset mirrors the permission model of the UN1T CRM web app — what each staff member can see and do inside the app is controlled by their role and location assignments. Master and owner accounts can also impersonate other staff to troubleshoot what an employee is seeing on their own device.
 
 This app is restricted to current UN1T staff and contractors. A valid UN1T account is required to sign in; the app cannot be used by members of the public.
 
@@ -90,7 +92,7 @@ For privacy and data-handling details, see https://crm.un1tdublin.com/privacy
 ```
 gym,crm,staff,scheduling,roster,bookings,invoices,whatsapp,studio,operations
 ```
-(100-char limit, comma-separated. Don't include the app name "CF Studio" or "UN1T" — Apple indexes those automatically.)
+(100-char limit, comma-separated. Don't include the app name "Repset" or "UN1T" — Apple indexes those automatically.)
 
 ### Support URL
 ```
@@ -105,7 +107,7 @@ https://un1tdublin.com
 
 ### What's New in This Version (1.0.0)
 ```
-Initial release of CF Studio — the iOS companion to UN1T Dublin's CRM.
+Initial release of Repset — the iOS companion to UN1T Dublin's CRM.
 
 • Shift schedule, time-off requests, and swap requests
 • Member bookings and inbox messaging
@@ -123,7 +125,7 @@ Apple requires at least one device size; for an iPhone-only app the easiest set 
 
 Required count per device size: **3 to 10 screenshots**.
 
-Suggested screens to capture for CF Studio:
+Suggested screens to capture for Repset:
 1. **Home tab** — dashboard tiles for the role
 2. **Schedule** — week view with assigned shifts highlighted
 3. **Inbox** — WhatsApp conversation list
@@ -165,7 +167,7 @@ Suggested setup:
 
 ### Notes (the big free-text field — this is what saves you from rejections)
 ```
-CF Studio is the iOS app for UN1T Dublin, a fitness club in Dublin, Ireland. It is the internal operations tool used by our staff and contractors — not a consumer product.
+Repset is the iOS app for UN1T Dublin, a fitness club in Dublin, Ireland. It is the internal operations tool used by our staff and contractors — not a consumer product.
 
 The app cannot be used without a UN1T staff account. We have provisioned a review-only account for App Review (credentials above) with a non-production "Sandbox" location attached. Any actions taken by the review account will not affect real members or trigger external integrations (WhatsApp, SMS, email).
 

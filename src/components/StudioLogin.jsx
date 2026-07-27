@@ -173,7 +173,7 @@ export default function StudioLogin() {
     <div className="min-h-screen bg-un1t-bg flex items-center justify-center p-6">
       <div className="w-full max-w-xs">
         <div className="text-center mb-8">
-          <div className="text-xs uppercase tracking-widest text-un1t-subtle mb-2">CF Studio</div>
+          <div className="text-xs uppercase tracking-widest text-un1t-subtle mb-2">Repset</div>
           <div className="text-2xl font-bold text-un1t-text">Enter your PIN</div>
           {label && <div className="text-xs text-un1t-muted mt-1">{label}</div>}
         </div>

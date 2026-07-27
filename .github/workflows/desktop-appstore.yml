@@ -184,7 +184,7 @@ jobs:
           APP_PATH: ${{ steps.sign-app.outputs.app_path }}
         run: |
           set -euo pipefail
-          PKG_OUT="$RUNNER_TEMP/CF-Studio-${{ github.run_number }}.pkg"
+          PKG_OUT="$RUNNER_TEMP/Repset-${{ github.run_number }}.pkg"
 
           productbuild \
             --component "$APP_PATH" /Applications \
@@ -242,7 +242,7 @@ jobs:
       - name: Upload .pkg artefact
         uses: actions/upload-artifact@v7
         with:
-          name: cf-studio-mac-${{ github.run_number }}-appstore-pkg
+          name: repset-mac-${{ github.run_number }}-appstore-pkg
           path: ${{ steps.pkg.outputs.pkg_path }}
           if-no-files-found: error
           retention-days: 30
@@ -258,7 +258,7 @@ jobs:
             echo ""
             echo "Next steps:"
             echo ""
-            echo "1. Visit [App Store Connect → CF Studio](https://appstoreconnect.apple.com/) and switch to the macOS platform."
+            echo "1. Visit [App Store Connect → Repset](https://appstoreconnect.apple.com/) and switch to the macOS platform."
             echo "2. Wait 5-15 min for Apple's automated processing to complete."
             echo "3. Select this build for the version you want to ship."
             echo "4. Submit for review (unlisted distribution stays unlisted automatically)."

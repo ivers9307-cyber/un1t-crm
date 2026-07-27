@@ -1,4 +1,4 @@
-# CF Studio — Mac shell
+# Repset — Mac shell
 
 A native Mac app that wraps the web CRM at `crm.un1tdublin.com` in a
 WKWebView window. Lives in the dock, persists the user's session
@@ -49,7 +49,7 @@ The workflow doesn't auto-fire on `desktop/**` pushes — App Store
 builds count against Apple's review queue, so they're deliberate.
 
 When the run finishes (~8-12 min cold, 4-6 min cached) the build
-will appear in App Store Connect under the CF Studio macOS
+will appear in App Store Connect under the Repset macOS
 platform within ~10 min of upload. From there:
 
 1. Select the build for the version you want to ship.
@@ -109,7 +109,7 @@ For local development against a local Next.js dev server, edit
 npm run build
 ```
 
-Produces `src-tauri/target/release/bundle/dmg/CF Studio_*.dmg`.
+Produces `src-tauri/target/release/bundle/dmg/Repset_*.dmg`.
 Same unsigned status as the CI build. Don't ship an unsigned DMG to
 the studio Macs once we're past initial testing; let the CI workflow
 build it once signing is wired up.
@@ -128,7 +128,7 @@ were removed in STUDIO-MAC.8. App Store sandbox forbids launch-agent
 registration (autostart) and App Store policy forbids self-updating
 apps (the App Store handles updates itself).
 
-For auto-launch behaviour on the reception Mac: add CF Studio to
+For auto-launch behaviour on the reception Mac: add Repset to
 **System Settings → General → Login Items** manually. We may add
 this back later via Apple's `SMAppService` API, which is the
 sandbox-compatible way to register login items.

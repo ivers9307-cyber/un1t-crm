@@ -24,7 +24,7 @@ function parseClientIp(req) {
 }
 function classifyVia(userAgent) {
   if (!userAgent) return 'web'
-  return /Expo|okhttp|UN1TCRM\/|CFStudio\//.test(userAgent) ? 'mobile' : 'web'
+  return /Expo|okhttp|UN1TCRM\/|CFStudio\/|Repset\//.test(userAgent) ? 'mobile' : 'web'
 }
 
 // ----- POST: start a view session ----------------------------------

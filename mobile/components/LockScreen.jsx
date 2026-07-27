@@ -10,7 +10,7 @@ export default function LockScreen({ typeLabel, checking, onUnlock }) {
   const { signOut } = useAuth()
   return (
     <View style={StyleSheet.absoluteFill} className="bg-un1t-bg items-center justify-center px-8">
-      <Text className="text-3xl font-bold text-un1t-text mb-2">CF Studio</Text>
+      <Text className="text-3xl font-bold text-un1t-text mb-2">Repset</Text>
       {checking ? (
         <ActivityIndicator className="mt-6" />
       ) : (

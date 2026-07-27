@@ -1,4 +1,4 @@
-// STUDIO-MAC.1 — CF Studio Mac shell entry point.
+// STUDIO-MAC.1 — Repset Mac shell entry point.
 //
 // Wraps crm.un1tdublin.com in a native macOS window via Tauri 2. The
 // shell does three things:
@@ -13,7 +13,7 @@
 //      cookie (STUDIO-PIN.3) survive a restart.
 //
 // STUDIO-MAC.8 — autostart + updater plugins removed for Mac App
-// Store distribution. Reception staff who want CF Studio to open at
+// Store distribution. Reception staff who want Repset to open at
 // boot add it to Login Items via System Settings → General → Login
 // Items. Updates are delivered through the App Store.
 //
@@ -27,7 +27,7 @@ fn main() {
     tauri::Builder::default()
         // Single-instance: opening the app twice focuses the existing
         // window. The closure runs when a second instance launches
-        // (e.g. user double-clicks the dock icon or a `cfstudio://`
+        // (e.g. user double-clicks the dock icon or a `repset://`
         // deep-link fires).
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
@@ -41,5 +41,5 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running CF Studio");
+        .expect("error while running Repset");
 }

@@ -1,6 +1,6 @@
 // /privacy/members — public, member- and visitor-facing privacy policy.
 //
-// Distinct from /privacy, which is the internal CRM + CF Studio iOS
+// Distinct from /privacy, which is the internal CRM + Repset iOS
 // app policy (App Store review requirement, controller "UN1T Dublin
 // Ltd"). THIS page is the member/website policy for the public
 // marketing site (un1tdublin.com → /welcome): Glofox membership,

@@ -308,7 +308,7 @@ export default function More() {
       </Pressable>
 
       <Text className="text-xs text-un1t-muted text-center mt-4">
-        CF Studio · {buildSummary()}
+        Repset · {buildSummary()}
       </Text>
     </ScrollView>
   )

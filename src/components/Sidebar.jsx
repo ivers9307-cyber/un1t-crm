@@ -126,7 +126,7 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
 
   // Browser tab title prefix — surfaces the combined pending count
   // even when the operator is on a different tab. Format:
-  // "(3) CF Studio · …". Combines the operator-action queues
+  // "(3) Repset · …". Combines the operator-action queues
   // (INVOICES.2 + APPROVALS.1 + Issues) so the operator sees one
   // total rather than the prefix flickering between values; the
   // per-tab breakdown lives in the sidebar. WhatsApp unread is

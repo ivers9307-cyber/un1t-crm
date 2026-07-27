@@ -2,7 +2,7 @@
 
 Step-by-step setup so the `Desktop App Store` CI workflow produces
 a signed `.pkg` and uploads it directly to App Store Connect, ready
-to ship as an unlisted Mac app under the existing CF Studio ASC
+to ship as an unlisted Mac app under the existing Repset ASC
 record.
 
 You only do this once. After the four GitHub secrets are in place,
@@ -14,7 +14,7 @@ every workflow run can upload a new build for review.
 
 By the end of this guide:
 
-- The CF Studio app record in ASC has **macOS** added as a
+- The Repset app record in ASC has **macOS** added as a
   platform (Universal Purchase — same `com.un1tdublin.crm` bundle
   ID as the iOS app).
 - A **Mac App Distribution** certificate exported from Keychain
@@ -59,14 +59,14 @@ need a non-App-Store distribution path again, they're ready to go.
 
 ---
 
-## Step 1 — Add macOS as a platform on the CF Studio ASC record
+## Step 1 — Add macOS as a platform on the Repset ASC record
 
 The iOS app already exists at App Store Connect with bundle ID
 `com.un1tdublin.crm`. Universal Purchase lets one record cover
 both iOS and macOS binaries.
 
 1. Visit <https://appstoreconnect.apple.com/apps>.
-2. Click into **CF Studio** (the existing iOS app record).
+2. Click into **Repset** (the existing iOS app record).
 3. Top-left, look for the platform switcher / *Add Platform*
    button. Choose **macOS**.
 4. Apple asks you to confirm Universal Purchase. Confirm.
@@ -141,8 +141,8 @@ For each of the two certs:
 4. Right-click the certificate (not the private key). Choose
    **Export "3rd Party Mac Developer …"**.
 5. Save as:
-   - `cf-studio-mas-app.p12` for the App Distribution cert
-   - `cf-studio-mas-installer.p12` for the Installer Distribution
+   - `repset-mas-app.p12` for the App Distribution cert
+   - `repset-mas-installer.p12` for the Installer Distribution
      cert
 6. Set a strong password and write it down. These are
    `APPLE_MAS_APP_CERTIFICATE_PASSWORD` and
@@ -158,14 +158,14 @@ GitHub secrets are text-only, so the binary `.p12` files have to
 be base64-encoded. In Terminal:
 
 ```bash
-base64 -i ~/Downloads/cf-studio-mas-app.p12 | pbcopy
+base64 -i ~/Downloads/repset-mas-app.p12 | pbcopy
 ```
 
 Paste that into the `APPLE_MAS_APP_CERTIFICATE` secret in the next
 step. Then:
 
 ```bash
-base64 -i ~/Downloads/cf-studio-mas-installer.p12 | pbcopy
+base64 -i ~/Downloads/repset-mas-installer.p12 | pbcopy
 ```
 
 Paste into `APPLE_MAS_INSTALLER_CERTIFICATE`.
@@ -180,10 +180,10 @@ Paste into `APPLE_MAS_INSTALLER_CERTIFICATE`.
 
 | Secret name                            | Value |
 |----------------------------------------|-------|
-| `APPLE_MAS_APP_CERTIFICATE`            | base64 of `cf-studio-mas-app.p12` |
+| `APPLE_MAS_APP_CERTIFICATE`            | base64 of `repset-mas-app.p12` |
 | `APPLE_MAS_APP_CERTIFICATE_PASSWORD`   | export password from Step 4 |
 | `APPLE_MAS_APP_SIGNING_IDENTITY`       | App cert Common Name: `3rd Party Mac Developer Application: <Name> (<TEAMID>)` |
-| `APPLE_MAS_INSTALLER_CERTIFICATE`      | base64 of `cf-studio-mas-installer.p12` |
+| `APPLE_MAS_INSTALLER_CERTIFICATE`      | base64 of `repset-mas-installer.p12` |
 | `APPLE_MAS_INSTALLER_CERTIFICATE_PASSWORD` | export password from Step 4 |
 | `APPLE_MAS_INSTALLER_SIGNING_IDENTITY` | Installer cert Common Name: `3rd Party Mac Developer Installer: <Name> (<TEAMID>)` |
 
