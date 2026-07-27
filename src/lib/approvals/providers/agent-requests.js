@@ -62,6 +62,7 @@ export const agentRequestsProvider = {
       .from('agent_membership_requests')
       .select(`
         id, kind, details, customer_note, created_at, location_id,
+        channel, conversation_id,
         contact:contacts!contact_id ( id, name )
       `)
       .eq('location_id', activeId)
@@ -80,6 +81,14 @@ export const agentRequestsProvider = {
       amount: r.details?.paid ? (r.details.amount_cents ?? null) : null,
       currency: r.details?.paid ? (r.details.currency || 'EUR') : null,
       reviewUrl: `/settings/customer-agent/requests?focus=${r.id}`,
+      // APPROVALS-STUDIO.1 — the mobile Customers tab renders + actions
+      // these directly, so it needs the raw request fields (web ignores).
+      kind: r.kind,
+      details: r.details || {},
+      customerNote: r.customer_note || null,
+      contactName: r.contact?.name || null,
+      channel: r.channel || null,
+      conversationId: r.conversation_id || null,
     }))
     return { count: items.length, items }
   },

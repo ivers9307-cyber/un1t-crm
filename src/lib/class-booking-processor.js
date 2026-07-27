@@ -37,6 +37,8 @@ async function routeToReview(db, request, reason) {
         location_id: request.location_id, contact_id: request.contact_id, kind: 'class_booking', status: 'pending',
         details: {
           event_id: request.glofox_event_id, class_name: request.class_name, class_time: classLabel(request.starts_at),
+          // ISO start for the mobile queue's countdown chip (class_time is a label).
+          starts_at: request.starts_at || null,
           mode: 'draft', source: 'start_funnel', reason,
           ...(request.payment_status === 'paid'
             ? { paid: true, amount_cents: request.amount_cents, currency: request.currency || 'EUR' }
@@ -56,6 +58,19 @@ async function routeToReview(db, request, reason) {
     return { outcome: next === 'failed' ? 'failed' : 'needs_review', detail: `review_unavailable:${reason}` }
   }
   await setStatus(db, request.id, { status: 'needs_review', last_error: reason, approval_request_id: approvalId })
+  // APPROVALS-STUDIO.1 — a review item is a customer waiting; ping the
+  // approvers. Deduped per (request, recipient), so the reuse-existing
+  // path above can't double-notify. Best-effort.
+  try {
+    const { notifyAgentApprovalRequest } = await import('@/lib/agent/approval-notify')
+    await notifyAgentApprovalRequest(db, {
+      requestId: approvalId,
+      locationId: request.location_id,
+      kind: 'class_booking',
+      customerName: request.customer_name,
+      summary: [request.class_name, classLabel(request.starts_at), `needs review: ${reason}`].filter(Boolean).join(' · '),
+    })
+  } catch (e) { logWarn('cbp', 'approval notify failed', { err: e }) }
   return { outcome: 'needs_review', detail: reason }
 }
 

@@ -414,10 +414,14 @@ describe('executeAccountTool · request queue failures never leak the raw DB err
   function insertFailDb(message) {
     return {
       from() {
+        let inserting = false
         const b = {
           select() { return b }, eq() { return b }, limit() { return b },
           async maybeSingle() { return { data: null, error: null } },
-          async insert() { return { error: { message } } },
+          // insert().select('id').single() shape (APPROVALS-STUDIO.1 captures
+          // the new row id for the approval push).
+          insert() { inserting = true; return b },
+          async single() { return inserting ? { data: null, error: { message } } : { data: null, error: null } },
           then(resolve) { resolve({ data: null, error: null }) },
         }
         return b

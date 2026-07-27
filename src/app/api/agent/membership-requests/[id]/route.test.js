@@ -20,6 +20,7 @@ vi.mock('@/lib/agent/notify', () => ({
   sendAgentThreadMessage: vi.fn(async () => ({ ok: true })),
   buildBookingConfirmationText: vi.fn(() => 'Booked!'),
   buildCancellationConfirmationText: vi.fn(() => 'Cancelled.'),
+  buildDeclineNoticeText: vi.fn(() => "Sorry, we couldn't complete that request this time."),
   agentConfirmationTemplates: vi.fn(async () => ({})),
 }))
 
@@ -113,5 +114,25 @@ describe('PATCH class_booking approval — Glofox body decides success, not HTTP
 
     expect(updates.at(-1).patch.status).toBe('failed')
     expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+  })
+})
+
+// APPROVALS-STUDIO.1 — a decline is never silence: the customer gets the
+// operator-editable (default) decline notice in-thread.
+describe('PATCH decline — customer notice', () => {
+  it('declining a threaded request sends the decline notice', async () => {
+    const res = await PATCH(
+      new Request('http://localhost/api/agent/membership-requests/r1', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status: 'declined' }),
+      }),
+      { params: Promise.resolve({ id: 'r1' }) },
+    )
+    expect(res.status).toBe(200)
+    expect(sendAgentThreadMessage).toHaveBeenCalledOnce()
+    const sent = sendAgentThreadMessage.mock.calls[0][1]
+    expect(sent.conversationId).toBe('conv1')
+    expect(sent.text.length).toBeGreaterThan(10)
   })
 })

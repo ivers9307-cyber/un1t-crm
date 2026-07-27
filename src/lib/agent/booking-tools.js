@@ -26,6 +26,7 @@
 
 import { GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
 import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
+import { notifyAgentApprovalRequest } from './approval-notify'
 import { formatDublinClassTime } from './dublin-format'
 
 // ── Anthropic tool definitions ──────────────────────────────────────
@@ -492,8 +493,12 @@ export async function executeBookingTool(toolName, input, ctx) {
     }
 
     if (mode === 'draft') {
-      await logBookingRequest(db, ctx, {
+      const draftId = await logBookingRequest(db, ctx, {
         kind: 'class_booking', status: 'pending', details: baseDetails,
+      })
+      await notifyAgentApprovalRequest(db, {
+        requestId: draftId, locationId, kind: 'class_booking', customerName: ctx.nameHint,
+        summary: [input.class_name, input.class_time].filter(Boolean).join(' · ') || 'class booking to confirm',
       })
       return {
         requested: true,
@@ -556,6 +561,12 @@ export async function executeBookingTool(toolName, input, ctx) {
         result: resultDetails,
       },
     })
+    if (!dupId) {
+      await notifyAgentApprovalRequest(db, {
+        requestId: auditId, locationId, kind: 'class_booking', customerName: ctx.nameHint,
+        summary,
+      })
+    }
     const handoffText = String(settings?.booking_issue_handoff_text || '').trim() || DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT
     return {
       requested: true,
@@ -612,8 +623,12 @@ export async function executeBookingTool(toolName, input, ctx) {
     }
 
     if (mode === 'draft') {
-      await logBookingRequest(db, ctx, {
+      const draftId = await logBookingRequest(db, ctx, {
         kind: 'class_cancellation', status: 'pending', details: baseDetails,
+      })
+      await notifyAgentApprovalRequest(db, {
+        requestId: draftId, locationId, kind: 'class_cancellation', customerName: ctx.nameHint,
+        summary: [input.class_name, input.class_time].filter(Boolean).join(' · ') || 'class cancellation to confirm',
       })
       return {
         requested: true,

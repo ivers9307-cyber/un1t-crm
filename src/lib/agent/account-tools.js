@@ -475,7 +475,7 @@ export async function executeAccountTool(toolName, input, ctx) {
       return { error: 'no_contact', message: 'No contact linked to this conversation — hand off to the team instead.' }
     }
     const details = buildMembershipPurchaseDetails(input)
-    const { error } = await db.from('agent_membership_requests').insert({
+    const { data: inserted, error } = await db.from('agent_membership_requests').insert({
       location_id: locationId,
       contact_id: targetContactId,
       kind: 'membership_purchase',
@@ -484,8 +484,15 @@ export async function executeAccountTool(toolName, input, ctx) {
       details,
       customer_note: details.note || details.offer || null,
       status: 'pending',
-    })
+    }).select('id').single()
     if (error) return queueFailed('membership_purchase', error)
+    {
+      const { notifyAgentApprovalRequest } = await import('./approval-notify')
+      await notifyAgentApprovalRequest(db, {
+        requestId: inserted?.id, locationId, kind: 'membership_purchase', customerName: ctx.nameHint,
+        summary: details.offer || details.note || 'membership purchase request',
+      })
+    }
     return {
       requested: true,
       kind: 'membership_purchase',
@@ -544,7 +551,7 @@ export async function executeAccountTool(toolName, input, ctx) {
   if (toolName === 'request_pause' || toolName === 'request_cancellation') {
     const kind = toolName === 'request_pause' ? 'pause' : 'cancellation'
     const details = kind === 'pause' ? buildPauseDetails(input) : buildCancellationDetails(input)
-    const { error } = await db.from('agent_membership_requests').insert({
+    const { data: inserted, error } = await db.from('agent_membership_requests').insert({
       location_id: locationId,
       contact_id: verifiedId,
       kind,
@@ -556,8 +563,15 @@ export async function executeAccountTool(toolName, input, ctx) {
       // Cancellations are flagged for a retention attempt by default so a
       // human can try a save before it's actioned.
       retention_flagged: kind === 'cancellation',
-    })
+    }).select('id').single()
     if (error) return queueFailed(kind, error)
+    {
+      const { notifyAgentApprovalRequest } = await import('./approval-notify')
+      await notifyAgentApprovalRequest(db, {
+        requestId: inserted?.id, locationId, kind, customerName: ctx.nameHint,
+        summary: details.reason || (kind === 'pause' ? 'membership pause request' : 'membership cancellation request'),
+      })
+    }
     return { requested: true, kind }
   }
 

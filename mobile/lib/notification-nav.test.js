@@ -41,20 +41,27 @@ describe('routeForNotification', () => {
     expect(routeForNotification({ type: 'issue_resolved' })).toBe('/issues')
   })
 
-  it('routes manager decision-queue types to the approvals inbox', () => {
+  // APPROVALS-STUDIO.1 — team decision types land on the Everything-else tab;
+  // customer approvals (agent_request) land on the Customers tab.
+  it('routes manager decision-queue types to the approvals inbox team tab', () => {
     for (const type of ['swap_open', 'swap_awaiting', 'time_off_inbound', 'expense_submitted']) {
-      expect(routeForNotification({ type })).toBe('/approvals')
+      expect(routeForNotification({ type })).toBe('/approvals?tab=team')
     }
   })
 
+  it('routes customer approval pushes to the Customers tab', () => {
+    expect(routeForNotification({ type: 'agent_request', request_id: 'r9' })).toBe('/approvals?tab=customers&focus=r9')
+    expect(routeForNotification({ type: 'agent_request' })).toBe('/approvals')
+  })
+
   it('appends ?focus= for decision-queue types when the payload carries the entity id', () => {
-    expect(routeForNotification({ type: 'swap_open', swap_id: 's1' })).toBe('/approvals?focus=s1')
-    expect(routeForNotification({ type: 'swap_awaiting', swap_id: 's2' })).toBe('/approvals?focus=s2')
-    expect(routeForNotification({ type: 'time_off_inbound', request_id: 'r1' })).toBe('/approvals?focus=r1')
-    expect(routeForNotification({ type: 'expense_submitted', claim_id: 'c1' })).toBe('/approvals?focus=c1')
+    expect(routeForNotification({ type: 'swap_open', swap_id: 's1' })).toBe('/approvals?tab=team&focus=s1')
+    expect(routeForNotification({ type: 'swap_awaiting', swap_id: 's2' })).toBe('/approvals?tab=team&focus=s2')
+    expect(routeForNotification({ type: 'time_off_inbound', request_id: 'r1' })).toBe('/approvals?tab=team&focus=r1')
+    expect(routeForNotification({ type: 'expense_submitted', claim_id: 'c1' })).toBe('/approvals?tab=team&focus=c1')
     // Unsafe id shapes are dropped rather than built into the URL.
-    expect(routeForNotification({ type: 'swap_open', swap_id: 'a?b=c' })).toBe('/approvals')
-    expect(routeForNotification({ type: 'time_off_inbound', request_id: 42 })).toBe('/approvals')
+    expect(routeForNotification({ type: 'swap_open', swap_id: 'a?b=c' })).toBe('/approvals?tab=team')
+    expect(routeForNotification({ type: 'time_off_inbound', request_id: 42 })).toBe('/approvals?tab=team')
   })
 
   it('routes staff swap-response types to the dashboard (swap cards live there)', () => {
