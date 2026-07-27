@@ -8,7 +8,7 @@
 // authenticated admin path; the TV itself has no session).
 //
 // Response shape:
-//   200 { display: { id, label, location_id, rotation }, content: { ... } | null }
+//   200 { display: { id, label, location_id, rotation, logo_url, company_name }, content: { ... } | null }
 //   404 { error: 'invalid_token' }
 //
 // content.source_type 'template' (TV-TEMPLATE.1) carries an extra
@@ -21,6 +21,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { getLocationBranding } from '@/lib/location-branding'
 
 export const dynamic = 'force-dynamic'
 
@@ -100,11 +101,19 @@ export async function GET(_request, props) {
     : true
   )
 
+  // TV-IDLE-LOGO — resolve the location's brand logo so the idle
+  // screen shows it in place of the hard-coded "UN1T" wordmark.
+  // Operator-editable via company_settings; logoUrl null → the
+  // client keeps the wordmark fallback. Never throws.
+  const branding = await getLocationBranding(db, display.location_id)
+
   return NextResponse.json({
     display: {
       id: display.id,
       label: display.label,
       location_id: display.location_id,
+      logo_url: branding.logoUrl,
+      company_name: branding.companyName,
       // TV-ROTATION.1 — degrees the client counter-rotates the
       // stage by so content fills a non-landscape-mounted panel.
       rotation: display.rotation || 0,
