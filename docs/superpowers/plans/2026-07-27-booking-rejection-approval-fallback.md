@@ -19,7 +19,7 @@
 - Modify: `src/lib/glofox.js` (after `createBooking`, ~line 1031)
 - Test: `src/lib/glofox.test.js` (append)
 
-- [ ] **Step 1: Write the failing tests** (append to `src/lib/glofox.test.js`)
+- [x] **Step 1: Write the failing tests** (append to `src/lib/glofox.test.js`)
 
 ```js
 describe('interpretBookingResult (MIA-BOOK.1)', () => {
@@ -58,9 +58,9 @@ describe('interpretBookingResult (MIA-BOOK.1)', () => {
 
 Add `interpretBookingResult` to the existing import from `'./glofox'` at the top of the test file.
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/lib/glofox.test.js` → FAIL (`interpretBookingResult` not exported).
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/lib/glofox.test.js` → FAIL (`interpretBookingResult` not exported).
 
-- [ ] **Step 3: Implement** (in `src/lib/glofox.js` directly after `createBooking`)
+- [x] **Step 3: Implement** (in `src/lib/glofox.js` directly after `createBooking`)
 
 ```js
 export const GLOFOX_ALREADY_BOOKED_CODE = 'YOU_HAVE_BOOKED_FOR_THIS_EVENT'
@@ -88,8 +88,8 @@ export function interpretBookingResult(result) {
 }
 ```
 
-- [ ] **Step 4: Run to verify pass** — `npx vitest run src/lib/glofox.test.js` → PASS.
-- [ ] **Step 5: Commit** — `git add src/lib/glofox.js src/lib/glofox.test.js && git commit -m "MIA-BOOK.1 — interpretBookingResult: in-body Glofox failures are failures"`
+- [x] **Step 4: Run to verify pass** — `npx vitest run src/lib/glofox.test.js` → PASS.
+- [x] **Step 5: Commit** — `git add src/lib/glofox.js src/lib/glofox.test.js && git commit -m "MIA-BOOK.1 — interpretBookingResult: in-body Glofox failures are failures"`
 
 ---
 
@@ -101,7 +101,7 @@ export function interpretBookingResult(result) {
 - Modify: `src/app/settings/customer-agent/page.js` (state init ~67, field block ~355)
 - Test: `src/app/api/settings/customer-agent/route.test.js` (extend round-trip)
 
-- [ ] **Step 1: Add the default** to `notify.js` after `DEFAULT_CANCELLATION_CONFIRMATION_TEXT`:
+- [x] **Step 1: Add the default** to `notify.js` after `DEFAULT_CANCELLATION_CONFIRMATION_TEXT`:
 
 ```js
 // MIA-BOOK.1 — what Mia tells the customer when Glofox rejects a booking for
@@ -111,9 +111,9 @@ export const DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT =
   "There seems to be an issue with your account, so I'm handing this over to the team to sort it out. You'll hear from them shortly once it's resolved."
 ```
 
-- [ ] **Step 2: Settings route** — in DEFAULTS after `cancellation_confirmation_text: null,` add `booking_issue_handoff_text: null,`; in `SettingsSchema` after the cancellation line add `booking_issue_handoff_text: z.string().max(500).nullable().optional(),`; in the persist block after the cancellation line add `booking_issue_handoff_text: v.data.booking_issue_handoff_text?.trim() || null,`.
+- [x] **Step 2: Settings route** — in DEFAULTS after `cancellation_confirmation_text: null,` add `booking_issue_handoff_text: null,`; in `SettingsSchema` after the cancellation line add `booking_issue_handoff_text: z.string().max(500).nullable().optional(),`; in the persist block after the cancellation line add `booking_issue_handoff_text: v.data.booking_issue_handoff_text?.trim() || null,`.
 
-- [ ] **Step 3: Settings page** — in the state init after `cancellation_confirmation_text` add `booking_issue_handoff_text: settings.booking_issue_handoff_text || null,`; after the cancellation-confirmation field block add:
+- [x] **Step 3: Settings page** — in the state init after `cancellation_confirmation_text` add `booking_issue_handoff_text: settings.booking_issue_handoff_text || null,`; after the cancellation-confirmation field block add:
 
 ```jsx
         <div>
@@ -125,8 +125,8 @@ export const DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT =
         </div>
 ```
 
-- [ ] **Step 4: Extend route test** round-trip (mirror how `booking_confirmation_text` is asserted) and run `npx vitest run src/app/api/settings/customer-agent/route.test.js` → PASS.
-- [ ] **Step 5: Commit** — `"MIA-BOOK.1 — operator-editable booking_issue_handoff_text"`
+- [x] **Step 4: Extend route test** round-trip (mirror how `booking_confirmation_text` is asserted) and run `npx vitest run src/app/api/settings/customer-agent/route.test.js` → PASS.
+- [x] **Step 5: Commit** — `"MIA-BOOK.1 — operator-editable booking_issue_handoff_text"`
 
 ---
 
@@ -136,7 +136,7 @@ export const DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT =
 - Modify: `src/lib/agent/booking-tools.js` (imports ~27, `logBookingRequest` ~379, new helpers after `finalizeBookingRequest` ~416, `book_class` executor 483–501)
 - Test: `src/lib/agent/booking-tools-audit.test.js` (extend mock + new describe), `src/lib/agent/booking-tools.test.js` (pure `bookingRejectionRoute`)
 
-- [ ] **Step 1: Failing tests.** In `booking-tools-audit.test.js`: add `interpretBookingResult` + `GLOFOX_ALREADY_BOOKED_CODE` to the `vi.mock('@/lib/glofox', …)` factory via `const actual = await importOriginal()` spread (mock becomes `vi.mock('@/lib/glofox', async (importOriginal) => ({ ...(await importOriginal()), glofoxCredentialsForLocation: vi.fn(), … }))` keeping existing overrides); add `contains: () => b` to the mock builder. New tests:
+- [x] **Step 1: Failing tests.** In `booking-tools-audit.test.js`: add `interpretBookingResult` + `GLOFOX_ALREADY_BOOKED_CODE` to the `vi.mock('@/lib/glofox', …)` factory via `const actual = await importOriginal()` spread (mock becomes `vi.mock('@/lib/glofox', async (importOriginal) => ({ ...(await importOriginal()), glofoxCredentialsForLocation: vi.fn(), … }))` keeping existing overrides); add `contains: () => b` to the mock builder. New tests:
 
 ```js
 describe('MIA-BOOK.1 — in-body Glofox rejections', () => {
@@ -207,9 +207,9 @@ describe('bookingRejectionRoute', () => {
 })
 ```
 
-- [ ] **Step 2: Run to verify failure** — `npx vitest run src/lib/agent/booking-tools-audit.test.js src/lib/agent/booking-tools.test.js` → FAIL.
+- [x] **Step 2: Run to verify failure** — `npx vitest run src/lib/agent/booking-tools-audit.test.js src/lib/agent/booking-tools.test.js` → FAIL.
 
-- [ ] **Step 3: Implement in `booking-tools.js`:**
+- [x] **Step 3: Implement in `booking-tools.js`:**
 
 (a) top import: `import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'`
 
@@ -297,8 +297,8 @@ async function pendingBookingApprovalId(db, ctx, eventId, excludeId) {
     }
 ```
 
-- [ ] **Step 4: Run** both test files → PASS (existing `{ ok: true, status: 200, body: {} }` success test must still pass).
-- [ ] **Step 5: Commit** — `"MIA-BOOK.1 — book_class: rejected bookings hand off to a pending approval"`
+- [x] **Step 4: Run** both test files → PASS (existing `{ ok: true, status: 200, body: {} }` success test must still pass).
+- [x] **Step 5: Commit** — `"MIA-BOOK.1 — book_class: rejected bookings hand off to a pending approval"`
 
 ---
 
@@ -307,7 +307,7 @@ async function pendingBookingApprovalId(db, ctx, eventId, excludeId) {
 **Files:**
 - Modify: `src/app/api/agent/membership-requests/[id]/route.js:225-258`
 
-- [ ] **Step 1:** Add `interpretBookingResult` to the dynamic glofox import; replace the result handling:
+- [x] **Step 1:** Add `interpretBookingResult` to the dynamic glofox import; replace the result handling:
 
 ```js
       const result = await createBooking(creds, {
@@ -327,8 +327,8 @@ async function pendingBookingApprovalId(db, ctx, eventId, excludeId) {
       if (outcome.success && row.conversation_id) {
 ```
 
-- [ ] **Step 2:** `npx vitest run src/lib/agent` (no route test exists; nearest suites green) + `npm run lint` on the file.
-- [ ] **Step 3: Commit** — `"MIA-BOOK.1 — approval execution: don't mark a rejected re-run actioned"`
+- [x] **Step 2:** `npx vitest run src/lib/agent` (no route test exists; nearest suites green) + `npm run lint` on the file.
+- [x] **Step 3: Commit** — `"MIA-BOOK.1 — approval execution: don't mark a rejected re-run actioned"`
 
 ---
 
@@ -338,9 +338,9 @@ async function pendingBookingApprovalId(db, ctx, eventId, excludeId) {
 - Modify: `src/lib/class-booking-processor.js:128-140` (+ import line 5)
 - Test: `src/lib/class-booking-processor.test.js` (mock + one new case)
 
-- [ ] **Step 1: Failing test** — in the `vi.mock('@/lib/glofox', …)` factory add the real `interpretBookingResult` (switch factory to `async (importOriginal) => ({ ...(await importOriginal()), <existing overrides> })`). New case: `createBooking` resolves `{ ok: true, status: 200, body: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } }` for a contact that passes the credit pre-gate → expect `routeToReview` outcome `needs_review` with `booking_failed:YOU_HAVE_NO_CREDITS_LEFT` (mirror the existing booking-failure case's assertions).
-- [ ] **Step 2:** Run → FAIL (currently returns `booked`).
-- [ ] **Step 3: Implement** — add `interpretBookingResult` to the import from `'@/lib/glofox'`; replace lines 128-140:
+- [x] **Step 1: Failing test** — in the `vi.mock('@/lib/glofox', …)` factory add the real `interpretBookingResult` (switch factory to `async (importOriginal) => ({ ...(await importOriginal()), <existing overrides> })`). New case: `createBooking` resolves `{ ok: true, status: 200, body: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } }` for a contact that passes the credit pre-gate → expect `routeToReview` outcome `needs_review` with `booking_failed:YOU_HAVE_NO_CREDITS_LEFT` (mirror the existing booking-failure case's assertions).
+- [x] **Step 2:** Run → FAIL (currently returns `booked`).
+- [x] **Step 3: Implement** — add `interpretBookingResult` to the import from `'@/lib/glofox'`; replace lines 128-140:
 
 ```js
   const result = await createBooking(creds, { user_id: memberId, model: GLOFOX_BOOKING_MODEL, model_id: request.glofox_event_id })
@@ -354,8 +354,8 @@ async function pendingBookingApprovalId(db, ctx, eventId, excludeId) {
   await setStatus(db, request.id, { status: 'booked', last_error: null, glofox_booking_id: outcome.bookingId })
 ```
 
-- [ ] **Step 4:** `npx vitest run src/lib/class-booking-processor.test.js` → PASS.
-- [ ] **Step 5: Commit** — `"MIA-BOOK.1 — funnel processor: same in-body rejection truth"`
+- [x] **Step 4:** `npx vitest run src/lib/class-booking-processor.test.js` → PASS.
+- [x] **Step 5: Commit** — `"MIA-BOOK.1 — funnel processor: same in-body rejection truth"`
 
 ---
 
@@ -364,14 +364,14 @@ async function pendingBookingApprovalId(db, ctx, eventId, excludeId) {
 **Files:**
 - Modify: `src/lib/agent/prompt.js` (the "Relay the result honestly" bullet, ~line 92)
 
-- [ ] **Step 1:** Extend the bullet: after "say exactly that and never claim it's booked;" insert "if it reports an account issue the team has been asked to fix, tell the customer that in the tool's suggested wording and never claim it's booked;". Run `npx vitest run src/lib/agent/prompt.test.js` → PASS.
-- [ ] **Step 2: Commit** — `"MIA-BOOK.1 — prompt: relay account-issue handoffs honestly"`
+- [x] **Step 1:** Extend the bullet: after "say exactly that and never claim it's booked;" insert "if it reports an account issue the team has been asked to fix, tell the customer that in the tool's suggested wording and never claim it's booked;". Run `npx vitest run src/lib/agent/prompt.test.js` → PASS.
+- [x] **Step 2: Commit** — `"MIA-BOOK.1 — prompt: relay account-issue handoffs honestly"`
 
 ---
 
 ### Task 7: CI mirror, changelog, PR
 
-- [ ] **Step 1:** `npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:route-guards && npm run check:guardrails` → all green (no new route/page/import beyond existing patterns, but run the full mirror anyway).
-- [ ] **Step 2:** `npm run build` (imports changed in `glofox.js`/`booking-tools.js`/`notify.js`).
-- [ ] **Step 3:** `docs/CHANGELOG.md` entry (MIA-BOOK.1, cite the incident + migless).
-- [ ] **Step 4:** Push branch, `gh pr create --base main --fill`, report URL.
+- [x] **Step 1:** `npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:route-guards && npm run check:guardrails` → all green (no new route/page/import beyond existing patterns, but run the full mirror anyway).
+- [x] **Step 2:** `npm run build` (imports changed in `glofox.js`/`booking-tools.js`/`notify.js`).
+- [x] **Step 3:** `docs/CHANGELOG.md` entry (MIA-BOOK.1, cite the incident + migless).
+- [x] **Step 4:** Push branch, `gh pr create --base main --fill`, report URL.
