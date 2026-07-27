@@ -122,7 +122,13 @@ export default function TVDisplay({ token, initial }) {
       />
     )
   } else {
-    body = <IdleView now={now} />
+    body = (
+      <IdleView
+        now={now}
+        logoUrl={data?.display?.logo_url}
+        companyName={data?.display?.company_name}
+      />
+    )
   }
 
   return (
@@ -141,10 +147,56 @@ export default function TVDisplay({ token, initial }) {
   )
 }
 
-function IdleView({ now }) {
+function IdleView({ now, logoUrl, companyName }) {
   const hh = String(now.getHours()).padStart(2, '0')
   const mm = String(now.getMinutes()).padStart(2, '0')
   const day = now.toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' })
+  // TV-IDLE-LOGO — show the location's brand logo in place of the
+  // hard-coded wordmark. The idle screen is white-on-black, but the
+  // stored logo (the same asset used on invoice/contract emails,
+  // which sit on WHITE) is typically dark ink on transparent — it
+  // would vanish on black. So we probe the asset's luminance once
+  // and invert a dark logo to render it white, matching the clock; a
+  // light logo is left as-is. No logo (or a load error) → fall back
+  // to the company-name wordmark. The probe is best-effort: it needs
+  // CORS (Supabase public storage sends ACAO:*), and on any failure
+  // we simply don't invert.
+  const [logoOk, setLogoOk] = useState(Boolean(logoUrl))
+  const [invert, setInvert] = useState(false)
+
+  useEffect(() => {
+    if (!logoUrl) return undefined
+    let cancelled = false
+    const probe = new Image()
+    probe.crossOrigin = 'anonymous'
+    probe.onload = () => {
+      try {
+        const w = 64
+        const h = Math.max(1, Math.round(w * (probe.naturalHeight / probe.naturalWidth || 0.4)))
+        const canvas = document.createElement('canvas')
+        canvas.width = w
+        canvas.height = h
+        const ctx = canvas.getContext('2d', { willReadFrequently: true })
+        ctx.drawImage(probe, 0, 0, w, h)
+        const { data } = ctx.getImageData(0, 0, w, h)
+        let lum = 0
+        let weight = 0
+        for (let i = 0; i < data.length; i += 4) {
+          const a = data[i + 3] / 255
+          if (a < 0.1) continue // ignore transparent pixels
+          lum += (0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]) * a
+          weight += a
+        }
+        const avg = weight ? lum / weight : 255
+        if (!cancelled) setInvert(avg < 110) // dark ink → invert to show on black
+      } catch {
+        // canvas tainted / unreadable — leave the logo un-inverted
+      }
+    }
+    probe.src = logoUrl
+    return () => { cancelled = true }
+  }, [logoUrl])
+
   return (
     <div
       style={{
@@ -164,7 +216,25 @@ function IdleView({ now }) {
           TV-TEMPLATE.7 — brand font on the idle view too, so it
           matches the template zones instead of just falling back to
           the outer wrapper's system-ui stack. */}
-      <div style={{ fontSize: '12cqh', fontWeight: 900, letterSpacing: '0.2em', fontFamily: tvFontFamily }}>UN1T</div>
+      {logoOk ? (
+        <img
+          src={logoUrl}
+          alt={companyName || ''}
+          onError={() => setLogoOk(false)}
+          style={{
+            maxHeight: '20cqh',
+            maxWidth: '72cqw',
+            width: 'auto',
+            height: 'auto',
+            objectFit: 'contain',
+            filter: invert ? 'invert(1)' : 'none',
+          }}
+        />
+      ) : (
+        <div style={{ fontSize: '12cqh', fontWeight: 900, letterSpacing: '0.2em', fontFamily: tvFontFamily }}>
+          {companyName || 'UN1T'}
+        </div>
+      )}
       <div style={{ fontSize: '18cqh', fontWeight: 700, fontVariantNumeric: 'tabular-nums', lineHeight: 1, fontFamily: tvFontFamily }}>
         {hh}:{mm}
       </div>
