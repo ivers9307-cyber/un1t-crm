@@ -24,13 +24,16 @@ New export in `src/lib/glofox.js` beside `createBooking`. Input: `{ ok, status, 
 
 - `messageCode` = `body.message_code || body.message || null` (existing convention).
 - `alreadyBooked` = `messageCode === 'YOU_HAVE_BOOKED_FOR_THIS_EVENT'` → **success** (precedent: `class-booking-processor.js:133`, Glofox dedupes server-side).
-- `success` = `alreadyBooked || (ok && !KNOWN_FAILURE_CODES.has(messageCode))`.
 - `bookingId` harvested best-effort: `body.id || body._id || body.booking_id || body.data?.id` (same as processor line 139).
-- `KNOWN_FAILURE_CODES` (exported): codes Glofox is known to send inside a 2xx that mean the booking did NOT happen. Seed: `YOU_HAVE_NO_CREDITS_LEFT`, `EVENT_HAS_BEEN_CANCELLED`. Grows as codes are observed. Deliberately conservative: an *unknown* code inside a 2xx is treated as success — false "issue with your account" messages on benign success bodies are worse than the rare unknown failure code, which still lands in `details.result.message_code` for detection.
+- `success`:
+  - `alreadyBooked` → success.
+  - `!ok` → failure.
+  - `ok` and no `messageCode` → success (a missing bookingId alone never fails a clean 2xx — response shapes without a harvestable id must not regress).
+  - `ok` **with** a `messageCode` → success only if a `bookingId` was harvested; otherwise failure. Rationale: a 2xx that carries a code but no booking object is exactly the `YOU_HAVE_NO_CREDITS_LEFT` shape; per the approved routing decision, *unknown* codes fail safe into the approval path rather than silently claiming success. Worst-case false positive = one redundant approval card (approving re-runs the booking; Glofox dedupes), worst-case false negative = another customer told a lie — the incident this spec exists to prevent.
 
 ### 2. Failure routing (booking-tools.js, auto mode)
 
-On `!success`, classify `messageCode`:
+On `!success`, classify `messageCode` (routing only — success detection is §1):
 
 - `CUSTOMER_ANSWERABLE_CODES` = `EVENT_HAS_BEEN_CANCELLED` + future capacity/waitlist codes → current behaviour: finalise row `failed`, return `{ booked: false, reason, message: relay honestly + offer alternative }`.
 - **Everything else** (incl. `YOU_HAVE_NO_CREDITS_LEFT`, non-2xx statuses, unknown reasons) → **approval fallback**:
