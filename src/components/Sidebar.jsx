@@ -250,7 +250,10 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
       }
     }
     const supabase = createBrowserClient()
-    await supabase.auth.signOut()
+    // scope:'local' — sign out THIS browser only. The supabase-js default
+    // (scope:'global') revokes every session the user holds, so signing out
+    // of e.g. the kiosk Mac shell also killed their phone + other browsers.
+    await supabase.auth.signOut({ scope: 'local' })
     router.push('/login')
     router.refresh()
   }

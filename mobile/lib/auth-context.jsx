@@ -188,7 +188,13 @@ export function AuthProvider({ children }) {
     } catch {
       // ignore — next sign-in re-registers for the new user
     }
-    await supabase.auth.signOut()
+    // scope:'local' — revoke THIS device's session only. supabase-js
+    // defaults to scope:'global', which revokes every refresh token the
+    // user holds — so a studio kiosk's 5-minute idle lock (StudioPinProvider
+    // calls this signOut) was signing the staffer out of their own phone
+    // and the web CRM. Local scope still kills the kiosk-minted session
+    // server-side; personal sign-out likewise stays per-device.
+    await supabase.auth.signOut({ scope: 'local' })
   }, [])
 
   const setActiveLocationId = useCallback(async (locationId) => {

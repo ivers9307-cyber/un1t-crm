@@ -36,6 +36,16 @@ export async function registerForPushNotifications() {
     return { skipped: true, reason: 'simulator' }
   }
 
+  // Paired studio kiosks never register for push. A kiosk's token would
+  // be upserted under whichever staffer last PIN-unlocked, so their lead
+  // alerts / WhatsApp notifications (customer PII) would land on the
+  // shared gym device. Checked before the permission request so kiosks
+  // never even show the iOS "Allow Notifications?" prompt.
+  try {
+    const { getPairing } = await import('./studio-device')
+    if (await getPairing()) return { skipped: true, reason: 'studio_device' }
+  } catch { /* SecureStore unreadable ⇒ treat as unpaired */ }
+
   // Check existing permission, request if not granted.
   const { status: existing } = await Notifications.getPermissionsAsync()
   let final = existing

@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   permission: 'granted',
   token: 'ExponentPushToken[abc]',
   tokenThrows: false,
+  pairing: null,
 }))
 
 vi.mock('expo-device', () => ({
@@ -34,9 +35,13 @@ vi.mock('expo-constants', () => ({
 }))
 vi.mock('react-native', () => ({ Platform: { OS: 'ios' } }))
 vi.mock('./api', () => ({ api: vi.fn(async () => ({ success: true })) }))
+vi.mock('./studio-device', () => ({
+  getPairing: vi.fn(async () => state.pairing),
+}))
 
-import { unregisterCurrentDevicePush, unregisterPushNotifications } from './push-register'
+import { registerForPushNotifications, unregisterCurrentDevicePush, unregisterPushNotifications } from './push-register'
 import { api } from './api'
+import * as Notifications from 'expo-notifications'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -44,6 +49,27 @@ beforeEach(() => {
   state.permission = 'granted'
   state.token = 'ExponentPushToken[abc]'
   state.tokenThrows = false
+  state.pairing = null
+})
+
+describe('registerForPushNotifications — studio-device guard', () => {
+  it('skips entirely on a paired studio device — no permission prompt, no token upload', async () => {
+    state.pairing = { token: 'x'.repeat(32), label: 'Reception iPad' }
+    const res = await registerForPushNotifications()
+    expect(res).toEqual({ skipped: true, reason: 'studio_device' })
+    expect(Notifications.requestPermissionsAsync).not.toHaveBeenCalled()
+    expect(Notifications.getExpoPushTokenAsync).not.toHaveBeenCalled()
+    expect(api).not.toHaveBeenCalled()
+  })
+
+  it('registers normally on an unpaired personal device', async () => {
+    const res = await registerForPushNotifications()
+    expect(res.token).toBe('ExponentPushToken[abc]')
+    expect(api).toHaveBeenCalledWith('/api/mobile/device-tokens', expect.objectContaining({
+      method: 'POST',
+      body: expect.objectContaining({ expo_push_token: 'ExponentPushToken[abc]' }),
+    }))
+  })
 })
 
 describe('unregisterCurrentDevicePush — signOut token cleanup', () => {
