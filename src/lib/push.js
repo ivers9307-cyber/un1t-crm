@@ -358,11 +358,18 @@ export async function resolveRoleRecipientIds(db, locationId, roles) {
   if (!locationId || !roles?.length) return []
   const { data: links } = await db
     .from('profile_locations')
-    .select('profile_id, profiles!inner(id, role, active)')
+    .select('profile_id, role, profiles!inner(id, role, active)')
     .eq('location_id', locationId)
 
+  // PUSH-ROLES.1 — judge the PER-LOCATION role (roles are per-location, mig
+  // 051), not the global profiles.role: filtering on the global role both
+  // over-notified (global owner holding a staff row here) and, worse,
+  // silently excluded every `master` from owner/manager fan-outs — masters
+  // hold every decision right, so they are always included. Live miss:
+  // Richard (global role master, owner at Stillorgan) never received the
+  // new-time-off-request push, 2026-07-27.
   return (links || [])
-    .filter(l => l.profiles?.active && roles.includes(l.profiles.role))
+    .filter(l => l.profiles?.active && (roles.includes(l.role) || l.profiles.role === 'master'))
     .map(l => l.profile_id)
 }
 
