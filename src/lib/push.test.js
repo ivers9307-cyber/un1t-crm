@@ -88,7 +88,7 @@ beforeEach(() => {
   })
 })
 
-import { sendPush, resolvePushAllowedIds } from './push.js'
+import { sendPush, resolvePushAllowedIds, resolveRoleRecipientIds } from './push.js'
 
 describe('sendPush — permission filtering (reads profile_locations, mig 058)', () => {
   it('returns zero counts when no userIds are passed', async () => {
@@ -433,5 +433,37 @@ describe('resolvePushAllowedIds — per-location gating', () => {
     ]
     const allowed = await resolvePushAllowedIds(makeFakeDb(), ['r'], 'whatsapp', { locationId: 'sourceit' })
     expect(allowed.has('r')).toBe(true)
+  })
+})
+
+describe('resolveRoleRecipientIds — per-location role + master inclusion (PUSH-ROLES.1)', () => {
+  const db = {
+    from: () => ({
+      select: () => ({
+        eq: async () => ({
+          data: [
+            { profile_id: 'richard', role: 'owner', profiles: { id: 'richard', role: 'master', active: true } },
+            { profile_id: 'garrett', role: 'owner', profiles: { id: 'garrett', role: 'owner', active: true } },
+            { profile_id: 'james', role: 'staff', profiles: { id: 'james', role: 'staff', active: true } },
+            { profile_id: 'gone', role: 'owner', profiles: { id: 'gone', role: 'owner', active: false } },
+            { profile_id: 'demoted', role: 'staff', profiles: { id: 'demoted', role: 'owner', active: true } },
+          ],
+          error: null,
+        }),
+      }),
+    }),
+  }
+
+  it('judges the PER-LOCATION role, not the stale global profiles.role', async () => {
+    const ids = await resolveRoleRecipientIds(db, 'loc1', ['owner', 'manager'])
+    expect(ids).toContain('garrett')
+    expect(ids).not.toContain('demoted')
+    expect(ids).not.toContain('james')
+    expect(ids).not.toContain('gone')
+  })
+
+  it('always includes active masters assigned to the location (they hold every decision right)', async () => {
+    const ids = await resolveRoleRecipientIds(db, 'loc1', ['owner', 'manager'])
+    expect(ids).toContain('richard')
   })
 })
