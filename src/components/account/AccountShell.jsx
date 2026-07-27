@@ -80,7 +80,8 @@ export default function AccountShell({ user, mobileOpen = false, onMobileClose }
       }
     }
     const supabase = createBrowserClient()
-    await supabase.auth.signOut()
+    // scope:'local' — this device only (global default revokes every session).
+    await supabase.auth.signOut({ scope: 'local' })
     router.push('/login')
     router.refresh()
   }

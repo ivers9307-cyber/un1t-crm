@@ -8,7 +8,8 @@ import { createBrowserClient } from '@/lib/supabase'
 export default function HostSignOut() {
   const router = useRouter()
   async function signOut() {
-    try { await createBrowserClient().auth.signOut() } catch { /* ignore */ }
+    // scope:'local' — this device only (global default revokes every session).
+    try { await createBrowserClient().auth.signOut({ scope: 'local' }) } catch { /* ignore */ }
     router.push('/host/login')
     router.refresh()
   }
