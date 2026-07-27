@@ -222,7 +222,7 @@ export async function PATCH(request, { params }) {
 
   // AGENT-HANDS.1 — approving a drafted class booking executes it.
   if (executing && row.kind === 'class_booking') {
-    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, GLOFOX_BOOKING_MODEL } =
+    const { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, GLOFOX_BOOKING_MODEL, interpretBookingResult } =
       await import('@/lib/glofox')
     const { data: contact } = await db.from('contacts')
       .select('glofox_member_id')
@@ -252,13 +252,18 @@ export async function PATCH(request, { params }) {
         model: GLOFOX_BOOKING_MODEL,
         model_id: details.event_id,
       })
-      const messageCode = result?.body?.message_code || result?.body?.message || null
-      executed = { ok: result.ok, status: result.status, message_code: messageCode }
+      // MIA-BOOK.1 — Glofox reports rejections in-body with an HTTP 200, so
+      // approving a still-broken account must finalise failed, not actioned.
+      const outcome = interpretBookingResult(result)
+      executed = {
+        ok: outcome.success, status: result.status, message_code: outcome.messageCode,
+        ...(outcome.bookingId ? { glofox_booking_id: outcome.bookingId } : {}),
+      }
       details = { ...details, result: executed }
-      finalStatus = result.ok ? 'actioned' : 'failed'
+      finalStatus = outcome.success ? 'actioned' : 'failed'
 
       // Close the loop with the customer in-thread — best-effort.
-      if (result.ok && row.conversation_id) {
+      if (outcome.success && row.conversation_id) {
         try {
           const { sendAgentThreadMessage, buildBookingConfirmationText } = await import('@/lib/agent/notify')
           await sendAgentThreadMessage(db, {
