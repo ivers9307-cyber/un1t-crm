@@ -446,7 +446,7 @@ describe('createGlofoxInteraction', () => {
 describe('interpretBookingResult', () => {
   it('HTTP 200 + a booking id → booked, id harvested', () => {
     expect(interpretBookingResult({ ok: true, status: 200, body: { _id: 'bk1' } }))
-      .toEqual({ booked: true, bookingId: 'bk1', messageCode: null })
+      .toEqual({ booked: true, bookingId: 'bk1', messageCode: null, alreadyBooked: false })
   })
 
   it('harvests the id across every live response shape', () => {
@@ -460,7 +460,7 @@ describe('interpretBookingResult', () => {
 
   it('HTTP 200 with a failure message_code and no id → NOT booked (the Lucinda case)', () => {
     const r = interpretBookingResult({ ok: true, status: 200, body: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } })
-    expect(r).toEqual({ booked: false, bookingId: null, messageCode: 'YOU_HAVE_NO_CREDITS_LEFT' })
+    expect(r).toEqual({ booked: false, bookingId: null, messageCode: 'YOU_HAVE_NO_CREDITS_LEFT', alreadyBooked: false })
   })
 
   it('HTTP 200 with an empty/idless body → NOT booked', () => {
@@ -480,6 +480,17 @@ describe('interpretBookingResult', () => {
   })
 
   it('tolerates a missing result entirely', () => {
-    expect(interpretBookingResult(null)).toEqual({ booked: false, bookingId: null, messageCode: null })
+    expect(interpretBookingResult(null)).toEqual({ booked: false, bookingId: null, messageCode: null, alreadyBooked: false })
+  })
+
+  // MIA-BOOK.1 — alreadyBooked flags Glofox's member+event dedupe: booked
+  // stays false (no new id), but callers treat it as success — the member
+  // IS in the class (re-run, or staff booked manually before approving).
+  it('flags YOU_HAVE_BOOKED_FOR_THIS_EVENT as alreadyBooked on any status', () => {
+    const on200 = interpretBookingResult({ ok: true, status: 200, body: { message_code: 'YOU_HAVE_BOOKED_FOR_THIS_EVENT' } })
+    expect(on200).toMatchObject({ booked: false, alreadyBooked: true })
+    const on422 = interpretBookingResult({ ok: false, status: 422, body: { message_code: 'YOU_HAVE_BOOKED_FOR_THIS_EVENT' } })
+    expect(on422).toMatchObject({ booked: false, alreadyBooked: true })
+    expect(interpretBookingResult({ ok: true, status: 200, body: { _id: 'bk1' } }).alreadyBooked).toBe(false)
   })
 })

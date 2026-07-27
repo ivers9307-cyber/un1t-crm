@@ -65,6 +65,7 @@ export default function CustomerAgentSettingsPage() {
         holding_message: settings.holding_message || null,
         booking_confirmation_text: settings.booking_confirmation_text || null,
         cancellation_confirmation_text: settings.cancellation_confirmation_text || null,
+        booking_issue_handoff_text: settings.booking_issue_handoff_text || null,
         welcome_greeting: settings.welcome_greeting || null,
         link_button_text: (settings.link_button_text || '').trim() || null,
         quiet_hours: settings.quiet_hours?.start && settings.quiet_hours?.end
@@ -356,6 +357,17 @@ export default function CustomerAgentSettingsPage() {
             onChange={e => setField('cancellation_confirmation_text', e.target.value)}
             placeholder="All sorted, your booking for {class} has been cancelled. Hope to see you at another class soon." />
           <p className="text-xs text-un1t-muted mt-1">Sent to the customer when you approve a cancellation the agent drafted. <code>{'{class}'}</code> becomes the class name and time. Leave blank to use the default shown.</p>
+        </div>
+
+        {/* MIA-BOOK.1 — what the agent says when the booking system rejects a
+            booking (e.g. no credits) and the request goes to the team to fix.
+            Default mirrors DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT in notify.js. */}
+        <div>
+          <label className="block text-sm font-medium text-un1t-text mb-1">Booking issue handoff message</label>
+          <input className={inputCls} maxLength={500} value={settings.booking_issue_handoff_text || ''}
+            onChange={e => setField('booking_issue_handoff_text', e.target.value)}
+            placeholder="There seems to be an issue with your account, so I'm handing this over to the team to sort it out. You'll hear from them shortly once it's resolved." />
+          <p className="text-xs text-un1t-muted mt-1">What the agent tells the customer when the booking system rejects a booking (for example no credits left) and the request is sent to the team to fix. Leave blank to use the default shown.</p>
         </div>
 
         {/* C2 — request_welcome instant greeting. Placeholder mirrors

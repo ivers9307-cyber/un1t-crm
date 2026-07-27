@@ -24,6 +24,12 @@ export const DEFAULT_BOOKING_CONFIRMATION_TEXT =
 export const DEFAULT_CANCELLATION_CONFIRMATION_TEXT =
   'All sorted, your booking for {class} has been cancelled. Hope to see you at another class soon.'
 
+// MIA-BOOK.1 — what Mia tells the customer when Glofox rejects a booking for
+// an account-shaped reason and the attempt becomes a pending approval.
+// Operator-editable (settings.customer_agent.booking_issue_handoff_text).
+export const DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT =
+  "There seems to be an issue with your account, so I'm handing this over to the team to sort it out. You'll hear from them shortly once it's resolved."
+
 function renderConfirmation(template, className, classTime) {
   const what = [className, classTime].filter(Boolean).join(', ')
   const base = String(template || '').trim()

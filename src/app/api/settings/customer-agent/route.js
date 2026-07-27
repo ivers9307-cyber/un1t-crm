@@ -22,6 +22,10 @@ const DEFAULTS = {
   // defaults in lib/agent/notify.js. {class} renders the class + time.
   booking_confirmation_text: null,
   cancellation_confirmation_text: null,
+  // MIA-BOOK.1 — what the agent tells the customer when Glofox rejects a
+  // booking (e.g. no credits) and the attempt becomes a pending approval.
+  // Null → the code default in lib/agent/notify.js.
+  booking_issue_handoff_text: null,
   // C2 — instant greeting sent when someone opens the chat without typing
   // (request_welcome). Null → code default (DEFAULT_WELCOME_GREETING).
   welcome_greeting: null,
@@ -60,6 +64,7 @@ const SettingsSchema = z.object({
   holding_message: z.string().max(500).nullable().optional(),
   booking_confirmation_text: z.string().max(500).nullable().optional(),
   cancellation_confirmation_text: z.string().max(500).nullable().optional(),
+  booking_issue_handoff_text: z.string().max(500).nullable().optional(),
   welcome_greeting: z.string().max(500).nullable().optional(),
   link_button_text: z.string().max(25).nullable().optional(),
   quiet_hours: z.object({
@@ -185,6 +190,7 @@ export async function PUT(request) {
     holding_message: v.data.holding_message?.trim() || null,
     booking_confirmation_text: v.data.booking_confirmation_text?.trim() || null,
     cancellation_confirmation_text: v.data.cancellation_confirmation_text?.trim() || null,
+    booking_issue_handoff_text: v.data.booking_issue_handoff_text?.trim() || null,
     welcome_greeting: v.data.welcome_greeting?.trim() || null,
     link_button_text: v.data.link_button_text?.trim() || null,
     quiet_hours: v.data.quiet_hours || null,

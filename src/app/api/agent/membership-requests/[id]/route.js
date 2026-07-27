@@ -253,14 +253,17 @@ export async function PATCH(request, { params }) {
         model_id: details.event_id,
       })
       // Glofox can 200 with a failure body (YOU_HAVE_NO_CREDITS_LEFT) —
-      // success needs the created booking id, not just HTTP ok.
-      const { booked, bookingId, messageCode } = interpretBookingResult(result)
-      executed = { ok: booked, status: result.status, message_code: messageCode, glofox_booking_id: bookingId }
+      // success needs the created booking id, not just HTTP ok. alreadyBooked
+      // counts as success: the member IS in the class (MIA-BOOK.1 — staff may
+      // have booked them manually before approving a fallback card).
+      const { booked, bookingId, messageCode, alreadyBooked } = interpretBookingResult(result)
+      const success = booked || alreadyBooked
+      executed = { ok: success, status: result.status, message_code: messageCode, glofox_booking_id: bookingId }
       details = { ...details, result: executed }
-      finalStatus = booked ? 'actioned' : 'failed'
+      finalStatus = success ? 'actioned' : 'failed'
 
       // Close the loop with the customer in-thread — best-effort.
-      if (booked && row.conversation_id) {
+      if (success && row.conversation_id) {
         try {
           const { sendAgentThreadMessage, buildBookingConfirmationText } = await import('@/lib/agent/notify')
           await sendAgentThreadMessage(db, {

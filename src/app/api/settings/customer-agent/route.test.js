@@ -59,4 +59,22 @@ describe('PUT /api/settings/customer-agent — CTA fields', () => {
     expect(written.settings.customer_agent.membership_signup_url).toBeNull()
     expect(written.settings.customer_agent.membership_cta_label).toBeNull()
   })
+
+  // MIA-BOOK.1 — the handoff copy round-trips; blank coerces to null (code default).
+  it('persists booking_issue_handoff_text and coerces blank to null', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u', role: 'manager', activeLocation: { id: 'loc1' } })
+    let written = null
+    createServerClient.mockReturnValue({
+      from: () => ({
+        select: () => ({ eq: () => ({ single: () => Promise.resolve({ data: { settings: {} }, error: null }) }) }),
+        update: (patch) => { written = patch; return { eq: () => ({ select: () => ({ single: () => Promise.resolve({ data: { id: 'loc1' }, error: null }) }) }) } },
+      }),
+    })
+    let res = await PUT(putReq({ enabled: true, booking_issue_handoff_text: 'Account hiccup, the crew will ping you.' }))
+    expect(res.status).toBe(200)
+    expect(written.settings.customer_agent.booking_issue_handoff_text).toBe('Account hiccup, the crew will ping you.')
+    res = await PUT(putReq({ enabled: true, booking_issue_handoff_text: '   ' }))
+    expect(res.status).toBe(200)
+    expect(written.settings.customer_agent.booking_issue_handoff_text).toBeNull()
+  })
 })

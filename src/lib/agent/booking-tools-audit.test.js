@@ -8,7 +8,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Partial mock: interpretBookingResult stays REAL — these tests assert the
-// booked/failed judgement, so the actual body-interpretation logic must run.
+// booked/failed/pending-fallback judgement, so the actual body-interpretation
+// logic must run (MIA-BOOKCHECK.1 + MIA-BOOK.1).
 vi.mock('@/lib/glofox', async (importOriginal) => ({
   ...(await importOriginal()),
   GLOFOX_BOOKING_MODEL: 'events',
@@ -26,12 +27,17 @@ import { executeBookingTool } from './booking-tools'
 const EVENT_ID = '64aa00000000000000000001'
 
 // Records every audit write and the Glofox call in one ordered trace.
+// pendingLookupRows feeds the MIA-BOOK.1 dedup select (existing pending
+// approvals for the same contact+event).
 function auditDb(trace, { insertId = 'req-1', insertThrows = false } = {}) {
-  return {
+  const db = {
+    pendingLookupRows: null,
     from(table) {
+      let selected = false
       const b = {
-        select: () => b,
+        select: () => { selected = true; return b },
         eq: () => b,
+        contains: () => b,
         limit: () => b,
         async maybeSingle() {
           if (table === 'contacts') return { data: { glofox_member_id: 'gf-1' }, error: null }
@@ -39,22 +45,27 @@ function auditDb(trace, { insertId = 'req-1', insertThrows = false } = {}) {
         },
         async single() { return { data: { id: insertId }, error: null } },
         insert(row) {
+          selected = false
           trace.push({ step: 'audit_insert', table, status: row.status, stage: row.details?.stage || null })
           if (insertThrows) throw new Error('audit table unavailable')
           return b
         },
         update(patch) {
+          selected = false
           trace.push({
-            step: 'audit_update', table, status: patch.status,
+            step: 'audit_update', table, status: patch.status, details: patch.details,
             glofoxBookingId: patch.details?.result?.glofox_booking_id ?? null,
           })
           return b
         },
-        then(resolve) { resolve({ data: null, error: null }) },
+        then(resolve) {
+          resolve({ data: selected && table === 'agent_membership_requests' ? db.pendingLookupRows : null, error: null })
+        },
       }
       return b
     },
   }
+  return db
 }
 
 const ctx = (trace, opts) => ({
@@ -104,11 +115,13 @@ describe('auto-mode class booking writes the audit intent BEFORE the Glofox call
 
     const res = await executeBookingTool('book_class', { event_id: EVENT_ID, class_name: 'ARENA' }, ctx(trace))
 
-    expect(res).toMatchObject({ booked: false, reason: 'YOU_HAVE_NO_CREDITS_LEFT' })
-    expect(trace.at(-1)).toMatchObject({ step: 'audit_update', status: 'failed' })
+    // MIA-BOOK.1 — account-shaped rejections now fall back to a PENDING
+    // approval instead of a plain failure (never actioned either way).
+    expect(res).toMatchObject({ booked: false, reason: 'YOU_HAVE_NO_CREDITS_LEFT', requested: true })
+    expect(trace.at(-1)).toMatchObject({ step: 'audit_update', status: 'pending' })
   })
 
-  it('HTTP 200 with no booking id in the body → booked:false, audit row failed', async () => {
+  it('HTTP 200 with no booking id in the body → booked:false, falls back to approval (unknown shape, fail safe)', async () => {
     const trace = []
     glofox.createBooking.mockImplementation(async () => {
       trace.push({ step: 'glofox_createBooking' })
@@ -117,8 +130,8 @@ describe('auto-mode class booking writes the audit intent BEFORE the Glofox call
 
     const res = await executeBookingTool('book_class', { event_id: EVENT_ID }, ctx(trace))
 
-    expect(res).toMatchObject({ booked: false })
-    expect(trace.at(-1)).toMatchObject({ step: 'audit_update', status: 'failed' })
+    expect(res).toMatchObject({ booked: false, requested: true })
+    expect(trace.at(-1)).toMatchObject({ step: 'audit_update', status: 'pending' })
   })
 
   it('a FAILED booking finalises the same row as failed (still one row, not two)', async () => {
@@ -151,6 +164,71 @@ describe('auto-mode class booking writes the audit intent BEFORE the Glofox call
     expect(trace.filter(t => t.step === 'audit_update')).toHaveLength(0)
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
+  })
+})
+
+// MIA-BOOK.1 — Glofox reports many rejections IN-BODY with an HTTP 200
+// (live-observed 2026-07-27: 200 + YOU_HAVE_NO_CREDITS_LEFT booked nothing,
+// and the customer was told "you're booked in"). Account-shaped rejections
+// become a PENDING approval a human resolves; venue-shaped ones stay an
+// honest in-chat failure.
+describe('in-body Glofox rejections (MIA-BOOK.1)', () => {
+  it('a 200 + YOU_HAVE_NO_CREDITS_LEFT finalises the row PENDING (approval fallback), never booked:true', async () => {
+    const trace = []
+    glofox.createBooking.mockResolvedValue({ ok: true, status: 200, body: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } })
+    const res = await executeBookingTool('book_class', { event_id: EVENT_ID, class_name: 'SQUAD' }, ctx(trace))
+    expect(res.booked).not.toBe(true)
+    expect(res.requested).toBe(true)
+    expect(res.message).toContain('handing this over to the team')
+    expect(trace.map(t => t.step)).toEqual(['audit_insert', 'audit_update'])
+    expect(trace[1]).toMatchObject({ status: 'pending' })
+    expect(trace[1].details.summary).toContain('YOU_HAVE_NO_CREDITS_LEFT')
+    expect(trace[1].details.reason).toBe('booking_rejected')
+  })
+
+  it('honours the operator handoff copy override', async () => {
+    const trace = []
+    glofox.createBooking.mockResolvedValue({ ok: true, status: 200, body: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } })
+    const c = ctx(trace)
+    c.settings = { booking_mode: 'auto', booking_issue_handoff_text: 'Account hiccup, the crew will ping you.' }
+    const res = await executeBookingTool('book_class', { event_id: EVENT_ID }, c)
+    expect(res.message).toContain('Account hiccup, the crew will ping you.')
+  })
+
+  it('EVENT_HAS_BEEN_CANCELLED stays an honest in-chat failure (no approval)', async () => {
+    const trace = []
+    glofox.createBooking.mockResolvedValue({ ok: true, status: 200, body: { message_code: 'EVENT_HAS_BEEN_CANCELLED' } })
+    const res = await executeBookingTool('book_class', { event_id: EVENT_ID }, ctx(trace))
+    expect(res).toMatchObject({ booked: false, reason: 'EVENT_HAS_BEEN_CANCELLED' })
+    expect(res.requested).toBeUndefined()
+    expect(trace[1]).toMatchObject({ status: 'failed' })
+  })
+
+  it('already-booked reads as success', async () => {
+    const trace = []
+    glofox.createBooking.mockResolvedValue({ ok: true, status: 200, body: { message_code: 'YOU_HAVE_BOOKED_FOR_THIS_EVENT' } })
+    const res = await executeBookingTool('book_class', { event_id: EVENT_ID }, ctx(trace))
+    expect(res.booked).toBe(true)
+    expect(trace[1]).toMatchObject({ status: 'actioned' })
+  })
+
+  it('a success stores the glofox booking id on the audit row', async () => {
+    const trace = []
+    glofox.createBooking.mockResolvedValue({ ok: true, status: 200, body: { id: 'gfb-1' } })
+    await executeBookingTool('book_class', { event_id: EVENT_ID }, ctx(trace))
+    expect(trace[1]).toMatchObject({ status: 'actioned' })
+    expect(trace[1].details.result.glofox_booking_id).toBe('gfb-1')
+  })
+
+  it('a second rejection for the same contact+event supersedes instead of double-carding', async () => {
+    const trace = []
+    glofox.createBooking.mockResolvedValue({ ok: true, status: 200, body: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } })
+    const c = ctx(trace)
+    c.db.pendingLookupRows = [{ id: 'req-existing' }]
+    const res = await executeBookingTool('book_class', { event_id: EVENT_ID }, c)
+    expect(res.requested).toBe(true)                       // customer experience identical
+    expect(trace[1]).toMatchObject({ status: 'failed' })   // no second pending card
+    expect(trace[1].details.reason).toBe('superseded_duplicate')
   })
 })
 

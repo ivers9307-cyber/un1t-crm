@@ -1030,6 +1030,8 @@ export async function createBooking(creds, bookingRequest) {
   }
 }
 
+export const GLOFOX_ALREADY_BOOKED_CODE = 'YOU_HAVE_BOOKED_FOR_THIS_EVENT'
+
 /**
  * Interpret a createBooking result. Glofox returns HTTP 200 with a
  * failure body (message_code YOU_HAVE_NO_CREDITS_LEFT — seen live
@@ -1038,13 +1040,20 @@ export async function createBooking(creds, bookingRequest) {
  * The id is harvested best-effort across the response shapes seen
  * live (flat and data-wrapped, `id`/`_id`/`booking_id`).
  *
- * Returns { booked, bookingId, messageCode }.
+ * MIA-BOOK.1 — `alreadyBooked` flags Glofox's server-side member+event
+ * dedupe: `booked` stays false (no new booking id comes back), but most
+ * callers should treat it as success — the member IS in the class (e.g.
+ * a re-run whose first attempt landed, or staff booked manually before
+ * approving a pending fallback card).
+ *
+ * Returns { booked, bookingId, messageCode, alreadyBooked }.
  */
 export function interpretBookingResult(result) {
   const body = result?.body
   const bookingId = body?._id || body?.id || body?.booking_id || body?.data?._id || body?.data?.id || null
   const messageCode = body?.message_code || body?.message || null
-  return { booked: !!result?.ok && !!bookingId, bookingId, messageCode }
+  const alreadyBooked = messageCode === GLOFOX_ALREADY_BOOKED_CODE
+  return { booked: !!result?.ok && !!bookingId, bookingId, messageCode, alreadyBooked }
 }
 
 /**
