@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-vi.mock('@/lib/glofox', () => ({
+vi.mock('@/lib/glofox', async (importOriginal) => ({
+  // real interpretBookingResult (MIA-BOOK.1) — its rules are under test here.
+  ...(await importOriginal()),
   glofoxCredentialsForLocation: vi.fn(async () => ({ branchId: 'b', apiKey: 'k', apiToken: 't' })),
   missingGlofoxCredentialsForLocation: vi.fn(() => []),
   createBooking: vi.fn(async () => ({ ok: true, status: 200, body: {} })),
@@ -80,5 +82,14 @@ describe('processClassBookingRequest', () => {
     createBooking.mockResolvedValueOnce({ ok: false, status: 400, body: { message_code: 'YOU_HAVE_BOOKED_FOR_THIS_EVENT' } })
     const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
     expect(r.outcome).toBe('booked')
+  })
+  // MIA-BOOK.1 — Glofox rejections arrive in-body with an HTTP 200
+  // (live-observed 2026-07-27); a 200-with-error must route to review,
+  // never count as booked.
+  it('HTTP 200 + in-body rejection → review, never booked', async () => {
+    createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: { message_code: 'YOU_HAVE_NO_CREDITS_LEFT' } })
+    const r = await processClassBookingRequest(makeDb({ id: 'c1', first_name: 'Sam', phone: '0871234567', glofox_member_id: 'gm1', last_attended_at: null }), req)
+    expect(r.outcome).toBe('needs_review')
+    expect(r.detail).toBe('booking_failed:YOU_HAVE_NO_CREDITS_LEFT')
   })
 })
