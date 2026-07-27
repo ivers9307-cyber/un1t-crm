@@ -1031,6 +1031,23 @@ export async function createBooking(creds, bookingRequest) {
 }
 
 /**
+ * Interpret a createBooking result. Glofox returns HTTP 200 with a
+ * failure body (message_code YOU_HAVE_NO_CREDITS_LEFT — seen live
+ * 2026-07-27) when the member cannot book, so HTTP ok alone is NOT
+ * booking success: a real booking carries the created booking's id.
+ * The id is harvested best-effort across the response shapes seen
+ * live (flat and data-wrapped, `id`/`_id`/`booking_id`).
+ *
+ * Returns { booked, bookingId, messageCode }.
+ */
+export function interpretBookingResult(result) {
+  const body = result?.body
+  const bookingId = body?._id || body?.id || body?.booking_id || body?.data?._id || body?.data?.id || null
+  const messageCode = body?.message_code || body?.message || null
+  return { booked: !!result?.ok && !!bookingId, bookingId, messageCode }
+}
+
+/**
  * UIX-P3b — upcoming classes for the unified inbox's Book tab.
  *
  * VERIFIED against the live Stillorgan branch

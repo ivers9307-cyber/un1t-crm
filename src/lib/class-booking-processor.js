@@ -2,7 +2,7 @@
 // process-class-bookings cron). Prior-attendance → staff review (never
 // auto-book). Otherwise: ensure a Glofox account + class credit, book the
 // class, send the booking_class_confirmed WhatsApp. Any failure → review.
-import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, fetchUserCredits, fetchUserBookingsResult, GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
+import { glofoxCredentialsForLocation, missingGlofoxCredentialsForLocation, createBooking, interpretBookingResult, fetchUserCredits, fetchUserBookingsResult, GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
 import { computeCreditsRemaining } from '@/lib/glofox-sync'
 import { findOrCreateGlofoxMember } from '@/lib/glofox-push'
 import { maybeSendBookingWhatsappConfirm, CLASS_CONFIRM_TEMPLATE } from '@/lib/automations/booking-whatsapp-confirm'
@@ -126,18 +126,19 @@ export async function processClassBookingRequest(db, request) {
   }
 
   const result = await createBooking(creds, { user_id: memberId, model: GLOFOX_BOOKING_MODEL, model_id: request.glofox_event_id })
-  const code = result?.body?.message_code || result?.body?.message || null
+  // Success needs the created booking id — Glofox can 200 with a failure
+  // body (YOU_HAVE_NO_CREDITS_LEFT), so HTTP ok alone is not enough.
+  const { booked, bookingId, messageCode } = interpretBookingResult(result)
   // Glofox dedupes member+event server-side. A re-run (e.g. the reaper requeued
   // a row whose first attempt booked but died before persisting) returns
   // "already booked" — that's a SUCCESS, not a failure to push to staff review.
-  const alreadyBooked = code === 'YOU_HAVE_BOOKED_FOR_THIS_EVENT'
-  if (!result?.ok && !alreadyBooked) {
-    return routeToReview(db, request, `booking_failed:${code || `status_${result?.status}`}`)
+  const alreadyBooked = messageCode === 'YOU_HAVE_BOOKED_FOR_THIS_EVENT'
+  if (!booked && !alreadyBooked) {
+    return routeToReview(db, request, `booking_failed:${messageCode || `status_${result?.status}`}`)
   }
-  // Persist the Glofox booking id (best-effort across response shapes) so re-runs
-  // and the /approvals view can see the real booking.
-  const glofoxBookingId = result?.body?.id || result?.body?._id || result?.body?.booking_id || result?.body?.data?.id || null
-  await setStatus(db, request.id, { status: 'booked', last_error: null, glofox_booking_id: glofoxBookingId })
+  // Persist the Glofox booking id so re-runs and the /approvals view can see
+  // the real booking (null on the already-booked re-run path).
+  await setStatus(db, request.id, { status: 'booked', last_error: null, glofox_booking_id: bookingId })
   try {
     await maybeSendBookingWhatsappConfirm({ db, locationId: request.location_id, contact, templateName: CLASS_CONFIRM_TEMPLATE, bodyParams: [firstName, request.class_name || 'your class', classLabel(request.starts_at)] })
   } catch (e) { logWarn('cbp', 'class confirm failed', { err: e }) }
