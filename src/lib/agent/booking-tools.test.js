@@ -16,6 +16,7 @@ import {
   shapeMemberBookingsForAgent,
   cancelBookingGuard,
   leadDetailsPatch,
+  bookingRejectionRoute,
 } from './booking-tools'
 
 describe('BOOKING_TOOLS definitions', () => {
@@ -286,5 +287,17 @@ describe('leadDetailsPatch', () => {
   })
   it('returns no note when interest is blank', () => {
     expect(leadDetailsPatch({}, { interest: '  ' }).note).toBeNull()
+  })
+})
+
+// MIA-BOOK.1 — rejected-booking routing: staff-fixable and UNKNOWN codes go
+// to a pending approval (fail safe); venue codes stay an honest reply.
+describe('bookingRejectionRoute', () => {
+  it('routes staff-fixable and unknown codes to approval, venue codes to reply', () => {
+    expect(bookingRejectionRoute('YOU_HAVE_NO_CREDITS_LEFT')).toBe('approval')
+    expect(bookingRejectionRoute('BRAND_NEW_CODE')).toBe('approval')
+    expect(bookingRejectionRoute(null)).toBe('approval')
+    expect(bookingRejectionRoute('EVENT_HAS_BEEN_CANCELLED')).toBe('reply')
+    expect(bookingRejectionRoute('EVENT_FULL')).toBe('reply')
   })
 })

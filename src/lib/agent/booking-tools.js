@@ -24,7 +24,8 @@
 // Pure helpers are unit-tested in booking-tools.test.js; the executor
 // does the IO and never throws (mirrors executeAccountTool).
 
-import { GLOFOX_BOOKING_MODEL } from '@/lib/glofox'
+import { GLOFOX_BOOKING_MODEL, interpretBookingResult } from '@/lib/glofox'
+import { DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT } from './notify'
 import { formatDublinClassTime } from './dublin-format'
 
 // ── Anthropic tool definitions ──────────────────────────────────────
@@ -376,7 +377,7 @@ async function resolveConsultationEventType(db, locationId, settings) {
 // the action (Glofox is the arbiter of double-booking).
 async function logBookingRequest(db, ctx, { kind, status, details, customerNote = null }) {
   try {
-    const { data } = await db.from('agent_membership_requests').insert({
+    const { data, error } = await db.from('agent_membership_requests').insert({
       location_id: ctx.locationId,
       contact_id: ctx.verifiedContactId || ctx.contactId || null,
       kind,
@@ -386,6 +387,9 @@ async function logBookingRequest(db, ctx, { kind, status, details, customerNote 
       customer_note: customerNote,
       status,
     }).select('id').single()
+    // supabase-js resolves PostgREST errors instead of throwing — without
+    // this check a rejected insert is a silent no-row (MIA-BOOK.1).
+    if (error) console.error(`[agent][booking] audit insert failed (${kind}): ${error.message}`)
     return data?.id || null
   } catch (e) {
     console.warn(`[agent][booking] audit insert failed: ${e?.message || e}`)
@@ -413,6 +417,33 @@ async function finalizeBookingRequest(db, ctx, requestId, { kind, status, detail
   } catch (e) {
     console.error(`[agent][booking] audit finalise threw (${kind} ${requestId}): ${e?.message || e}`)
   }
+}
+
+// MIA-BOOK.1 — routing for a rejected booking. Codes staff cannot fix (the
+// class itself is gone or full) stay in-chat as an honest reply + an
+// alternative; everything else — credits, membership, UNKNOWN codes —
+// becomes a pending approval a human resolves (fail safe: a spurious card
+// beats a false "you're booked"). Grow this set as real codes appear in
+// agent_membership_requests.details.result.message_code.
+const CUSTOMER_ANSWERABLE_CODES = new Set(['EVENT_HAS_BEEN_CANCELLED', 'EVENT_FULL'])
+export function bookingRejectionRoute(messageCode) {
+  return CUSTOMER_ANSWERABLE_CODES.has(messageCode) ? 'reply' : 'approval'
+}
+
+// One pending approval per (contact, event): a retried tool call must not
+// double-card staff. Best-effort — on lookup failure we'd rather risk a
+// duplicate card than lose the fallback entirely.
+async function pendingBookingApprovalId(db, ctx, eventId, excludeId) {
+  try {
+    const { data } = await db.from('agent_membership_requests')
+      .select('id')
+      .eq('contact_id', ctx.verifiedContactId || ctx.contactId)
+      .eq('kind', 'class_booking')
+      .eq('status', 'pending')
+      .contains('details', { event_id: eventId })
+      .limit(5)
+    return (data || []).map((r) => r.id).find((id) => id && id !== excludeId) || null
+  } catch { return null }
 }
 
 // ── executor (IO) ───────────────────────────────────────────────────
@@ -485,20 +516,53 @@ export async function executeBookingTool(toolName, input, ctx) {
       model: GLOFOX_BOOKING_MODEL,
       model_id: input.event_id,
     })
-    const messageCode = result?.body?.message_code || result?.body?.message || null
-    await finalizeBookingRequest(db, ctx, auditId, {
-      kind: 'class_booking',
-      status: result.ok ? 'actioned' : 'failed',
-      details: { ...baseDetails, result: { ok: result.ok, status: result.status, message_code: messageCode } },
-    })
-    if (!result.ok) {
+    // MIA-BOOK.1 — Glofox reports rejections IN-BODY with an HTTP 200, so
+    // success comes from the interpreter, never from result.ok alone.
+    const outcome = interpretBookingResult(result)
+    const resultDetails = {
+      ok: outcome.success, status: result.status, message_code: outcome.messageCode,
+      ...(outcome.bookingId ? { glofox_booking_id: outcome.bookingId } : {}),
+    }
+    if (outcome.success) {
+      await finalizeBookingRequest(db, ctx, auditId, {
+        kind: 'class_booking', status: 'actioned',
+        details: { ...baseDetails, result: resultDetails },
+      })
+      return { booked: true, class_name: input.class_name || null, class_time: input.class_time || null }
+    }
+    if (bookingRejectionRoute(outcome.messageCode) === 'reply') {
+      await finalizeBookingRequest(db, ctx, auditId, {
+        kind: 'class_booking', status: 'failed',
+        details: { ...baseDetails, result: resultDetails },
+      })
       return {
         booked: false,
-        reason: messageCode || 'BOOKING_FAILED',
+        reason: outcome.messageCode || 'BOOKING_FAILED',
         message: 'The booking did not go through — relay the reason honestly and offer an alternative or a handoff.',
       }
     }
-    return { booked: true, class_name: input.class_name || null, class_time: input.class_time || null }
+    // Account-shaped (or unknown) rejection: hand to a human. The intent row
+    // becomes the approval card; approving re-runs the booking after staff
+    // fix the account. Never tell the customer it's booked.
+    const dupId = await pendingBookingApprovalId(db, ctx, input.event_id, auditId)
+    const summary = `Glofox rejected this booking (${outcome.messageCode || `status_${result.status}`}). Fix the member's account (credits/membership), then Approve to retry the booking.`
+    await finalizeBookingRequest(db, ctx, auditId, {
+      kind: 'class_booking',
+      status: dupId ? 'failed' : 'pending',
+      details: {
+        ...baseDetails,
+        reason: dupId ? 'superseded_duplicate' : 'booking_rejected',
+        ...(dupId ? { duplicate_of: dupId } : { summary }),
+        result: resultDetails,
+      },
+    })
+    const handoffText = String(settings?.booking_issue_handoff_text || '').trim() || DEFAULT_BOOKING_ISSUE_HANDOFF_TEXT
+    return {
+      requested: true,
+      booked: false,
+      reason: outcome.messageCode || 'BOOKING_FAILED',
+      message: `There is an account issue the team has been asked to fix before this booking can go through. Tell the customer, staying close to this wording: "${handoffText}". Never say the booking is confirmed.`,
+    }
   }
 
   if (toolName === 'list_my_upcoming_bookings') {
