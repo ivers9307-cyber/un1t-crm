@@ -1,10 +1,16 @@
 // REPORT-ISSUE.2 — approvals provider for staff-reported issues.
 //
-// Surfaces open + in_progress issues at the user's active location
-// as another category inside /approvals so handlers don't need to
-// flip between two inboxes. The dedicated /issues page is still the
-// richer surface (claim + resolve + close); the /approvals tab is
-// the aggregator view.
+// Surfaces UNCLAIMED (status 'open') issues at the user's active
+// location as another category inside /approvals so handlers don't
+// need to flip between two inboxes. The dedicated /issues page is
+// still the richer surface (claim + resolve + close); the /approvals
+// tab is the aggregator view.
+//
+// APPROVALS-STUDIO.2 — in_progress issues are deliberately NOT
+// counted: an approval is a decision that hasn't been made yet, and
+// a claimed issue has been decided (someone owns it) and is just
+// pending actioning. Counting them left the approvals badge stuck at
+// N forever while work was underway (operator-reported 2026-07-28).
 //
 // Scope: owner + master at the location (per the "All owners at the
 // studio" routing decision). Non-handlers see a 0-count empty tab
@@ -16,7 +22,7 @@ import {
 } from '../registry'
 
 const HANDLER_ROLES = ['owner']
-const OPEN_STATUSES = ['open', 'in_progress']
+const OPEN_STATUSES = ['open']
 
 export const issuesProvider = {
   key: 'issues',
