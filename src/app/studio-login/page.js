@@ -11,7 +11,7 @@ import StudioLogin from '@/components/StudioLogin'
 export const dynamic = 'force-dynamic'
 
 export const metadata = {
-  title: 'CF Studio — Sign in',
+  title: 'Repset — Sign in',
 }
 
 export default function StudioLoginPage() {

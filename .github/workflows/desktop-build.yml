@@ -163,7 +163,7 @@ jobs:
           # resources, extended attributes) where a plain `zip`
           # quietly mangles them. notarytool will reject a
           # mis-archived bundle.
-          ZIP="$STAGE/cf-studio.zip"
+          ZIP="$STAGE/repset.zip"
           ditto -c -k --keepParent "$APP_PATH" "$ZIP"
           echo "Created zip for notarisation: $(ls -lh "$ZIP" | awk '{print $5}')"
 
@@ -216,9 +216,9 @@ jobs:
       - name: Upload signed app + notarisation metadata
         uses: actions/upload-artifact@v7
         with:
-          name: cf-studio-mac-${{ github.run_number }}-signed
+          name: repset-mac-${{ github.run_number }}-signed
           path: |
-            ${{ env.STAGE }}/cf-studio.zip
+            ${{ env.STAGE }}/repset.zip
             ${{ env.STAGE }}/notarization-uuid.txt
             ${{ env.STAGE }}/notarization-submit.json
           if-no-files-found: error

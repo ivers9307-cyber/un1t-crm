@@ -1,7 +1,7 @@
 [package]
-name = "cf-studio"
+name = "repset"
 version = "1.0.0"
-description = "CF Studio Mac shell — Tauri wrapper for crm.un1tdublin.com"
+description = "Repset Mac shell — Tauri wrapper for crm.un1tdublin.com"
 authors = ["UN1T Dublin"]
 edition = "2021"
 rust-version = "1.77"
@@ -14,7 +14,7 @@ rust-version = "1.77"
 # one (so the project can also target iOS/Android where the entry
 # point differs), but for a Mac-only desktop we just need src/main.rs
 # and the implicit binary target Cargo derives from it. Declaring
-# `[lib] name = "cf_studio_lib"` without a matching `src/lib.rs`
+# `[lib] name = "repset_lib"` without a matching `src/lib.rs`
 # breaks `cargo metadata` before any code compiles — which was why
 # every desktop-build CI run silently failed in 16 seconds.
 #

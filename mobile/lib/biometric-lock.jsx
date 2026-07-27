@@ -44,7 +44,7 @@ export function BiometricLockProvider({ children }) {
   }, [])
 
   const promptUnlock = useCallback(async () => {
-    const { success } = await runBiometricAuth('Unlock CF Studio')
+    const { success } = await runBiometricAuth('Unlock Repset')
     if (success) setLockState('unlocked')
     // else: stay locked — LockScreen shows Unlock (retry) + Sign out.
   }, [])
@@ -118,7 +118,7 @@ export function BiometricLockProvider({ children }) {
       <Modal visible={promptVisible} animationType="fade" transparent onRequestClose={onDeclinePrompt}>
         <View className="flex-1 items-center justify-center bg-black/50 px-8">
           <View className="bg-un1t-bg rounded-3xl p-6 w-full max-w-[340px]">
-            <Text className="text-lg font-bold text-un1t-text mb-1">Protect CF Studio with {typeLabel}?</Text>
+            <Text className="text-lg font-bold text-un1t-text mb-1">Protect Repset with {typeLabel}?</Text>
             <Text className="text-sm text-un1t-subtle mb-5">Require {typeLabel} to open the app and after 5 minutes away. You can change this any time in More.</Text>
             <Pressable onPress={onEnableFromPrompt}
               className="bg-un1t-text rounded-2xl py-3.5 items-center active:opacity-80">

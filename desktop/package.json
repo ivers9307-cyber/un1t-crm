@@ -1,8 +1,8 @@
 {
-  "name": "cf-studio-desktop",
+  "name": "repset-desktop",
   "version": "1.0.0",
   "private": true,
-  "description": "CF Studio Mac shell — Tauri wrapper for crm.un1tdublin.com",
+  "description": "Repset Mac shell — Tauri wrapper for crm.un1tdublin.com",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",

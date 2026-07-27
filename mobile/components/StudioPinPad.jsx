@@ -57,7 +57,7 @@ export default function StudioPinPad({ deviceToken, onSuccess }) {
   return (
     <View className="absolute inset-0 bg-un1t-bg items-center justify-center px-8">
       <Text className="text-2xl font-bold text-un1t-text mb-2">Enter your PIN</Text>
-      <Text className="text-sm text-un1t-subtle mb-8">Tap in to use CF Studio</Text>
+      <Text className="text-sm text-un1t-subtle mb-8">Tap in to use Repset</Text>
 
       <View className="flex-row gap-3 mb-8">
         {[0, 1, 2, 3].map(i => (

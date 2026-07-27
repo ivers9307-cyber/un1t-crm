@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Repset">
+  <!-- Repset tally mark: three reps, one strike, set closed.
+       Geometry: bar 0.105S, pitch 0.185S, corner 0.24S, strike 39.7deg
+       (see docs — brand source in ~/code/repset-brand). -->
+  <rect width="1024" height="1024" rx="245.76" fill="#131316"/>
+  <g>
+    <rect x="268.8"  y="245.76" width="107.52" height="532.48" rx="53.76" fill="#F1EEE7"/>
+    <rect x="458.24" y="245.76" width="107.52" height="532.48" rx="53.76" fill="#F1EEE7"/>
+    <rect x="647.68" y="245.76" width="107.52" height="532.48" rx="53.76" fill="#F1EEE7"/>
+    <line x1="209.92" y1="762.88" x2="814.08" y2="261.12" stroke="#131316" stroke-width="174.18" stroke-linecap="round"/>
+    <line x1="209.92" y1="762.88" x2="814.08" y2="261.12" stroke="#D6FF3D" stroke-width="107.52" stroke-linecap="round"/>
+  </g>
+</svg>

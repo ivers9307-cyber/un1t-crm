@@ -35,7 +35,7 @@ it and double-click.
 
 ## Step 1 — Confirm you have an Apple Developer Program membership
 
-You almost certainly already have this (the iOS CF Studio app needs
+You almost certainly already have this (the iOS Repset app needs
 it), but to check:
 
 1. Visit <https://developer.apple.com/account>.
@@ -84,7 +84,7 @@ distribute outside the App Store need "Developer ID Application."
    underneath.
 4. Right-click the certificate (not the private key). Choose
    **Export "Developer ID Application: …"**.
-5. Save it as `cf-studio-signing.p12`.
+5. Save it as `repset-signing.p12`.
 6. When prompted for a password, **set a strong password** and
    write it down — this is `APPLE_CERTIFICATE_PASSWORD` later.
 7. macOS will prompt for your login password to permit the export.
@@ -110,7 +110,7 @@ password**. This is NOT your normal Apple ID password.
 3. Under **Sign-In and Security**, click **App-Specific
    Passwords**.
 4. Click **Generate an app-specific password**.
-5. Label it something memorable — e.g. `CF Studio notarytool`.
+5. Label it something memorable — e.g. `Repset notarytool`.
 6. Apple shows you the password ONCE in the format
    `abcd-efgh-ijkl-mnop`. Copy it now — you can't see it again.
 
@@ -124,7 +124,7 @@ GitHub secrets are text-only, so the binary `.p12` has to be
 base64-encoded before you paste it in. Open Terminal and run:
 
 ```bash
-base64 -i ~/Downloads/cf-studio-signing.p12 | pbcopy
+base64 -i ~/Downloads/repset-signing.p12 | pbcopy
 ```
 
 This puts the base64 string on your clipboard. (Replace the path
@@ -258,7 +258,7 @@ Store. The DMG is hosted by us, the user downloads it from a known
 URL, and macOS trusts it because Apple has notarised it. The Mac
 shell never goes through App Review.
 
-If you ever decide to put CF Studio on the Mac App Store (a
+If you ever decide to put Repset on the Mac App Store (a
 fundamentally different distribution path), you'd need a
 "Mac App Store Distribution" certificate and a separate App
 Store Connect record — out of scope here.
