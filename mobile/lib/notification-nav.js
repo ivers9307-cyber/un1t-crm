@@ -55,14 +55,18 @@ export function routeForNotification(data) {
       return '/(tabs)'
     case 'swap_open':      // manager: open swap posted
     case 'swap_awaiting':  // manager: swap awaiting approval
-      return isSafeId(data.swap_id) ? `/approvals?focus=${data.swap_id}` : '/approvals'
+      return isSafeId(data.swap_id) ? `/approvals?tab=team&focus=${data.swap_id}` : '/approvals?tab=team'
     case 'swap_decision':  // requester/taker: final decision — roster changed
       // on the requester-shift's date; preselect that week+day.
       return isIsoDay(data.block_date) ? `/(tabs)/schedule?date=${data.block_date}` : '/(tabs)/schedule'
 
     // ── Time off ────────────────────────────────────────────────────
     case 'time_off_inbound': // manager: new request
-      return isSafeId(data.request_id) ? `/approvals?focus=${data.request_id}` : '/approvals'
+      return isSafeId(data.request_id) ? `/approvals?tab=team&focus=${data.request_id}` : '/approvals?tab=team'
+
+    // ── Customer approvals (APPROVALS-STUDIO.1) ─────────────────────
+    case 'agent_request': // manager: a customer request needs a decision
+      return isSafeId(data.request_id) ? `/approvals?tab=customers&focus=${data.request_id}` : '/approvals'
     case 'time_off_decision': // staff: approved/declined — preselect the
       // week+day of the request's first day.
       return isIsoDay(data.start_date) ? `/(tabs)/schedule?date=${data.start_date}` : '/(tabs)/schedule'
@@ -106,7 +110,7 @@ export function routeForNotification(data) {
 
     // ── FTE expenses (expenses submit/approve/decline) ──────────────
     case 'expense_submitted': // owner: awaiting approval
-      return isSafeId(data.claim_id) ? `/approvals?focus=${data.claim_id}` : '/approvals'
+      return isSafeId(data.claim_id) ? `/approvals?tab=team&focus=${data.claim_id}` : '/approvals?tab=team'
     case 'expense_approved':
     case 'expense_declined':
       return data.claim_id ? `/expenses/${data.claim_id}` : '/(tabs)/expenses'

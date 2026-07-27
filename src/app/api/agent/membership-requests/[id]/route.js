@@ -305,6 +305,23 @@ export async function PATCH(request, { params }) {
     }
   }
 
+  // APPROVALS-STUDIO.1 — a decline is never silence: tell the customer
+  // in-thread (operator-editable approval_decline_text). Best-effort; only
+  // for requests that came from a live conversation (funnel rows without a
+  // thread have no message window to use).
+  if (v.data.status === 'declined' && row.conversation_id) {
+    try {
+      const { sendAgentThreadMessage, buildDeclineNoticeText } = await import('@/lib/agent/notify')
+      await sendAgentThreadMessage(db, {
+        channel: row.channel,
+        conversationId: row.conversation_id,
+        text: buildDeclineNoticeText({ template: await confirmationTemplate('decline') }),
+      })
+    } catch (e) {
+      console.warn(`[agent-requests] decline notice send error: ${e?.message || e}`)
+    }
+  }
+
   // The claim above owns decided_by/decided_at/decision_note; this only
   // persists the execution outcome (finalStatus === v.data.status when
   // nothing executed — harmless rewrite of the claimed value). The execution

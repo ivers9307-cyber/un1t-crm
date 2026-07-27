@@ -381,7 +381,12 @@ export async function executeEventTool(toolName, input, ctx) {
     // Draft mode parity with class bookings: queue for one-tap approval.
     const { bookingMode } = await import('./booking-tools')
     if (bookingMode(ctx.settings) === 'draft') {
-      await logEventRequest(db, ctx, { kind: 'event_booking', status: 'pending', details: { ...auditDetails, mode: 'draft' } })
+      const draftId = await logEventRequest(db, ctx, { kind: 'event_booking', status: 'pending', details: { ...auditDetails, mode: 'draft' } })
+      const { notifyAgentApprovalRequest } = await import('./approval-notify')
+      await notifyAgentApprovalRequest(db, {
+        requestId: draftId, locationId: ctx.locationId, kind: 'event_booking', customerName: ctx.nameHint,
+        summary: [auditDetails.event_name, auditDetails.event_date].filter(Boolean).join(' · ') || 'event booking to confirm',
+      })
       return { requested: true, message: 'Queued for the team to confirm — tell the customer they will hear back shortly. Never say it is booked yet.' }
     }
 
@@ -496,10 +501,15 @@ export async function executeEventTool(toolName, input, ctx) {
         : { cancelled: false, message: 'The cancellation did not go through — relay honestly and offer a handoff.' }
     }
     if (decision.action === 'draft') {
-      await logEventRequest(db, ctx, {
+      const draftId = await logEventRequest(db, ctx, {
         kind: 'event_cancellation',
         status: 'pending',
         details: { ...auditDetails, mode: 'draft' },
+      })
+      const { notifyAgentApprovalRequest } = await import('./approval-notify')
+      await notifyAgentApprovalRequest(db, {
+        requestId: draftId, locationId: ctx.locationId, kind: 'event_cancellation', customerName: ctx.nameHint,
+        summary: [auditDetails.event_name, auditDetails.event_date].filter(Boolean).join(' · ') || 'paid entry cancellation',
       })
       return {
         requested: true,
@@ -523,7 +533,7 @@ export async function executeEventTool(toolName, input, ctx) {
 // blocks the customer-facing outcome.
 async function logEventRequest(db, ctx, { kind, status, details }) {
   try {
-    await db.from('agent_membership_requests').insert({
+    const { data, error } = await db.from('agent_membership_requests').insert({
       location_id: ctx.locationId,
       contact_id: ctx.verifiedContactId || ctx.contactId || null,
       kind,
@@ -531,8 +541,11 @@ async function logEventRequest(db, ctx, { kind, status, details }) {
       conversation_id: ctx.conversationId || null,
       details,
       status,
-    })
+    }).select('id').single()
+    if (error) console.warn(`[agent][events] audit insert failed: ${error.message}`)
+    return data?.id || null
   } catch (e) {
     console.warn(`[agent][events] audit insert failed: ${e?.message || e}`)
+    return null
   }
 }

@@ -120,6 +120,16 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     fallbackEmail: false,
   },
   {
+    category: 'agent_requests',
+    label: 'Customer approval needed',
+    description: 'A customer request landed in the approvals queue and needs a decision: a Mia booking issue, a /start funnel review, or a pause/cancel/membership request. One push per request.',
+    trigger: { kind: 'event', source: 'Agent tools + /start funnel processor (pending agent_membership_requests row created)' },
+    recipients: { kind: 'roles_at_location', detail: 'owner / manager at the request location (masters always included)' },
+    configurable: { leadTimes: false, roles: false },
+    fallbackEmail: true,
+    emailSubject: 'Customer approval needed',
+  },
+  {
     category: 'invoice_approved',
     label: 'Invoice approved',
     description: 'Contractor invoice has been approved for payment.',
