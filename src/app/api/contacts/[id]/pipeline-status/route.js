@@ -20,6 +20,8 @@ import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
 import { ensureDealForContact } from '@/lib/glofox-sync'
+import { logPipelineDismissal } from '@/lib/activity-events'
+import { logAuditEvent } from '@/lib/audit'
 
 export const runtime = 'nodejs'
 
@@ -96,6 +98,28 @@ export async function POST(request, props) {
   } catch (e) {
     deal = { action: 'error', error: e?.message || 'deal placement threw' }
   }
+
+  // Actor attribution — the deals trigger logs "Pipeline: moved to Cold"
+  // with no user context, which made "who dismissed this lead?" unanswerable.
+  // Record WHO on the contact timeline + in the unified audit log. Both
+  // helpers are best-effort (swallow their own errors) so an attribution
+  // hiccup never fails the already-saved dismissal.
+  await logPipelineDismissal(db, {
+    contactId: id,
+    locationId: contact.location_id,
+    cold,
+    actorName: user.full_name || user.email || null,
+  })
+  await logAuditEvent({
+    category: 'business',
+    action: cold ? 'pipeline.dismiss' : 'pipeline.restore',
+    actor: { id: user.id, full_name: user.full_name, email: user.email },
+    // Contacts aren't profiles — identity goes in resource, never target.id.
+    target: { label: contact.name || null, resource: `contacts/${id}` },
+    locationId: contact.location_id,
+    details: { cold, deal_action: deal?.action || null },
+    request,
+  })
 
   return NextResponse.json({ success: true, data: { cold, pipeline_dismissed_at: dismissedAt, deal } })
 }

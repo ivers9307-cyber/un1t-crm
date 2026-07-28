@@ -70,3 +70,46 @@ export async function logPipelineEvent(db, { contactId, locationId, oldStatus, n
     logWarn('activity-events', 'logPipelineEvent failed', { contactId, err: e })
   }
 }
+
+/**
+ * Log an operator Cold dismissal (or restore) with actor attribution.
+ *
+ * The deals trigger (mig 003/004) writes an unattributed
+ * "Pipeline: moved to Cold" row when the deal moves stage — it runs
+ * as service role and has no idea WHO clicked. This row is the
+ * operator-action record: it carries the acting staff member's name
+ * and fires even when the deal doesn't move (already cold, classifier
+ * disagreement), because the dismissal itself still happened.
+ *
+ * @param {SupabaseClient} db   service-role client
+ * @param {object} args
+ * @param {string}  args.contactId
+ * @param {string}  args.locationId
+ * @param {boolean} args.cold        true = dismissed, false = restored
+ * @param {string}  [args.actorName] acting user's display name (falls
+ *                                   back to email upstream; 'Unknown
+ *                                   staff' here as a last resort)
+ */
+export async function logPipelineDismissal(db, { contactId, locationId, cold, actorName }) {
+  if (!contactId || !locationId) return
+
+  const who = (actorName && String(actorName).trim()) || 'Unknown staff'
+  const subject = cold ? `Moved to Cold by ${who}` : `Returned to pipeline by ${who}`
+  const note = cold
+    ? 'Operator dismissal: lead taken off the pipeline.'
+    : 'Operator restore: lead returned to the pipeline.'
+
+  try {
+    await db.from('activities').insert({
+      contact_id: contactId,
+      location_id: locationId,
+      kind: 'event',
+      type: 'pipeline',
+      subject,
+      note,
+      done: true,
+    })
+  } catch (e) {
+    logWarn('activity-events', 'logPipelineDismissal failed', { contactId, err: e })
+  }
+}
