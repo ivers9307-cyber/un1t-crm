@@ -11,8 +11,8 @@ const prov = (key, n, items) => ({
 })
 
 describe('MOBILE_APPROVAL_KEYS', () => {
-  it('is the four inline-actionable categories in order', () => {
-    expect(MOBILE_APPROVAL_KEYS).toEqual(['time_off', 'shift_swaps', 'fte_expenses', 'contractor_invoices'])
+  it('is the five inline-actionable categories in order', () => {
+    expect(MOBILE_APPROVAL_KEYS).toEqual(['host_events', 'time_off', 'shift_swaps', 'fte_expenses', 'contractor_invoices'])
   })
 })
 

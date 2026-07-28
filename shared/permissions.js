@@ -569,6 +569,9 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // booking issue, /start funnel review, pause/cancel request). Fans out
   // to owner/manager (+masters); defaults on for approver roles only.
   { key: 'notify_agent_requests', label: '… Customer approval needed', hint: 'Notify when a customer request from Mia or the website needs a decision (approver roles by default)', mobileOnly: true, isNotify: true },
+  // HOST-APPROVALS.1 — a host submitted an event for review on the events
+  // platform. Approver roles only.
+  { key: 'notify_host_event_review', label: '… Host event needs review', hint: 'Notify when an event host submits an event for review (approver roles by default)', mobileOnly: true, isNotify: true },
   // Contractor invoice events (mig 101). Approved + declined go to
   // the contractor; FTE staff don't have an invoice flow so the
   // toggles are still listed but default off for non-contractors.
@@ -642,6 +645,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_agent_activity: true,
     notify_agent_requests: true,
+    notify_host_event_review: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_expense_submitted: true, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
@@ -675,6 +679,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: false, notify_whatsapp: false, notify_instagram: false, notify_agent_activity: false,
     notify_agent_requests: false,
+    notify_host_event_review: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
     // Staff submit expenses — outcomes on, but not the approval-queue
     // ping (they aren't approvers).
@@ -715,6 +720,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: false, notify_whatsapp: true, notify_instagram: false, notify_agent_activity: true,
     notify_agent_requests: false,
+    notify_host_event_review: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
     notify_expense_submitted: false, notify_expense_approved: true, notify_expense_declined: true,
     notify_shift_adjusted: true,
@@ -745,6 +751,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_agent_activity: true,
     notify_agent_requests: true,
+    notify_host_event_review: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
     // Approval-queue ping on by default (senior role covering the
     // studio); own-claim outcomes on like every role.
@@ -781,6 +788,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_agent_activity: true,
     notify_agent_requests: true,
+    notify_host_event_review: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
     // Managers run the approval queue day-to-day — submitted ping on;
     // own-claim outcomes on (parity-superset of staff too).
@@ -819,6 +827,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_time_off: true, notify_schedule: true, notify_swap: true,
     notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_agent_activity: true,
     notify_agent_requests: true,
+    notify_host_event_review: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
     // Owner IS the expense approver (per the routes: owner-at-location
     // + master) — submitted ping on; own-claim outcomes on.

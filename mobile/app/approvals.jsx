@@ -15,7 +15,7 @@ import { Stack, useFocusEffect, useLocalSearchParams, router } from 'expo-router
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../lib/auth-context'
 import BackHeaderLeft from '../components/BackHeaderLeft'
-import { getPendingApprovals } from '../lib/approvals-api'
+import { getPendingApprovals, reviewHostEvent } from '../lib/approvals-api'
 import {
   mobileApprovalSections, customerQueue, teamNavTiles,
   customerBadgeCount, teamBadgeCount,
@@ -28,7 +28,7 @@ import ApprovalCard from '../components/approvals/ApprovalCard'
 import CustomerApprovalCard from '../components/approvals/CustomerApprovalCard'
 import DeclineSheet from '../components/approvals/DeclineSheet'
 
-const REASON_REQUIRED = new Set(['fte_expenses', 'contractor_invoices'])
+const REASON_REQUIRED = new Set(['fte_expenses', 'contractor_invoices', 'host_events'])
 
 function TabPill({ label, count, active, onPress }) {
   return (
@@ -83,6 +83,7 @@ export default function ApprovalsInbox() {
       case 'shift_swaps': return respondToSwap(id, 'approved', null, locationId)
       case 'fte_expenses': return approveExpenseClaim(id)
       case 'contractor_invoices': return approveInvoice(id)
+      case 'host_events': return reviewHostEvent(id, 'approve')
       default: return Promise.resolve({ success: false, error: 'Unknown category' })
     }
   }
@@ -92,6 +93,7 @@ export default function ApprovalsInbox() {
       case 'shift_swaps': return respondToSwap(id, 'rejected', reason, locationId)
       case 'fte_expenses': return declineExpenseClaim(id, reason)
       case 'contractor_invoices': return declineInvoice(id, reason)
+      case 'host_events': return reviewHostEvent(id, 'reject', reason)
       default: return Promise.resolve({ success: false, error: 'Unknown category' })
     }
   }
