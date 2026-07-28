@@ -332,7 +332,10 @@ export default function HostEmails() {
 
             {mode === 'design' ? (
               <div className="rounded-lg overflow-hidden border border-white/15 bg-white/[0.02]">
-                <div id={EDITOR_DIV_ID} style={{ minHeight: 480 }}>
+                {/* Unlayer's iframe sizes to 100% of its container, so the
+                    container needs a DEFINITE height — min-height alone lets
+                    the iframe collapse (squashed toolbar + dead space). */}
+                <div id={EDITOR_DIV_ID} style={{ height: 620 }}>
                   {!unlayerReady && (
                     <p className="text-white/40 text-sm p-4">Loading the designer…</p>
                   )}
