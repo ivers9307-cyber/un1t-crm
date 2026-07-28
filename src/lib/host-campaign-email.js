@@ -126,8 +126,24 @@ export function renderHostCampaignHtml({ host, subject, bodyHtml, unsubscribeUrl
   const senderName = escapeHtml(host?.sender_name || host?.name || '')
   const hostName = escapeHtml(host?.name || host?.sender_name || '')
   const safeSubject = escapeHtml(subject || '')
-  const safeBody = sanitizeCampaignHtml(bodyHtml)
   const unsub = escapeHtml(unsubscribeUrl || '')
+
+  // HOST-EMAIL.4 — a visual-composer campaign stores a FULL html document
+  // (Unlayer export). Wrapping it in the shell would nest documents, so:
+  // sanitize the whole thing (same strip-list — the security posture on
+  // host-authored input is unchanged) and inject the mandatory footer
+  // before </body> instead. The footer stays server-injected AFTER
+  // sanitization so a host can never omit or strip it.
+  if (/<\s*(!doctype|html)[\s>]/i.test(String(bodyHtml || '').slice(0, 500))) {
+    const safeDoc = sanitizeCampaignHtml(bodyHtml)
+    const footer = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;"><tr><td align="center" style="padding:16px 8px;font-family:${FONT};font-size:11px;line-height:1.5;color:#888888;">${hostName} &middot; <a href="${unsub}" style="color:#888888;text-decoration:underline;">Unsubscribe</a><br>You&#39;re receiving this because you attended an event or joined the mailing list.</td></tr></table>`
+    if (/<\/body\s*>/i.test(safeDoc)) {
+      return safeDoc.replace(/<\/body\s*>/i, `${footer}</body>`)
+    }
+    return safeDoc + footer
+  }
+
+  const safeBody = sanitizeCampaignHtml(bodyHtml)
 
   return `<!DOCTYPE html>
 <html>
@@ -167,7 +183,35 @@ You&#39;re receiving this because you attended an event or joined the mailing li
  * @param {string} hostId
  * @returns {Promise<Array<{contact_id: string, email: string}>>}
  */
-export async function resolveHostRecipients(db, hostId) {
+export async function resolveHostRecipients(db, hostId, { audienceEventId = null } = {}) {
+  // HOST-EMAIL.4 — per-event audience. Resolved from CONFIRMED registrations
+  // at send time (host_contacts.source_event_id only records the FIRST event
+  // that added a contact, so it cannot answer "who attended event X").
+  // Null = no restriction (every host contact).
+  let allowedContactIds = null
+  if (audienceEventId) {
+    allowedContactIds = new Set()
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await db
+        .from('race_registrations')
+        .select('id, teams:team_id ( team_members ( contact_id ) )')
+        .eq('race_event_id', audienceEventId)
+        .eq('status', 'confirmed')
+        .order('registered_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, from + PAGE - 1)
+      if (error) throw new Error(`host campaign: attendee query failed: ${error.message}`)
+      for (const reg of data || []) {
+        const members = Array.isArray(reg?.teams?.team_members) ? reg.teams.team_members : []
+        for (const m of members) {
+          if (m?.contact_id) allowedContactIds.add(m.contact_id)
+        }
+      }
+      if (!data || data.length < PAGE) break
+    }
+    if (allowedContactIds.size === 0) return []
+  }
+
   const suppressed = new Set()
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await db
@@ -196,6 +240,7 @@ export async function resolveHostRecipients(db, hostId) {
       .range(from, from + PAGE - 1)
     if (error) throw new Error(`host campaign: contacts query failed: ${error.message}`)
     for (const row of data || []) {
+      if (allowedContactIds && !allowedContactIds.has(row.contact_id)) continue
       const contact = row.contact || null
       if (!isEmailable(contact, suppressed.has(row.contact_id))) continue
       const key = String(contact.email).trim().toLowerCase()

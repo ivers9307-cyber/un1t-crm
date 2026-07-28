@@ -38,7 +38,7 @@ export async function POST(_request, props) {
   // Own campaign or 404 — the .eq('host_id') is the tenancy boundary.
   const { data: campaign } = await db
     .from('host_campaigns')
-    .select('id, status')
+    .select('id, status, audience_event_id')
     .eq('id', params.id)
     .eq('host_id', session.host.id)
     .maybeSingle()
@@ -80,7 +80,9 @@ export async function POST(_request, props) {
   // Recipients resolve at send time — consent + per-host suppression + dedupe.
   let recipients
   try {
-    recipients = await resolveHostRecipients(db, session.host.id)
+    // HOST-EMAIL.4 — per-event audience: resolved from confirmed
+    // registrations at send time when the draft targets one event.
+    recipients = await resolveHostRecipients(db, session.host.id, { audienceEventId: campaign.audience_event_id || null })
   } catch (e) {
     return NextResponse.json({ success: false, error: e.message }, { status: 500 })
   }
