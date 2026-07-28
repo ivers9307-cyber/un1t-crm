@@ -95,6 +95,99 @@ function CopyValue({ label, value, copiedKey, onCopy }) {
   )
 }
 
+// HOST-EMAIL.5 — sender defaults, editable directly: the from-address, the
+// display name, and an explicit Reply-To for the host's campaign emails.
+// The email-domain flow above also writes sender_email/sender_name when it
+// provisions a dedicated domain; this card lets an operator set an interim
+// from-address on an already-verified domain (e.g. host@un1tdublin.com)
+// without provisioning, and control where replies land (blank Reply-To
+// falls back to the host's login email).
+function SenderDefaultsCard({ hostId, host, applyHost }) {
+  const [senderEmail, setSenderEmail] = useState(host?.sender_email || '')
+  const [senderName, setSenderName] = useState(host?.sender_name || '')
+  const [replyTo, setReplyTo] = useState(host?.reply_to_email || '')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState(null)
+
+  async function save(e) {
+    e.preventDefault()
+    if (saving) return
+    setSaving(true)
+    setSaved(false)
+    setError(null)
+    try {
+      const res = await fetch(`/api/hosts/${hostId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sender_email: senderEmail.trim() || null,
+          sender_name: senderName.trim() || null,
+          reply_to_email: replyTo.trim() || null,
+        }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok || !j.success) throw new Error(j.error || `HTTP ${res.status}`)
+      applyHost(j.data)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (err) {
+      setError(err.message || 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card title="Sender defaults">
+      <form onSubmit={save} className="space-y-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Send from email">
+            <input
+              type="email"
+              value={senderEmail}
+              onChange={(e) => setSenderEmail(e.target.value)}
+              placeholder="host@un1tdublin.com"
+              className="w-full border border-un1t-border rounded-md px-3 py-2 text-sm"
+            />
+          </Field>
+          <Field label="Sender name">
+            <input
+              type="text"
+              value={senderName}
+              onChange={(e) => setSenderName(e.target.value)}
+              maxLength={200}
+              placeholder={host?.name || 'Sender name'}
+              className="w-full border border-un1t-border rounded-md px-3 py-2 text-sm"
+            />
+          </Field>
+        </div>
+        <Field label="Reply-to email">
+          <input
+            type="email"
+            value={replyTo}
+            onChange={(e) => setReplyTo(e.target.value)}
+            placeholder={host?.email || 'Falls back to the host login email'}
+            className="w-full border border-un1t-border rounded-md px-3 py-2 text-sm"
+          />
+          <p className="text-xs text-un1t-subtle mt-1">
+            Where replies to campaign emails land. Leave blank to use the host&apos;s login email{host?.email ? ` (${host.email})` : ''}.
+          </p>
+        </Field>
+        <p className="text-xs text-un1t-subtle">
+          The from-address must be on a domain that&apos;s verified for sending — a dedicated
+          host domain from the card above, or an un1tdublin.com address as an interim.
+        </p>
+        {error && <p className="text-xs text-red-700">{error}</p>}
+        <div className="flex items-center gap-3">
+          <Button type="submit" icon={Save} loading={saving}>Save sender defaults</Button>
+          {saved && <span className="text-xs text-green-700">Saved.</span>}
+        </div>
+      </form>
+    </Card>
+  )
+}
+
 // "Email sending" (HOST-EMAIL.2) — provision the host's dedicated Postmark
 // sending domain (<label>.mail.un1tdublin.com), show the DKIM/Return-Path
 // DNS records to add to the un1tdublin.com zone, re-check verification, and
@@ -955,6 +1048,14 @@ export default function HostDetail({ hostId }) {
           domain: provision, DNS records, verification, kill switch. Keyed on
           the domain id so a fresh provision remounts with the new state. */}
       <EmailSendingCard key={host.postmark_domain_id || 'unprovisioned'} hostId={hostId} host={host} />
+
+      {/* Sender defaults (HOST-EMAIL.5) — from-address, sender name, reply-to. */}
+      <SenderDefaultsCard
+        key={`sender-${host.sender_email || ''}-${host.reply_to_email || ''}`}
+        hostId={hostId}
+        host={host}
+        applyHost={applyHost}
+      />
 
       {/* Host portal access (HOST-PORTAL.1) — give the host a login to their
           own self-serve dashboard. Emails them a set-password link. */}

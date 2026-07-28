@@ -83,7 +83,7 @@ async function runChunk(db, campaignId) {
   // sender_domain_verified stops an in-flight campaign mid-drain.
   const { data: host, error: hostErr } = await db
     .from('event_hosts')
-    .select('id, name, email, sender_email, sender_name, sender_domain_verified')
+    .select('id, name, email, sender_email, sender_name, sender_domain_verified, reply_to_email')
     .eq('id', campaign.host_id)
     .maybeSingle()
   if (hostErr) throw new Error(`host load failed: ${hostErr.message}`)
@@ -181,7 +181,8 @@ async function runChunk(db, campaignId) {
         await sendEmail({
           to: row.email,
           from,
-          replyTo: host.email || undefined,
+          // HOST-EMAIL.5 — explicit Reply-To wins; the host login email stays the fallback.
+          replyTo: host.reply_to_email || host.email || undefined,
           subject: campaign.subject,
           htmlBody,
           stream: 'broadcast',
