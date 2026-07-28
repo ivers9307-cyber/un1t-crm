@@ -31,6 +31,13 @@ const PatchSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
   email: z.string().trim().email().max(200).nullable().optional().or(z.literal('')),
   platform_fee_cents: z.number().int().min(0).max(100000).optional(),
+  // HOST-EMAIL.5 — sender defaults, editable directly (the email-domain flow
+  // also writes sender_email/sender_name when provisioning; direct edits let
+  // an operator set an interim from-address on an already-verified domain,
+  // e.g. host@un1tdublin.com, and an explicit Reply-To).
+  sender_email: z.string().trim().email().max(200).nullable().optional().or(z.literal('')),
+  sender_name: z.string().trim().max(200).nullable().optional().or(z.literal('')),
+  reply_to_email: z.string().trim().email().max(200).nullable().optional().or(z.literal('')),
 }).refine((o) => Object.keys(o).length > 0, { message: 'No fields to update' })
 
 export async function GET(_request, props) {
@@ -57,6 +64,9 @@ export async function PATCH(request, props) {
   if (v.data.name !== undefined) updates.name = v.data.name
   if (v.data.email !== undefined) updates.email = v.data.email || null
   if (v.data.platform_fee_cents !== undefined) updates.platform_fee_cents = v.data.platform_fee_cents
+  if (v.data.sender_email !== undefined) updates.sender_email = v.data.sender_email || null
+  if (v.data.sender_name !== undefined) updates.sender_name = v.data.sender_name || null
+  if (v.data.reply_to_email !== undefined) updates.reply_to_email = v.data.reply_to_email || null
 
   const { data, error } = await db
     .from('event_hosts')

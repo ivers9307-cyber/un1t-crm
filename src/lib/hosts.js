@@ -10,7 +10,7 @@ export const HOST_COLS =
   // Sender identity (HOST-EMAIL.2, mig 400) — the HostDetail "Email sending"
   // card + /api/hosts/[id]/email-domain routes read these off loadHostForOrg.
   'sender_domain, sender_email, sender_name, sender_domain_verified, ' +
-  'postmark_domain_id, email_daily_send_cap, slug'
+  'postmark_domain_id, email_daily_send_cap, reply_to_email, slug'
 
 /**
  * Load a host scoped to the caller's org. Returns null when the id is unknown
