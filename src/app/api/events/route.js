@@ -138,6 +138,7 @@ export async function GET(request) {
     .select(`
       id, name, slug, race_date, start_time, capacity, capacity_mode,
       active, kind, shared, location_id,
+      host:event_hosts!host_id ( id, name, organization_id ),
       waves:race_waves ( capacity ),
       registrations:race_registrations ( id, status, team:teams ( size ) )
     `)
@@ -145,7 +146,31 @@ export async function GET(request) {
     .order('race_date', { ascending: false })
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  const shaped = (data || []).map((r) => {
+  // HOST-EDIT.1 — org admins also see their org's HOST events (which live on
+  // the host's own anchor location, not the active studio) so hosted events
+  // can be found and edited from /events. Org-scoped, additive, deduped.
+  let rows = data || []
+  const orgId = user.activeOrganization?.id || user.activeLocation?.organization_id || null
+  if (orgId && ADMIN_ROLES.includes(user.role)) {
+    const { data: hosted } = await db
+      .from('race_events')
+      .select(`
+        id, name, slug, race_date, start_time, capacity, capacity_mode,
+        active, kind, shared, location_id,
+        host:event_hosts!host_id ( id, name, organization_id ),
+        waves:race_waves ( capacity ),
+        registrations:race_registrations ( id, status, team:teams ( size ) )
+      `)
+      .not('host_id', 'is', null)
+      .order('race_date', { ascending: false })
+      .limit(200)
+    const seen = new Set(rows.map((r) => r.id))
+    for (const r of hosted || []) {
+      if (!seen.has(r.id) && r.host?.organization_id === orgId) rows.push(r)
+    }
+  }
+
+  const shaped = rows.map((r) => {
     const isRace = isRaceKind(r.kind)
     return {
       id: r.id,
@@ -156,6 +181,7 @@ export async function GET(request) {
       start_time: r.start_time,
       active: r.active,
       shared: r.shared,
+      hosted_by: r.host?.name || null,
       signup_summary: formatSignupSummary(r.registrations, {
         isRace,
         capacity: sumWaveCapacity(r.waves) ?? r.capacity,
