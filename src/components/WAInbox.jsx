@@ -6,6 +6,7 @@ import { createBrowserClient } from '@/lib/supabase'
 import { isServableMedia } from '@shared/whatsapp-media'
 import { mergeTimeline } from '@shared/approval-cards'
 import { CHANNELS } from '@shared/channels'
+import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
 import WAMediaContent from '@/components/WAMediaContent'
 import ApprovalActionCard from '@/components/ApprovalActionCard'
 import { ChannelAvatar } from '@/components/inbox/ChannelBits'
@@ -157,6 +158,8 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState(null)
   const [templateVars, setTemplateVars] = useState({})
+  // WA-TPL-GROUPS — search box inside the template picker (mig 450 groups).
+  const [templateSearch, setTemplateSearch] = useState('')
   const [sendingTemplate, setSendingTemplate] = useState(false)
   // INBOX-REDESIGN.3.2 — unified "+" composer menu (Template / Card set /
   // Booking Flow), open-window-only. Same click-toggled popover idiom as
@@ -333,6 +336,7 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
       setShowTemplatePicker(false)
       setSelectedTemplate(null)
       setTemplateVars({})
+      setTemplateSearch('')
     }
   }, [selectedId])
 
@@ -598,38 +602,63 @@ export default function WAInbox({ locationId, userId, initialConversationId, emb
   // window-open composer's "+" menu → Template item (same picker, now
   // reachable from both states — defined once so the two call sites can
   // never drift apart).
+  // WA-TPL-GROUPS — bucketed by operator-set display_group (mig 450),
+  // filtered by the picker's search box; Ungrouped renders last.
+  const templateGroups = groupWaTemplates(templates, templateSearch)
   const templateListJsx = (
     <div>
       <div className="flex items-center justify-between mb-2">
         <p className="text-xs text-un1t-subtle font-semibold uppercase tracking-wider">Select a template</p>
-        <button type="button" onClick={() => setShowTemplatePicker(false)} className="text-un1t-subtle hover:text-un1t-text">
+        <button type="button" onClick={() => { setShowTemplatePicker(false); setTemplateSearch('') }} className="text-un1t-subtle hover:text-un1t-text">
           <X size={14} />
         </button>
       </div>
       {templates.length === 0 ? (
         <p className="text-xs text-un1t-muted py-2">No approved templates available. Create one in WhatsApp → Templates.</p>
       ) : (
-        <div className="space-y-1 max-h-48 overflow-auto">
-          {templates.map(t => {
-            const bodyComp = t.components?.find(c => c.type === 'BODY')
-            return (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => selectTemplate(t)}
-                className="w-full text-left px-3 py-2 rounded-md hover:bg-un1t-border/30 transition-colors"
-              >
-                <p className="text-sm font-medium flex items-center gap-1.5">
-                  {t.name}
-                  {t.quality_rating === 'RED' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-700">RED</span>}
-                  {t.quality_rating === 'YELLOW' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-700">YELLOW</span>}
-                </p>
-                <p className="text-xs text-un1t-muted truncate mt-0.5">
-                  {bodyComp?.text || 'No body text'}
-                </p>
-              </button>
-            )
-          })}
+        <div>
+          <input
+            type="text"
+            value={templateSearch}
+            onChange={e => setTemplateSearch(e.target.value)}
+            placeholder="Search templates…"
+            className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted mb-2"
+          />
+          <div className="space-y-2 max-h-48 overflow-auto">
+            {templateGroups.map(group => (
+              <div key={group.label}>
+                {/* A lone Ungrouped bucket (nobody has set groups yet) needs no header. */}
+                {!(templateGroups.length === 1 && group.label === UNGROUPED_LABEL) && (
+                  <p className="text-[10px] text-un1t-muted font-semibold uppercase tracking-wider px-3 pt-1 pb-0.5">{group.label}</p>
+                )}
+                <div className="space-y-1">
+                  {group.templates.map(t => {
+                    const bodyComp = t.components?.find(c => c.type === 'BODY')
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => selectTemplate(t)}
+                        className="w-full text-left px-3 py-2 rounded-md hover:bg-un1t-border/30 transition-colors"
+                      >
+                        <p className="text-sm font-medium flex items-center gap-1.5">
+                          {t.name}
+                          {t.quality_rating === 'RED' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-700">RED</span>}
+                          {t.quality_rating === 'YELLOW' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-700">YELLOW</span>}
+                        </p>
+                        <p className="text-xs text-un1t-muted truncate mt-0.5">
+                          {bodyComp?.text || 'No body text'}
+                        </p>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+            {templateGroups.length === 0 && (
+              <p className="text-xs text-un1t-muted py-2 px-3">No templates match &ldquo;{templateSearch}&rdquo;.</p>
+            )}
+          </div>
         </div>
       )}
     </div>

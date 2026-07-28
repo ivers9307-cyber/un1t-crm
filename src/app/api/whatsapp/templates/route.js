@@ -25,6 +25,9 @@ const WaTemplateCreateSchema = z.object({
   header_media_handle: z.string().max(4000).nullable().optional(),
   header_media_url: z.string().url().max(2000).nullable().optional(),
   header_media_path: z.string().max(500).nullable().optional(),
+  // Operator-defined picker grouping (mig 450) — local-only, never sent
+  // to Meta and untouched by ?sync=true.
+  display_group: z.string().max(100).nullable().optional(),
 })
 
 // GET /api/whatsapp/templates — list templates (syncs with Meta)
@@ -130,6 +133,7 @@ export async function POST(request) {
       header_media_handle: body.header_media_handle || null,
       header_media_url: body.header_media_url || null,
       header_media_path: body.header_media_path || null,
+      display_group: body.display_group?.trim() || null,
     }).select().single()
 
     if (error) throw new Error(error.message)

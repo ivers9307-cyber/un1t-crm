@@ -43,6 +43,7 @@ import {
 import { listConversationApprovals } from '../../lib/inbox-approvals-api'
 import { needsReply, isAgentHandoff } from '../../lib/inbox'
 import { mergeTimeline } from 'shared/approval-cards'
+import { groupWaTemplates, UNGROUPED_LABEL } from 'shared/wa-template-groups'
 import MessageBubble from '../../components/MessageBubble'
 import ThreadApprovalCard from '../../components/ThreadApprovalCard'
 
@@ -491,19 +492,31 @@ export default function Conversation() {
                       No approved templates available.
                     </Text>
                   )}
-                  {templates.map(t => (
-                    <Pressable
-                      key={t.id}
-                      onPress={() => sendChosenTemplate(t)}
-                      className="bg-un1t-surface border border-un1t-border rounded-xl p-3 mb-2 active:opacity-70"
-                    >
-                      <Text className="text-sm font-semibold text-un1t-text">{t.name}</Text>
-                      {t.body_text && (
-                        <Text className="text-xs text-un1t-subtle mt-1" numberOfLines={2}>
-                          {t.body_text}
+                  {/* WA-TPL-GROUPS — bucketed by operator-set display_group
+                      (mig 450), same shared ordering as the web picker. A
+                      lone Ungrouped bucket needs no header. */}
+                  {groupWaTemplates(templates).map((group, _, groups) => (
+                    <View key={group.label}>
+                      {!(groups.length === 1 && group.label === UNGROUPED_LABEL) && (
+                        <Text className="text-[11px] font-semibold text-un1t-subtle uppercase tracking-wider mb-1.5 mt-1">
+                          {group.label}
                         </Text>
                       )}
-                    </Pressable>
+                      {group.templates.map(t => (
+                        <Pressable
+                          key={t.id}
+                          onPress={() => sendChosenTemplate(t)}
+                          className="bg-un1t-surface border border-un1t-border rounded-xl p-3 mb-2 active:opacity-70"
+                        >
+                          <Text className="text-sm font-semibold text-un1t-text">{t.name}</Text>
+                          {t.body_text && (
+                            <Text className="text-xs text-un1t-subtle mt-1" numberOfLines={2}>
+                              {t.body_text}
+                            </Text>
+                          )}
+                        </Pressable>
+                      ))}
+                    </View>
                   ))}
                 </ScrollView>
               </Pressable>

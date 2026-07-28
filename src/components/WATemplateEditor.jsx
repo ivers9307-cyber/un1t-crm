@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Save, Send, Trash2, Upload, FileText, Video, X } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import { validateTemplateMedia } from '@/lib/template-media'
 import { extractVariableIndexes, extractNamedVariables, buildBodyExample, buildNamedBodyExample, buildHeaderTextExample, missingSampleError, samplesFromExample, samplesFromNamedExample } from '@/lib/whatsapp-template-samples'
+import { listWaTemplateGroups } from '@shared/wa-template-groups'
 
 // Parse a route response defensively. Infra layers answer in plain text
 // (Vercel's ~4.5 MB body cap returns a literal "Request Entity Too
@@ -63,9 +64,44 @@ export default function WATemplateEditor({ template, locationId, userId, events 
   const [name, setName] = useState(template?.name || '')
   const [category, setCategory] = useState(template?.category || 'MARKETING')
   const [language, setLanguage] = useState(template?.language || 'en')
+  // WA-TPL-GROUPS (mig 450) — local-only picker grouping. Editable at any
+  // status: for unsubmitted templates it rides the main save payload; for
+  // submitted ones (Save disabled — Meta fields are locked) it self-saves
+  // on blur via its own PUT.
+  const [displayGroup, setDisplayGroup] = useState(template?.display_group || '')
+  const [groupSaved, setGroupSaved] = useState(false)
+  const [groupSuggestions, setGroupSuggestions] = useState([])
   const [saving, setSaving] = useState(false)
   const [resubmitting, setResubmitting] = useState(false)
   const [error, setError] = useState(null)
+
+  // Group suggestions for the datalist — the groups already in use at this
+  // location, so naming stays consistent across staff.
+  useEffect(() => {
+    if (!locationId) return
+    let cancelled = false
+    fetch(`/api/whatsapp/templates?location_id=${locationId}`)
+      .then(readJson)
+      .then(data => {
+        if (!cancelled && data.success) setGroupSuggestions(listWaTemplateGroups(data.templates || []))
+      })
+      .catch(() => { /* best-effort — suggestions only */ })
+    return () => { cancelled = true }
+  }, [locationId])
+
+  async function saveGroupOnly() {
+    if (!isEditing || !isSubmitted) return   // unsubmitted templates carry it in the main save payload
+    const next = displayGroup.trim() || null
+    if (next === (template?.display_group || null)) return
+    try {
+      const result = await fetch(`/api/whatsapp/templates/${template.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ display_group: next }),
+      }).then(readJson)
+      if (result.success) setGroupSaved(true)
+    } catch { /* best-effort */ }
+  }
 
   // Component state
   const existingComponents = template?.components || []
@@ -280,6 +316,7 @@ export default function WATemplateEditor({ template, locationId, userId, events 
         header_media_handle: mediaHandle,
         header_media_url: mediaUrl,
         header_media_path: mediaPath,
+        display_group: displayGroup.trim() || null,
       }
 
       const url = isEditing ? `/api/whatsapp/templates/${template.id}` : '/api/whatsapp/templates'
@@ -485,6 +522,26 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                     <option value="en_GB">English (UK)</option>
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-sm mb-1.5">
+                  Group
+                  {groupSaved && <span className="ml-2 text-xs text-green-600">Saved</span>}
+                </label>
+                <input
+                  type="text"
+                  list="wa-template-editor-groups"
+                  value={displayGroup}
+                  onChange={e => { setDisplayGroup(e.target.value); setGroupSaved(false) }}
+                  onBlur={saveGroupOnly}
+                  placeholder="e.g. Bookings, Payments, Leads"
+                  className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted"
+                />
+                <datalist id="wa-template-editor-groups">
+                  {groupSuggestions.map(g => <option key={g} value={g} />)}
+                </datalist>
+                <p className="text-xs text-un1t-muted mt-1">Groups templates together in the inbox picker. Local only — not sent to Meta, editable even after approval.</p>
               </div>
             </div>
 

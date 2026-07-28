@@ -160,7 +160,7 @@ export function getNeedsActionCount(locationId) {
 
 export async function listTemplates(locationId) {
   let q = supabase.from('whatsapp_templates')
-    .select('id, name, status, category, language, body_text, header_text')
+    .select('id, name, status, category, language, body_text, header_text, display_group')
     .eq('status', 'APPROVED')
     .order('name', { ascending: true })
   if (locationId) q = q.eq('location_id', locationId)
