@@ -201,6 +201,24 @@ export default ({ config }) => ({
     'expo-splash-screen',
     'expo-status-bar',
     'expo-web-browser',
+    // ANDROID-R8 — Play Console flagged release 7 (2.1.0) as unoptimised:
+    // React Native's Gradle template defaults minifyEnabled=false, so the
+    // Java/Kotlin side ships unshrunk. Enabling R8 + resource shrinking cuts
+    // AAB size and startup cost; the JS bundle (Hermes) is unaffected. Expo
+    // modules carry their own ProGuard keep-rules, but reflection breakage
+    // only surfaces in a MINIFIED build — smoke-test the internal-testing
+    // .aab before promoting. NATIVE change → new EAS Build, not OTA-able;
+    // runtimeVersion stays put (the JS↔native interface is unchanged, so
+    // existing lanes still match).
+    [
+      'expo-build-properties',
+      {
+        android: {
+          enableProguardInReleaseBuilds: true,
+          enableShrinkResourcesInReleaseBuilds: true,
+        },
+      },
+    ],
   ],
   experiments: {
     typedRoutes: true,
