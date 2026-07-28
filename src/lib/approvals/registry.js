@@ -54,6 +54,7 @@ import { invoicesQueueProvider } from './providers/invoices-queue'
 import { issuesProvider } from './providers/issues'
 import { agentRequestsProvider } from './providers/agent-requests'
 import { hyroxSessionsProvider } from './providers/hyrox-sessions'
+import { hostEventsProvider } from './providers/host-events'
 import { hasPermission } from '@/lib/permissions'
 
 export const APPROVALS_PROVIDERS = Object.freeze([
@@ -77,6 +78,8 @@ export const APPROVALS_PROVIDERS = Object.freeze([
   // HYROX-TC.2 — coach review of AI-generated Hyrox Training Club
   // sessions before they publish to the studio TV.
   hyroxSessionsProvider,
+  // HOST-APPROVALS.1 — host events pending review (org-scoped).
+  hostEventsProvider,
 ])
 
 /**

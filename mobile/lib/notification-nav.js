@@ -67,6 +67,10 @@ export function routeForNotification(data) {
     // ── Customer approvals (APPROVALS-STUDIO.1) ─────────────────────
     case 'agent_request': // manager: a customer request needs a decision
       return isSafeId(data.request_id) ? `/approvals?tab=customers&focus=${data.request_id}` : '/approvals'
+
+    // ── Host events (HOST-APPROVALS.1) ──────────────────────────────
+    case 'host_event_review': // admin: a host submitted an event for review
+      return isSafeId(data.event_id) ? `/approvals?tab=team&focus=${data.event_id}` : '/approvals?tab=team'
     case 'time_off_decision': // staff: approved/declined — preselect the
       // week+day of the request's first day.
       return isIsoDay(data.start_date) ? `/(tabs)/schedule?date=${data.start_date}` : '/(tabs)/schedule'

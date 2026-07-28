@@ -225,6 +225,17 @@ export async function POST(request) {
 
   const db = createServerClient()
 
+  // HOST-APPROVALS.1 — slugs are globally unique (public /event/[slug] has
+  // no location filter; mig 451 enforces it). Pre-check for a clean 409
+  // instead of a raw constraint error.
+  const { data: slugClash } = await db.from('race_events').select('id').eq('slug', slug).maybeSingle()
+  if (slugClash) {
+    return NextResponse.json({
+      success: false,
+      error: `The URL slug "${slug}" is already used by another event. Pick a different name or slug.`,
+    }, { status: 409 })
+  }
+
   // EVENTS-HOST.4 — assigning a payee routes ticket money DIRECTLY to that
   // host's Stripe, so it's gated to the host-management bar (ADMIN_ROLES) —
   // the same level that can create/delete the host itself — not the

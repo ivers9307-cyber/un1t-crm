@@ -11,7 +11,9 @@
 //                    dedicated screens.
 
 // Internal categories actioned inline on this screen, in display order.
-export const MOBILE_APPROVAL_KEYS = ['time_off', 'shift_swaps', 'fte_expenses', 'contractor_invoices']
+// host_events (HOST-APPROVALS.1): approve/reject a host-submitted event —
+// executes via POST /api/events/[id]/review, reject requires a reason.
+export const MOBILE_APPROVAL_KEYS = ['host_events', 'time_off', 'shift_swaps', 'fte_expenses', 'contractor_invoices']
 
 // Internal categories with a dedicated mobile surface — the inbox links out
 // instead of re-implementing their review flows.
