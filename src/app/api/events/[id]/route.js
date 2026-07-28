@@ -98,6 +98,23 @@ async function loadRace(db, id) {
     .single()
 }
 
+
+// HOST-EDIT.1 — org admins may manage a HOST event even though it lives on
+// the host's own anchor location (no profile_locations row there): allowed
+// when the event's host belongs to the caller's active org and the caller
+// is ADMIN_ROLES. Falls back to the normal location guard otherwise.
+async function hostEventOrgAccess(db, user, eventRow) {
+  if (!eventRow?.host_id || !ADMIN_ROLES.includes(user.role)) return false
+  const orgId = user.activeOrganization?.id || user.activeLocation?.organization_id || null
+  if (!orgId) return false
+  const { data: host } = await db
+    .from('event_hosts')
+    .select('id, organization_id')
+    .eq('id', eventRow.host_id)
+    .maybeSingle()
+  return host?.organization_id === orgId
+}
+
 export async function GET(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
@@ -112,7 +129,7 @@ export async function GET(_request, props) {
     return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   }
   const guard = assertLocationAccessOr404(user, data.location_id)
-  if (guard) return guard
+  if (guard && !(await hostEventOrgAccess(db, user, data))) return guard
 
   return NextResponse.json({ success: true, data })
 }
@@ -139,7 +156,7 @@ export async function PUT(request, props) {
     return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   }
   const guard = assertLocationAccessOr404(user, existing.location_id)
-  if (guard) return guard
+  if (guard && !(await hostEventOrgAccess(db, user, existing))) return guard
 
   // EVENTS-HOST.4 — changing the payee (assign, switch, or clear) routes
   // ticket money, so it's gated to ADMIN_ROLES — matching who can manage the

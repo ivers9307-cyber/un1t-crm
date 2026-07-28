@@ -12,6 +12,7 @@ import { hasPermission } from '@/lib/permissions'
 import { Plus, Flag, ExternalLink, Users, Tag } from 'lucide-react'
 import { getAppUrl } from '@/lib/app-url'
 import { formatSignupSummary, sumWaveCapacity } from '@/lib/event-signups'
+import { ADMIN_ROLES } from '@/lib/schemas'
 import { eventKindLabel, eventKindTone, isRaceKind, orderEventsForBrowse, todayIsoDublin } from '@shared/events'
 
 export const dynamic = 'force-dynamic'
@@ -60,12 +61,36 @@ export default async function EventsIndexPage(props) {
       .select(`
         id, name, slug, race_date, start_time, capacity, capacity_mode, allowed_team_sizes,
         active, kind, shared, location_id, registration_opens_at, registration_closes_at,
+        host:event_hosts!host_id ( id, name, organization_id ),
         waves:race_waves ( capacity ),
         registrations:race_registrations ( id, status, team:teams ( size ) )
       `)
       .or(`location_id.eq.${activeLocationId},shared.eq.true`)
       .order('race_date', { ascending: false })
     races = data || []
+  }
+
+  // HOST-EDIT.1 — org admins also see their org's HOST events (which live
+  // on the host's own anchor location, not this studio) so hosted events
+  // can be found + edited from here. Org-scoped, additive, deduped.
+  const orgId = user.activeOrganization?.id || user.activeLocation?.organization_id || null
+  if (orgId && ADMIN_ROLES.includes(user.role)) {
+    const { data: hosted } = await db
+      .from('race_events')
+      .select(`
+        id, name, slug, race_date, start_time, capacity, capacity_mode, allowed_team_sizes,
+        active, kind, shared, location_id, registration_opens_at, registration_closes_at,
+        host:event_hosts!host_id ( id, name, organization_id ),
+        waves:race_waves ( capacity ),
+        registrations:race_registrations ( id, status, team:teams ( size ) )
+      `)
+      .not('host_id', 'is', null)
+      .order('race_date', { ascending: false })
+      .limit(200)
+    const seen = new Set(races.map((r) => r.id))
+    for (const r of hosted || []) {
+      if (!seen.has(r.id) && r.host?.organization_id === orgId) races.push(r)
+    }
   }
 
   const today = todayIsoDublin()
@@ -179,6 +204,7 @@ export default async function EventsIndexPage(props) {
                       <td className="p-3">
                         <div className="font-medium text-un1t-text">{r.name}</div>
                         {r.shared && <span className="inline-block mt-0.5 text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-500/15 text-indigo-700">Shared</span>}
+                        {r.host?.name && <span className="inline-block mt-0.5 text-[10px] px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-700">Hosted · {r.host.name}</span>}
                         <div className="text-[11px] text-un1t-subtle font-mono mt-0.5">/{r.slug}</div>
                       </td>
                       <td className="p-3">
