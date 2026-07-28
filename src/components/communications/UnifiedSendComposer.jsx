@@ -14,6 +14,7 @@ import AudienceBuilder from '@/components/AudienceBuilder'
 import ContactMultiSelect from './ContactMultiSelect'
 import { useUnlayerEditor } from './useUnlayerEditor'
 import { smsSegmentInfo, SMS_MAX_LEN, SMS_MERGE_TAGS, waBodyVariables, WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
+import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
 
 const EMPTY_FILTER = { logic: 'and', filters: [] }
 
@@ -398,9 +399,16 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
               <span className="block text-xs font-medium text-un1t-subtle mb-1">Approved template</span>
               <select className={fieldCls} value={templateId} onChange={e => { setTemplateId(e.target.value); setVariables({}) }}>
                 <option value="">Choose a template…</option>
-                {templates.map(t => (
-                  <option key={t.id} value={t.id}>{t.name}{t.language ? ` (${t.language})` : ''}{t.category ? ` · ${t.category}` : ''}</option>
-                ))}
+                {/* WA-TPL-GROUPS — optgroups by operator-set display_group (mig
+                    450); a lone Ungrouped bucket renders flat, so nothing
+                    changes until groups are actually set. */}
+                {groupWaTemplates(templates).map((group, _, groups) => {
+                  const options = group.templates.map(t => (
+                    <option key={t.id} value={t.id}>{t.name}{t.language ? ` (${t.language})` : ''}{t.category ? ` · ${t.category}` : ''}</option>
+                  ))
+                  if (groups.length === 1 && group.label === UNGROUPED_LABEL) return options
+                  return <optgroup key={group.label} label={group.label}>{options}</optgroup>
+                })}
               </select>
             </label>
             {templates.length === 0 && (
