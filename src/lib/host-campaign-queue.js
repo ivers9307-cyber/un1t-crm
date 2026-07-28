@@ -42,7 +42,7 @@
 import { renderHostCampaignHtml } from './host-campaign-email.js'
 import { isEmailable } from './host-contact-list.js'
 import { signHostUnsubToken } from './host-unsubscribe.js'
-import { sendEmail } from './postmark.js'
+import { sendEmail, applyMergeTags } from './postmark.js'
 import { getAppUrl } from './app-url.js'
 import { logError } from './log.js'
 
@@ -72,7 +72,7 @@ async function runChunk(db, campaignId) {
   // unknown) campaign is a clean skip for either consumer.
   const { data: campaign, error: campErr } = await db
     .from('host_campaigns')
-    .select('id, host_id, subject, body_html, status, recipient_count, sent_count')
+    .select('id, host_id, subject, body_html, status, email_type, recipient_count, sent_count')
     .eq('id', campaignId)
     .eq('status', 'sending')
     .maybeSingle()
@@ -139,7 +139,7 @@ async function runChunk(db, campaignId) {
     const contactIds = claimed.map((r) => r.contact_id)
     const { data: contactRows, error: contactErr } = await db
       .from('contacts')
-      .select('id, email, email_marketing, email_status, email_suppressed_at')
+      .select('id, email, first_name, last_name, name, email_marketing, email_administrative, email_status, email_suppressed_at')
       .in('id', contactIds)
     if (contactErr) throw new Error(`consent re-check failed: ${contactErr.message}`)
     const { data: suppRows, error: suppErr } = await db
@@ -153,7 +153,7 @@ async function runChunk(db, campaignId) {
     const sendable = []
     const revokedIds = []
     for (const row of claimed) {
-      const ok = isEmailable(contactById.get(row.contact_id) || null, suppressedIds.has(row.contact_id))
+      const ok = isEmailable(contactById.get(row.contact_id) || null, suppressedIds.has(row.contact_id), { emailType: campaign.email_type === 'utility' ? 'utility' : 'marketing' })
       if (ok) sendable.push(row)
       else revokedIds.push(row.id)
     }
@@ -171,21 +171,30 @@ async function runChunk(db, campaignId) {
       // per-contact (host_email_suppressions), injected by the renderer.
       const unsubscribeUrl =
         `${baseUrl}/unsubscribe/host/${signHostUnsubToken({ hostId: campaign.host_id, contactId: row.contact_id })}`
-      const htmlBody = renderHostCampaignHtml({
+      // HOST-EMAIL.6 — merge tags, the same engine and syntax as CRM
+      // campaigns ({{first_name}} …). Substituted AFTER render/sanitize, on
+      // a limited contact shape — hosts get name/email tags only.
+      const tagContact = (() => {
+        const c = contactById.get(row.contact_id) || {}
+        return { first_name: c.first_name || null, last_name: c.last_name || null, name: c.name || null, email: c.email || row.email }
+      })()
+      const htmlBody = applyMergeTags(renderHostCampaignHtml({
         host,
         subject: campaign.subject,
         bodyHtml: campaign.body_html,
         unsubscribeUrl,
-      })
+      }), tagContact, { unsubscribe_url: unsubscribeUrl })
+      const mergedSubject = applyMergeTags(campaign.subject, tagContact) || campaign.subject
       try {
         await sendEmail({
           to: row.email,
           from,
           // HOST-EMAIL.5 — explicit Reply-To wins; the host login email stays the fallback.
           replyTo: host.reply_to_email || host.email || undefined,
-          subject: campaign.subject,
+          subject: mergedSubject,
           htmlBody,
-          stream: 'broadcast',
+          // HOST-EMAIL.6 — utility rides the transactional stream.
+          stream: campaign.email_type === 'utility' ? 'outbound' : 'broadcast',
           tag: 'host-campaign',
           metadata: { host_campaign_id: campaign.id, host_id: host.id, contact_id: row.contact_id },
         })

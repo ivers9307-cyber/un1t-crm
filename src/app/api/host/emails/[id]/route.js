@@ -21,6 +21,7 @@ const CampaignUpdateSchema = z.object({
   body: z.string().min(1, 'Body is required').max(300000, 'Body is too long'),
   design_json: z.unknown().optional().nullable(),
   audience_event_id: z.string().regex(UUIDISH).optional().nullable(),
+  email_type: z.enum(['marketing', 'utility']).optional(),
 })
 
 export async function GET(_request, props) {
@@ -31,7 +32,7 @@ export async function GET(_request, props) {
   const db = createServerClient()
   const { data, error } = await db
     .from('host_campaigns')
-    .select('id, subject, body_html, design_json, audience_event_id, status, recipient_count, sent_count, created_at, sent_at')
+    .select('id, subject, body_html, design_json, audience_event_id, email_type, status, recipient_count, sent_count, created_at, sent_at')
     .eq('id', params.id)
     .eq('host_id', session.host.id)
     .maybeSingle()
@@ -67,6 +68,7 @@ export async function PATCH(request, props) {
       body_html: parsed.data.body,
       design_json: parsed.data.design_json ?? null,
       audience_event_id: parsed.data.audience_event_id || null,
+      email_type: parsed.data.email_type === 'utility' ? 'utility' : 'marketing',
     })
     .eq('id', params.id)
     .eq('host_id', session.host.id)

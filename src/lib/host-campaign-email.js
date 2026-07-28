@@ -183,7 +183,7 @@ You&#39;re receiving this because you attended an event or joined the mailing li
  * @param {string} hostId
  * @returns {Promise<Array<{contact_id: string, email: string}>>}
  */
-export async function resolveHostRecipients(db, hostId, { audienceEventId = null } = {}) {
+export async function resolveHostRecipients(db, hostId, { audienceEventId = null, emailType = 'marketing' } = {}) {
   // HOST-EMAIL.4 — per-event audience. Resolved from CONFIRMED registrations
   // at send time (host_contacts.source_event_id only records the FIRST event
   // that added a contact, so it cannot answer "who attended event X").
@@ -232,7 +232,7 @@ export async function resolveHostRecipients(db, hostId, { audienceEventId = null
       .from('host_contacts')
       .select(`
         contact_id,
-        contact:contacts!contact_id ( id, email, email_marketing, email_status, email_suppressed_at )
+        contact:contacts!contact_id ( id, email, email_marketing, email_administrative, email_status, email_suppressed_at )
       `)
       .eq('host_id', hostId)
       .order('created_at', { ascending: false })
@@ -242,7 +242,7 @@ export async function resolveHostRecipients(db, hostId, { audienceEventId = null
     for (const row of data || []) {
       if (allowedContactIds && !allowedContactIds.has(row.contact_id)) continue
       const contact = row.contact || null
-      if (!isEmailable(contact, suppressed.has(row.contact_id))) continue
+      if (!isEmailable(contact, suppressed.has(row.contact_id), { emailType })) continue
       const key = String(contact.email).trim().toLowerCase()
       if (seenEmails.has(key)) continue
       seenEmails.add(key)

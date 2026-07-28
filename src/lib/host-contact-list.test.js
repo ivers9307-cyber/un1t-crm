@@ -266,3 +266,24 @@ describe('fetchHostContactRows', () => {
     expect(rows[0]).toMatchObject({ contact_id: 'c1', name: '', email: '', emailable: false })
   })
 })
+
+// HOST-EMAIL.6 — utility vs marketing consent families.
+describe('isEmailable — utility emails', () => {
+  const base = { email: 'a@x.com', email_marketing: false, email_administrative: true, email_status: 'active', email_suppressed_at: null }
+  it('reaches admin-consented contacts regardless of marketing opt-out or host unsubscribe', () => {
+    expect(isEmailable(base, false, { emailType: 'utility' })).toBe(true)
+    expect(isEmailable(base, true, { emailType: 'utility' })).toBe(true)
+    expect(isEmailable({ ...base, email_status: 'unsubscribed' }, false, { emailType: 'utility' })).toBe(true)
+  })
+  it('still blocks on missing admin consent and deliverability', () => {
+    expect(isEmailable({ ...base, email_administrative: false }, false, { emailType: 'utility' })).toBe(false)
+    expect(isEmailable({ ...base, email_status: 'bounced' }, false, { emailType: 'utility' })).toBe(false)
+    expect(isEmailable({ ...base, email_status: 'complained' }, false, { emailType: 'utility' })).toBe(false)
+    expect(isEmailable({ ...base, email_suppressed_at: '2026-01-01' }, false, { emailType: 'utility' })).toBe(false)
+  })
+  it('marketing gate is unchanged by default', () => {
+    expect(isEmailable(base, false)).toBe(false)
+    expect(isEmailable({ ...base, email_marketing: true }, false)).toBe(true)
+    expect(isEmailable({ ...base, email_marketing: true }, true)).toBe(false)
+  })
+})
