@@ -1,0 +1,12 @@
+-- HOST-APPROVALS.1 — global unique index on race_events.slug.
+--
+-- /event/[slug] + /api/public/events/[slug] resolve the slug with NO
+-- location filter, but nothing enforced global uniqueness: the host
+-- portal's create route deduped per-location only, and the operator
+-- create route not at all. Live incident 2026-07-28: a host event
+-- duplicated a staff-created event's slug and both public pages 404'd
+-- ("no race event") because .single() matched two rows. The one live
+-- duplicate was repaired by hand (pride-training-club-sep20) before
+-- this index; both create routes now also pre-check globally, so this
+-- is the backstop for any future write path.
+CREATE UNIQUE INDEX IF NOT EXISTS race_events_slug_unique ON public.race_events (slug);

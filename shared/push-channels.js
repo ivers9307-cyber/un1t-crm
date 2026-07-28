@@ -79,6 +79,7 @@ const CATEGORY_CHANNELS = Object.freeze({
   time_off: 'approvals',
   expense_submitted: 'approvals',
   agent_requests: 'approvals', // customer approval queued by Mia / the /start funnel
+  host_event_review: 'approvals', // host submitted an event for review
   // Informational outcomes / FYIs.
   agent_activity: 'updates', // "Mia is handling a chat" — an ambient FYI, not a heads-up
   schedule: 'updates',

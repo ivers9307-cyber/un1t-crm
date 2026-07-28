@@ -130,6 +130,15 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     emailSubject: 'Customer approval needed',
   },
   {
+    category: 'host_event_review',
+    label: 'Host event needs review',
+    description: 'A host submitted an event for review on the events platform. One push per submission to the org admins; the email notification remains as the durable record.',
+    trigger: { kind: 'event', source: 'POST /api/host/events/[id]/submit (status → pending_review)' },
+    recipients: { kind: 'roles_at_location', detail: 'owner / manager across the host org (masters included)' },
+    configurable: { leadTimes: false, roles: false },
+    fallbackEmail: false, // the submit flow already sends its own richer email
+  },
+  {
     category: 'invoice_approved',
     label: 'Invoice approved',
     description: 'Contractor invoice has been approved for payment.',

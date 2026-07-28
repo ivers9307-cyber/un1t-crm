@@ -49,9 +49,14 @@ export async function POST(request) {
 
   const locationId = await ensureAnchorLocation(db, host)
 
+  // HOST-APPROVALS.1 — slug clash check must be GLOBAL: /event/[slug] and
+  // /api/public/events/[slug] resolve with no location filter, so a slug
+  // that collides with ANY event 404s both ("no race event", live
+  // 2026-07-28 — the host's new event duplicated a staff-created
+  // Stillorgan event's slug and the per-location check saw no clash).
   let slug = deriveSlug(input.name)
   for (let n = 2; ; n++) {
-    const { data: clash } = await db.from('race_events').select('id').eq('location_id', locationId).eq('slug', slug).maybeSingle()
+    const { data: clash } = await db.from('race_events').select('id').eq('slug', slug).maybeSingle()
     if (!clash) break
     slug = `${deriveSlug(input.name)}-${n}`
   }

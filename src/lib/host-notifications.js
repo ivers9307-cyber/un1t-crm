@@ -117,6 +117,23 @@ export async function notifyAdminsEventSubmitted({ db, event, host, orgId }) {
     .in('role', ADMIN_ROLES)
   const profileIds = [...new Set((pls || []).map((r) => r.profile_id).filter(Boolean))]
   if (profileIds.length === 0) return
+
+  // HOST-APPROVALS.1 — push first (the email below predates the approvals
+  // integration and stays as the durable record). Keyed on event+submission
+  // so a resubmit after rejection pushes again; deduped per recipient.
+  // Best-effort — a push hiccup never blocks the emails.
+  try {
+    const { sendPushOnce } = await import('@/lib/push-dedup')
+    await sendPushOnce(db, `host_event_review:${event.id}:${event.submitted_at || ''}`, profileIds, {
+      title: 'Approval needed · Host event',
+      body: `${host.name || 'A host'} submitted "${event.name}" for review.`,
+      category: 'host_event_review',
+      data: { type: 'host_event_review', event_id: event.id },
+    })
+  } catch (e) {
+    console.warn(`[host-notifications] submit push failed: ${e?.message || e}`)
+  }
+
   const { data: profiles } = await db.from('profiles').select('email').in('id', profileIds)
   // Reuse the tested dedupe/lowercase/skip-empty pass (no host email here).
   const recipients = assembleHostRecipients({ email: null }, profiles || [])

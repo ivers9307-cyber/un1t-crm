@@ -20,12 +20,16 @@ export async function POST(_request, props) {
     return NextResponse.json({ success: false, error: `Cannot submit an event that is ${event.status}.` }, { status: 409 })
   }
 
+  const submittedAt = new Date().toISOString()
   const { error } = await db.from('race_events').update({
     status: 'pending_review',
-    submitted_at: new Date().toISOString(),
+    submitted_at: submittedAt,
     rejected_reason: null,
   }).eq('id', event.id)
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  // Carried into the notify so the push dedupe key is per-SUBMISSION (a
+  // resubmit after rejection pushes again).
+  event.submitted_at = submittedAt
 
   // Fire-and-forget: tell the org's admins there's an event to review.
   // Never changes the response — the submit already succeeded.
