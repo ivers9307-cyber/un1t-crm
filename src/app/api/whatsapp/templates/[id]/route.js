@@ -11,6 +11,9 @@ const TemplateUpdateSchema = z.object({
   components: z.array(z.unknown()).optional(),
   example_values: z.unknown().optional(),
   status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'PAUSED']).optional(),
+  // Operator-defined picker grouping (mig 450) — local-only, editable at
+  // any status (unlike the Meta-owned fields, which lock after submit).
+  display_group: z.string().max(100).nullable().optional(),
   // Media-header upload fields (mig 045) — see notes on the create
   // route for what these are.
   // Meta's resumable-upload handles are opaque and can exceed 500 chars
@@ -67,6 +70,7 @@ export async function PUT(request, props) {
   const validation = await validateBody(request, TemplateUpdateSchema)
   if (!validation.ok) return validation.response
   const updates = { ...validation.data }
+  if ('display_group' in updates) updates.display_group = updates.display_group?.trim() || null
 
   const { data, error } = await db.from('whatsapp_templates')
     .update(updates)
