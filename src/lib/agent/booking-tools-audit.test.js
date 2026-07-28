@@ -121,8 +121,12 @@ describe('auto-mode class booking writes the audit intent BEFORE the Glofox call
     expect(trace.at(-1)).toMatchObject({ step: 'audit_update', status: 'pending' })
   })
 
-  it('HTTP 200 with no booking id in the body → booked:false, falls back to approval (unknown shape, fail safe)', async () => {
+  // MIA-BOOK.2 — a CLEAN 2xx (no message code) is a real booking even when
+  // no id can be harvested (Glofox's live success shape never matched the
+  // harvest list; Emma Kennedy 2026-07-28).
+  it('HTTP 200 with no booking id and no message code → booked:true', async () => {
     const trace = []
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     glofox.createBooking.mockImplementation(async () => {
       trace.push({ step: 'glofox_createBooking' })
       return { ok: true, status: 200, body: {} }
@@ -130,8 +134,9 @@ describe('auto-mode class booking writes the audit intent BEFORE the Glofox call
 
     const res = await executeBookingTool('book_class', { event_id: EVENT_ID }, ctx(trace))
 
-    expect(res).toMatchObject({ booked: false, requested: true })
-    expect(trace.at(-1)).toMatchObject({ step: 'audit_update', status: 'pending' })
+    expect(res).toMatchObject({ booked: true })
+    expect(trace.at(-1)).toMatchObject({ step: 'audit_update', status: 'actioned' })
+    warn.mockRestore()
   })
 
   it('a FAILED booking finalises the same row as failed (still one row, not two)', async () => {

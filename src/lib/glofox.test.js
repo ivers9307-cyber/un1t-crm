@@ -463,9 +463,15 @@ describe('interpretBookingResult', () => {
     expect(r).toEqual({ booked: false, bookingId: null, messageCode: 'YOU_HAVE_NO_CREDITS_LEFT', alreadyBooked: false })
   })
 
-  it('HTTP 200 with an empty/idless body → NOT booked', () => {
-    expect(interpretBookingResult({ ok: true, status: 200, body: {} }).booked).toBe(false)
-    expect(interpretBookingResult({ ok: true, status: 200, body: null }).booked).toBe(false)
+  // MIA-BOOK.2 — Glofox's live success body has never matched the harvest
+  // shapes (0/9 historical funnel bookings captured an id; Emma Kennedy
+  // 2026-07-28 booked fine on an idless 200). A CLEAN 2xx is booked.
+  it('HTTP 200 with an empty/idless body and NO message code → booked (id is a bonus, not the gate)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(interpretBookingResult({ ok: true, status: 200, body: {} }).booked).toBe(true)
+    expect(interpretBookingResult({ ok: true, status: 200, body: null }).booked).toBe(true)
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
   })
 
   it('non-2xx → not booked, message_code surfaced (message as fallback)', () => {
