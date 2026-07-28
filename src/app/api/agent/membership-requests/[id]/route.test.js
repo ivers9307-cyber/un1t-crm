@@ -107,13 +107,17 @@ describe('PATCH class_booking approval — Glofox body decides success, not HTTP
     expect(sendAgentThreadMessage).toHaveBeenCalledOnce()
   })
 
-  it('HTTP 200 with an idless body → failed (no phantom actioned rows)', async () => {
+  // MIA-BOOK.2 — a clean 200 without an id is a real booking (Glofox's live
+  // success shape never matched the harvest list).
+  it('HTTP 200 with an idless body and no message code → actioned, confirmation sent', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     createBooking.mockResolvedValueOnce({ ok: true, status: 200, body: {} })
 
     await approve()
 
-    expect(updates.at(-1).patch.status).toBe('failed')
-    expect(sendAgentThreadMessage).not.toHaveBeenCalled()
+    expect(updates.at(-1).patch.status).toBe('actioned')
+    expect(sendAgentThreadMessage).toHaveBeenCalledOnce()
+    warn.mockRestore()
   })
 })
 

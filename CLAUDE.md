@@ -28,7 +28,7 @@ The "if you miss one, you break prod or burn a session" list. Terse on purpose; 
 - **Check `information_schema` before driving a "dormant" column** — mocked tests + `next build` won't catch a column that doesn't exist in prod (assumed `campaigns.postmark_stream`; it's on `email_sends` → prod 500).
 
 **Glofox**
-- **`POST /2.0/bookings` can 200 with a failure body** (`message_code: YOU_HAVE_NO_CREDITS_LEFT` — live 2026-07-27). Booking success = HTTP ok **and** a created-booking id in the body; judge via `interpretBookingResult()` in `src/lib/glofox.js`, never `result.ok` alone.
+- **`POST /2.0/bookings` can 200 with a failure body** (`message_code: YOU_HAVE_NO_CREDITS_LEFT` — live 2026-07-27) **and its success body carries no harvestable booking id** (0/9 historical funnel bookings captured one; an id-required rule mislabelled a real booking, live 2026-07-28). Success = HTTP ok AND (no message code OR an id); judge via `interpretBookingResult()` in `src/lib/glofox.js`, never `result.ok` alone and never id-required.
 - **Glofox mints a NEW `invoice_id` per payment *attempt*** (one-off purchases; subscriptions reuse one id) → fail-then-succeed leaves orphans. Same-amount+same-day ≠ dupe.
 - **`glofox_invoices` is stale** — never compute "amount owed" from it (only live via `INVOICE_UPDATED` webhooks; PENDING_INTENT frozen).
 - **Only Stillorgan is Glofox-connected.** Hatch Street's `branch_id` is a placeholder — nothing to "turn off" there. Integration is fully per-location.

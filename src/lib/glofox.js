@@ -1036,15 +1036,24 @@ export const GLOFOX_ALREADY_BOOKED_CODE = 'YOU_HAVE_BOOKED_FOR_THIS_EVENT'
  * Interpret a createBooking result. Glofox returns HTTP 200 with a
  * failure body (message_code YOU_HAVE_NO_CREDITS_LEFT — seen live
  * 2026-07-27) when the member cannot book, so HTTP ok alone is NOT
- * booking success: a real booking carries the created booking's id.
- * The id is harvested best-effort across the response shapes seen
- * live (flat and data-wrapped, `id`/`_id`/`booking_id`).
+ * booking success.
  *
- * MIA-BOOK.1 — `alreadyBooked` flags Glofox's server-side member+event
- * dedupe: `booked` stays false (no new booking id comes back), but most
- * callers should treat it as success — the member IS in the class (e.g.
- * a re-run whose first attempt landed, or staff booked manually before
- * approving a pending fallback card).
+ * MIA-BOOK.2 — but an id-REQUIRED rule is too strict the other way:
+ * Glofox's live success body has NEVER matched the harvest shapes below
+ * (0/9 historical funnel bookings captured an id; Emma Kennedy
+ * 2026-07-28 booked fine on a 200 we then mislabelled a failure). So:
+ *   - a 2xx WITH a message code is only booked when an id came back too
+ *     (the 200-with-error shape — the Lucinda case stays a failure);
+ *   - a CLEAN 2xx (no message code) is booked, id or not — the id is a
+ *     reconciliation bonus, never the success gate. When a clean 2xx has
+ *     no harvestable id we log the body keys once so the real success
+ *     shape can be added to the harvest list.
+ *
+ * `alreadyBooked` flags Glofox's server-side member+event dedupe:
+ * `booked` stays false (no new booking id comes back), but most callers
+ * should treat it as success — the member IS in the class (e.g. a re-run
+ * whose first attempt landed, or staff booked manually before approving
+ * a pending fallback card).
  *
  * Returns { booked, bookingId, messageCode, alreadyBooked }.
  */
@@ -1053,7 +1062,12 @@ export function interpretBookingResult(result) {
   const bookingId = body?._id || body?.id || body?.booking_id || body?.data?._id || body?.data?.id || null
   const messageCode = body?.message_code || body?.message || null
   const alreadyBooked = messageCode === GLOFOX_ALREADY_BOOKED_CODE
-  return { booked: !!result?.ok && !!bookingId, bookingId, messageCode, alreadyBooked }
+  const booked = !!result?.ok && (!messageCode || !!bookingId)
+  if (booked && !bookingId) {
+    const keys = body && typeof body === 'object' ? Object.keys(body).join(',') : typeof body
+    console.warn(`[glofox] booking 2xx without a harvestable id — extend the harvest shapes. body keys: ${keys || 'empty'}`)
+  }
+  return { booked, bookingId, messageCode, alreadyBooked }
 }
 
 /**
