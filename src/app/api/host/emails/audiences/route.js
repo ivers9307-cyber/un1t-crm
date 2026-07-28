@@ -53,9 +53,10 @@ export async function GET() {
       }
       if (!data || data.length < PAGE) break
     }
-    if (contactIds.size > 0) {
-      eventOptions.push({ id: ev.id, name: ev.name, race_date: ev.race_date, count: contactIds.size })
-    }
+    // Every event lists — including brand-new ones with no confirmed
+    // attendees yet (count 0), so the host can see the option exists; the
+    // send gate still 409s a zero-recipient send.
+    eventOptions.push({ id: ev.id, name: ev.name, race_date: ev.race_date, count: contactIds.size })
   }
 
   return NextResponse.json({
