@@ -288,3 +288,77 @@ describe('resolveHostRecipients', () => {
     expect(db.calls.contactRanges).toEqual([{ from: 0, to: 999 }, { from: 1000, to: 1999 }])
   })
 })
+
+// HOST-EMAIL.4 — visual composer + per-event audience.
+describe('renderHostCampaignHtml — full-document (Unlayer) campaigns', () => {
+  const host = { name: 'Pride Training Club', sender_name: 'Pride Training Club' }
+  it('injects the footer before </body> instead of shell-wrapping', () => {
+    const doc = '<!DOCTYPE html><html><head><title>x</title></head><body><table><tr><td>Hi</td></tr></table></body></html>'
+    const out = renderHostCampaignHtml({ host, subject: 'S', bodyHtml: doc, unsubscribeUrl: 'https://x/u/t' })
+    expect(out.match(/<!DOCTYPE html>/gi)).toHaveLength(1)
+    expect(out).toContain('Unsubscribe')
+    expect(out.indexOf('Unsubscribe')).toBeLessThan(out.indexOf('</body>'))
+  })
+  it('still sanitizes active content inside a full document', () => {
+    const doc = '<html><body><script>alert(1)</script><p onclick="x()">Hi</p></body></html>'
+    const out = renderHostCampaignHtml({ host, subject: 'S', bodyHtml: doc, unsubscribeUrl: 'https://x/u/t' })
+    expect(out).not.toContain('<script')
+    expect(out).not.toContain('onclick')
+    expect(out).toContain('Unsubscribe')
+  })
+  it('plain fragments keep the branded shell', () => {
+    const out = renderHostCampaignHtml({ host, subject: 'S', bodyHtml: '<p>Hi</p>', unsubscribeUrl: 'https://x/u/t' })
+    expect(out).toContain('border-radius:12px')
+    expect(out).toContain('Unsubscribe')
+  })
+})
+
+describe('resolveHostRecipients — per-event audience', () => {
+  function eventDb({ attendees, hostContacts }) {
+    return {
+      from(table) {
+        let filters = {}
+        const b = {
+          select: () => b,
+          eq: (col, val) => { filters[col] = val; return b },
+          order: () => b,
+          range: async () => {
+            if (table === 'race_registrations') {
+              return { data: attendees.map((id) => ({ id: `r-${id}`, teams: { team_members: [{ contact_id: id }] } })), error: null }
+            }
+            if (table === 'host_email_suppressions') return { data: [], error: null }
+            if (table === 'host_contacts') {
+              return {
+                data: hostContacts.map((id) => ({
+                  contact_id: id,
+                  contact: { id, email: `${id}@x.com`, email_marketing: true, email_status: 'active', email_suppressed_at: null },
+                })),
+                error: null,
+              }
+            }
+            return { data: [], error: null }
+          },
+        }
+        return b
+      },
+    }
+  }
+
+  it('restricts to the event attendees when audienceEventId is set', async () => {
+    const db = eventDb({ attendees: ['a', 'b'], hostContacts: ['a', 'b', 'c'] })
+    const out = await resolveHostRecipients(db, 'h1', { audienceEventId: 'ev1' })
+    expect(out.map((r) => r.contact_id).sort()).toEqual(['a', 'b'])
+  })
+
+  it('no audience → every host contact (unchanged)', async () => {
+    const db = eventDb({ attendees: [], hostContacts: ['a', 'b', 'c'] })
+    const out = await resolveHostRecipients(db, 'h1')
+    expect(out).toHaveLength(3)
+  })
+
+  it('event with zero attendees → empty, no contact scan', async () => {
+    const db = eventDb({ attendees: [], hostContacts: ['a'] })
+    const out = await resolveHostRecipients(db, 'h1', { audienceEventId: 'ev1' })
+    expect(out).toEqual([])
+  })
+})

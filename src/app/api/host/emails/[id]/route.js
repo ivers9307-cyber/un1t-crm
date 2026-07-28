@@ -1,8 +1,10 @@
-// GET  /api/host/emails — the host's OWN campaigns (HOST-EMAIL.3), newest first.
-// POST /api/host/emails — create a DRAFT campaign. No sending here: the send
-// gate (verified sender, daily cap, recipient resolution, CAS draft→sending)
-// lives in /api/host/emails/[id]/send, and the fan-out runs on the cron.
-// Tenancy: getCurrentHost() → every query .eq('host_id', session.host.id).
+// GET   /api/host/emails/[id] — one of the host's own campaigns, full body
+//       (body_html + design_json + audience) so a draft round-trips into the
+//       visual composer for editing (HOST-EMAIL.4).
+// PATCH /api/host/emails/[id] — update a DRAFT campaign (subject / body /
+//       design / audience). CAS on status='draft' so a campaign that started
+//       sending can never be rewritten mid-flight. Same validation as create.
+// Tenancy: every query .eq('host_id', session.host.id) → 404, not 403.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -13,66 +15,66 @@ import { designJsonTooBig, assertAudienceEventOwned } from '@/lib/host-campaign-
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// HOST-EMAIL.4 — body cap raised for visual-composer exports (a full Unlayer
-// html document); design_json is the editable design (round-trips into the
-// composer), audience_event_id restricts recipients to one event's confirmed
-// attendees (validated below: the event must belong to THIS host).
 const UUIDISH = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const CampaignDraftSchema = z.object({
+const CampaignUpdateSchema = z.object({
   subject: z.string().min(1, 'Subject is required').max(200, 'Subject is too long (max 200 characters)'),
   body: z.string().min(1, 'Body is required').max(300000, 'Body is too long'),
   design_json: z.unknown().optional().nullable(),
   audience_event_id: z.string().regex(UUIDISH).optional().nullable(),
 })
 
-
-
-export async function GET() {
+export async function GET(_request, props) {
+  const params = await props.params
   const session = await getCurrentHost()
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   const db = createServerClient()
   const { data, error } = await db
     .from('host_campaigns')
-    .select('id, subject, status, audience_event_id, recipient_count, sent_count, created_at, sent_at')
+    .select('id, subject, body_html, design_json, audience_event_id, status, recipient_count, sent_count, created_at, sent_at')
+    .eq('id', params.id)
     .eq('host_id', session.host.id)
-    .order('created_at', { ascending: false })
-    .limit(200)
+    .maybeSingle()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ success: true, data: data || [] })
+  if (!data) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  return NextResponse.json({ success: true, data })
 }
 
-export async function POST(request) {
+export async function PATCH(request, props) {
+  const params = await props.params
   const session = await getCurrentHost()
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
   let body
   try { body = await request.json() } catch { return NextResponse.json({ success: false, error: 'Invalid JSON' }, { status: 400 }) }
-  const parsed = CampaignDraftSchema.safeParse(body)
+  const parsed = CampaignUpdateSchema.safeParse(body)
   if (!parsed.success) {
     return NextResponse.json({ success: false, error: 'Invalid email', issues: parsed.error.issues }, { status: 400 })
   }
-
-  const db = createServerClient()
   if (designJsonTooBig(parsed.data.design_json)) {
     return NextResponse.json({ success: false, error: 'Design is too large.' }, { status: 400 })
   }
+
+  const db = createServerClient()
   const audienceErr = await assertAudienceEventOwned(db, session.host.id, parsed.data.audience_event_id)
   if (audienceErr) return NextResponse.json({ success: false, error: audienceErr }, { status: 404 })
-  const { data: campaign, error } = await db
+
+  // CAS on draft — a concurrent send flipped it → 0 rows → 409.
+  const { data: updated, error } = await db
     .from('host_campaigns')
-    .insert({
-      design_json: parsed.data.design_json ?? null,
-      audience_event_id: parsed.data.audience_event_id || null,
-      host_id: session.host.id,
+    .update({
       subject: parsed.data.subject,
       body_html: parsed.data.body,
-      status: 'draft',
+      design_json: parsed.data.design_json ?? null,
+      audience_event_id: parsed.data.audience_event_id || null,
     })
-    .select('id, subject, status, audience_event_id, recipient_count, sent_count, created_at, sent_at')
-    .single()
-  if (error || !campaign) {
-    return NextResponse.json({ success: false, error: error?.message || 'Create failed' }, { status: 500 })
+    .eq('id', params.id)
+    .eq('host_id', session.host.id)
+    .eq('status', 'draft')
+    .select('id')
+  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (!updated || updated.length === 0) {
+    return NextResponse.json({ success: false, error: 'This email is no longer a draft.' }, { status: 409 })
   }
-  return NextResponse.json({ success: true, data: campaign })
+  return NextResponse.json({ success: true, data: { id: params.id } })
 }
