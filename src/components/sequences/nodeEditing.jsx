@@ -8,6 +8,7 @@ import { ChevronUp, ChevronDown, Trash2, Pencil, AlertTriangle } from 'lucide-re
 import { describeNode } from '@/lib/sequences/graph'
 import { isPhantomTag } from '@/lib/sequences/tag-vocabulary'
 import { styleForType } from './nodeStyles'
+import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
 
 export function IconBtn({ children, label, onClick, disabled, danger }) {
   return (
@@ -92,7 +93,15 @@ export function NodeConfig({ node, onPatch, templates, tagVocabulary }) {
           <Labeled label="Template" hint={list.length ? 'Approved WhatsApp templates at this location.' : 'No approved WhatsApp templates at this location yet.'}>
             <select className={fieldCls} value={c.template_id || ''} onChange={e => onPatch({ template_id: e.target.value || null, variables: {} })}>
               <option value="">Choose a template…</option>
-              {list.map(t => <option key={t.id} value={t.id}>{t.name}{t.language ? ` (${t.language})` : ''}</option>)}
+              {/* WA-TPL-GROUPS — optgroups by operator-set display_group
+                  (mig 450); a lone Ungrouped bucket renders flat. */}
+              {groupWaTemplates(list).map((group, _, groups) => {
+                const options = group.templates.map(t => (
+                  <option key={t.id} value={t.id}>{t.name}{t.language ? ` (${t.language})` : ''}</option>
+                ))
+                if (groups.length === 1 && group.label === UNGROUPED_LABEL) return options
+                return <optgroup key={group.label} label={group.label}>{options}</optgroup>
+              })}
             </select>
           </Labeled>
           {selected && vars.length > 0 && (

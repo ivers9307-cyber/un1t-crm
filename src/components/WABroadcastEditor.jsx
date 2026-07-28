@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { ArrowLeft, Save, Send, Users, CheckCircle2, XCircle, Ban, Clock } from 'lucide-react'
 import AudienceBuilder from './AudienceBuilder'
 import { estimateDripDays } from '@/lib/whatsapp-drip'
+import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
 
 export default function WABroadcastEditor({ broadcast, templates, locationId, userId, failedRecipients = [], failedCount = 0, dripProgress = null }) {
   const router = useRouter()
@@ -531,9 +532,15 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                   className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                 >
                   <option value="">Select a template...</option>
-                  {templates.map(t => (
-                    <option key={t.id} value={t.id}>{t.name} ({t.category})</option>
-                  ))}
+                  {/* WA-TPL-GROUPS — optgroups by operator-set display_group
+                      (mig 450); a lone Ungrouped bucket renders flat. */}
+                  {groupWaTemplates(templates).map((group, _, groups) => {
+                    const options = group.templates.map(t => (
+                      <option key={t.id} value={t.id}>{t.name} ({t.category})</option>
+                    ))
+                    if (groups.length === 1 && group.label === UNGROUPED_LABEL) return options
+                    return <optgroup key={group.label} label={group.label}>{options}</optgroup>
+                  })}
                 </select>
               )}
 
