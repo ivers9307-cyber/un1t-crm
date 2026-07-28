@@ -42,6 +42,7 @@ export default function HostEmails() {
   const [audiences, setAudiences] = useState({ all_count: null, events: [] })
   const [subject, setSubject] = useState('')
   const [audienceEventId, setAudienceEventId] = useState('')
+  const [emailType, setEmailType] = useState('marketing')
   const [mode, setMode] = useState('design') // 'design' | 'text'
   const [textBody, setTextBody] = useState('')
   const [editingId, setEditingId] = useState(null) // draft being edited (null = new)
@@ -105,6 +106,14 @@ export default function HostEmails() {
       id: EDITOR_DIV_ID,
       displayMode: 'email',
       appearance: { theme: 'dark' },
+      // HOST-EMAIL.6 — the variables guide: Unlayer's built-in merge-tags
+      // picker, limited to the tags the host send path substitutes.
+      mergeTags: [
+        { name: 'First name', value: '{{first_name}}' },
+        { name: 'Last name', value: '{{last_name}}' },
+        { name: 'Full name', value: '{{name}}' },
+        { name: 'Email', value: '{{email}}' },
+      ],
     })
     editorInited.current = true
   }, [unlayerReady, mode])
@@ -124,6 +133,7 @@ export default function HostEmails() {
     setSubject('')
     setTextBody('')
     setAudienceEventId('')
+    setEmailType('marketing')
     setEditingId(null)
     if (editorInited.current && window.unlayer) {
       try {
@@ -148,6 +158,7 @@ export default function HostEmails() {
       setEditingId(c.id)
       setSubject(c.subject || '')
       setAudienceEventId(c.audience_event_id || '')
+      setEmailType(c.email_type === 'utility' ? 'utility' : 'marketing')
       if (c.design_json && unlayerReady && window.unlayer) {
         setMode('design')
         try { window.unlayer.loadDesign(c.design_json) } catch { /* stale design doc — editor keeps its current state */ }
@@ -185,6 +196,7 @@ export default function HostEmails() {
         body,
         design_json: designJson,
         audience_event_id: audienceEventId || null,
+        email_type: emailType,
       }
       const res = await fetch(editingId ? `/api/host/emails/${editingId}` : '/api/host/emails', {
         method: editingId ? 'PATCH' : 'POST',
@@ -216,8 +228,9 @@ export default function HostEmails() {
     return ev ? `attendees of ${ev.name} (${ev.race_date})` : 'the selected event’s attendees'
   }
 
-  async function send(id, campaignAudienceId) {
-    if (!window.confirm(`Send this email to ${audienceLabel(campaignAudienceId)}?`)) return
+  async function send(id, campaignAudienceId, campaignType) {
+    const typeNote = campaignType === 'utility' ? ' as a UTILITY email (reaches attendees regardless of marketing opt-in)' : ''
+    if (!window.confirm(`Send this email to ${audienceLabel(campaignAudienceId)}${typeNote}?`)) return
     setError('')
     setNotice('')
     setSendingId(id)
@@ -309,6 +322,28 @@ export default function HostEmails() {
           </div>
 
           <div>
+            <span className="block text-xs text-white/50 mb-1">Email type</span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setEmailType('marketing')}
+                className={`flex-1 rounded-lg border px-3 py-2 text-left ${emailType === 'marketing' ? 'border-white/50 bg-white/[0.06]' : 'border-white/15 hover:border-white/30'}`}
+              >
+                <span className="block text-sm font-semibold">Marketing</span>
+                <span className="block text-[11px] text-white/45 mt-0.5">Promotions and news. Only goes to contacts opted in to marketing.</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setEmailType('utility')}
+                className={`flex-1 rounded-lg border px-3 py-2 text-left ${emailType === 'utility' ? 'border-white/50 bg-white/[0.06]' : 'border-white/15 hover:border-white/30'}`}
+              >
+                <span className="block text-sm font-semibold">Utility</span>
+                <span className="block text-[11px] text-white/45 mt-0.5">Operational info for attendees — time changes, instructions. Reaches people regardless of marketing opt-in, so only use it for messages about their booking.</span>
+              </button>
+            </div>
+          </div>
+
+          <div>
             <div className="flex items-center justify-between mb-1">
               <span className="block text-xs text-white/50">Message</span>
               <div className="flex gap-1 text-[11px]">
@@ -355,6 +390,7 @@ export default function HostEmails() {
             )}
             <p className="text-[11px] text-white/35 mt-1">
               Sent with your sender name and an unsubscribe link added automatically.
+              {' '}Personalise with variables: {'{{first_name}}'}, {'{{last_name}}'}, {'{{name}}'}, {'{{email}}'} — in the designer they&apos;re under the text toolbar&apos;s merge-tags menu.
             </p>
           </div>
           <button
@@ -385,6 +421,11 @@ export default function HostEmails() {
                       <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${chip}`}>
                         {STATUS_LABEL[c.status] || c.status}
                       </span>
+                      {c.email_type === 'utility' && (
+                        <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide bg-sky-500/15 text-sky-300">
+                          Utility
+                        </span>
+                      )}
                     </p>
                     <p className="text-xs text-white/45 mt-0.5">
                       {c.status === 'draft'
@@ -406,7 +447,7 @@ export default function HostEmails() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => send(c.id, c.audience_event_id || '')}
+                        onClick={() => send(c.id, c.audience_event_id || '', c.email_type)}
                         disabled={sendingId === c.id}
                         className="rounded-lg bg-white text-black text-xs font-semibold px-3 py-1.5 hover:bg-white/90 disabled:opacity-50"
                       >

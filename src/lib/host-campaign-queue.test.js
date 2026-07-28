@@ -25,7 +25,10 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('./postmark.js', () => ({ sendEmail: vi.fn() }))
+vi.mock('./postmark.js', async (importOriginal) => ({
+  ...(await importOriginal()), // real applyMergeTags — substitution is part of the send contract
+  sendEmail: vi.fn(),
+}))
 vi.mock('./app-url.js', () => ({ getAppUrl: () => 'https://crm.test' }))
 vi.mock('./host-unsubscribe.js', () => ({ signHostUnsubToken: vi.fn(() => 'tok') }))
 vi.mock('./host-campaign-email.js', () => ({ renderHostCampaignHtml: vi.fn(() => '<html>rendered</html>') }))

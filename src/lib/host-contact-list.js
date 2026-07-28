@@ -50,18 +50,32 @@ export function hostTagFor(host) {
 /**
  * Send-time emailability predicate — the SAME gate PR-C's send path uses.
  * Pure: the caller loads the contact flags + the per-host suppression set.
+ *
+ * HOST-EMAIL.6 — two consent families (the CRM's own split):
+ *   marketing (default)  email_marketing === true; the per-host unsubscribe
+ *                        and the global 'unsubscribed' status both block.
+ *   utility              operational messages to attendees (time change,
+ *                        instructions) — email_administrative === true;
+ *                        marketing opt-outs do NOT block it, deliverability
+ *                        blocks (bounced / complained / suppressed_at) do.
  * @param {object|null} contact  contacts row with email, email_marketing,
- *   email_status, email_suppressed_at
+ *   email_administrative, email_status, email_suppressed_at
  * @param {boolean} suppressed   contact_id ∈ host_email_suppressions for this host
+ * @param {{emailType?: 'marketing'|'utility'}} [opts]
  * @returns {boolean}
  */
-export function isEmailable(contact, suppressed) {
-  if (suppressed) return false
+export function isEmailable(contact, suppressed, { emailType = 'marketing' } = {}) {
   if (!contact) return false
   if (!contact.email) return false
+  if (contact.email_suppressed_at) return false
+  if (emailType === 'utility') {
+    if (contact.email_administrative !== true) return false
+    if (['bounced', 'complained'].includes(contact.email_status ?? 'active')) return false
+    return true
+  }
+  if (suppressed) return false
   if (contact.email_marketing !== true) return false
   if (BLOCKED_EMAIL_STATUSES.includes(contact.email_status ?? 'active')) return false // NULL = legacy 'active' (column default, mig 005)
-  if (contact.email_suppressed_at) return false
   return true
 }
 
