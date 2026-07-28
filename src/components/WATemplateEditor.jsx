@@ -73,6 +73,7 @@ export default function WATemplateEditor({ template, locationId, userId, events 
   const [groupSuggestions, setGroupSuggestions] = useState([])
   const [saving, setSaving] = useState(false)
   const [resubmitting, setResubmitting] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState(null)
 
   // Group suggestions for the datalist — the groups already in use at this
@@ -370,6 +371,21 @@ export default function WATemplateEditor({ template, locationId, userId, events 
     }
   }
 
+  async function handleDelete() {
+    if (!confirm(`Delete "${template.name}"? It will also be removed from your Meta account, and any automation still sending it will fail. This cannot be undone.`)) return
+    setDeleting(true)
+    setError(null)
+    try {
+      const result = await fetch(`/api/whatsapp/templates/${template.id}`, { method: 'DELETE' }).then(readJson)
+      if (!result.success) throw new Error(errorMessageFrom(result, 'Delete failed'))
+      router.push('/communications/templates?channel=whatsapp')
+      router.refresh()
+    } catch (err) {
+      setError(err.message)
+      setDeleting(false)
+    }
+  }
+
   function addButton(type) {
     if (buttons.length >= 3) return
     const newButton = type === 'URL'
@@ -413,14 +429,27 @@ export default function WATemplateEditor({ template, locationId, userId, events 
           )}
         </div>
 
-        <button
-          onClick={handleSave}
-          disabled={saving || isSubmitted}
-          className="flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
-        >
-          {isEditing ? <Save size={14} /> : <Send size={14} />}
-          {saving ? 'Submitting...' : isEditing ? 'Update' : 'Submit to Meta'}
-        </button>
+        <div className="flex items-center gap-2">
+          {isEditing && (
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={deleting}
+              className="flex items-center gap-1.5 text-sm text-red-700 border border-red-500/30 font-medium px-3 py-1.5 rounded-md hover:bg-red-500/10 transition-colors disabled:opacity-50"
+            >
+              <Trash2 size={14} />
+              {deleting ? 'Deleting...' : 'Delete'}
+            </button>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={saving || isSubmitted}
+            className="flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
+          >
+            {isEditing ? <Save size={14} /> : <Send size={14} />}
+            {saving ? 'Submitting...' : isEditing ? 'Update' : 'Submit to Meta'}
+          </button>
+        </div>
       </div>
 
       {error && (
