@@ -60,14 +60,14 @@ export function MembershipPanel({ live, trend }) {
         />
       </KpiRow>
 
-      <SectionHeader title="Membership trend (12 months)" />
+      <SectionHeader title="Membership trend (recurring vs drop-in)" />
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
         {hasTrend ? (
           <MembershipTrendChart trend={trend} />
         ) : (
           <p className="text-sm text-un1t-muted py-8 text-center">
-            Trend starts building from the first monthly snapshot. Check back next month
-            for the first data point.
+            Trend builds one point per day from the membership snapshot cron. Check
+            back tomorrow for the first data point.
           </p>
         )}
       </div>
