@@ -11,8 +11,17 @@
 // that used to live here moved into the reusable PersonActionBar so the
 // pipeline card, contact header, etc. share one consistent affordance.
 
-import { User } from 'lucide-react'
+import { User, Clock } from 'lucide-react'
 import PersonActionBar from './PersonActionBar'
+
+// PIPE-AGE.1 footer tones — colour keys on the server-derived
+// deal.age.tone (time in stage, falling back to time in pipeline).
+// Literal classes so the guardrails linter can see them.
+const AGE_TONES = {
+  quiet: 'text-un1t-subtle',
+  warm:  'text-amber-700',
+  stale: 'text-red-700',
+}
 
 // Keyed on pipeline_stage_slug (FUNNEL.1 taxonomy).
 const statusColors = {
@@ -33,9 +42,25 @@ const statusColors = {
 // off-funnel stages don't (it'd be noise there).
 const BADGE_SLUGS = new Set(['new_lead', 'first_class', 'second_class', 'trial_done'])
 
-export default function DealCard({ deal, locationId, onOpenContact }) {
+export default function DealCard({ deal, locationId, stageName, onOpenContact }) {
   const contact = deal.contacts || {}
   const borderColor = statusColors[contact.pipeline_stage_slug] || 'border-l-blue-500'
+
+  // Age footer (PIPE-AGE.1): time in current stage when the mig-458
+  // stamp exists, else time in pipeline. Strings are server-derived
+  // (toBoardDeal) so SSR and hydration render identical text.
+  const age = deal.age || {}
+  const ageTone = AGE_TONES[age.tone] || AGE_TONES.quiet
+  const primaryAge = age.stage
+    ? (age.stage === 'today' ? `Entered ${stageName || 'stage'} today` : `${age.stage} in ${stageName || 'stage'}`)
+    : (age.total
+      ? (age.backfilled
+        ? "In pipeline since May '26"
+        : (age.total === 'today' ? 'Joined pipeline today' : `${age.total} in pipeline`))
+      : null)
+  const secondaryAge = age.stage && age.total
+    ? (age.backfilled ? "since May '26" : `${age.total} total`)
+    : null
 
   function openContact() {
     if (!contact.id || !onOpenContact) return
@@ -85,6 +110,17 @@ export default function DealCard({ deal, locationId, onOpenContact }) {
               No class booked
             </span>
           )
+        )}
+        {primaryAge && (
+          <div className="flex items-center justify-between gap-2 mt-2 pt-1.5 border-t border-un1t-border text-[10px]">
+            <span className={`flex items-center gap-1 min-w-0 ${ageTone}`}>
+              <Clock size={11} className="shrink-0" />
+              <span className="truncate">{primaryAge}</span>
+            </span>
+            {secondaryAge && (
+              <span className="text-un1t-muted shrink-0">{secondaryAge}</span>
+            )}
+          </div>
         )}
       </div>
     </div>
