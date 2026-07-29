@@ -1,29 +1,18 @@
 import { describe, it, expect } from 'vitest'
 import {
-  weekStartStr,
-  weekKeys,
+  monthKeys,
   fetchMembershipFlows,
   SALES_DATA_START,
   CANCEL_TRACKING_START,
 } from './membership-flows.js'
 
-describe('weekStartStr', () => {
-  it('returns the Monday of the containing week', () => {
-    expect(weekStartStr('2026-07-29')).toBe('2026-07-27') // Wednesday
-    expect(weekStartStr('2026-07-27')).toBe('2026-07-27') // Monday itself
-    expect(weekStartStr('2026-08-02')).toBe('2026-07-27') // Sunday belongs to prior Monday
+describe('monthKeys', () => {
+  it('returns N months oldest→newest ending with the current month', () => {
+    expect(monthKeys(3, '2026-07-29')).toEqual(['2026-05', '2026-06', '2026-07'])
   })
 
-  it('crosses month and year boundaries', () => {
-    expect(weekStartStr('2026-08-01')).toBe('2026-07-27')
-    expect(weekStartStr('2026-01-01')).toBe('2025-12-29')
-  })
-})
-
-describe('weekKeys', () => {
-  it('returns N Mondays oldest→newest ending with the current week', () => {
-    const keys = weekKeys(3, '2026-07-29')
-    expect(keys).toEqual(['2026-07-13', '2026-07-20', '2026-07-27'])
+  it('crosses year boundaries', () => {
+    expect(monthKeys(4, '2026-02-10')).toEqual(['2025-11', '2025-12', '2026-01', '2026-02'])
   })
 })
 
@@ -48,18 +37,18 @@ function fakeDb(tables) {
   }
 }
 
-// 2026-07-29T12:00:00Z as a fixed "now" (Date.now() is banned-ish in
-// prod paths but fine to pin in tests via the nowMs parameter).
+// 2026-07-29T12:00:00Z as a fixed "now", injected via the nowMs param.
 const NOW = Date.UTC(2026, 6, 29, 12)
 
 describe('fetchMembershipFlows', () => {
-  it('buckets first-sale-per-contact and cancels into Monday weeks', async () => {
+  it('buckets first-sale-per-contact and cancels into calendar months', async () => {
     const db = fakeDb({
       glofox_invoices: {
         data: [
-          { contact_id: 'a', invoice_date: '2026-07-14T10:00:00Z' }, // week 07-13
-          { contact_id: 'a', invoice_date: '2026-07-21T10:00:00Z' }, // retry — deduped
-          { contact_id: 'b', invoice_date: '2026-07-28T10:00:00Z' }, // week 07-27
+          { contact_id: 'a', invoice_date: '2026-05-14T10:00:00Z' }, // May
+          { contact_id: 'a', invoice_date: '2026-06-02T10:00:00Z' }, // retry — deduped
+          { contact_id: 'b', invoice_date: '2026-06-21T10:00:00Z' }, // June
+          { contact_id: 'c', invoice_date: '2026-07-28T10:00:00Z' }, // July
         ],
         error: null,
       },
@@ -68,15 +57,26 @@ describe('fetchMembershipFlows', () => {
         error: null,
       },
     })
-    const { weeks } = await fetchMembershipFlows(db, 'loc-1', 3, NOW)
-    expect(weeks.map((w) => w.week)).toEqual(['2026-07-13', '2026-07-20', '2026-07-27'])
-    expect(weeks[0].sales).toBe(1)
-    expect(weeks[1].sales).toBe(0) // the retry did not double-count
-    expect(weeks[2].sales).toBe(1)
-    expect(weeks[2].cancellations).toBe(1)
+    const { months } = await fetchMembershipFlows(db, 'loc-1', 3, NOW)
+    expect(months.map((m) => m.month)).toEqual(['2026-05', '2026-06', '2026-07'])
+    expect(months.map((m) => m.sales)).toEqual([1, 1, 1]) // the June retry did not double-count
+    expect(months[2].cancellations).toBe(1)
   })
 
-  it('dedupes against a first sale before the display window', async () => {
+  it('buckets a late-UTC event into the next Dublin month during BST', async () => {
+    const db = fakeDb({
+      glofox_invoices: {
+        data: [{ contact_id: 'a', invoice_date: '2026-06-30T23:30:00Z' }], // 00:30 Dublin, 1 Jul
+        error: null,
+      },
+      membership_transitions: { data: [], error: null },
+    })
+    const { months } = await fetchMembershipFlows(db, 'loc-1', 3, NOW)
+    expect(months.find((m) => m.month === '2026-07').sales).toBe(1)
+    expect(months.find((m) => m.month === '2026-06').sales).toBe(0)
+  })
+
+  it('dedupes against a first sale outside the display window', async () => {
     const db = fakeDb({
       glofox_invoices: {
         data: [
@@ -87,34 +87,21 @@ describe('fetchMembershipFlows', () => {
       },
       membership_transitions: { data: [], error: null },
     })
-    const { weeks } = await fetchMembershipFlows(db, 'loc-1', 3, NOW)
-    expect(weeks.every((w) => w.sales === 0)).toBe(true)
+    const { months } = await fetchMembershipFlows(db, 'loc-1', 2, NOW) // window = Jun, Jul only
+    expect(months.every((m) => m.sales === 0)).toBe(true)
   })
 
-  it('nulls cancellations for weeks before tracking started', async () => {
+  it('nulls each series for months before its data source existed', async () => {
     const db = fakeDb({
       glofox_invoices: { data: [], error: null },
       membership_transitions: { data: [], error: null },
     })
-    const { weeks, cancelTrackingStart } = await fetchMembershipFlows(db, 'loc-1', 4, NOW)
+    const { months, cancelTrackingStart } = await fetchMembershipFlows(db, 'loc-1', 5, NOW)
     expect(cancelTrackingStart).toBe(CANCEL_TRACKING_START)
-    // tracking started 2026-07-29 → only the 07-27 week has a number
-    expect(weeks.map((w) => w.cancellations)).toEqual([null, null, null, 0])
-    // sales data exists from mid-May, so all four weeks are numeric
-    expect(weeks.every((w) => w.sales === 0)).toBe(true)
-  })
-
-  it('nulls sales for weeks before the invoice webhook log existed', async () => {
-    const db = fakeDb({
-      glofox_invoices: { data: [], error: null },
-      membership_transitions: { data: [], error: null },
-    })
-    // 20-week window reaches back past 2026-05-12
-    const { weeks } = await fetchMembershipFlows(db, 'loc-1', 20, NOW)
-    const firstReliable = weekStartStr(SALES_DATA_START)
-    for (const w of weeks) {
-      expect(w.sales).toBe(w.week >= firstReliable ? 0 : null)
-    }
+    expect(months.map((m) => m.month)).toEqual(['2026-03', '2026-04', '2026-05', '2026-06', '2026-07'])
+    // sales data from May 2026; cancel tracking from July 2026
+    expect(months.map((m) => m.sales)).toEqual([null, null, 0, 0, 0])
+    expect(months.map((m) => m.cancellations)).toEqual([null, null, null, null, 0])
   })
 
   it('scopes both queries to the location and filters sales to paid subscription starts', async () => {
@@ -126,6 +113,7 @@ describe('fetchMembershipFlows', () => {
     expect(db._calls.glofox_invoices.eq).toContainEqual(['location_id', 'loc-9'])
     expect(db._calls.glofox_invoices.eq).toContainEqual(['status', 'PAID'])
     expect(db._calls.glofox_invoices.like).toEqual(['line_item_subtypes', '%SUBSCRIPTION_PAYMENT%'])
+    expect(db._calls.glofox_invoices.gte).toEqual(['invoice_date', SALES_DATA_START])
     expect(db._calls.membership_transitions.eq).toContainEqual(['location_id', 'loc-9'])
     expect(db._calls.membership_transitions.eq).toContainEqual(['kind', 'recurring_cancel'])
   })

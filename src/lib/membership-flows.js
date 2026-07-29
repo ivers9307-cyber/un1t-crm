@@ -1,29 +1,28 @@
-// Membership flows — TREND-FLOWS.1.
+// Membership flows — TREND-FLOWS.1 (monthly since TREND-FLOWS.2).
 //
-// Weekly membership SALES vs CANCELLATIONS for the business-board
-// chart (Richard 2026-07-29: the trend chart's job is "week by week
-// membership sales and week by week membership cancellations", not
-// the member-count level the snapshots show).
+// Monthly membership SALES vs CANCELLATIONS for the business-board
+// chart (Richard 2026-07-29: the chart's job is membership sales and
+// membership cancellations over time, bucketed by month).
 //
 // Sales — PAID glofox_invoices whose line_item_subtypes contains
 // SUBSCRIPTION_PAYMENT (a NEW subscription starting; renewals arrive
 // as SUBSCRIPTION_RENEWAL and are excluded). Webhook-sourced rows
 // exist from 2026-05-12; older rows use the legacy document_type
-// taxonomy that can't split new-vs-renewal, so the series starts
-// there. Deduped to each contact's first sale in the window (Glofox
-// re-mints invoices per payment attempt).
+// taxonomy that can't split new-vs-renewal, so the series starts with
+// May 2026 (itself a partial month). Deduped to each contact's first
+// sale in the window (Glofox re-mints invoices per payment attempt).
 //
 // Cancellations — membership_transitions rows with
-// kind='recurring_cancel' (mig 456 trigger on contacts: a
-// member+time contact stopping being one). The trigger went live
-// 2026-07-29; weeks before CANCEL_TRACKING_START have no data and
-// return null (not 0) so the chart can render the gap honestly.
+// kind='recurring_cancel' (mig 456 trigger on contacts: a member+time
+// contact stopping being one). The trigger went live 2026-07-29, so
+// months before July 2026 have no data and return null (not 0) so the
+// chart can render the gap honestly.
 //
-// Weeks are Monday-start Dublin calendar weeks keyed 'YYYY-MM-DD'.
+// Months are Dublin calendar months keyed 'YYYY-MM'.
 
 import { dublinDayStr } from '@/lib/dublin-time'
 
-// Earliest week with reliable new-vs-renewal invoice data (webhook
+// Earliest day with reliable new-vs-renewal invoice data (webhook
 // INVOICE_UPDATED log starts 2026-05-12).
 export const SALES_DATA_START = '2026-05-12'
 
@@ -31,46 +30,30 @@ export const SALES_DATA_START = '2026-05-12'
 export const CANCEL_TRACKING_START = '2026-07-29'
 
 /**
- * Monday of the week containing a 'YYYY-MM-DD' day. Date.UTC on the
- * split parts is pure calendar math — no local-time parsing.
+ * The last `months` 'YYYY-MM' keys, oldest → newest, ending with the
+ * month containing `todayStr`. Pure string math.
  */
-export function weekStartStr(dayStr) {
-  const y = Number(dayStr.slice(0, 4))
-  const m = Number(dayStr.slice(5, 7))
-  const d = Number(dayStr.slice(8, 10))
-  const ms = Date.UTC(y, m - 1, d)
-  const dow = new Date(ms).getUTCDay() // 0=Sun … 6=Sat
-  const monday = new Date(ms - ((dow + 6) % 7) * 86400000)
-  return `${monday.getUTCFullYear()}-${String(monday.getUTCMonth() + 1).padStart(2, '0')}-${String(monday.getUTCDate()).padStart(2, '0')}`
-}
-
-/**
- * The last `weeks` Monday keys, oldest → newest, ending with the week
- * containing `todayStr`.
- */
-export function weekKeys(weeks, todayStr) {
-  const start = weekStartStr(todayStr)
-  const y = Number(start.slice(0, 4))
-  const m = Number(start.slice(5, 7))
-  const d = Number(start.slice(8, 10))
-  const ms = Date.UTC(y, m - 1, d)
+export function monthKeys(months, todayStr) {
+  const y = Number(todayStr.slice(0, 4))
+  const m = Number(todayStr.slice(5, 7))
+  const total = y * 12 + (m - 1)
   const keys = []
-  for (let i = weeks - 1; i >= 0; i--) {
-    const dt = new Date(ms - i * 7 * 86400000)
-    keys.push(`${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`)
+  for (let i = months - 1; i >= 0; i--) {
+    const t = total - i
+    keys.push(`${String(Math.floor(t / 12)).padStart(4, '0')}-${String((t % 12) + 1).padStart(2, '0')}`)
   }
   return keys
 }
 
 /**
- * Assemble the weekly sales/cancellations series for one location.
- * Returns { weeks: [{ week: 'YYYY-MM-DD', sales, cancellations }],
- * cancelTrackingStart } — `cancellations` is null for weeks that ended
- * before tracking existed. `nowMs` injectable for tests.
+ * Assemble the monthly sales/cancellations series for one location.
+ * Returns { months: [{ month: 'YYYY-MM', sales, cancellations }],
+ * cancelTrackingStart } — a series is null for months that predate its
+ * data source. `nowMs` injectable for tests.
  */
-export async function fetchMembershipFlows(db, locationId, weeks = 12, nowMs = Date.now()) {
+export async function fetchMembershipFlows(db, locationId, months = 12, nowMs = Date.now()) {
   const todayStr = dublinDayStr(nowMs)
-  const keys = weekKeys(weeks, todayStr)
+  const keys = monthKeys(months, todayStr)
 
   // Fetch the full sale history (not just the window) so first-sale
   // dedupe sees a contact's earlier purchase; row count is tiny
@@ -103,22 +86,23 @@ export async function fetchMembershipFlows(db, locationId, weeks = 12, nowMs = D
     const cid = row.contact_id || 'unknown'
     if (seen.has(cid)) continue
     seen.add(cid)
-    const week = weekStartStr(dublinDayStr(row.invoice_date))
-    if (week in sales) sales[week] += 1
+    const month = dublinDayStr(row.invoice_date).slice(0, 7)
+    if (month in sales) sales[month] += 1
   }
 
   const cancels = Object.fromEntries(keys.map((k) => [k, 0]))
   for (const row of cancelRes.data || []) {
-    const week = weekStartStr(dublinDayStr(row.occurred_at))
-    if (week in cancels) cancels[week] += 1
+    const month = dublinDayStr(row.occurred_at).slice(0, 7)
+    if (month in cancels) cancels[month] += 1
   }
 
-  const cancelStartWeek = weekStartStr(CANCEL_TRACKING_START)
+  const salesStartMonth = SALES_DATA_START.slice(0, 7)
+  const cancelStartMonth = CANCEL_TRACKING_START.slice(0, 7)
   return {
-    weeks: keys.map((week) => ({
-      week,
-      sales: week >= weekStartStr(SALES_DATA_START) ? sales[week] : null,
-      cancellations: week >= cancelStartWeek ? cancels[week] : null,
+    months: keys.map((month) => ({
+      month,
+      sales: month >= salesStartMonth ? sales[month] : null,
+      cancellations: month >= cancelStartMonth ? cancels[month] : null,
     })),
     cancelTrackingStart: CANCEL_TRACKING_START,
   }
