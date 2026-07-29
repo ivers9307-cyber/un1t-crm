@@ -12,7 +12,7 @@
 // Next 16 rejects `dynamic(..., { ssr: false })` inside a Server
 // Component — so the lazy import lives in AdsTrendChartLazy.jsx (a
 // 'use client' wrapper), same shape as MembershipPanel.jsx wrapping
-// MembershipTrendChart.jsx.
+// MembershipFlowsChart.jsx.
 
 import { redirect, notFound } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'

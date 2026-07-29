@@ -2,7 +2,7 @@
 // InBodyCharts.jsx — CONSULTATIONS SP1
 //
 // Lazy-loaded recharts chunk for InBodyProgress. Split into its own
-// module (same approach as MembershipTrendChart.jsx) so recharts
+// module (same approach as MembershipFlowsChart.jsx) so recharts
 // (~150KB) only ships when a contact has InBody scans to plot — the
 // parent dynamic-imports this with { ssr: false }.
 //

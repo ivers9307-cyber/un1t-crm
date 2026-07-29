@@ -11,7 +11,7 @@
 //
 // recharts is heavy (~150KB), so the chart block is split into its own
 // chunk via next/dynamic (ssr:false) — same pattern as
-// MembershipTrendChart — so it only ships when a contact actually has
+// MembershipFlowsChart — so it only ships when a contact actually has
 // scans to plot.
 
 import dynamic from 'next/dynamic'
