@@ -95,11 +95,18 @@ describe('writeMembershipSnapshot', () => {
     expect(out.snapshot_date).toBe('2026-06-01')
   })
 
-  it('derives snapshot_date from now when not supplied', async () => {
+  it('derives the Dublin calendar day from now when not supplied', async () => {
     const upsert = vi.fn()
     const db = fakeCountDb(() => 0, upsert)
     await writeMembershipSnapshot(db, 'loc-1', { now: '2026-06-15T10:00:00Z' })
-    expect(upsert.mock.calls[0][0].snapshot_date).toBe('2026-06-01')
+    expect(upsert.mock.calls[0][0].snapshot_date).toBe('2026-06-15')
+  })
+
+  it('buckets a late-UTC instant into the next Dublin day during BST', async () => {
+    const upsert = vi.fn()
+    const db = fakeCountDb(() => 0, upsert)
+    await writeMembershipSnapshot(db, 'loc-1', { now: '2026-06-15T23:30:00Z' }) // 00:30 Dublin, 16th
+    expect(upsert.mock.calls[0][0].snapshot_date).toBe('2026-06-16')
   })
 
   it('throws when the upsert fails', async () => {
@@ -125,6 +132,7 @@ describe('fetchMembershipTrend', () => {
       from: () => b,
       select: () => b,
       eq: (c, v) => { calls.eq = [c, v]; return b },
+      gte: (c, v) => { calls.gte = [c, v]; return b },
       order: (c, o) => { calls.order = [c, o]; return b },
       limit: (n) => { calls.limit = n; return Promise.resolve({ data: rows, error: errorObj }) },
       _calls: calls,
@@ -132,26 +140,36 @@ describe('fetchMembershipTrend', () => {
     return b
   }
 
-  it('returns rows oldest→newest with a YYYY-MM month key', async () => {
-    // Supabase returns newest-first (we order desc); the reader reverses.
-    const db = trendDb([
-      { snapshot_date: '2026-07-01', monthly_recurring: 200, class_packs: 460, payg: 410, total_members: 1070, active_recurring: 170, dead_packs: 380 },
-      { snapshot_date: '2026-06-01', monthly_recurring: 191, class_packs: 470, payg: 418, total_members: 1079, active_recurring: 165, dead_packs: 392 },
-    ])
-    const out = await fetchMembershipTrend(db, 'loc-1')
-    expect(out).toHaveLength(2)
-    expect(out[0].month).toBe('2026-06') // oldest first after reverse
+  const rows = [
+    { snapshot_date: '2026-06-01', monthly_recurring: 191, class_packs: 470, payg: 418, total_members: 1079, active_recurring: 165, dead_packs: 392 },
+    { snapshot_date: '2026-07-01', monthly_recurring: 200, class_packs: 460, payg: 410, total_members: 1070, active_recurring: 170, dead_packs: 380 },
+    { snapshot_date: '2026-07-29', monthly_recurring: 205, class_packs: 458, payg: 412, total_members: 1075, active_recurring: 173, dead_packs: 379 },
+  ]
+
+  it('defaults to monthly granularity: first-of-month rows only, month key', async () => {
+    const out = await fetchMembershipTrend(trendDb(rows), 'loc-1')
+    expect(out).toHaveLength(2) // the 07-29 daily row is filtered out
+    expect(out[0].month).toBe('2026-06')
     expect(out[1].month).toBe('2026-07')
     expect(out[0].monthly_recurring).toBe(191)
     expect(out[1].class_packs).toBe(460)
   })
 
-  it('passes the months limit and location scope through', async () => {
+  it('daily granularity returns every snapshot with a date key', async () => {
+    const out = await fetchMembershipTrend(trendDb(rows), 'loc-1', 12, { granularity: 'daily' })
+    expect(out).toHaveLength(3)
+    expect(out.map((r) => r.date)).toEqual(['2026-06-01', '2026-07-01', '2026-07-29'])
+    expect(out[2].payg).toBe(412)
+  })
+
+  it('scopes to the location and windows by months, oldest first', async () => {
     const db = trendDb([])
     await fetchMembershipTrend(db, 'loc-9', 6)
     expect(db._calls.eq).toEqual(['location_id', 'loc-9'])
-    expect(db._calls.limit).toBe(6)
-    expect(db._calls.order).toEqual(['snapshot_date', { ascending: false }])
+    expect(db._calls.gte[0]).toBe('snapshot_date')
+    expect(db._calls.gte[1]).toMatch(/^\d{4}-\d{2}-01$/)
+    expect(db._calls.order).toEqual(['snapshot_date', { ascending: true }])
+    expect(db._calls.limit).toBe(800) // 12mo daily ≈ 370 rows — stays under the 1k select cap
   })
 
   it('returns an empty array when there are no snapshots yet', async () => {

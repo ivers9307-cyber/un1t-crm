@@ -1,14 +1,16 @@
-// Vercel cron — monthly membership snapshot (DASH-MEMBERSHIP.1).
+// Vercel cron — daily membership snapshot (DASH-MEMBERSHIP.1;
+// daily since TREND-DAILY.1 — monthly gave the trend chart one point
+// per month, i.e. two dots after two months).
 //
-// Runs the 1st of each month at 02:00 UTC. For every active location it
-// computes the current membership breakdown (monthly recurring vs class
-// packs vs payg, plus active-recurring + dead-pack sub-metrics) and
-// upserts one membership_snapshots row for the month. The business
-// dashboard's 12-month trend chart reads from that table.
+// Runs daily at 02:00 UTC. For every active location it computes the
+// current membership breakdown (monthly recurring vs class packs vs
+// payg, plus active-recurring + dead-pack sub-metrics) and upserts one
+// membership_snapshots row for the Dublin day. The business
+// dashboard's trend chart reads from that table.
 //
-// First run establishes the baseline; the trend grows one point per
-// month from there. Idempotent — re-running in the same month upserts
-// the same (location_id, snapshot_date) row.
+// Idempotent — re-running on the same day upserts the same
+// (location_id, snapshot_date) row. Heartbeat expectation tightened to
+// daily in mig 455.
 //
 // Auth: same fail-closed CRON_SECRET pattern as the other crons.
 

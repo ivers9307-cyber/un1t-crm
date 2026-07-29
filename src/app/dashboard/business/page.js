@@ -92,7 +92,9 @@ async function MembershipBlock({ locationId }) {
   try {
     const [live, trend] = await Promise.all([
       computeMembershipCounts(db, locationId),
-      fetchMembershipTrend(db, locationId, 12),
+      // Daily granularity — the web line chart plots every snapshot;
+      // the mobile route keeps the default monthly view (≤12 columns).
+      fetchMembershipTrend(db, locationId, 12, { granularity: 'daily' }),
     ])
     // Falsy counts are a failure too — fall through to the error cell
     // rather than rendering nothing (JSX built after the try per the

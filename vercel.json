@@ -62,7 +62,7 @@
     },
     {
       "path": "/api/cron/membership-snapshot",
-      "schedule": "0 2 1 * *"
+      "schedule": "0 2 * * *"
     },
     {
       "path": "/api/cron/glofox-detail-backfill",
