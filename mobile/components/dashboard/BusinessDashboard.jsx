@@ -92,7 +92,9 @@ function AdsSummaryPanel({ ads }) {
 }
 
 // 12-month membership trend as stacked per-month columns — plain Views,
-// same three series (and colours) as the web MembershipTrendChart.
+// three series over monthly snapshots. (The web panel moved on to a
+// weekly sales-vs-cancellations chart in TREND-FLOWS.1; this mini
+// keeps the monthly stacked view until mobile gets a flows chart.)
 const TREND_SERIES = [
   { key: 'monthly_recurring', label: 'Monthly recurring', color: '#10b981' },
   { key: 'class_packs', label: 'Class packs', color: '#3b82f6' },

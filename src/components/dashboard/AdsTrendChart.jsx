@@ -2,7 +2,7 @@
 
 // ADS-REPORT.3 — lazy-loaded recharts trend chart for /dashboard/ads.
 //
-// Mirrors MembershipTrendChart.jsx: its own chunk so recharts only
+// Mirrors MembershipFlowsChart.jsx: its own chunk so recharts only
 // ships when the ads trend actually renders — the page dynamic-imports
 // this with { ssr: false } instead of importing recharts at the top
 // level.

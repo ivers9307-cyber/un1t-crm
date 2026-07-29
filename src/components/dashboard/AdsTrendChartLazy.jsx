@@ -6,7 +6,7 @@
 // Component (Next.js 16 App Router rejects it in a Server Component —
 // see /dashboard/ads/page.js, which stays a server component). Mirrors
 // how MembershipPanel.jsx (a 'use client' component) wraps
-// MembershipTrendChart with dynamic(..., { ssr: false }) rather than
+// MembershipFlowsChart with dynamic(..., { ssr: false }) rather than
 // the server page doing it directly.
 
 import dynamic from 'next/dynamic'

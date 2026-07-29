@@ -12,7 +12,8 @@ import { createServerClient } from '@/lib/supabase'
 import { fetchFunnelCounts, fetchAdsSummary, fetchTodayOps } from '@shared/dashboard-data'
 import { buildNeedsYouRail } from '@/lib/dashboard/business-rail'
 import { buildBusinessKpis } from '@/lib/dashboard/business-kpis'
-import { computeMembershipCounts, fetchMembershipTrend } from '@/lib/membership-snapshot'
+import { computeMembershipCounts } from '@/lib/membership-snapshot'
+import { fetchMembershipFlows } from '@/lib/membership-flows'
 import { KpiCard, KpiRow, formatCurrency } from '@/components/dashboard/Cards'
 import { MembershipPanel } from '@/components/dashboard/MembershipPanel'
 import {
@@ -90,21 +91,19 @@ async function MembershipBlock({ locationId }) {
   const db = createServerClient()
   let data = null
   try {
-    const [live, trend] = await Promise.all([
+    const [live, flows] = await Promise.all([
       computeMembershipCounts(db, locationId),
-      // Daily granularity — the web line chart plots every snapshot;
-      // the mobile route keeps the default monthly view (≤12 columns).
-      fetchMembershipTrend(db, locationId, 12, { granularity: 'daily' }),
+      fetchMembershipFlows(db, locationId, 12),
     ])
     // Falsy counts are a failure too — fall through to the error cell
     // rather than rendering nothing (JSX built after the try per the
     // error-boundaries lint rule; see the file header).
-    if (live) data = { live, trend }
+    if (live) data = { live, flows }
   } catch {
     data = null
   }
-  if (!data) return <BlockError label="Membership trend" />
-  return <MembershipPanel live={data.live} trend={data.trend} />
+  if (!data) return <BlockError label="Membership sales" />
+  return <MembershipPanel live={data.live} flows={data.flows} />
 }
 
 async function TodayBlock({ locationId, locationName }) {
