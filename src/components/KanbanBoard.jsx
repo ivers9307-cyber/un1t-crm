@@ -115,7 +115,7 @@ export default function KanbanBoard({ initialStages, initialDeals, stageCounts =
                 the next page from /api/pipeline/deals and appends it. */}
             <div className="p-2 space-y-0 min-h-[100px]">
               {loaded.map((deal) => (
-                <DealCard key={deal.id} deal={deal} locationId={locationId} onOpenContact={openContact} />
+                <DealCard key={deal.id} deal={deal} locationId={locationId} stageName={stage.name} onOpenContact={openContact} />
               ))}
               {hasMore && (
                 <button
