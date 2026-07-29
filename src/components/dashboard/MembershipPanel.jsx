@@ -3,7 +3,7 @@
 // MembershipPanel — DASH-MEMBERSHIP.2 (chart reworked in TREND-FLOWS.1).
 //
 // Business-board membership section: live breakdown KPI cards (read
-// from contacts on each load, always current) + a weekly
+// from contacts on each load, always current) + a monthly
 // sales-vs-cancellations bar chart (sales from subscription-start
 // invoices, cancellations from the membership_transitions trigger log
 // — see src/lib/membership-flows.js for the definitions and data
@@ -36,11 +36,11 @@ function dateLabel(d) {
 
 export function MembershipPanel({ live, flows }) {
   const l = live || {}
-  const weeks = flows?.weeks
-  const hasFlows = Array.isArray(weeks) && weeks.length > 0
-  // Footnote only while the chart still contains untracked weeks —
-  // once every rendered week postdates the trigger it disappears.
-  const hasUntrackedWeeks = hasFlows && weeks.some((w) => w.cancellations == null)
+  const months = flows?.months
+  const hasFlows = Array.isArray(months) && months.length > 0
+  // Footnote only while the chart still contains untracked months —
+  // once every rendered month postdates the trigger it disappears.
+  const hasUntrackedMonths = hasFlows && months.some((m) => m.cancellations == null)
 
   return (
     <>
@@ -73,15 +73,15 @@ export function MembershipPanel({ live, flows }) {
         />
       </KpiRow>
 
-      <SectionHeader title="Membership sales vs cancellations (weekly)" />
+      <SectionHeader title="Membership sales vs cancellations (monthly)" />
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
         {hasFlows ? (
           <>
-            <MembershipFlowsChart weeks={weeks} />
-            {hasUntrackedWeeks ? (
+            <MembershipFlowsChart months={months} />
+            {hasUntrackedMonths ? (
               <p className="text-xs text-un1t-muted mt-2">
                 Cancellation tracking started {dateLabel(flows.cancelTrackingStart)} — earlier
-                weeks show sales only.
+                months show sales only.
               </p>
             ) : null}
           </>
