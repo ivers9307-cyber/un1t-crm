@@ -2,9 +2,12 @@
 
 // Public mailing-list signup form for /h/[slug] (HOST-EMAIL.2). Dark,
 // host-branded, deliberately tiny: name (optional) + email + join. The
-// consent copy IS the opt-in basis — the backing API stamps marketing
-// consent TRUE, so keep the promise explicit and the unsubscribe mention
-// intact. Inline success (no redirect); the API always answers
+// consent copy can now be host-customised (headline/blurb/button
+// label/success message, mig 460) but the API's opt-in basis is
+// unchanged — it stamps marketing consent TRUE regardless of copy. The
+// unsubscribe promise remains in the default copy, and the unsubscribe
+// link in every email footer is the actual binding mechanism, not the
+// on-page wording. Inline success (no redirect); the API always answers
 // { success: true } once the host resolves, so "done" here means "recorded
 // or already on the list" — indistinguishable by design.
 
@@ -14,7 +17,7 @@ const INPUT_CLASS =
   'w-full rounded-lg border border-white/15 bg-white/5 px-4 py-3 text-sm text-white ' +
   'placeholder:text-white/40 focus:outline-none focus:border-white/40'
 
-export default function HostListSignup({ slug, hostName }) {
+export default function HostListSignup({ slug, hostName, headline, blurb, buttonLabel, successMessage }) {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -58,8 +61,7 @@ export default function HostListSignup({ slug, hostName }) {
         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-white/50">Mailing list</p>
         <h1 className="mt-3 text-3xl font-bold">You&apos;re on the list</h1>
         <p className="mt-4 text-sm text-white/70">
-          We&apos;ll email you about {hostName}&apos;s upcoming events. You can
-          unsubscribe anytime from any email.
+          {successMessage || `We'll email you about ${hostName}'s upcoming events. You can unsubscribe anytime from any email.`}
         </p>
       </div>
     )
@@ -68,9 +70,9 @@ export default function HostListSignup({ slug, hostName }) {
   return (
     <div className="w-full max-w-md">
       <p className="text-center text-xs font-semibold uppercase tracking-[0.3em] text-white/50">Mailing list</p>
-      <h1 className="mt-3 text-center text-3xl font-bold">{hostName}</h1>
+      <h1 className="mt-3 text-center text-3xl font-bold">{headline || hostName}</h1>
       <p className="mt-3 text-center text-sm text-white/70">
-        Get emails about {hostName}&apos;s events. Unsubscribe anytime.
+        {blurb || `Get emails about ${hostName}'s events. Unsubscribe anytime.`}
       </p>
 
       <form onSubmit={submit} className="mt-8 space-y-3">
@@ -97,7 +99,7 @@ export default function HostListSignup({ slug, hostName }) {
           disabled={submitting}
           className="w-full rounded-lg bg-white px-4 py-3 text-sm font-semibold uppercase tracking-widest text-black transition-opacity hover:opacity-90 disabled:opacity-50"
         >
-          {submitting ? 'Joining…' : 'Join the list'}
+          {submitting ? 'Joining…' : (buttonLabel || 'Join the list')}
         </button>
       </form>
 
