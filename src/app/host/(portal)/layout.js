@@ -36,7 +36,7 @@ export default async function HostPortalLayout({ children }) {
             >
               + Create event
             </Link>
-            <span className="text-white/70 hidden sm:inline">{session.host.name}</span>
+            <span className="text-white/70 hidden sm:inline truncate max-w-[16rem]">{session.host.name}</span>
             {/* SAFEGUARD: HostSignOut calls supabase.auth.signOut(), which would
                 destroy the admin's real staff session. An admin viewing-as must
                 exit via the banner's "Exit to CRM", never sign out here. */}

@@ -25,19 +25,23 @@ export default function HostNav() {
   const pathname = usePathname() || ''
   return (
     <nav aria-label="Host portal" className="flex items-center gap-1">
-      {LINKS.map((l) => (
-        <Link
-          key={l.href}
-          href={l.href}
-          className={`rounded-lg px-3 py-1.5 text-sm ${
-            isNavActive(pathname, l)
-              ? 'bg-white/10 text-white font-semibold'
-              : 'text-white/60 hover:text-white hover:bg-white/5'
-          }`}
-        >
-          {l.label}
-        </Link>
-      ))}
+      {LINKS.map((l) => {
+        const active = isNavActive(pathname, l)
+        return (
+          <Link
+            key={l.href}
+            href={l.href}
+            aria-current={active ? 'page' : undefined}
+            className={`rounded-lg px-3 py-1.5 text-sm ${
+              active
+                ? 'bg-white/10 text-white font-semibold'
+                : 'text-white/60 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            {l.label}
+          </Link>
+        )
+      })}
     </nav>
   )
 }
