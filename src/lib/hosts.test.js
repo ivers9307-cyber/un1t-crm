@@ -47,4 +47,16 @@ describe('ensureHostSlug', () => {
     const { db } = mockDb([{ code: '42501', message: 'nope' }])
     await expect(ensureHostSlug(db, { id: 'h1', name: 'Acme', slug: null })).rejects.toThrow(/slug persist failed/)
   })
+
+  it('throws after exhausting 25 suffix attempts', async () => {
+    const { db } = mockDb(Array(25).fill({ code: '23505' }))
+    await expect(ensureHostSlug(db, { id: 'h1', name: 'Acme', slug: null })).rejects.toThrow(/could not derive/)
+  })
+
+  it('falls back to base "host" for a degenerate name', async () => {
+    const { db, updates } = mockDb([null])
+    const slug = await ensureHostSlug(db, { id: 'h1', name: '!!!', slug: null })
+    expect(slug).toBe('host')
+    expect(updates).toEqual(['host'])
+  })
 })
