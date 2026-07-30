@@ -1,5 +1,5 @@
 // src/app/api/attendance/geofence-checkin/route.test.js
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/auth', async () => {
   const actual = await vi.importActual('@/lib/auth')
@@ -11,7 +11,16 @@ import { POST } from './route'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 
-beforeEach(() => vi.clearAllMocks())
+// Pin the clock to a mid-day Dublin instant: nearbyShiftRow() derives a
+// "10 minutes ago" Dublin wall-clock shift from now, so within ~10 min
+// after midnight the shift's block_date is yesterday (and its 23:59:00
+// end_time already past) → no_shift_in_window instead of matched.
+// toFake:['Date'] only — leave timers real for async plumbing.
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-07-15T11:00:00Z') }) // 12:00 IST
+})
+afterEach(() => vi.useRealTimers())
 
 const staff = { id: 'prof-1', role: 'staff', activeLocation: { id: 'loc1' }, locations: [{ id: 'loc1' }] }
 const GEO = { enabled: true, latitude: 53.2905, longitude: -6.1988, radius_m: 200 }
