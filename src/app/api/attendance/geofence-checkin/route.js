@@ -127,7 +127,10 @@ export async function POST(request) {
     .gte('block.block_date', dayBefore)
     .lte('block.block_date', dayAfter)
     .eq('block.location_id', location.id)
-  if (shiftErr) return NextResponse.json({ success: false, error: shiftErr.message }, { status: 503 })
+  // transient:true is the client's retry marker — api() passes the parsed
+  // envelope through verbatim, so flushQueue can keep the ping queued
+  // without sniffing the (arbitrary) DB error string.
+  if (shiftErr) return NextResponse.json({ success: false, error: shiftErr.message, transient: true }, { status: 503 })
 
   const shifts = (rows || [])
     .map((r) => {
@@ -146,7 +149,7 @@ export async function POST(request) {
       .update({ start_time_override: stamp })
       .eq('id', best.shift.id)
       .is('start_time_override', null)
-    if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 503 })
+    if (updErr) return NextResponse.json({ success: false, error: updErr.message, transient: true }, { status: 503 })
     // Post-update verify is best-effort — a read-back failure only
     // risks the matched/already_stamped label, not the stamp itself.
     const { data: post } = await db

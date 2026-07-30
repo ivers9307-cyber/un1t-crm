@@ -152,6 +152,7 @@ describe('POST /api/attendance/geofence-checkin', () => {
     const body = await res.json()
     expect(res.status).toBe(503)
     expect(body.success).toBe(false)
+    expect(body.transient).toBe(true)
     expect(db.inserted().length).toBe(0)
   })
 
@@ -162,6 +163,7 @@ describe('POST /api/attendance/geofence-checkin', () => {
     const body = await res.json()
     expect(res.status).toBe(503)
     expect(body.success).toBe(false)
+    expect(body.transient).toBe(true)
     expect(db.inserted().length).toBe(0)
   })
 

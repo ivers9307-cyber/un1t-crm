@@ -55,13 +55,18 @@ export async function flushQueue() {
       })
       // Server-rejected (4xx → success:false with a real error) is
       // terminal — retrying an exempt/disabled ping forever is noise.
-      // Transient-shaped failures stay queued: network errors plus the
-      // 5xx strings api() synthesises when the server dies without the
-      // standard envelope ("Non-JSON response (5xx)" for HTML error
-      // pages, "HTTP 5xx" for bare non-2xx JSON) — see mobile/lib/api.js.
+      // Transient failures stay queued, via two channels:
+      //   1. api()-synthesised strings for network/edge failures
+      //      ("Network error: …"; "Non-JSON response (5xx)" for HTML
+      //      error pages; "HTTP 5xx" for bare non-2xx JSON) — see
+      //      mobile/lib/api.js.
+      //   2. The checkin route's own 503s carry transient:true in the
+      //      envelope (their error string is a raw DB message, so it
+      //      can't be sniffed) — api() passes the flag through verbatim.
       if (
         !res.success &&
-        (/^Network error/.test(res.error || '') ||
+        (res.transient === true ||
+          /^Network error/.test(res.error || '') ||
           /^Non-JSON response \(5\d\d\)/.test(res.error || '') ||
           /^HTTP 5\d\d/.test(res.error || ''))
       ) remaining.push(item)
