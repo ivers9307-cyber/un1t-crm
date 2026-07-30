@@ -203,6 +203,7 @@ describe('applyStaffProfileWrite — ordering guarantee (C2b.2a review)', () => 
 })
 
 import { buildAssignmentRow } from './staff-write.js'
+import { assignmentSchema } from './schemas.js'
 
 describe('buildAssignmentRow', () => {
   const base = { location_id: 'loc-1', role: 'staff', is_default: 1, permissions: { x: 1 } }
@@ -240,6 +241,24 @@ describe('buildAssignmentRow', () => {
     expect(buildAssignmentRow({ ...common, assignment: { ...base, protect_face_id: 'face1' } }).protect_face_id).toBe('face1')
     expect(buildAssignmentRow({ ...common, assignment: { ...base, protect_face_id: null } }).protect_face_id).toBeNull()
     expect('protect_face_id' in buildAssignmentRow({ ...common, assignment: base })).toBe(false)
+  })
+
+  // Zod's z.object strips unknown keys, so a key missing from
+  // assignmentSchema silently vanishes between validateBody and
+  // buildAssignmentRow — and omit-means-unchanged then makes the save a
+  // no-op. This run-through-the-schema test catches that class.
+  it('protect_face_id survives assignmentSchema validation into the row', () => {
+    const valid = {
+      location_id: 'a0000000-0000-0000-0000-000000000001',
+      role: 'staff',
+      is_default: true,
+    }
+    const set = assignmentSchema.parse({ ...valid, protect_face_id: 'face1' })
+    expect(buildAssignmentRow({ ...common, assignment: set }).protect_face_id).toBe('face1')
+    const clear = assignmentSchema.parse({ ...valid, protect_face_id: null })
+    expect(buildAssignmentRow({ ...common, assignment: clear }).protect_face_id).toBeNull()
+    const omit = assignmentSchema.parse(valid)
+    expect('protect_face_id' in buildAssignmentRow({ ...common, assignment: omit })).toBe(false)
   })
 
   it('unifi_door_ids: null→null, array→array, []→[], omit→absent', () => {
