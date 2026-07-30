@@ -15,6 +15,7 @@ import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
 import { ensureHostSlug } from '@/lib/hosts'
 import { getAppUrl } from '@/lib/app-url'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -35,7 +36,8 @@ export async function GET() {
   try {
     slug = await ensureHostSlug(db, hostRow)
   } catch (e) {
-    return NextResponse.json({ success: false, error: e.message }, { status: 500 })
+    logError('host-signup-qr', 'slug ensure failed', { err: e })
+    return NextResponse.json({ success: false, error: 'Could not prepare your signup page — try again shortly.' }, { status: 500 })
   }
 
   // Origin-only from getAppUrl, same defensive pattern as the events QR

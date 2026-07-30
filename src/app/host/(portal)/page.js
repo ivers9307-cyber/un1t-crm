@@ -8,9 +8,12 @@ import { getCurrentHost } from '@/lib/host-auth'
 import { getHostRevenue } from '@/lib/host-revenue'
 import { createServerClient } from '@/lib/supabase'
 import { HOST_EVENT_STATUS_LABEL } from '@/lib/host-events'
+import { ensureHostSlug } from '@/lib/hosts'
+import { getAppUrl } from '@/lib/app-url'
 import HostSubmitButton from '@/components/host/HostSubmitButton'
 import HostPayouts from '@/components/host/HostPayouts'
 import HostStatements from '@/components/host/HostStatements'
+import HostSignupPageCard from '@/components/host/HostSignupPageCard'
 
 export const dynamic = 'force-dynamic'
 
@@ -53,6 +56,31 @@ export default async function HostDashboard() {
     revenue = null
   }
   const cur = revenue?.currency || 'EUR'
+
+  // "Your signup page" (HOST-GROWTH.A) — lazily ensure the /h/[slug] slug
+  // (same derivation the email-domain flow uses) + count mailing-list
+  // signups. Any failure degrades to signupUrl=null (card hides).
+  let signupUrl = null
+  let signupCount = null
+  try {
+    const { data: hostRow } = await db
+      .from('event_hosts')
+      .select('id, name, slug')
+      .eq('id', session.host.id)
+      .maybeSingle()
+    if (hostRow) {
+      const slug = await ensureHostSlug(db, hostRow)
+      signupUrl = `${new URL(getAppUrl()).origin}/h/${slug}`
+      const { count } = await db
+        .from('host_contacts')
+        .select('*', { count: 'exact', head: true })
+        .eq('host_id', session.host.id)
+        .eq('source', 'mailing_list')
+      signupCount = count ?? 0
+    }
+  } catch {
+    signupUrl = null
+  }
   const netByEvent = new Map((revenue?.perEvent || []).map((r) => [r.event_id, r]))
 
   // Only Stripe-Connect hosts have a UN1T booking fee + a settled "net to host"
@@ -87,6 +115,16 @@ export default async function HostDashboard() {
         <div className="mt-6 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
           Your Stripe account isn&apos;t fully connected yet — ticket payments can&apos;t be taken until it is.
         </div>
+      )}
+
+      {signupUrl && (
+        <section className="mt-8">
+          <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">Grow your list</h2>
+          <HostSignupPageCard url={signupUrl} signupCount={signupCount} />
+          <p className="mt-2 text-xs text-white/40">
+            Share this link or QR anywhere — signups land in your Contacts and can be emailed from Emails.
+          </p>
+        </section>
       )}
 
       <section className="mt-8">
