@@ -4174,6 +4174,54 @@ registry.registerPath({
 })
 
 // ============================================================================
+// Host Portal — event host's own /h/[slug] signup-page copy (HOST-GROWTH.7)
+// ============================================================================
+
+const HostListPageCopy = z.object({
+  slug: z.string().optional(),
+  list_headline: z.string().max(120).nullable().optional(),
+  list_blurb: z.string().max(500).nullable().optional(),
+  list_button_label: z.string().max(40).nullable().optional(),
+  list_success_message: z.string().max(500).nullable().optional(),
+}).openapi('HostListPageCopy')
+
+const HostListPageUpdate = z.object({
+  list_headline: z.string().max(120).optional(),
+  list_blurb: z.string().max(500).optional(),
+  list_button_label: z.string().max(40).optional(),
+  list_success_message: z.string().max(500).optional(),
+}).openapi('HostListPageUpdate')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/host/list-page',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Get the host's /h/[slug] signup-page copy (mig 460)",
+  description: 'Host session (getCurrentHost). Returns the four nullable list_* copy columns plus slug for the session host; a null field renders the built-in default copy on the public page.',
+  responses: {
+    200: { description: 'Copy fields for the session host', content: { 'application/json': { schema: SuccessResponse(HostListPageCopy) } } },
+    401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/host/list-page',
+  tags: ['Host Portal'],
+  security: [{ CookieAuth: [] }],
+  summary: "Update the host's /h/[slug] signup-page copy",
+  description: 'Host session. Strict schema (unknown keys rejected); partial — only supplied keys are written. Each field is trimmed; an empty string clears the override back to NULL (default copy).',
+  request: { body: { content: { 'application/json': { schema: HostListPageUpdate } } } },
+  responses: {
+    200: { description: 'Updated fields', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()) } } },
+    400: { description: 'Validation failed, unknown key, or empty patch', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Database update failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
 //
