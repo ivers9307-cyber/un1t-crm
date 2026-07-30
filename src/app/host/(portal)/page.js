@@ -10,7 +10,7 @@ import { createServerClient } from '@/lib/supabase'
 import { HOST_EVENT_STATUS_LABEL } from '@/lib/host-events'
 import { ensureHostSlug } from '@/lib/hosts'
 import { getAppUrl } from '@/lib/app-url'
-import { logError } from '@/lib/log'
+import { logWarn } from '@/lib/log'
 import HostSubmitButton from '@/components/host/HostSubmitButton'
 import HostPayouts from '@/components/host/HostPayouts'
 import HostStatements from '@/components/host/HostStatements'
@@ -80,7 +80,7 @@ export default async function HostDashboard() {
       signupCount = count ?? 0
     }
   } catch (e) {
-    logError('host-dashboard', 'signup card degraded', { err: e })
+    logWarn('host-dashboard', 'signup card degraded', { err: e })
     signupUrl = null
   }
   const netByEvent = new Map((revenue?.perEvent || []).map((r) => [r.event_id, r]))
