@@ -1,6 +1,6 @@
 // src/lib/geofence-attendance.js
 //
-// GEO-ATT (mig 460) — passive staff attendance via mobile geofencing.
+// GEO-ATT (mig 463) — passive staff attendance via mobile geofencing.
 // Location config lives in locations.settings.geofence:
 //   { enabled, latitude, longitude, radius_m, gate_copy }
 // This module owns defaults + normalisation (the FREQ-CAP.1 shape).

@@ -24,12 +24,12 @@
 ### Task 1: Migration 460 — geofence source + exempt flag
 
 **Files:**
-- Create: `supabase/migrations/460_geofence_attendance.sql`
+- Create: `supabase/migrations/463_geofence_attendance.sql`
 
 - [ ] **Step 1: Write the migration**
 
 ```sql
--- 460_geofence_attendance.sql
+-- 463_geofence_attendance.sql
 -- GEO-ATT.1 — passive staff attendance via mobile geofencing.
 --
 -- 1. staff_attendance_events.source gains 'geofence' (third auto
@@ -55,11 +55,11 @@ ALTER TABLE public.profile_locations
   ADD COLUMN IF NOT EXISTS geofence_exempt boolean NOT NULL DEFAULT false;
 
 COMMENT ON COLUMN public.profile_locations.geofence_exempt IS
-  'GEO-ATT (mig 460): true = this staff member is excluded from mobile geofence attendance at this location — never permission-gated, never auto-stamped by source=geofence.';
+  'GEO-ATT (mig 463): true = this staff member is excluded from mobile geofence attendance at this location — never permission-gated, never auto-stamped by source=geofence.';
 ```
 
 - [ ] **Step 2: Sanity-check numbering** — `ls supabase/migrations | sort -n | tail -3` must show 459 as the previous latest and no other 460.
-- [ ] **Step 3: Commit** — `git add supabase/migrations/460_geofence_attendance.sql && git commit -m "GEO-ATT.1 — mig 460: geofence attendance source + profile_locations.geofence_exempt"`
+- [ ] **Step 3: Commit** — `git add supabase/migrations/463_geofence_attendance.sql && git commit -m "GEO-ATT.1 — mig 463: geofence attendance source + profile_locations.geofence_exempt"`
 
 **Do NOT apply the migration** — the supervisor applies it via Supabase MCP against `iyvtbjjxdggiadzwwvdj` before merge (forward-only invariant), then runs `get_advisors`.
 
@@ -134,7 +134,7 @@ describe('geofenceIsConfigured', () => {
 ```js
 // src/lib/geofence-attendance.js
 //
-// GEO-ATT (mig 460) — passive staff attendance via mobile geofencing.
+// GEO-ATT (mig 463) — passive staff attendance via mobile geofencing.
 // Location config lives in locations.settings.geofence:
 //   { enabled, latitude, longitude, radius_m, gate_copy }
 // This module owns defaults + normalisation (the FREQ-CAP.1 shape).
@@ -338,14 +338,14 @@ export async function GET() {
 - [ ] **Step 5: Register in openapi.js** — append after the comms-frequency-cap entries:
 
 ```js
-// Geofence attendance (GEO-ATT, mig 460)
+// Geofence attendance (GEO-ATT, mig 463)
 registry.registerPath({
   method: 'get',
   path: '/api/attendance/geofence-config',
   tags: ['Attendance'],
   security: [{ CookieAuth: [] }],
   summary: 'Geofence regions + permission-gate flag for the current user',
-  description: 'Returns { required, gate_copy, regions:[{location_id,latitude,longitude,radius_m}] } for the caller\'s non-exempt assignments at geofence-enabled locations (locations.settings.geofence, mig 460). Mobile registers OS geofences from this and gates the app on background-location permission when required=true.',
+  description: 'Returns { required, gate_copy, regions:[{location_id,latitude,longitude,radius_m}] } for the caller\'s non-exempt assignments at geofence-enabled locations (locations.settings.geofence, mig 463). Mobile registers OS geofences from this and gates the app on background-location permission when required=true.',
   responses: { 200: { description: 'Config for the current user' } },
 })
 ```
@@ -523,7 +523,7 @@ For the `matched` verify path: in `mockDb`, make the post-update `single()` retu
 //
 // GEO-ATT.4 — the mobile app's geofence ENTER handler calls this.
 // Mirrors the stamping pipeline of /api/webhooks/unifi-access (mig 120)
-// with source='geofence' (mig 460). The caller can only stamp
+// with source='geofence' (mig 463). The caller can only stamp
 // THEMSELVES (profile from the JWT) at a location they're assigned to,
 // so unknown_user / wrong_location can't occur here.
 //
@@ -700,7 +700,7 @@ registry.registerPath({
   tags: ['Attendance'],
   security: [{ CookieAuth: [] }],
   summary: 'Mobile geofence-entry check-in (stamps own shift)',
-  description: 'Called by the mobile background geofence task on region ENTER. Stamps the caller\'s nearest unstamped shift at the location (±4h window, race-guarded) and writes a staff_attendance_events row with source=geofence (mig 460). Outcomes: matched | already_stamped | no_shift_in_window | duplicate | geofence_exempt.',
+  description: 'Called by the mobile background geofence task on region ENTER. Stamps the caller\'s nearest unstamped shift at the location (±4h window, race-guarded) and writes a staff_attendance_events row with source=geofence (mig 463). Outcomes: matched | already_stamped | no_shift_in_window | duplicate | geofence_exempt.',
   request: {
     body: { content: { 'application/json': { schema: z.object({
       location_id: uuidLike,
@@ -766,7 +766,7 @@ GET returns `shape(location.settings)` = the normalised blob from `geofenceFromL
 - Modify: `src/components/StaffForm.jsx` — payload map (line ~404): add `geofence_exempt: !!a.geofence_exempt,` after `protect_face_id`; add a pill-switch toggle after the `ProtectFacePicker` block, cloning the Door Access toggle at lines 633–658:
 
 ```jsx
-              {/* GEO-ATT (mig 460) — exclude this staff member from
+              {/* GEO-ATT (mig 463) — exclude this staff member from
                   mobile geofence attendance at this location: never
                   permission-gated in the app, never auto-stamped.
                   Keep ON for the Apple review account. */}
@@ -1103,8 +1103,8 @@ with `import { syncGeofences } from '../lib/geofence'` (this import also registe
 
 ### Task 11: Docs + full CI mirror + build
 
-- [ ] **Step 1:** Append a `### Phase 3 — mobile geofence (mig 460)` section to `docs/staff-attendance.md`: one paragraph (architecture pointer to the spec), the outcome taxonomy additions (`duplicate`, `geofence_exempt` — response-only, never stored), operator runbook (settings card fields; exempt toggle; **review account must be exempt** — cross-reference the review-login runbook), and the 2.2.0 native-lane note.
-- [ ] **Step 2:** Add a `docs/CHANGELOG.md` entry (next number): `GEO-ATT — passive staff attendance via mobile geofencing (mig 460, native lane 2.2.0): geofence source + config blob + exempt flag + LocationGate. PR #<fill at PR time>.`
+- [ ] **Step 1:** Append a `### Phase 3 — mobile geofence (mig 463)` section to `docs/staff-attendance.md`: one paragraph (architecture pointer to the spec), the outcome taxonomy additions (`duplicate`, `geofence_exempt` — response-only, never stored), operator runbook (settings card fields; exempt toggle; **review account must be exempt** — cross-reference the review-login runbook), and the 2.2.0 native-lane note.
+- [ ] **Step 2:** Add a `docs/CHANGELOG.md` entry (next number): `GEO-ATT — passive staff attendance via mobile geofencing (mig 463, native lane 2.2.0): geofence source + config blob + exempt flag + LocationGate. PR #<fill at PR time>.`
 - [ ] **Step 3:** Full CI mirror from repo root: `npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:route-guards && npm run check:guardrails` → all green.
 - [ ] **Step 4:** `npm run build` → passes (new routes/imports).
 - [ ] **Step 5: Commit** — `git commit -am "GEO-ATT.11 — docs + changelog"`
@@ -1114,7 +1114,7 @@ with `import { syncGeofences } from '../lib/geofence'` (this import also registe
 ## Supervisor-only steps (NOT for subagents)
 
 1. Code-review audit of the full diff (superpowers:requesting-code-review): IDOR pass on both new routes ("what filters this if RLS is gone?" — answer must be `user.id` scoping + `assertLocationAccess`), builder-thenable scan, awaited writes, chip-contrast, `type="button"`.
-2. Apply mig 460 via Supabase MCP (`apply_migration`, project `iyvtbjjxdggiadzwwvdj`) → `get_advisors` (security) → confirm no new findings.
+2. Apply mig 463 via Supabase MCP (`apply_migration`, project `iyvtbjjxdggiadzwwvdj`) → `get_advisors` (security) → confirm no new findings.
 3. Push branch + open PR (base main) — report URL to Richard. **Do not merge**: server side deploys on merge (dark — no location enabled), mobile needs the 2.2.0 EAS store build which Richard triggers.
 4. Post-merge checklist for Richard (include in PR body): enable + set coords on Stillorgan's settings card; set the Apple review account's assignment to Geofence-exempt BEFORE submitting the 2.2.0 binary; App Review notes paragraph (employee-only app, attendance is core functionality); Play Console background-location declaration; staff-handbook line.
 

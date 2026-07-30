@@ -42,7 +42,7 @@ POST /api/attendance/geofence-checkin   (Supabase JWT via authHeaders)
 
 Whichever signal fires first (door tap, geofence) wins the stamp; the loser lands as `already_stamped` — same defence-in-depth model as Access + Protect.
 
-## 4. Data model (one forward-only migration — mig 460)
+## 4. Data model (one forward-only migration — mig 463)
 
 *(Amended 2026-07-30 after repo review: location-level config follows the FREQ-CAP.1 `locations.settings` blob convention instead of new columns; gate copy lives in the same blob, not `company_settings`, which is a branding-only table.)*
 

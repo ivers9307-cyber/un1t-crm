@@ -1,4 +1,4 @@
--- 460_geofence_attendance.sql
+-- 463_geofence_attendance.sql
 -- GEO-ATT.1 — passive staff attendance via mobile geofencing.
 --
 -- 1. staff_attendance_events.source gains 'geofence' (third auto
@@ -24,4 +24,4 @@ ALTER TABLE public.profile_locations
   ADD COLUMN IF NOT EXISTS geofence_exempt boolean NOT NULL DEFAULT false;
 
 COMMENT ON COLUMN public.profile_locations.geofence_exempt IS
-  'GEO-ATT (mig 460): true = this staff member is excluded from mobile geofence attendance at this location — never permission-gated, never auto-stamped by source=geofence.';
+  'GEO-ATT (mig 463): true = this staff member is excluded from mobile geofence attendance at this location — never permission-gated, never auto-stamped by source=geofence.';
