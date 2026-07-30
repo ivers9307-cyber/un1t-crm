@@ -16,6 +16,7 @@ import * as Location from 'expo-location'
 import * as TaskManager from 'expo-task-manager'
 import * as SecureStore from 'expo-secure-store'
 import { api } from './api'
+import { readImpersonate } from './impersonate'
 
 export const GEOFENCE_TASK = 'geo-att-region-enter'
 const QUEUE_KEY = 'geo_att_queue_v1'
@@ -54,8 +55,16 @@ export async function flushQueue() {
       })
       // Server-rejected (4xx → success:false with a real error) is
       // terminal — retrying an exempt/disabled ping forever is noise.
-      // Only network-shaped failures stay queued.
-      if (!res.success && /^Network error/.test(res.error || '')) remaining.push(item)
+      // Transient-shaped failures stay queued: network errors plus the
+      // 5xx strings api() synthesises when the server dies without the
+      // standard envelope ("Non-JSON response (5xx)" for HTML error
+      // pages, "HTTP 5xx" for bare non-2xx JSON) — see mobile/lib/api.js.
+      if (
+        !res.success &&
+        (/^Network error/.test(res.error || '') ||
+          /^Non-JSON response \(5\d\d\)/.test(res.error || '') ||
+          /^HTTP 5\d\d/.test(res.error || ''))
+      ) remaining.push(item)
     } catch { remaining.push(item) }
   }
   await writeQueue(remaining)
@@ -78,6 +87,17 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
  * Returns the config so callers (the gate) can reuse it.
  */
 export async function syncGeofences() {
+  // GEO-ATT.10b — never touch region registration mid-impersonation:
+  // the config fetch would run AS THE TARGET (x-impersonate-target
+  // header), so a master viewing-as a gated staff member could register
+  // the target's regions on their own phone and stamp the target's
+  // attendance. Leave the master's own registration untouched too —
+  // impersonation is a temporary lens, not a location change.
+  try {
+    const imp = await readImpersonate()
+    if (imp?.targetId) return null
+  } catch {}
+
   const res = await api('/api/attendance/geofence-config')
   if (!res.success || !res.data) return null
   const { required, regions } = res.data
@@ -99,16 +119,23 @@ export async function syncGeofences() {
       const started = await Location.hasStartedGeofencingAsync(GEOFENCE_TASK)
       if (started) await Location.stopGeofencingAsync(GEOFENCE_TASK)
       await SecureStore.setItemAsync(REGIONS_KEY, '')
-    } else if (fingerprint !== prev) {
-      await Location.startGeofencingAsync(GEOFENCE_TASK, regions.map(r => ({
-        identifier: r.location_id,
-        latitude: r.latitude,
-        longitude: r.longitude,
-        radius: r.radius_m,
-        notifyOnEnter: true,
-        notifyOnExit: false,
-      })))
-      await SecureStore.setItemAsync(REGIONS_KEY, fingerprint)
+    } else {
+      // Self-heal: even when the fingerprint matches, the OS-level
+      // registration may have been torn down (e.g. TaskManager's
+      // task-not-found path unregisters geofencing natively) — check
+      // the actual registration, not just our stored fingerprint.
+      const started = await Location.hasStartedGeofencingAsync(GEOFENCE_TASK)
+      if (fingerprint !== prev || !started) {
+        await Location.startGeofencingAsync(GEOFENCE_TASK, regions.map(r => ({
+          identifier: r.location_id,
+          latitude: r.latitude,
+          longitude: r.longitude,
+          radius: r.radius_m,
+          notifyOnEnter: true,
+          notifyOnExit: false,
+        })))
+        await SecureStore.setItemAsync(REGIONS_KEY, fingerprint)
+      }
     }
   } catch {
     // Geofencing registration must never crash the app shell.

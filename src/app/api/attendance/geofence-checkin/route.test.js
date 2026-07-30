@@ -145,24 +145,42 @@ describe('POST /api/attendance/geofence-checkin', () => {
     expect(db.inserted()[0].match_outcome).toBe('already_stamped')
   })
 
-  it('shift-candidates select error → 400 with NO audit row (retry stays possible)', async () => {
+  it('shift-candidates select error → 503 (transient) with NO audit row (retry stays possible)', async () => {
     getCurrentUser.mockResolvedValue({ ...staff, locations: [{ id: 'a0000000-0000-0000-0000-000000000001' }] })
     const db = mockDb({ shiftSelectError: { message: 'db down' } })
     const res = await POST(postReq(validBody()))
     const body = await res.json()
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(503)
     expect(body.success).toBe(false)
     expect(db.inserted().length).toBe(0)
   })
 
-  it('stamp UPDATE error → 400 with NO audit row (retry stays possible)', async () => {
+  it('stamp UPDATE error → 503 (transient) with NO audit row (retry stays possible)', async () => {
     getCurrentUser.mockResolvedValue({ ...staff, locations: [{ id: 'a0000000-0000-0000-0000-000000000001' }] })
     const db = mockDb({ shiftRows: [nearbyShiftRow()], updateError: { message: 'write failed' } })
     const res = await POST(postReq(validBody()))
     const body = await res.json()
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(503)
     expect(body.success).toBe(false)
     expect(db.inserted().length).toBe(0)
+  })
+
+  it('impersonating master → impersonation_ignored, no DB touched, no audit row', async () => {
+    // getCurrentUser resolves to the TARGET profile with impersonatingFrom
+    // set to the real master (src/lib/auth.js mig 035 shape).
+    getCurrentUser.mockResolvedValue({
+      ...staff,
+      locations: [{ id: 'a0000000-0000-0000-0000-000000000001' }],
+      impersonatingFrom: { masterId: 'master-1', masterName: 'M', masterEmail: 'm@x' },
+    })
+    const db = mockDb()
+    const res = await POST(postReq(validBody()))
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.data.match_outcome).toBe('impersonation_ignored')
+    expect(db.inserted().length).toBe(0)
+    expect(createServerClient).not.toHaveBeenCalled()
   })
 
   it('no shift in window → no_shift_in_window, audit row still written', async () => {

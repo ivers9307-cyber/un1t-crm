@@ -15,7 +15,7 @@ import { api } from '../lib/api'
 import { syncGeofences } from '../lib/geofence'
 
 export default function LocationGate({ children }) {
-  const { session } = useAuth()
+  const { session, impersonatingFrom } = useAuth()
   // null = unknown (render children — never block on a fetch failure);
   // {required, gate_copy} once the config has loaded.
   const [config, setConfig] = useState(null)
@@ -37,7 +37,10 @@ export default function LocationGate({ children }) {
     })
     check()
     const sub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') { check(); syncGeofences() }
+      // GEO-ATT.10b — refresh the gate's config from the sync result so
+      // an operator toggling geofencing / exemption propagates on the
+      // next foreground without a remount.
+      if (s === 'active') { check(); syncGeofences().then(d => { if (d) setConfig(d) }) }
     })
     return () => sub.remove()
   }, [session, check])
@@ -56,6 +59,13 @@ export default function LocationGate({ children }) {
       await check()
     } catch { await check() }
   }, [check])
+
+  // GEO-ATT.10b — never gate a master who is viewing-as a gated staff
+  // member: the block would also hide the stop-impersonating UI, locking
+  // the master out. The gate reflects the TARGET's requirement, not the
+  // master's own; syncGeofences() separately refuses to (re)register
+  // regions mid-impersonation.
+  if (impersonatingFrom) return children
 
   const blocked = config?.required === true && granted === false
   if (!blocked) return children

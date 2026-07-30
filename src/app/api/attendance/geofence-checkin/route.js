@@ -8,7 +8,8 @@
 //
 // Outcomes returned (data.match_outcome):
 //   matched | already_stamped | no_shift_in_window   → audit row written
-//   duplicate (10-min flap dedup) | geofence_exempt  → NO audit row
+//   duplicate (10-min flap dedup) | geofence_exempt
+//     | impersonation_ignored                        → NO audit row
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -34,6 +35,17 @@ const GeofenceCheckinSchema = z.object({
 export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  // GEO-ATT.10b — defense-in-depth: a master viewing-as a staff member
+  // resolves to the TARGET profile here (user.impersonatingFrom carries
+  // the real master, src/lib/auth.js mig 035), so a geofence ping from
+  // the master's phone would stamp the TARGET's attendance. The mobile
+  // client already refuses to register regions mid-impersonation; this
+  // catches any queued ping that slips through. Success-shaped so the
+  // client dequeues; response-only outcome, never inserted.
+  if (user.impersonatingFrom) {
+    return NextResponse.json({ success: true, data: { match_outcome: 'impersonation_ignored' } })
+  }
 
   const validation = await validateBody(request, GeofenceCheckinSchema)
   if (!validation.ok) return validation.response
@@ -100,9 +112,9 @@ export async function POST(request) {
   const dayBefore = new Date(eventAt.getTime() - 24 * 3600_000).toISOString().slice(0, 10)
   const dayAfter  = new Date(eventAt.getTime() + 24 * 3600_000).toISOString().slice(0, 10)
 
-  // DB errors in the match/stamp path return 400 BEFORE the audit
-  // insert — a dedup-blocking row must never be written for a ping we
-  // didn't actually process, so the phone's queued retry can succeed.
+  // DB errors in the match/stamp path return 503 (transient) BEFORE the
+  // audit insert — a dedup-blocking row must never be written for a ping
+  // we didn't actually process, so the phone's queued retry can succeed.
   const { data: rows, error: shiftErr } = await db
     .from('shift_assignments')
     .select(`
@@ -115,7 +127,7 @@ export async function POST(request) {
     .gte('block.block_date', dayBefore)
     .lte('block.block_date', dayAfter)
     .eq('block.location_id', location.id)
-  if (shiftErr) return NextResponse.json({ success: false, error: shiftErr.message }, { status: 400 })
+  if (shiftErr) return NextResponse.json({ success: false, error: shiftErr.message }, { status: 503 })
 
   const shifts = (rows || [])
     .map((r) => {
@@ -134,7 +146,7 @@ export async function POST(request) {
       .update({ start_time_override: stamp })
       .eq('id', best.shift.id)
       .is('start_time_override', null)
-    if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 400 })
+    if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 503 })
     // Post-update verify is best-effort — a read-back failure only
     // risks the matched/already_stamped label, not the stamp itself.
     const { data: post } = await db
