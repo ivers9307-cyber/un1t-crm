@@ -181,7 +181,10 @@ export async function POST(request) {
         clamped,
       },
     })
-  if (insErr) return NextResponse.json({ success: false, error: insErr.message }, { status: 400 })
+  // Audit-insert failure is transient too (same 503 contract): the
+  // retry is safe — the stamp (if any) already landed, so the replay
+  // resolves as already_stamped, and dedup only keys on inserted rows.
+  if (insErr) return NextResponse.json({ success: false, error: insErr.message, transient: true }, { status: 503 })
 
   return NextResponse.json({ success: true, data: { match_outcome: matchOutcome } })
 }

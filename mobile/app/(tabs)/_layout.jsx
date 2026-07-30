@@ -20,7 +20,6 @@ import { registerForPushNotifications } from '../../lib/push-register'
 import { resolveLayoutForUser } from '../../lib/mobile-layout'
 import { getNeedsActionCount } from '../../lib/whatsapp-api'
 import ImpersonateBanner from '../../components/ImpersonateBanner'
-import LocationGate from '../../components/LocationGate'
 import PendingContractsBanner from '../../components/PendingContractsBanner'
 
 export default function TabsLayout() {
@@ -95,13 +94,9 @@ export default function TabsLayout() {
   }
 
   return (
-    // GEO-ATT — LocationGate blocks the whole tab tree until background
-    // location is granted (only when /api/attendance/geofence-config
-    // says required=true for this user; everyone else passes through).
-    <LocationGate>
-    {/* Wrap the navigator so the impersonation banner can pin above
-        the system header on every tab. ImpersonateBanner returns null
-        when not active, so this wrapper is a no-op for the common case. */}
+    // Wrap the navigator so the impersonation banner can pin above
+    // the system header on every tab. ImpersonateBanner returns null
+    // when not active, so this wrapper is a no-op for the common case.
     <View style={{ flex: 1 }}>
       <ImpersonateBanner />
       {/* Contracts banner: stacks below the impersonation banner
@@ -164,6 +159,5 @@ export default function TabsLayout() {
         ))}
       </Tabs>
     </View>
-    </LocationGate>
   )
 }

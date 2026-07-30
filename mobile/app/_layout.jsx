@@ -40,6 +40,7 @@ import { routeForNotification } from '../lib/notification-nav'
 import { ForegroundOtaUpdater } from '../lib/foreground-ota'
 import { BiometricLockProvider } from '../lib/biometric-lock'
 import { StudioPinProvider } from '../lib/studio-pin'
+import LocationGate from '../components/LocationGate'
 import RootErrorBoundary from '../components/RootErrorBoundary'
 
 // Keep the splash screen up until auth bootstrap finishes — avoids a
@@ -158,6 +159,13 @@ export default function RootLayout() {
               <Stack.Screen name="accounting" options={{ headerShown: true, headerStyle: { backgroundColor: '#FFFFFF' }, headerTitleStyle: { fontWeight: '600' }, headerTintColor: '#111827' }} />
               <Stack.Screen name="events" options={{ headerShown: false }} />
             </Stack>
+            {/* GEO-ATT.12 — full-screen permission-gate OVERLAY. Sibling
+                of <Stack> (SplashGate pattern: reads useAuth in its own
+                component, never wraps the navigator) and rendered AFTER
+                it so the absolute-fill block sits above every screen —
+                including deep-linked sibling groups that a (tabs)-only
+                wrap missed. Renders null unless gating applies. */}
+            <LocationGate />
           </BiometricLockProvider>
           </StudioPinProvider>
         </AuthProvider>

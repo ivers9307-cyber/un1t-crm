@@ -2719,7 +2719,7 @@ registry.registerPath({
   tags: ['Attendance'],
   security: [{ CookieAuth: [] }],
   summary: 'Mobile geofence-entry check-in (stamps own shift)',
-  description: 'Called by the mobile background geofence task on region ENTER. Stamps the caller\'s nearest unstamped shift at the location (±4h window, race-guarded) and writes a staff_attendance_events row with source=geofence (mig 463). Outcomes: matched | already_stamped | no_shift_in_window | duplicate | geofence_exempt.',
+  description: 'Called by the mobile background geofence task on region ENTER. Stamps the caller\'s nearest unstamped shift at the location (±4h window, race-guarded) and writes a staff_attendance_events row with source=geofence (mig 463). Outcomes: matched | already_stamped | no_shift_in_window | duplicate | geofence_exempt | impersonation_ignored.',
   request: {
     body: { content: { 'application/json': { schema: z.object({
       location_id: uuidLike,

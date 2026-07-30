@@ -103,6 +103,16 @@ export async function syncGeofences() {
     if (imp?.targetId) return null
   } catch {}
 
+  // GEO-ATT.12 — drain the retry queue on every sync (auth bootstrap +
+  // every foreground), not just inside the background task: a ping that
+  // failed while the phone had no signal would otherwise sit queued
+  // until the NEXT region ENTER. After the impersonation guard on
+  // purpose — flushing mid-View-as would post the master's own queued
+  // pings with the impersonation header and the server would drop them
+  // (impersonation_ignored); they survive until View-as ends instead.
+  // Own try/catch: a queue failure must never block region sync.
+  try { await flushQueue() } catch {}
+
   const res = await api('/api/attendance/geofence-config')
   if (!res.success || !res.data) return null
   const { required, regions } = res.data

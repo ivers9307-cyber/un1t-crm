@@ -6,6 +6,15 @@
 // users at non-geofence locations get required=false and never see
 // this. Re-checks on every foreground so returning from Settings
 // unblocks without a relaunch.
+//
+// GEO-ATT.12 — rendered as a ROOT-LEVEL FULL-SCREEN OVERLAY (a sibling
+// after <Stack> in app/_layout.jsx), not a wrapper around one route
+// group: push-notification deep links land on sibling screen groups
+// (contacts, schedule, approvals, …) that sit on top of (tabs), so a
+// tabs-only wrap was bypassable. When not blocked it renders null; when
+// blocked it absolutely fills the screen above the (still-mounted)
+// navigator so nothing underneath is visible or touchable. Renders
+// nothing without a session, so login is never covered.
 
 import { useCallback, useEffect, useState } from 'react'
 import { View, Text, Pressable, AppState, Linking } from 'react-native'
@@ -14,9 +23,9 @@ import { useAuth } from '../lib/auth-context'
 import { api } from '../lib/api'
 import { syncGeofences } from '../lib/geofence'
 
-export default function LocationGate({ children }) {
+export default function LocationGate() {
   const { session, impersonatingFrom } = useAuth()
-  // null = unknown (render children — never block on a fetch failure);
+  // null = unknown (render nothing — never block on a fetch failure);
   // {required, gate_copy} once the config has loaded.
   const [config, setConfig] = useState(null)
   const [granted, setGranted] = useState(null)
@@ -65,13 +74,17 @@ export default function LocationGate({ children }) {
   // the master out. The gate reflects the TARGET's requirement, not the
   // master's own; syncGeofences() separately refuses to (re)register
   // regions mid-impersonation.
-  if (impersonatingFrom) return children
+  if (impersonatingFrom) return null
 
+  if (!session) return null
   const blocked = config?.required === true && granted === false
-  if (!blocked) return children
+  if (!blocked) return null
 
   return (
-    <View className="flex-1 items-center justify-center bg-un1t-bg px-8">
+    <View
+      style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }}
+      className="items-center justify-center bg-un1t-bg px-8"
+    >
       <Text className="text-2xl font-bold text-un1t-text text-center mb-4">Location required</Text>
       <Text className="text-base text-un1t-subtle text-center mb-8">{config.gate_copy}</Text>
       <Pressable

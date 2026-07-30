@@ -29,6 +29,7 @@ const validBody = () => ({ location_id: 'a0000000-0000-0000-0000-000000000001', 
 function mockDb({
   geo = GEO, exempt = false, recentGeofenceEvent = null,
   shiftRows = [], shiftSelectError = null, updateError = null, postUpdateStamp = undefined,
+  insertError = null,
 } = {}) {
   const inserted = []
   let updated = null
@@ -45,7 +46,7 @@ function mockDb({
       if (table === 'staff_attendance_events') return {
         select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({ gte: () => ({ limit: () => Promise.resolve({
           data: recentGeofenceEvent ? [recentGeofenceEvent] : [], error: null }) }) }) }) }) }),
-        insert: (row) => { inserted.push(row); return Promise.resolve({ error: null }) },
+        insert: (row) => { inserted.push(row); return Promise.resolve({ error: insertError }) },
       }
       if (table === 'shift_assignments') return {
         select: (cols) => cols.includes('block:')
@@ -165,6 +166,16 @@ describe('POST /api/attendance/geofence-checkin', () => {
     expect(body.success).toBe(false)
     expect(body.transient).toBe(true)
     expect(db.inserted().length).toBe(0)
+  })
+
+  it('audit-insert error → 503 transient (retry safe: replay resolves already_stamped)', async () => {
+    getCurrentUser.mockResolvedValue({ ...staff, locations: [{ id: 'a0000000-0000-0000-0000-000000000001' }] })
+    mockDb({ shiftRows: [], insertError: { message: 'insert failed' } })
+    const res = await POST(postReq(validBody()))
+    const body = await res.json()
+    expect(res.status).toBe(503)
+    expect(body.success).toBe(false)
+    expect(body.transient).toBe(true)
   })
 
   it('impersonating master → impersonation_ignored, no DB touched, no audit row', async () => {
