@@ -25,6 +25,15 @@ export async function GET() {
     .select('*', { count: 'exact', head: true })
     .eq('host_id', session.host.id)
 
+  // HOST-GROWTH.11 — the mailing-list audience: contacts who signed up via
+  // the public list page (source='mailing_list'), same population the
+  // send-time resolver targets for audience_kind='mailing_list'.
+  const { count: mailingListCount } = await db
+    .from('host_contacts')
+    .select('*', { count: 'exact', head: true })
+    .eq('host_id', session.host.id)
+    .eq('source', 'mailing_list')
+
   const { data: events, error } = await db
     .from('race_events')
     .select('id, name, race_date')
@@ -61,6 +70,6 @@ export async function GET() {
 
   return NextResponse.json({
     success: true,
-    data: { all_count: allCount || 0, events: eventOptions },
+    data: { all_count: allCount || 0, mailing_list_count: mailingListCount || 0, events: eventOptions },
   })
 }

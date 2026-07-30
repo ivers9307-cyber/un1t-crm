@@ -38,7 +38,7 @@ export async function POST(_request, props) {
   // Own campaign or 404 — the .eq('host_id') is the tenancy boundary.
   const { data: campaign } = await db
     .from('host_campaigns')
-    .select('id, status, audience_event_id, email_type')
+    .select('id, status, audience_kind, audience_event_id, email_type')
     .eq('id', params.id)
     .eq('host_id', session.host.id)
     .maybeSingle()
@@ -82,8 +82,13 @@ export async function POST(_request, props) {
   try {
     // HOST-EMAIL.4 — per-event audience: resolved from confirmed
     // registrations at send time when the draft targets one event.
+    // HOST-GROWTH.11 — audience_kind picks the population: 'event' →
+    // that event's confirmed attendees; 'mailing_list' → contacts with
+    // source='mailing_list'; 'all' (incl. legacy backfilled rows) → the
+    // whole list.
     recipients = await resolveHostRecipients(db, session.host.id, {
-      audienceEventId: campaign.audience_event_id || null,
+      audienceEventId: campaign.audience_kind === 'event' ? campaign.audience_event_id || null : null,
+      mailingListOnly: campaign.audience_kind === 'mailing_list',
       emailType: campaign.email_type === 'utility' ? 'utility' : 'marketing',
     })
   } catch (e) {
