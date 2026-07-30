@@ -45,12 +45,15 @@ import { validateBody } from '@/lib/validate'
 
 // Validate body SHAPE only — auth/permission logic is unchanged.
 // newPassword is optional (server generates if missing/generateRandom=true).
-const PasswordOverrideSchema = z.object({
+export const PasswordOverrideSchema = z.object({
   targetType:      z.string().optional(),
   targetId:        z.string().optional(),
   newPassword:     z.string().optional(),
   generateRandom:  z.boolean().optional(),
-  reason:          z.string().max(1000).optional(),
+  // nullish, not optional: the modal sends `reason: null` for a blank
+  // field, and optional() rejects null — that combination 400'd every
+  // override with an empty reason (live 2026-07-31).
+  reason:          z.string().max(1000).nullish(),
 })
 
 export const runtime = 'nodejs'
