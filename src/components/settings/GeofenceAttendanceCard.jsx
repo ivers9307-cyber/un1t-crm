@@ -15,6 +15,7 @@
 
 import { useEffect, useState } from 'react'
 import { MapPin, Loader2, Check, AlertTriangle } from 'lucide-react'
+import GeofenceMapPicker from './GeofenceMapPicker'
 import {
   DEFAULT_GATE_COPY,
   GEOFENCE_MIN_RADIUS_M,
@@ -173,6 +174,19 @@ export default function GeofenceAttendanceCard({ locationId }) {
         )}
       </div>
 
+      <div className="mt-3">
+        <GeofenceMapPicker
+          latitude={latValid && latNum !== null ? latNum : null}
+          longitude={lngValid && lngNum !== null ? lngNum : null}
+          radiusM={radiusValid ? radiusNum : 0}
+          interactive={canEdit}
+          onPick={({ latitude, longitude }) => {
+            setLat(String(latitude))
+            setLng(String(longitude))
+          }}
+        />
+      </div>
+
       <div className="mt-3 grid grid-cols-2 gap-3 max-w-md">
         <div>
           <label htmlFor="geo-att-lat" className="block text-xs text-un1t-subtle mb-1">Latitude</label>
@@ -206,7 +220,7 @@ export default function GeofenceAttendanceCard({ locationId }) {
         </div>
       </div>
       <p className="mt-1 text-xs text-un1t-muted">
-        Find these in Google Maps → right-click the gym → copy coordinates
+        Fine-tune the exact coordinates here if needed — the map and fields stay in sync
       </p>
       {(!latValid || !lngValid) && (
         <p className="mt-1 text-xs text-red-700">
