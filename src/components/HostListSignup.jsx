@@ -1,7 +1,8 @@
 'use client'
 
 // Public mailing-list signup form for /h/[slug] (HOST-EMAIL.2). Dark,
-// host-branded, deliberately tiny: name (optional) + email + join. The
+// host-branded, deliberately tiny: name + email + join (both required —
+// a nameless lead is unusable for the host's outreach). The
 // consent copy can now be host-customised (headline/blurb/button
 // label/success message, mig 460) but the API's opt-in basis is
 // unchanged — it stamps marketing consent TRUE regardless of copy. The
@@ -27,6 +28,11 @@ export default function HostListSignup({ slug, hostName, headline, blurb, button
   async function submit(e) {
     e.preventDefault()
     if (submitting) return
+    const trimmedName = name.trim()
+    if (!trimmedName) {
+      setError('Enter your name.')
+      return
+    }
     const trimmedEmail = email.trim()
     if (!trimmedEmail) {
       setError('Enter your email address.')
@@ -40,7 +46,7 @@ export default function HostListSignup({ slug, hostName, headline, blurb, button
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: trimmedEmail,
-          ...(name.trim() ? { name: name.trim() } : {}),
+          name: trimmedName,
         }),
       })
       const j = await res.json().catch(() => ({}))
@@ -79,7 +85,8 @@ export default function HostListSignup({ slug, hostName, headline, blurb, button
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Your name (optional)"
+          required
+          placeholder="Your name"
           maxLength={200}
           aria-label="Your name"
           className={INPUT_CLASS}
@@ -106,7 +113,7 @@ export default function HostListSignup({ slug, hostName, headline, blurb, button
       {error && <p className="mt-3 text-center text-sm text-red-400">{error}</p>}
 
       <p className="mt-6 text-center text-xs text-white/40">
-        By joining you agree to receive emails about {hostName}&apos;s events.
+        By joining you agree to receive emails about {hostName}&apos;s events &amp; other events and promotions at UN1T Dublin.
       </p>
     </div>
   )
