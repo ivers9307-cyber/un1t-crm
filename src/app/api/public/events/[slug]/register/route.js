@@ -178,7 +178,10 @@ export async function POST(request, props) {
     // Funnel tags — per-event slug tag + generic lead_gen tag. Both
     // idempotent; fire tag_added sequences exactly once.
     try {
-      await writeContactTags(db, { contactId, locationId: race.location_id, tags: [`leadgen-${race.slug}`, 'lead_gen'] })
+      // HOST-MASTER.4b — tags are contact-scoped, so they live where the
+      // CONTACT lives (the master location for host events), not where the
+      // event runs; otherwise master-scoped segments never see them.
+      await writeContactTags(db, { contactId, locationId: contactLocationId, tags: [`leadgen-${race.slug}`, 'lead_gen'] })
     } catch (e) { logWarn('lead-gen', 'tag write failed', { err: e }) }
 
     // Already captured for this form? Idempotent success (no dup row).

@@ -76,11 +76,13 @@ export async function POST(request, props) {
     const locationId = await resolveMasterLocationId(db, host) || host.anchor_location_id || await ensureAnchorLocation(db, host)
 
     const email = body.email.toLowerCase().trim()
-    // restrictToLocation — a PUBLIC write path must never globally resolve an
-    // arbitrary email to an existing contact and then write consent/tags
-    // against them (IDOR + consent resurrection). Mirrors the hardened
-    // /api/public/leads + /api/public/class-booking pattern: match/create only
-    // within the master location (= link to the real member).
+    // restrictToLocation — match is scoped to ONE location (never a global
+    // email resolve). Since HOST-MASTER.4 that location is the org MASTER, so
+    // a signup with a known member's email deliberately links to their real
+    // contact and re-affirms marketing consent — that's the feature, and the
+    // accepted posture of every public opt-in form (/api/public/leads,
+    // class-booking). The tenant-keyed rate limit + always-identical response
+    // bound the abuse surface: no enumeration oracle, no bulk probing.
     const contactId = await findOrCreateRaceContact({
       db,
       locationId,
