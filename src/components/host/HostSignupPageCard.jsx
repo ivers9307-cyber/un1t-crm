@@ -6,11 +6,14 @@
 // resolves url/count and handles the degraded (no-slug) case.
 
 import { useState } from 'react'
+import HostListPageEditor from '@/components/host/HostListPageEditor'
 
-export default function HostSignupPageCard({ url, signupCount }) {
+export default function HostSignupPageCard({ url, signupCount, copyValues }) {
   const [copied, setCopied] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [copy, setCopy] = useState(copyValues)
 
-  async function copy() {
+  async function copyLink() {
     try {
       await navigator.clipboard.writeText(url)
       setCopied(true)
@@ -35,10 +38,21 @@ export default function HostSignupPageCard({ url, signupCount }) {
         </p>
       </div>
       <div className="shrink-0 flex items-center gap-2">
-        <button type="button" onClick={copy} className={btn}>{copied ? 'Copied' : 'Copy link'}</button>
+        <button type="button" onClick={copyLink} className={btn}>{copied ? 'Copied' : 'Copy link'}</button>
         <a href={url} target="_blank" rel="noopener noreferrer" className={btn}>Open</a>
         <a href="/api/host/signup-qr" className={btn}>QR code</a>
+        <button type="button" onClick={() => setEditing((v) => !v)} className={btn}>Customise</button>
       </div>
+      {editing && (
+        <div className="w-full">
+          <HostListPageEditor
+            initial={copy}
+            previewUrl={url}
+            onClose={() => setEditing(false)}
+            onSaved={(v) => { setCopy(v); setEditing(false) }}
+          />
+        </div>
+      )}
     </div>
   )
 }
