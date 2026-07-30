@@ -26,9 +26,17 @@ const PICK_ZOOM = 16
 const FALLBACK_ZOOM = 11
 
 // Same-point tolerance ~0.11 m — anything closer than this is "the value
-// we just emitted echoing back", not an external change worth recentring
-// for (avoids fighting an in-flight drag).
+// we just emitted echoing back", not an external change worth moving the
+// marker for (avoids fighting an in-flight drag).
 const EPS = 0.000001
+
+// The VIEW recentres only for search/pick-scale moves (> ~1.1 km) or when
+// the marker first appears, and only after the coords settle for
+// PAN_DEBOUNCE_MS — fine-tune keystrokes in the lat/lng fields move the
+// marker but must never pan the map mid-entry (typing "53.29" passes
+// through latitude 5).
+const PAN_THRESHOLD_DEG = 0.01
+const PAN_DEBOUNCE_MS = 400
 
 function round6(n) {
   return Math.round(n * 1e6) / 1e6
@@ -50,6 +58,8 @@ export default function GeofenceMapPicker({ latitude, longitude, radiusM, onPick
   const mapRef = useRef(null)       // Leaflet map instance
   const markerRef = useRef(null)
   const circleRef = useRef(null)
+  const panTimerRef = useRef(null)
+  const aliveRef = useRef(true)
   const onPickRef = useRef(onPick)
   useEffect(() => {
     onPickRef.current = onPick
@@ -62,9 +72,83 @@ export default function GeofenceMapPicker({ latitude, longitude, radiusM, onPick
   const hasCoords = Number.isFinite(latitude) && Number.isFinite(longitude)
   const radius = Number.isFinite(Number(radiusM)) && Number(radiusM) > 0 ? Number(radiusM) : 0
 
+  // Latest props, readable from the async init (a prop change landing
+  // during the dynamic-import window must not be lost) and from
+  // syncLayers. Kept in step by the props effect below.
+  const stateRef = useRef({ latitude, longitude, radius, hasCoords })
+
+  // Unmount guard for the async search + any pending debounced pan.
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+      if (panTimerRef.current) {
+        clearTimeout(panTimerRef.current)
+        panTimerRef.current = null
+      }
+    }
+  }, [])
+
   function emitPick(latlng) {
     onPickRef.current?.({ latitude: round6(latlng.lat), longitude: round6(latlng.lng) })
   }
+
+  function schedulePan(la, ln) {
+    panTimerRef.current = setTimeout(() => {
+      panTimerRef.current = null
+      const map = mapRef.current
+      if (!map || !aliveRef.current) return
+      map.setView([la, ln], Math.max(map.getZoom(), PICK_ZOOM))
+    }, PAN_DEBOUNCE_MS)
+  }
+
+  // Reconcile marker/circle/view with stateRef.current. Called from the
+  // props effect and once at init-complete. Marker + circle always track
+  // the coords immediately; the view pans only per the PAN_* rules above.
+  // Reads refs only, so it never closes over stale props.
+  function syncLayers() {
+    const map = mapRef.current
+    const marker = markerRef.current
+    const circle = circleRef.current
+    if (!map || !marker || !circle) return
+    // Any pending pan targets stale coords — re-derive below.
+    if (panTimerRef.current) {
+      clearTimeout(panTimerRef.current)
+      panTimerRef.current = null
+    }
+    const { latitude: la, longitude: ln, radius: r, hasCoords: has } = stateRef.current
+    if (!has) {
+      marker.setOpacity(0)
+      if (map.hasLayer(circle)) circle.remove()
+      return
+    }
+    const wasHidden = marker.options.opacity === 0
+    marker.setOpacity(1)
+    const cur = marker.getLatLng()
+    const dLat = Math.abs(cur.lat - la)
+    const dLng = Math.abs(cur.lng - ln)
+    if (dLat > EPS || dLng > EPS) marker.setLatLng([la, ln])
+    circle.setLatLng([la, ln])
+    if (r > 0) {
+      if (circle.getRadius() !== r) circle.setRadius(r)
+      if (!map.hasLayer(circle)) circle.addTo(map)
+    } else if (map.hasLayer(circle)) {
+      circle.remove()
+    }
+    if (wasHidden || dLat > PAN_THRESHOLD_DEG || dLng > PAN_THRESHOLD_DEG) {
+      schedulePan(la, ln)
+    }
+  }
+
+  // Props → stateRef + layer sync. Runs before init completes too (no-op
+  // on the layers then); init re-syncs from stateRef once the import
+  // resolves, so nothing is lost either way.
+  useEffect(() => {
+    stateRef.current = { latitude, longitude, radius, hasCoords }
+    syncLayers()
+    // syncLayers reads refs only — stable by construction.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latitude, longitude, radius, hasCoords])
 
   // Init once (per interactivity mode); destroy on unmount.
   useEffect(() => {
@@ -74,10 +158,13 @@ export default function GeofenceMapPicker({ latitude, longitude, radiusM, onPick
       const L = (await import('leaflet')).default
       if (cancelled || !containerRef.current || mapRef.current) return
 
-      const center = hasCoords ? [latitude, longitude] : [DUBLIN.lat, DUBLIN.lng]
+      // Read CURRENT props via stateRef, not the effect closure — they
+      // may have changed while the dynamic import was in flight.
+      const { latitude: la, longitude: ln, radius: r, hasCoords: has } = stateRef.current
+      const center = has ? [la, ln] : [DUBLIN.lat, DUBLIN.lng]
       const map = L.map(containerRef.current, {
         center,
-        zoom: hasCoords ? PICK_ZOOM : FALLBACK_ZOOM,
+        zoom: has ? PICK_ZOOM : FALLBACK_ZOOM,
         dragging: interactive,
         scrollWheelZoom: interactive,
         doubleClickZoom: interactive,
@@ -96,20 +183,21 @@ export default function GeofenceMapPicker({ latitude, longitude, radiusM, onPick
         icon: markerIcon(L),
         draggable: interactive,
         keyboard: false,
-        opacity: hasCoords ? 1 : 0,
+        opacity: has ? 1 : 0,
         interactive,
       }).addTo(map)
+      marker.on('drag', () => circleRef.current?.setLatLng(marker.getLatLng()))
       marker.on('dragend', () => emitPick(marker.getLatLng()))
 
       const circle = L.circle(center, {
-        radius,
+        radius: r,
         color: '#1E293B',
         weight: 2,
         fillColor: '#1E293B',
         fillOpacity: 0.08,
         interactive: false,
       })
-      if (hasCoords && radius > 0) circle.addTo(map)
+      if (has && r > 0) circle.addTo(map)
 
       if (interactive) {
         map.on('click', (e) => emitPick(e.latlng))
@@ -118,6 +206,9 @@ export default function GeofenceMapPicker({ latitude, longitude, radiusM, onPick
       mapRef.current = map
       markerRef.current = marker
       circleRef.current = circle
+      // Reconcile once more in case props moved between the stateRef
+      // read above and layer creation.
+      syncLayers()
     }
     init()
     return () => {
@@ -130,46 +221,9 @@ export default function GeofenceMapPicker({ latitude, longitude, radiusM, onPick
       }
     }
     // interactive changes rebuild the map (handlers/drag flags are set at
-    // init); coords/radius updates are handled by the effects below.
+    // init); coords/radius updates are handled by syncLayers above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [interactive])
-
-  // External coord changes (search, manual field edit, load) → move
-  // marker + circle + view, but only when meaningfully different so a
-  // drag's own echo doesn't recentre under the user.
-  useEffect(() => {
-    const map = mapRef.current
-    const marker = markerRef.current
-    const circle = circleRef.current
-    if (!map || !marker || !circle) return
-    if (!hasCoords) {
-      marker.setOpacity(0)
-      if (map.hasLayer(circle)) circle.remove()
-      return
-    }
-    marker.setOpacity(1)
-    const cur = marker.getLatLng()
-    const changed = Math.abs(cur.lat - latitude) > EPS || Math.abs(cur.lng - longitude) > EPS
-    if (changed) {
-      marker.setLatLng([latitude, longitude])
-      map.setView([latitude, longitude], Math.max(map.getZoom(), PICK_ZOOM))
-    }
-    circle.setLatLng([latitude, longitude])
-    if (radius > 0 && !map.hasLayer(circle)) circle.addTo(map)
-  }, [latitude, longitude, hasCoords, radius])
-
-  // Radius prop → live circle update (no re-init).
-  useEffect(() => {
-    const map = mapRef.current
-    const circle = circleRef.current
-    if (!map || !circle) return
-    if (radius > 0) {
-      circle.setRadius(radius)
-      if (hasCoords && !map.hasLayer(circle)) circle.addTo(map)
-    } else if (map.hasLayer(circle)) {
-      circle.remove()
-    }
-  }, [radius, hasCoords])
 
   async function runSearch() {
     const q = query.trim()
@@ -180,8 +234,10 @@ export default function GeofenceMapPicker({ latitude, longitude, radiusM, onPick
       const res = await fetch(
         `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`
       )
+      if (!aliveRef.current) return
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const results = await res.json()
+      if (!aliveRef.current) return
       const hit = Array.isArray(results) ? results[0] : null
       if (!hit) {
         setSearchMsg('No match found')
@@ -192,9 +248,9 @@ export default function GeofenceMapPicker({ latitude, longitude, radiusM, onPick
         })
       }
     } catch {
-      setSearchMsg('Search failed — try again or click the map')
+      if (aliveRef.current) setSearchMsg('Search failed — try again or click the map')
     } finally {
-      setSearching(false)
+      if (aliveRef.current) setSearching(false)
     }
   }
 
