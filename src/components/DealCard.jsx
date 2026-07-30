@@ -46,11 +46,16 @@ export default function DealCard({ deal, locationId, stageName, onOpenContact })
   const contact = deal.contacts || {}
   const borderColor = statusColors[contact.pipeline_stage_slug] || 'border-l-blue-500'
 
-  // Age footer (PIPE-AGE.1): time in current stage when the mig-458
-  // stamp exists, else time in pipeline. Strings are server-derived
+  // Age footer (PIPE-AGE.1; backfilled in PIPE-AGE.2 so both metrics
+  // show on every card): time in current stage when the stage stamp
+  // exists, else time in pipeline. Strings are server-derived
   // (toBoardDeal) so SSR and hydration render identical text.
+  // Colour only alarms on the four active funnel stages — a long stay
+  // in Member/Converted/dormant piles is fine (or good), not stale.
   const age = deal.age || {}
-  const ageTone = AGE_TONES[age.tone] || AGE_TONES.quiet
+  const ageTone = BADGE_SLUGS.has(contact.pipeline_stage_slug)
+    ? (AGE_TONES[age.tone] || AGE_TONES.quiet)
+    : AGE_TONES.quiet
   const primaryAge = age.stage
     ? (age.stage === 'today' ? `Entered ${stageName || 'stage'} today` : `${age.stage} in ${stageName || 'stage'}`)
     : (age.total
