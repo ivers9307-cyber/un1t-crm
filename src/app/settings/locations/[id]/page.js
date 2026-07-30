@@ -28,6 +28,7 @@ import OrgBrandingSettings from '@/components/OrgBrandingSettings'
 import LocationIntegrations from '@/components/settings/LocationIntegrations'
 import NotificationConfigCard from '@/components/settings/NotificationConfigCard'
 import CommsFrequencyCapCard from '@/components/settings/CommsFrequencyCapCard'
+import GeofenceAttendanceCard from '@/components/settings/GeofenceAttendanceCard'
 
 export const dynamic = 'force-dynamic'
 
@@ -154,6 +155,10 @@ export default async function EditLocationPage(props) {
               Details (not Integrations — it carries no credentials and
               spans email + WhatsApp, so no single integration tab fits). */}
           <CommsFrequencyCapCard locationId={location.id} />
+          {/* GEO-ATT.5 — mobile geofence attendance config (mig 463).
+              Coordinates + radius + the permission-gate copy staff see
+              in the mobile app. */}
+          <GeofenceAttendanceCard locationId={location.id} />
         </>
       )}
 

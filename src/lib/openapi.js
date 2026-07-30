@@ -2733,6 +2733,43 @@ registry.registerPath({
   },
 })
 
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/geofence-attendance',
+  tags: ['Attendance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Per-location geofence attendance settings',
+  description: 'Returns { enabled, latitude, longitude, radius_m, gate_copy, can_edit } — the normalised locations.settings.geofence blob (mig 463; defaults enabled=false, radius 150 m, gate_copy = the default staff-facing permission copy). Any authenticated user at the location can read; owner + master can write.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Current geofence settings' },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/geofence-attendance',
+  tags: ['Attendance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save geofence attendance settings (owner or master)',
+  description: 'Merge-writes locations.settings.geofence without touching sibling settings keys. Latitude + longitude are required when enabled; radius is clamped to 50–1000 m; gate_copy null falls back to the default copy.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      enabled: z.boolean(),
+      latitude: z.number().min(-90).max(90).nullable(),
+      longitude: z.number().min(-180).max(180).nullable(),
+      radius_m: z.number().int().min(50).max(1000),
+      gate_copy: z.string().max(2000).nullable(),
+    }).openapi('GeofenceSettingsSave') } } },
+  },
+  responses: {
+    200: { description: 'Settings saved' },
+    403: { description: 'Forbidden — owner or master', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Schedule
 registry.registerPath({
   method: 'get',
