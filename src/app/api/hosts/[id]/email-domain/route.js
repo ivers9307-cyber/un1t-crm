@@ -25,7 +25,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { ADMIN_ROLES } from '@/lib/schemas'
-import { HOST_COLS, loadHostForOrg } from '@/lib/hosts'
+import { HOST_COLS, loadHostForOrg, ensureHostSlug } from '@/lib/hosts'
 import {
   createDomain,
   getDomain,
@@ -57,21 +57,6 @@ function domainStatePayload(hostRow, domain) {
     return_path_verified: !!domain?.ReturnPathDomainVerified,
     records: dnsRecordsFrom(domain),
   }
-}
-
-// Derive + persist event_hosts.slug from the host name when still null
-// (mig 400 leaves it NULL — provisioning is the lazy-derivation point).
-// UNIQUE violations get a numeric suffix (acme, acme-2, acme-3, …).
-async function ensureHostSlug(db, host) {
-  if (host.slug) return host.slug
-  const base = sanitizeDomainLabel(host.name) || 'host'
-  for (let n = 0; n < 25; n++) {
-    const candidate = n === 0 ? base : `${base}-${n + 1}`
-    const { error } = await db.from('event_hosts').update({ slug: candidate }).eq('id', host.id)
-    if (!error) return candidate
-    if (error.code !== '23505') throw new Error(`slug persist failed: ${error.message}`)
-  }
-  throw new Error(`could not derive a unique slug from "${base}"`)
 }
 
 export async function POST(request, props) {
