@@ -31,6 +31,18 @@ const UPSERT_CHUNK = 500 // rows per host_contacts upsert statement
 // mirror of the full flag family.
 const BLOCKED_EMAIL_STATUSES = ['bounced', 'complained', 'unsubscribed']
 
+// Shared normalisation for both host and event tags: lowercase, collapse
+// any run of non-alphanumerics to a single '-', trim leading/trailing
+// dashes, and fall back to `fallback` when nothing usable remains — so a
+// tag built from degenerate input is never empty.
+function tagBase(input, fallback) {
+  const base = String(input || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return base || fallback
+}
+
 /**
  * The CRM tag for a host's mailing-list signups (PR-B writes it to BOTH
  * contacts.tags and contact_tags). `host:` + the host's slug, falling back to
@@ -40,11 +52,18 @@ const BLOCKED_EMAIL_STATUSES = ['bounced', 'complained', 'unsubscribed']
  * @returns {string} e.g. 'host:acme-events'
  */
 export function hostTagFor(host) {
-  const base = String(host?.slug || host?.name || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  return `host:${base || 'host'}`
+  return `host:${tagBase(host?.slug || host?.name, 'host')}`
+}
+
+/**
+ * HOST-MASTER.3 — one tag per race event a contact attends. `event:` + the
+ * event's slug, falling back to the normalized name. Pure; mirrors hostTagFor's
+ * normalisation via the shared tagBase() helper.
+ * @param {{slug?: string|null, name?: string|null}|null} raceEvent
+ * @returns {string} e.g. 'event:pride-sep20'
+ */
+export function eventTagFor(raceEvent) {
+  return `event:${tagBase(raceEvent?.slug || raceEvent?.name, 'event')}`
 }
 
 /**

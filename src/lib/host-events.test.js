@@ -6,7 +6,7 @@ import {
   deriveSlug,
   HOST_EVENT_KINDS,
 } from './host-events'
-import { ensureAnchorLocation } from './host-events'
+import { ensureAnchorLocation, resolveMasterLocationId } from './host-events'
 
 function fakeDb() {
   const calls = { inserted: null, updatedHost: null }
@@ -146,5 +146,22 @@ describe('ensureAnchorLocation', () => {
     expect(id).toBe('loc-winner')
     expect(calls.reselects).toBe(1)
     expect(calls.updatedHost).toEqual({ anchor_location_id: 'loc-winner' })
+  })
+})
+
+describe('resolveMasterLocationId', () => {
+  function orgDb(row) {
+    return { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row }) }) }) }) }
+  }
+  it('returns the org master location when set', async () => {
+    expect(await resolveMasterLocationId(orgDb({ master_location_id: 'master-1' }), { organization_id: 'org-1', anchor_location_id: 'anchor-1' })).toBe('master-1')
+  })
+  it('falls back to the host anchor location when unset', async () => {
+    expect(await resolveMasterLocationId(orgDb({ master_location_id: null }), { organization_id: 'org-1', anchor_location_id: 'anchor-1' })).toBe('anchor-1')
+  })
+  it('falls back on db error and on missing org id', async () => {
+    const throwing = { from: () => { throw new Error('boom') } }
+    expect(await resolveMasterLocationId(throwing, { organization_id: 'org-1', anchor_location_id: 'anchor-1' })).toBe('anchor-1')
+    expect(await resolveMasterLocationId(orgDb({}), { anchor_location_id: 'anchor-1' })).toBe('anchor-1')
   })
 })

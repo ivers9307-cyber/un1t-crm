@@ -4,6 +4,7 @@ import {
   isEmailable,
   addEventAttendeesToHostList,
   fetchHostContactRows,
+  eventTagFor,
 } from './host-contact-list'
 
 describe('hostTagFor', () => {
@@ -20,6 +21,14 @@ describe('hostTagFor', () => {
     expect(hostTagFor({ name: '###' })).toBe('host:host')
     expect(hostTagFor({})).toBe('host:host')
     expect(hostTagFor(null)).toBe('host:host')
+  })
+})
+
+describe('eventTagFor', () => {
+  it('builds event:<slug>', () => expect(eventTagFor({ slug: 'pride-sep20' })).toBe('event:pride-sep20'))
+  it('falls back to normalised name then event', () => {
+    expect(eventTagFor({ slug: null, name: 'Pride Run 5K' })).toBe('event:pride-run-5k')
+    expect(eventTagFor({})).toBe('event:event')
   })
 })
 
