@@ -36,7 +36,7 @@ import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
 import { wouldFit, spotsLeft } from '@/lib/event-signups'
 import { LIVE_REGISTRATION_STATUSES } from '@/lib/audience-filter'
-import { eventIsPublic } from '@/lib/host-events'
+import { eventIsPublic, resolveMasterLocationId } from '@/lib/host-events'
 
 export const runtime = 'nodejs'
 
@@ -116,6 +116,22 @@ export async function POST(request, props) {
     return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   }
 
+  // HOST-MASTER.4 — third-party host events place/match contacts at the org
+  // MASTER location (Stillorgan), exempt-on-create; internal events unchanged.
+  // Teams/registrations/payments stay keyed on the EVENT's location — only
+  // where the contact rows live changes.
+  let hostRow = null
+  if (race.host_id) {
+    const { data } = await db
+      .from('event_hosts')
+      .select('id, organization_id, anchor_location_id')
+      .eq('id', race.host_id)
+      .maybeSingle()
+    hostRow = data || null
+  }
+  const contactLocationId = hostRow ? (await resolveMasterLocationId(db, hostRow) || race.location_id) : race.location_id
+  const contactInsertFields = hostRow ? { automations_exempt: true } : {}
+
   // Registration-window check.
   const now = Date.now()
   if (race.registration_opens_at && now < Date.parse(race.registration_opens_at)) {
@@ -145,7 +161,8 @@ export async function POST(request, props) {
     const leadPhone = (body.captain_phone || '').trim()
 
     const contactId = await findOrCreateRaceContact({
-      db, locationId: race.location_id, email: leadEmail, name: leadName, phone: leadPhone,
+      db, locationId: contactLocationId, email: leadEmail, name: leadName, phone: leadPhone,
+      insertFields: contactInsertFields,
     })
     if (!contactId) {
       return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
@@ -307,10 +324,11 @@ export async function POST(request, props) {
   const captainEmail = body.captain_email.toLowerCase().trim()
   const captainContactId = await findOrCreateRaceContact({
     db,
-    locationId: race.location_id,
+    locationId: contactLocationId,
     email: captainEmail,
     name: body.captain_name,
     phone: body.captain_phone || null,
+    insertFields: contactInsertFields,
   })
   if (!captainContactId) {
     return NextResponse.json({
@@ -566,9 +584,10 @@ export async function POST(request, props) {
     if (!contactId && m.email) {
       contactId = await findOrCreateRaceContact({
         db,
-        locationId: race.location_id,
+        locationId: contactLocationId,
         email: m.email,
         name: m.name,
+        insertFields: contactInsertFields,
       })
     }
     memberRows.push({

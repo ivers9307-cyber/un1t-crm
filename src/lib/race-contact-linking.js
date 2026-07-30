@@ -44,9 +44,13 @@ import { splitName } from './name-utils'
  *        forms set this so a known email can't resolve an existing person at
  *        another location (and then have attribution/consent/a deal written
  *        against them) — an IDOR on a public write path.
+ * @param {object} [args.insertFields={}]  extra columns stamped onto the
+ *        contact INSERT only (HOST-MASTER.4: e.g. { automations_exempt: true }
+ *        for host-sourced signups). NEVER applied to a matched existing
+ *        contact — matches keep their settings untouched.
  * @returns {Promise<string|null>}
  */
-export async function findOrCreateRaceContact({ db, locationId, email, name = null, phone = null, restrictToLocation = false }) {
+export async function findOrCreateRaceContact({ db, locationId, email, name = null, phone = null, restrictToLocation = false, insertFields = {} }) {
   if (!email || typeof email !== 'string') return null
   const normalised = email.toLowerCase().trim()
   if (!normalised || !normalised.includes('@')) return null
@@ -98,6 +102,7 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
         phone: phone || null,
         source: 'race_signup',
         lead_source: 'website',
+        ...insertFields,
       })
       .select('id')
       .single()
