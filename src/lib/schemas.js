@@ -137,6 +137,12 @@ export const assignmentSchema = z.object({
   // Management screen. Same NULL / empty / populated semantics
   // as unifi_door_ids. UUIDs, not arbitrary strings.
   ac_device_ids: z.array(z.string().uuid()).nullable().optional(),
+  // GEO-ATT (mig 463) — exclude this staff member from mobile
+  // geofence attendance at this location: never permission-gated in
+  // the app, never auto-stamped by source=geofence. Omit to leave the
+  // stored value unchanged (buildAssignmentRow mirrors the
+  // hasOwnProperty optional-key semantics).
+  geofence_exempt: z.boolean().optional(),
   // Per-location user permission overrides (mig 058). Empty `{}` =
   // "use the role default at this assignment's role". Top-level
   // keys mirror WEB_PERMISSIONS; nested `mobile` sub-object mirrors

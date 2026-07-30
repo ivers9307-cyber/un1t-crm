@@ -36,7 +36,7 @@
  * updating this single shape.
  *
  * @param {object} pl  profile_locations row
- * @returns {{ location_id, role, is_default, unifi_door_access, unifi_user_id, unifi_door_ids, protect_face_id, permissions }}
+ * @returns {{ location_id, role, is_default, unifi_door_access, unifi_user_id, unifi_door_ids, protect_face_id, geofence_exempt, permissions }}
  */
 export function mapProfileLocationToAssignment(pl) {
   if (!pl) return null
@@ -66,6 +66,10 @@ export function mapProfileLocationToAssignment(pl) {
     // P2.4 — Protect face link (mig 142). Surfaced here so the
     // ProtectFacePicker can pre-select the current value.
     protect_face_id: pl.protect_face_id || null,
+    // GEO-ATT (mig 463) — mobile geofence attendance opt-out. Seeded
+    // so the StaffForm toggle renders the stored state and the PUT
+    // round-trips it (the form always sends the key).
+    geofence_exempt: !!pl.geofence_exempt,
     // CRITICAL: keep the permissions blob. StaffForm's hydration
     // path (initialAssignments in StaffForm.jsx) only renders the
     // saved overrides when permissions has keys; an empty/undefined

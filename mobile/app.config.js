@@ -68,7 +68,12 @@ export default ({ config }) => ({
   // Bumped past 2.0.0 in case the SDK-57 binary is already in review on
   // ASC (a higher version is always accepted; runtimeVersion stays
   // 2.0.0 so both binaries share one OTA lane — the JS is identical).
-  version: '2.1.0',
+  //
+  // 2.2.0 (GEO-ATT) — passive staff attendance via background geofencing.
+  // Adds expo-location + expo-task-manager (NATIVE modules) → new EAS
+  // Build + store release, NOT an OTA; runtimeVersion bumps to 2.2.0 in
+  // lockstep (see the runtimeVersion comment log below).
+  version: '2.2.0',
   // We ship iOS + Android only. Without this, Expo defaults to
   // ['ios','android','web'] and `eas update` exports for web too —
   // which crashes the publish because react-native-web isn't installed.
@@ -132,7 +137,9 @@ export default ({ config }) => ({
       // Required for sending push tokens via APNs once an Apple
       // Developer account is wired up. Until then, Expo Go uses Expo's
       // own push channel for development.
-      UIBackgroundModes: ['remote-notification'],
+      // GEO-ATT — 'location' lets the OS wake the app for geofence
+      // region events with the app backgrounded or killed.
+      UIBackgroundModes: ['remote-notification', 'location'],
       // US export-control declaration. Repset uses only HTTPS
       // (standard) and the iOS Keychain (standard) — no custom or
       // proprietary cryptography — so the app is EXEMPT from export
@@ -194,6 +201,21 @@ export default ({ config }) => ({
     [
       'expo-camera',
       { cameraPermission: 'Scan attendee check-in QR codes at events.', recordAudioAndroid: false },
+    ],
+    // GEO-ATT — background geofencing for passive staff attendance.
+    // Writes the iOS location usage strings + Android foreground/
+    // background location permissions. NATIVE module → new EAS Build
+    // (runtimeVersion 2.2.0 lane), NOT an OTA.
+    [
+      'expo-location',
+      {
+        locationWhenInUsePermission:
+          'Repset detects when you arrive at the gym so your shift attendance is logged automatically.',
+        locationAlwaysAndWhenInUsePermission:
+          'Allow "Always" so arrival is detected even when the app is closed. Only gym arrival is detected — never your location elsewhere.',
+        isIosBackgroundLocationEnabled: true,
+        isAndroidBackgroundLocationEnabled: true,
+      },
     ],
     // SDK 57 — these packages now ship config plugins that must be registered
     // explicitly. `expo install --fix` flagged them but can't auto-edit a
@@ -278,7 +300,13 @@ export default ({ config }) => ({
   // native change, so a fresh OTA lane is mandatory. ⚠️ Align this string with
   // the actual store-release version you cut for the SDK 57 binary before
   // shipping; existing 1.4.x installs freeze (NOT crash) until users update.
-  runtimeVersion: '2.0.0',
+  //
+  // 2.2.0 — GEO-ATT adds expo-location + expo-task-manager (native:
+  // background geofencing for staff attendance). New lane: 2.0.x
+  // installs stop receiving OTAs (frozen, NOT crashed) until users
+  // install the 2.2.0 binary. Merge only as part of the 2.2.0 store
+  // release.
+  runtimeVersion: '2.2.0',
   extra: {
     // Supabase URL + anon key are PUBLIC by design — the anon key is
     // protected by Row-Level Security on the database, not by secrecy

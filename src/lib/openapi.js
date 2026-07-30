@@ -2702,6 +2702,74 @@ registry.registerPath({
   },
 })
 
+// Geofence attendance (GEO-ATT, mig 463)
+registry.registerPath({
+  method: 'get',
+  path: '/api/attendance/geofence-config',
+  tags: ['Attendance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Geofence regions + permission-gate flag for the current user',
+  description: 'Returns { required, gate_copy, regions:[{location_id,latitude,longitude,radius_m}] } for the caller\'s non-exempt assignments at geofence-enabled locations (locations.settings.geofence, mig 463). Mobile registers OS geofences from this and gates the app on background-location permission when required=true.',
+  responses: { 200: { description: 'Config for the current user' } },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/attendance/geofence-checkin',
+  tags: ['Attendance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Mobile geofence-entry check-in (stamps own shift)',
+  description: 'Called by the mobile background geofence task on region ENTER. Stamps the caller\'s nearest unstamped shift at the location (±4h window, race-guarded) and writes a staff_attendance_events row with source=geofence (mig 463). Outcomes: matched | already_stamped | no_shift_in_window | duplicate | geofence_exempt | impersonation_ignored.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: uuidLike,
+      entered_at: z.string().datetime({ offset: true }),
+      device_name: z.string().max(80).optional(),
+    }).openapi('GeofenceCheckin') } } },
+  },
+  responses: {
+    200: { description: '{ match_outcome }' },
+    404: { description: 'Location not found / geofencing not enabled', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/geofence-attendance',
+  tags: ['Attendance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Per-location geofence attendance settings',
+  description: 'Returns { enabled, latitude, longitude, radius_m, gate_copy, can_edit } — the normalised locations.settings.geofence blob (mig 463; defaults enabled=false, radius 150 m, gate_copy = the default staff-facing permission copy). Any authenticated user at the location can read; owner + master can write.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Current geofence settings' },
+    404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/geofence-attendance',
+  tags: ['Attendance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Save geofence attendance settings (owner or master)',
+  description: 'Merge-writes locations.settings.geofence without touching sibling settings keys. Latitude + longitude are required when enabled; radius is clamped to 50–1000 m; gate_copy null falls back to the default copy.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      enabled: z.boolean(),
+      latitude: z.number().min(-90).max(90).nullable(),
+      longitude: z.number().min(-180).max(180).nullable(),
+      radius_m: z.number().int().min(50).max(1000),
+      gate_copy: z.string().max(2000).nullable(),
+    }).openapi('GeofenceSettingsSave') } } },
+  },
+  responses: {
+    200: { description: 'Settings saved' },
+    403: { description: 'Forbidden — owner or master', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Schedule
 registry.registerPath({
   method: 'get',

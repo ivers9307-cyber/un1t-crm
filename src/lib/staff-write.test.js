@@ -274,6 +274,16 @@ describe('buildAssignmentRow', () => {
     expect(buildAssignmentRow({ ...common, assignment: { ...base, ac_device_ids: [] } }).ac_device_ids).toEqual([])
     expect('ac_device_ids' in buildAssignmentRow({ ...common, assignment: base })).toBe(false)
   })
+
+  it('geofence_exempt: true → true, non-true coerces to false (GEO-ATT, mig 463)', () => {
+    expect(buildAssignmentRow({ ...common, assignment: { ...base, geofence_exempt: true } }).geofence_exempt).toBe(true)
+    expect(buildAssignmentRow({ ...common, assignment: { ...base, geofence_exempt: false } }).geofence_exempt).toBe(false)
+    expect(buildAssignmentRow({ ...common, assignment: { ...base, geofence_exempt: 'yes' } }).geofence_exempt).toBe(false)
+  })
+
+  it('geofence_exempt: omitting the key leaves it absent from the row patch', () => {
+    expect('geofence_exempt' in buildAssignmentRow({ ...common, assignment: base })).toBe(false)
+  })
 })
 
 import { applyDoorAccessChange } from './staff-write.js'

@@ -179,7 +179,9 @@ export async function sparsifyAssignmentPermissions({ db, assignments, employmen
  *     the DB value unchanged (key omitted from the row).
  *   - unifi_door_ids (mig 182) / ac_device_ids (mig 210): null clears,
  *     [] = empty allowlist, array = exactly those, omit leaves the DB
- *     value unchanged (key omitted). */
+ *     value unchanged (key omitted).
+ *   - geofence_exempt (mig 463): boolean (non-true coerces to false),
+ *     omit leaves the DB value unchanged (key omitted). */
 export function buildAssignmentRow({ id, assignment, wantsDoor, unifiUserId, syncedAt }) {
   const a = assignment
   return {
@@ -193,6 +195,8 @@ export function buildAssignmentRow({ id, assignment, wantsDoor, unifiUserId, syn
     permissions: a.permissions || {},
     ...(Object.prototype.hasOwnProperty.call(a, 'protect_face_id')
       ? { protect_face_id: a.protect_face_id || null } : {}),
+    ...(Object.prototype.hasOwnProperty.call(a, 'geofence_exempt')
+      ? { geofence_exempt: a.geofence_exempt === true } : {}),
     ...(Object.prototype.hasOwnProperty.call(a, 'unifi_door_ids')
       ? { unifi_door_ids: a.unifi_door_ids === null ? null : (a.unifi_door_ids || []) } : {}),
     ...(Object.prototype.hasOwnProperty.call(a, 'ac_device_ids')

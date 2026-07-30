@@ -237,6 +237,7 @@ function SourceBadges({ sources }) {
     unifi_access: { label: 'Access', cls: 'bg-blue-50 text-blue-800 border-blue-200',  title: 'Card tap (UniFi Access)' },
     protect:      { label: 'Face',   cls: 'bg-purple-50 text-purple-800 border-purple-200', title: 'Face match (UniFi Protect)' },
     manual:       { label: 'Manual', cls: 'bg-neutral-100 text-neutral-700 border-neutral-200', title: 'Manually entered' },
+    geofence:     { label: 'Geofence', cls: 'bg-emerald-50 text-emerald-800 border-emerald-200', title: 'Phone arrived at the gym (mobile geofence)' },
   }
   return (
     <div className="flex flex-wrap gap-1">
