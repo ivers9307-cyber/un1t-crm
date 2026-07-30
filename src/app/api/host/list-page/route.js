@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentHost } from '@/lib/host-auth'
 import { createServerClient } from '@/lib/supabase'
+import { logError } from '@/lib/log'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -26,7 +27,10 @@ export async function GET() {
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
   const db = createServerClient()
   const { data, error } = await db.from('event_hosts').select(COLS).eq('id', session.host.id).maybeSingle()
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('host-list-page', 'load failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not load your signup page settings.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, data: data || {} })
 }
 
@@ -51,6 +55,9 @@ export async function PATCH(request) {
 
   const db = createServerClient()
   const { error } = await db.from('event_hosts').update(patch).eq('id', session.host.id)
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  if (error) {
+    logError('host-list-page', 'update failed', { err: error })
+    return NextResponse.json({ success: false, error: 'Could not save — try again shortly.' }, { status: 500 })
+  }
   return NextResponse.json({ success: true, data: patch })
 }

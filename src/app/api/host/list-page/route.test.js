@@ -11,11 +11,11 @@ vi.mock('@/lib/supabase', () => ({ createServerClient: mocks.createServerClient 
 
 import { GET, PATCH } from './route'
 
-function dbWith({ row = {}, updateError = null } = {}) {
+function dbWith({ row = {}, updateError = null, selectError = null } = {}) {
   const update = vi.fn(() => ({ eq: vi.fn(async () => ({ error: updateError })) }))
   return {
     from: vi.fn(() => ({
-      select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(async () => ({ data: row })) })) })),
+      select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(async () => ({ data: row, error: selectError })) })) })),
       update,
     })),
     _update: update,
@@ -69,11 +69,14 @@ describe('PATCH /api/host/list-page', () => {
     expect(db._update).toHaveBeenCalledWith({ list_headline: 'Hello', list_blurb: null })
   })
 
-  it('500s with the db error message when the update fails', async () => {
+  it('500s with a generic message (not the raw db error) when the update fails', async () => {
     mocks.getCurrentHost.mockResolvedValue({ host: { id: 'h1' } })
     mocks.createServerClient.mockReturnValue(dbWith({ updateError: { message: 'boom' } }))
     const res = await PATCH(req({ list_headline: 'Hi' }))
     expect(res.status).toBe(500)
+    const j = await res.json()
+    expect(j.error).toBe('Could not save — try again shortly.')
+    expect(j.error).not.toContain('boom')
   })
 })
 
@@ -92,5 +95,15 @@ describe('GET /api/host/list-page', () => {
     expect(j.success).toBe(true)
     expect(j.data.list_headline).toBe('Hi')
     expect(j.data.slug).toBe('acme')
+  })
+
+  it('500s with a generic message (not the raw db error) when the load fails', async () => {
+    mocks.getCurrentHost.mockResolvedValue({ host: { id: 'h1' } })
+    mocks.createServerClient.mockReturnValue(dbWith({ selectError: { message: 'boom' } }))
+    const res = await GET()
+    expect(res.status).toBe(500)
+    const j = await res.json()
+    expect(j.error).toBe('Could not load your signup page settings.')
+    expect(j.error).not.toContain('boom')
   })
 })
