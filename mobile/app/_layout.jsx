@@ -32,6 +32,10 @@ import {
   Poppins_800ExtraBold,
 } from '@expo-google-fonts/poppins'
 import { AuthProvider, useAuth } from '../lib/auth-context'
+// GEO-ATT — importing from lib/geofence also runs its module top-level
+// TaskManager.defineTask, so the background geofence task is registered
+// on every launch (including headless OS relaunches for region events).
+import { syncGeofences } from '../lib/geofence'
 import { routeForNotification } from '../lib/notification-nav'
 import { ForegroundOtaUpdater } from '../lib/foreground-ota'
 import { BiometricLockProvider } from '../lib/biometric-lock'
@@ -94,6 +98,18 @@ function NotificationRouter() {
   return null
 }
 
+// GEO-ATT — registers/refreshes geofence regions once auth is ready.
+// Side-effect only; must NOT live in the component that renders <Stack>
+// (see the header comment — reading useAuth() there races the
+// navigation bootstrap).
+function GeofenceSync() {
+  const { session, loading } = useAuth()
+  useEffect(() => {
+    if (!loading && session) syncGeofences()
+  }, [loading, session])
+  return null
+}
+
 export default function RootLayout() {
   // TV-STYLE.2 — load Poppins (the TV-template face) app-wide.
   // Deliberately NON-blocking: we don't gate rendering or hold the
@@ -118,6 +134,7 @@ export default function RootLayout() {
             <StatusBar style="dark" />
             <SplashGate />
             <NotificationRouter />
+            <GeofenceSync />
             <ForegroundOtaUpdater />
             <Stack screenOptions={{ headerShown: false }}>
               <Stack.Screen name="(auth)" options={{ headerShown: false }} />
