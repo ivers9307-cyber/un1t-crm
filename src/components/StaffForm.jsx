@@ -408,6 +408,9 @@ export default function StaffForm({
         // P2.4 — Protect face link (mig 142 attendance picker).
         // Same null/string/omit semantics as unifi_user_id.
         protect_face_id: a.protect_face_id || null,
+        // GEO-ATT (mig 463) — mobile geofence attendance opt-out.
+        // Always sent so the toggle reliably writes both directions.
+        geofence_exempt: !!a.geofence_exempt,
         // UNIFI-DOORS-SCOPE (mig 182) — door allowlist for studio
         // mgmt. Always sent so toggling the picker reliably clears
         // or replaces the existing array. Empty array = no doors;
@@ -696,6 +699,31 @@ export default function StaffForm({
                     updateAssignment(a.location_id, { protect_face_id })
                   }
                 />
+              )}
+              {/* GEO-ATT (mig 463) — exclude this staff member from
+                  mobile geofence attendance at this location: never
+                  permission-gated in the app, never auto-stamped.
+                  Keep ON for the Apple review account. */}
+              {isEdit && (
+                <div className="flex items-center justify-between">
+                  <div className="min-w-0">
+                    <div className="text-sm">Geofence exempt</div>
+                    <div className="text-xs text-un1t-subtle">
+                      Skip auto attendance + the location permission requirement on mobile
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => updateAssignment(a.location_id, { geofence_exempt: !a.geofence_exempt })}
+                    className={`w-10 h-5 rounded-full transition-colors shrink-0 ${
+                      a.geofence_exempt ? 'bg-green-500' : 'bg-un1t-border'
+                    }`}
+                  >
+                    <div className={`w-4 h-4 rounded-full bg-white transition-transform ${
+                      a.geofence_exempt ? 'translate-x-5' : 'translate-x-0.5'
+                    }`} />
+                  </button>
+                </div>
               )}
               {/* UNIFI-DOORS-SCOPE — per-location door allowlist
                   (mig 182). Operator ticks the doors this user can
