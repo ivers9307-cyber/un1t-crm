@@ -34,7 +34,7 @@ import { logWarn, logError } from '@/lib/log'
 export const runtime = 'nodejs'
 
 const SubscribeSchema = z.object({
-  name: z.string().trim().max(200).optional(),
+  name: z.string().trim().min(1).max(200),
   email: z.string().email().max(320),
 })
 
@@ -83,7 +83,7 @@ export async function POST(request, props) {
       db,
       locationId,
       email,
-      name: body.name || 'Mailing list subscriber',
+      name: body.name,
       restrictToLocation: true,
     })
     if (!contactId) {
