@@ -89,11 +89,16 @@ export async function enrolContacts({
     const exempt = new Set()
     // Chunked .in() by 500 guards the 1k-row cap.
     for (let i = 0; i < candidateIds.length; i += 500) {
-      const { data: flags } = await db
+      const { data: flags, error } = await db
         .from('contacts')
         .select('id')
         .in('id', candidateIds.slice(i, i + 500))
         .eq('automations_exempt', true)
+      // FAIL CLOSED: a transient read failure must abort the enrolment,
+      // not fall through to auto-enrolling exempt contacts (the exact
+      // thing this gate forbids). Trigger/cron/dunning callers are all
+      // best-effort try/catch, so the throw just skips that firing.
+      if (error) throw new Error(`enrol: automations_exempt check failed: ${error.message}`)
       for (const r of flags || []) exempt.add(r.id)
     }
     if (exempt.size > 0) {

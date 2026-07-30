@@ -35,12 +35,13 @@ function mockDb({
   insertError = null,
   rpcError = null,
   exemptContactIds = [],
+  contactsError = null,
 } = {}) {
   const inserts = []
   const rpcCalls = []
   const contactsQueries = []
 
-  function chain(rows) {
+  function chain(rows, error = null) {
     const builder = {
       eq: vi.fn().mockReturnThis(),
       in: vi.fn().mockReturnThis(),
@@ -52,7 +53,7 @@ function mockDb({
       then: undefined,
     }
     builder.then = (onFulfilled) =>
-      Promise.resolve({ data: rows, error: null }).then(onFulfilled)
+      Promise.resolve(error ? { data: null, error } : { data: rows, error: null }).then(onFulfilled)
     return builder
   }
 
@@ -85,7 +86,7 @@ function mockDb({
         return {
           select: vi.fn(() => {
             contactsQueries.push(table)
-            return chain(exemptContactIds.map(id => ({ id })))
+            return chain(exemptContactIds.map(id => ({ id })), contactsError)
           }),
         }
       }
@@ -293,6 +294,31 @@ describe('enrolContacts — automations_exempt gate (HOST-MASTER.3)', () => {
     expect(out.enrolled).toBe(1)
     expect(inserts[0].map(r => r.contact_id)).toEqual(['c1'])
     expect(contactsQueries).toHaveLength(0)
+  })
+
+  it('invoice_past_due (dunning auto-enrol) respects the flag', async () => {
+    const { db, inserts } = mockDb({ exemptContactIds: ['c1'] })
+    createServerClient.mockReturnValue(db)
+    const out = await enrolContacts({
+      sequenceId: 's1', contactIds: ['c1', 'c2'], sourceType: 'invoice_past_due',
+    })
+    expect(out.enrolled).toBe(1)
+    expect(out.skipped).toBe(1)
+    expect(inserts[0].map(r => r.contact_id)).toEqual(['c2'])
+  })
+
+  it('fails closed: a contacts-read error rejects instead of enrolling', async () => {
+    // A transient read failure must NOT fall through to auto-enrolling
+    // exempt contacts — the gate's whole point.
+    const { db, inserts } = mockDb({
+      exemptContactIds: ['c1'],
+      contactsError: { message: 'connection reset' },
+    })
+    createServerClient.mockReturnValue(db)
+    await expect(enrolContacts({
+      sequenceId: 's1', contactIds: ['c1', 'c2'], sourceType: 'tag_added',
+    })).rejects.toThrow(/automations_exempt check failed: connection reset/)
+    expect(inserts).toHaveLength(0)
   })
 
   it('webhook sourceType respects the flag (inbound automation, not a human click)', async () => {
