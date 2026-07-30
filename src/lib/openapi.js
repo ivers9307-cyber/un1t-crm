@@ -2713,6 +2713,26 @@ registry.registerPath({
   responses: { 200: { description: 'Config for the current user' } },
 })
 
+registry.registerPath({
+  method: 'post',
+  path: '/api/attendance/geofence-checkin',
+  tags: ['Attendance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Mobile geofence-entry check-in (stamps own shift)',
+  description: 'Called by the mobile background geofence task on region ENTER. Stamps the caller\'s nearest unstamped shift at the location (±4h window, race-guarded) and writes a staff_attendance_events row with source=geofence (mig 463). Outcomes: matched | already_stamped | no_shift_in_window | duplicate | geofence_exempt.',
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      location_id: uuidLike,
+      entered_at: z.string().datetime({ offset: true }),
+      device_name: z.string().max(80).optional(),
+    }).openapi('GeofenceCheckin') } } },
+  },
+  responses: {
+    200: { description: '{ match_outcome }' },
+    404: { description: 'Location not found / geofencing not enabled', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Schedule
 registry.registerPath({
   method: 'get',

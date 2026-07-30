@@ -1,0 +1,167 @@
+// POST /api/attendance/geofence-checkin
+//
+// GEO-ATT.4 — the mobile app's geofence ENTER handler calls this.
+// Mirrors the stamping pipeline of /api/webhooks/unifi-access (mig 120)
+// with source='geofence' (mig 463). The caller can only stamp
+// THEMSELVES (profile from the JWT) at a location they're assigned to,
+// so unknown_user / wrong_location can't occur here.
+//
+// Outcomes returned (data.match_outcome):
+//   matched | already_stamped | no_shift_in_window   → audit row written
+//   duplicate (10-min flap dedup) | geofence_exempt  → NO audit row
+
+import { NextResponse } from 'next/server'
+import { z } from 'zod'
+import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { createServerClient } from '@/lib/supabase'
+import { validateBody } from '@/lib/validate'
+import { uuidLike } from '@/lib/schemas'
+import { geofenceFromLocationSettings, geofenceIsConfigured } from '@/lib/geofence-attendance'
+import { resolveScheduledAt, matchArrivalToShift, arrivalToTimeOnly } from '@/lib/staff-attendance'
+
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+const CLOCK_SKEW_MS = 5 * 60_000   // trust client entered_at within ±5 min
+const DEDUP_WINDOW_MS = 10 * 60_000 // one geofence event per profile+location per 10 min
+
+const GeofenceCheckinSchema = z.object({
+  location_id: uuidLike,
+  entered_at: z.string().datetime({ offset: true }),
+  device_name: z.string().max(80).optional(),
+})
+
+export async function POST(request) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+
+  const validation = await validateBody(request, GeofenceCheckinSchema)
+  if (!validation.ok) return validation.response
+  const body = validation.data
+
+  const guard = assertLocationAccess(user, body.location_id)
+  if (guard) return guard
+
+  const db = createServerClient()
+
+  const { data: location, error: locErr } = await db
+    .from('locations')
+    .select('id, timezone, settings')
+    .eq('id', body.location_id)
+    .single()
+  if (locErr || !location) {
+    return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
+  }
+  const geo = geofenceFromLocationSettings(location.settings)
+  if (!geofenceIsConfigured(geo)) {
+    // 404 not 403 — don't advertise which locations have the feature.
+    return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
+  }
+  const locationTz = location.timezone || 'Europe/Dublin'
+
+  const { data: link, error: linkErr } = await db
+    .from('profile_locations')
+    .select('geofence_exempt')
+    .eq('profile_id', user.id)
+    .eq('location_id', location.id)
+    .maybeSingle()
+  if (linkErr) return NextResponse.json({ success: false, error: linkErr.message }, { status: 400 })
+  if (!link) return NextResponse.json({ success: false, error: 'Location not found' }, { status: 404 })
+  if (link.geofence_exempt) {
+    return NextResponse.json({ success: true, data: { match_outcome: 'geofence_exempt' } })
+  }
+
+  // Clamp the client timestamp — phone clocks and queued retries are
+  // untrusted; anything outside ±5 min becomes "now".
+  const nowMs = Date.now()
+  const clientMs = new Date(body.entered_at).getTime()
+  const clamped = !Number.isFinite(clientMs) || Math.abs(nowMs - clientMs) > CLOCK_SKEW_MS
+  const eventAt = clamped ? new Date(nowMs) : new Date(clientMs)
+
+  // Region-flap dedup: one geofence event per profile+location per window.
+  const sinceIso = new Date(eventAt.getTime() - DEDUP_WINDOW_MS).toISOString()
+  const { data: recent, error: dupErr } = await db
+    .from('staff_attendance_events')
+    .select('id')
+    .eq('profile_id', user.id)
+    .eq('location_id', location.id)
+    .eq('source', 'geofence')
+    .gte('event_at', sinceIso)
+    .limit(1)
+  if (dupErr) return NextResponse.json({ success: false, error: dupErr.message }, { status: 400 })
+  if (recent && recent.length > 0) {
+    return NextResponse.json({ success: true, data: { match_outcome: 'duplicate' } })
+  }
+
+  // ── Shift match + race-guarded stamp (mirrors unifi-access) ──────
+  let matchOutcome = 'no_shift_in_window'
+  let matchedAssignmentId = null
+
+  const dayBefore = new Date(eventAt.getTime() - 24 * 3600_000).toISOString().slice(0, 10)
+  const dayAfter  = new Date(eventAt.getTime() + 24 * 3600_000).toISOString().slice(0, 10)
+
+  const { data: rows } = await db
+    .from('shift_assignments')
+    .select(`
+      id, profile_id, status, start_time_override,
+      block:shift_blocks!inner ( id, location_id, block_date, start_time, end_time )
+    `)
+    .eq('profile_id', user.id)
+    .is('start_time_override', null)
+    .neq('status', 'cancelled')
+    .gte('block.block_date', dayBefore)
+    .lte('block.block_date', dayAfter)
+    .eq('block.location_id', location.id)
+
+  const shifts = (rows || [])
+    .map((r) => {
+      if (!r.block) return null
+      const scheduledAt    = resolveScheduledAt(r.block.block_date, r.block.start_time, locationTz)
+      const scheduledEndAt = resolveScheduledAt(r.block.block_date, r.block.end_time,   locationTz)
+      return scheduledAt ? { id: r.id, scheduledAt, scheduledEndAt } : null
+    })
+    .filter(Boolean)
+
+  const best = matchArrivalToShift(eventAt, shifts)
+  if (best) {
+    const stamp = arrivalToTimeOnly(eventAt, locationTz)
+    const { error: updErr } = await db
+      .from('shift_assignments')
+      .update({ start_time_override: stamp })
+      .eq('id', best.shift.id)
+      .is('start_time_override', null)
+    if (!updErr) {
+      const { data: post } = await db
+        .from('shift_assignments')
+        .select('start_time_override')
+        .eq('id', best.shift.id)
+        .single()
+      if (post && post.start_time_override === stamp) {
+        matchedAssignmentId = best.shift.id
+        matchOutcome = 'matched'
+      } else {
+        matchedAssignmentId = best.shift.id
+        matchOutcome = 'already_stamped'
+      }
+    }
+  }
+
+  const { error: insErr } = await db
+    .from('staff_attendance_events')
+    .insert({
+      profile_id: user.id,
+      location_id: location.id,
+      source: 'geofence',
+      event_at: eventAt.toISOString(),
+      matched_assignment_id: matchedAssignmentId,
+      match_outcome: matchOutcome,
+      payload: {
+        device_name: body.device_name || null,
+        client_entered_at: body.entered_at,
+        clamped,
+      },
+    })
+  if (insErr) return NextResponse.json({ success: false, error: insErr.message }, { status: 400 })
+
+  return NextResponse.json({ success: true, data: { match_outcome: matchOutcome } })
+}
