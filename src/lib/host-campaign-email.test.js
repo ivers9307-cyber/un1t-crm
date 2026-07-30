@@ -200,12 +200,19 @@ function fakeRecipientsDb({ contactPages = [[]], suppressions = [] } = {}) {
           select: () => ({
             eq: (col, val) => {
               calls.hostFilters.push([table, col, val])
+              let sourceFilter = col === 'source' ? val : null
               const chain = {
+                eq: (col2, val2) => {
+                  calls.hostFilters.push([table, col2, val2])
+                  if (col2 === 'source') sourceFilter = val2
+                  return chain
+                },
                 order: () => chain,
                 range: async (from, to) => {
                   calls.contactRanges.push({ from, to })
-                  const page = contactPages[contactCall] || []
+                  let page = contactPages[contactCall] || []
                   contactCall++
+                  if (sourceFilter) page = page.filter((r) => r.source === sourceFilter)
                   return { data: page, error: null }
                 },
               }
@@ -286,6 +293,30 @@ describe('resolveHostRecipients', () => {
     const rows = await resolveHostRecipients(db, 'h1')
     expect(rows).toHaveLength(1001)
     expect(db.calls.contactRanges).toEqual([{ from: 0, to: 999 }, { from: 1000, to: 1999 }])
+  })
+
+  it('mailingListOnly restricts the query to source=mailing_list', async () => {
+    const db = fakeRecipientsDb({
+      contactPages: [[
+        { ...member('c1', goodContact('c1', 'a@x.ie')), source: 'event' },
+        { ...member('c2', goodContact('c2', 'b@x.ie')), source: 'mailing_list' },
+      ]],
+    })
+    const out = await resolveHostRecipients(db, 'h1', { mailingListOnly: true })
+    expect(db.calls.hostFilters).toContainEqual(['host_contacts', 'source', 'mailing_list'])
+    expect(out).toEqual([{ contact_id: 'c2', email: 'b@x.ie' }])
+  })
+
+  it('default leaves the source unfiltered', async () => {
+    const db = fakeRecipientsDb({
+      contactPages: [[
+        { ...member('c1', goodContact('c1', 'a@x.ie')), source: 'event' },
+        { ...member('c2', goodContact('c2', 'b@x.ie')), source: 'mailing_list' },
+      ]],
+    })
+    const out = await resolveHostRecipients(db, 'h1')
+    expect(db.calls.hostFilters.some(([t, c]) => t === 'host_contacts' && c === 'source')).toBe(false)
+    expect(out.map((r) => r.contact_id).sort()).toEqual(['c1', 'c2'])
   })
 })
 

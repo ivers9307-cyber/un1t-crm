@@ -63,10 +63,11 @@ export default async function HostDashboard() {
   // signups. Any failure degrades to signupUrl=null (card hides).
   let signupUrl = null
   let signupCount = null
+  let signupCopy = null
   try {
     const { data: hostRow } = await db
       .from('event_hosts')
-      .select('id, name, slug')
+      .select('id, name, slug, list_headline, list_blurb, list_button_label, list_success_message')
       .eq('id', session.host.id)
       .maybeSingle()
     if (hostRow) {
@@ -78,6 +79,12 @@ export default async function HostDashboard() {
         .eq('host_id', session.host.id)
         .eq('source', 'mailing_list')
       signupCount = count ?? 0
+      signupCopy = {
+        list_headline: hostRow.list_headline,
+        list_blurb: hostRow.list_blurb,
+        list_button_label: hostRow.list_button_label,
+        list_success_message: hostRow.list_success_message,
+      }
     }
   } catch (e) {
     logWarn('host-dashboard', 'signup card degraded', { err: e })
@@ -122,7 +129,7 @@ export default async function HostDashboard() {
       {signupUrl && (
         <section className="mt-8">
           <h2 className="text-xs uppercase tracking-[0.15em] text-white/45 mb-3">Grow your list</h2>
-          <HostSignupPageCard url={signupUrl} signupCount={signupCount} />
+          <HostSignupPageCard url={signupUrl} signupCount={signupCount} copyValues={signupCopy} />
           <p className="mt-2 text-xs text-white/40">
             Share this link or QR anywhere — signups land in your Contacts and can be emailed from Emails.
           </p>

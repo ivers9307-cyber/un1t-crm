@@ -23,6 +23,7 @@ const CampaignDraftSchema = z.object({
   body: z.string().min(1, 'Body is required').max(300000, 'Body is too long'),
   design_json: z.unknown().optional().nullable(),
   audience_event_id: z.string().regex(UUIDISH).optional().nullable(),
+  audience_kind: z.enum(['all', 'event', 'mailing_list']).optional(),
   email_type: z.enum(['marketing', 'utility']).optional(),
 })
 
@@ -35,7 +36,7 @@ export async function GET() {
   const db = createServerClient()
   const { data, error } = await db
     .from('host_campaigns')
-    .select('id, subject, status, audience_event_id, email_type, recipient_count, sent_count, created_at, sent_at')
+    .select('id, subject, status, audience_kind, audience_event_id, email_type, recipient_count, sent_count, created_at, sent_at')
     .eq('host_id', session.host.id)
     .order('created_at', { ascending: false })
     .limit(200)
@@ -58,20 +59,31 @@ export async function POST(request) {
   if (designJsonTooBig(parsed.data.design_json)) {
     return NextResponse.json({ success: false, error: 'Design is too large.' }, { status: 400 })
   }
-  const audienceErr = await assertAudienceEventOwned(db, session.host.id, parsed.data.audience_event_id)
-  if (audienceErr) return NextResponse.json({ success: false, error: audienceErr }, { status: 404 })
+  // audience_kind defaults from the legacy field: an audience_event_id
+  // implies 'event'; otherwise 'all'. kind='event' REQUIRES the event id;
+  // the other kinds null it out.
+  const kind = parsed.data.audience_kind || (parsed.data.audience_event_id ? 'event' : 'all')
+  const audienceEventId = kind === 'event' ? parsed.data.audience_event_id || null : null
+  if (kind === 'event' && !audienceEventId) {
+    return NextResponse.json({ success: false, error: 'Pick an event for a per-event audience.' }, { status: 400 })
+  }
+  if (audienceEventId) {
+    const audienceErr = await assertAudienceEventOwned(db, session.host.id, audienceEventId)
+    if (audienceErr) return NextResponse.json({ success: false, error: audienceErr }, { status: 404 })
+  }
   const { data: campaign, error } = await db
     .from('host_campaigns')
     .insert({
       design_json: parsed.data.design_json ?? null,
-      audience_event_id: parsed.data.audience_event_id || null,
+      audience_kind: kind,
+      audience_event_id: audienceEventId,
       email_type: parsed.data.email_type === 'utility' ? 'utility' : 'marketing',
       host_id: session.host.id,
       subject: parsed.data.subject,
       body_html: parsed.data.body,
       status: 'draft',
     })
-    .select('id, subject, status, audience_event_id, email_type, recipient_count, sent_count, created_at, sent_at')
+    .select('id, subject, status, audience_kind, audience_event_id, email_type, recipient_count, sent_count, created_at, sent_at')
     .single()
   if (error || !campaign) {
     return NextResponse.json({ success: false, error: error?.message || 'Create failed' }, { status: 500 })

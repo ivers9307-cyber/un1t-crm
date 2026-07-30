@@ -181,9 +181,13 @@ You&#39;re receiving this because you attended an event or joined the mailing li
  *
  * @param {SupabaseClient} db  service-role client
  * @param {string} hostId
+ * @param {{audienceEventId?: string|null, emailType?: string, mailingListOnly?: boolean}} [options]
+ * @param {boolean} [options.mailingListOnly] restrict the host_contacts query
+ *   to source='mailing_list' (excludes 'event'-sourced membership rows).
+ *   Every consent/suppression gate below is unaffected.
  * @returns {Promise<Array<{contact_id: string, email: string}>>}
  */
-export async function resolveHostRecipients(db, hostId, { audienceEventId = null, emailType = 'marketing' } = {}) {
+export async function resolveHostRecipients(db, hostId, { audienceEventId = null, emailType = 'marketing', mailingListOnly = false } = {}) {
   // HOST-EMAIL.4 — per-event audience. Resolved from CONFIRMED registrations
   // at send time (host_contacts.source_event_id only records the FIRST event
   // that added a contact, so it cannot answer "who attended event X").
@@ -228,13 +232,15 @@ export async function resolveHostRecipients(db, hostId, { audienceEventId = null
   const recipients = []
   const seenEmails = new Set()
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await db
+    let query = db
       .from('host_contacts')
       .select(`
         contact_id,
         contact:contacts!contact_id ( id, email, email_marketing, email_administrative, email_status, email_suppressed_at )
       `)
       .eq('host_id', hostId)
+    if (mailingListOnly) query = query.eq('source', 'mailing_list')
+    const { data, error } = await query
       .order('created_at', { ascending: false })
       .order('id')
       .range(from, from + PAGE - 1)
