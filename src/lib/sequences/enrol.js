@@ -18,6 +18,14 @@
 import { createServerClient } from '@/lib/supabase'
 import { findBlockedByCooldown } from './cooldown.js'
 
+// Operator-initiated sourceTypes that bypass the automations_exempt gate.
+// 'manual' = the sequences enrol route/UI; 'churn_radar' = a staff member's
+// per-member "Send payment reminder" click (RADAR-PAY.1) — both are humans
+// deliberately targeting a contact, which must include host leads
+// (Richard's rule). Everything else (triggers, crons, segments, dunning
+// auto-enrol, inbound webhook) is automatic and respects the flag.
+const MANUAL_LIKE_SOURCE_TYPES = new Set(['manual', 'churn_radar'])
+
 /**
  * @param {object} args
  * @param {string} args.sequenceId
@@ -68,8 +76,33 @@ export async function enrolContacts({
     blockedFromHistory = findBlockedByCooldown(history || [], cooldownDays)
   }
 
-  const toInsert = contactIds
+  let candidateIds = contactIds
     .filter(id => !alreadyActive.has(id) && !blockedFromHistory.has(id))
+
+  // HOST-MASTER.3 — automations_exempt blocks AUTOMATIC enrolment only.
+  // Every trigger/cron/segment/dunning/webhook caller passes a named
+  // sourceType; the MANUAL_LIKE set is exclusively the operator-initiated
+  // paths (and the default), which deliberately bypass this gate (manual
+  // sends must include host leads — Richard's rule).
+  let exemptSkipped = 0
+  if (!MANUAL_LIKE_SOURCE_TYPES.has(sourceType) && candidateIds.length > 0) {
+    const exempt = new Set()
+    // Chunked .in() by 500 guards the 1k-row cap.
+    for (let i = 0; i < candidateIds.length; i += 500) {
+      const { data: flags } = await db
+        .from('contacts')
+        .select('id')
+        .in('id', candidateIds.slice(i, i + 500))
+        .eq('automations_exempt', true)
+      for (const r of flags || []) exempt.add(r.id)
+    }
+    if (exempt.size > 0) {
+      exemptSkipped = exempt.size
+      candidateIds = candidateIds.filter(id => !exempt.has(id))
+    }
+  }
+
+  const toInsert = candidateIds
     .map(contactId => ({
       sequence_id: sequenceId,
       contact_id: contactId,
@@ -100,5 +133,5 @@ export async function enrolContacts({
     })
   } catch { /* RPC not present / best-effort counter — no-op */ }
 
-  return { enrolled: toInsert.length, skipped: alreadyActive.size }
+  return { enrolled: toInsert.length, skipped: alreadyActive.size + exemptSkipped }
 }
