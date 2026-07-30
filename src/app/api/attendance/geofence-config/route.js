@@ -32,6 +32,7 @@ export async function GET() {
       .from('locations')
       .select('id, settings')
       .in('id', eligibleIds)
+      .order('id')
     if (locErr) return NextResponse.json({ success: false, error: locErr.message }, { status: 400 })
     for (const loc of locs || []) {
       const g = geofenceFromLocationSettings(loc.settings)

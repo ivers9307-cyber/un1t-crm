@@ -28,7 +28,7 @@ const validBody = () => ({ location_id: 'a0000000-0000-0000-0000-000000000001', 
 // (select candidates + race-guarded update + post-update verify).
 function mockDb({
   geo = GEO, exempt = false, recentGeofenceEvent = null,
-  shiftRows = [], updateError = null, postUpdateStamp = undefined,
+  shiftRows = [], shiftSelectError = null, updateError = null, postUpdateStamp = undefined,
 } = {}) {
   const inserted = []
   let updated = null
@@ -50,7 +50,7 @@ function mockDb({
       if (table === 'shift_assignments') return {
         select: (cols) => cols.includes('block:')
           ? { eq: () => ({ is: () => ({ neq: () => ({ gte: () => ({ lte: () => ({ eq: () =>
-              Promise.resolve({ data: shiftRows, error: null }) }) }) }) }) }) }
+              Promise.resolve({ data: shiftSelectError ? null : shiftRows, error: shiftSelectError }) }) }) }) }) }) }
           // Post-update verify: echo whatever update() wrote (or the
           // explicit postUpdateStamp override for the raced case).
           : { eq: () => ({ single: () => Promise.resolve({
@@ -89,6 +89,14 @@ describe('POST /api/attendance/geofence-checkin', () => {
   it('400 on a malformed body', async () => {
     getCurrentUser.mockResolvedValue(staff)
     expect((await POST(postReq({ location_id: 'nope' }))).status).toBe(400)
+  })
+
+  it('403 for a location outside the caller\'s assignments (real assertLocationAccess)', async () => {
+    getCurrentUser.mockResolvedValue(staff) // locations: [{ id: 'loc1' }] — target uuid absent
+    const db = mockDb()
+    const res = await POST(postReq(validBody()))
+    expect(res.status).toBe(403)
+    expect(db.inserted().length).toBe(0)
   })
 
   it('404 when the location has geofencing disabled', async () => {
@@ -135,6 +143,26 @@ describe('POST /api/attendance/geofence-checkin', () => {
     expect(body.data.match_outcome).toBe('already_stamped')
     expect(db.inserted().length).toBe(1)
     expect(db.inserted()[0].match_outcome).toBe('already_stamped')
+  })
+
+  it('shift-candidates select error → 400 with NO audit row (retry stays possible)', async () => {
+    getCurrentUser.mockResolvedValue({ ...staff, locations: [{ id: 'a0000000-0000-0000-0000-000000000001' }] })
+    const db = mockDb({ shiftSelectError: { message: 'db down' } })
+    const res = await POST(postReq(validBody()))
+    const body = await res.json()
+    expect(res.status).toBe(400)
+    expect(body.success).toBe(false)
+    expect(db.inserted().length).toBe(0)
+  })
+
+  it('stamp UPDATE error → 400 with NO audit row (retry stays possible)', async () => {
+    getCurrentUser.mockResolvedValue({ ...staff, locations: [{ id: 'a0000000-0000-0000-0000-000000000001' }] })
+    const db = mockDb({ shiftRows: [nearbyShiftRow()], updateError: { message: 'write failed' } })
+    const res = await POST(postReq(validBody()))
+    const body = await res.json()
+    expect(res.status).toBe(400)
+    expect(body.success).toBe(false)
+    expect(db.inserted().length).toBe(0)
   })
 
   it('no shift in window → no_shift_in_window, audit row still written', async () => {

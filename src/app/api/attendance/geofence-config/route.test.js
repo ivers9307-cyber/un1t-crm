@@ -26,8 +26,8 @@ function mockDb({ links, locs }) {
       select: () => ({
         eq: () => table === 'profile_locations'
           ? Promise.resolve({ data: links, error: null })
-          : { in: () => Promise.resolve({ data: locs, error: null }) },
-        in: () => Promise.resolve({ data: locs, error: null }),
+          : { in: () => ({ order: () => Promise.resolve({ data: locs, error: null }) }) },
+        in: () => ({ order: () => Promise.resolve({ data: locs, error: null }) }),
       }),
     }),
   })

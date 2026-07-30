@@ -100,7 +100,10 @@ export async function POST(request) {
   const dayBefore = new Date(eventAt.getTime() - 24 * 3600_000).toISOString().slice(0, 10)
   const dayAfter  = new Date(eventAt.getTime() + 24 * 3600_000).toISOString().slice(0, 10)
 
-  const { data: rows } = await db
+  // DB errors in the match/stamp path return 400 BEFORE the audit
+  // insert — a dedup-blocking row must never be written for a ping we
+  // didn't actually process, so the phone's queued retry can succeed.
+  const { data: rows, error: shiftErr } = await db
     .from('shift_assignments')
     .select(`
       id, profile_id, status, start_time_override,
@@ -112,6 +115,7 @@ export async function POST(request) {
     .gte('block.block_date', dayBefore)
     .lte('block.block_date', dayAfter)
     .eq('block.location_id', location.id)
+  if (shiftErr) return NextResponse.json({ success: false, error: shiftErr.message }, { status: 400 })
 
   const shifts = (rows || [])
     .map((r) => {
@@ -130,19 +134,20 @@ export async function POST(request) {
       .update({ start_time_override: stamp })
       .eq('id', best.shift.id)
       .is('start_time_override', null)
-    if (!updErr) {
-      const { data: post } = await db
-        .from('shift_assignments')
-        .select('start_time_override')
-        .eq('id', best.shift.id)
-        .single()
-      if (post && post.start_time_override === stamp) {
-        matchedAssignmentId = best.shift.id
-        matchOutcome = 'matched'
-      } else {
-        matchedAssignmentId = best.shift.id
-        matchOutcome = 'already_stamped'
-      }
+    if (updErr) return NextResponse.json({ success: false, error: updErr.message }, { status: 400 })
+    // Post-update verify is best-effort — a read-back failure only
+    // risks the matched/already_stamped label, not the stamp itself.
+    const { data: post } = await db
+      .from('shift_assignments')
+      .select('start_time_override')
+      .eq('id', best.shift.id)
+      .single()
+    if (post && post.start_time_override === stamp) {
+      matchedAssignmentId = best.shift.id
+      matchOutcome = 'matched'
+    } else {
+      matchedAssignmentId = best.shift.id
+      matchOutcome = 'already_stamped'
     }
   }
 
