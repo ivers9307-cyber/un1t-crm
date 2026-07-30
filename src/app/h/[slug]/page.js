@@ -24,13 +24,13 @@ export async function generateMetadata(props) {
     const db = createServerClient()
     const { data } = await db
       .from('event_hosts')
-      .select('name')
+      .select('name, list_blurb')
       .eq('slug', params.slug)
       .maybeSingle()
     if (!data) return {}
     return {
       title: `${data.name} — mailing list`,
-      description: `Get emails about ${data.name}'s events. Unsubscribe anytime.`,
+      description: data.list_blurb || `Get emails about ${data.name}'s events. Unsubscribe anytime.`,
     }
   } catch {
     return {}
@@ -42,14 +42,21 @@ export default async function HostMailingListPage(props) {
   const db = createServerClient()
   const { data: host } = await db
     .from('event_hosts')
-    .select('id, name, slug')
+    .select('id, name, slug, list_headline, list_blurb, list_button_label, list_success_message')
     .eq('slug', params.slug)
     .maybeSingle()
   if (!host) notFound()
 
   return (
     <div className={`${poppins.variable} font-body flex min-h-screen items-center justify-center bg-black px-4 py-16 text-white`}>
-      <HostListSignup slug={host.slug} hostName={host.name} />
+      <HostListSignup
+        slug={host.slug}
+        hostName={host.name}
+        headline={host.list_headline}
+        blurb={host.list_blurb}
+        buttonLabel={host.list_button_label}
+        successMessage={host.list_success_message}
+      />
     </div>
   )
 }

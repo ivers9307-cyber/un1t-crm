@@ -2,6 +2,8 @@
 // shared across the /api/hosts routes. The auth gate stays INLINE in each
 // route (each must literally call getCurrentUser() for check:route-guards).
 
+import { sanitizeDomainLabel } from '@/lib/postmark-domains'
+
 export const HOST_COLS =
   'id, name, email, payment_provider, stripe_connected_account_id, ' +
   'charges_enabled, payouts_enabled, details_submitted, ' +
@@ -24,4 +26,19 @@ export async function loadHostForOrg(db, id, orgId) {
   const { data } = await db.from('event_hosts').select(HOST_COLS).eq('id', id).maybeSingle()
   if (!data || data.organization_id !== orgId) return null
   return data
+}
+
+// Derive + persist event_hosts.slug from the host name when still null
+// (mig 400 leaves it NULL — provisioning is the lazy-derivation point).
+// UNIQUE violations get a numeric suffix (acme, acme-2, acme-3, …).
+export async function ensureHostSlug(db, host) {
+  if (host.slug) return host.slug
+  const base = sanitizeDomainLabel(host.name) || 'host'
+  for (let n = 0; n < 25; n++) {
+    const candidate = n === 0 ? base : `${base}-${n + 1}`
+    const { error } = await db.from('event_hosts').update({ slug: candidate }).eq('id', host.id)
+    if (!error) return candidate
+    if (error.code !== '23505') throw new Error(`slug persist failed: ${error.message}`)
+  }
+  throw new Error(`could not derive a unique slug from "${base}"`)
 }

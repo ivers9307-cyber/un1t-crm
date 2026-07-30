@@ -170,3 +170,67 @@ describe('POST /api/host/emails/[id]/send — QStash kick', () => {
     expect(order).toEqual(['upsert', 'publish'])
   })
 })
+
+// HOST-GROWTH.11 — audience_kind drives the recipient resolver: 'mailing_list'
+// restricts to source='mailing_list' contacts, 'event' targets the event's
+// confirmed attendees, 'all' (incl. legacy rows) targets the whole list.
+describe('POST /api/host/emails/[id]/send — audience_kind → resolveHostRecipients', () => {
+  it("audience_kind='mailing_list' resolves with mailingListOnly: true and no event", async () => {
+    const { db } = makeDb(routeFor({
+      campaign: { id: CAMPAIGN_ID, status: 'draft', audience_kind: 'mailing_list', audience_event_id: null, email_type: 'marketing' },
+    }))
+    createServerClient.mockReturnValue(db)
+    const res = await POST(makeRequest(), props)
+    expect(res.status).toBe(200)
+    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, {
+      audienceEventId: null,
+      mailingListOnly: true,
+      emailType: 'marketing',
+    })
+  })
+
+  it("audience_kind='event' resolves against the event with mailingListOnly: false", async () => {
+    const { db } = makeDb(routeFor({
+      campaign: { id: CAMPAIGN_ID, status: 'draft', audience_kind: 'event', audience_event_id: 'ev-1', email_type: 'marketing' },
+    }))
+    createServerClient.mockReturnValue(db)
+    const res = await POST(makeRequest(), props)
+    expect(res.status).toBe(200)
+    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, {
+      audienceEventId: 'ev-1',
+      mailingListOnly: false,
+      emailType: 'marketing',
+    })
+  })
+
+  it("legacy row: audience_kind='all' WITH an event id (pre-460 writer) still targets the event", async () => {
+    // Rows created/patched by pre-audience_kind code get the column default
+    // 'all' while carrying audience_event_id — the pre-460 semantic (event id
+    // = per-event audience) must win, or the draft sends to the WHOLE list.
+    const { db } = makeDb(routeFor({
+      campaign: { id: CAMPAIGN_ID, status: 'draft', audience_kind: 'all', audience_event_id: 'ev-legacy', email_type: 'marketing' },
+    }))
+    createServerClient.mockReturnValue(db)
+    const res = await POST(makeRequest(), props)
+    expect(res.status).toBe(200)
+    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, {
+      audienceEventId: 'ev-legacy',
+      mailingListOnly: false,
+      emailType: 'marketing',
+    })
+  })
+
+  it("audience_kind='all' (legacy-shaped row) resolves the whole list", async () => {
+    const { db } = makeDb(routeFor({
+      campaign: { id: CAMPAIGN_ID, status: 'draft', audience_kind: 'all', audience_event_id: null, email_type: 'marketing' },
+    }))
+    createServerClient.mockReturnValue(db)
+    const res = await POST(makeRequest(), props)
+    expect(res.status).toBe(200)
+    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, {
+      audienceEventId: null,
+      mailingListOnly: false,
+      emailType: 'marketing',
+    })
+  })
+})
