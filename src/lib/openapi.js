@@ -2702,6 +2702,17 @@ registry.registerPath({
   },
 })
 
+// Geofence attendance (GEO-ATT, mig 463)
+registry.registerPath({
+  method: 'get',
+  path: '/api/attendance/geofence-config',
+  tags: ['Attendance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Geofence regions + permission-gate flag for the current user',
+  description: 'Returns { required, gate_copy, regions:[{location_id,latitude,longitude,radius_m}] } for the caller\'s non-exempt assignments at geofence-enabled locations (locations.settings.geofence, mig 463). Mobile registers OS geofences from this and gates the app on background-location permission when required=true.',
+  responses: { 200: { description: 'Config for the current user' } },
+})
+
 // Schedule
 registry.registerPath({
   method: 'get',

@@ -1,0 +1,76 @@
+// src/app/api/attendance/geofence-config/route.test.js
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('@/lib/auth', async () => {
+  const actual = await vi.importActual('@/lib/auth')
+  return { ...actual, getCurrentUser: vi.fn() }
+})
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+
+import { GET } from './route'
+import { getCurrentUser } from '@/lib/auth'
+import { createServerClient } from '@/lib/supabase'
+import { DEFAULT_GATE_COPY } from '@/lib/geofence-attendance'
+
+beforeEach(() => vi.clearAllMocks())
+
+const req = () => new Request('http://x/api/attendance/geofence-config')
+const staff = { id: 'prof-1', role: 'staff', activeLocation: { id: 'loc1' }, locations: [{ id: 'loc1' }] }
+
+const GEO = { enabled: true, latitude: 53.2905, longitude: -6.1988, radius_m: 200 }
+
+// profile_locations rows + locations rows behind one from() switch
+function mockDb({ links, locs }) {
+  createServerClient.mockReturnValue({
+    from: (table) => ({
+      select: () => ({
+        eq: () => table === 'profile_locations'
+          ? Promise.resolve({ data: links, error: null })
+          : { in: () => Promise.resolve({ data: locs, error: null }) },
+        in: () => Promise.resolve({ data: locs, error: null }),
+      }),
+    }),
+  })
+}
+
+describe('GET /api/attendance/geofence-config', () => {
+  it('401 when unauthenticated', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect((await GET(req())).status).toBe(401)
+  })
+
+  it('required=true with a region for an enabled, non-exempt assignment', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    mockDb({
+      links: [{ location_id: 'loc1', geofence_exempt: false }],
+      locs: [{ id: 'loc1', settings: { geofence: GEO } }],
+    })
+    const body = await (await GET(req())).json()
+    expect(body.success).toBe(true)
+    expect(body.data.required).toBe(true)
+    expect(body.data.regions).toEqual([
+      { location_id: 'loc1', latitude: 53.2905, longitude: -6.1988, radius_m: 200 },
+    ])
+    expect(body.data.gate_copy).toBe(DEFAULT_GATE_COPY)
+  })
+
+  it('required=false when exempt', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    mockDb({
+      links: [{ location_id: 'loc1', geofence_exempt: true }],
+      locs: [{ id: 'loc1', settings: { geofence: GEO } }],
+    })
+    const body = await (await GET(req())).json()
+    expect(body.data.required).toBe(false)
+    expect(body.data.regions).toEqual([])
+  })
+
+  it('required=false when the location blob is disabled or missing coords', async () => {
+    getCurrentUser.mockResolvedValue(staff)
+    mockDb({
+      links: [{ location_id: 'loc1', geofence_exempt: false }],
+      locs: [{ id: 'loc1', settings: { geofence: { ...GEO, enabled: false } } }],
+    })
+    expect((await (await GET(req())).json()).data.required).toBe(false)
+  })
+})
