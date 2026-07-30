@@ -21,6 +21,9 @@
 // Tables (mig 400): host_contacts (UNIQUE(host_id, contact_id)),
 // host_email_suppressions (UNIQUE(host_id, contact_id)). Service-role only.
 
+import { writeContactTag } from '@/lib/contact-tags'
+import { logWarn } from '@/lib/log'
+
 const PAGE = 1000        // the supabase-js 1k select cap — always .range()-paginate
 const UPSERT_CHUNK = 500 // rows per host_contacts upsert statement
 
@@ -106,10 +109,20 @@ export function isEmailable(contact, suppressed, { emailType = 'marketing' } = {
  * insert-once; re-running is always safe, which is what makes the backfill
  * route idempotent).
  *
+ * HOST-MASTER.5 — every deduped attendee is ALSO tagged with the host tag
+ * (hostTagFor) and this event's tag (eventTagFor), in BOTH tag systems
+ * (contacts.tags text[] append-if-missing + contact_tags via
+ * writeContactTag), using the CONTACT's own location_id (host-event
+ * contacts live at the org master location post-HOST-MASTER.4; tags must
+ * follow the contact, not the host). Tag writes are best-effort: a failure
+ * is logged and swallowed, never thrown — this step must never turn a
+ * host_contacts upsert success into a reported failure.
+ *
  * Callers hook this fire-and-forget after a registration flips to
  * 'confirmed' (race-payments free path + webhook path, the operator
  * manual-add) — each with its OWN try/catch, so a failure here can never
- * affect the payment/registration response. Errors THROW for those catchers.
+ * affect the payment/registration response. Errors THROW for those catchers
+ * (race/registrations/host_contacts loads only — tagging never throws).
  *
  * @param {SupabaseClient} db  service-role client
  * @param {string} raceEventId
@@ -118,7 +131,7 @@ export function isEmailable(contact, suppressed, { emailType = 'marketing' } = {
 export async function addEventAttendeesToHostList(db, raceEventId) {
   const { data: race, error: raceErr } = await db
     .from('race_events')
-    .select('id, host_id')
+    .select('id, host_id, slug, name')
     .eq('id', raceEventId)
     .maybeSingle()
   if (raceErr) throw new Error(`host contact list: race load failed: ${raceErr.message}`)
@@ -161,6 +174,56 @@ export async function addEventAttendeesToHostList(db, raceEventId) {
       .upsert(chunk, { onConflict: 'host_id,contact_id', ignoreDuplicates: true })
     if (error) throw new Error(`host contact list: upsert failed: ${error.message}`)
   }
+
+  // HOST-MASTER.5 — tag each attendee to the host + this event, in BOTH tag
+  // systems (subscribe-route pattern). writeContactTag fires tag_added
+  // sequences, which cannot auto-enrol exempt contacts (enrolContacts gate).
+  // Per-tag failures are logged and swallowed — attendance sync must never
+  // fail because of a tag write.
+  const { data: host } = await db
+    .from('event_hosts')
+    .select('id, slug, name')
+    .eq('id', race.host_id)
+    .maybeSingle()
+  const tags = [hostTagFor(host), eventTagFor(race)]
+
+  const idList = [...contactIds]
+  for (let i = 0; i < idList.length; i += UPSERT_CHUNK) {
+    const chunk = idList.slice(i, i + UPSERT_CHUNK)
+    const { data: contactRows, error: contactsErr } = await db
+      .from('contacts')
+      .select('id, location_id, tags')
+      .in('id', chunk)
+    if (contactsErr) {
+      logWarn('host-contact-list', 'attendee contacts load failed', { err: contactsErr })
+      continue
+    }
+    for (const contact of contactRows || []) {
+      const prior = Array.isArray(contact.tags) ? contact.tags : []
+      const missing = tags.filter((t) => !prior.includes(t))
+      if (missing.length > 0) {
+        try {
+          const { error } = await db
+            .from('contacts')
+            .update({ tags: [...new Set([...prior, ...missing])] })
+            .eq('id', contact.id)
+          if (error) {
+            logWarn('host-contact-list', 'tag write failed', { err: error, contactId: contact.id, tag: missing.join(',') })
+          }
+        } catch (err) {
+          logWarn('host-contact-list', 'tag write failed', { err, contactId: contact.id, tag: missing.join(',') })
+        }
+      }
+      for (const tag of tags) {
+        try {
+          await writeContactTag(db, { contactId: contact.id, locationId: contact.location_id, tag })
+        } catch (err) {
+          logWarn('host-contact-list', 'tag write failed', { err, contactId: contact.id, tag })
+        }
+      }
+    }
+  }
+
   return rows.length
 }
 
