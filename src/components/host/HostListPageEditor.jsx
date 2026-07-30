@@ -36,7 +36,12 @@ export default function HostListPageEditor({ initial, previewUrl, onClose, onSav
       })
       const j = await res.json().catch(() => ({}))
       if (!res.ok || !j.success) throw new Error(j.error || 'Could not save — try again.')
-      onSaved(values)
+      // The PATCH returns the patch actually written (trimmed, nulls for
+      // cleared fields) — merge it over the submitted values so state
+      // reflects the server's canonical copy, not the raw client input.
+      const canonical = { ...values }
+      if (j.data) for (const k of Object.keys(j.data)) canonical[k] = j.data[k] ?? ''
+      onSaved(canonical)
     } catch (e) {
       setError(e.message)
     } finally {
