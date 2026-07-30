@@ -19,6 +19,11 @@ function finiteOrNull(v) {
   return typeof n === 'number' && Number.isFinite(n) ? n : null
 }
 
+function inRangeOrNull(v, min, max) {
+  const n = finiteOrNull(v)
+  return n !== null && n >= min && n <= max ? n : null
+}
+
 /**
  * Normalise locations.settings.geofence into a fully-defaulted object.
  * Never throws; garbage in → disabled defaults out.
@@ -35,8 +40,8 @@ export function geofenceFromLocationSettings(settings) {
   const gateCopy = (typeof g.gate_copy === 'string' && g.gate_copy.trim()) ? g.gate_copy.trim() : DEFAULT_GATE_COPY
   return {
     enabled: g.enabled === true,
-    latitude: finiteOrNull(g.latitude),
-    longitude: finiteOrNull(g.longitude),
+    latitude: inRangeOrNull(g.latitude, -90, 90),
+    longitude: inRangeOrNull(g.longitude, -180, 180),
     radiusM,
     gateCopy,
   }
@@ -44,5 +49,5 @@ export function geofenceFromLocationSettings(settings) {
 
 /** A location only participates when enabled AND has real coordinates. */
 export function geofenceIsConfigured(g) {
-  return !!g && g.enabled === true && g.latitude !== null && g.longitude !== null
+  return !!g && g.enabled === true && Number.isFinite(g.latitude) && Number.isFinite(g.longitude)
 }

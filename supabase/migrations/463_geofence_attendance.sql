@@ -14,11 +14,13 @@
 -- Location-level config (enabled/lat/lng/radius/gate_copy) lives in
 -- locations.settings.geofence (JSONB) — no DDL needed for it.
 
+BEGIN;
 ALTER TABLE public.staff_attendance_events
   DROP CONSTRAINT IF EXISTS staff_attendance_events_source_check;
 ALTER TABLE public.staff_attendance_events
   ADD CONSTRAINT staff_attendance_events_source_check
   CHECK (source IN ('unifi_access', 'protect', 'manual', 'geofence'));
+COMMIT;
 
 ALTER TABLE public.profile_locations
   ADD COLUMN IF NOT EXISTS geofence_exempt boolean NOT NULL DEFAULT false;

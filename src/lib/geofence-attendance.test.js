@@ -39,6 +39,20 @@ describe('geofenceFromLocationSettings', () => {
   it('blank gate_copy falls back to the default', () => {
     expect(geofenceFromLocationSettings({ geofence: { gate_copy: '   ' } }).gateCopy).toBe(DEFAULT_GATE_COPY)
   })
+
+  it('coerces string numbers and rounds the radius', () => {
+    const g = geofenceFromLocationSettings({
+      geofence: { latitude: '53.29', longitude: '-6.19', radius_m: '200' },
+    })
+    expect(g.latitude).toBe(53.29)
+    expect(g.longitude).toBe(-6.19)
+    expect(g.radiusM).toBe(200)
+    expect(geofenceFromLocationSettings({ geofence: { radius_m: 150.6 } }).radiusM).toBe(151)
+  })
+
+  it('nulls out-of-range coordinates', () => {
+    expect(geofenceFromLocationSettings({ geofence: { latitude: 999 } }).latitude).toBeNull()
+  })
 })
 
 describe('geofenceIsConfigured', () => {
@@ -46,5 +60,7 @@ describe('geofenceIsConfigured', () => {
     expect(geofenceIsConfigured({ enabled: true, latitude: 53.29, longitude: -6.19, radiusM: 150 })).toBe(true)
     expect(geofenceIsConfigured({ enabled: false, latitude: 53.29, longitude: -6.19, radiusM: 150 })).toBe(false)
     expect(geofenceIsConfigured({ enabled: true, latitude: null, longitude: -6.19, radiusM: 150 })).toBe(false)
+    expect(geofenceIsConfigured({ enabled: true, latitude: 53.29, longitude: null, radiusM: 150 })).toBe(false)
+    expect(geofenceIsConfigured({ enabled: true, latitude: undefined, longitude: -6.19, radiusM: 150 })).toBe(false)
   })
 })
