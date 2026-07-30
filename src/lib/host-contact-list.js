@@ -116,7 +116,13 @@ export function isEmailable(contact, suppressed, { emailType = 'marketing' } = {
  * contacts live at the org master location post-HOST-MASTER.4; tags must
  * follow the contact, not the host). Tag writes are best-effort: a failure
  * is logged and swallowed, never thrown — this step must never turn a
- * host_contacts upsert success into a reported failure.
+ * host_contacts upsert success into a reported failure. If the host row
+ * itself fails to load (transient error, or deleted between the earlier
+ * host_id read and here), tagging is skipped entirely rather than
+ * fabricating hostTagFor(null)'s fallback tag onto every attendee.
+ * HOST-MASTER.5b batches a per-chunk contact_tags delta pre-check so a
+ * steady-state re-confirmation (already tagged) costs ~1 query per 500
+ * attendees instead of 2 idempotency SELECTs each.
  *
  * Callers hook this fire-and-forget after a registration flips to
  * 'confirmed' (race-payments free path + webhook path, the operator
@@ -180,11 +186,20 @@ export async function addEventAttendeesToHostList(db, raceEventId) {
   // sequences, which cannot auto-enrol exempt contacts (enrolContacts gate).
   // Per-tag failures are logged and swallowed — attendance sync must never
   // fail because of a tag write.
-  const { data: host } = await db
+  //
+  // HOST-MASTER.5b — a failed (or TOCTOU-deleted) host load must NOT fall
+  // back to hostTagFor(null)'s degenerate 'host:host' tag: that would
+  // permanently mistag every attendee in both systems. Skip tagging
+  // entirely rather than fabricate a host.
+  const { data: host, error: hostErr } = await db
     .from('event_hosts')
     .select('id, slug, name')
     .eq('id', race.host_id)
     .maybeSingle()
+  if (hostErr || !host) {
+    logWarn('host-contact-list', 'host load failed — skipping attendee tagging', { err: hostErr, raceEventId })
+    return rows.length
+  }
   const tags = [hostTagFor(host), eventTagFor(race)]
 
   const idList = [...contactIds]
@@ -198,6 +213,33 @@ export async function addEventAttendeesToHostList(db, raceEventId) {
       logWarn('host-contact-list', 'attendee contacts load failed', { err: contactsErr })
       continue
     }
+
+    // HOST-MASTER.5b — batched delta pre-check: a re-confirmation of an
+    // already-tagged attendee is the steady-state case (every re-run of
+    // this sync re-touches the same attendees), and writeContactTag's own
+    // idempotency SELECT is per-(contact,tag) — O(2N) serial round-trips
+    // on the payment-webhook thread otherwise. One query per chunk finds
+    // which (contact, tag) pairs are already active; only the gaps go
+    // through writeContactTag. Fail-open on error: writeContactTag is
+    // idempotent on its own, so falling back to calling it for every pair
+    // is merely slower, never incorrect.
+    let alreadyTagged = new Set()
+    try {
+      const { data: existingTags, error: precheckErr } = await db
+        .from('contact_tags')
+        .select('contact_id, tag')
+        .in('contact_id', chunk)
+        .in('tag', tags)
+        .is('removed_at', null)
+      if (precheckErr) {
+        logWarn('host-contact-list', 'tag delta pre-check failed — falling back to per-pair writes', { err: precheckErr })
+      } else {
+        alreadyTagged = new Set((existingTags || []).map((r) => `${r.contact_id}:${r.tag}`))
+      }
+    } catch (err) {
+      logWarn('host-contact-list', 'tag delta pre-check failed — falling back to per-pair writes', { err })
+    }
+
     for (const contact of contactRows || []) {
       const prior = Array.isArray(contact.tags) ? contact.tags : []
       const missing = tags.filter((t) => !prior.includes(t))
@@ -208,13 +250,14 @@ export async function addEventAttendeesToHostList(db, raceEventId) {
             .update({ tags: [...new Set([...prior, ...missing])] })
             .eq('id', contact.id)
           if (error) {
-            logWarn('host-contact-list', 'tag write failed', { err: error, contactId: contact.id, tag: missing.join(',') })
+            logWarn('host-contact-list', 'tag write failed', { err: error, contactId: contact.id, tags: missing })
           }
         } catch (err) {
-          logWarn('host-contact-list', 'tag write failed', { err, contactId: contact.id, tag: missing.join(',') })
+          logWarn('host-contact-list', 'tag write failed', { err, contactId: contact.id, tags: missing })
         }
       }
       for (const tag of tags) {
+        if (alreadyTagged.has(`${contact.id}:${tag}`)) continue
         try {
           await writeContactTag(db, { contactId: contact.id, locationId: contact.location_id, tag })
         } catch (err) {
