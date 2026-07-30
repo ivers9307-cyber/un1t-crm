@@ -84,10 +84,16 @@ export async function POST(_request, props) {
     // registrations at send time when the draft targets one event.
     // HOST-GROWTH.11 — audience_kind picks the population: 'event' →
     // that event's confirmed attendees; 'mailing_list' → contacts with
-    // source='mailing_list'; 'all' (incl. legacy backfilled rows) → the
-    // whole list.
+    // source='mailing_list'; 'all' → the whole list.
+    // Legacy-row guard: rows written by pre-audience_kind code carry the
+    // column default 'all' WITH an audience_event_id set (mig 460's one-shot
+    // backfill can't cover rows created after it ran). An event id on a
+    // non-mailing_list row therefore always means a per-event audience —
+    // the pre-460 semantic. New-code rows null the id for non-event kinds,
+    // so this fallback can only fire on legacy rows.
+    const audienceEventId = campaign.audience_kind !== 'mailing_list' ? campaign.audience_event_id || null : null
     recipients = await resolveHostRecipients(db, session.host.id, {
-      audienceEventId: campaign.audience_kind === 'event' ? campaign.audience_event_id || null : null,
+      audienceEventId,
       mailingListOnly: campaign.audience_kind === 'mailing_list',
       emailType: campaign.email_type === 'utility' ? 'utility' : 'marketing',
     })

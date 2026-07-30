@@ -203,6 +203,23 @@ describe('POST /api/host/emails/[id]/send — audience_kind → resolveHostRecip
     })
   })
 
+  it("legacy row: audience_kind='all' WITH an event id (pre-460 writer) still targets the event", async () => {
+    // Rows created/patched by pre-audience_kind code get the column default
+    // 'all' while carrying audience_event_id — the pre-460 semantic (event id
+    // = per-event audience) must win, or the draft sends to the WHOLE list.
+    const { db } = makeDb(routeFor({
+      campaign: { id: CAMPAIGN_ID, status: 'draft', audience_kind: 'all', audience_event_id: 'ev-legacy', email_type: 'marketing' },
+    }))
+    createServerClient.mockReturnValue(db)
+    const res = await POST(makeRequest(), props)
+    expect(res.status).toBe(200)
+    expect(resolveHostRecipients).toHaveBeenCalledWith(db, HOST_ID, {
+      audienceEventId: 'ev-legacy',
+      mailingListOnly: false,
+      emailType: 'marketing',
+    })
+  })
+
   it("audience_kind='all' (legacy-shaped row) resolves the whole list", async () => {
     const { db } = makeDb(routeFor({
       campaign: { id: CAMPAIGN_ID, status: 'draft', audience_kind: 'all', audience_event_id: null, email_type: 'marketing' },
