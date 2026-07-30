@@ -39,7 +39,7 @@ const EDITOR_DIV_ID = 'host-email-designer'
 
 export default function HostEmails() {
   const [campaigns, setCampaigns] = useState(null) // null = loading
-  const [audiences, setAudiences] = useState({ all_count: null, events: [] })
+  const [audiences, setAudiences] = useState({ all_count: null, mailing_list_count: null, events: [] })
   const [subject, setSubject] = useState('')
   const [audienceEventId, setAudienceEventId] = useState('')
   const [emailType, setEmailType] = useState('marketing')
@@ -157,7 +157,7 @@ export default function HostEmails() {
       const c = json.data
       setEditingId(c.id)
       setSubject(c.subject || '')
-      setAudienceEventId(c.audience_event_id || '')
+      setAudienceEventId(c.audience_kind === 'mailing_list' ? '__mailing_list__' : (c.audience_event_id || ''))
       setEmailType(c.email_type === 'utility' ? 'utility' : 'marketing')
       if (c.design_json && unlayerReady && window.unlayer) {
         setMode('design')
@@ -195,7 +195,8 @@ export default function HostEmails() {
         subject,
         body,
         design_json: designJson,
-        audience_event_id: audienceEventId || null,
+        audience_kind: audienceEventId === '__mailing_list__' ? 'mailing_list' : (audienceEventId ? 'event' : 'all'),
+        audience_event_id: audienceEventId && audienceEventId !== '__mailing_list__' ? audienceEventId : null,
         email_type: emailType,
       }
       const res = await fetch(editingId ? `/api/host/emails/${editingId}` : '/api/host/emails', {
@@ -223,6 +224,11 @@ export default function HostEmails() {
       return audiences.all_count == null
         ? 'all your emailable contacts'
         : `all ${audiences.all_count} contacts (where emailable)`
+    }
+    if (id === '__mailing_list__') {
+      return audiences.mailing_list_count == null
+        ? 'your mailing-list signups'
+        : `your ${audiences.mailing_list_count} mailing-list signups (where emailable)`
     }
     const ev = audiences.events.find((x) => x.id === id)
     return ev ? `attendees of ${ev.name} (${ev.race_date})` : 'the selected event’s attendees'
@@ -311,6 +317,9 @@ export default function HostEmails() {
               >
                 <option value="">
                   Everyone{audiences.all_count != null ? ` (${audiences.all_count})` : ''}
+                </option>
+                <option value="__mailing_list__">
+                  Mailing list signups{audiences.mailing_list_count != null ? ` (${audiences.mailing_list_count})` : ''}
                 </option>
                 {audiences.events.map((ev) => (
                   <option key={ev.id} value={ev.id}>
@@ -447,7 +456,7 @@ export default function HostEmails() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => send(c.id, c.audience_event_id || '', c.email_type)}
+                        onClick={() => send(c.id, c.audience_kind === 'mailing_list' ? '__mailing_list__' : (c.audience_event_id || ''), c.email_type)}
                         disabled={sendingId === c.id}
                         className="rounded-lg bg-white text-black text-xs font-semibold px-3 py-1.5 hover:bg-white/90 disabled:opacity-50"
                       >
