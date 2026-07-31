@@ -16,12 +16,28 @@
 // navigator so nothing underneath is visible or touchable. Renders
 // nothing without a session, so login is never covered.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { View, Text, Pressable, AppState, Linking } from 'react-native'
 import * as Location from 'expo-location'
 import { useAuth } from '../lib/auth-context'
 import { api } from '../lib/api'
 import { syncGeofences } from '../lib/geofence'
+import { reportDeviceState } from '../lib/push-register'
+
+// STAFF-DEV.7 — collapse the two OS permission reads into the single
+// value the CRM stores (mig 466's CHECK values).
+//
+// Background-first by design: this column answers "can geofence
+// attendance actually fire on this phone?", so an iOS user on "While
+// Using" (whose BACKGROUND status expo reports as denied) is a denial
+// for that purpose. `when_in_use` is therefore mainly an Android shape —
+// background still undetermined while foreground is granted.
+function mapPermission(bg, fg) {
+  if (bg?.status === 'granted') return 'always'
+  if (bg?.status === 'denied') return 'denied'
+  if (fg?.status === 'granted') return 'when_in_use'
+  return 'undetermined'
+}
 
 export default function LocationGate() {
   const { session, impersonatingFrom } = useAuth()
@@ -31,12 +47,49 @@ export default function LocationGate() {
   const [granted, setGranted] = useState(null)
   const [denied, setDenied] = useState(false) // permanently denied → Settings
 
+  // STAFF-DEV.7 — last value we told the server, so a foreground that
+  // changed nothing costs no round-trip. `check` runs on EVERY
+  // foreground, and reporting an unchanged permission every time would
+  // hammer the endpoint for no new information.
+  const reportedRef = useRef(null)
+  // Read through refs, not closure: `check` is memoised with an empty
+  // dep list and captured by a long-lived AppState listener, so a
+  // sign-out or an impersonation started afterwards must still be seen.
+  const sessionRef = useRef(session)
+  const impersonatingRef = useRef(impersonatingFrom)
+  useEffect(() => {
+    sessionRef.current = session
+    impersonatingRef.current = impersonatingFrom
+  }, [session, impersonatingFrom])
+
   const check = useCallback(async () => {
+    let bg = null
     try {
-      const bg = await Location.getBackgroundPermissionsAsync()
+      bg = await Location.getBackgroundPermissionsAsync()
       setGranted(bg.status === 'granted')
       setDenied(bg.status === 'denied' && !bg.canAskAgain)
     } catch { setGranted(true) } // never brick the app on a permission API error
+
+    // Fire-and-forget device-state report. Mirrors the gate's own
+    // early-outs: never while impersonating (the row would be written
+    // against the MASTER's session but describe the master's phone,
+    // polluting the target's record) and never without a session.
+    // Wrapped in its own try/catch so a reporting failure can never
+    // block or break the gate.
+    try {
+      if (!bg) return
+      if (!sessionRef.current || impersonatingRef.current) return
+      let fg = null
+      try { fg = await Location.getForegroundPermissionsAsync() } catch { /* background alone is enough */ }
+      const value = mapPermission(bg, fg)
+      if (value === reportedRef.current) return
+      // Only remember it once it actually landed: a report that skipped
+      // (offline, no token yet) must be retried on the next foreground,
+      // not silently written off. The upsert is idempotent, so a rare
+      // double-report costs nothing.
+      const res = await reportDeviceState({ geofencePermission: value })
+      if (!res?.skipped) reportedRef.current = value
+    } catch { /* reporting is best-effort — never surfaces to the user */ }
   }, [])
 
   useEffect(() => {

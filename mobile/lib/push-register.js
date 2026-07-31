@@ -30,7 +30,16 @@ Notifications.setNotificationHandler({
   }),
 })
 
-export async function registerForPushNotifications() {
+/**
+ * Register this device's Expo push token with the CRM.
+ *
+ * @param {object} [opts]
+ * @param {'always'|'when_in_use'|'denied'|'undetermined'} [opts.geofencePermission]
+ *   The OS background-location verdict to report alongside the token
+ *   (STAFF-DEV.7). Omitted when the caller doesn't know it — the server
+ *   then leaves any stored value alone rather than nulling it.
+ */
+export async function registerForPushNotifications(opts = {}) {
   if (!Device.isDevice) {
     // Simulators don't get real push tokens. Skip silently.
     return { skipped: true, reason: 'simulator' }
@@ -96,10 +105,75 @@ export async function registerForPushNotifications() {
       platform: Platform.OS,
       device_name: Device.deviceName || undefined,
       app_version: Constants.expoConfig?.version,
+      // Only sent when the caller actually knows it — see reportDeviceState.
+      ...(opts.geofencePermission ? { geofence_permission: opts.geofencePermission } : {}),
     },
   })
 
   return { token, result: res }
+}
+
+/**
+ * STAFF-DEV.7 — report this device's current state (app version +
+ * background-location permission) to the CRM WITHOUT going through the
+ * push-permission flow.
+ *
+ * Why it exists: registerForPushNotifications() early-returns on a
+ * simulator, a studio kiosk or a declined notification prompt, so a
+ * staff member who said "no" to notifications never reported an
+ * app_version at all — they showed up on the device-health page as if
+ * they had no app. This path reuses the same upsert (conflict target =
+ * expo_push_token) so it refreshes the existing row rather than making
+ * a second one, and never prompts for anything: it only reports when a
+ * token can already be derived.
+ *
+ * Every failure mode returns a `{ skipped, reason }` object rather than
+ * throwing — callers fire this and forget it, and reporting must never
+ * be able to break the surface that triggered it.
+ *
+ * @param {object} [opts]
+ * @param {'always'|'when_in_use'|'denied'|'undetermined'} [opts.geofencePermission]
+ * @returns {Promise<{token?: string, result?: object, skipped?: boolean, reason?: string}>}
+ */
+export async function reportDeviceState({ geofencePermission } = {}) {
+  try {
+    if (!Device.isDevice) return { skipped: true, reason: 'simulator' }
+
+    // Same kiosk carve-out as registration: a shared studio device must
+    // never write a row under whichever staffer last PIN-unlocked it.
+    try {
+      const { getPairing } = await import('./studio-device')
+      if (await getPairing()) return { skipped: true, reason: 'studio_device' }
+    } catch { /* SecureStore unreadable ⇒ treat as unpaired */ }
+
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId
+    let token
+    try {
+      const result = await Notifications.getExpoPushTokenAsync(
+        projectId ? { projectId } : undefined
+      )
+      token = result?.data
+    } catch (err) {
+      // iOS refuses a token without notification permission. Nothing to
+      // update in that case — the row is keyed by the token.
+      return { skipped: true, reason: `token_error: ${err?.message || err}` }
+    }
+    if (!token) return { skipped: true, reason: 'no_token' }
+
+    const res = await api('/api/mobile/device-tokens', {
+      method: 'POST',
+      body: {
+        expo_push_token: token,
+        platform: Platform.OS,
+        device_name: Device.deviceName || undefined,
+        app_version: Constants.expoConfig?.version,
+        ...(geofencePermission ? { geofence_permission: geofencePermission } : {}),
+      },
+    })
+    return { token, result: res }
+  } catch (err) {
+    return { skipped: true, reason: `report_error: ${err?.message || err}` }
+  }
 }
 
 export async function unregisterPushNotifications(token) {

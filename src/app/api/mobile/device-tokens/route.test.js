@@ -85,4 +85,43 @@ describe('POST /api/mobile/device-tokens', () => {
     expect(res.status).toBe(200)
     expect(captured.row.app_version).toBeUndefined()
   })
+
+  it('persists geofence_permission (+ a timestamp) when the client sends one', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1' })
+    const captured = {}
+    createServerClient.mockReturnValue(makeDb(captured))
+
+    const res = await POST(req({
+      expo_push_token: TOKEN, geofence_permission: 'always',
+    }))
+    expect(res.status).toBe(200)
+    expect(captured.row.geofence_permission).toBe('always')
+    expect(typeof captured.row.geofence_permission_at).toBe('string')
+  })
+
+  it('OMITS the geofence keys entirely when the client sends none', async () => {
+    // Load-bearing: the conflict target is expo_push_token, so an upsert
+    // writes the WHOLE row — including a key present-but-undefined. If
+    // these keys were in the patch, every register from a pre-2.2.0
+    // client would wipe a permission we had already learned, and
+    // "never reported" would be indistinguishable from "denied".
+    getCurrentUser.mockResolvedValue({ id: 'u1' })
+    const captured = {}
+    createServerClient.mockReturnValue(makeDb(captured))
+
+    const res = await POST(req({ expo_push_token: TOKEN, app_version: '2.1.0' }))
+    expect(res.status).toBe(200)
+    expect(Object.keys(captured.row)).not.toContain('geofence_permission')
+    expect(Object.keys(captured.row)).not.toContain('geofence_permission_at')
+  })
+
+  it('400s on a geofence_permission outside the mig 466 CHECK values', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1' })
+    const captured = {}
+    createServerClient.mockReturnValue(makeDb(captured))
+
+    const res = await POST(req({ expo_push_token: TOKEN, geofence_permission: 'maybe' }))
+    expect(res.status).toBe(400)
+    expect(captured.row).toBeUndefined()
+  })
 })

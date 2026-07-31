@@ -39,7 +39,7 @@ vi.mock('./studio-device', () => ({
   getPairing: vi.fn(async () => state.pairing),
 }))
 
-import { registerForPushNotifications, unregisterCurrentDevicePush, unregisterPushNotifications } from './push-register'
+import { registerForPushNotifications, reportDeviceState, unregisterCurrentDevicePush, unregisterPushNotifications } from './push-register'
 import { api } from './api'
 import * as Notifications from 'expo-notifications'
 
@@ -69,6 +69,50 @@ describe('registerForPushNotifications — studio-device guard', () => {
       method: 'POST',
       body: expect.objectContaining({ expo_push_token: 'ExponentPushToken[abc]' }),
     }))
+  })
+})
+
+describe('reportDeviceState — STAFF-DEV.7 permission + version reporting', () => {
+  it('reports the permission and the app version without prompting for anything', async () => {
+    const res = await reportDeviceState({ geofencePermission: 'always' })
+    expect(res.token).toBe('ExponentPushToken[abc]')
+    expect(Notifications.requestPermissionsAsync).not.toHaveBeenCalled()
+    expect(api).toHaveBeenCalledWith('/api/mobile/device-tokens', expect.objectContaining({
+      method: 'POST',
+      body: expect.objectContaining({
+        expo_push_token: 'ExponentPushToken[abc]',
+        app_version: '1.3.0',
+        geofence_permission: 'always',
+      }),
+    }))
+  })
+
+  it('omits geofence_permission when the caller has no value', async () => {
+    await reportDeviceState()
+    const body = api.mock.calls[0][1].body
+    expect(Object.keys(body)).not.toContain('geofence_permission')
+  })
+
+  it('skips on a paired studio device — never writes under the last PIN-unlocker', async () => {
+    state.pairing = { token: 'x'.repeat(32), label: 'Reception iPad' }
+    const res = await reportDeviceState({ geofencePermission: 'always' })
+    expect(res).toEqual({ skipped: true, reason: 'studio_device' })
+    expect(api).not.toHaveBeenCalled()
+  })
+
+  it('skips on simulators and when the token lookup throws, without throwing', async () => {
+    state.isDevice = false
+    expect((await reportDeviceState({ geofencePermission: 'denied' })).skipped).toBe(true)
+    state.isDevice = true
+    state.tokenThrows = true
+    expect((await reportDeviceState({ geofencePermission: 'denied' })).skipped).toBe(true)
+    expect(api).not.toHaveBeenCalled()
+  })
+
+  it('skips when the device returns an empty token', async () => {
+    state.token = null
+    expect((await reportDeviceState({ geofencePermission: 'always' })).skipped).toBe(true)
+    expect(api).not.toHaveBeenCalled()
   })
 })
 
