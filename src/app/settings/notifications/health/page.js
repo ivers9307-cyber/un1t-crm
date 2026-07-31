@@ -11,12 +11,15 @@
 //       or the user is fully web-only)
 //
 // "Send test push" button per ≥1-token user posts to
-// /api/admin/push/test which fires a category='test' push via the
-// shared push.js — respects each user's push_notifications master
-// switch but skips per-category notify_* gating (category 'test'
-// isn't registered, so the m[notify_test] === false check fails
-// open). Same delivery path as real notifications so it's a true
-// end-to-end test.
+// /api/admin/push/test, which fires a CATEGORYLESS push via the shared
+// push.js — respects each user's push_notifications master switch and
+// the OS device permission, and skips per-category notify_* gating by
+// not having a category at all. It used to send category='test' on the
+// belief that an unregistered key "fails open"; it fails CLOSED
+// (resolvePermission's last tier is `defaults[role][key] === true`), so
+// the button silently suppressed itself for every non-master — see
+// PUSH-TEST.1 and the route's header. Same delivery path as real
+// notifications, so it's still a true end-to-end test.
 //
 // Auth: master or owner. /settings/notifications already gates on
 // hasPermission(user, 'settings') — same gate inherited here.

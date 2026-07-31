@@ -2,9 +2,14 @@
 
 // NOTIF.4 — admin test-push button.
 //
-// Fires a category='test' push at a specific user via /api/admin/push/test.
+// Fires a categoryless push at a specific user via /api/admin/push/test.
 // Surfaces the response inline (n sent / n invalidated). Useful for
 // verifying end-to-end delivery without waiting for a real reminder.
+//
+// "0 sent · n blocked" here means the recipient's master
+// push_notifications switch is off — not a device problem. It used to
+// also mean "the diagnostic suppressed itself"; see the route's header
+// for why there is no category (PUSH-TEST.1).
 
 import { useState } from 'react'
 import { Send, Check, AlertTriangle, Loader2 } from 'lucide-react'
