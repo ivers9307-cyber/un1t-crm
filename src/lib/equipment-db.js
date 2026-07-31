@@ -118,3 +118,87 @@ export async function updateEquipment(db, id, patch) {
   if (error) throw error
   return data
 }
+
+// ---- inspections ---------------------------------------------------
+
+const INSPECTION_COLUMNS =
+  'id, location_id, equipment_id, type_id, inspector_id, due_on, items, results, ' +
+  'status, submitted_at, issue_id, created_at, updated_at'
+
+/** The draft for this asset's CURRENT cycle, if one exists. */
+export async function getDraftFor(db, { equipmentId, dueOn }) {
+  const { data, error } = await db
+    .from('equipment_inspections')
+    .select(INSPECTION_COLUMNS)
+    .eq('equipment_id', equipmentId)
+    .eq('due_on', dueOn)
+    .maybeSingle()
+  if (error) throw error
+  return data || null
+}
+
+export async function getInspection(db, id) {
+  const { data, error } = await db
+    .from('equipment_inspections')
+    .select(`${INSPECTION_COLUMNS}, equipment!equipment_id ( id, name, location_id, status, next_due_on ), equipment_types!type_id ( id, name, interval_weeks )`)
+    .eq('id', id)
+    .maybeSingle()
+  if (error) throw error
+  return data || null
+}
+
+export async function insertDraft(db, row) {
+  const { data, error } = await db
+    .from('equipment_inspections')
+    .insert(row)
+    .select(INSPECTION_COLUMNS)
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function updateInspection(db, id, patch) {
+  const { data, error } = await db
+    .from('equipment_inspections')
+    .update(patch)
+    .eq('id', id)
+    .select(INSPECTION_COLUMNS)
+    .single()
+  if (error) throw error
+  return data
+}
+
+/**
+ * Assets due for inspection at a location as of `today`.
+ * Mirrors isDue(): in-service only, next_due_on <= today. The
+ * equipment_due_idx predicate (status <> 'retired') is deliberately
+ * wider — index for cheapness, isDue() for truth — so we filter
+ * status here rather than relying on the index shape.
+ *
+ * Row-count note: 30-80 assets per studio, well under the 1000-row
+ * PostgREST cap, so this does not paginate.
+ */
+export async function listDueEquipment(db, locationId, today) {
+  const { data, error } = await db
+    .from('equipment')
+    .select(`${EQUIPMENT_COLUMNS}, equipment_types!type_id ( id, name, interval_weeks, items )`)
+    .eq('location_id', locationId)
+    .eq('status', 'in_service')
+    .lte('next_due_on', today)
+    .order('next_due_on', { ascending: true })
+    .order('name', { ascending: true })
+  if (error) throw error
+  return data || []
+}
+
+/** Assets currently off the floor — shown in their own section. */
+export async function listOutOfServiceEquipment(db, locationId) {
+  const { data, error } = await db
+    .from('equipment')
+    .select(`${EQUIPMENT_COLUMNS}, equipment_types!type_id ( id, name )`)
+    .eq('location_id', locationId)
+    .eq('status', 'out_of_service')
+    .order('name', { ascending: true })
+  if (error) throw error
+  return data || []
+}
