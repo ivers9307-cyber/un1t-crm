@@ -249,6 +249,23 @@ describe('insertIssueWithAttachments', () => {
     expect(out.code).toBe('issue_insert_failed')
     expect(out.error).toBe('FK violation')
   })
+
+  it('sets equipment_id when the issue came from a failed inspection', async () => {
+    const { db, trackers } = makeDb()
+    await insertIssueWithAttachments(db, {
+      locationId: 'loc-1', submitterId: 'prof-1', description: 'Treadmill 3 failed inspection',
+      equipmentId: 'eq-1',
+    })
+    expect(trackers.inserts[0].rows).toEqual(expect.objectContaining({ equipment_id: 'eq-1' }))
+  })
+
+  it('omits equipment_id entirely for an ordinary staff-reported issue', async () => {
+    const { db, trackers } = makeDb()
+    await insertIssueWithAttachments(db, {
+      locationId: 'loc-1', submitterId: 'prof-1', description: 'Bathroom light out',
+    })
+    expect(trackers.inserts[0].rows).not.toHaveProperty('equipment_id')
+  })
 })
 
 // ----------------------------------------------------------------
@@ -305,11 +322,11 @@ function makeHandlerDb({
   countResult = { count: 0, error: null },
   updateSingleResult = { data: null, error: null },
 } = {}) {
-  const trackers = { updates: [], inSets: [], eqs: [] }
+  const trackers = { updates: [], inSets: [], eqs: [], selects: [] }
   const db = {}
   db.from = vi.fn(() => {
     const chain = {}
-    chain.select = vi.fn(() => chain)
+    chain.select = vi.fn((cols) => { trackers.selects.push(cols); return chain })
     chain.eq = vi.fn((col, val) => { trackers.eqs.push([col, val]); return chain })
     chain.in = vi.fn((col, vals) => { trackers.inSets.push([col, vals]); return chain })
     chain.order = vi.fn(() => chain)
@@ -401,6 +418,18 @@ describe('getInboxIssue', () => {
     const row = { id: 'iss' }
     const { db } = makeHandlerDb({ selectSingleResult: { data: row, error: null } })
     expect(await getInboxIssue(db, 'iss')).toEqual(row)
+  })
+
+  // EQUIP-MAINT.2 — a CONFIRMED gap: the return-to-service hook on
+  // issue resolve reads existing.equipment_id off this select. If a
+  // future tidy-up of the column string drops it, existing.equipment_id
+  // silently reads as undefined and the hook never fires — no error
+  // anywhere, the asset just never comes back on the floor. Guard the
+  // column list itself so that regression can't sneak back in.
+  it('selects equipment_id so the return-to-service hook has something to read', async () => {
+    const { db, trackers } = makeHandlerDb({ selectSingleResult: { data: { id: 'iss' }, error: null } })
+    await getInboxIssue(db, 'iss')
+    expect(trackers.selects.some((cols) => /\bequipment_id\b/.test(cols))).toBe(true)
   })
 })
 
