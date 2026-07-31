@@ -115,6 +115,14 @@ const nextConfig = {
     return [
       { source: '/churn-radar', destination: '/dashboard/churn-radar', permanent: false },
       { source: '/lead-radar',  destination: '/dashboard/lead-radar',  permanent: false },
+      // Pride Training Club: the Aug 2 link is out in the wild (socials,
+      // old posts) and should land people on the next date. 307 on purpose
+      // — the Aug 2 event still exists and is still published, so this is
+      // a re-pointable alias, NOT a permanent move a browser should cache
+      // forever. QUICK FIX (Richard, 2026-07-31): hardcoded because it was
+      // needed immediately. The durable version is a re-pointable alias on
+      // the event row so an operator can do this without a deploy.
+      { source: '/event/pride-training-club-aug2', destination: '/event/pride-training-club-sep20', permanent: false },
     ]
   },
 
