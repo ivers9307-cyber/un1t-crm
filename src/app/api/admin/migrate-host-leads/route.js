@@ -3,10 +3,15 @@
 // HOST-MASTER.7 — one-off relocation of pre-HOST-MASTER host leads. Contacts
 // created by host signups/registrations before HOST-MASTER live at the host's
 // hidden `is_host_anchor` location, invisible to the operator's normal
-// location-scoped views. This walks every anchor location and moves its
+// location-scoped views. This walks every anchor location and MOVES its
 // contacts to the owning org's master location (`organizations.master_location_id`,
-// mig 464): merged into the existing master contact when the email matches,
-// otherwise plain-moved and stamped `automations_exempt = true`.
+// mig 464), stamping `automations_exempt = true`.
+//
+// It never deletes and never merges anything. When an anchor contact's email
+// collides with an existing master contact it is left exactly where it is and
+// reported in `needs_manual_merge` for a human to resolve via the existing
+// POST /api/contacts/merge route — a cross-location merge needs the full
+// child-table re-point that route already implements.
 //
 // Idempotent — a relocated contact is no longer at an anchor location, so
 // re-running is always safe and finds nothing to do.

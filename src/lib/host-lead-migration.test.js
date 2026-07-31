@@ -5,9 +5,9 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.f
 
 describe('planHostLeadMigration', () => {
   const master = new Map([['ada@x.com', { id: 'm1' }]])
-  it('plans a merge for an email match (case-insensitive)', () => {
+  it('flags an email match for manual merge (case-insensitive)', () => {
     expect(planHostLeadMigration([{ id: 'a1', email: 'Ada@X.com' }], master))
-      .toEqual([{ action: 'merge', from: 'a1', into: 'm1' }])
+      .toEqual([{ action: 'needs_manual_merge', from: 'a1', into: 'm1' }])
   })
   it('plans a move for no match', () => {
     expect(planHostLeadMigration([{ id: 'a2', email: 'new@x.com' }], master))
@@ -80,13 +80,11 @@ describe('runHostLeadMigration', () => {
     expect(db.writes).toEqual([])
     expect(summary.dry_run).toBe(true)
     expect(summary.planned).toBe(2)
-    expect(summary.merged).toBe(1)
     expect(summary.moved).toBe(1)
+    expect(summary.needs_manual_merge).toEqual([{ anchor_id: 'a1', master_id: 'm1' }])
+    expect(summary.needs_manual_merge_truncated).toBeUndefined()
     expect(summary.errors).toEqual([])
-    expect(summary.sample).toEqual([
-      { action: 'merge', from: 'a1', into: 'm1' },
-      { action: 'move', id: 'a2' },
-    ])
+    expect(summary).not.toHaveProperty('merged')
   })
 
   it('a move issues exactly one contacts update with location_id + automations_exempt', async () => {
@@ -109,57 +107,23 @@ describe('runHostLeadMigration', () => {
     ])
   })
 
-  it('a merge re-points children, drops the anchor preferences, and deletes the anchor contact LAST', async () => {
+  // The whole point of HOST-MASTER.7b: an email collision is a REPORT, not an
+  // operation. No update, no delete, not even with writes armed.
+  it('an email collision performs ZERO writes even with dryRun=false', async () => {
     const db = makeDb({
       ...BASE,
       contacts: [
-        { id: 'a1', email: 'Ada@X.com', tags: ['host:acme'], location_id: 'anchor-1' },
-        { id: 'm1', email: 'ada@x.com', tags: ['member'], location_id: 'master-1' },
+        { id: 'a1', email: 'Ada@X.com', location_id: 'anchor-1' },
+        { id: 'm1', email: 'ada@x.com', location_id: 'master-1' },
       ],
     })
 
     const summary = await runHostLeadMigration(db, { dryRun: false })
 
-    expect(summary.merged).toBe(1)
+    expect(db.writes).toEqual([])
+    expect(summary.planned).toBe(1)
+    expect(summary.moved).toBe(0)
+    expect(summary.needs_manual_merge).toEqual([{ anchor_id: 'a1', master_id: 'm1' }])
     expect(summary.errors).toEqual([])
-
-    // Children re-pointed onto the master, never redacted.
-    expect(db.writes).toContainEqual({
-      op: 'update',
-      table: 'whatsapp_conversations',
-      payload: { contact_id: 'm1' },
-      filters: [['eq', 'contact_id', 'a1']],
-    })
-    expect(db.writes).toContainEqual({
-      op: 'update',
-      table: 'host_contacts',
-      payload: { contact_id: 'm1' },
-      filters: [['eq', 'contact_id', 'a1']],
-    })
-
-    // Master consent wins: the anchor's preferences are deleted, not re-pointed.
-    expect(db.writes).toContainEqual({
-      op: 'delete',
-      table: 'contact_preferences',
-      payload: null,
-      filters: [['eq', 'contact_id', 'a1']],
-    })
-    expect(db.writes.some((w) => w.table === 'contact_preferences' && w.op === 'update')).toBe(false)
-
-    // The master keeps its own automations_exempt flag — a merge never sets it.
-    const masterUpdates = db.writes.filter(
-      (w) => w.table === 'contacts' && w.op === 'update' && w.filters[0][2] === 'm1'
-    )
-    expect(masterUpdates).toEqual([
-      { op: 'update', table: 'contacts', payload: { tags: ['member', 'host:acme'] }, filters: [['eq', 'id', 'm1']] },
-    ])
-
-    // Ordering is load-bearing: the CASCADE must find nothing left to destroy.
-    expect(db.writes[db.writes.length - 1]).toEqual({
-      op: 'delete',
-      table: 'contacts',
-      payload: null,
-      filters: [['eq', 'id', 'a1']],
-    })
   })
 })
