@@ -1,6 +1,6 @@
 # Draft policy clauses — automatic attendance detection
 
-**Status: DRAFT for Richard + solicitor review. NOT published.**
+**Status: PUBLISHED 2026-07-31.** Employee Handbook v3 (§2.5-2.8) and Staff Privacy Notice v3 (§10, plus §2.5 category and §6 retention row) are live in the CRM. Retention set to **3 years** per Richard, matching the Organisation of Working Time Act 1997. This file is kept as the drafting record and the open-questions list for the solicitor.
 Prepared 2026-07-31 alongside GEO-ATT going live at Stillorgan (100 m radius).
 
 Both live documents are versioned in the CRM (`policies` → `policy_versions`), so publishing these means cutting a **new version**, which flags every staff member with an unread policy. That is Richard's call, not an automated one. The existing documents are also still marked as needing solicitor sign-off — this text should go into that same review.
@@ -37,7 +37,7 @@ Both live documents are versioned in the CRM (`policies` → `policy_versions`),
 >
 > **10.4** Lawful basis: our legitimate interests (Article 6(1)(f) GDPR) in accurately recording working time, administering payroll, and managing rosters. We have assessed that this is proportionate because detection is limited to arrival at the workplace, is no more intrusive than a physical clock-in, and an exemption is available on request.
 >
-> **10.5** Retention: attendance events are retained for [X years] in line with our working-time record obligations under the Organisation of Working Time Act 1997. [Confirm the retention period with the solicitor — the Act requires 3 years.]
+> **10.5** Retention: 3 years (SETTLED — Richard, 2026-07-31), consistent with the Organisation of Working Time Act 1997. Applies to the arrival events and the shift records they inform.
 >
 > **10.6** Your rights: you may object to this processing. Tell your manager and you will be exempted, and your attendance will be recorded manually instead. You may also request a copy of your attendance records at any time (see §7).
 >
@@ -47,7 +47,7 @@ Both live documents are versioned in the CRM (`policies` → `policy_versions`),
 
 ## Open questions for the solicitor
 
-1. **Retention period** for attendance events (§10.5) — the Organisation of Working Time Act 1997 requires working-time records to be kept for 3 years; confirm that is the right figure here and that it applies to arrival events specifically.
+1. ~~Retention period~~ — SETTLED at 3 years (2026-07-31). Worth a sanity check that 3 years is right for the *detection events* specifically, as distinct from the shift records; we have applied it to both, which is the conservative reading.
 2. Whether a **standalone legitimate-interests assessment (LIA)** should be documented for §10.4, or whether the paragraph as drafted is sufficient.
 3. Whether the **exemption route** (§10.6 / handbook 2.x.4) should be a written request rather than a verbal one to a manager, for evidential purposes.
 4. Whether the handbook needs an explicit statement that attendance data **will not be used for disciplinary purposes without corroboration** — currently implied by 2.x.3 and §10.7 but not stated as a commitment.
