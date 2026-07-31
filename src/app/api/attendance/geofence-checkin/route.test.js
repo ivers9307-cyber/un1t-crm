@@ -187,6 +187,20 @@ describe('POST /api/attendance/geofence-checkin', () => {
     expect(body.transient).toBe(true)
   })
 
+  it('audit-insert 23505 (mig 465 unique index) → terminal duplicate, NOT transient', async () => {
+    // The concurrency backstop: a second OS fire in the same minute
+    // loses the insert race. The client must dequeue, so the response
+    // is success-shaped with no transient marker.
+    getCurrentUser.mockResolvedValue({ ...staff, locations: [{ id: 'a0000000-0000-0000-0000-000000000001' }] })
+    mockDb({ shiftRows: [], insertError: { code: '23505', message: 'duplicate key value violates unique constraint' } })
+    const res = await POST(postReq(validBody()))
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.data.match_outcome).toBe('duplicate')
+    expect(body.transient).toBeUndefined()
+  })
+
   it('impersonating master → impersonation_ignored, no DB touched, no audit row', async () => {
     // getCurrentUser resolves to the TARGET profile with impersonatingFrom
     // set to the real master (src/lib/auth.js mig 035 shape).
