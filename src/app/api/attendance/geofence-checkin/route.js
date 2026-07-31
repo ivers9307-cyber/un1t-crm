@@ -181,7 +181,16 @@ export async function POST(request) {
         clamped,
       },
     })
-  // Audit-insert failure is transient too (same 503 contract): the
+  // 23505 = the mig 465 partial unique index rejected a same-minute
+  // duplicate. That's the concurrency backstop for the SELECT→INSERT
+  // race in the dedup above (two OS fires ~40ms apart both cleared the
+  // 10-min check — observed live 2026-07-31). Terminal, NOT transient:
+  // the first request already logged and stamped, so the client must
+  // dequeue rather than retry forever.
+  if (insErr?.code === '23505') {
+    return NextResponse.json({ success: true, data: { match_outcome: 'duplicate' } })
+  }
+  // Any other audit-insert failure is transient (same 503 contract): the
   // retry is safe — the stamp (if any) already landed, so the replay
   // resolves as already_stamped, and dedup only keys on inserted rows.
   if (insErr) return NextResponse.json({ success: false, error: insErr.message, transient: true }, { status: 503 })
