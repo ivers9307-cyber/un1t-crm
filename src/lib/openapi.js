@@ -2164,6 +2164,48 @@ registry.registerPath({
   },
 })
 
+// Staff device visibility (STAFF-DEV, mig 466)
+registry.registerPath({
+  method: 'get',
+  path: '/api/staff-devices',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Staff app versions, devices and geofence permission',
+  description: 'Every active staff profile with their registered devices, the target app version derived from the non-stale fleet, and a per-person verdict (current | outdated | unknown_version | no_device). The verdict keys off each person\'s most recently seen device, never their best version. Requires the settings permission.',
+  responses: {
+    200: { description: 'Fleet payload — { target_version, staff[] }' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — settings permission required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/staff-devices/nudge',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Push an update reminder to staff on an outdated app build',
+  description: 'Sends an "App update available" push. Who is outdated is recomputed SERVER-SIDE from device_tokens and intersected with `profile_ids` — the caller cannot nominate a staff member who is up to date, and profiles with no device are skipped (nothing to push to). Throttled to one nudge per device per 24h via device_tokens.last_update_nudge_at (mig 466). Requires the settings permission.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            profile_ids: z.array(uuidLike).min(1).max(200),
+            message: z.string().min(1).max(200).optional(),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Counts — { sent, skipped_throttled, skipped_no_token }' },
+    400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — settings permission required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Org-admin grants (SAAS-4, mig 417)
 registry.registerPath({
   method: 'get',

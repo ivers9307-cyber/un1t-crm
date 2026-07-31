@@ -107,6 +107,10 @@ const TYPE_CHANNELS = Object.freeze({
   swap_decision: 'updates',
   // 'time_off' decision back to the requester is an FYI.
   time_off_decision: 'updates',
+  // STAFF-DEV.8 — the "your app is out of date" nudge. It rides NO
+  // category (an unregistered notify_ key resolves to false and would
+  // suppress the send), so the type is the only routing signal it has.
+  app_update: 'updates',
   // WA health/template webhooks ride category 'whatsapp' (for the
   // notify_whatsapp opt-in) but are ops alerts, not chat.
   wa_quality: 'alerts',

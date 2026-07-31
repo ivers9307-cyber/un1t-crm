@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   token: 'ExponentPushToken[abc]',
   tokenThrows: false,
   pairing: null,
+  impersonate: null,
 }))
 
 vi.mock('expo-device', () => ({
@@ -38,9 +39,13 @@ vi.mock('./api', () => ({ api: vi.fn(async () => ({ success: true })) }))
 vi.mock('./studio-device', () => ({
   getPairing: vi.fn(async () => state.pairing),
 }))
+vi.mock('./impersonate', () => ({
+  readImpersonate: vi.fn(async () => state.impersonate),
+}))
 
-import { registerForPushNotifications, unregisterCurrentDevicePush, unregisterPushNotifications } from './push-register'
+import { registerForPushNotifications, reportDeviceState, unregisterCurrentDevicePush, unregisterPushNotifications } from './push-register'
 import { api } from './api'
+import { readImpersonate } from './impersonate'
 import * as Notifications from 'expo-notifications'
 
 beforeEach(() => {
@@ -50,6 +55,7 @@ beforeEach(() => {
   state.token = 'ExponentPushToken[abc]'
   state.tokenThrows = false
   state.pairing = null
+  state.impersonate = null
 })
 
 describe('registerForPushNotifications — studio-device guard', () => {
@@ -69,6 +75,72 @@ describe('registerForPushNotifications — studio-device guard', () => {
       method: 'POST',
       body: expect.objectContaining({ expo_push_token: 'ExponentPushToken[abc]' }),
     }))
+  })
+})
+
+describe('reportDeviceState — STAFF-DEV.7 permission + version reporting', () => {
+  it('reports the permission and the app version without prompting for anything', async () => {
+    const res = await reportDeviceState({ geofencePermission: 'always' })
+    expect(res.token).toBe('ExponentPushToken[abc]')
+    expect(Notifications.requestPermissionsAsync).not.toHaveBeenCalled()
+    expect(api).toHaveBeenCalledWith('/api/mobile/device-tokens', expect.objectContaining({
+      method: 'POST',
+      body: expect.objectContaining({
+        expo_push_token: 'ExponentPushToken[abc]',
+        app_version: '1.3.0',
+        geofence_permission: 'always',
+      }),
+    }))
+  })
+
+  it('omits geofence_permission when the caller has no value', async () => {
+    await reportDeviceState()
+    const body = api.mock.calls[0][1].body
+    expect(Object.keys(body)).not.toContain('geofence_permission')
+  })
+
+  it('skips on a paired studio device — never writes under the last PIN-unlocker', async () => {
+    state.pairing = { token: 'x'.repeat(32), label: 'Reception iPad' }
+    const res = await reportDeviceState({ geofencePermission: 'always' })
+    expect(res).toEqual({ skipped: true, reason: 'studio_device' })
+    expect(api).not.toHaveBeenCalled()
+  })
+
+  it('skips mid-impersonation — the upsert would re-point the token to the target', async () => {
+    // The row's conflict target is expo_push_token, and api() attaches
+    // x-impersonate-target straight from SecureStore, so a report sent
+    // while viewing-as would move THIS phone's row onto the target's
+    // user_id: the master would start receiving the target's WhatsApp
+    // and lead pushes (customer PII) and stop receiving their own.
+    // SecureStore is read directly because the caller's React state is
+    // still null during the cold-start window this runs in.
+    state.impersonate = { targetId: 'target-uuid', startedAt: new Date().toISOString() }
+    const res = await reportDeviceState({ geofencePermission: 'always' })
+    expect(res).toEqual({ skipped: true, reason: 'impersonating' })
+    expect(Notifications.getExpoPushTokenAsync).not.toHaveBeenCalled()
+    expect(api).not.toHaveBeenCalled()
+  })
+
+  it('reports normally when the impersonation blob is unreadable', async () => {
+    readImpersonate.mockRejectedValueOnce(new Error('SecureStore unavailable'))
+    const res = await reportDeviceState({ geofencePermission: 'always' })
+    expect(res.token).toBe('ExponentPushToken[abc]')
+    expect(api).toHaveBeenCalled()
+  })
+
+  it('skips on simulators and when the token lookup throws, without throwing', async () => {
+    state.isDevice = false
+    expect((await reportDeviceState({ geofencePermission: 'denied' })).skipped).toBe(true)
+    state.isDevice = true
+    state.tokenThrows = true
+    expect((await reportDeviceState({ geofencePermission: 'denied' })).skipped).toBe(true)
+    expect(api).not.toHaveBeenCalled()
+  })
+
+  it('skips when the device returns an empty token', async () => {
+    state.token = null
+    expect((await reportDeviceState({ geofencePermission: 'always' })).skipped).toBe(true)
+    expect(api).not.toHaveBeenCalled()
   })
 })
 

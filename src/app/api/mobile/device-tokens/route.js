@@ -31,7 +31,20 @@ const RegisterSchema = z.object({
   ),
   platform: z.enum(['ios', 'android', 'web']).default('ios'),
   device_name: z.string().max(120).optional(),
-  app_version: z.string().max(40).optional(),
+  // Shape-checked, not just length-capped: `app_version` is client-reported
+  // and the highest value in the fleet becomes the target version every
+  // other staff member is judged against on /api/staff-devices (STAFF-DEV).
+  // An unbounded number here would mark the whole estate outdated. Mirrors
+  // parseVersion() in src/lib/staff-devices.js — max 4 digits per segment.
+  app_version: z.string().max(40).regex(
+    /^v?\d{1,4}(\.\d{1,4}){0,2}([-+][\w.]+)?$/,
+    'Must look like a version, e.g. 2.2.0'
+  ).optional(),
+  // STAFF-DEV.7 — what the OS reports for BACKGROUND location on this
+  // device. Optional: clients below 2.2.0 never send it, and their
+  // silence must not be read as a denial (see the upsert note below).
+  // Values mirror the mig 466 CHECK constraint.
+  geofence_permission: z.enum(['always', 'when_in_use', 'denied', 'undetermined']).optional(),
 })
 
 export async function POST(request) {
@@ -49,6 +62,15 @@ export async function POST(request) {
   // Upsert by token — re-registers from the same device update the row
   // rather than creating a duplicate. We also re-point user_id in case a
   // shared kiosk-style device is now logged in as a different staffer.
+  //
+  // STAFF-DEV.7 — geofence_permission is spread in ONLY when the client
+  // actually sent one. An UPSERT writes the whole row, so an omitted key
+  // overwrites the stored value with null (that is exactly why
+  // device_name / app_version go null for old clients). Reporting is a
+  // 2.2.0-era behaviour, so a staff member on an older build re-opening
+  // the app would otherwise wipe a permission we had already learned —
+  // and "never reported" renders identically to "no data", making the
+  // whole diagnostic useless. Absence of data is not a denial.
   const { data, error } = await db
     .from('device_tokens')
     .upsert(
@@ -59,6 +81,12 @@ export async function POST(request) {
         device_name: body.device_name,
         app_version: body.app_version,
         last_seen_at: new Date().toISOString(),
+        ...(body.geofence_permission
+          ? {
+            geofence_permission: body.geofence_permission,
+            geofence_permission_at: new Date().toISOString(),
+          }
+          : {}),
       },
       { onConflict: 'expo_push_token' }
     )
