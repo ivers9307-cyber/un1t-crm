@@ -256,7 +256,7 @@ export const ISSUE_INBOX_OPEN_STATUSES = Object.freeze([
 ])
 
 const HANDLER_SELECT_COLUMNS = `
-  id, location_id, submitter_id, description, status,
+  id, location_id, submitter_id, description, status, equipment_id,
   created_at, claimed_at, resolved_at, closed_at,
   claimed_by, resolved_by, resolution_notes,
   locations:location_id ( id, name ),
