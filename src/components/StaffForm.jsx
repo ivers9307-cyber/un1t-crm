@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { ArrowLeft, Plus, Trash2, Crown, KeyRound, AlertCircle, Loader2, UserX, UserCheck, Skull, ShieldAlert, Building2 } from 'lucide-react'
 import PasswordOverrideModal from './PasswordOverrideModal'
 import TestPushButton from './settings/TestPushButton'
+import StaffDevicesCard from './settings/StaffDevicesCard'
 import LeadTimeOverrideRow from './settings/LeadTimeOverrideRow'
 import MobileBarPlanner from './MobileBarPlanner'
 import AcDeviceAllowlistPicker from './AcDeviceAllowlistPicker'
@@ -1143,6 +1144,11 @@ export default function StaffForm({
         )}
       </div>
       )}
+
+      {/* STAFF-DEV.6 — which devices this person actually has, what
+          version they run and whether background location is granted.
+          Edit-only: a profile that doesn't exist yet has no devices. */}
+      {isEdit && staff?.id && <StaffDevicesCard profileId={staff.id} />}
 
       <button
         type="submit"
