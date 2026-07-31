@@ -89,3 +89,49 @@ export function rollForward({ dueOn, intervalWeeks, today }) {
   while (next < today) next = addDays(next, step)
   return next
 }
+
+// ---- checklist item validation ------------------------------------
+
+/**
+ * Validate a checklist item array against the shape stored in
+ * equipment_types.items — [{ id, label, order }], the same shape
+ * checklist_templates.items uses.
+ *
+ * `order` is always renumbered from the array index, so the array
+ * order the operator dragged into is the order of record and a stale
+ * client-side `order` value can never desync the list.
+ *
+ * @returns {{ ok: true, items: Array }|{ ok: false, error: string }}
+ */
+export function validateItems(raw) {
+  if (!Array.isArray(raw)) {
+    return { ok: false, error: 'Checklist items must be a list.' }
+  }
+  if (raw.length === 0) {
+    return { ok: false, error: 'Add at least one checklist item.' }
+  }
+  if (raw.length > MAX_ITEMS_PER_TYPE) {
+    return { ok: false, error: `A checklist can hold at most ${MAX_ITEMS_PER_TYPE} items.` }
+  }
+
+  const seen = new Set()
+  const items = []
+
+  for (let i = 0; i < raw.length; i++) {
+    const row = raw[i]
+    const id = typeof row?.id === 'string' ? row.id.trim() : ''
+    if (!id) return { ok: false, error: `Item ${i + 1} is missing an id.` }
+    if (seen.has(id)) return { ok: false, error: `Duplicate item id: ${id}.` }
+    seen.add(id)
+
+    const label = typeof row?.label === 'string' ? row.label.trim() : ''
+    if (!label) return { ok: false, error: `Item ${i + 1} needs a label.` }
+    if (label.length > ITEM_LABEL_MAX) {
+      return { ok: false, error: `Item ${i + 1} label is over ${ITEM_LABEL_MAX} characters.` }
+    }
+
+    items.push({ id, label, order: i })
+  }
+
+  return { ok: true, items }
+}

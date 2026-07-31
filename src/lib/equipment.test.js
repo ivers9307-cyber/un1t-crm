@@ -93,3 +93,70 @@ describe('rollForward', () => {
     expect(dowOf(next)).toBe(dowOf('2026-08-04'))
   })
 })
+
+import { validateItems, MAX_ITEMS_PER_TYPE, ITEM_LABEL_MAX } from './equipment.js'
+
+describe('validateItems', () => {
+  const ok = [
+    { id: 'a1', label: 'Check belt wear', order: 0 },
+    { id: 'b2', label: 'Emergency stop works', order: 1 },
+  ]
+
+  it('accepts a well-formed list and renumbers order from the array index', () => {
+    const res = validateItems([
+      { id: 'a1', label: 'Check belt wear', order: 9 },
+      { id: 'b2', label: 'Emergency stop works', order: 4 },
+    ])
+    expect(res.ok).toBe(true)
+    expect(res.items).toEqual(ok)
+  })
+
+  it('trims labels and ids', () => {
+    const res = validateItems([{ id: '  a1  ', label: '  Check belt  ' }])
+    expect(res.ok).toBe(true)
+    expect(res.items[0]).toEqual({ id: 'a1', label: 'Check belt', order: 0 })
+  })
+
+  it('rejects a non-array', () => {
+    expect(validateItems('nope').ok).toBe(false)
+    expect(validateItems(null).ok).toBe(false)
+  })
+
+  it('rejects an empty list', () => {
+    const res = validateItems([])
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/at least one/i)
+  })
+
+  it('rejects more than MAX_ITEMS_PER_TYPE items', () => {
+    const many = Array.from({ length: MAX_ITEMS_PER_TYPE + 1 }, (_, i) => ({
+      id: `i${i}`, label: `item ${i}`,
+    }))
+    expect(validateItems(many).ok).toBe(false)
+  })
+
+  it('rejects a missing id', () => {
+    const res = validateItems([{ label: 'no id' }])
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/id/i)
+  })
+
+  it('rejects duplicate ids', () => {
+    const res = validateItems([
+      { id: 'same', label: 'one' },
+      { id: 'same', label: 'two' },
+    ])
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/duplicate/i)
+  })
+
+  it('rejects a blank label', () => {
+    expect(validateItems([{ id: 'a', label: '   ' }]).ok).toBe(false)
+  })
+
+  it('rejects an over-long label', () => {
+    const res = validateItems([{ id: 'a', label: 'x'.repeat(ITEM_LABEL_MAX + 1) }])
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(new RegExp(String(ITEM_LABEL_MAX)))
+  })
+})
