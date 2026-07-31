@@ -361,96 +361,42 @@ fix: switch to a different DDNS provider that respects the
 existing record state, or pre-create the record with proxied=false
 and confirm UniFi's update doesn't change it on the next push.
 
-## Webhook → CRM (zero-touch attendance, mig 120)
+## Linking staff to UniFi users (door provisioning)
 
-The CRM receives door-unlock events from UniFi Access at
-`POST https://crm.un1tdublin.com/api/webhooks/unifi-access`. Each
-event is logged to `staff_attendance_events` and, if it can be
-matched to a scheduled shift in the next/previous 4h, the arrival
-time is auto-stamped onto `shift_assignments.start_time_override`.
-That stamp drives the on-time / late / no-show buckets shown at
-`/schedule/attendance` (owner / manager / master only).
+`profile_locations.unifi_user_id` is the per-location link between a
+CRM staff profile and the UniFi Access user whose credentials open the
+doors. **It is load-bearing for door access**: provisioning grants and
+offboarding revocations are issued against this id, so an unlinked or
+mislinked profile means access is granted — or, worse, *not* revoked —
+against the wrong UniFi account.
 
-### One-time setup per location
+There are two ways the link gets set:
 
-1. **Generate a webhook token.** A long random string is fine —
-   anything ≥ 32 chars. We use one shared token across all
-   locations because the receiver fingerprints which location an
-   event belongs to from the controller_id in the payload (and
-   falls back to "single configured location" when there's only
-   one studio with UniFi Access).
+- **Auto** — flipping the per-location Door Access toggle in StaffForm
+  runs `findOrCreateUnifiUser(cfg, profile)`, which finds the UniFi user
+  by email or creates one. Works only when the staff member's UniFi
+  email matches their CRM email.
+- **Manual picker** (the fallback, and the common case) — owner /
+  manager / master picks the right UniFi user from a per-location
+  dropdown on the staff edit page. Cards are often registered under a
+  personal rather than a work email, so auto-discovery misses. The
+  sub-component is `UnifiUserPicker` in `src/components/StaffForm.jsx`,
+  backed by `GET /api/locations/[id]/unifi-users`.
 
-2. **Set the env var on Vercel.**
-   - `UNIFI_ACCESS_WEBHOOK_TOKEN` → the token from step 1
-   - During rotation: `UNIFI_ACCESS_WEBHOOK_TOKEN_PREVIOUS` → the
-     previous token. Both are accepted while you flip every
-     controller's webhook config.
+Which doors a linked user can remote-unlock from the mobile Studio
+Management screen is a separate allowlist — `unifi_door_ids` (mig 182),
+edited via `DoorAllowlistPicker` and backed by
+`GET /api/locations/[id]/unifi-doors`.
 
-3. **Configure the webhook in UniFi Access** (per location):
-   - Settings → System → Webhooks → Add
-   - URL: `https://crm.un1tdublin.com/api/webhooks/unifi-access`
-   - Events: tick **Door access (success)** only — we ignore
-     denials, lock-rule changes, user-create events, etc.
-   - Custom header: `X-Webhook-Token: <your-token>`
-
-4. **Smoke test.** Tap your card at any door. Within ~2s the
-   `staff_attendance_events` table gets a row. If you're scheduled
-   on a shift starting within 4h, the stamp also lands on
-   `shift_assignments.start_time_override`. Operators check
-   `/schedule/attendance` to see live results.
-
-### Diagnostic: what does each `match_outcome` mean?
-
-The audit table `staff_attendance_events.match_outcome` tells you
-why a webhook didn't end up stamping a shift:
-
-| `match_outcome`         | Meaning |
-| ----------------------- | ------- |
-| `matched`               | Stamped successfully — see `matched_assignment_id` |
-| `no_shift_in_window`    | Staff identified, but no shift starting within ±4h at this location |
-| `already_stamped`       | Found a candidate shift but a parallel webhook beat us to it |
-| `unknown_user`          | The `actor.user_id` from the payload doesn't match any `profile_locations.unifi_user_id` — the door was unlocked by a member NFC card, a deactivated staff card, or a never-synced staff record |
-| `wrong_location`        | The staff member is registered in a different studio's UniFi instance — somehow they tapped at this controller |
-
-For "I expected to be auto-stamped but wasn't", check this column
-to know which knob to turn (sync staff, fix wave window, regenerate
-token, etc).
-
-### Webhook alarm payload — actual shape (firmware ~v3.x)
-
-Discovered live 2026-05-09 by capturing real UniFi POSTs. **Don't trust generic docs** — UniFi sends an alarm envelope, not a flat single event:
-
-```json
-{
-  "alarm_id": "019e0da5-d0f3-7ec3-81c8-827431b33ecc",
-  "events": [{
-    "id": "access.entry.granted" | "access.unlocks.location_unlocked" | ...,
-    "user": "<uuid>",                  // actor — links to profile_locations.unifi_user_id
-    "device": "<uuid>" | "",           // door (empty for remote unlocks)
-    "location": "<uuid>",              // UniFi internal id (NOT our locations.id)
-    "scope": { "locations": "<uuid>" },
-    "time": "<iso>" | "",              // empty for remote unlocks
-    "unlock_method_text": "NFC" | "Remote Unlock" | "PIN" | "REX" | ...
-  }],
-  "data": { "custom_content": "" }
-}
-```
-
-Critical findings:
-
-1. **`alarm_id` is reused across every fire** of the same alarm rule. Naive dedup keyed on `alarm_id:index` silently drops every fire after the first. Receiver mixes a 60-second receipt-time bucket into the dedup key.
-2. **Iterate `events[]`** — one alarm can carry multiple events.
-3. **Event type lives at `events[i].id`**, not top-level. Examples seen: `access.unlocks.location_unlocked` (remote app unlock), `access.entry.granted` (real card tap, expected — not yet verified live).
-4. **`unlock_method_text === "Remote Unlock"`** identifies operator app-unlocks. The actor in the payload is the operator, not the person walking through. The receiver records audit rows for these but never stamps a shift.
-5. **`event.time` is often empty.** Falls back to webhook receipt time at the receiver.
-6. **`event.location` is UniFi's internal location UUID, not our `locations.id`**. Single-UniFi-location deploys (today) just pick the only location with UniFi configured. Multi-location will need a `controller_id` mapping column on `locations`.
-
-### Linking staff to UniFi users via the staff edit page
-
-Without a `profile_locations.unifi_user_id` link per location, every webhook lands as `match_outcome='unknown_user'` and shifts never auto-stamp. There are two paths:
-
-- **Auto** — flipping the per-location Door Access toggle in StaffForm runs `findOrCreateUnifiUser(cfg, profile)`, which finds the UniFi user by email or creates one. Works only when emails match.
-- **Manual picker** (recommended for existing UniFi users with mismatched emails) — owner / manager / master picks the right UniFi user from a dropdown per location. Lives inside each per-location card on the staff edit page; sub-component is `UnifiUserPicker` in `src/components/StaffForm.jsx`. Backed by `GET /api/locations/[id]/unifi-users`.
+> **Historical note.** Until 2026-07-31 this doc also covered a
+> `POST /api/webhooks/unifi-access` receiver that turned door taps into
+> automatic shift stamps (mig 120), plus a UniFi Protect face-match
+> equivalent. Both were removed: across 157 received Access events not
+> one ever matched a staff member to a shift, and the Protect side was
+> never wired up. Staff attendance is now geofence-only — see
+> `docs/staff-attendance.md`. Door access control itself is an
+> **outbound** API integration (`src/lib/unifi-access.js`) and never
+> depended on those inbound webhooks.
 
 ### Updated rollout checklist
 

@@ -36,7 +36,7 @@
  * updating this single shape.
  *
  * @param {object} pl  profile_locations row
- * @returns {{ location_id, role, is_default, unifi_door_access, unifi_user_id, unifi_door_ids, protect_face_id, geofence_exempt, permissions }}
+ * @returns {{ location_id, role, is_default, unifi_door_access, unifi_user_id, unifi_door_ids, geofence_exempt, permissions }}
  */
 export function mapProfileLocationToAssignment(pl) {
   if (!pl) return null
@@ -46,7 +46,9 @@ export function mapProfileLocationToAssignment(pl) {
     is_default: !!pl.is_default,
     unifi_door_access: !!pl.unifi_door_access,
     // Surfaced so the staff edit UniFi user picker (mig 120) can show
-    // which UniFi user is currently linked. Empty/null = unlinked.
+    // which UniFi user is currently linked — that link is what door
+    // provisioning and offboarding revocation target. Empty/null =
+    // unlinked.
     unifi_user_id: pl.unifi_user_id || null,
     // UNIFI-DOORS-SCOPE (mig 182) — per-location door allowlist.
     // Hydrated as an array so the form's multi-select renders the
@@ -63,9 +65,6 @@ export function mapProfileLocationToAssignment(pl) {
     // after the mig 210 backfill; a populated array means exactly
     // those devices.
     ac_device_ids: Array.isArray(pl.ac_device_ids) ? pl.ac_device_ids : (pl.ac_device_ids ?? null),
-    // P2.4 — Protect face link (mig 142). Surfaced here so the
-    // ProtectFacePicker can pre-select the current value.
-    protect_face_id: pl.protect_face_id || null,
     // GEO-ATT (mig 463) — mobile geofence attendance opt-out. Seeded
     // so the StaffForm toggle renders the stored state and the PUT
     // round-trips it (the form always sends the key).

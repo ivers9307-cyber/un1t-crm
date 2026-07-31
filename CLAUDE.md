@@ -148,7 +148,7 @@ Full set in [`docs/architecture/REFERENCE.md`](docs/architecture/REFERENCE.md); 
 | [`docs/BACKLOG.md`](docs/BACKLOG.md) | Durable do-not-build decisions + design-doc pointers |
 | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | What shipped (numbered Done log) — add an entry per task |
 
-Feature deep-dives also in `docs/`: `roster-v2.md`, `events.md`, `staff-attendance.md`, `invoices-queue-plan.md`, `whatsapp-setup.md`, `unifi-access-setup.md`/`unifi-protect-setup.md`, `EMAIL_DELIVERABILITY.md`, `PLATFORM_ROADMAP.md`, and the dated design docs (`*_DESIGN.md`, `*_2026-06.md`).
+Feature deep-dives also in `docs/`: `roster-v2.md`, `events.md`, `staff-attendance.md`, `invoices-queue-plan.md`, `whatsapp-setup.md`, `unifi-access-setup.md`, `EMAIL_DELIVERABILITY.md`, `PLATFORM_ROADMAP.md`, and the dated design docs (`*_DESIGN.md`, `*_2026-06.md`).
 
 ## API reference
 

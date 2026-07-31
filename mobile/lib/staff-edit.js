@@ -11,9 +11,8 @@ import { hydratePermissions } from 'shared/permissions'
 // permissions or physical door access. This builder always echoes back
 // each emitted assignment's permissions + unifi_door_access + is_default
 // (changing only role and/or permissions where edited), and OMITS
-// unifi_user_id / unifi_door_ids / ac_device_ids / protect_face_id so the
-// server leaves those DB values unchanged (their hasOwnProperty-omit
-// semantics).
+// unifi_user_id / unifi_door_ids / ac_device_ids so the server leaves
+// those DB values unchanged (their hasOwnProperty-omit semantics).
 //
 // Permission edits carry the FULL hydrated blob for a touched location
 // (see hydratePermissions) — a partial blob would wipe absent keys. Only

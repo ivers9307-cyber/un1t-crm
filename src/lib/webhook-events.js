@@ -43,14 +43,14 @@ export const WEBHOOK_PROVIDERS = Object.freeze({
   INSTAGRAM: 'instagram',
   TWILIO: 'twilio',
   XERO: 'xero',
-  // Mig 120: UniFi Access door-unlock events — drives zero-touch
-  // staff attendance tracking. Provider whitelist updated in mig 120.
-  UNIFI_ACCESS: 'unifi_access',
-  // Mig 121: UniFi Protect face-recognition events — Phase 2 of
-  // zero-touch attendance. Co-equal with UNIFI_ACCESS; whichever
-  // source's webhook lands first stamps the shift, the other
-  // becomes audit-only via the existing 'already_stamped' bucket.
-  UNIFI_PROTECT: 'unifi_protect',
+  // NOTE: 'unifi_access' (mig 120) and 'unifi_protect' (mig 121) used to
+  // live here. Both receivers drove the zero-touch staff-attendance
+  // pipeline, removed 2026-07-31 (Access: 157 events, none ever matched
+  // a staff member; Protect: never wired up). The DB CHECK constraint
+  // still permits both values ON PURPOSE — 157 historical
+  // webhook_events rows carry provider='unifi_access'. Door access
+  // control is unaffected: it is an outbound API integration
+  // (src/lib/unifi-access.js) and never used these inbound webhooks.
 })
 
 const VALID_PROVIDERS = new Set(Object.values(WEBHOOK_PROVIDERS))

@@ -5,8 +5,8 @@
 // membership picker (GLOFOX3.1) so the operator can choose which
 // membership + plan to attach to freshly-created Glofox accounts.
 //
-// Auth: master / owner / manager only (mirrors /unifi-users +
-// /protect-faces — both touch sensitive integration data).
+// Auth: master / owner / manager only (mirrors /unifi-users — both
+// touch sensitive integration data).
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'

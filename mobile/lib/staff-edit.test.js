@@ -35,13 +35,12 @@ describe('buildStaffAssignmentsPatch', () => {
     expect(a1.is_default).toBe(true)
   })
 
-  it('OMITS unifi_user_id and the door/AC/face allowlist keys (so the server leaves them unchanged)', () => {
+  it('OMITS unifi_user_id and the door/AC allowlist keys (so the server leaves them unchanged)', () => {
     const out = buildStaffAssignmentsPatch({ isMaster: true, ownedLocationIds: [], currentAssignments: current, roleEdits: {} })
     const a1 = out.find(a => a.location_id === 'loc-1')
     expect('unifi_user_id' in a1).toBe(false)
     expect('unifi_door_ids' in a1).toBe(false)
     expect('ac_device_ids' in a1).toBe(false)
-    expect('protect_face_id' in a1).toBe(false)
   })
 
   it('defaults a missing permissions blob to {} (never undefined → never wipes via undefined)', () => {

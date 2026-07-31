@@ -118,11 +118,6 @@ export const assignmentSchema = z.object({
   // hint by the staff PUT — when present and door access is ON, the
   // route uses this id rather than calling findOrCreateUnifiUser.
   unifi_user_id: z.string().nullable().optional(),
-  // UniFi Protect face link (mig 142, ProtectFacePicker). Same
-  // semantics as unifi_user_id: string sets, `null` clears,
-  // `undefined`/omitted leaves unchanged (buildAssignmentRow only
-  // writes the column when the key is present).
-  protect_face_id: z.string().nullable().optional(),
   // UNIFI-DOORS-SCOPE (mig 182) — per-location allowlist of UniFi
   // Access door IDs this user can remote-unlock from the iOS Studio
   // Management screen. NULL = legacy fallback (route shows all doors

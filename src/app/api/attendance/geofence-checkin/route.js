@@ -1,8 +1,9 @@
 // POST /api/attendance/geofence-checkin
 //
 // GEO-ATT.4 — the mobile app's geofence ENTER handler calls this.
-// Mirrors the stamping pipeline of /api/webhooks/unifi-access (mig 120)
-// with source='geofence' (mig 463). The caller can only stamp
+// Matches the arrival to a shift in a ±4h window and stamps it with a
+// race-guarded UPDATE … WHERE start_time_override IS NULL, writing an
+// audit row with source='geofence' (mig 463). The caller can only stamp
 // THEMSELVES (profile from the JWT) at a location they're assigned to,
 // so unknown_user / wrong_location can't occur here.
 //

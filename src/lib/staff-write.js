@@ -175,8 +175,6 @@ export async function sparsifyAssignmentPermissions({ db, assignments, employmen
  * mirror of route lines ~294-328.
  *
  * Optional-key semantics (all mirror unifi_user_id's null/string/omit):
- *   - protect_face_id (mig 142): string sets, null clears, omit leaves
- *     the DB value unchanged (key omitted from the row).
  *   - unifi_door_ids (mig 182) / ac_device_ids (mig 210): null clears,
  *     [] = empty allowlist, array = exactly those, omit leaves the DB
  *     value unchanged (key omitted).
@@ -193,8 +191,6 @@ export function buildAssignmentRow({ id, assignment, wantsDoor, unifiUserId, syn
     unifi_synced_at: syncedAt,
     unifi_user_id: unifiUserId,
     permissions: a.permissions || {},
-    ...(Object.prototype.hasOwnProperty.call(a, 'protect_face_id')
-      ? { protect_face_id: a.protect_face_id || null } : {}),
     ...(Object.prototype.hasOwnProperty.call(a, 'geofence_exempt')
       ? { geofence_exempt: a.geofence_exempt === true } : {}),
     ...(Object.prototype.hasOwnProperty.call(a, 'unifi_door_ids')
