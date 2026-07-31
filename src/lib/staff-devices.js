@@ -1,0 +1,194 @@
+// Staff device verdicts (STAFF-DEV) — the single source of truth for
+// "what version is this staff member on, and are they behind?".
+//
+// PURE MODULE: no IO, no Supabase, and deliberately NO `Date.now()` —
+// the clock is injected as a `now` (epoch ms) argument so every caller
+// (server component, route, test) shares one comparable notion of now
+// and tests need no fake timers. Same design as
+// `mobile/lib/foreground-update-logic.js`.
+//
+// Definitions (mirrored in docs/superpowers/specs/2026-07-31-...):
+//   - Current device = the row with the greatest `last_seen_at`. EVERY
+//     verdict keys off it, never off the best version the person owns:
+//     an old iPad left on a newer build must not mask a daily phone
+//     that has been downgraded or never updated.
+//   - Stale device = not seen in STALE_AFTER_DAYS. Rendered dimmed and
+//     never allowed to set the target version (an abandoned beta must
+//     not put the whole fleet permanently "behind").
+//   - Target version = highest parseable `app_version` across the
+//     non-stale fleet. No operator setting — it self-updates when a new
+//     build lands.
+//
+// Rows older than 90 days are deleted by the sweep-stale-push-tokens
+// cron, so "no_device" already means "nothing in 90 days"; this module
+// deliberately adds no competing 90-day rule.
+
+/** Days without a `last_seen_at` heartbeat before a device is considered stale. */
+export const STALE_AFTER_DAYS = 30
+
+const DAY_MS = 86400_000
+const LEADING_DIGITS = /^\d+/
+
+/**
+ * Parse a loosely-semver `app_version` into comparable numbers.
+ *
+ * Tolerates the historical junk in the column: a leading `v`, missing
+ * minor/patch (`'2'` → 2.0.0), and prerelease/build suffixes
+ * (`'2.2.0-beta.1'` → 2.2.0 — prerelease ordering is ignored by design;
+ * we only ever ask "is this build behind the fleet?").
+ *
+ * @param {string|null|undefined} str
+ * @returns {[number, number, number]|null} null when unparseable.
+ */
+export function parseVersion(str) {
+  if (typeof str !== 'string') return null
+  const trimmed = str.trim().replace(/^v/i, '')
+  if (!trimmed) return null
+  const parts = trimmed.split('.')
+  const out = [0, 0, 0]
+  for (let i = 0; i < 3; i++) {
+    const match = (parts[i] ?? '').match(LEADING_DIGITS)
+    // The major segment must be a real number; minor/patch default to 0.
+    if (!match) {
+      if (i === 0) return null
+      continue
+    }
+    out[i] = Number(match[0])
+  }
+  return out
+}
+
+/**
+ * Compare two `app_version` strings numerically (so 2.10.0 > 2.9.0).
+ *
+ * Unparseable/missing versions sort LOWEST and are never equal to a real
+ * version; two unparseable values compare equal.
+ *
+ * @param {string|null|undefined} a
+ * @param {string|null|undefined} b
+ * @returns {-1|0|1}
+ */
+export function compareVersions(a, b) {
+  const pa = parseVersion(a)
+  const pb = parseVersion(b)
+  if (!pa && !pb) return 0
+  if (!pa) return -1
+  if (!pb) return 1
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] > pb[i]) return 1
+    if (pa[i] < pb[i]) return -1
+  }
+  return 0
+}
+
+/** @param {{ last_seen_at?: string|null }} device @returns {number} epoch ms, -Infinity when unknown. */
+function seenAtMs(device) {
+  const raw = device?.last_seen_at
+  if (!raw) return -Infinity
+  const ms = Date.parse(raw)
+  return Number.isNaN(ms) ? -Infinity : ms
+}
+
+/**
+ * The device every verdict keys off: the most recently seen row.
+ *
+ * Rows with no (or an unparseable) `last_seen_at` sort last rather than
+ * throwing; selection is stable, so the first row wins a tie.
+ *
+ * @param {Array<object>|null|undefined} devices
+ * @returns {object|null}
+ */
+export function currentDevice(devices) {
+  if (!Array.isArray(devices) || devices.length === 0) return null
+  let best = null
+  let bestMs = -Infinity
+  for (const device of devices) {
+    if (!device) continue
+    const ms = seenAtMs(device)
+    if (best === null || ms > bestMs) {
+      best = device
+      bestMs = ms
+    }
+  }
+  return best
+}
+
+/**
+ * Has this device gone quiet for longer than STALE_AFTER_DAYS?
+ *
+ * A row with no `last_seen_at` counts as stale — unknown recency must
+ * never be treated as "active" (it would let a mystery row set the
+ * target version for everyone).
+ *
+ * @param {{ last_seen_at?: string|null }} device
+ * @param {number} now epoch ms (injected clock)
+ * @returns {boolean}
+ */
+export function isStale(device, now) {
+  const ms = seenAtMs(device)
+  if (ms === -Infinity) return true
+  return now - ms > STALE_AFTER_DAYS * DAY_MS
+}
+
+/**
+ * The version the fleet is expected to be on: the highest parseable
+ * `app_version` among devices seen in the last STALE_AFTER_DAYS.
+ *
+ * Stale devices are excluded so an abandoned beta install cannot set
+ * the bar for everyone else.
+ *
+ * @param {Array<object>|null|undefined} devices every device in scope
+ * @param {number} now epoch ms (injected clock)
+ * @returns {string|null} the raw version string, or null when nothing is parseable.
+ */
+export function deriveTargetVersion(devices, now) {
+  if (!Array.isArray(devices)) return null
+  let target = null
+  for (const device of devices) {
+    if (!device || isStale(device, now)) continue
+    const version = device.app_version
+    if (!parseVersion(version)) continue
+    if (target === null || compareVersions(version, target) > 0) target = version
+  }
+  return target
+}
+
+/**
+ * @typedef {object} DeviceVerdict
+ * @property {'no_device'|'unknown_version'|'outdated'|'current'} kind
+ * @property {string|null} version   the current device's reported version
+ * @property {string|null} deviceId  the current device's id
+ * @property {string|null} lastSeenAt
+ * @property {boolean} stale         is the current device itself stale?
+ */
+
+/**
+ * The per-staff verdict, computed from that person's device rows.
+ *
+ * Keys off the CURRENT (most recently seen) device, not the best version
+ * the person owns. `no_device` when they have no rows at all;
+ * `unknown_version` when the current device never reported a parseable
+ * version; `outdated` only when there is a target to compare against —
+ * with no target, nobody is behind.
+ *
+ * @param {Array<object>|null|undefined} devices this profile's device rows
+ * @param {string|null} targetVersion from deriveTargetVersion()
+ * @param {number} now epoch ms (injected clock)
+ * @returns {DeviceVerdict}
+ */
+export function deviceVerdict(devices, targetVersion, now) {
+  const device = currentDevice(devices)
+  if (!device) {
+    return { kind: 'no_device', version: null, deviceId: null, lastSeenAt: null, stale: false }
+  }
+  const base = {
+    version: device.app_version ?? null,
+    deviceId: device.id ?? null,
+    lastSeenAt: device.last_seen_at ?? null,
+    stale: isStale(device, now),
+  }
+  if (!parseVersion(device.app_version)) return { kind: 'unknown_version', ...base }
+  if (!parseVersion(targetVersion)) return { kind: 'current', ...base }
+  const kind = compareVersions(device.app_version, targetVersion) < 0 ? 'outdated' : 'current'
+  return { kind, ...base }
+}
