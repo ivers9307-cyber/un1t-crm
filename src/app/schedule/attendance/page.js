@@ -1,9 +1,11 @@
 // /schedule/attendance — owner/manager/master-only attendance report.
 //
-// Auto-stamped from UniFi Access door unlocks (mig 120 + the
-// /api/webhooks/unifi-access receiver). This page is a read-only
-// monitoring view; not visible to staff (gated by attendance_reports
-// permission, default off for staff + head_coach roles).
+// Auto-stamped from the mobile geofence check-in (mig 463 + the
+// /api/attendance/geofence-checkin route), plus manual entry. This page
+// is a read-only monitoring view; not visible to staff (gated by
+// attendance_reports permission, default off for staff + head_coach).
+// Historical rows may carry source='unifi_access'/'protect' from the
+// UniFi pipelines removed 2026-07-31 — see docs/staff-attendance.md.
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'

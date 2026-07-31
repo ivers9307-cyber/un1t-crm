@@ -254,6 +254,75 @@ describe('buildAssignmentRow', () => {
     expect('unifi_door_ids' in buildAssignmentRow({ ...common, assignment: omit })).toBe(false)
   })
 
+  // Same Zod-strip class as above, but for the two DOOR-ACCESS keys —
+  // and these are the physical-security ones, so they get their own
+  // pins. NOTE both are consumed differently from unifi_door_ids:
+  // buildAssignmentRow does NOT read them off the assignment, the route
+  // derives them (staff-write.js ~269 / ~286-288) and injects them as
+  // the `wantsDoor` / `unifiUserId` params. So these tests reproduce the
+  // route's derivation against a SCHEMA-PARSED assignment — if the key
+  // were ever dropped from assignmentSchema, parse() strips it and the
+  // derivation silently changes.
+  it('unifi_door_access survives assignmentSchema validation into wantsDoor', () => {
+    const valid = {
+      location_id: 'a0000000-0000-0000-0000-000000000001',
+      role: 'staff',
+      is_default: true,
+    }
+    // Plain boolean, NOT the null/omit tri-state the other keys use.
+    const on = assignmentSchema.parse({ ...valid, unifi_door_access: true })
+    expect(on.unifi_door_access).toBe(true)
+    const off = assignmentSchema.parse({ ...valid, unifi_door_access: false })
+    expect(off.unifi_door_access).toBe(false)
+
+    // The route's derivation. If the schema stripped the key, `on` would
+    // parse to {} for this field and wantsDoor would go FALSE — silently
+    // revoking door access for every staff member on every save, with a
+    // green suite. That is what this asserts against.
+    const wantsDoor = (a) => !!a.unifi_door_access
+    expect(wantsDoor(on)).toBe(true)
+    expect(wantsDoor(off)).toBe(false)
+    expect(buildAssignmentRow({ ...common, wantsDoor: wantsDoor(on), assignment: on }).unifi_door_access).toBe(true)
+    expect(buildAssignmentRow({ ...common, wantsDoor: wantsDoor(off), assignment: off }).unifi_door_access).toBe(false)
+
+    // Omitted stays omitted, so wantsDoor is false — that is the route's
+    // real behaviour (a payload with no door key does not grant access).
+    const omit = assignmentSchema.parse(valid)
+    expect('unifi_door_access' in omit).toBe(false)
+    expect(wantsDoor(omit)).toBe(false)
+  })
+
+  it('unifi_user_id survives assignmentSchema validation with its tri-state intact', () => {
+    const valid = {
+      location_id: 'a0000000-0000-0000-0000-000000000001',
+      role: 'staff',
+      is_default: true,
+    }
+    // The route branches on hasOwnProperty, so string / null / OMITTED
+    // must stay distinguishable after a parse: a stripped key would
+    // collapse "clear the link" and "operator picked this user" into
+    // "leave it alone", and door grants/revocations would target a stale
+    // UniFi account.
+    const set = assignmentSchema.parse({ ...valid, unifi_user_id: 'unifi-user-1' })
+    expect(Object.prototype.hasOwnProperty.call(set, 'unifi_user_id')).toBe(true)
+    expect(set.unifi_user_id).toBe('unifi-user-1')
+
+    const clear = assignmentSchema.parse({ ...valid, unifi_user_id: null })
+    expect(Object.prototype.hasOwnProperty.call(clear, 'unifi_user_id')).toBe(true)
+    expect(clear.unifi_user_id).toBeNull()
+
+    const omit = assignmentSchema.parse(valid)
+    expect(Object.prototype.hasOwnProperty.call(omit, 'unifi_user_id')).toBe(false)
+
+    // The route's derivation (staff-write.js ~286-288): an explicit key
+    // overrides the existing link, an omitted one preserves it.
+    const resolve = (a, existingId) =>
+      Object.prototype.hasOwnProperty.call(a, 'unifi_user_id') ? (a.unifi_user_id || null) : existingId
+    expect(resolve(set, 'old-id')).toBe('unifi-user-1')
+    expect(resolve(clear, 'old-id')).toBeNull()
+    expect(resolve(omit, 'old-id')).toBe('old-id')
+  })
+
   it('unifi_door_ids: null→null, array→array, []→[], omit→absent', () => {
     expect(buildAssignmentRow({ ...common, assignment: { ...base, unifi_door_ids: null } }).unifi_door_ids).toBeNull()
     expect(buildAssignmentRow({ ...common, assignment: { ...base, unifi_door_ids: ['d1'] } }).unifi_door_ids).toEqual(['d1'])
