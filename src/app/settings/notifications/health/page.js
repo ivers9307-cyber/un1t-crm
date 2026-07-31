@@ -20,6 +20,12 @@
 //
 // Auth: master or owner. /settings/notifications already gates on
 // hasPermission(user, 'settings') — same gate inherited here.
+//
+// STAFF-DEV.4 — this page is also the fleet view for app versions and
+// geofence permission (it already loads every device_tokens row, so a
+// second page would only be able to disagree with it). Version verdicts
+// come from @/lib/staff-devices, shared with /api/staff-devices and the
+// staff list; the clock is injected here so the lib stays pure.
 
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
@@ -28,6 +34,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, ShieldCheck, Smartphone, Mail } from 'lucide-react'
 import TestPushButton from '@/components/settings/TestPushButton'
+import { deriveTargetVersion, deviceVerdict, currentDevice } from '@/lib/staff-devices'
 
 export const dynamic = 'force-dynamic'
 
@@ -69,7 +76,7 @@ export default async function PushHealthPage() {
   const [profilesRes, locationsRes, tokensRes, sendsRes, plRes] = await Promise.all([
     db.from('profiles').select('id, full_name, email, role, active').eq('active', true),
     db.from('locations').select('id, name, active').eq('active', true).eq('is_host_anchor', false).order('name'),
-    db.from('device_tokens').select('id, user_id, platform, device_name, app_version, created_at, last_seen_at'),
+    db.from('device_tokens').select('id, user_id, platform, device_name, app_version, created_at, last_seen_at, geofence_permission, geofence_permission_at'),
     db.from('push_reminder_sends')
       .select('recipient_id, sent_at')
       .gte('sent_at', new Date(Date.now() - 30 * 86400 * 1000).toISOString()),
@@ -98,17 +105,31 @@ export default async function PushHealthPage() {
     profileLocByUser.get(pl.profile_id).add(pl.location_id)
   }
 
+  // Version verdicts (STAFF-DEV). One clock for the whole render, and
+  // the target is derived from ACTIVE staff's devices only — a leaver's
+  // newer phone must not mark everyone still here as outdated.
+  const now = Date.now()
+  const activeIds = new Set(profiles.map(p => p.id))
+  const targetVersion = deriveTargetVersion(tokens.filter(t => activeIds.has(t.user_id)), now)
+
   // Group profiles by location for display. A profile can be at
   // multiple locations — show them under each (rare; only ~3 staff
   // hit this today).
   const groups = locations.map(loc => ({
     location: loc,
     profiles: profiles.filter(p => profileLocByUser.get(p.id)?.has(loc.id))
-      .map(p => ({
-        ...p,
-        tokens: tokensByUser.get(p.id) || [],
-        pushesLast30d: sendsByUser.get(p.id) || 0,
-      }))
+      .map(p => {
+        const ownTokens = tokensByUser.get(p.id) || []
+        return {
+          ...p,
+          tokens: ownTokens,
+          pushesLast30d: sendsByUser.get(p.id) || 0,
+          verdict: deviceVerdict(ownTokens, targetVersion, now),
+          // Permission reads off the CURRENT device only — an old iPad
+          // that once granted "always" says nothing about today's phone.
+          permission: currentDevice(ownTokens)?.geofence_permission ?? null,
+        }
+      })
       .sort((a, b) => a.full_name.localeCompare(b.full_name || '')),
   }))
 
@@ -116,6 +137,7 @@ export default async function PushHealthPage() {
   const totals = {
     profiles: profiles.length,
     healthy: 0, stale: 0, no_app: 0,
+    on_latest: 0,
     total_tokens: tokens.length,
   }
   for (const p of profiles) {
@@ -123,6 +145,9 @@ export default async function PushHealthPage() {
     if (s.kind === 'green') totals.healthy++
     else if (s.kind === 'amber') totals.stale++
     else totals.no_app++
+    if (deviceVerdict(tokensByUser.get(p.id) || [], targetVersion, now).kind === 'current') {
+      totals.on_latest++
+    }
   }
 
   return (
@@ -142,15 +167,21 @@ export default async function PushHealthPage() {
       </p>
 
       {/* Rollup */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
         <SummaryCard label="Total staff" value={totals.profiles} kind="neutral" />
         <SummaryCard label="Healthy" value={totals.healthy} kind="green" />
         <SummaryCard label="Stale" value={totals.stale} kind="amber" />
         <SummaryCard label="No app installed" value={totals.no_app} kind="red" />
+        <SummaryCard
+          label="On latest"
+          value={`${totals.on_latest}/${totals.profiles}`}
+          kind="neutral"
+          sub={targetVersion ? `v${targetVersion}` : 'no version reported'}
+        />
       </div>
 
       {totals.no_app > 0 && (
-        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 mb-6 text-xs text-amber-100">
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 mb-6 text-xs text-amber-700">
           <strong className="font-semibold">{totals.no_app}</strong> of {totals.profiles} active staff have no device tokens registered.
           They won&apos;t receive any push notifications until they install the mobile app and grant push permission on first launch.
         </div>
@@ -174,6 +205,8 @@ export default async function PushHealthPage() {
                   <th className="text-left px-4 py-2 font-medium">Role</th>
                   <th className="text-left px-4 py-2 font-medium">Status</th>
                   <th className="text-left px-4 py-2 font-medium">Devices</th>
+                  <th className="text-left px-4 py-2 font-medium">App version</th>
+                  <th className="text-left px-4 py-2 font-medium">Location permission</th>
                   <th className="text-left px-4 py-2 font-medium">Last seen</th>
                   <th className="text-left px-4 py-2 font-medium">Pushes 30d</th>
                   <th className="px-4 py-2"></th>
@@ -203,6 +236,12 @@ export default async function PushHealthPage() {
                             </span>
                           </span>
                         )}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-un1t-subtle">
+                        <VersionCell verdict={p.verdict} />
+                      </td>
+                      <td className="px-4 py-2.5 text-xs">
+                        <PermissionChip value={p.permission} />
                       </td>
                       <td className="px-4 py-2.5 text-xs text-un1t-subtle">{fmtRelative(newestSeen)}</td>
                       <td className="px-4 py-2.5 text-xs text-un1t-subtle">{p.pushesLast30d}</td>
@@ -235,30 +274,63 @@ export default async function PushHealthPage() {
   )
 }
 
-function SummaryCard({ label, value, kind }) {
+function SummaryCard({ label, value, kind, sub }) {
   const colors = {
     neutral: 'border-un1t-border text-un1t-text',
-    green:   'border-emerald-500/40 text-emerald-300',
-    amber:   'border-amber-500/40 text-amber-200',
-    red:     'border-red-500/40 text-red-300',
+    green:   'border-emerald-500/40 text-emerald-700',
+    amber:   'border-amber-500/40 text-amber-700',
+    red:     'border-red-500/40 text-red-700',
   }
   return (
     <div className={`bg-un1t-surface border ${colors[kind]} rounded-lg p-3`}>
       <div className="text-2xl font-bold">{value}</div>
       <div className="text-[11px] uppercase tracking-wider text-un1t-subtle">{label}</div>
+      {sub && <div className="text-[11px] text-un1t-muted mt-0.5">{sub}</div>}
     </div>
   )
 }
 
+// House chip recipe: bg-<c>-500/10 + the -700 text ramp. The amber pill
+// previously used text-amber-200, which is invisible on this light
+// surface (the palette has inverted token names) — fixed in STAFF-DEV.4.
+const CHIP = 'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] uppercase font-semibold'
+const CHIP_TONE = {
+  green:   'bg-emerald-500/10 text-emerald-700',
+  amber:   'bg-amber-500/10 text-amber-700',
+  red:     'bg-red-500/10 text-red-700',
+  neutral: 'bg-un1t-border/40 text-un1t-subtle',
+}
+
 function StatusPill({ status }) {
-  const styles = {
-    green: 'bg-emerald-500/20 text-emerald-700',
-    amber: 'bg-amber-500/20 text-amber-200',
-    red:   'bg-red-500/20 text-red-700',
-  }
+  return <span className={`${CHIP} ${CHIP_TONE[status.kind]}`}>{status.label}</span>
+}
+
+// Current device's version + an Outdated chip. Never shows a version the
+// person isn't actually running: the verdict keys off their newest
+// device, not the best build they happen to own.
+function VersionCell({ verdict }) {
+  if (verdict.kind === 'no_device') return <span className="text-un1t-muted">—</span>
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] uppercase font-semibold ${styles[status.kind]}`}>
-      {status.label}
+    <span className="inline-flex items-center gap-1.5">
+      <span className="text-un1t-text">{verdict.version || '—'}</span>
+      {verdict.kind === 'outdated' && <span className={`${CHIP} ${CHIP_TONE.amber}`}>Outdated</span>}
     </span>
   )
+}
+
+// Background-location state for the CURRENT device. A null value means
+// the device has never reported (client below 2.2.0, or pre-STAFF-DEV
+// JS) and MUST render as "—" — absence of data is not a denial, and
+// that distinction is the whole diagnostic point.
+function PermissionChip({ value }) {
+  const map = {
+    always:       ['green', 'Always'],
+    when_in_use:  ['amber', 'While using'],
+    denied:       ['red', 'Denied'],
+    undetermined: ['neutral', 'Not asked'],
+  }
+  const entry = map[value]
+  if (!entry) return <span className="text-un1t-muted">—</span>
+  const [tone, label] = entry
+  return <span className={`${CHIP} ${CHIP_TONE[tone]}`}>{label}</span>
 }
