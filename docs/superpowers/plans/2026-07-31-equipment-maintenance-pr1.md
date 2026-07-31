@@ -1060,7 +1060,17 @@ git commit -m "EQUIP-MAINT.1 — result validation, issue composition, due filte
 - Modify: `shared/permissions.js`
 - Modify: `scripts/check-mobile-parity.mjs`
 
-**Context:** `WEB_PERMISSIONS` is a frozen array of `{ key, label, hint }` at line ~33. `DEFAULT_WEB_PERMISSIONS_BY_ROLE` at line ~234 has one block per role (`master`, `manager`, `head_coach`, `staff`, `owner`) and **every** role block must list every key. `MOBILE_PERMISSIONS` is at line ~437 and `DEFAULT_MOBILE_PERMISSIONS_BY_ROLE` at ~623.
+**Context:** `WEB_PERMISSIONS` is a frozen array of `{ key, label, hint }` at line ~33. `DEFAULT_WEB_PERMISSIONS_BY_ROLE` at line ~234 has one block per role and **every** role block must list every key. `MOBILE_PERMISSIONS` is at line ~437 and `DEFAULT_MOBILE_PERMISSIONS_BY_ROLE` at ~623.
+
+> **⚠️ CORRECTION — there are SIX role blocks, not five.** An earlier draft of
+> this plan listed `master`, `manager`, `head_coach`, `staff`, `owner`. There is
+> also a **`reception`** block in both maps. Worse, **no test catches the
+> omission**: `src/lib/shared-permissions.test.js:31` hardcodes
+> `['owner', 'manager', 'head_coach', 'staff']`, so leaving a key out of
+> `master` or `reception` passes CI while those roles silently fall through to
+> the default tier — which `CLAUDE.md` documents as failing CLOSED. Count the
+> blocks in the file; do not trust a list in a plan. `reception` mirrors `staff`
+> for every analogous key.
 
 - [ ] **Step 1: Add the two web keys**
 
