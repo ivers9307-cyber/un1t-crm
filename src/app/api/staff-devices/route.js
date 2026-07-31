@@ -15,8 +15,9 @@
 // staff. Same gate as /settings/notifications/health, which this backs.
 //
 // Both selects are bounded by the size of the staff table (~22 profiles,
-// ~11 devices today), so there is no pagination — well clear of the
-// 1,000-row PostgREST cap.
+// ~11 devices today), so a single 1,000-row page is enough — but it is
+// requested explicitly and a full page is logged, because silent
+// truncation would drop staff and skew the target version.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
@@ -26,6 +27,11 @@ import { deriveTargetVersion, deviceVerdict, currentDevice, isStale } from '@/li
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+// PostgREST caps every select at 1,000 rows regardless of .limit(). Both
+// reads here are staff-sized, so we ask for exactly that page and shout
+// if we ever fill it rather than silently losing rows.
+const PAGE_MAX = 1000
 
 export async function GET() {
   const user = await getCurrentUser()
@@ -42,13 +48,23 @@ export async function GET() {
   let devices = []
   try {
     const [profilesRes, devicesRes] = await Promise.all([
-      db.from('profiles').select('id, full_name, email, role, active').eq('active', true),
+      db
+        .from('profiles')
+        .select('id, full_name, email, role, active')
+        // Deactivated ex-staff must never appear in the fleet — they would
+        // also become nudge recipients downstream.
+        .eq('active', true)
+        .range(0, PAGE_MAX - 1),
       db
         .from('device_tokens')
         .select(
           'id, user_id, platform, device_name, app_version, last_seen_at, created_at, geofence_permission, geofence_permission_at',
         )
-        .order('last_seen_at', { ascending: false }),
+        .order('last_seen_at', { ascending: false })
+        // Secondary key so an exact last_seen_at tie can't flip which row
+        // is "current" between renders.
+        .order('id', { ascending: true })
+        .range(0, PAGE_MAX - 1),
     ])
     if (profilesRes.error) throw new Error(profilesRes.error.message)
     if (devicesRes.error) throw new Error(devicesRes.error.message)
@@ -57,6 +73,15 @@ export async function GET() {
   } catch (err) {
     console.error('[staff-devices] load failed', err)
     return NextResponse.json({ success: false, error: 'Failed to load staff devices' }, { status: 500 })
+  }
+
+  // Both sets are staff-sized (~22 profiles / ~11 devices), so a full page
+  // means we are silently truncating — which would drop staff from the
+  // fleet and skew the target version. Loud, not silent.
+  if (profiles.length >= PAGE_MAX || devices.length >= PAGE_MAX) {
+    console.error(
+      `[staff-devices] result hit the ${PAGE_MAX}-row cap (profiles=${profiles.length}, devices=${devices.length}) — payload is truncated, add pagination`,
+    )
   }
 
   // One clock for the whole payload — the lib itself stays pure.
@@ -77,9 +102,17 @@ export async function GET() {
     const ms = d?.last_seen_at ? Date.parse(d.last_seen_at) : NaN
     return Number.isNaN(ms) ? 0 : ms
   }
-  for (const list of byUser.values()) list.sort((a, b) => seenMs(b) - seenMs(a))
+  for (const list of byUser.values()) {
+    list.sort((a, b) => seenMs(b) - seenMs(a) || String(a.id).localeCompare(String(b.id)))
+  }
 
-  const targetVersion = deriveTargetVersion(devices, now)
+  // Target version comes from ACTIVE staff only: a deactivated leaver's
+  // newer phone must not mark everyone still working here as outdated.
+  const activeIds = new Set(profiles.map((p) => p.id))
+  const targetVersion = deriveTargetVersion(
+    devices.filter((d) => activeIds.has(d.user_id)),
+    now,
+  )
 
   const staff = profiles.map((profile) => {
     const own = byUser.get(profile.id) || []

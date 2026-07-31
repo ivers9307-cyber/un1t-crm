@@ -28,6 +28,8 @@ export const STALE_AFTER_DAYS = 30
 
 const DAY_MS = 86400_000
 const LEADING_DIGITS = /^\d+/
+/** Largest value any one version segment may hold — see parseVersion's security note. */
+const MAX_SEGMENT = 9999
 
 /**
  * Parse a loosely-semver `app_version` into comparable numbers.
@@ -35,10 +37,19 @@ const LEADING_DIGITS = /^\d+/
  * Tolerates the historical junk in the column: a leading `v`, missing
  * minor/patch (`'2'` → 2.0.0), and prerelease/build suffixes
  * (`'2.2.0-beta.1'` → 2.2.0 — prerelease ordering is ignored by design;
- * we only ever ask "is this build behind the fleet?").
+ * we only ever ask "is this build behind the fleet?"). Only the first
+ * three segments are read, so a 4th is truncated: `'2.2.0.1'` compares
+ * equal to `'2.2.0'`.
+ *
+ * SECURITY: `app_version` is client-reported, and the highest one in the
+ * fleet becomes the target every other staff member is measured against
+ * (and, via the nudge, pushed about). A segment outside 0–MAX_SEGMENT is
+ * therefore rejected outright rather than parsed — otherwise a single
+ * device claiming '9999999999999999' would mark the whole estate
+ * outdated. The mobile register endpoint validates the same shape.
  *
  * @param {string|null|undefined} str
- * @returns {[number, number, number]|null} null when unparseable.
+ * @returns {[number, number, number]|null} null when unparseable or out of range.
  */
 export function parseVersion(str) {
   if (typeof str !== 'string') return null
@@ -53,7 +64,9 @@ export function parseVersion(str) {
       if (i === 0) return null
       continue
     }
-    out[i] = Number(match[0])
+    const n = Number(match[0])
+    if (!Number.isSafeInteger(n) || n > MAX_SEGMENT) return null
+    out[i] = n
   }
   return out
 }
@@ -120,11 +133,15 @@ export function currentDevice(devices) {
  * never be treated as "active" (it would let a mystery row set the
  * target version for everyone).
  *
+ * The clock is required: a missing/NaN `now` would make every comparison
+ * false and silently mark the entire fleet fresh, so it throws instead.
+ *
  * @param {{ last_seen_at?: string|null }} device
  * @param {number} now epoch ms (injected clock)
  * @returns {boolean}
  */
 export function isStale(device, now) {
+  if (!Number.isFinite(now)) throw new TypeError('isStale: now must be epoch ms')
   const ms = seenAtMs(device)
   if (ms === -Infinity) return true
   return now - ms > STALE_AFTER_DAYS * DAY_MS

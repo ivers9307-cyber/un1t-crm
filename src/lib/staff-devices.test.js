@@ -35,6 +35,18 @@ describe('parseVersion / compareVersions', () => {
     expect(compareVersions('v2.2.0', '2.2.0')).toBe(0)
     expect(compareVersions('2.2.0-beta.1', '2.2.0')).toBe(0) // prerelease ignored, by design
   })
+  it('rejects absurd segments — a client cannot poison the fleet target', () => {
+    // app_version is client-reported; an unbounded number here would make
+    // every other staff member "outdated" and, via the nudge, push-spammed.
+    expect(parseVersion('9'.repeat(40))).toBeNull()
+    expect(parseVersion('1.' + '9'.repeat(40) + '.0')).toBeNull()
+    expect(parseVersion('10000.0.0')).toBeNull()
+    expect(parseVersion('9999.9999.9999')).toEqual([9999, 9999, 9999])
+    expect(compareVersions('9'.repeat(40), '2.1.0')).toBeLessThan(0)
+  })
+  it('truncates a 4th segment rather than treating it as newer', () => {
+    expect(compareVersions('2.2.0.1', '2.2.0')).toBe(0)
+  })
 })
 
 describe('currentDevice', () => {
@@ -57,6 +69,10 @@ describe('isStale', () => {
     expect(isStale(dev({ last_seen_at: daysAgo(STALE_AFTER_DAYS + 1) }), T0)).toBe(true)
     expect(isStale(dev({ last_seen_at: daysAgo(1) }), T0)).toBe(false)
   })
+  it('throws when the clock is not injected, rather than calling everything fresh', () => {
+    expect(() => isStale(dev(), undefined)).toThrow(TypeError)
+    expect(() => isStale(dev(), Number.NaN)).toThrow(/epoch ms/)
+  })
 })
 
 describe('deriveTargetVersion', () => {
@@ -74,6 +90,12 @@ describe('deriveTargetVersion', () => {
   it('returns null when there is nothing to go on', () => {
     expect(deriveTargetVersion([], T0)).toBeNull()
     expect(deriveTargetVersion([dev({ app_version: 'junk' })], T0)).toBeNull()
+  })
+  it('cannot be poisoned by an absurd client-reported version', () => {
+    expect(deriveTargetVersion([
+      dev({ id: 'evil', app_version: '9'.repeat(40) }),
+      dev({ id: 'real', app_version: '2.1.0' }),
+    ], T0)).toBe('2.1.0')
   })
 })
 

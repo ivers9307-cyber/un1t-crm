@@ -17,15 +17,21 @@ const { GET } = await import('./route.js')
 
 // A tiny thenable builder mock: every chain method returns `this`, and
 // awaiting resolves to { data, error } for the table named in from().
-function makeDb(tables) {
+//
+// It also RECORDS each call into `calls`, because the filters are
+// load-bearing and a mock that ignores them lets them be deleted with the
+// suite still green — dropping `.eq('active', true)` would leak
+// deactivated ex-staff into the fleet (and into the nudge recipients).
+function makeDb(tables, calls = []) {
   return {
     from(table) {
       const builder = {
-        select: () => builder,
-        order: () => builder,
+        select: (cols) => { calls.push(['select', table, cols]); return builder },
+        order: (col, opts) => { calls.push(['order', table, col, opts?.ascending]); return builder },
+        eq: (col, val) => { calls.push(['eq', table, col, val]); return builder },
+        range: (from, to) => { calls.push(['range', table, from, to]); return builder },
         limit: () => builder,
         in: () => builder,
-        eq: () => builder,
         gte: () => builder,
         then: (resolve) =>
           Promise.resolve({ data: tables[table] ?? [], error: null }).then(resolve),
@@ -34,6 +40,10 @@ function makeDb(tables) {
     },
   }
 }
+
+// Did `calls` record a call whose recorded fields start with these values?
+const recorded = (calls, ...prefix) =>
+  calls.some((c) => prefix.every((v, i) => c[i] === v))
 
 const DAY = 86400_000
 const daysAgo = (n) => new Date(Date.now() - n * DAY).toISOString()
@@ -63,6 +73,7 @@ describe('GET /api/staff-devices', () => {
 
   it('returns the fleet with a derived target version', async () => {
     getCurrentUser.mockResolvedValue(settingsUser)
+    const calls = []
     createServerClient.mockReturnValue(
       makeDb({
         profiles: [
@@ -81,7 +92,7 @@ describe('GET /api/staff-devices', () => {
             geofence_permission: null, geofence_permission_at: null,
           },
         ],
-      }),
+      }, calls),
     )
 
     const res = await GET()
@@ -90,6 +101,17 @@ describe('GET /api/staff-devices', () => {
     expect(json.success).toBe(true)
     expect(json.data.target_version).toBe('2.2.0')
     expect(json.data.staff).toHaveLength(2)
+
+    // Pin the query shape — these filters are the payload's correctness.
+    expect(recorded(calls, 'eq', 'profiles', 'active', true)).toBe(true)
+    expect(recorded(calls, 'order', 'device_tokens', 'last_seen_at', false)).toBe(true)
+    expect(recorded(calls, 'order', 'device_tokens', 'id', true)).toBe(true)
+    expect(recorded(calls, 'range', 'profiles', 0, 999)).toBe(true)
+    expect(recorded(calls, 'range', 'device_tokens', 0, 999)).toBe(true)
+    const deviceSelect = calls.find((c) => c[0] === 'select' && c[1] === 'device_tokens')[2]
+    expect(deviceSelect).toContain('geofence_permission')
+    expect(deviceSelect).toContain('app_version')
+    expect(deviceSelect).toContain('last_seen_at')
 
     const richard = json.data.staff.find(s => s.id === 'p1')
     expect(richard.verdict.kind).toBe('current')
@@ -162,6 +184,36 @@ describe('GET /api/staff-devices', () => {
     expect(staff.devices.find(d => d.id === 'phone').stale).toBe(false)
   })
 
+  it('ignores a deactivated leaver\'s device when deriving the target version', async () => {
+    getCurrentUser.mockResolvedValue(settingsUser)
+    createServerClient.mockReturnValue(
+      makeDb({
+        // The profiles query filters active=true, so the leaver is absent
+        // here — but their device row is still in device_tokens.
+        profiles: [
+          { id: 'p1', full_name: 'Still Here', email: 's@x.ie', role: 'staff', active: true },
+        ],
+        device_tokens: [
+          {
+            id: 'd-leaver', user_id: 'p-gone', platform: 'ios', device_name: 'Ex iPhone',
+            app_version: '3.0.0', last_seen_at: daysAgo(1), created_at: daysAgo(20),
+            geofence_permission: null, geofence_permission_at: null,
+          },
+          {
+            id: 'd1', user_id: 'p1', platform: 'ios', device_name: 'iPhone',
+            app_version: '2.2.0', last_seen_at: daysAgo(0), created_at: daysAgo(5),
+            geofence_permission: null, geofence_permission_at: null,
+          },
+        ],
+      }),
+    )
+
+    const json = await (await GET()).json()
+    expect(json.data.target_version).toBe('2.2.0')
+    expect(json.data.staff).toHaveLength(1)
+    expect(json.data.staff[0].verdict.kind).toBe('current')
+  })
+
   it('500s when a query errors', async () => {
     getCurrentUser.mockResolvedValue(settingsUser)
     createServerClient.mockReturnValue({
@@ -169,6 +221,7 @@ describe('GET /api/staff-devices', () => {
         select: function () { return this },
         eq: function () { return this },
         order: function () { return this },
+        range: function () { return this },
         then: (resolve) => Promise.resolve({ data: null, error: { message: 'boom' } }).then(resolve),
       }),
     })

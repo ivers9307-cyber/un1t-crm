@@ -31,7 +31,15 @@ const RegisterSchema = z.object({
   ),
   platform: z.enum(['ios', 'android', 'web']).default('ios'),
   device_name: z.string().max(120).optional(),
-  app_version: z.string().max(40).optional(),
+  // Shape-checked, not just length-capped: `app_version` is client-reported
+  // and the highest value in the fleet becomes the target version every
+  // other staff member is judged against on /api/staff-devices (STAFF-DEV).
+  // An unbounded number here would mark the whole estate outdated. Mirrors
+  // parseVersion() in src/lib/staff-devices.js — max 4 digits per segment.
+  app_version: z.string().max(40).regex(
+    /^v?\d{1,4}(\.\d{1,4}){0,2}([-+][\w.]+)?$/,
+    'Must look like a version, e.g. 2.2.0'
+  ).optional(),
 })
 
 export async function POST(request) {
