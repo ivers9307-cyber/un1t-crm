@@ -1,6 +1,6 @@
 // src/lib/whatsapp-coexistence.test.js
 import { describe, it, expect } from 'vitest'
-import { normalizeWaPhone, parseEchoMessages, parseSyncContacts, parseHistoryMessages, nextHistorySyncState, effectiveHistorySyncStatus } from './whatsapp-coexistence.js'
+import { normalizeWaPhone, parseEchoMessages, parseSyncContacts, parseHistoryMessages, nextHistorySyncState, effectiveHistorySyncStatus, parseAccountUpdateEvent, nextCoexistenceLinkState, COEX_LINK_EVENTS } from './whatsapp-coexistence.js'
 
 describe('normalizeWaPhone', () => {
   it('yields both + and no-+ forms, stripping non-digits', () => {
@@ -103,5 +103,56 @@ describe('effectiveHistorySyncStatus', () => {
   it('is null-safe', () => {
     expect(effectiveHistorySyncStatus(null, start, past)).toBeNull()
     expect(effectiveHistorySyncStatus('importing', null, past)).toBe('importing')
+  })
+})
+
+describe('parseAccountUpdateEvent', () => {
+  it('returns the event name uppercased', () => {
+    expect(parseAccountUpdateEvent({ event: 'ACCOUNT_OFFBOARDED' })).toBe('ACCOUNT_OFFBOARDED')
+    expect(parseAccountUpdateEvent({ event: 'account_reconnected' })).toBe('ACCOUNT_RECONNECTED')
+  })
+  it('returns null when absent or not a string', () => {
+    expect(parseAccountUpdateEvent({})).toBeNull()
+    expect(parseAccountUpdateEvent(null)).toBeNull()
+    expect(parseAccountUpdateEvent({ event: 42 })).toBeNull()
+  })
+})
+
+describe('nextCoexistenceLinkState', () => {
+  const NOW = '2026-07-31T10:00:00.000Z'
+
+  it('OFFBOARDED marks the link down and stamps offboarded_at', () => {
+    const next = nextCoexistenceLinkState(null, COEX_LINK_EVENTS.OFFBOARDED, NOW)
+    expect(next).toEqual({
+      status: 'offboarded', event: 'ACCOUNT_OFFBOARDED',
+      offboarded_at: NOW, reconnected_at: null, updated_at: NOW,
+    })
+  })
+
+  it('keeps the FIRST offboarded_at when Meta resends OFFBOARDED', () => {
+    const first = nextCoexistenceLinkState(null, COEX_LINK_EVENTS.OFFBOARDED, NOW)
+    const later = nextCoexistenceLinkState(first, COEX_LINK_EVENTS.OFFBOARDED, '2026-07-31T10:30:00.000Z')
+    expect(later.offboarded_at).toBe(NOW)                       // outage clock not reset
+    expect(later.updated_at).toBe('2026-07-31T10:30:00.000Z')   // but freshness moves
+  })
+
+  it('RECONNECTED clears the outage and stamps reconnected_at', () => {
+    const down = nextCoexistenceLinkState(null, COEX_LINK_EVENTS.OFFBOARDED, NOW)
+    const up = nextCoexistenceLinkState(down, COEX_LINK_EVENTS.RECONNECTED, '2026-07-31T10:05:00.000Z')
+    expect(up.status).toBe('connected')
+    expect(up.offboarded_at).toBeNull()
+    expect(up.reconnected_at).toBe('2026-07-31T10:05:00.000Z')
+  })
+
+  // account_update is a SHARED webhook field: review / violation / restriction
+  // / partner events ride it too. None may touch the coexistence link state —
+  // a violation event must not read as "the phone was reinstalled", and must
+  // not clear a real outage either.
+  it('leaves state untouched for unrelated account_update events', () => {
+    const down = nextCoexistenceLinkState(null, COEX_LINK_EVENTS.OFFBOARDED, NOW)
+    for (const ev of ['ACCOUNT_VIOLATION', 'ACCOUNT_RESTRICTION', 'PARTNER_ADDED', 'ACCOUNT_UPDATE', null]) {
+      expect(nextCoexistenceLinkState(down, ev, '2026-08-01T00:00:00.000Z')).toBe(down)
+    }
+    expect(nextCoexistenceLinkState(null, 'ACCOUNT_VIOLATION', NOW)).toBeNull()
   })
 })
