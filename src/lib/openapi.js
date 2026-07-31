@@ -933,34 +933,6 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
-  path: '/api/webhooks/unifi-access',
-  tags: ['Webhooks (Inbound)'],
-  security: [{ WebhookToken: [] }],
-  summary: 'UniFi Access door events',
-  description: 'UniFi Access → CRM. Carries door open/close and access events.',
-  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('UnifiAccessEvent') } } } },
-  responses: {
-    200: { description: 'Accepted' },
-    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
-
-registry.registerPath({
-  method: 'post',
-  path: '/api/webhooks/unifi-protect',
-  tags: ['Webhooks (Inbound)'],
-  security: [{ WebhookToken: [] }],
-  summary: 'UniFi Protect events',
-  description: 'UniFi Protect → CRM. Carries camera/NVR events.',
-  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('UnifiProtectEvent') } } } },
-  responses: {
-    200: { description: 'Accepted' },
-    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
-
-registry.registerPath({
-  method: 'post',
   path: '/api/webhooks/invoices-inbound/{token}',
   tags: ['Webhooks (Inbound)'],
   security: [],

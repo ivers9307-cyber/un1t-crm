@@ -136,44 +136,16 @@ export const GET = withAuth(
       return acc
     }, { total: 0, on_time: 0, late: 0, no_show: 0, pending: 0 })
 
-    // P2.7 — tailgate / unmatched-Protect surfacing. A Protect event
-    // that fired but couldn't be mapped to an enrolled face is one
-    // of three things:
-    //   - Genuine tailgate (member walks in behind a staff card-tap)
-    //   - Staff member not yet enrolled in the Protect face library
-    //   - Staff member enrolled in Protect but not linked in the CRM
-    //     (operator forgot to use the ProtectFacePicker)
-    // All three need operator visibility — we surface the recent
-    // unknown_user events so the operator can either enrol the face,
-    // link the existing face, or investigate the tailgate.
-    //
-    // Scope: same date window as the main report, this location.
-    const fromIso = new Date(fromStr + 'T00:00:00Z').toISOString()
-    const toIso   = new Date(toStr   + 'T23:59:59Z').toISOString()
-    const { data: unmatched } = await db
-      .from('staff_attendance_events')
-      .select('id, event_at, source, unifi_door_id, unifi_user_id, payload')
-      .eq('location_id', locationId)
-      .eq('source', 'protect')
-      .eq('match_outcome', 'unknown_user')
-      .gte('event_at', fromIso)
-      .lte('event_at', toIso)
-      .order('event_at', { ascending: false })
-      .limit(200)
-    const tailgates = (unmatched || []).map(ev => ({
-      id: ev.id,
-      event_at: ev.event_at,
-      camera_id: ev.unifi_door_id || null,
-      face_id: ev.unifi_user_id || null,  // overloaded for source='protect'
-      event_type: ev.payload?.event_type || null,
-    }))
-
+    // NOTE: this response used to carry `tailgates`/`tailgate_count` —
+    // recent source='protect' events with match_outcome='unknown_user',
+    // surfaced so an operator could enrol/link a face. The UniFi Protect
+    // receiver was removed 2026-07-31 (never wired up; the query has
+    // always returned 0 rows and no new protect events can ever be
+    // written), so the panel and its query went with it.
     return NextResponse.json({
       success: true,
       rows,
       summary,
-      tailgates,
-      tailgate_count: tailgates.length,
       location: { id: location.id, name: location.name, timezone: tz },
     })
   }

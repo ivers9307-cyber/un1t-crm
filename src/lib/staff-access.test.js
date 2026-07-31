@@ -38,15 +38,15 @@ describe('mapProfileLocationToAssignment — surfaces UNIFI-DOORS-SCOPE fields',
     expect(a.unifi_door_ids).toBeNull()
   })
 
-  it('surfaces protect_face_id alongside the other UniFi fields', () => {
+  it('surfaces unifi_user_id so the door-provisioning picker can pre-select it', () => {
     const pl = {
       location_id: 'loc-A',
       role: 'staff',
-      protect_face_id: 'face-uuid-1',
+      unifi_user_id: 'unifi-user-1',
       permissions: {},
     }
     const a = mapProfileLocationToAssignment(pl)
-    expect(a.protect_face_id).toBe('face-uuid-1')
+    expect(a.unifi_user_id).toBe('unifi-user-1')
   })
 })
 

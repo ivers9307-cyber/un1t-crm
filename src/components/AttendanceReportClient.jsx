@@ -190,18 +190,6 @@ export default function AttendanceReportClient({ activeLocationName }) {
         </table>
       </div>
 
-      {/* P2.7 — Tailgate / unmatched-Protect surfacing.
-          Protect events where the face wasn't enrolled at this
-          location. Three legitimate causes: actual tailgate (member
-          walks in behind a staff card-tap), staff member not yet in
-          the Protect face library, or staff face enrolled but not
-          linked in the CRM (operator forgot the ProtectFacePicker).
-          Show them in a panel below the main report so the operator
-          either enrols/links the face or investigates. */}
-      {data?.tailgates?.length > 0 && (
-        <TailgatesPanel tailgates={data.tailgates} totalCount={data.tailgate_count} />
-      )}
-
       <p className="mt-3 text-xs text-un1t-subtle">
         Showing data for <strong>{activeLocationName || data?.location?.name || 'active location'}</strong>.
         Switch locations with the location picker to see other studios.
@@ -225,10 +213,11 @@ function SummaryTile({ label, value, accent }) {
   )
 }
 
-// P2.6 — Source badges per stamped shift. Multiple sources can
-// contribute when both Access (card tap) and Protect (face match)
-// fire within seconds — we surface both so the operator can see
-// the corroboration.
+// P2.6 — Source badges per stamped shift. Geofence + manual are the
+// live sources. `unifi_access` / `protect` are RETAINED DELIBERATELY:
+// the UniFi attendance receivers were removed 2026-07-31, but historical
+// staff_attendance_events rows still carry those source strings and must
+// keep rendering as "Access"/"Face" rather than a raw slug.
 function SourceBadges({ sources }) {
   if (!sources || sources.length === 0) {
     return <span className="text-xs text-un1t-subtle">—</span>
@@ -250,49 +239,6 @@ function SourceBadges({ sources }) {
           </span>
         )
       })}
-    </div>
-  )
-}
-
-// P2.7 — Tailgate / unmatched-Protect panel.
-function TailgatesPanel({ tailgates, totalCount }) {
-  return (
-    <div className="mt-6 overflow-hidden rounded-xl border border-amber-200 bg-amber-50">
-      <div className="px-3 py-2 border-b border-amber-200 bg-amber-100/50 flex items-center justify-between">
-        <div>
-          <h3 className="text-sm font-semibold text-amber-900">
-            Unmatched face-recognition events ({totalCount})
-          </h3>
-          <p className="text-xs text-amber-800 mt-0.5">
-            Camera saw a face that isn&apos;t enrolled OR isn&apos;t linked to a CRM staff profile. Could be a tailgate (member walks in behind a staff tap), an unenrolled staff member, or a missing CRM link.
-          </p>
-        </div>
-      </div>
-      <table className="w-full text-sm">
-        <thead className="bg-amber-100/30 text-left text-xs uppercase text-amber-900/80">
-          <tr>
-            <th className="px-3 py-2">When</th>
-            <th className="px-3 py-2">Camera</th>
-            <th className="px-3 py-2">Face id</th>
-            <th className="px-3 py-2">Event type</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tailgates.map((t) => (
-            <tr key={t.id} className="border-t border-amber-200">
-              <td className="px-3 py-2 tabular-nums text-xs">{new Date(t.event_at).toLocaleString()}</td>
-              <td className="px-3 py-2 font-mono text-xs">{t.camera_id || '—'}</td>
-              <td className="px-3 py-2 font-mono text-xs">
-                {t.face_id ? (t.face_id.length > 16 ? t.face_id.slice(0, 12) + '…' : t.face_id) : <span className="text-amber-700/70">no face id</span>}
-              </td>
-              <td className="px-3 py-2 text-xs">{t.event_type || '—'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <p className="px-3 py-2 text-[11px] text-amber-800 bg-amber-100/30 border-t border-amber-200">
-        To resolve: copy a face id, open the staff member&apos;s profile, paste it into the Protect face picker. Or enrol them in UniFi Protect → Cameras → Smart Detections → Known Faces first if the face id isn&apos;t known yet.
-      </p>
     </div>
   )
 }

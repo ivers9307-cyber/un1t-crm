@@ -46,6 +46,11 @@ export default function LocationGate() {
   const [config, setConfig] = useState(null)
   const [granted, setGranted] = useState(null)
   const [denied, setDenied] = useState(false) // permanently denied → Settings
+  // GEO-ATT.17 — a paired studio kiosk is never gated. A shared reception
+  // iPad won't have "Always" location, so without this the gate would
+  // block the kiosk out of the app entirely. syncGeofences applies the
+  // same carve-out, so a kiosk never registers regions either.
+  const [isKiosk, setIsKiosk] = useState(false)
 
   // STAFF-DEV.7 — last value we told the server, so a foreground that
   // changed nothing costs no round-trip. `check` runs on EVERY
@@ -114,6 +119,21 @@ export default function LocationGate() {
   // Once granted, make sure regions are registered.
   useEffect(() => { if (granted && config?.required) syncGeofences() }, [granted, config])
 
+  // GEO-ATT.17 — resolve kiosk pairing once on mount. Pairing only
+  // changes via a deliberate pair/unpair action (which restarts the
+  // session), so there is nothing to subscribe to here.
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const { getPairing } = await import('../lib/studio-device')
+        const paired = await getPairing()
+        if (alive) setIsKiosk(!!paired)
+      } catch { /* unreadable ⇒ treat as a normal device (still gated) */ }
+    })()
+    return () => { alive = false }
+  }, [])
+
   const request = useCallback(async () => {
     try {
       const fg = await Location.requestForegroundPermissionsAsync()
@@ -134,6 +154,7 @@ export default function LocationGate() {
   if (impersonatingFrom) return null
 
   if (!session) return null
+  if (isKiosk) return null
   const blocked = config?.required === true && granted === false
   if (!blocked) return null
 
