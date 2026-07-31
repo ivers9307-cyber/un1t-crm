@@ -4,10 +4,19 @@ vi.mock('./supabase', () => ({ createServerClient: vi.fn() }))
 
 import { buildAudienceQuery, buildAudienceQueryAsync } from './postmark'
 
-// SEPARATION INVARIANT (HOST-GROWTH spec): host mailing-list signups live at
-// the host's anchor location (locations.is_host_anchor=true). UN1T campaign
-// audiences must therefore ALWAYS be pinned .eq('location_id', <location>) —
-// if that filter is ever dropped, host leads leak into gym marketing. Both
+// LOCATION-PINNING INVARIANT: UN1T campaign audiences must ALWAYS be pinned
+// .eq('location_id', <location>) — dropping that filter would sweep every
+// tenant's contacts into one gym's broadcast.
+//
+// NOTE (HOST-MASTER.1, 2026-07-31): this test used to double as the
+// "host leads can never reach UN1T marketing" guarantee, back when host
+// signups lived at the host's hidden anchor location. That is NO LONGER the
+// contract — host leads now live on the org's MASTER location (Stillorgan)
+// and are deliberately reachable by UN1T sends (Richard's call). What still
+// protects them is `contacts.automations_exempt` + the enrolContacts gate
+// (src/lib/sequences/enrol.js): they are never AUTO-enrolled in sequences or
+// automations, though a manual staff enrolment includes them. Don't read the
+// pin below as host-lead isolation — it is plain multi-tenant scoping. Both
 // the sync builder (used by preview/count paths) and its async sibling
 // (the one the live send path — campaign-sender.js — actually calls) hand-
 // write their own location pin, so both need this guard independently.
