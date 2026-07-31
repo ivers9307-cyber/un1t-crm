@@ -298,11 +298,22 @@ App Dashboard → **WhatsApp → Configuration** → subscribe the WABA to:
 - `history`
 - `smb_app_state_sync`
 - `smb_message_echoes`
-- `account_update` ← **added WA-COEX.6, 2026-07-31**
+- `account_update` ← **handled since WA-COEX.6, 2026-07-31**
 
 ...in addition to the existing `messages` field. Harmless to subscribe
 anytime — the fields just sit unhandled until the coexistence code path is
 enabled for a client.
+
+**Subscription state, verified via the Meta DevTools API 2026-07-31** — the
+app's `whatsapp_business_account` topic already carries all of: `messages`,
+`message_template_status_update`, `message_template_quality_update`,
+`template_category_update`, `message_template_components_update`,
+`phone_number_quality_update`, `phone_number_name_update`, `account_update`,
+`flows`, `user_preferences`, `business_capability_update`, `history`,
+`smb_app_state_sync`, `smb_message_echoes`. **No console step is outstanding.**
+Note what this means: `account_update` was subscribed but unhandled, so those
+events were being received and silently dropped (the webhook 200s unrecognised
+fields by design). WA-COEX.6 closes a live gap, not a theoretical one.
 
 **Why `account_update` matters.** When a client changes phone, reinstalls, or
 re-registers the WhatsApp Business app, Meta **automatically offboards** our
