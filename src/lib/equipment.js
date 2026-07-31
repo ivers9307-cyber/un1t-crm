@@ -23,13 +23,24 @@ export const ITEM_LABEL_MAX = 200
 export const ITEM_ID_MAX = 100
 export const MAX_ITEMS_PER_TYPE = 50
 export const RESULT_NOTE_MAX = 500
-export const INTERVAL_WEEKS_MIN = 1
-export const INTERVAL_WEEKS_MAX = 52
 
 // issues.description caps at 4000 (mig 213) — compose never exceeds it.
 export const ISSUE_DESCRIPTION_MAX = 4000
 
-export { dowOf, addDays, nextOccurrenceOfDow, firstDueOn, rollForward } from './equipment-dates.js'
+// The interval bounds are DEFINED in ./equipment-dates.js (rollForward's guard
+// is their only enforcement point) and re-exported here so callers have one
+// import site. Defining them here instead would make equipment-dates.js import
+// back from this module — a cycle in which the constants evaluate to undefined
+// at module-eval time, silently disabling the rollForward range guard.
+export {
+  INTERVAL_WEEKS_MIN,
+  INTERVAL_WEEKS_MAX,
+  dowOf,
+  addDays,
+  nextOccurrenceOfDow,
+  firstDueOn,
+  rollForward,
+} from './equipment-dates.js'
 
 // ---- checklist item validation ------------------------------------
 

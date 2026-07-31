@@ -16,13 +16,56 @@
 
 ---
 
+## ⚠️ Post-review amendments (applied after Tasks 1-4 landed)
+
+Code review of Tasks 2-4 found defects **in this plan**, not in the
+implementation. Tasks 2-4 as written below are superseded by commit
+`EQUIP-MAINT.1c`. If you are reading this plan to build PR 2 or PR 3, take
+these as the current truth:
+
+1. **The date arithmetic lives in `src/lib/equipment-dates.js`**, not in
+   `equipment.js`. `equipment.js` re-exports it, so import sites are unchanged.
+   The split keeps the risky, reusable part separate as PRs 2-3 grow the file.
+
+2. **`addDays` wraps `addDaysISO` from `@/lib/dublin-time`** rather than
+   hand-rolling UTC formatting. The plan's original claim that "`toISOString`
+   is guardrail-blocked" was **factually wrong** — the `no-utc-today` rule
+   (`eslint-rules/index.mjs:171-196`) only fires on *argless* `new Date()`, so
+   `d.toISOString().slice(0,10)` on a variable lints clean, which is why
+   `addDaysISO` has passed CI for months across 10+ consumers. Do not
+   reintroduce the duplicate. `Date.UTC` was also subtly worse: it applies the
+   two-digit-year rule, so `'0050-01-01'` became 1950.
+
+3. **`rollForward` throws `RangeError` on an out-of-range `intervalWeeks`** and
+   its loop is bounded. As originally written it spun forever on
+   `intervalWeeks: 0` with a past `dueOn`, and — worse — silently returned
+   `dueOn` unchanged with a *future* `dueOn`, which would have made the submit
+   route report success while the asset's schedule quietly stopped advancing.
+   **PR 2's submit route must catch this `RangeError`** and return a 400 with
+   an operator-actionable message ("This equipment type has an invalid
+   inspection interval — fix it in Equipment setup") rather than a bare 500.
+
+4. **`buildIssueDescription` marks truncation and trims lone surrogates.**
+   A plain `.slice(4000)` silently dropped most faults on a heavily-failed
+   inspection, and could split an emoji into an unpaired surrogate that
+   Postgres rejects — failing the issue insert and 500ing the submit.
+
+5. **`validateResults` guards the items-snapshot shape.** `equipment_inspections.items`
+   is only constrained to `jsonb_typeof = 'array'`, so a `null` element
+   crashed the route.
+
+---
+
+---
+
 ## File Structure
 
 | File | Responsibility |
 |---|---|
 | `supabase/migrations/467_equipment_maintenance.sql` | Create four tables + `issues.equipment_id`. Forward-only. |
-| `src/lib/equipment.js` | **All** pure logic: constants, date arithmetic, item/result validation, issue-description composition, due filtering. No DB, no I/O — every function takes plain data and returns plain data. |
-| `src/lib/equipment.test.js` | Vitest unit tests for the above. |
+| `src/lib/equipment-dates.js` | Date arithmetic only: `dowOf`, `addDays`, `nextOccurrenceOfDow`, `firstDueOn`, `rollForward`. Wraps `addDaysISO` from `@/lib/dublin-time`. (Split out post-review — see amendments above.) |
+| `src/lib/equipment.js` | Constants, item/result validation, issue-description composition, due filtering; re-exports the date helpers. No DB, no I/O — every function takes plain data and returns plain data. |
+| `src/lib/equipment.test.js`, `src/lib/equipment-dates.test.js` | Vitest unit tests for the above. |
 | `src/lib/equipment-db.js` | Thin Supabase read/write helpers. Separated from `equipment.js` so the pure logic stays trivially testable without mocks. |
 | `shared/permissions.js` | Add `equipment_admin` + `equipment_inspect` web keys, mobile counterpart, role defaults. |
 | `scripts/check-mobile-parity.mjs` | Add `equipment_admin` to `WEB_ONLY_OK` with a reason. |
@@ -2490,9 +2533,13 @@ const columns = [
   {
     key: 'due',
     header: 'Next due',
+    // Use isDue(), NOT a bare `r.next_due_on <= today`. isDue also requires
+    // status === 'in_service', so an out-of-service asset does not show an
+    // amber "due" chip while being correctly absent from the due list.
+    // Three definitions of "due" would otherwise ship in one PR.
     render: (r) => (
       <span className={
-        r.next_due_on <= today
+        isDue(r, today)
           ? 'rounded bg-amber-500/10 px-2 py-0.5 text-xs text-amber-700'
           : 'text-un1t-muted'
       }>
@@ -2503,10 +2550,17 @@ const columns = [
 ]
 ```
 
+Import `isDue` from `@/lib/equipment`.
+
 `today` comes from a `useState(() => new Date().toLocaleDateString('sv-SE'))`
 — `sv-SE` formats as `YYYY-MM-DD` natively, which is what makes the plain
-string comparison above correct. Do **not** use `toISOString().slice(0,10)`:
-it is UTC, not local, and `check:guardrails` blocks it.
+string comparison inside `isDue` correct on the client.
+
+Note the three-way definition of "due" this resolves. The index predicate
+`equipment_due_idx` is `where status <> 'retired'` — deliberately *wider* than
+`isDue`, because an index predicate is a cheap prefilter and the function is
+the truth. Don't "align" them by narrowing the index; a narrower partial index
+stops covering queries that legitimately want out-of-service rows.
 
 The modal form fields map one-to-one onto `CreateEquipmentBody` from Task 9:
 a type `<select>` populated from `GET /api/equipment/types`, then `name`

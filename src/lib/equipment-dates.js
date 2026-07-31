@@ -16,7 +16,15 @@
 // BST/GMT boundary. It does no I/O, so this file stays mock-free.
 
 import { addDaysISO } from '@/lib/dublin-time'
-import { INTERVAL_WEEKS_MIN, INTERVAL_WEEKS_MAX } from './equipment.js'
+
+// Defined HERE, not in ./equipment.js, and re-exported from there for callers.
+// rollForward's range guard is the only place these are enforced, so importing
+// them back from equipment.js would create a cycle — and in that cycle they
+// evaluate to undefined at module-eval time, making `intervalWeeks < undefined`
+// always false and silently disabling the guard that prevents the roll-forward
+// loop spinning on a request thread.
+export const INTERVAL_WEEKS_MIN = 1
+export const INTERVAL_WEEKS_MAX = 52
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
