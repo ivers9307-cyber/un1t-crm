@@ -249,6 +249,23 @@ describe('insertIssueWithAttachments', () => {
     expect(out.code).toBe('issue_insert_failed')
     expect(out.error).toBe('FK violation')
   })
+
+  it('sets equipment_id when the issue came from a failed inspection', async () => {
+    const { db, trackers } = makeDb()
+    await insertIssueWithAttachments(db, {
+      locationId: 'loc-1', submitterId: 'prof-1', description: 'Treadmill 3 failed inspection',
+      equipmentId: 'eq-1',
+    })
+    expect(trackers.inserts[0].rows).toEqual(expect.objectContaining({ equipment_id: 'eq-1' }))
+  })
+
+  it('omits equipment_id entirely for an ordinary staff-reported issue', async () => {
+    const { db, trackers } = makeDb()
+    await insertIssueWithAttachments(db, {
+      locationId: 'loc-1', submitterId: 'prof-1', description: 'Bathroom light out',
+    })
+    expect(trackers.inserts[0].rows).not.toHaveProperty('equipment_id')
+  })
 })
 
 // ----------------------------------------------------------------
