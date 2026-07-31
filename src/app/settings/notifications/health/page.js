@@ -34,6 +34,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, ShieldCheck, Smartphone, Mail } from 'lucide-react'
 import TestPushButton from '@/components/settings/TestPushButton'
+import NudgeUpdateButton from '@/components/settings/NudgeUpdateButton'
 import { deriveTargetVersion, deviceVerdict, currentDevice } from '@/lib/staff-devices'
 
 export const dynamic = 'force-dynamic'
@@ -189,10 +190,20 @@ export default async function PushHealthPage() {
 
       {groups.map(({ location, profiles }) => (
         <div key={location.id} className="mb-6 bg-un1t-surface border border-un1t-border rounded-lg overflow-hidden">
-          <div className="bg-un1t-border/30 px-4 py-2.5 border-b border-un1t-border flex items-center justify-between">
+          <div className="bg-un1t-border/30 px-4 py-2.5 border-b border-un1t-border flex items-center justify-between gap-3">
             <div className="text-sm font-semibold text-un1t-text">{location.name}</div>
-            <div className="text-[11px] text-un1t-subtle">
-              {profiles.length} staff
+            <div className="flex items-center gap-3">
+              <div className="text-[11px] text-un1t-subtle">
+                {profiles.length} staff
+              </div>
+              {/* STAFF-DEV.8 — recipients here are a PREVIEW. The route
+                  recomputes who is outdated server-side and intersects,
+                  so this list can never nominate an up-to-date staffer. */}
+              <NudgeUpdateButton
+                recipients={profiles
+                  .filter(p => p.verdict.kind === 'outdated')
+                  .map(p => ({ id: p.id, name: p.full_name, version: p.verdict.version }))}
+              />
             </div>
           </div>
           {profiles.length === 0 ? (
