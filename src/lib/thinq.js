@@ -348,9 +348,12 @@ export async function setDeviceState(deviceId, command, { pat, clientId, country
   // error there beats stranding the user with "Invalid command
   // error" while the unit is physically running.
   //
-  // A failure on `operation` itself is still fatal — the whole
-  // call rejects up the stack and the dispatcher reports it.
+  // A failure on `operation` is fatal ONLY if the unit didn't reach
+  // the requested power state — see the already-in-state check below.
   let lastJson = null
+  // Populated only when the already-in-state check below runs, so a
+  // no-op power command still returns real device state instead of null.
+  let confirmedState = null
   const warnings = []
   for (const key of keys) {
     const body = { [key]: command[key] }
@@ -371,8 +374,29 @@ export async function setDeviceState(deviceId, command, { pat, clientId, country
       )
     } catch (e) {
       if (key === 'operation') {
-        // Power on/off didn't apply — abort the whole call.
-        throw e
+        // LG rejects a power command that's already satisfied —
+        // "Command not supported in POWER_ON" when you send POWER_ON
+        // to a running unit (live: the Womens bathroom AC, 12 failed
+        // bathroom_climate fires 2026-07-28..31). Treating that as
+        // fatal was actively harmful: mode/temp/fan never got applied,
+        // and the caller wrote no ac_sessions row, so no auto-off was
+        // scheduled — the unit kept running and the next fire hit the
+        // same rejection. Self-perpetuating.
+        //
+        // We don't pattern-match LG's error wording (undocumented and
+        // free to change). We ask the device. If it's already in the
+        // state we asked for, the command was a no-op, not a failure:
+        // carry on and apply the remaining resources. If it isn't —
+        // or we can't tell — the original error stands.
+        confirmedState = await readPowerState(deviceId, { pat, clientId, countryCode })
+        if (!isAlreadyInPowerState(command[key], confirmedState)) throw e
+        warnings.push({
+          resource: key,
+          message: e?.message || 'unknown',
+          code: e?.code || null,
+          already_in_state: true,
+        })
+        continue
       }
       // Non-critical resource — log + carry on. Keeps audit visibility
       // without breaking the user's flow.
@@ -386,11 +410,42 @@ export async function setDeviceState(deviceId, command, { pat, clientId, country
   // state should do a follow-up getDeviceState() — we surface
   // whatever LG returned on the LAST successful call, normalised,
   // or null.
-  const normalised = normaliseState(lastJson?.response || null)
+  const normalised = normaliseState(lastJson?.response || null) || confirmedState
   if (warnings.length && normalised) {
     normalised.warnings = warnings
   }
   return normalised
+}
+
+/**
+ * Best-effort read of the device's current state, used only to
+ * adjudicate a rejected `operation` command. Never throws — if we
+ * can't reach LG we return null, which reads as "can't confirm" and
+ * leaves the original control error fatal.
+ */
+async function readPowerState(deviceId, { pat, clientId, countryCode } = {}) {
+  try {
+    return await getDeviceState(deviceId, { pat, clientId, countryCode })
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Was the rejected power command already satisfied? `operation` is
+ * the LG resource body ({ airConOperationMode: 'POWER_ON'|'POWER_OFF' })
+ * and `state` the normalised read from readPowerState.
+ *
+ * A null/unreadable state, or an operation mode we don't recognise,
+ * returns false — we only ever downgrade a real error to a warning on
+ * positive confirmation from the device itself.
+ */
+function isAlreadyInPowerState(operation, state) {
+  if (!state || typeof state.on !== 'boolean') return false
+  const mode = operation?.airConOperationMode
+  if (mode === 'POWER_ON')  return state.on === true
+  if (mode === 'POWER_OFF') return state.on === false
+  return false
 }
 
 /**

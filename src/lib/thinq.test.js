@@ -356,6 +356,8 @@ describe('setDeviceState', () => {
 
   it('still throws when the operation POST itself fails (power-on never happened)', async () => {
     // operation failure = unit is still off = user needs to see the error.
+    // Every call 400s here, including the confirming state read below,
+    // so we can't prove the unit reached the desired state → rethrow.
     global.fetch = vi.fn(async () => jsonResponse(
       { error: { code: '2207', message: 'Invalid command error' } },
       { status: 400 }
@@ -363,8 +365,85 @@ describe('setDeviceState', () => {
     await expect(
       setDeviceState('ac-1', buildTurnOnState({}), CTX)
     ).rejects.toThrow(/Invalid command error/i)
-    // No subsequent POSTs once operation rejects.
-    expect(global.fetch).toHaveBeenCalledTimes(1)
+    // 1 control POST + 1 confirming state read. No downstream resource
+    // POSTs once operation rejects unconfirmed.
+    expect(global.fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('treats an operation rejection as non-fatal when the unit is ALREADY in the target power state', async () => {
+    // Live bug (bathroom_climate, Womens unit, 2026-07-28..31): LG returns
+    // "Command not supported in POWER_ON" when you send POWER_ON to a unit
+    // that is already running. The old code treated any operation failure
+    // as fatal, so mode/temp/fan were never applied AND the caller wrote no
+    // ac_sessions row — which meant no auto-off was scheduled, so the unit
+    // stayed on and the NEXT fire hit the same rejection. Self-perpetuating.
+    //
+    // The desired end state (unit on) is already true, so we confirm against
+    // the vendor's real state and carry on with the remaining resources.
+    const calls = []
+    global.fetch = vi.fn(async (url, init) => {
+      calls.push({ url: String(url), method: init.method || 'GET' })
+      if (String(url).endsWith('/state')) {
+        // Vendor truth: it IS on, just not by our doing.
+        return jsonResponse({ response: { operation: { airConOperationMode: 'POWER_ON' } } })
+      }
+      const body = JSON.parse(init.body)
+      if (body.operation) {
+        return jsonResponse(
+          { error: { code: '2207', message: 'Command not supported in POWER_ON' } },
+          { status: 400 }
+        )
+      }
+      return jsonResponse({ response: {} })
+    })
+
+    const out = await setDeviceState('ac-1', buildTurnOnState({ mode: 'cool', tempC: 18, fan: 'high' }), CTX)
+
+    // Did NOT throw, and the three downstream resources still went out —
+    // the whole point is that the bathroom actually reaches 18°/high.
+    const posted = calls.filter((c) => c.method === 'POST').map((c) => c.url)
+    expect(posted).toHaveLength(4)
+    expect(calls.some((c) => c.url.endsWith('/state'))).toBe(true)
+    // The already-on rejection is surfaced as a warning, not an error.
+    expect(out.warnings).toBeDefined()
+    expect(out.warnings[0]).toMatchObject({ resource: 'operation', code: '2207', already_in_state: true })
+  })
+
+  it('rethrows the operation rejection when the confirming read shows the unit is NOT in the target state', async () => {
+    // Same rejection, but the unit really is off — that's a genuine failure
+    // and the operator must see it. Guards against the fix above swallowing
+    // real power-on failures.
+    global.fetch = vi.fn(async (url, init) => {
+      if (String(url).endsWith('/state')) {
+        return jsonResponse({ response: { operation: { airConOperationMode: 'POWER_OFF' } } })
+      }
+      if (JSON.parse(init.body).operation) {
+        return jsonResponse(
+          { error: { code: '2207', message: 'Command not supported in POWER_ON' } },
+          { status: 400 }
+        )
+      }
+      return jsonResponse({ response: {} })
+    })
+    await expect(
+      setDeviceState('ac-1', buildTurnOnState({}), CTX)
+    ).rejects.toThrow(/Command not supported in POWER_ON/i)
+  })
+
+  it('applies the same already-in-state tolerance to POWER_OFF (turnOff on an off unit)', async () => {
+    // Symmetric case: the auto-off cron sending POWER_OFF to a unit someone
+    // already switched off at the wall shouldn't record a failed session.
+    global.fetch = vi.fn(async (url) => {
+      if (String(url).endsWith('/state')) {
+        return jsonResponse({ response: { operation: { airConOperationMode: 'POWER_OFF' } } })
+      }
+      return jsonResponse(
+        { error: { code: '2207', message: 'Command not supported in POWER_OFF' } },
+        { status: 400 }
+      )
+    })
+    const out = await turnOff('ac-1', CTX)
+    expect(out.warnings[0]).toMatchObject({ resource: 'operation', already_in_state: true })
   })
 
   it('uses POST and returns the normalised response from the LAST call', async () => {
