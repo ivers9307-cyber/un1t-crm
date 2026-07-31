@@ -3,12 +3,10 @@
 // Nothing here touches Supabase or the network. Every function takes
 // plain data and returns plain data, so the risky part (date maths)
 // is testable without mocks. DB access lives in ./equipment-db.js.
-//
-// DATES: every date here is a timezone-less calendar string
-// (YYYY-MM-DD), like bookings.booking_date. We build from parts in UTC
-// and format by hand — never toISOString(), never local-time parsing —
-// so results are identical under TZ=Europe/Dublin and a US timezone,
-// and across the BST/GMT boundary. See CLAUDE.md "Timezones".
+// Date arithmetic lives in ./equipment-dates.js — split out at review
+// because it is the only genuinely risky and reusable part of this
+// feature, and this file will keep growing through PR 2/3. Re-exported
+// below so existing import sites are unaffected.
 
 export const EQUIPMENT_STATUS = Object.freeze({
   IN_SERVICE: 'in_service',
@@ -22,6 +20,7 @@ export const INSPECTION_STATUS = Object.freeze({
 })
 
 export const ITEM_LABEL_MAX = 200
+export const ITEM_ID_MAX = 100
 export const MAX_ITEMS_PER_TYPE = 50
 export const RESULT_NOTE_MAX = 500
 export const INTERVAL_WEEKS_MIN = 1
@@ -30,65 +29,7 @@ export const INTERVAL_WEEKS_MAX = 52
 // issues.description caps at 4000 (mig 213) — compose never exceeds it.
 export const ISSUE_DESCRIPTION_MAX = 4000
 
-// ---- date helpers -------------------------------------------------
-
-/** Format a UTC Date as YYYY-MM-DD by hand (toISOString is guardrail-blocked). */
-function formatUtc(dt) {
-  const y = dt.getUTCFullYear()
-  const m = String(dt.getUTCMonth() + 1).padStart(2, '0')
-  const d = String(dt.getUTCDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
-function toUtcDate(dateStr) {
-  const [y, m, d] = String(dateStr).split('-').map(Number)
-  return new Date(Date.UTC(y, m - 1, d))
-}
-
-/** Day of week for a YYYY-MM-DD string, Postgres convention (0 = Sunday). */
-export function dowOf(dateStr) {
-  return toUtcDate(dateStr).getUTCDay()
-}
-
-/** Add (or subtract) whole days to a YYYY-MM-DD string. */
-export function addDays(dateStr, days) {
-  const dt = toUtcDate(dateStr)
-  dt.setUTCDate(dt.getUTCDate() + days)
-  return formatUtc(dt)
-}
-
-/** The next date on or after `fromDateStr` falling on weekday `dow`. */
-export function nextOccurrenceOfDow(fromDateStr, dow) {
-  const delta = (dow - dowOf(fromDateStr) + 7) % 7
-  return addDays(fromDateStr, delta)
-}
-
-/**
- * First due date for a newly registered asset.
- * Operator override wins; otherwise the next inspection weekday on or
- * after today; otherwise (no settings row yet) today, which gets
- * snapped to the weekday at the first roll-forward.
- */
-export function firstDueOn({ today, inspectionDayOfWeek, explicitFirstDue }) {
-  if (explicitFirstDue) return explicitFirstDue
-  if (inspectionDayOfWeek === null || inspectionDayOfWeek === undefined) return today
-  return nextOccurrenceOfDow(today, inspectionDayOfWeek)
-}
-
-/**
- * Next due date after a submitted inspection.
- * Measured from `dueOn` (the cycle date), NOT from today, so a late
- * inspection does not drag the schedule permanently later. If that
- * still lands in the past, step in whole intervals until it is on or
- * after today, so submitting never produces an instantly-overdue item.
- * Because the interval is whole weeks, the weekday is preserved.
- */
-export function rollForward({ dueOn, intervalWeeks, today }) {
-  const step = intervalWeeks * 7
-  let next = addDays(dueOn, step)
-  while (next < today) next = addDays(next, step)
-  return next
-}
+export { dowOf, addDays, nextOccurrenceOfDow, firstDueOn, rollForward } from './equipment-dates.js'
 
 // ---- checklist item validation ------------------------------------
 
@@ -99,7 +40,10 @@ export function rollForward({ dueOn, intervalWeeks, today }) {
  *
  * `order` is always renumbered from the array index, so the array
  * order the operator dragged into is the order of record and a stale
- * client-side `order` value can never desync the list.
+ * client-side `order` value can never desync the list. Any other
+ * field on an input row is silently stripped — only { id, label,
+ * order } survive — so it's obvious when a later PR adds a field that
+ * needs its own pass-through here.
  *
  * @returns {{ ok: true, items: Array }|{ ok: false, error: string }}
  */
@@ -121,6 +65,9 @@ export function validateItems(raw) {
     const row = raw[i]
     const id = typeof row?.id === 'string' ? row.id.trim() : ''
     if (!id) return { ok: false, error: `Item ${i + 1} is missing an id.` }
+    if (id.length > ITEM_ID_MAX) {
+      return { ok: false, error: `Item ${i + 1} id is over ${ITEM_ID_MAX} characters.` }
+    }
     if (seen.has(id)) return { ok: false, error: `Duplicate item id: ${id}.` }
     seen.add(id)
 
@@ -145,7 +92,14 @@ export function validateItems(raw) {
  *   - `missing`  → items with no pass/fail mark. Submission is refused;
  *                  the route returns these ids so the UI can highlight
  *                  the unanswered rows.
- *   - `error`    → a fail with no note, or an over-long note.
+ *   - `error`    → a fail with no note, an over-long note, or a
+ *                  malformed items snapshot.
+ *
+ * `items` is a jsonb snapshot (`equipment_inspections.items`) whose
+ * elements Postgres only constrains to `jsonb_typeof = 'array'` —
+ * elements themselves are unvalidated, so a malformed element (null, a
+ * bare string) is possible and must fail cleanly here rather than
+ * throwing or producing an unmappable id in `missing`.
  *
  * @returns {{ ok: true, failed: Array<{id,label,note}> }
  *          |{ ok: false, error: string, missing?: string[] }}
@@ -162,6 +116,10 @@ export function validateResults({ items, results }) {
   const failed = []
 
   for (const item of items) {
+    if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !item.id) {
+      return { ok: false, error: 'Items snapshot is malformed.' }
+    }
+
     const row = results[item.id]
     const state = row?.state
     if (state !== 'pass' && state !== 'fail') {
@@ -195,8 +153,17 @@ export function validateResults({ items, results }) {
  *
  * Hard-capped at ISSUE_DESCRIPTION_MAX because issues.description has a
  * CHECK constraint at 4000 (mig 213) and would otherwise 500 the route.
+ * A truncated list leaves a marker with the true fault count instead of
+ * silently dropping the remaining faults mid-word with no trace, and
+ * never leaves an unpaired UTF-16 surrogate at the cut point — Postgres
+ * rejects one in a JSON string, which would otherwise 500 the issue
+ * insert (inspectors type notes on phones and use emoji). `.length`
+ * (not `[...text].length`) is deliberate: it counts UTF-16 units, so it
+ * over-counts relative to Postgres's character-counting `length()` and
+ * so errs conservatively against the 4000 CHECK rather than risking a
+ * rejected insert — don't "optimise" it to a code-point count.
  */
-export function buildIssueDescription({ equipmentName, typeName, dueOn, failed, extraNote }) {
+export function buildIssueDescription({ equipmentName, typeName, dueOn, failed = [], extraNote }) {
   const lines = [`${equipmentName} (${typeName}) failed inspection due ${dueOn}.`, '']
   for (const f of failed) lines.push(`• ${f.label}: ${f.note}`)
 
@@ -204,7 +171,12 @@ export function buildIssueDescription({ equipmentName, typeName, dueOn, failed, 
   if (note) lines.push('', note)
 
   const text = lines.join('\n')
-  return text.length > ISSUE_DESCRIPTION_MAX ? text.slice(0, ISSUE_DESCRIPTION_MAX) : text
+  if (text.length <= ISSUE_DESCRIPTION_MAX) return text
+
+  const marker = `\n… truncated (${failed.length} faults in total — see the inspection record).`
+  let out = text.slice(0, ISSUE_DESCRIPTION_MAX - marker.length)
+  if (/[\uD800-\uDBFF]$/.test(out)) out = out.slice(0, -1) // don't split a surrogate pair
+  return out + marker
 }
 
 /**
@@ -221,7 +193,13 @@ export function shouldReturnToService(equipment, resolvedIssueId) {
   return equipment.out_of_service_issue_id === resolvedIssueId
 }
 
-/** Is this asset due for inspection as of `today` (YYYY-MM-DD)? */
+/**
+ * Is this asset due for inspection as of `today` (YYYY-MM-DD)?
+ * "Due" here means due AND in service. `equipment_due_idx`'s predicate
+ * (`status <> 'retired'`) is deliberately wider than that — it's an
+ * index for cheapness, this function is the truth: an out-of-service
+ * asset already has an open issue and must not show up as due again.
+ */
 export function isDue(equipment, today) {
   if (equipment?.status !== EQUIPMENT_STATUS.IN_SERVICE) return false
   return equipment.next_due_on <= today

@@ -1,100 +1,10 @@
 // EQUIP-MAINT.1 — unit tests for the pure equipment library.
 //
-// Date maths is the risky part: these must pass identically under
-// TZ=Europe/Dublin and a US timezone, and across the BST/GMT boundary.
+// Date arithmetic (dowOf, addDays, nextOccurrenceOfDow, firstDueOn,
+// rollForward) has its own test file: src/lib/equipment-dates.test.js.
 
 import { describe, it, expect } from 'vitest'
-import {
-  dowOf,
-  addDays,
-  nextOccurrenceOfDow,
-  firstDueOn,
-  rollForward,
-} from './equipment.js'
-
-describe('dowOf', () => {
-  it('matches the Postgres dow convention (0 = Sunday)', () => {
-    expect(dowOf('2026-08-02')).toBe(0) // Sunday
-    expect(dowOf('2026-08-03')).toBe(1) // Monday
-    expect(dowOf('2026-08-04')).toBe(2) // Tuesday
-    expect(dowOf('2026-08-08')).toBe(6) // Saturday
-  })
-})
-
-describe('addDays', () => {
-  it('adds days across a month boundary', () => {
-    expect(addDays('2026-08-30', 3)).toBe('2026-09-02')
-  })
-
-  it('adds days across a year boundary', () => {
-    expect(addDays('2026-12-30', 3)).toBe('2027-01-02')
-  })
-
-  it('crosses the BST→GMT boundary without shifting the date', () => {
-    // Clocks go back 2026-10-25 in Dublin. A naive local-time
-    // implementation lands on 2026-10-25 here instead of 10-26.
-    expect(addDays('2026-10-24', 2)).toBe('2026-10-26')
-  })
-
-  it('crosses the GMT→BST boundary without shifting the date', () => {
-    // Clocks go forward 2026-03-29.
-    expect(addDays('2026-03-28', 2)).toBe('2026-03-30')
-  })
-})
-
-describe('nextOccurrenceOfDow', () => {
-  it('returns the same date when it already falls on that weekday', () => {
-    expect(nextOccurrenceOfDow('2026-08-04', 2)).toBe('2026-08-04') // Tue
-  })
-
-  it('advances to the next occurrence otherwise', () => {
-    expect(nextOccurrenceOfDow('2026-08-05', 2)).toBe('2026-08-11') // Wed -> Tue
-  })
-})
-
-describe('firstDueOn', () => {
-  it('uses the operator-supplied date when given', () => {
-    expect(
-      firstDueOn({ today: '2026-08-03', inspectionDayOfWeek: 2, explicitFirstDue: '2026-09-01' })
-    ).toBe('2026-09-01')
-  })
-
-  it('uses the next inspection weekday on or after today', () => {
-    expect(firstDueOn({ today: '2026-08-03', inspectionDayOfWeek: 2 })).toBe('2026-08-04')
-  })
-
-  it('falls back to today when the location has no settings row', () => {
-    expect(firstDueOn({ today: '2026-08-03', inspectionDayOfWeek: null })).toBe('2026-08-03')
-  })
-})
-
-describe('rollForward', () => {
-  it('measures from the cycle date, not the submission date', () => {
-    // Due Tue 04 Aug, four-weekly, actually inspected late on 07 Aug.
-    // Must land 01 Sep (04 Aug + 28d), NOT 04 Sep.
-    expect(rollForward({ dueOn: '2026-08-04', intervalWeeks: 4, today: '2026-08-07' }))
-      .toBe('2026-09-01')
-  })
-
-  it('advances in whole intervals when more than one cycle overdue', () => {
-    // Due 04 Aug, weekly, not inspected until 26 Aug. One step lands
-    // 11 Aug which is still past, so it must keep stepping to 01 Sep.
-    expect(rollForward({ dueOn: '2026-08-04', intervalWeeks: 1, today: '2026-08-26' }))
-      .toBe('2026-09-01')
-  })
-
-  it('never returns a date before today', () => {
-    const next = rollForward({ dueOn: '2026-01-06', intervalWeeks: 13, today: '2026-08-07' })
-    expect(next >= '2026-08-07').toBe(true)
-  })
-
-  it('always lands on the same weekday as the cycle date', () => {
-    const next = rollForward({ dueOn: '2026-08-04', intervalWeeks: 13, today: '2026-08-05' })
-    expect(dowOf(next)).toBe(dowOf('2026-08-04'))
-  })
-})
-
-import { validateItems, MAX_ITEMS_PER_TYPE, ITEM_LABEL_MAX } from './equipment.js'
+import { validateItems, MAX_ITEMS_PER_TYPE, ITEM_LABEL_MAX, ITEM_ID_MAX } from './equipment.js'
 
 describe('validateItems', () => {
   const ok = [
@@ -158,6 +68,12 @@ describe('validateItems', () => {
     const res = validateItems([{ id: 'a', label: 'x'.repeat(ITEM_LABEL_MAX + 1) }])
     expect(res.ok).toBe(false)
     expect(res.error).toMatch(new RegExp(String(ITEM_LABEL_MAX)))
+  })
+
+  it('rejects an over-long id', () => {
+    const res = validateItems([{ id: 'i'.repeat(ITEM_ID_MAX + 1), label: 'ok' }])
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(new RegExp(String(ITEM_ID_MAX)))
   })
 })
 
@@ -227,6 +143,14 @@ describe('validateResults', () => {
     expect(validateResults({ items: ITEMS, results: [] }).ok).toBe(false)
     expect(validateResults({ items: ITEMS, results: null }).ok).toBe(false)
   })
+
+  it('rejects a malformed items snapshot instead of throwing or producing an unmappable id', () => {
+    // equipment_inspections.items is only constrained to
+    // jsonb_typeof = 'array' — elements themselves are unvalidated.
+    expect(validateResults({ items: [null], results: {} }).ok).toBe(false)
+    expect(validateResults({ items: ['a'], results: {} }).ok).toBe(false)
+    expect(() => validateResults({ items: [null], results: {} })).not.toThrow()
+  })
 })
 
 describe('buildIssueDescription', () => {
@@ -242,11 +166,13 @@ describe('buildIssueDescription', () => {
       dueOn: '2026-08-04',
       failed,
     })
-    expect(text).toContain('Treadmill 3')
-    expect(text).toContain('Treadmill')
-    expect(text).toContain('2026-08-04')
-    expect(text).toContain('Check belt wear: fraying at the edge')
-    expect(text).toContain('Emergency stop works: sticks, needs force')
+    // Exact composed string, not just toContain fragments — pins the
+    // format (blank line after the header, one bullet per failure).
+    expect(text).toBe(
+      'Treadmill 3 (Treadmill) failed inspection due 2026-08-04.\n\n' +
+      '• Check belt wear: fraying at the edge\n' +
+      '• Emergency stop works: sticks, needs force'
+    )
   })
 
   it('appends the inspector note when present', () => {
@@ -261,8 +187,13 @@ describe('buildIssueDescription', () => {
     const text = buildIssueDescription({
       equipmentName: 'T3', typeName: 'Treadmill', dueOn: '2026-08-04', failed, extraNote: '   ',
     })
-    expect(text.trimEnd()).toBe(text.trimEnd())
     expect(text).not.toMatch(/\n\n\s*\n/)
+  })
+
+  it('defaults failed to an empty array so an omitted argument does not throw', () => {
+    expect(() =>
+      buildIssueDescription({ equipmentName: 'Rig', typeName: 'Rig', dueOn: '2026-08-04' })
+    ).not.toThrow()
   })
 
   it('never exceeds the issues.description cap', () => {
@@ -273,6 +204,39 @@ describe('buildIssueDescription', () => {
       equipmentName: 'Rig', typeName: 'Rig', dueOn: '2026-08-04', failed: many,
     })
     expect(text.length).toBeLessThanOrEqual(ISSUE_DESCRIPTION_MAX)
+  })
+
+  it('leaves a marker with the true fault count rather than cutting mid-word silently', () => {
+    const many = Array.from({ length: 200 }, (_, i) => ({
+      id: `i${i}`, label: `Item ${i}`, note: 'x'.repeat(RESULT_NOTE_MAX),
+    }))
+    const text = buildIssueDescription({
+      equipmentName: 'Rig', typeName: 'Rig', dueOn: '2026-08-04', failed: many,
+    })
+    expect(text).toMatch(/truncated \(200 faults in total/)
+    expect(text.length).toBeLessThanOrEqual(ISSUE_DESCRIPTION_MAX)
+  })
+
+  it('does not split a surrogate pair when truncating for the cap', () => {
+    // Inspectors type notes on phones and use emoji (surrogate pairs).
+    // Postgres rejects an unpaired UTF-16 surrogate anywhere in a JSON
+    // string, which would otherwise 500 the issue insert — so this
+    // scans the whole string, not just the very end, because the
+    // truncation marker is appended AFTER the cut point and would mask
+    // an unpaired surrogate left at the out/marker join. The fixed
+    // 2-char label is deliberate: with this shape of input, a naive
+    // `.slice(0, ISSUE_DESCRIPTION_MAX)` provably lands mid-pair
+    // (verified against the pre-fix implementation), so this is not
+    // vacuously passing on a lucky boundary.
+    const many = Array.from({ length: 400 }, (_, i) => ({
+      id: `i${i}`, label: 'AB', note: '😀'.repeat(50),
+    }))
+    const text = buildIssueDescription({
+      equipmentName: 'Rig', typeName: 'Rig', dueOn: '2026-08-04', failed: many,
+    })
+    const UNPAIRED_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+    expect(text.length).toBeLessThanOrEqual(ISSUE_DESCRIPTION_MAX)
+    expect(UNPAIRED_SURROGATE.test(text)).toBe(false)
   })
 })
 
