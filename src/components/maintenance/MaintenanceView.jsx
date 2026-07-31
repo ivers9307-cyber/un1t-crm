@@ -16,6 +16,7 @@ import { useState } from 'react'
 import DueTab from './DueTab'
 import TypesTab from './TypesTab'
 import EquipmentTab from './EquipmentTab'
+import LogTab from './LogTab'
 
 export default function MaintenanceView({ canAdmin }) {
   const TABS = [
@@ -23,6 +24,7 @@ export default function MaintenanceView({ canAdmin }) {
     ...(canAdmin ? [
       { key: 'equipment', label: 'Equipment' },
       { key: 'types', label: 'Types' },
+      { key: 'log', label: 'Log' },
     ] : []),
   ]
   const [tab, setTab] = useState(canAdmin ? 'equipment' : 'due')
@@ -59,6 +61,7 @@ export default function MaintenanceView({ canAdmin }) {
       {tab === 'due' && <DueTab />}
       {canAdmin && tab === 'equipment' && <EquipmentTab />}
       {canAdmin && tab === 'types' && <TypesTab />}
+      {canAdmin && tab === 'log' && <LogTab />}
     </div>
   )
 }

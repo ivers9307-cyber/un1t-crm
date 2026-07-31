@@ -14,6 +14,7 @@ import { cellValue } from '@/components/ui'
 import { buildEquipmentColumns } from './EquipmentTab.jsx'
 import { buildTypeColumns } from './TypesTab.jsx'
 import { buildDueColumns } from './DueTab.jsx'
+import { buildLogColumns } from './LogTab.jsx'
 
 const EQUIPMENT_ROW = {
   id: 'eq-1',
@@ -89,5 +90,50 @@ describe('DueTab columns', () => {
   it('the Equipment (name) column reads the asset name — the regressed column', () => {
     const nameColumn = columns.find((c) => c.key === 'name')
     expect(cellValue(DUE_ROW, nameColumn)).toBe('Treadmill 3')
+  })
+})
+
+const LOG_ROW_PASSED = {
+  id: 'insp-1',
+  equipment_id: 'eq-1',
+  due_on: '2026-07-25',
+  submitted_at: '2026-07-25T09:14:00.000Z',
+  results: { 'item-a': { state: 'pass', at: '2026-07-25T09:14:00.000Z', by: 'prof-1' } },
+  items: [{ id: 'item-a', label: 'Check belt wear' }],
+  issue_id: null,
+  equipment: { id: 'eq-1', name: 'Treadmill 3', zone: 'Cardio floor' },
+  equipment_types: { id: 'type-1', name: 'Treadmill' },
+  profiles: { id: 'prof-1', full_name: 'Casey Coach' },
+}
+
+const LOG_ROW_FAILED = {
+  ...LOG_ROW_PASSED,
+  id: 'insp-2',
+  results: {
+    'item-a': { state: 'fail', note: 'Belt frayed', at: '2026-07-25T09:14:00.000Z', by: 'prof-1' },
+    'item-b': { state: 'pass', at: '2026-07-25T09:14:00.000Z', by: 'prof-1' },
+  },
+}
+
+describe('LogTab columns', () => {
+  const columns = buildLogColumns()
+
+  it('every column resolves a defined value for a representative row', () => {
+    for (const column of columns) {
+      expect(cellValue(LOG_ROW_PASSED, column), `column "${column.key}" (${column.header})`)
+        .toBeDefined()
+    }
+  })
+
+  it('the Equipment column reads the asset name — the regressed column', () => {
+    const equipmentColumn = columns.find((c) => c.key === 'equipment')
+    expect(cellValue(LOG_ROW_PASSED, equipmentColumn)).toBe('Treadmill 3')
+  })
+
+  it('the Result column resolves for a row with faults too', () => {
+    for (const column of columns) {
+      expect(cellValue(LOG_ROW_FAILED, column), `column "${column.key}" (${column.header})`)
+        .toBeDefined()
+    }
   })
 })
