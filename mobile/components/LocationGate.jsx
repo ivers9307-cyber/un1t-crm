@@ -85,7 +85,9 @@ export default function LocationGate() {
       style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }}
       className="items-center justify-center bg-un1t-bg px-8"
     >
-      <Text className="text-2xl font-bold text-un1t-text text-center mb-4">Location required</Text>
+      <Text className="text-2xl font-bold text-un1t-text text-center mb-4">
+        Location required to utilise app features
+      </Text>
       <Text className="text-base text-un1t-subtle text-center mb-8">{config.gate_copy}</Text>
       <Pressable
         onPress={denied ? () => Linking.openSettings() : request}
