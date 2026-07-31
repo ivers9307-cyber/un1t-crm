@@ -202,3 +202,80 @@ export async function listOutOfServiceEquipment(db, locationId) {
   if (error) throw error
   return data || []
 }
+
+// ---- cron + compliance log -----------------------------------------
+
+/** Every location with the feature switched on. Small set (one row per location). */
+export async function listEnabledSettings(db) {
+  const { data, error } = await db
+    .from('equipment_settings')
+    .select('location_id, inspection_day_of_week, enabled')
+    .eq('enabled', true)
+  if (error) throw error
+  return data || []
+}
+
+/**
+ * Submitted inspections at a location covering the cycles currently in
+ * play. Bounded by `sinceDueOn` so this stays small — the sweep only
+ * cares about cycles that are due now, not the whole history.
+ */
+export async function listSubmittedSince(db, locationId, sinceDueOn) {
+  const { data, error } = await db
+    .from('equipment_inspections')
+    .select('equipment_id, due_on')
+    .eq('location_id', locationId)
+    .eq('status', 'submitted')
+    .gte('due_on', sinceDueOn)
+    .order('due_on', { ascending: false })
+  if (error) throw error
+  return data || []
+}
+
+/**
+ * All non-retired assets at a location, for the crons' outstanding
+ * calculation. 30-80 rows per studio, well under the 1000-row cap.
+ */
+export async function listActiveEquipment(db, locationId) {
+  const { data, error } = await db
+    .from('equipment')
+    .select('id, name, status, next_due_on, type_id')
+    .eq('location_id', locationId)
+    .neq('status', 'retired')
+    .order('next_due_on', { ascending: true })
+  if (error) throw error
+  return data || []
+}
+
+/**
+ * The compliance log: submitted inspections newest first, with the
+ * asset, the type and the inspector's name.
+ *
+ * Paginated with .range() because this DOES grow past the 1000-row cap
+ * over time — 60 assets x fortnightly is ~1,500 rows a year.
+ */
+export async function listInspectionLog(db, locationId, { limit = 100, offset = 0, equipmentId = null } = {}) {
+  let q = db
+    .from('equipment_inspections')
+    .select(
+      'id, equipment_id, due_on, submitted_at, results, items, issue_id, ' +
+      'equipment!equipment_id ( id, name, zone ), ' +
+      'equipment_types!type_id ( id, name ), ' +
+      'profiles!inspector_id ( id, full_name )',
+      { count: 'exact' }
+    )
+    .eq('location_id', locationId)
+    .eq('status', 'submitted')
+  if (equipmentId) q = q.eq('equipment_id', equipmentId)
+  const { data, error, count } = await q
+    .order('submitted_at', { ascending: false })
+    .range(offset, offset + limit - 1)
+  if (error) throw error
+  return { rows: data || [], total: count ?? 0 }
+}
+
+// Note on the `profiles` embed: this runs on the service-role client
+// inside an /api route, where the embed is fine. The "never embed
+// profiles" invariant applies to mobile-direct Supabase selects (the
+// authenticated role has no grant, so the whole select 500s). Do not
+// copy this helper into a mobile-direct call.
