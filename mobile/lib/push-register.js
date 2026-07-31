@@ -17,6 +17,7 @@ import * as Notifications from 'expo-notifications'
 import Constants from 'expo-constants'
 import { Platform } from 'react-native'
 import { api } from './api'
+import { readImpersonate } from './impersonate'
 import { ANDROID_CHANNELS } from 'shared/push-channels'
 
 // Show notifications even when the app is in the foreground (default
@@ -138,6 +139,26 @@ export async function registerForPushNotifications(opts = {}) {
 export async function reportDeviceState({ geofencePermission } = {}) {
   try {
     if (!Device.isDevice) return { skipped: true, reason: 'simulator' }
+
+    // STAFF-DEV.10 — NEVER report mid-impersonation. api() attaches
+    // x-impersonate-target straight from SecureStore, so getCurrentUser()
+    // would resolve to the TARGET and this upsert (conflict target
+    // expo_push_token) would RE-POINT the row's user_id — handing the
+    // master's phone every subsequent push meant for the target
+    // (WhatsApp threads, lead alerts: customer PII) and silently cutting
+    // the master off from their own until they next sign in.
+    //
+    // The guard lives HERE, not only at the call site: a caller's React
+    // state (`impersonatingFrom`) is populated by a fire-and-forget
+    // /api/mobile/me refresh AFTER setSession, so on a cold start it is
+    // still null while SecureStore already says "impersonating" — the
+    // exact window LocationGate's foreground check runs in. SecureStore
+    // is the authority, and this protects any future caller too. Same
+    // reasoning (and the same read) as syncGeofences in ./geofence.
+    try {
+      const imp = await readImpersonate()
+      if (imp?.targetId) return { skipped: true, reason: 'impersonating' }
+    } catch { /* unreadable blob ⇒ treat as not impersonating */ }
 
     // Same kiosk carve-out as registration: a shared studio device must
     // never write a row under whichever staffer last PIN-unlocked it.

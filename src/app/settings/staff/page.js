@@ -14,7 +14,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { ChevronLeft, Users } from 'lucide-react'
 import StaffSearchableList from '@/components/settings/StaffSearchableList'
-import { deriveTargetVersion, deviceVerdict } from '@/lib/staff-devices'
+import { deriveTargetVersion, deviceVerdict, currentDevice } from '@/lib/staff-devices'
 
 export const dynamic = 'force-dynamic'
 
@@ -48,6 +48,12 @@ export default async function StaffIndexPage() {
   const targetVersion = deriveTargetVersion(devices.filter(d => activeIds.has(d.user_id)), now)
   const verdictsById = Object.fromEntries(
     staff.map(s => [s.id, deviceVerdict(devicesByUser.get(s.id) || [], targetVersion, now)]),
+  )
+  // Background-location state for the CURRENT device only — an old iPad
+  // that once granted "always" says nothing about today's phone. NULL
+  // means never reported and renders as "—", never as "denied".
+  const permissionsById = Object.fromEntries(
+    staff.map(s => [s.id, currentDevice(devicesByUser.get(s.id) || [])?.geofence_permission ?? null]),
   )
 
   // Pre-compute the canEdit boolean per row server-side so the client
@@ -92,6 +98,7 @@ export default async function StaffIndexPage() {
         user={user}
         canEditFns={canEditFns}
         verdictsById={verdictsById}
+        permissionsById={permissionsById}
         targetVersion={targetVersion}
       />
     </div>

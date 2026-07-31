@@ -45,7 +45,7 @@ function fmtAge(iso) {
 // kept on the prop list as a forward-compat hook in case future
 // row-level behaviour wants the caller's role.
 
-export default function StaffSearchableList({ staff, user: _user, canEditFns, verdictsById = {}, targetVersion = null }) {
+export default function StaffSearchableList({ staff, user: _user, canEditFns, verdictsById = {}, permissionsById = {}, targetVersion = null }) {
   const [query, setQuery] = useState('')
   // 'all' | 'active' | 'inactive' | 'needs_update'
   const [statusFilter, setStatusFilter] = useState('all')
@@ -159,7 +159,7 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns, ve
                     {(s.profile_locations || []).map(pl => pl.locations?.name).filter(Boolean).join(', ') || '—'}
                   </td>
                   <td className="p-3">
-                    <DeviceCell verdict={verdictsById[s.id]} />
+                    <DeviceCell verdict={verdictsById[s.id]} permission={permissionsById[s.id]} />
                   </td>
                   <td className="p-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full ${s.active ? 'bg-green-500/20 text-green-700' : 'bg-red-500/20 text-red-700'}`}>
@@ -197,7 +197,26 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns, ve
 // amber Outdated chip or a neutral No app chip. The verdict keys off the
 // person's NEWEST device, so an old spare on a newer build can't hide a
 // daily phone that never updated.
-function DeviceCell({ verdict }) {
+// STAFF-DEV.10 — background-location state for the CURRENT device.
+// A null/unknown value renders as "—" and NEVER as "Denied": the column
+// is null until a device reports (any client below 2.2.0 never does),
+// and absence of data is not a denial — conflating the two is what makes
+// the whole diagnostic useless.
+const PERMISSION_CHIPS = {
+  always: ['bg-emerald-500/10 text-emerald-700', 'Always'],
+  when_in_use: ['bg-amber-500/10 text-amber-700', 'While using'],
+  denied: ['bg-red-500/10 text-red-700', 'Denied'],
+  undetermined: ['bg-gray-500/10 text-gray-700', 'Not asked'],
+}
+
+function PermissionChip({ value }) {
+  const entry = PERMISSION_CHIPS[value]
+  if (!entry) return <span className="text-un1t-muted">—</span>
+  const [tone, label] = entry
+  return <span className={`px-2 py-0.5 rounded-full ${tone}`}>{label}</span>
+}
+
+function DeviceCell({ verdict, permission }) {
   if (!verdict || verdict.kind === 'no_device') {
     return (
       <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/10 text-gray-700">No app</span>
@@ -211,6 +230,7 @@ function DeviceCell({ verdict }) {
       {verdict.kind === 'outdated' && (
         <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-700">Outdated</span>
       )}
+      <PermissionChip value={permission} />
     </span>
   )
 }

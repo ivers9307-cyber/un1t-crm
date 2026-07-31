@@ -41,12 +41,18 @@ const MAX_SEGMENT = 9999
  * three segments are read, so a 4th is truncated: `'2.2.0.1'` compares
  * equal to `'2.2.0'`.
  *
- * SECURITY: `app_version` is client-reported, and the highest one in the
- * fleet becomes the target every other staff member is measured against
- * (and, via the nudge, pushed about). A segment outside 0–MAX_SEGMENT is
- * therefore rejected outright rather than parsed — otherwise a single
- * device claiming '9999999999999999' would mark the whole estate
- * outdated. The mobile register endpoint validates the same shape.
+ * ON THE SEGMENT CAP — what it does and does not buy: `app_version` is
+ * client-reported, and the highest one in the fleet becomes the target
+ * every other staff member is measured against (and, via the nudge,
+ * pushed about). Rejecting a segment outside 0–MAX_SEGMENT bounds the
+ * MAGNITUDE of a poisoned value; it does NOT remove the capability. Any
+ * authenticated staff session can still POST `'9999.0.0'` to
+ * /api/mobile/device-tokens and mark the whole fleet outdated — the cap
+ * only stops the absurd end of that (and keeps the numbers safe to
+ * compare). Real defence would be an operator-set target version or
+ * trusting only store-published builds; neither is built. The mobile
+ * register endpoint validates the same shape so the two can't disagree
+ * about what is storable.
  *
  * @param {string|null|undefined} str
  * @returns {[number, number, number]|null} null when unparseable or out of range.

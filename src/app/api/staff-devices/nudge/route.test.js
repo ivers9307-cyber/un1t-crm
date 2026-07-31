@@ -37,32 +37,78 @@ const ID = {
 }
 
 // Thenable builder mock. Records every call so the query shape (which is
-// the route's correctness) can be asserted, and captures the update
+// the route's correctness) can be asserted, and captures each update
 // patch + the ids it was scoped to.
+//
+// The claim UPDATE is modelled FAITHFULLY rather than stubbed: it
+// applies the `.in()` id list AND the `.or(...is.null,...lt.<cutoff>)`
+// throttle filter against the fixture rows, returns only the rows that
+// matched, and WRITES THE PATCH BACK into the fixture. That last part is
+// what lets a second POST against the same db observe the first one's
+// claim — i.e. it actually exercises the concurrency property instead of
+// asserting a mock's opinion of it.
 function makeDb(tables, sink = {}) {
   sink.calls = sink.calls || []
   sink.updates = sink.updates || []
   return {
     from(table) {
       let patch = null
+      let ids = null
+      let orFilter = null
+      const claimable = (row) => {
+        if (!orFilter) return true
+        const cutoff = orFilter.match(/lt\.([^,)]+)/)?.[1]
+        const value = row.last_update_nudge_at
+        if (value == null) return true
+        return cutoff ? Date.parse(value) < Date.parse(cutoff) : false
+      }
+      const matched = () =>
+        (tables[table] ?? []).filter((row) => ids?.includes(row.id) && claimable(row))
       const builder = {
-        select: (cols) => { sink.calls.push(['select', table, cols]); return builder },
+        select: (cols) => {
+          sink.calls.push(['select', table, cols])
+          if (patch) {
+            // An update…select() returns the affected rows. Apply the
+            // patch to the fixture so a later call sees the new state.
+            const rows = matched()
+            for (const row of rows) Object.assign(row, patch)
+            sink.updates.push({ table, patch: { ...patch }, ids, returned: rows.map((r) => r.id) })
+            return { then: (resolve) => Promise.resolve({ data: rows.map((r) => ({ id: r.id })), error: null }).then(resolve) }
+          }
+          return builder
+        },
         update: (row) => { patch = row; return builder },
         eq: (col, val) => { sink.calls.push(['eq', table, col, val]); return builder },
         order: (col, opts) => { sink.calls.push(['order', table, col, opts?.ascending]); return builder },
         range: (from, to) => { sink.calls.push(['range', table, from, to]); return builder },
+        or: (expr) => { orFilter = expr; sink.calls.push(['or', table, expr]); return builder },
         in: (col, vals) => {
           sink.calls.push(['in', table, col, vals])
-          if (patch) sink.updates.push({ table, patch, col, ids: vals })
+          ids = vals
           return builder
         },
-        then: (resolve) =>
-          Promise.resolve({ data: patch ? null : (tables[table] ?? []), error: null }).then(resolve),
+        then: (resolve) => {
+          if (patch) {
+            // A bare update with no .select() — the claim RELEASE path.
+            const rows = matched()
+            for (const row of rows) Object.assign(row, patch)
+            sink.updates.push({ table, patch: { ...patch }, ids, returned: rows.map((r) => r.id) })
+            return Promise.resolve({ data: null, error: null }).then(resolve)
+          }
+          return Promise.resolve({ data: tables[table] ?? [], error: null }).then(resolve)
+        },
       }
       return builder
     },
   }
 }
+
+// Fresh, mutable copy of the fixture — the mock writes claims back into
+// it, so each test needs its own.
+const fleet = (overrides = {}) => ({
+  profiles: FLEET.profiles.map((p) => ({ ...p })),
+  device_tokens: (overrides.device_tokens || FLEET.device_tokens).map((d) => ({ ...d })),
+})
 
 const req = (body) =>
   new Request('http://localhost/api/staff-devices/nudge', {
@@ -125,7 +171,7 @@ describe('POST /api/staff-devices/nudge', () => {
 
   it('sends only to the genuinely outdated — the client cannot nominate victims', async () => {
     const sink = {}
-    createServerClient.mockReturnValue(makeDb(FLEET, sink))
+    createServerClient.mockReturnValue(makeDb(fleet(), sink))
 
     const res = await POST(req({ profile_ids: allIds }))
     expect(res.status).toBe(200)
@@ -141,43 +187,68 @@ describe('POST /api/staff-devices/nudge', () => {
   })
 
   it('skips (and counts) a profile nudged inside the last 24h', async () => {
-    createServerClient.mockReturnValue(makeDb(FLEET))
+    createServerClient.mockReturnValue(makeDb(fleet()))
     const json = await (await POST(req({ profile_ids: [ID.throttled] }))).json()
     expect(sendPush).not.toHaveBeenCalled()
     expect(json.data).toEqual({ sent: 0, skipped_throttled: 1, skipped_no_token: 0 })
   })
 
   it('nudges again once the throttle window has passed', async () => {
-    createServerClient.mockReturnValue(makeDb({
-      ...FLEET,
+    createServerClient.mockReturnValue(makeDb(fleet({
       device_tokens: [
-        { ...FLEET.device_tokens[0] },
-        { ...FLEET.device_tokens[1] },
+        FLEET.device_tokens[0],
+        FLEET.device_tokens[1],
         { ...FLEET.device_tokens[2], last_update_nudge_at: daysAgo(2) },
       ],
-    }))
+    })))
     const json = await (await POST(req({ profile_ids: [ID.throttled] }))).json()
     expect(sendPush.mock.calls[0][0]).toEqual([ID.throttled])
     expect(json.data.sent).toBe(1)
   })
 
-  it('stamps last_update_nudge_at on the devices it actually nudged', async () => {
+  it('CLAIMS the throttle before sending, conditionally, on the current device row', async () => {
     const sink = {}
-    createServerClient.mockReturnValue(makeDb(FLEET, sink))
+    createServerClient.mockReturnValue(makeDb(fleet(), sink))
     await POST(req({ profile_ids: allIds }))
 
+    // Exactly one write: the claim. It is scoped to the outdated
+    // staffer's CURRENT device row — never the up-to-date one — and it
+    // carries the conditional filter that makes it a claim rather than a
+    // blind stamp. Without the .or(), two concurrent callers would both
+    // read "not nudged" and both send.
     expect(sink.updates).toHaveLength(1)
-    const [update] = sink.updates
-    expect(update.table).toBe('device_tokens')
-    expect(update.col).toBe('id')
-    // Only the outdated staffer's CURRENT device row — never the
-    // up-to-date one, and never the already-throttled one.
-    expect(update.ids).toEqual(['d-outdated'])
-    expect(typeof update.patch.last_update_nudge_at).toBe('string')
+    const [claim] = sink.updates
+    expect(claim.table).toBe('device_tokens')
+    expect(claim.ids).toContain('d-outdated')
+    expect(claim.ids).not.toContain('d-current')
+    expect(typeof claim.patch.last_update_nudge_at).toBe('string')
+
+    const or = sink.calls.find(c => c[0] === 'or' && c[1] === 'device_tokens')?.[2]
+    expect(or).toContain('last_update_nudge_at.is.null')
+    expect(or).toContain('last_update_nudge_at.lt.')
+    // The claim must be written BEFORE the push goes out, not after.
+    expect(sendPush).toHaveBeenCalledTimes(1)
+  })
+
+  it('a concurrent second call sends to nobody — the claim is the throttle', async () => {
+    // Both calls run against the SAME rows, as two racing requests would.
+    // The first claims d-outdated; the second finds nothing left to claim
+    // and must send to no one rather than firing a duplicate push.
+    const db = makeDb(fleet())
+    createServerClient.mockReturnValue(db)
+
+    const first = await (await POST(req({ profile_ids: allIds }))).json()
+    expect(first.data.sent).toBe(1)
+    expect(sendPush).toHaveBeenCalledTimes(1)
+
+    const second = await (await POST(req({ profile_ids: allIds }))).json()
+    expect(sendPush).toHaveBeenCalledTimes(1) // no second push
+    expect(second.data.sent).toBe(0)
+    expect(second.data.skipped_throttled).toBe(2)
   })
 
   it('uses the default copy, and lets a custom message override the body', async () => {
-    createServerClient.mockReturnValue(makeDb(FLEET))
+    createServerClient.mockReturnValue(makeDb(fleet()))
     await POST(req({ profile_ids: [ID.outdated] }))
     const defaultBody = sendPush.mock.calls[0][1].body
     expect(defaultBody).toMatch(/update/i)
@@ -186,7 +257,7 @@ describe('POST /api/staff-devices/nudge', () => {
     hasPermission.mockReturnValue(true)
     getCurrentUser.mockResolvedValue(settingsUser)
     sendPush.mockResolvedValue({ sent: 1, skipped: 0, invalidated: 0, failed: 0 })
-    createServerClient.mockReturnValue(makeDb(FLEET))
+    createServerClient.mockReturnValue(makeDb(fleet()))
     await POST(req({ profile_ids: [ID.outdated], message: 'New build in TestFlight, please grab it.' }))
     const payload = sendPush.mock.calls[0][1]
     expect(payload.body).toBe('New build in TestFlight, please grab it.')
@@ -201,20 +272,20 @@ describe('POST /api/staff-devices/nudge', () => {
     // A `category: 'app_update'` here would skip every staffer with a
     // location assignment and the nudge would reach nobody. Android
     // routing rides data.type instead (TYPE_CHANNELS.app_update).
-    createServerClient.mockReturnValue(makeDb(FLEET))
+    createServerClient.mockReturnValue(makeDb(fleet()))
     await POST(req({ profile_ids: [ID.outdated] }))
     expect(sendPush.mock.calls[0][1].category).toBeUndefined()
   })
 
   it('400s on a message longer than 200 characters', async () => {
-    createServerClient.mockReturnValue(makeDb(FLEET))
+    createServerClient.mockReturnValue(makeDb(fleet()))
     const res = await POST(req({ profile_ids: [ID.outdated], message: 'x'.repeat(201) }))
     expect(res.status).toBe(400)
     expect(sendPush).not.toHaveBeenCalled()
   })
 
   it('400s on a non-uuid profile id', async () => {
-    createServerClient.mockReturnValue(makeDb(FLEET))
+    createServerClient.mockReturnValue(makeDb(fleet()))
     const res = await POST(req({ profile_ids: ['not-a-uuid'] }))
     expect(res.status).toBe(400)
     expect(sendPush).not.toHaveBeenCalled()
@@ -222,20 +293,69 @@ describe('POST /api/staff-devices/nudge', () => {
 
   it('reports a push failure in the counts instead of 500ing', async () => {
     const sink = {}
-    createServerClient.mockReturnValue(makeDb(FLEET, sink))
+    createServerClient.mockReturnValue(makeDb(fleet(), sink))
     sendPush.mockRejectedValue(new Error('expo down'))
 
     const res = await POST(req({ profile_ids: allIds }))
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json.data.sent).toBe(0)
-    // Nothing was delivered, so nothing may be throttled — otherwise a
-    // transient Expo outage would lock the operator out for 24h.
-    expect(sink.updates).toHaveLength(0)
+    // Nothing was delivered, so the claim must be RELEASED — otherwise a
+    // transient Expo outage would lock the operator out for 24h. The
+    // release restores the value the row actually held (here: null), it
+    // doesn't blanket-null rows that had an older genuine stamp.
+    expect(sink.updates).toHaveLength(2)
+    const [claim, release] = sink.updates
+    expect(typeof claim.patch.last_update_nudge_at).toBe('string')
+    expect(release.patch.last_update_nudge_at).toBeNull()
+    expect(release.ids).toEqual(['d-outdated'])
+  })
+
+  it('releases the claim when the push pipeline delivers nothing', async () => {
+    // Distinct from a throw: sendPush resolves, but every ticket failed.
+    const sink = {}
+    createServerClient.mockReturnValue(makeDb(fleet(), sink))
+    sendPush.mockResolvedValue({ sent: 0, skipped: 0, invalidated: 0, failed: 1 })
+
+    const json = await (await POST(req({ profile_ids: [ID.outdated] }))).json()
+    expect(json.data.sent).toBe(0)
+    expect(sink.updates).toHaveLength(2)
+    expect(sink.updates[1].patch.last_update_nudge_at).toBeNull()
+  })
+
+  it('500s rather than sending when the claim itself fails', async () => {
+    // A failed claim means the throttle isn't holding, so sending anyway
+    // could double-push. Failing is the safe direction — the operator
+    // just retries.
+    createServerClient.mockReturnValue({
+      from: (table) => {
+        let patch = null
+        const builder = {
+          select: () => (patch
+            ? { then: (r) => Promise.resolve({ data: null, error: { message: 'claim boom' } }).then(r) }
+            : builder),
+          update: (row) => { patch = row; return builder },
+          eq: () => builder,
+          order: () => builder,
+          range: () => builder,
+          or: () => builder,
+          in: () => builder,
+          then: (resolve) => Promise.resolve({
+            data: table === 'profiles' ? FLEET.profiles : FLEET.device_tokens,
+            error: null,
+          }).then(resolve),
+        }
+        return builder
+      },
+    })
+
+    const res = await POST(req({ profile_ids: [ID.outdated] }))
+    expect(res.status).toBe(500)
+    expect(sendPush).not.toHaveBeenCalled()
   })
 
   it('ignores an inactive/unknown profile id rather than trusting it', async () => {
-    createServerClient.mockReturnValue(makeDb(FLEET))
+    createServerClient.mockReturnValue(makeDb(fleet()))
     const json = await (await POST(req({
       profile_ids: ['99999999-9999-9999-9999-999999999999'],
     }))).json()

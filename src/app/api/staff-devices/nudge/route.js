@@ -15,12 +15,14 @@
 // device_tokens.last_update_nudge_at (mig 466) of the CURRENT device —
 // the same row every other verdict keys off. Server-side because a
 // client-side guard is a suggestion, and because the operator may have
-// several tabs open.
+// several tabs open. It is CLAIMED BEFORE SENDING: the conditional
+// UPDATE is the throttle, and the rows it returns are the recipients,
+// so two concurrent requests cannot both decide the same person is
+// un-nudged. A claim is released again if the send didn't land.
 //
 // Nothing here 500s on a push failure: Expo being down is not the
-// operator's problem to debug, it just means nothing was sent, and the
-// throttle is deliberately NOT stamped in that case so a retry is
-// possible immediately.
+// operator's problem to debug, it just means nothing was sent and the
+// claim comes back off so a retry is possible immediately.
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -106,9 +108,10 @@ export async function POST(request) {
     now,
   )
 
-  const recipientIds = []
-  const deviceIdsToStamp = []
-  let skippedThrottled = 0
+  // Candidates: requested ids that ARE genuinely outdated and have a
+  // current device row to claim. The throttle is not judged here — see
+  // the claim below.
+  const candidates = []
   let skippedNoToken = 0
 
   // Deduplicate: a repeated id in the request must not double-push.
@@ -129,15 +132,50 @@ export async function POST(request) {
     if (verdict.kind !== 'outdated') continue
 
     const device = currentDevice(own)
-    const lastNudge = device?.last_update_nudge_at ? Date.parse(device.last_update_nudge_at) : NaN
-    if (Number.isFinite(lastNudge) && now - lastNudge < THROTTLE_MS) {
-      skippedThrottled++
-      continue
-    }
-
-    recipientIds.push(id)
-    if (device?.id) deviceIdsToStamp.push(device.id)
+    if (!device?.id) continue
+    candidates.push({ id, deviceId: device.id, previousNudgeAt: device.last_update_nudge_at ?? null })
   }
+
+  if (candidates.length === 0) {
+    return NextResponse.json({
+      success: true,
+      data: { sent: 0, skipped_throttled: 0, skipped_no_token: skippedNoToken },
+    })
+  }
+
+  // CLAIM BEFORE SEND (the estate's established pattern). Reading
+  // last_update_nudge_at and then writing it later is a read-then-write
+  // race: two concurrent POSTs — a double-click, two open tabs, a retry
+  // — both read "not nudged yet" and both send. Instead the UPDATE
+  // itself is the throttle: it is filtered to rows that are still
+  // claimable, so exactly one caller can win a given row, and the rows
+  // it returns ARE the recipients.
+  const nowIso = new Date(now).toISOString()
+  const cutoffIso = new Date(now - THROTTLE_MS).toISOString()
+  let claimedDeviceIds = []
+  try {
+    const { data: claimed, error } = await db
+      .from('device_tokens')
+      .update({ last_update_nudge_at: nowIso })
+      .in('id', candidates.map((c) => c.deviceId))
+      .or(`last_update_nudge_at.is.null,last_update_nudge_at.lt.${cutoffIso}`)
+      .select('id')
+    if (error) throw new Error(error.message)
+    claimedDeviceIds = (claimed || []).map((row) => row.id)
+  } catch (err) {
+    // Failing the claim is the safe direction: sending without one could
+    // double-push, and the operator can simply retry.
+    console.error('[staff-devices/nudge] throttle claim failed', err)
+    return NextResponse.json({ success: false, error: 'Failed to claim the nudge' }, { status: 500 })
+  }
+
+  const claimedSet = new Set(claimedDeviceIds)
+  const winners = candidates.filter((c) => claimedSet.has(c.deviceId))
+  // Anything we wanted to nudge but couldn't claim was nudged inside the
+  // window — by an earlier click, or by a concurrent request that beat
+  // us to this very row.
+  const skippedThrottled = candidates.length - winners.length
+  const recipientIds = winners.map((c) => c.id)
 
   if (recipientIds.length === 0) {
     return NextResponse.json({
@@ -176,26 +214,36 @@ export async function POST(request) {
   }
 
   if (pushed === 0) {
+    // RELEASE THE CLAIM. Nothing was delivered, so the 24h lock has to
+    // come back off — an Expo outage must not stop the operator retrying
+    // for a day. Each row is restored to the value it actually held, not
+    // blanket-nulled, so a genuinely older stamp survives; rows are
+    // grouped by previous value (almost always a single null group) to
+    // keep this to one or two statements.
+    const byPrevious = new Map()
+    for (const winner of winners) {
+      const list = byPrevious.get(winner.previousNudgeAt)
+      if (list) list.push(winner.deviceId)
+      else byPrevious.set(winner.previousNudgeAt, [winner.deviceId])
+    }
+    for (const [previous, deviceIds] of byPrevious) {
+      try {
+        const { error } = await db
+          .from('device_tokens')
+          .update({ last_update_nudge_at: previous })
+          .in('id', deviceIds)
+        if (error) throw new Error(error.message)
+      } catch (err) {
+        // Worst case the throttle stands for 24h on a send that never
+        // landed. Loud in the logs so it's diagnosable.
+        console.error('[staff-devices/nudge] claim release failed', err)
+      }
+    }
+
     return NextResponse.json({
       success: true,
       data: { sent: 0, skipped_throttled: skippedThrottled, skipped_no_token: skippedNoToken },
     })
-  }
-
-  // Stamp the throttle only for a send that actually landed — an Expo
-  // outage must not lock the operator out for the next 24 hours.
-  if (deviceIdsToStamp.length) {
-    try {
-      const { error } = await db
-        .from('device_tokens')
-        .update({ last_update_nudge_at: new Date(now).toISOString() })
-        .in('id', deviceIdsToStamp)
-      if (error) throw new Error(error.message)
-    } catch (err) {
-      // The push already went out; failing the response now would invite
-      // a retry that double-pushes. Loud in the logs, quiet to the caller.
-      console.error('[staff-devices/nudge] throttle stamp failed', err)
-    }
   }
 
   return NextResponse.json({

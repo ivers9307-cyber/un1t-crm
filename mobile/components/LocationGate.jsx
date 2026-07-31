@@ -71,11 +71,13 @@ export default function LocationGate() {
     } catch { setGranted(true) } // never brick the app on a permission API error
 
     // Fire-and-forget device-state report. Mirrors the gate's own
-    // early-outs: never while impersonating (the row would be written
-    // against the MASTER's session but describe the master's phone,
-    // polluting the target's record) and never without a session.
-    // Wrapped in its own try/catch so a reporting failure can never
-    // block or break the gate.
+    // early-outs — but these are a CHEAP EARLY-OUT ONLY: the
+    // authoritative impersonation guard lives inside reportDeviceState,
+    // which reads SecureStore. `impersonatingFrom` here comes from a
+    // fire-and-forget /api/mobile/me refresh that lands AFTER
+    // setSession, so on a cold start it is still null while api() is
+    // already attaching x-impersonate-target. Wrapped in its own
+    // try/catch so a reporting failure can never block or break the gate.
     try {
       if (!bg) return
       if (!sessionRef.current || impersonatingRef.current) return
@@ -83,12 +85,14 @@ export default function LocationGate() {
       try { fg = await Location.getForegroundPermissionsAsync() } catch { /* background alone is enough */ }
       const value = mapPermission(bg, fg)
       if (value === reportedRef.current) return
-      // Only remember it once it actually landed: a report that skipped
-      // (offline, no token yet) must be retried on the next foreground,
-      // not silently written off. The upsert is idempotent, so a rare
+      // Only remember it once the SERVER confirmed it. api() never
+      // throws and never sets `skipped` — a network failure comes back
+      // as { success: false, error: '…' } — so anything short of an
+      // explicit success must be retried on the next foreground rather
+      // than silently written off. The upsert is idempotent, so a rare
       // double-report costs nothing.
       const res = await reportDeviceState({ geofencePermission: value })
-      if (!res?.skipped) reportedRef.current = value
+      if (res?.result?.success) reportedRef.current = value
     } catch { /* reporting is best-effort — never surfaces to the user */ }
   }, [])
 
