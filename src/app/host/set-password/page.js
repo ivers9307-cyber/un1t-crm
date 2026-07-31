@@ -1,16 +1,19 @@
 'use client'
 
 // Host-portal set-password / accept-invite (HOST-PORTAL.1). The invite email's
-// link lands here; the token-handling below is copied VERBATIM from the staff
-// /reset-password page (hardened against CVE-internal 2026-05-13 + the
-// 2026-06 session-race) — do not simplify. Only the styling (dark host brand)
-// and the success redirect (/host) differ. Lives OUTSIDE the (portal) gate.
+// link lands here; the token handshake is SHARED with the staff /reset-password
+// page via `@/lib/recovery-link` (hardened against CVE-internal 2026-05-13, the
+// 2026-06 session-race and the 2026-07-31 PKCE-verifier bug). It used to be a
+// verbatim copy, which meant it carried the same bug — keep it shared. Only the
+// styling (dark host brand) and the success redirect (/host) differ. Lives
+// OUTSIDE the (portal) gate.
 
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Check, X } from 'lucide-react'
 import { createBrowserClient } from '@/lib/supabase'
 import { passwordRequirements, validatePasswordComplexity } from '@/lib/schemas'
+import { parseRecoveryLink, establishRecoverySession } from '@/lib/recovery-link'
 
 export default function HostSetPasswordPage() {
   const [password, setPassword] = useState('')
@@ -20,24 +23,23 @@ export default function HostSetPasswordPage() {
   const [ready, setReady] = useState(false)
   const [flowType, setFlowType] = useState('recovery')
   const supabaseRef = useRef(null)
+  // The user id the link verified as — handleSet pins the write to it.
+  const linkUserRef = useRef(null)
   const router = useRouter()
 
   useEffect(() => {
-    // Sign out any existing session FIRST, then establish ONLY the recovery/
-    // invite session from the link's token, so updateUser() can only ever hit
-    // the invited user. detectSessionInUrl:false so we control the sequence.
+    // Establish ONLY the invite/recovery session from the link's token, so
+    // updateUser() can only ever hit the invited user. Sign-out happens on
+    // the failure paths inside establishRecoverySession — doing it up front
+    // deleted the PKCE code verifier the exchange needs (RESET-PKCE.1).
+    // detectSessionInUrl:false so we control the sequence.
     if (typeof window === 'undefined') return
 
-    const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''))
-    const searchParams = new URLSearchParams(window.location.search || '')
-    const t = hashParams.get('type') || searchParams.get('type')
-    if (t === 'invite') setFlowType('invite')
-    else if (t === 'recovery') setFlowType('recovery')
-
-    const code = searchParams.get('code')
-    const tokenHash = searchParams.get('token_hash') || hashParams.get('token_hash')
-    const accessToken = hashParams.get('access_token')
-    const refreshToken = hashParams.get('refresh_token')
+    const link = parseRecoveryLink({
+      hash: window.location.hash,
+      search: window.location.search,
+    })
+    setFlowType(link.flowType)
 
     const supabase = createBrowserClient({ auth: { detectSessionInUrl: false } })
     supabaseRef.current = supabase
@@ -45,31 +47,12 @@ export default function HostSetPasswordPage() {
 
     ;(async () => {
       try {
-        try { await supabase.auth.signOut({ scope: 'local' }) } catch { /* ignore */ }
+        const { userId } = await establishRecoverySession(supabase, link)
         if (cancelled) return
-
-        if (code) {
-          const { error: exErr } = await supabase.auth.exchangeCodeForSession(code)
-          if (exErr) throw exErr
-        } else if (accessToken && refreshToken) {
-          const { error: ssErr } = await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken })
-          if (ssErr) throw ssErr
-        } else if (tokenHash) {
-          const { error: otpErr } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: t === 'invite' ? 'invite' : 'recovery' })
-          if (otpErr) throw otpErr
-        } else {
-          throw new Error('this link is missing its verification token')
-        }
-        if (cancelled) return
-
-        const { data: sessData } = await supabase.auth.getSession()
-        if (cancelled) return
-        if (sessData?.session) setReady(true)
-        else throw new Error('no session was established')
+        linkUserRef.current = userId
+        setReady(true)
       } catch (e) {
-        if (!cancelled) {
-          setError(`Link could not be verified: ${e?.message || 'unknown error'}. Ask UN1T for a fresh invite.`)
-        }
+        if (!cancelled) setError(e?.message || 'Link could not be verified.')
       }
     })()
 
@@ -87,6 +70,14 @@ export default function HostSetPasswordPage() {
     const supabase = supabaseRef.current
     if (!ready || !supabase) {
       setError('Link not verified yet. Wait a moment and try again, or ask for a fresh invite.')
+      setLoading(false)
+      return
+    }
+    // Re-check at the moment of the write that the live session is still the
+    // account the link verified as (CVE-internal 2026-05-13).
+    const { data: live } = await supabase.auth.getUser()
+    if (!live?.user || live.user.id !== linkUserRef.current) {
+      setError('This session no longer matches the invite link. Ask for a fresh invite.')
       setLoading(false)
       return
     }

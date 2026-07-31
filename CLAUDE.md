@@ -21,6 +21,7 @@ The "if you miss one, you break prod or burn a session" list. Terse on purpose; 
 **supabase-js / PostgREST traps** (these fail *silently*)
 - **Builders are thenables, not Promises** — they have `.then` but no `.catch`. `await db.rpc(...).catch(()=>{})` throws and the rpc never runs. Use `try { await … } catch {}`.
 - **`.update()/.insert()` must be `await`ed** or the request never fires (silent no-op).
+- **`auth.signOut()` deletes the PKCE code verifier** (`_removeSession()` drops `${storageKey}`, `-user` AND `-code-verifier`, for every scope but `'others'`, even with no session). Never sign out on the path to `exchangeCodeForSession()` — establish the session first, sign out only on failure. Recovery/invite links go through `src/lib/recovery-link.js`; also parse `error_code` off the callback URL (an expired link is not a malformed one).
 - **1,000-row select cap.** Every `.select()` returns ≤1000 rows regardless of `.limit()`. Any fan-out (sends, imports, backfills) must `.range()`-paginate with an explicit `.order()`. Copy `src/lib/pipeline-reclassify.js`.
 - **Bare `contacts(...)` embeds 300 (`PGRST201`) once a table has ≥2 FKs to contacts** — disambiguate `contacts!contact_id(...)`. ≥2-FK tables today: `whatsapp_conversations`, `instagram_conversations`, `team_members`.
 - **Embedded-resource filters break under count-only (`head:true`) selects** → return 0, no error. Don't fight it: denormalise the filtered column onto `contacts` via trigger (that's why `contacts.email_marketing` / `pipeline_stage_slug` exist).
