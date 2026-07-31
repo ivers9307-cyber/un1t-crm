@@ -2164,6 +2164,21 @@ registry.registerPath({
   },
 })
 
+// Staff device visibility (STAFF-DEV, mig 466)
+registry.registerPath({
+  method: 'get',
+  path: '/api/staff-devices',
+  tags: ['Staff'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Staff app versions, devices and geofence permission',
+  description: 'Every active staff profile with their registered devices, the target app version derived from the non-stale fleet, and a per-person verdict (current | outdated | unknown_version | no_device). The verdict keys off each person\'s most recently seen device, never their best version. Requires the settings permission.',
+  responses: {
+    200: { description: 'Fleet payload — { target_version, staff[] }' },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — settings permission required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // Org-admin grants (SAAS-4, mig 417)
 registry.registerPath({
   method: 'get',
