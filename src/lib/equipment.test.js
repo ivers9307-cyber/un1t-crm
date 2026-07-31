@@ -160,3 +160,163 @@ describe('validateItems', () => {
     expect(res.error).toMatch(new RegExp(String(ITEM_LABEL_MAX)))
   })
 })
+
+import {
+  validateResults,
+  buildIssueDescription,
+  shouldReturnToService,
+  isDue,
+  RESULT_NOTE_MAX,
+  ISSUE_DESCRIPTION_MAX,
+} from './equipment.js'
+
+const ITEMS = [
+  { id: 'a', label: 'Check belt wear', order: 0 },
+  { id: 'b', label: 'Emergency stop works', order: 1 },
+]
+
+describe('validateResults', () => {
+  it('accepts an all-pass run with no failures', () => {
+    const res = validateResults({ items: ITEMS, results: { a: { state: 'pass' }, b: { state: 'pass' } } })
+    expect(res.ok).toBe(true)
+    expect(res.failed).toEqual([])
+  })
+
+  it('returns failed items with their notes, in snapshot order', () => {
+    const res = validateResults({
+      items: ITEMS,
+      results: { a: { state: 'fail', note: 'fraying at the edge' }, b: { state: 'pass' } },
+    })
+    expect(res.ok).toBe(true)
+    expect(res.failed).toEqual([{ id: 'a', label: 'Check belt wear', note: 'fraying at the edge' }])
+  })
+
+  it('rejects a fail with no note', () => {
+    const res = validateResults({ items: ITEMS, results: { a: { state: 'fail' }, b: { state: 'pass' } } })
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/note/i)
+  })
+
+  it('rejects a fail whose note is only whitespace', () => {
+    const res = validateResults({ items: ITEMS, results: { a: { state: 'fail', note: '   ' }, b: { state: 'pass' } } })
+    expect(res.ok).toBe(false)
+  })
+
+  it('rejects an over-long note', () => {
+    const res = validateResults({
+      items: ITEMS,
+      results: { a: { state: 'fail', note: 'x'.repeat(RESULT_NOTE_MAX + 1) }, b: { state: 'pass' } },
+    })
+    expect(res.ok).toBe(false)
+  })
+
+  it('rejects submission when an item is unmarked, listing the missing ids', () => {
+    const res = validateResults({ items: ITEMS, results: { a: { state: 'pass' } } })
+    expect(res.ok).toBe(false)
+    expect(res.missing).toEqual(['b'])
+    expect(res.error).toMatch(/pass or fail/i)
+  })
+
+  it('rejects an unrecognised state', () => {
+    const res = validateResults({ items: ITEMS, results: { a: { state: 'maybe' }, b: { state: 'pass' } } })
+    expect(res.ok).toBe(false)
+    expect(res.missing).toEqual(['a'])
+  })
+
+  it('rejects a non-object results blob', () => {
+    expect(validateResults({ items: ITEMS, results: [] }).ok).toBe(false)
+    expect(validateResults({ items: ITEMS, results: null }).ok).toBe(false)
+  })
+})
+
+describe('buildIssueDescription', () => {
+  const failed = [
+    { id: 'a', label: 'Check belt wear', note: 'fraying at the edge' },
+    { id: 'b', label: 'Emergency stop works', note: 'sticks, needs force' },
+  ]
+
+  it('names the asset, its type and the cycle date, then lists each failure', () => {
+    const text = buildIssueDescription({
+      equipmentName: 'Treadmill 3',
+      typeName: 'Treadmill',
+      dueOn: '2026-08-04',
+      failed,
+    })
+    expect(text).toContain('Treadmill 3')
+    expect(text).toContain('Treadmill')
+    expect(text).toContain('2026-08-04')
+    expect(text).toContain('Check belt wear: fraying at the edge')
+    expect(text).toContain('Emergency stop works: sticks, needs force')
+  })
+
+  it('appends the inspector note when present', () => {
+    const text = buildIssueDescription({
+      equipmentName: 'Treadmill 3', typeName: 'Treadmill', dueOn: '2026-08-04',
+      failed, extraNote: 'Taken off the floor.',
+    })
+    expect(text).toContain('Taken off the floor.')
+  })
+
+  it('omits the note section entirely when blank', () => {
+    const text = buildIssueDescription({
+      equipmentName: 'T3', typeName: 'Treadmill', dueOn: '2026-08-04', failed, extraNote: '   ',
+    })
+    expect(text.trimEnd()).toBe(text.trimEnd())
+    expect(text).not.toMatch(/\n\n\s*\n/)
+  })
+
+  it('never exceeds the issues.description cap', () => {
+    const many = Array.from({ length: 50 }, (_, i) => ({
+      id: `i${i}`, label: `Item ${i}`, note: 'x'.repeat(RESULT_NOTE_MAX),
+    }))
+    const text = buildIssueDescription({
+      equipmentName: 'Rig', typeName: 'Rig', dueOn: '2026-08-04', failed: many,
+    })
+    expect(text.length).toBeLessThanOrEqual(ISSUE_DESCRIPTION_MAX)
+  })
+})
+
+describe('shouldReturnToService', () => {
+  it('is true when the resolved issue is the one that removed the asset', () => {
+    const eq = { status: 'out_of_service', out_of_service_issue_id: 'iss-1' }
+    expect(shouldReturnToService(eq, 'iss-1')).toBe(true)
+  })
+
+  it('is false for a different issue on the same asset', () => {
+    const eq = { status: 'out_of_service', out_of_service_issue_id: 'iss-1' }
+    expect(shouldReturnToService(eq, 'iss-2')).toBe(false)
+  })
+
+  it('is false for an asset taken off the floor manually (no linked issue)', () => {
+    const eq = { status: 'out_of_service', out_of_service_issue_id: null }
+    expect(shouldReturnToService(eq, 'iss-1')).toBe(false)
+  })
+
+  it('is false for an in-service or retired asset', () => {
+    expect(shouldReturnToService({ status: 'in_service', out_of_service_issue_id: 'iss-1' }, 'iss-1')).toBe(false)
+    expect(shouldReturnToService({ status: 'retired', out_of_service_issue_id: 'iss-1' }, 'iss-1')).toBe(false)
+  })
+
+  it('is false for a missing asset', () => {
+    expect(shouldReturnToService(null, 'iss-1')).toBe(false)
+  })
+})
+
+describe('isDue', () => {
+  it('is true for an in-service asset due today or earlier', () => {
+    expect(isDue({ status: 'in_service', next_due_on: '2026-08-04' }, '2026-08-04')).toBe(true)
+    expect(isDue({ status: 'in_service', next_due_on: '2026-07-28' }, '2026-08-04')).toBe(true)
+  })
+
+  it('is false for an asset due in the future', () => {
+    expect(isDue({ status: 'in_service', next_due_on: '2026-09-01' }, '2026-08-04')).toBe(false)
+  })
+
+  it('excludes out-of-service assets — they already have an open issue', () => {
+    expect(isDue({ status: 'out_of_service', next_due_on: '2026-08-04' }, '2026-08-04')).toBe(false)
+  })
+
+  it('excludes retired assets', () => {
+    expect(isDue({ status: 'retired', next_due_on: '2026-08-04' }, '2026-08-04')).toBe(false)
+  })
+})

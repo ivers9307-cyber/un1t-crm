@@ -135,3 +135,94 @@ export function validateItems(raw) {
 
   return { ok: true, items }
 }
+
+// ---- inspection results -------------------------------------------
+
+/**
+ * Validate a results blob against an items snapshot.
+ *
+ * Two separate failure modes, deliberately distinguished:
+ *   - `missing`  → items with no pass/fail mark. Submission is refused;
+ *                  the route returns these ids so the UI can highlight
+ *                  the unanswered rows.
+ *   - `error`    → a fail with no note, or an over-long note.
+ *
+ * @returns {{ ok: true, failed: Array<{id,label,note}> }
+ *          |{ ok: false, error: string, missing?: string[] }}
+ */
+export function validateResults({ items, results }) {
+  if (!results || typeof results !== 'object' || Array.isArray(results)) {
+    return { ok: false, error: 'Results must be an object keyed by item id.' }
+  }
+  if (!Array.isArray(items)) {
+    return { ok: false, error: 'Items snapshot is missing.' }
+  }
+
+  const missing = []
+  const failed = []
+
+  for (const item of items) {
+    const row = results[item.id]
+    const state = row?.state
+    if (state !== 'pass' && state !== 'fail') {
+      missing.push(item.id)
+      continue
+    }
+    if (state === 'fail') {
+      const note = typeof row.note === 'string' ? row.note.trim() : ''
+      if (!note) {
+        return { ok: false, error: `"${item.label}" was marked as a fault but has no note.` }
+      }
+      if (note.length > RESULT_NOTE_MAX) {
+        return { ok: false, error: `The note on "${item.label}" is over ${RESULT_NOTE_MAX} characters.` }
+      }
+      failed.push({ id: item.id, label: item.label, note })
+    }
+  }
+
+  if (missing.length > 0) {
+    return { ok: false, error: 'Every check must be marked pass or fail before submitting.', missing }
+  }
+
+  return { ok: true, failed }
+}
+
+/**
+ * Compose the issues.description for a failed inspection.
+ * One issue per inspection listing every failed item, rather than one
+ * issue per failure — a badly worn treadmill should reach the owner as
+ * a single item of work, not four.
+ *
+ * Hard-capped at ISSUE_DESCRIPTION_MAX because issues.description has a
+ * CHECK constraint at 4000 (mig 213) and would otherwise 500 the route.
+ */
+export function buildIssueDescription({ equipmentName, typeName, dueOn, failed, extraNote }) {
+  const lines = [`${equipmentName} (${typeName}) failed inspection due ${dueOn}.`, '']
+  for (const f of failed) lines.push(`• ${f.label}: ${f.note}`)
+
+  const note = typeof extraNote === 'string' ? extraNote.trim() : ''
+  if (note) lines.push('', note)
+
+  const text = lines.join('\n')
+  return text.length > ISSUE_DESCRIPTION_MAX ? text.slice(0, ISSUE_DESCRIPTION_MAX) : text
+}
+
+/**
+ * Should resolving `resolvedIssueId` put this asset back in service?
+ * Only when that exact issue is what removed it. An asset taken off the
+ * floor manually from the register has no linked issue and must be
+ * returned to service manually — resolving an unrelated issue on it
+ * must not silently put broken kit back on the floor.
+ */
+export function shouldReturnToService(equipment, resolvedIssueId) {
+  if (!equipment) return false
+  if (equipment.status !== EQUIPMENT_STATUS.OUT_OF_SERVICE) return false
+  if (!equipment.out_of_service_issue_id) return false
+  return equipment.out_of_service_issue_id === resolvedIssueId
+}
+
+/** Is this asset due for inspection as of `today` (YYYY-MM-DD)? */
+export function isDue(equipment, today) {
+  if (equipment?.status !== EQUIPMENT_STATUS.IN_SERVICE) return false
+  return equipment.next_due_on <= today
+}
