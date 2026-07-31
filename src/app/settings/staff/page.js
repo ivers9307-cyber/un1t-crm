@@ -14,6 +14,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { ChevronLeft, Users } from 'lucide-react'
 import StaffSearchableList from '@/components/settings/StaffSearchableList'
+import { deriveTargetVersion, deviceVerdict } from '@/lib/staff-devices'
 
 export const dynamic = 'force-dynamic'
 
@@ -23,11 +24,31 @@ export default async function StaffIndexPage() {
   if (!hasPermission(user, 'settings')) redirect('/')
 
   const db = createServerClient()
-  const { data: staffRows } = await db
-    .from('profiles')
-    .select('*, profile_locations(*, locations(*))')
-    .order('created_at')
-  const staff = staffRows || []
+  // STAFF-DEV.5 — devices ride along with the roster so the list can show
+  // who is behind. Both sets are staff-sized; one round-trip each.
+  const [staffRes, devicesRes] = await Promise.all([
+    db.from('profiles').select('*, profile_locations(*, locations(*))').order('created_at'),
+    db.from('device_tokens').select('id, user_id, app_version, last_seen_at, geofence_permission'),
+  ])
+  const staff = staffRes.data || []
+  const devices = devicesRes.data || []
+
+  // Verdicts computed server-side (one clock, shared lib) so the client
+  // component renders a decision rather than making one. The target comes
+  // from ACTIVE staff's devices only — a leaver's newer phone must not
+  // mark everyone still here as outdated.
+  const now = Date.now()
+  const devicesByUser = new Map()
+  for (const d of devices) {
+    if (!d.user_id) continue
+    if (!devicesByUser.has(d.user_id)) devicesByUser.set(d.user_id, [])
+    devicesByUser.get(d.user_id).push(d)
+  }
+  const activeIds = new Set(staff.filter(s => s.active).map(s => s.id))
+  const targetVersion = deriveTargetVersion(devices.filter(d => activeIds.has(d.user_id)), now)
+  const verdictsById = Object.fromEntries(
+    staff.map(s => [s.id, deviceVerdict(devicesByUser.get(s.id) || [], targetVersion, now)]),
+  )
 
   // Pre-compute the canEdit boolean per row server-side so the client
   // component doesn't need to know about the master/owner peer rules.
@@ -66,7 +87,13 @@ export default async function StaffIndexPage() {
         </Link>
       </div>
 
-      <StaffSearchableList staff={staff} user={user} canEditFns={canEditFns} />
+      <StaffSearchableList
+        staff={staff}
+        user={user}
+        canEditFns={canEditFns}
+        verdictsById={verdictsById}
+        targetVersion={targetVersion}
+      />
     </div>
   )
 }

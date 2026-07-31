@@ -26,20 +26,39 @@ const ROLE_LABELS = {
   staff: 'Staff',
 }
 
+// Short relative age for the Device cell — "today" / "6d" / "3mo".
+// Reads the clock at render time only for display; the outdated/no-app
+// DECISION is made server-side in @/lib/staff-devices and arrives as a
+// verdict, so the two can never drift.
+function fmtAge(iso) {
+  if (!iso) return 'never'
+  const ms = Date.now() - new Date(iso).getTime()
+  if (Number.isNaN(ms)) return 'never'
+  const d = Math.floor(ms / 86400000)
+  if (d < 1) return 'today'
+  if (d < 30) return `${d}d`
+  return `${Math.floor(d / 30)}mo`
+}
+
 // `user` is no longer read inside this component — canEditFns is
 // pre-computed server-side and passed in keyed by staff id — but
 // kept on the prop list as a forward-compat hook in case future
 // row-level behaviour wants the caller's role.
- 
-export default function StaffSearchableList({ staff, user: _user, canEditFns }) {
+
+export default function StaffSearchableList({ staff, user: _user, canEditFns, verdictsById = {}, targetVersion = null }) {
   const [query, setQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState('all')  // 'all' | 'active' | 'inactive'
+  // 'all' | 'active' | 'inactive' | 'needs_update'
+  const [statusFilter, setStatusFilter] = useState('all')
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return staff.filter(s => {
       if (statusFilter === 'active' && !s.active) return false
       if (statusFilter === 'inactive' && s.active) return false
+      if (statusFilter === 'needs_update') {
+        const kind = verdictsById[s.id]?.kind
+        if (kind !== 'outdated' && kind !== 'no_device') return false
+      }
       if (!q) return true
       const locationsLabel = (s.profile_locations || [])
         .map(pl => pl.locations?.name)
@@ -54,7 +73,7 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns }) 
         || locationsLabel.includes(q)
       )
     })
-  }, [staff, query, statusFilter])
+  }, [staff, query, statusFilter, verdictsById])
 
   return (
     <div className="space-y-4">
@@ -85,6 +104,7 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns }) 
             { key: 'all', label: 'All' },
             { key: 'active', label: 'Active' },
             { key: 'inactive', label: 'Inactive' },
+            { key: 'needs_update', label: 'Needs update' },
           ].map(({ key, label }) => (
             <button
               key={key}
@@ -111,6 +131,7 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns }) 
               <th className="text-left p-3">Email</th>
               <th className="text-left p-3">Role</th>
               <th className="text-left p-3">Locations</th>
+              <th className="text-left p-3" title={targetVersion ? `Latest reported version: ${targetVersion}` : undefined}>Device</th>
               <th className="text-left p-3">Status</th>
               <th className="w-8"></th>
             </tr>
@@ -118,7 +139,7 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns }) 
           <tbody className="divide-y divide-un1t-border">
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={6} className="p-6 text-center text-sm text-un1t-subtle">
+                <td colSpan={7} className="p-6 text-center text-sm text-un1t-subtle">
                   {staff.length === 0 ? 'No team members yet.' : 'No matches for that search.'}
                 </td>
               </tr>
@@ -136,6 +157,9 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns }) 
                   </td>
                   <td className="p-3 text-un1t-subtle text-xs">
                     {(s.profile_locations || []).map(pl => pl.locations?.name).filter(Boolean).join(', ') || '—'}
+                  </td>
+                  <td className="p-3">
+                    <DeviceCell verdict={verdictsById[s.id]} />
                   </td>
                   <td className="p-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full ${s.active ? 'bg-green-500/20 text-green-700' : 'bg-red-500/20 text-red-700'}`}>
@@ -166,5 +190,27 @@ export default function StaffSearchableList({ staff, user: _user, canEditFns }) 
         </table>
       </div>
     </div>
+  )
+}
+
+// Current device's version + how long since it was last seen, with an
+// amber Outdated chip or a neutral No app chip. The verdict keys off the
+// person's NEWEST device, so an old spare on a newer build can't hide a
+// daily phone that never updated.
+function DeviceCell({ verdict }) {
+  if (!verdict || verdict.kind === 'no_device') {
+    return (
+      <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/10 text-gray-700">No app</span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs">
+      <span className="text-un1t-text">
+        {verdict.version || 'unknown'} <span className="text-un1t-muted">· {fmtAge(verdict.lastSeenAt)}</span>
+      </span>
+      {verdict.kind === 'outdated' && (
+        <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-700">Outdated</span>
+      )}
+    </span>
   )
 }
