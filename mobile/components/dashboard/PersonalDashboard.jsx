@@ -33,6 +33,11 @@ import CoachPickerSheet from '../schedule/CoachPickerSheet'
 // when they're on shift today. Self-contained: renders nothing
 // when there's no instance to surface.
 import TodayChecklistCard from './TodayChecklistCard'
+// EQUIP-MAINT.2 — equipment due-for-inspection card. Self-contained,
+// same posture as TodayChecklistCard: renders nothing when there's
+// nothing due, the viewer lacks equipment_inspect, or the location
+// hasn't got inspections switched on.
+import DueInspectionsCard from './DueInspectionsCard'
 // MOBILE-TODAY-FEED — the "Needs attention" triage card (mirror of
 // the web Today feed). Self-contained: renders nothing when the
 // viewer has no queue permissions or nothing is pending.
@@ -635,6 +640,12 @@ export default function PersonalDashboard({ refreshKey }) {
           thing on shift — closer / opener items shouldn't have to
           scroll past a roster. */}
       <TodayChecklistCard />
+
+      {/* EQUIP-MAINT.2 — equipment due for inspection, right under
+          the checklist card. Self-renders null when nothing is due,
+          the location is dormant, or the viewer lacks
+          equipment_inspect. */}
+      <DueInspectionsCard />
 
       {/* MOBILE-TODAY-FEED — what needs the viewer across the gym,
           right under their own shift card. Coaches without queue
