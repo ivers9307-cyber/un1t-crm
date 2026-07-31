@@ -24,6 +24,7 @@ import {
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
   Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
   Workflow, Timer, Projector, Trophy, Activity, Landmark, Building2, Dumbbell,
+  Wrench,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -171,6 +172,15 @@ export const ALL_NAV = [
       { href: '/studio-management/timer', label: 'Class timer', icon: Timer, permission: 'studio_management' },
     ],
   },
+  // EQUIP-MAINT.1 — equipment register + inspection checklists. Visible
+  // to anyone holding either equipment_admin (the setup surfaces —
+  // register, types, intervals, inspection weekday) or equipment_inspect
+  // (the walk-round; equipment_inspect is the universal default granted
+  // to every staff role). The page itself (src/app/maintenance/page.js)
+  // gates which tabs render for which permission — this entry only
+  // decides sidebar visibility.
+  { href: '/maintenance', label: 'Maintenance', icon: Wrench,
+    anyPermission: ['equipment_admin', 'equipment_inspect'], section: 'gym' },
 
   // ── Automations ────────────────────────────────────────────────
   { href: '/automations', label: 'Automations', icon: Workflow, anyPermission: ['automations', 'email', 'whatsapp'], section: 'automations' },

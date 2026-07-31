@@ -7,119 +7,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Card, Field, Modal, Table } from '@/components/ui'
 import { isDue } from '@/lib/equipment'
+import { dublinTodayStr } from '@/lib/dublin-time'
 import { STATUS_CHIP, STATUS_LABEL } from './helpers'
 
-const EMPTY_EQUIPMENT = {
-  id: null,
-  typeId: '',
-  name: '',
-  assetTag: '',
-  serialNumber: '',
-  manufacturer: '',
-  zone: '',
-  purchaseDate: '',
-  notes: '',
-  firstDueOn: '',
-  status: 'in_service',
-}
-
-export default function EquipmentTab() {
-  const [equipment, setEquipment] = useState([])
-  const [types, setTypes] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [editing, setEditing] = useState(null)
-  const [error, setError] = useState(null)
-  const [saving, setSaving] = useState(false)
-  const [retiring, setRetiring] = useState(false)
-  // sv-SE formats as YYYY-MM-DD natively — never toISOString().slice(0,10),
-  // which is UTC and lint-blocked by check:guardrails.
-  const [today] = useState(() => new Date().toLocaleDateString('sv-SE'))
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    const [eRes, tRes] = await Promise.all([
-      fetch('/api/equipment').then((r) => r.json()),
-      fetch('/api/equipment/types').then((r) => r.json()),
-    ])
-    if (eRes.success) setEquipment(eRes.data)
-    if (tRes.success) setTypes(tRes.data)
-    setLoading(false)
-  }, [])
-
-  useEffect(() => { load() }, [load])
-
-  function openCreate() {
-    setError(null)
-    setEditing({ ...EMPTY_EQUIPMENT, typeId: types[0]?.id || '' })
-  }
-
-  function openEdit(row) {
-    setError(null)
-    setEditing({
-      id: row.id,
-      typeId: row.type_id,
-      name: row.name,
-      assetTag: row.asset_tag || '',
-      serialNumber: row.serial_number || '',
-      manufacturer: row.manufacturer || '',
-      zone: row.zone || '',
-      purchaseDate: row.purchase_date || '',
-      notes: row.notes || '',
-      firstDueOn: '',
-      status: row.status,
-    })
-  }
-
-  async function saveEquipment(e) {
-    e.preventDefault()
-    setSaving(true)
-    setError(null)
-
-    const body = {
-      typeId: editing.typeId,
-      name: editing.name,
-      assetTag: editing.assetTag.trim() || null,
-      serialNumber: editing.serialNumber.trim() || null,
-      manufacturer: editing.manufacturer.trim() || null,
-      zone: editing.zone.trim() || null,
-      purchaseDate: editing.purchaseDate || null,
-      notes: editing.notes.trim() || null,
-    }
-    if (editing.id) {
-      body.status = editing.status
-    } else {
-      body.firstDueOn = editing.firstDueOn || null
-    }
-
-    const res = await fetch(
-      editing.id ? `/api/equipment/${editing.id}` : '/api/equipment',
-      {
-        method: editing.id ? 'PATCH' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      }
-    ).then((r) => r.json())
-
-    setSaving(false)
-    if (!res.success) { setError(res.error); return }
-    setEditing(null)
-    load()
-  }
-
-  async function retireEquipment() {
-    if (!editing?.id) return
-    if (!window.confirm(`Retire ${editing.name}? This cannot be undone from here.`)) return
-    setRetiring(true)
-    setError(null)
-    const res = await fetch(`/api/equipment/${editing.id}`, { method: 'DELETE' }).then((r) => r.json())
-    setRetiring(false)
-    if (!res.success) { setError(res.error); return }
-    setEditing(null)
-    load()
-  }
-
-  const columns = [
-    { key: 'name', header: 'Equipment' },
+// Exported (not just inlined in the component) so columns.test.js can
+// assert every column resolves a defined cell value via the real
+// cellValue() — a column with neither `accessor` nor `render` renders
+// blank and nothing else catches that (see styles.js cellValue).
+export function buildEquipmentColumns(today) {
+  return [
+    { key: 'name', header: 'Equipment', accessor: 'name' },
     { key: 'type', header: 'Type', render: (r) => r.equipment_types?.name || '—' },
     { key: 'zone', header: 'Zone', render: (r) => r.zone || '—' },
     {
@@ -150,6 +47,139 @@ export default function EquipmentTab() {
       ),
     },
   ]
+}
+
+const EMPTY_EQUIPMENT = {
+  id: null,
+  typeId: '',
+  name: '',
+  assetTag: '',
+  serialNumber: '',
+  manufacturer: '',
+  zone: '',
+  purchaseDate: '',
+  notes: '',
+  firstDueOn: '',
+  status: 'in_service',
+}
+
+export default function EquipmentTab() {
+  const [equipment, setEquipment] = useState([])
+  const [types, setTypes] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
+  const [editing, setEditing] = useState(null)
+  const [error, setError] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [retiring, setRetiring] = useState(false)
+  // Dublin's calendar day, not the browser's — a staff phone/laptop set
+  // to another timezone must not shift what counts as "due today".
+  // dublinTodayStr() (dublin-time.js) is client-safe (Intl only, no
+  // server-only import) — seven other client components already use it.
+  const [today] = useState(() => dublinTodayStr())
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setLoadError(null)
+    try {
+      const [eRes, tRes] = await Promise.all([
+        fetch('/api/equipment').then((r) => r.json()),
+        fetch('/api/equipment/types').then((r) => r.json()),
+      ])
+      if (eRes.success) setEquipment(eRes.data)
+      else setLoadError(eRes.error || 'Failed to load equipment.')
+      if (tRes.success) setTypes(tRes.data)
+    } catch (err) {
+      // Without this catch, a network failure never reaches
+      // setLoading(false) and the table shows "Loading…" forever.
+      setLoadError(err.message || 'Failed to load equipment.')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  function openCreate() {
+    setError(null)
+    setEditing({ ...EMPTY_EQUIPMENT, typeId: types[0]?.id || '' })
+  }
+
+  function openEdit(row) {
+    setError(null)
+    setEditing({
+      id: row.id,
+      typeId: row.type_id,
+      name: row.name,
+      assetTag: row.asset_tag || '',
+      serialNumber: row.serial_number || '',
+      manufacturer: row.manufacturer || '',
+      zone: row.zone || '',
+      purchaseDate: row.purchase_date || '',
+      notes: row.notes || '',
+      firstDueOn: '',
+      status: row.status,
+    })
+  }
+
+  async function saveEquipment(e) {
+    e.preventDefault()
+    setSaving(true)
+    setError(null)
+    try {
+      const body = {
+        typeId: editing.typeId,
+        name: editing.name,
+        assetTag: editing.assetTag.trim() || null,
+        serialNumber: editing.serialNumber.trim() || null,
+        manufacturer: editing.manufacturer.trim() || null,
+        zone: editing.zone.trim() || null,
+        purchaseDate: editing.purchaseDate || null,
+        notes: editing.notes.trim() || null,
+      }
+      if (editing.id) {
+        body.status = editing.status
+      } else {
+        body.firstDueOn = editing.firstDueOn || null
+      }
+
+      const res = await fetch(
+        editing.id ? `/api/equipment/${editing.id}` : '/api/equipment',
+        {
+          method: editing.id ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }
+      ).then((r) => r.json())
+
+      if (!res.success) { setError(res.error); return }
+      setEditing(null)
+      load()
+    } catch (err) {
+      setError(err.message || 'Failed to save equipment.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function retireEquipment() {
+    if (!editing?.id) return
+    if (!window.confirm(`Retire ${editing.name}? This cannot be undone from here.`)) return
+    setRetiring(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/equipment/${editing.id}`, { method: 'DELETE' }).then((r) => r.json())
+      if (!res.success) { setError(res.error); return }
+      setEditing(null)
+      load()
+    } catch (err) {
+      setError(err.message || 'Failed to retire equipment.')
+    } finally {
+      setRetiring(false)
+    }
+  }
+
+  const columns = buildEquipmentColumns(today)
 
   return (
     <div className="space-y-6">
@@ -163,6 +193,7 @@ export default function EquipmentTab() {
             Add an equipment type on the Types tab before registering assets.
           </p>
         )}
+        {loadError && <p className="px-4 pb-4 text-sm text-red-700">{loadError}</p>}
         <Table
           columns={columns}
           rows={equipment}

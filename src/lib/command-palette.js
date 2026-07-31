@@ -25,6 +25,8 @@ export const NAV_COMMANDS = [
   { id: 'communications', label: 'Communications', href: '/communications', anyPermission: ['email', 'whatsapp', 'sms'] },
   { id: 'schedule', label: 'Schedule', href: '/schedule', permission: 'schedule' },
   { id: 'events', label: 'Events', href: '/events', permission: 'races' },
+  // EQUIP-MAINT.1 — mirrors the nav-items.js Sidebar entry's gate.
+  { id: 'maintenance', label: 'Maintenance', href: '/maintenance', anyPermission: ['equipment_admin', 'equipment_inspect'] },
   { id: 'cars', label: 'Car Processing', href: '/cars', permission: 'car_processing' },
   { id: 'orders', label: 'Orders', href: '/orders', permission: 'orders' },
   { id: 'invoices', label: 'Invoices', href: '/invoices', permission: 'invoices_inbox' },

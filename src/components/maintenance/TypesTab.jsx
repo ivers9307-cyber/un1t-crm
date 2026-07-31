@@ -9,61 +9,143 @@ import { formatInterval, INTERVAL_OPTIONS, WEEKDAYS } from './helpers'
 
 const EMPTY_TYPE = { id: null, name: '', intervalWeeks: 4, items: [] }
 
+// Exported (not just inlined in the component) so columns.test.js can
+// assert every column resolves a defined cell value via the real
+// cellValue() — a column with neither `accessor` nor `render` renders
+// blank and nothing else catches that (see styles.js cellValue).
+export function buildTypeColumns() {
+  return [
+    { key: 'name', header: 'Type', accessor: 'name' },
+    { key: 'interval', header: 'Interval', render: (r) => formatInterval(r.interval_weeks) },
+    { key: 'items', header: 'Checks', render: (r) => (r.items || []).length },
+    {
+      key: 'enabled',
+      header: 'Status',
+      render: (r) => (
+        <span className={`rounded px-2 py-0.5 text-xs ${r.enabled ? 'bg-emerald-500/10 text-emerald-700' : 'bg-slate-500/10 text-slate-700'}`}>
+          {r.enabled ? 'Active' : 'Disabled'}
+        </span>
+      ),
+    },
+  ]
+}
+
 export default function TypesTab() {
   const [types, setTypes] = useState([])
   const [settings, setSettings] = useState({ inspection_day_of_week: 2, enabled: false })
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [editing, setEditing] = useState(null)
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [toggling, setToggling] = useState(false)
+  const [settingsError, setSettingsError] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
-    const [tRes, sRes] = await Promise.all([
-      fetch('/api/equipment/types?includeDisabled=1').then((r) => r.json()),
-      fetch('/api/equipment/settings').then((r) => r.json()),
-    ])
-    if (tRes.success) setTypes(tRes.data)
-    if (sRes.success && sRes.data) setSettings(sRes.data)
-    setLoading(false)
+    setLoadError(null)
+    try {
+      const [tRes, sRes] = await Promise.all([
+        fetch('/api/equipment/types?includeDisabled=1').then((r) => r.json()),
+        fetch('/api/equipment/settings').then((r) => r.json()),
+      ])
+      if (tRes.success) setTypes(tRes.data)
+      else setLoadError(tRes.error || 'Failed to load equipment types.')
+      if (sRes.success && sRes.data) setSettings(sRes.data)
+    } catch (err) {
+      // Without this catch, a network failure never reaches
+      // setLoading(false) and the table shows "Loading…" forever.
+      setLoadError(err.message || 'Failed to load equipment types.')
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
   useEffect(() => { load() }, [load])
 
   async function saveSettings(patch) {
+    const previous = settings
     const next = { ...settings, ...patch }
     setSettings(next)
-    await fetch('/api/equipment/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        inspectionDayOfWeek: next.inspection_day_of_week,
-        enabled: next.enabled,
-      }),
-    })
+    setSettingsError(null)
+    try {
+      const res = await fetch('/api/equipment/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          inspectionDayOfWeek: next.inspection_day_of_week,
+          enabled: next.enabled,
+        }),
+      }).then((r) => r.json())
+      if (!res.success) {
+        // Revert the optimistic update — otherwise a 403 or validation
+        // failure leaves the checkbox reading "enabled" while the
+        // studio is actually still dormant server-side.
+        setSettings(previous)
+        setSettingsError(res.error || 'Failed to save settings.')
+      }
+    } catch (err) {
+      setSettings(previous)
+      setSettingsError(err.message || 'Failed to save settings.')
+    }
   }
 
   async function saveType(e) {
     e.preventDefault()
     setSaving(true)
     setError(null)
-    const body = {
-      name: editing.name,
-      intervalWeeks: editing.intervalWeeks,
-      items: editing.items,
-    }
-    const res = await fetch(
-      editing.id ? `/api/equipment/types/${editing.id}` : '/api/equipment/types',
-      {
-        method: editing.id ? 'PATCH' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+    try {
+      const body = {
+        name: editing.name,
+        intervalWeeks: editing.intervalWeeks,
+        items: editing.items,
       }
-    ).then((r) => r.json())
-    setSaving(false)
-    if (!res.success) { setError(res.error); return }
-    setEditing(null)
-    load()
+      const res = await fetch(
+        editing.id ? `/api/equipment/types/${editing.id}` : '/api/equipment/types',
+        {
+          method: editing.id ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }
+      ).then((r) => r.json())
+      if (!res.success) { setError(res.error); return }
+      setEditing(null)
+      load()
+    } catch (err) {
+      setError(err.message || 'Failed to save equipment type.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Disable (soft — DELETE, refused 409 if in-use assets remain) or
+  // re-enable (PATCH { enabled: true }) the type being edited. Only
+  // reachable from the edit modal, never on create.
+  async function toggleEnabled() {
+    if (!editing?.id) return
+    setToggling(true)
+    setError(null)
+    try {
+      const res = await (
+        editing.enabled
+          ? fetch(`/api/equipment/types/${editing.id}`, { method: 'DELETE' })
+          : fetch(`/api/equipment/types/${editing.id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled: true }),
+            })
+      ).then((r) => r.json())
+      // DELETE 409s with a specific "N assets still use this type"
+      // message when non-retired equipment still points at it —
+      // surface it rather than failing silently.
+      if (!res.success) { setError(res.error); return }
+      setEditing(null)
+      load()
+    } catch (err) {
+      setError(err.message || 'Failed to update equipment type status.')
+    } finally {
+      setToggling(false)
+    }
   }
 
   // A fresh uuid per item, generated ONCE on add and never regenerated
@@ -79,20 +161,7 @@ export default function TypesTab() {
     setEditing((t) => ({ ...t, items: t.items.filter((_, i) => i !== idx) }))
   }
 
-  const columns = [
-    { key: 'name', header: 'Type' },
-    { key: 'interval', header: 'Interval', render: (r) => formatInterval(r.interval_weeks) },
-    { key: 'items', header: 'Checks', render: (r) => (r.items || []).length },
-    {
-      key: 'enabled',
-      header: 'Status',
-      render: (r) => (
-        <span className={`rounded px-2 py-0.5 text-xs ${r.enabled ? 'bg-emerald-500/10 text-emerald-700' : 'bg-slate-500/10 text-slate-700'}`}>
-          {r.enabled ? 'Active' : 'Disabled'}
-        </span>
-      ),
-    },
-  ]
+  const columns = buildTypeColumns()
 
   return (
     <div className="space-y-6">
@@ -117,6 +186,7 @@ export default function TypesTab() {
             />
           </Field>
         </div>
+        {settingsError && <p className="px-4 pb-4 text-sm text-red-700">{settingsError}</p>}
       </Card>
 
       <Card>
@@ -124,13 +194,14 @@ export default function TypesTab() {
           <h2 className="font-medium text-un1t-text">Equipment types</h2>
           <Button type="button" onClick={() => setEditing({ ...EMPTY_TYPE })}>Add type</Button>
         </div>
+        {loadError && <p className="px-4 pb-4 text-sm text-red-700">{loadError}</p>}
         <Table
           columns={columns}
           rows={types}
           loading={loading}
           empty="No equipment types yet. Add one to get started."
           onRowClick={(r) => setEditing({
-            id: r.id, name: r.name, intervalWeeks: r.interval_weeks, items: r.items || [],
+            id: r.id, name: r.name, intervalWeeks: r.interval_weeks, items: r.items || [], enabled: r.enabled,
           })}
         />
       </Card>
@@ -185,9 +256,22 @@ export default function TypesTab() {
 
             {error && <p className="text-sm text-red-700">{error}</p>}
 
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
-              <Button type="submit" loading={saving}>Save</Button>
+            <div className="flex items-center justify-between gap-2">
+              {editing.id ? (
+                editing.enabled ? (
+                  <Button type="button" variant="danger" onClick={toggleEnabled} loading={toggling}>
+                    Disable
+                  </Button>
+                ) : (
+                  <Button type="button" variant="secondary" onClick={toggleEnabled} loading={toggling}>
+                    Enable
+                  </Button>
+                )
+              ) : <span />}
+              <div className="flex gap-2">
+                <Button type="button" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
+                <Button type="submit" loading={saving}>Save</Button>
+              </div>
             </div>
           </form>
         )}

@@ -59,8 +59,15 @@ export function nextOccurrenceOfDow(fromDateStr, dow) {
 /**
  * First due date for a newly registered asset.
  * Operator override wins; otherwise the next inspection weekday on or
- * after today; otherwise (no settings row yet) today, which gets
- * snapped to the weekday at the first roll-forward.
+ * after today; otherwise (no settings row yet) today. That last
+ * fallback is NOT corrected later — rollForward adds whole weeks from
+ * `dueOn` and is never given inspectionDayOfWeek, so a `today` that
+ * doesn't fall on the studio's inspection weekday keeps its wrong
+ * weekday forever. It remains here only as a defensive default for
+ * direct callers; the register route (src/app/api/equipment/route.js
+ * POST) is no longer able to reach it — it 409s before calling this
+ * when getSettings() returns no row, rather than mint an off-weekday
+ * asset.
  */
 export function firstDueOn({ today, inspectionDayOfWeek, explicitFirstDue }) {
   if (explicitFirstDue) return explicitFirstDue

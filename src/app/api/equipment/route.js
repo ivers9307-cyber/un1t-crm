@@ -60,9 +60,22 @@ export const POST = withAuth(
     }
 
     const settings = await getSettings(db, locationId)
+    if (!settings) {
+      // Without a settings row there is no inspection weekday to snap
+      // to — firstDueOn falls back to `today`, and rollForward (which
+      // owns every later reschedule) adds whole weeks from that date
+      // and never receives inspectionDayOfWeek, so the wrong weekday
+      // is preserved forever, not corrected at the next roll-forward.
+      // Refuse the register rather than silently minting an
+      // off-weekday asset.
+      return NextResponse.json(
+        { success: false, error: 'Set your studio inspection day before registering equipment.' },
+        { status: 409 }
+      )
+    }
     const nextDueOn = firstDueOn({
       today: dublinTodayStr(),
-      inspectionDayOfWeek: settings?.inspection_day_of_week ?? null,
+      inspectionDayOfWeek: settings.inspection_day_of_week,
       explicitFirstDue: input.firstDueOn || null,
     })
 

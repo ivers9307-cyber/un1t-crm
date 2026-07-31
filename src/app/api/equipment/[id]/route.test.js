@@ -39,7 +39,7 @@ vi.mock('@/lib/equipment-db', () => ({
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => ({ logged: true })) }))
 
 import { GET, PATCH, DELETE } from './route.js'
-import { getEquipment, updateEquipment } from '@/lib/equipment-db'
+import { getEquipment, updateEquipment, getType } from '@/lib/equipment-db'
 
 function req(body) {
   return { json: async () => body, headers: { get: () => null } }
@@ -59,6 +59,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   getEquipment.mockResolvedValue(ASSET)
   updateEquipment.mockImplementation(async (_db, _id, patch) => ({ ...ASSET, ...patch }))
+  getType.mockResolvedValue({ id: 'type-2', location_id: 'loc-1', name: 'Rower', enabled: true })
 })
 
 describe('GET /api/equipment/[id]', () => {
@@ -100,8 +101,15 @@ describe('PATCH /api/equipment/[id]', () => {
   })
 
   it('leaves next_due_on alone when the type changes', async () => {
-    await PATCH(req({ name: 'Treadmill 3a' }), ctx)
+    // Must actually exercise the re-type path (a same-location typeId
+    // different from the asset's current type_id) — the previous
+    // version of this test sent only { name }, so it never touched the
+    // typeId branch at all and would have passed even if re-typing DID
+    // reset next_due_on.
+    await PATCH(req({ typeId: 'type-2' }), ctx)
+    expect(getType).toHaveBeenCalledWith({}, 'type-2')
     const patch = updateEquipment.mock.calls.at(-1)[2]
+    expect(patch).toHaveProperty('type_id', 'type-2')
     expect(patch).not.toHaveProperty('next_due_on')
   })
 })
