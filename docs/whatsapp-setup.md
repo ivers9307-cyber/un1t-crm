@@ -298,10 +298,34 @@ App Dashboard → **WhatsApp → Configuration** → subscribe the WABA to:
 - `history`
 - `smb_app_state_sync`
 - `smb_message_echoes`
+- `account_update` ← **added WA-COEX.6, 2026-07-31**
 
 ...in addition to the existing `messages` field. Harmless to subscribe
 anytime — the fields just sit unhandled until the coexistence code path is
 enabled for a client.
+
+**Why `account_update` matters.** When a client changes phone, reinstalls, or
+re-registers the WhatsApp Business app, Meta **automatically offboards** our
+Cloud API companion and sends `ACCOUNT_OFFBOARDED` on this field. Cloud API
+sends for that number fail until the client finishes registering, at which
+point a pre-checked opt-in re-links us automatically and `ACCOUNT_RECONNECTED`
+arrives (usually within minutes). Without this subscription the number just
+goes quiet with nothing in the CRM explaining why. We record the state on
+`whatsapp_numbers.signup_meta.coex_link` and push the managers at that
+location on each transition.
+
+Two things to know about this field:
+- It is **shared** — account review, violation, restriction and partner events
+  ride it too. Only the two events above may touch the link state; everything
+  else is logged and ignored (pinned in `whatsapp-coexistence.test.js`).
+- It is **WABA-scoped** and carries **no `phone_number_id`**, so the handler
+  routes on `entry.id` → `whatsapp_numbers.business_account_id`, filtered to
+  `source='coexistence'`.
+
+Deliberate non-behaviour: an offboard does **not** auto-block sends. A state
+stuck at `offboarded` (a missed `ACCOUNT_RECONNECTED`) would mute a location's
+WhatsApp entirely — worse than the handful of sends that fail during a
+minutes-long re-link. Revisit once a real event pair has been observed live.
 
 ### 5.2 Client eligibility (Meta-gated, per number)
 Meta decides eligibility **per number**, not per app. Requirements:

@@ -16,7 +16,7 @@ import { recordCtwaTouch } from '@/lib/meta-capi'
 import { pricingColumnsFromStatus } from '@/lib/whatsapp-pricing'
 import { ensureMediaRehosted } from '@/lib/whatsapp-media-server'
 import { captureInboundBsuid } from '@/lib/whatsapp-bsuid'
-import { parseEchoMessages, parseSyncContacts, parseHistoryMessages, nextHistorySyncState } from '@/lib/whatsapp-coexistence'
+import { parseEchoMessages, parseSyncContacts, parseHistoryMessages, nextHistorySyncState, parseAccountUpdateEvent, nextCoexistenceLinkState, COEX_LINK_EVENTS } from '@/lib/whatsapp-coexistence'
 import { syncContactMatchOnly, ingestCoexistenceMessage } from '@/lib/whatsapp-coexistence-ingest'
 
 // Force Node.js runtime — we use node:crypto for HMAC verification.
@@ -115,6 +115,14 @@ export async function POST(request) {
         if (COEXISTENCE_EVENT_FIELDS.has(change.field)) {
           try { await handleCoexistenceEvent(db, change.field, change.value) }
           catch (e) { console.error(`[wa-webhook] coexistence ${change.field} failed:`, e?.message) }
+          continue
+        }
+        if (change.field === 'account_update') {
+          // WA-COEX.6 — routed by WABA id (entry.id): account_update carries
+          // NO metadata.phone_number_id, so the phone-number routing every
+          // other branch uses cannot resolve it.
+          try { await handleAccountUpdateEvent(db, entry.id, change.value) }
+          catch (e) { console.error('[wa-webhook] account_update failed:', e?.message) }
           continue
         }
         if (change.field !== 'messages') continue
@@ -693,6 +701,98 @@ async function handleCoexistenceEvent(db, field, value) {
       const nextSync = nextHistorySyncState(meta.history_sync, value, new Date().toISOString())
       await db.from('whatsapp_numbers').update({ signup_meta: { ...meta, history_sync: nextSync } }).eq('id', owner.id)
     } catch (e) { console.error('[wa-webhook] history-sync status update failed:', e?.message) }
+  }
+}
+
+// WA-COEX.6 — coexistence link lifecycle (account_update).
+//
+// A client changing phone, reinstalling, or re-registering the WhatsApp
+// Business app AUTO-OFFBOARDS our Cloud API companion. Sends for that number
+// fail until Meta's automatic re-link lands (usually minutes, via a
+// pre-checked opt-in the client sees while registering). Recording it — and
+// telling the managers — is the difference between "WhatsApp is broken" and
+// "the phone is re-registering, it'll be back shortly".
+//
+// Routed by WABA id: account_update carries NO metadata.phone_number_id, so
+// the phone-number routing every other branch uses cannot resolve it. Scoped
+// to source='coexistence' rows — a pure Cloud API number sharing the WABA is
+// never offboarded this way and must not have its state flipped.
+//
+// NOTE: state only. We deliberately do NOT auto-block sends off the back of
+// this: a state that got stuck 'offboarded' (a missed RECONNECTED) would mute
+// a location's WhatsApp entirely, which is far worse than the handful of
+// sends that fail during a minutes-long re-link. Revisit once we've seen the
+// real event pair land — see docs/whatsapp-setup.md §5.
+async function handleAccountUpdateEvent(db, wabaId, value) {
+  const event = parseAccountUpdateEvent(value)
+  if (event !== COEX_LINK_EVENTS.OFFBOARDED && event !== COEX_LINK_EVENTS.RECONNECTED) {
+    // account_update is a SHARED field — it also carries account review,
+    // violation, restriction and partner events. Not ours to act on, but
+    // leave a breadcrumb rather than swallowing it silently.
+    if (event) console.warn(`[wa-webhook] account_update ${event} ignored (waba ${wabaId || '(missing)'})`)
+    return
+  }
+  if (!wabaId) {
+    console.error(`[wa-webhook] DROP account_update ${event}: no WABA id on entry`)
+    return
+  }
+
+  const { data: rows, error } = await db
+    .from('whatsapp_numbers')
+    .select('id, location_id, label, display_phone, signup_meta')
+    .eq('business_account_id', String(wabaId))
+    .eq('source', 'coexistence')
+    .eq('is_active', true)
+  if (error) {
+    // supabase-js never throws — an unchecked error here would read as "no
+    // numbers for this WABA" and the offboard would go unrecorded forever
+    // (we 200, so Meta never retries).
+    console.error(`[wa-webhook] account_update ${event}: whatsapp_numbers lookup failed: ${error.message}`)
+    return
+  }
+  if (!rows?.length) {
+    console.error(`[wa-webhook] DROP account_update ${event}: no active coexistence number for WABA ${wabaId}`)
+    return
+  }
+
+  const nowIso = new Date().toISOString()
+  for (const row of rows) {
+    const meta = row.signup_meta || {}
+    const prevStatus = meta.coex_link?.status || null
+    const nextLink = nextCoexistenceLinkState(meta.coex_link, event, nowIso)
+
+    const { error: writeErr } = await db
+      .from('whatsapp_numbers')
+      .update({ signup_meta: { ...meta, coex_link: nextLink } })
+      .eq('id', row.id)
+    if (writeErr) {
+      console.error(`[wa-webhook] account_update ${event}: state write failed for ${row.id}: ${writeErr.message}`)
+      continue
+    }
+
+    // Notify on TRANSITION only. Meta resends webhooks, and an unconditional
+    // push would spam managers with "WhatsApp is offline" for an outage they
+    // already know about.
+    if (prevStatus === nextLink.status) continue
+    const name = row.display_phone || row.label || 'WhatsApp number'
+    const notify = event === COEX_LINK_EVENTS.OFFBOARDED
+      ? {
+          title: 'WhatsApp disconnected',
+          body: `${name} was unlinked from the platform, usually because the WhatsApp Business app was reinstalled or re-registered on a new phone. Messages can't send until it finishes registering.`,
+        }
+      : {
+          title: 'WhatsApp reconnected',
+          body: `${name} is back online. Messaging has resumed.`,
+        }
+    try {
+      await sendPushToRolesAtLocation(row.location_id, MANAGER_ROLES, {
+        ...notify,
+        category: 'whatsapp',
+        data: { type: 'coex_link', event, number_id: String(row.id) },
+      })
+    } catch (e) {
+      console.error('[wa-webhook] account_update push failed:', e?.message)
+    }
   }
 }
 

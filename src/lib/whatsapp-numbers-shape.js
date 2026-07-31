@@ -25,6 +25,10 @@ export function publicShape(row) {
     access_token_redacted: redactToken(row.access_token),
     history_sync_status: row.signup_meta?.history_sync?.status || null,
     history_sync_started_at: row.signup_meta?.history_sync?.started_at || null,
+    // WA-COEX.6 — coexistence link lifecycle. Two scalars only: signup_meta
+    // as a whole carries the 2FA PIN and must never reach the browser.
+    coex_link_status: row.signup_meta?.coex_link?.status || null,
+    coex_offboarded_at: row.signup_meta?.coex_link?.offboarded_at || null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   }

@@ -106,3 +106,64 @@ export function effectiveHistorySyncStatus(status, startedAtIso, nowMs) {
   if (Number.isNaN(startedMs)) return status
   return nowMs - startedMs > 24 * 60 * 60 * 1000 ? 'expired' : status
 }
+
+// ── WA-COEX.6 — account_update / coexistence link lifecycle ──────────
+//
+// When a coexistence client changes phone, reinstalls, or re-registers the
+// WhatsApp Business app, Meta AUTO-OFFBOARDS the Cloud API companion and
+// sends ACCOUNT_OFFBOARDED. Cloud API sends fail for that number until the
+// client finishes registering, at which point a pre-checked opt-in re-links
+// us automatically and ACCOUNT_RECONNECTED arrives (usually minutes).
+// Without this we'd just see sends failing with nothing explaining why.
+//
+// IMPORTANT: `account_update` is a SHARED field — it also carries account
+// review/violation/restriction/partner events. Only the two coexistence
+// events below may drive this state; everything else must leave it alone.
+
+/** The two coexistence link events we act on. */
+export const COEX_LINK_EVENTS = { OFFBOARDED: 'ACCOUNT_OFFBOARDED', RECONNECTED: 'ACCOUNT_RECONNECTED' }
+
+/**
+ * account_update → the event name, uppercased, or null when absent.
+ * Deliberately does NOT filter: the caller decides what it recognises, so an
+ * unrelated account_update event is logged rather than silently swallowed.
+ */
+export function parseAccountUpdateEvent(value) {
+  const raw = value?.event
+  if (!raw || typeof raw !== 'string') return null
+  return raw.toUpperCase()
+}
+
+/**
+ * Advance the coexistence link state from an account_update event. Pure —
+ * pass the current state and `now` as ISO.
+ *
+ * Returns the UNCHANGED `current` for any event that isn't one of the two
+ * coexistence lifecycle events, so a violation/restriction event on the same
+ * webhook field can never flip a healthy number to "offboarded" (or mask a
+ * real offboard by clearing it).
+ */
+export function nextCoexistenceLinkState(current, event, nowIso) {
+  if (event === COEX_LINK_EVENTS.OFFBOARDED) {
+    return {
+      status: 'offboarded',
+      event,
+      // First offboard wins: repeated OFFBOARDED events (Meta may resend)
+      // must not keep pushing the clock forward, or "how long has this been
+      // down" is unanswerable.
+      offboarded_at: current?.offboarded_at || nowIso,
+      reconnected_at: null,
+      updated_at: nowIso,
+    }
+  }
+  if (event === COEX_LINK_EVENTS.RECONNECTED) {
+    return {
+      status: 'connected',
+      event,
+      offboarded_at: null,
+      reconnected_at: nowIso,
+      updated_at: nowIso,
+    }
+  }
+  return current ?? null
+}
