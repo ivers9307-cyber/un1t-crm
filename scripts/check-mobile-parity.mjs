@@ -202,6 +202,7 @@ const WEB_ONLY_OK = {
   approvals_rosters: 'Per-category approval grant (APPROVALS-PERCAT.1). Mobile approvals surface is still gated by the aggregate `approvals` permission; no per-category mobile split yet.',
   // approvals_hyrox_sessions dropped from WEB_ONLY_OK: the mobile `hyrox`
   // feature (webEquivalent: 'approvals_hyrox_sessions') now covers it.
+  equipment_admin: 'Register + checklist + interval setup is a desktop task; the mobile counterpart is equipment_inspect (the walk-round), which is matched via webEquivalent.',
 }
 
 const webDrift = []
