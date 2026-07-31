@@ -4630,6 +4630,26 @@ registry.registerPath({
   },
 })
 
+registry.registerPath({
+  method: 'get',
+  path: '/api/equipment/inspections',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'The compliance log: every submitted inspection at the active location, newest first (equipment_admin)',
+  description: 'The view you put in front of an insurer or an H&S auditor — gated on equipment_admin rather than equipment_inspect because it is an oversight surface, not an operational one. Paginated with `limit`/`offset` (`limit` capped at 100): unlike the register, this table grows without bound (roughly 1,500 rows/year for a 60-asset fortnightly-cycle studio) and every `.select()` caps at 1000 rows regardless of `.limit()`. Optional `equipmentId` narrows the log to one asset\'s history. No CSV export — on-screen only, per the operator.',
+  request: {
+    query: z.object({
+      limit: z.coerce.number().int().min(1).max(100).optional().openapi({ description: 'Default 50, capped at 100' }),
+      offset: z.coerce.number().int().min(0).optional().openapi({ description: 'Default 0' }),
+      equipmentId: uuidLike.optional(),
+    }),
+  },
+  responses: {
+    200: { description: 'A page of submitted inspections, newest first, with total for pagination', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentInspectionLogResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
