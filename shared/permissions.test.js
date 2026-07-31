@@ -10,9 +10,18 @@ import {
   sanitizePermissionsBlob,
   diffPermissionsBlob,
   mergeTemplates,
+  WEB_PERMISSIONS,
+  WEB_PERMISSION_KEYS,
+  MOBILE_PERMISSION_KEYS,
   DEFAULT_WEB_PERMISSIONS_BY_ROLE,
   DEFAULT_MOBILE_PERMISSIONS_BY_ROLE,
 } from './permissions.js'
+
+// Derived, never hardcoded — see the note in
+// src/lib/shared-permissions.test.js. The completeness check below used
+// to name `reception` alone, which left `master` (and any future role)
+// with no coverage at all.
+const ROLES = Object.keys(DEFAULT_WEB_PERMISSIONS_BY_ROLE)
 
 // A few keys we know exist in the defaults maps. Values inferred
 // from the file rather than hard-coded so the test stays in sync
@@ -390,25 +399,38 @@ describe('diffPermissionsBlob — sparse diff vs a base blob', () => {
   })
 })
 
-// RECEPTION.1 — new front-of-house role (2026-07). Guard that the
-// defaults maps are COMPLETE for it (a missing key would render as a
-// phantom OFF in the editors and resolve false at tier 3), and pin
-// the intent: staff-tier access plus the WhatsApp inbox + bookings desk.
-describe('reception role defaults', () => {
-  it('covers every web + mobile permission key (no gaps, no orphans)', async () => {
-    const { WEB_PERMISSIONS, WEB_PERMISSION_KEYS, MOBILE_PERMISSION_KEYS } = await import('./permissions.js')
-    // locationGateOnly keys (e.g. approvals_inbox — APPROVALS-PERCAT.1) are
-    // derived-visibility aggregator cards, not directly-granted role perms,
-    // so they're deliberately absent from every role default map.
-    const directWebKeys = WEB_PERMISSIONS.filter(p => !p.locationGateOnly).map(p => p.key)
-    const web = DEFAULT_WEB_PERMISSIONS_BY_ROLE.reception
-    const mob = DEFAULT_MOBILE_PERMISSIONS_BY_ROLE.reception
-    expect(directWebKeys.filter(k => !(k in web))).toEqual([])
-    expect(Object.keys(web).filter(k => !WEB_PERMISSION_KEYS.includes(k))).toEqual([])
-    expect(MOBILE_PERMISSION_KEYS.filter(k => !(k in mob))).toEqual([])
-    expect(Object.keys(mob).filter(k => !MOBILE_PERMISSION_KEYS.includes(k))).toEqual([])
+// Guard that the defaults maps are COMPLETE for EVERY role (a missing
+// key renders as a phantom OFF in the editors and resolves at whatever
+// resolvePermission's default tier decides — fail-closed for every role
+// but master). Was RECEPTION.1, scoped to `reception` alone; deriving
+// the role list is what stops `master` (or a seventh role) drifting
+// uncovered while CI stays green.
+describe('role default maps are complete for every role', () => {
+  // locationGateOnly keys (e.g. approvals_inbox — APPROVALS-PERCAT.1) are
+  // derived-visibility aggregator cards, not directly-granted role perms,
+  // so they're deliberately absent from every role default map.
+  const directWebKeys = WEB_PERMISSIONS.filter(p => !p.locationGateOnly).map(p => p.key)
+
+  it.each(ROLES)('%s covers every web + mobile permission key (no gaps, no orphans)', (role) => {
+    const web = DEFAULT_WEB_PERMISSIONS_BY_ROLE[role]
+    const mob = DEFAULT_MOBILE_PERMISSIONS_BY_ROLE[role]
+    expect(web, `web defaults for ${role}`).toBeDefined()
+    expect(mob, `mobile defaults for ${role}`).toBeDefined()
+    expect(directWebKeys.filter(k => !(k in web)), `${role}: web keys missing`).toEqual([])
+    expect(Object.keys(web).filter(k => !WEB_PERMISSION_KEYS.includes(k)), `${role}: web orphans`).toEqual([])
+    expect(MOBILE_PERMISSION_KEYS.filter(k => !(k in mob)), `${role}: mobile keys missing`).toEqual([])
+    expect(Object.keys(mob).filter(k => !MOBILE_PERMISSION_KEYS.includes(k)), `${role}: mobile orphans`).toEqual([])
   })
 
+  it('includes master and reception — the two a hardcoded list used to miss', () => {
+    expect(ROLES).toEqual(expect.arrayContaining(['master', 'reception']))
+  })
+})
+
+// RECEPTION.1 — pin the intent of the front-of-house role: staff-tier
+// access plus the WhatsApp inbox + bookings desk. (The completeness
+// half of RECEPTION.1 now lives in the every-role block above.)
+describe('reception role defaults', () => {
   it('is staff-tier plus the front-desk surfaces', () => {
     const web = DEFAULT_WEB_PERMISSIONS_BY_ROLE.reception
     expect(web.whatsapp).toBe(true)            // the front-desk channel
