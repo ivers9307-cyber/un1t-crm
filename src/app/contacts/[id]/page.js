@@ -28,6 +28,8 @@ import ContactWhoRail from '@/components/contact/ContactWhoRail'
 import ContactNextRail from '@/components/contact/ContactNextRail'
 import ContactTimeline from '@/components/contact/ContactTimeline'
 import { PastEventsCard } from '@/components/contact/EventRegistrationsCards'
+// HOST-MASTER.6 — race-event registrations + the No auto-enrol flag.
+import ContactEventsCard from '@/components/ContactEventsCard'
 import { relativeTime } from '@/components/contact/format'
 import { mergeTimeline, deriveNeedsAttention } from '@/lib/contact-view'
 // CONSULTATIONS SP1 — coach/web surface (mig 272 tables), permission-gated.
@@ -78,7 +80,7 @@ export default async function ContactDetailPage(props) {
     if (pg?.group?.id) person = await aggregatePerson(db, pg.group.id)
   } catch { person = null }
 
-  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, contactArrears] = await Promise.all([
+  const [dealsRes, notesRes, activitiesRes, bookingsRes, waConvRes, eventTypesRes, raceEventsRes, contactArrears] = await Promise.all([
     db.from('deals').select('*, pipeline_stages(name, color)').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('notes').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
     db.from('activities').select('*').eq('contact_id', id).order('created_at', { ascending: false }),
@@ -87,6 +89,14 @@ export default async function ContactDetailPage(props) {
     // BOOK-ON-PROFILE.1 — bookable consultation event types for this
     // studio, so the profile's Book card matches the inbox Book tab.
     db.from('event_types').select('id, name, slug, duration_minutes, availability, active').eq('location_id', contact.location_id).eq('active', true).order('name'),
+    // HOST-MASTER.6 — the contact's race-event registrations (host +
+    // internal), resolved live via team_members → teams → race_registrations
+    // (the same proven join as /api/contacts/[id]/events; each FK in the
+    // chain is unambiguous, and host:event_hosts!host_id matches the
+    // disambiguated embed the events pages use).
+    db.from('team_members')
+      .select('id, teams:team_id ( name, race_registrations ( id, status, race_events:race_event_id ( id, name, slug, race_date, host_id, host:event_hosts!host_id ( name ) ) ) )')
+      .eq('contact_id', id),
     // PROFILE-ARREARS.1 — this contact's open past-due total (netted), so the
     // profile shows the SAME arrears the Overdue chase-list flags. Previously
     // arrears were only computed for grouped contacts, so an ungrouped member
@@ -115,6 +125,27 @@ export default async function ContactDetailPage(props) {
   const bookings = bookingsRes.data || []
   const waConversations = waConvRes.data || []
   const bookableEventTypes = eventTypesRes?.data || []
+
+  // HOST-MASTER.6 — flatten team_members → registrations → race_events into
+  // one entry per registration, newest race first. e.id = registration id
+  // (unique key), e.eventId = race_events.id (link target) — kept distinct.
+  const raceEvents = []
+  for (const tm of raceEventsRes.data || []) {
+    for (const reg of tm.teams?.race_registrations || []) {
+      const race = reg.race_events
+      if (!race) continue
+      raceEvents.push({
+        id: reg.id,
+        eventId: race.id,
+        name: race.name,
+        slug: race.slug,
+        race_date: race.race_date,
+        status: reg.status,
+        hostName: race.host?.name || null,
+      })
+    }
+  }
+  raceEvents.sort((a, b) => (b.race_date || '').localeCompare(a.race_date || ''))
 
   // CHURN-CONTACT.1 — make the contact page prospective, not just a
   // retrospective timeline: surface the SAME at-risk signal the radar
@@ -346,6 +377,7 @@ export default async function ContactDetailPage(props) {
         journey={journey}
         attention={attention}
         nextClassAt={nextClassAt}
+        canToggleExempt={MANAGER_ROLES.includes(user?.role)}
         metrics={{
           ltvCents,
           arrearsCents: metricArrearsCents,
@@ -471,6 +503,9 @@ export default async function ContactDetailPage(props) {
 
           {/* Past event registrations (CRM-native). */}
           <PastEventsCard bookings={pastBookings} />
+
+          {/* HOST-MASTER.6 — race-event registrations (host + internal). */}
+          <ContactEventsCard events={raceEvents} />
         </div>
 
         {/* What happens next. */}

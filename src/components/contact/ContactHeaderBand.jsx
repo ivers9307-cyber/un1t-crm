@@ -9,6 +9,8 @@
 
 import PersonHeader from '@/components/PersonHeader'
 import PersonActionBar from '@/components/PersonActionBar'
+// HOST-MASTER.6 — "No auto-enrol" chip + Manager+ toggle (client component).
+import AutomationsExemptToggle from '@/components/AutomationsExemptToggle'
 import { formatLastSeen } from '@/lib/person-view'
 import { formatMoney, formatDate } from './format'
 
@@ -48,7 +50,7 @@ function StatTile({ label, value, tone = 'default' }) {
   )
 }
 
-export default function ContactHeaderBand({ contact, person, risk, journey, metrics, attention = [], nextClassAt = null }) {
+export default function ContactHeaderBand({ contact, person, risk, journey, metrics, attention = [], nextClassAt = null, canToggleExempt = false }) {
   const funnel = BADGE_SLUGS.has(contact.pipeline_stage_slug)
   const lastAttended = person?.lastAttendedAt || contact.last_attended_at
   // GLOFOX-REACTIVE (mig 428) — membership pause, surfaced prominently
@@ -149,6 +151,17 @@ export default function ContactHeaderBand({ contact, person, risk, journey, metr
               <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${PULSE_STATUS_CHIP[journey.status] || 'bg-gray-500/10 text-gray-600'}`}>
                 First 90: {PULSE_STATUS_LABEL[journey.status] || journey.status}
               </span>
+            )}
+            {/* HOST-MASTER.6 — mig 464 flag on host-sourced contacts. Chip
+                for everyone while the flag is on; toggle for Manager+. Not
+                rendered at all when the flag is off (non-managers never see
+                it; the toggle only appears alongside an active chip). */}
+            {contact.automations_exempt && (
+              <AutomationsExemptToggle
+                contactId={contact.id}
+                initial={contact.automations_exempt}
+                canToggle={canToggleExempt}
+              />
             )}
           </div>
         </div>
