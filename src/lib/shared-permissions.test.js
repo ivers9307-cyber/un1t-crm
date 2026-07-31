@@ -28,7 +28,15 @@ import {
 } from '@shared/permissions'
 import { hasPermission, hasMobilePermission } from './permissions.js'
 
-const ROLES = ['owner', 'manager', 'head_coach', 'staff']
+// Derived from the defaults map, NEVER hardcoded. A hardcoded list
+// (['owner','manager','head_coach','staff']) silently left `master` and
+// `reception` outside every invariant below: a new permission key
+// omitted from those two blocks passed CI, then resolved at whatever
+// resolvePermission's default tier decided — and since unregistered
+// keys fail CLOSED for every role except master, the practical effect
+// was a role quietly losing access to a new feature with no signal.
+// Deriving means a seventh role is covered the moment it's added.
+const ROLES = Object.keys(DEFAULT_WEB_PERMISSIONS_BY_ROLE)
 
 // locationGateOnly keys (e.g. approvals_inbox — APPROVALS-PERCAT.1) are
 // derived-visibility aggregator cards, not directly-granted role perms,
@@ -41,6 +49,19 @@ describe('shared/permissions.js', () => {
       expect(DEFAULT_WEB_PERMISSIONS_BY_ROLE[r], `web defaults for ${r}`).toBeDefined()
       expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE[r], `mobile defaults for ${r}`).toBeDefined()
     }
+  })
+
+  it('web and mobile declare the SAME role set', () => {
+    // ROLES derives from the web map, so a role present only in the
+    // mobile map would escape every loop below. Pin both directions.
+    expect(Object.keys(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE).sort()).toEqual([...ROLES].sort())
+  })
+
+  it('ROLES is derived, and covers the roles a hardcoded list used to miss', () => {
+    // Regression guard for the drift this file used to have. If a role
+    // is renamed/removed this fails loudly rather than silently
+    // shrinking the coverage of every other test in the block.
+    expect(ROLES).toEqual(expect.arrayContaining(['master', 'reception']))
   })
 
   it('every directly-granted web permission key appears in every role default map', () => {
@@ -166,7 +187,8 @@ describe('notification registry ↔ per-user toggles', () => {
     expect(d.manager.notify_expense_submitted).toBe(true)
     expect(d.head_coach.notify_expense_submitted).toBe(true)
     expect(d.staff.notify_expense_submitted).toBe(false)
-    for (const r of ['master', ...ROLES]) {
+    expect(d.reception.notify_expense_submitted).toBe(false)  // front desk doesn't approve
+    for (const r of ROLES) {
       expect(d[r].notify_expense_approved, `${r}.notify_expense_approved`).toBe(true)
       expect(d[r].notify_expense_declined, `${r}.notify_expense_declined`).toBe(true)
     }
