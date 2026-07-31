@@ -135,3 +135,34 @@ describe('PUT /api/contacts/[id] — cookie-path location gate', () => {
     expect(res.status).toBe(401)
   })
 })
+
+// HOST-MASTER.6b — automations_exempt (mig 464) is a staff decision: the
+// cookie path (Manager+ by requireApiKeyOrManager) may flip it; API-key
+// callers (auth.user null — n8n / integrations) get the field stripped
+// rather than 403'd so whole-object PUTs keep working.
+describe('PUT /api/contacts/[id] — automations_exempt gating', () => {
+  it('strips automations_exempt for an API-key caller (user null) — update object lacks it', async () => {
+    requireApiKeyOrManager.mockResolvedValue({ ok: true, orgId: null, user: null })
+    const db = mockDb({ oldRow: { tags: [], location_id: 'loc-1', email: null, glofox_member_id: null } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ first_name: 'Ada', automations_exempt: true }), props)
+    expect(res.status).toBe(200)
+    expect(db.update).toHaveBeenCalledWith({ first_name: 'Ada' })
+    expect(db.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ automations_exempt: true })
+    )
+  })
+
+  it('passes automations_exempt through for a cookie Manager+ caller', async () => {
+    requireApiKeyOrManager.mockResolvedValue({
+      ok: true,
+      orgId: null,
+      user: { role: 'manager', locations: [{ id: 'loc-1' }] },
+    })
+    const db = mockDb({ oldRow: { tags: [], location_id: 'loc-1', email: null, glofox_member_id: null } })
+    createServerClient.mockReturnValue(db)
+    const res = await PUT(req({ automations_exempt: false }), props)
+    expect(res.status).toBe(200)
+    expect(db.update).toHaveBeenCalledWith({ automations_exempt: false })
+  })
+})

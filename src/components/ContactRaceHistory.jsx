@@ -1,8 +1,9 @@
 'use client'
 
-// ContactRaceHistory — shown on the /contacts/[id] profile page
-// (mig 086). Lists every race this contact has competed in (as
-// captain or member), with team name, wave, and finish time.
+// ContactRaceHistory — the "Events" card on the /contacts/[id] profile
+// page (mig 086). Lists every race event this contact has competed in
+// (as captain or member), with team name, wave, finish time and — for
+// host-run events (HOST-MASTER.6b) — the hosting party.
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
@@ -85,6 +86,10 @@ export default function ContactRaceHistory({ contactId }) {
                   </span>
                 )}
               </div>
+              {/* HOST-MASTER.6b — hosting party (NULL host = internal UN1T event). */}
+              {r.hostName && (
+                <div className="text-xs text-un1t-muted mt-0.5">Hosted by {r.hostName}</div>
+              )}
               <div className="text-[11px] text-un1t-subtle mt-1">
                 {dateLabel}
                 {r.team?.name && <> · Team {r.team.name} ({r.team.size}-person)</>}

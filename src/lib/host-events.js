@@ -163,3 +163,21 @@ export async function ensureAnchorLocation(db, host) {
   if (linkErr) throw new Error(`anchor link failed: ${linkErr.message}`)
   return id
 }
+
+// HOST-MASTER.1 — where host-sourced CONTACTS live. The org's master
+// location when configured (Stillorgan for UN1T Group, mig 464);
+// otherwise the host's anchor location — fail-open to the pre-master
+// behaviour, never to a wrong location. Errors also fall back.
+export async function resolveMasterLocationId(db, host) {
+  try {
+    if (!host?.organization_id) return host?.anchor_location_id || null
+    const { data } = await db
+      .from('organizations')
+      .select('master_location_id')
+      .eq('id', host.organization_id)
+      .maybeSingle()
+    return data?.master_location_id || host.anchor_location_id || null
+  } catch {
+    return host?.anchor_location_id || null
+  }
+}

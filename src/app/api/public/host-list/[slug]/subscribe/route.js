@@ -4,9 +4,12 @@
 // auth — same posture as /api/public/races/[slug]/register: per-IP rate
 // limit + Zod body + slug lookup (404 on unknown slug; slugs are public).
 //
-// Flow: find-or-create the contact at the host's ANCHOR location (the
-// synthetic location every host gets for its events — provisioned lazily
-// via ensureAnchorLocation), apply marketing consent TRUE (this form IS the
+// Flow: find-or-create the contact at the org's MASTER location (HOST-MASTER.4
+// — Stillorgan for UN1T Group, so host signups land next to the real member
+// base; the host's lazily-provisioned anchor location is only the fallback
+// when no master is configured), stamping automations_exempt on CREATE only
+// (matched existing contacts keep their settings), apply marketing consent
+// TRUE (this form IS the
 // explicit opt-in — same applyFormMarketingConsent the event register route
 // uses: contact_preferences three channels + consent_log + email_status
 // mirror), upsert host_contacts membership (source='mailing_list',
@@ -25,7 +28,7 @@ import { createServerClient } from '@/lib/supabase'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validateBody } from '@/lib/validate'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
-import { ensureAnchorLocation } from '@/lib/host-events'
+import { ensureAnchorLocation, resolveMasterLocationId } from '@/lib/host-events'
 import { hostTagFor } from '@/lib/host-contact-list'
 import { writeContactTag } from '@/lib/contact-tags'
 import { applyFormMarketingConsent } from '@/lib/marketing-consent'
@@ -67,24 +70,26 @@ export async function POST(request, props) {
   }
 
   try {
-    const locationId = host.anchor_location_id || await ensureAnchorLocation(db, host)
+    // HOST-MASTER.4 — contacts live at the org's master location so a signup
+    // from an existing member matches their REAL contact row; the anchor
+    // location is only the fallback when no master is configured.
+    const locationId = await resolveMasterLocationId(db, host) || host.anchor_location_id || await ensureAnchorLocation(db, host)
 
-    // Find-or-create mirrors the event register route: match the email
-    // globally so an existing member/attendee links to their real contact
-    // (dedup keeps consent + per-host suppression meaningful) rather than
-    // minting a doppelgänger at the anchor location.
     const email = body.email.toLowerCase().trim()
-    // restrictToLocation — a PUBLIC write path must never globally resolve an
-    // arbitrary email to an existing contact and then write consent/tags
-    // against them (IDOR + consent resurrection). Mirrors the hardened
-    // /api/public/leads + /api/public/class-booking pattern: match/create only
-    // within the host's own anchor location.
+    // restrictToLocation — match is scoped to ONE location (never a global
+    // email resolve). Since HOST-MASTER.4 that location is the org MASTER, so
+    // a signup with a known member's email deliberately links to their real
+    // contact and re-affirms marketing consent — that's the feature, and the
+    // accepted posture of every public opt-in form (/api/public/leads,
+    // class-booking). The tenant-keyed rate limit + always-identical response
+    // bound the abuse surface: no enumeration oracle, no bulk probing.
     const contactId = await findOrCreateRaceContact({
       db,
       locationId,
       email,
       name: body.name,
-      restrictToLocation: true,
+      restrictToLocation: true,          // match at the MASTER location = link to the real member
+      insertFields: { automations_exempt: true },  // new contacts only — matches keep their settings
     })
     if (!contactId) {
       // Hard failure creating the contact — logged, but the public response

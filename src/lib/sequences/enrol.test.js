@@ -34,11 +34,14 @@ function mockDb({
   cooldownDays = null,
   insertError = null,
   rpcError = null,
+  exemptContactIds = [],
+  contactsError = null,
 } = {}) {
   const inserts = []
   const rpcCalls = []
+  const contactsQueries = []
 
-  function chain(rows) {
+  function chain(rows, error = null) {
     const builder = {
       eq: vi.fn().mockReturnThis(),
       in: vi.fn().mockReturnThis(),
@@ -50,7 +53,7 @@ function mockDb({
       then: undefined,
     }
     builder.then = (onFulfilled) =>
-      Promise.resolve({ data: rows, error: null }).then(onFulfilled)
+      Promise.resolve(error ? { data: null, error } : { data: rows, error: null }).then(onFulfilled)
     return builder
   }
 
@@ -75,6 +78,18 @@ function mockDb({
       if (table === 'email_sequences') {
         return { select: vi.fn(() => chain([{ re_enrolment_cooldown_days: cooldownDays }])) }
       }
+      if (table === 'contacts') {
+        // automations_exempt gate: select('id').in('id', chunk)
+        //   .eq('automations_exempt', true). The mock ignores the
+        //   filters and returns every exempt id — fixtures keep the
+        //   exempt set a subset of the candidates.
+        return {
+          select: vi.fn(() => {
+            contactsQueries.push(table)
+            return chain(exemptContactIds.map(id => ({ id })), contactsError)
+          }),
+        }
+      }
       throw new Error(`unexpected table: ${table}`)
     }),
     rpc: vi.fn(async (name, args) => {
@@ -90,7 +105,7 @@ function mockDb({
       return { data: null, error: null }
     }),
   }
-  return { db, inserts, rpcCalls }
+  return { db, inserts, rpcCalls, contactsQueries }
 }
 
 beforeEach(() => {
@@ -224,6 +239,96 @@ describe('enrolContacts — counter RPC', () => {
     // Should resolve normally despite the RPC rejection.
     const out = await enrolContacts({ sequenceId: 's1', contactIds: ['a'] })
     expect(out.enrolled).toBe(1)
+  })
+})
+
+describe('enrolContacts — automations_exempt gate (HOST-MASTER.3)', () => {
+  it('drops automations_exempt contacts for non-manual sourceTypes', async () => {
+    const { db, inserts } = mockDb({ exemptContactIds: ['c1'] })
+    createServerClient.mockReturnValue(db)
+    const out = await enrolContacts({
+      sequenceId: 's1', contactIds: ['c1', 'c2'], sourceType: 'tag_added',
+    })
+    expect(out.enrolled).toBe(1)
+    expect(out.skipped).toBe(1) // c1 counted as skipped
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0].map(r => r.contact_id)).toEqual(['c2'])
+  })
+
+  it('returns skipped: contactIds.length when ALL candidates are exempt', async () => {
+    const { db, inserts, rpcCalls } = mockDb({ exemptContactIds: ['c1', 'c2'] })
+    createServerClient.mockReturnValue(db)
+    const out = await enrolContacts({
+      sequenceId: 's1', contactIds: ['c1', 'c2'], sourceType: 'booking_created',
+    })
+    expect(out).toEqual({ enrolled: 0, skipped: 2 })
+    expect(inserts).toHaveLength(0)
+    expect(rpcCalls).toHaveLength(0)
+  })
+
+  it('manual sourceType enrols exempt contacts (and never reads the flag)', async () => {
+    const { db, inserts, contactsQueries } = mockDb({ exemptContactIds: ['c1'] })
+    createServerClient.mockReturnValue(db)
+    const out = await enrolContacts({
+      sequenceId: 's1', contactIds: ['c1', 'c2'], sourceType: 'manual',
+    })
+    expect(out.enrolled).toBe(2)
+    expect(inserts[0].map(r => r.contact_id).sort()).toEqual(['c1', 'c2'])
+    expect(contactsQueries).toHaveLength(0) // gate bypassed entirely
+  })
+
+  it('omitted sourceType (defaults to manual) enrols exempt contacts', async () => {
+    const { db, inserts } = mockDb({ exemptContactIds: ['c1'] })
+    createServerClient.mockReturnValue(db)
+    const out = await enrolContacts({ sequenceId: 's1', contactIds: ['c1', 'c2'] })
+    expect(out.enrolled).toBe(2)
+    expect(inserts[0].map(r => r.contact_id).sort()).toEqual(['c1', 'c2'])
+  })
+
+  it('churn_radar sourceType enrols exempt contacts (operator per-member click)', async () => {
+    const { db, inserts, contactsQueries } = mockDb({ exemptContactIds: ['c1'] })
+    createServerClient.mockReturnValue(db)
+    const out = await enrolContacts({
+      sequenceId: 's1', contactIds: ['c1'], sourceType: 'churn_radar',
+    })
+    expect(out.enrolled).toBe(1)
+    expect(inserts[0].map(r => r.contact_id)).toEqual(['c1'])
+    expect(contactsQueries).toHaveLength(0)
+  })
+
+  it('invoice_past_due (dunning auto-enrol) respects the flag', async () => {
+    const { db, inserts } = mockDb({ exemptContactIds: ['c1'] })
+    createServerClient.mockReturnValue(db)
+    const out = await enrolContacts({
+      sequenceId: 's1', contactIds: ['c1', 'c2'], sourceType: 'invoice_past_due',
+    })
+    expect(out.enrolled).toBe(1)
+    expect(out.skipped).toBe(1)
+    expect(inserts[0].map(r => r.contact_id)).toEqual(['c2'])
+  })
+
+  it('fails closed: a contacts-read error rejects instead of enrolling', async () => {
+    // A transient read failure must NOT fall through to auto-enrolling
+    // exempt contacts — the gate's whole point.
+    const { db, inserts } = mockDb({
+      exemptContactIds: ['c1'],
+      contactsError: { message: 'connection reset' },
+    })
+    createServerClient.mockReturnValue(db)
+    await expect(enrolContacts({
+      sequenceId: 's1', contactIds: ['c1', 'c2'], sourceType: 'tag_added',
+    })).rejects.toThrow(/automations_exempt check failed: connection reset/)
+    expect(inserts).toHaveLength(0)
+  })
+
+  it('webhook sourceType respects the flag (inbound automation, not a human click)', async () => {
+    const { db, inserts } = mockDb({ exemptContactIds: ['c1'] })
+    createServerClient.mockReturnValue(db)
+    const out = await enrolContacts({
+      sequenceId: 's1', contactIds: ['c1', 'c2'], sourceType: 'webhook',
+    })
+    expect(out.enrolled).toBe(1)
+    expect(inserts[0].map(r => r.contact_id)).toEqual(['c2'])
   })
 })
 

@@ -1,10 +1,22 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   hostTagFor,
   isEmailable,
   addEventAttendeesToHostList,
   fetchHostContactRows,
+  eventTagFor,
 } from './host-contact-list'
+import { writeContactTag } from '@/lib/contact-tags'
+
+// HOST-MASTER.5 — writeContactTag is mocked per the estate's idiom
+// (glofox-push.test.js): the real contact_tags dual-write/sequence-fire
+// behaviour is covered by contact-tags.test.js; here we only assert
+// addEventAttendeesToHostList calls it with the right args and swallows
+// its failures.
+vi.mock('@/lib/contact-tags', () => ({
+  writeContactTag: vi.fn(async () => ({ written: true, tag: 'mocked', alreadyPresent: false })),
+}))
+vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn() }))
 
 describe('hostTagFor', () => {
   it('prefers the slug when set', () => {
@@ -20,6 +32,14 @@ describe('hostTagFor', () => {
     expect(hostTagFor({ name: '###' })).toBe('host:host')
     expect(hostTagFor({})).toBe('host:host')
     expect(hostTagFor(null)).toBe('host:host')
+  })
+})
+
+describe('eventTagFor', () => {
+  it('builds event:<slug>', () => expect(eventTagFor({ slug: 'pride-sep20' })).toBe('event:pride-sep20'))
+  it('falls back to normalised name then event', () => {
+    expect(eventTagFor({ slug: null, name: 'Pride Run 5K' })).toBe('event:pride-run-5k')
+    expect(eventTagFor({})).toBe('event:event')
   })
 })
 
@@ -70,8 +90,14 @@ describe('isEmailable', () => {
 // addEventAttendeesToHostList — fakeDb mirrors the host-events.test.js pattern.
 // regPages: array of pages served to successive .range() calls.
 // ---------------------------------------------------------------------------
-function fakeListDb({ race, regPages = [], upsertError = null } = {}) {
-  const calls = { upserts: [], regQueries: [] }
+function fakeListDb({
+  race, regPages = [], upsertError = null,
+  host = null, hostError = null, contactsById = {}, contactsLoadError = null,
+  existingTaggedPairs = [], precheckError = null,
+} = {}) {
+  const calls = {
+    upserts: [], regQueries: [], contactsSelects: [], contactsUpdates: [], precheckQueries: [],
+  }
   let regCall = 0
   return {
     calls,
@@ -104,6 +130,45 @@ function fakeListDb({ race, regPages = [], upsertError = null } = {}) {
           upsert: async (rows, opts) => {
             calls.upserts.push({ rows, opts })
             return { error: upsertError }
+          },
+        }
+      }
+      if (table === 'event_hosts') {
+        return {
+          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: host, error: hostError }) }) }),
+        }
+      }
+      if (table === 'contacts') {
+        return {
+          select: (cols) => ({
+            in: async (col, ids) => {
+              calls.contactsSelects.push({ cols, col, ids: [...ids] })
+              if (contactsLoadError) return { data: null, error: contactsLoadError }
+              const data = ids.map((id) => contactsById[id]).filter(Boolean)
+              return { data, error: null }
+            },
+          }),
+          update: (patch) => ({
+            eq: async (col, val) => {
+              calls.contactsUpdates.push({ patch, id: val })
+              return { error: null }
+            },
+          }),
+        }
+      }
+      if (table === 'contact_tags') {
+        return {
+          select: (cols) => {
+            const filters = {}
+            const builder = {
+              in: (col, vals) => { filters[col] = [...vals]; return builder },
+              is: async (col, val) => {
+                calls.precheckQueries.push({ cols, filters, isCol: col, isVal: val })
+                if (precheckError) return { data: null, error: precheckError }
+                return { data: existingTaggedPairs, error: null }
+              },
+            }
+            return builder
           },
         }
       }
@@ -188,6 +253,132 @@ describe('addEventAttendeesToHostList', () => {
       upsertError: { message: 'boom' },
     })
     await expect(addEventAttendeesToHostList(db, 'ev1')).rejects.toThrow(/boom/)
+  })
+
+  // HOST-MASTER.5 — each confirmed attendee ALSO gets the host tag + the
+  // per-event tag, in BOTH tag systems (subscribe-route pattern).
+  describe('tagging attendees (HOST-MASTER.5)', () => {
+    beforeEach(() => {
+      writeContactTag.mockClear()
+      writeContactTag.mockResolvedValue({ written: true, tag: 'mocked', alreadyPresent: false })
+    })
+
+    const race = { id: 'ev1', host_id: 'h1', slug: 'pride-run', name: 'Pride Run' }
+    const host = { id: 'h1', slug: 'acme', name: 'Acme Events' }
+
+    it('tags each confirmed attendee with the host and event tags', async () => {
+      const contactsById = {
+        c1: { id: 'c1', location_id: 'loc1', tags: ['other'] },                       // missing both
+        c2: { id: 'c2', location_id: 'loc2', tags: ['host:acme'] },                    // missing event tag only
+        c3: { id: 'c3', location_id: 'loc3', tags: ['host:acme', 'event:pride-run'] }, // already has both
+      }
+      const db = fakeListDb({
+        race, host, contactsById,
+        regPages: [[reg(['c1', 'c2', 'c3'])]],
+      })
+
+      const count = await addEventAttendeesToHostList(db, 'ev1')
+      expect(count).toBe(3)
+
+      // contact_tags dual-write — both tags, per contact, using the CONTACT's
+      // own location_id (host-event contacts live at the org master location;
+      // tags must follow the contact).
+      expect(writeContactTag).toHaveBeenCalledTimes(6)
+      expect(writeContactTag).toHaveBeenCalledWith(db, { contactId: 'c1', locationId: 'loc1', tag: 'host:acme' })
+      expect(writeContactTag).toHaveBeenCalledWith(db, { contactId: 'c1', locationId: 'loc1', tag: 'event:pride-run' })
+      expect(writeContactTag).toHaveBeenCalledWith(db, { contactId: 'c2', locationId: 'loc2', tag: 'host:acme' })
+      expect(writeContactTag).toHaveBeenCalledWith(db, { contactId: 'c2', locationId: 'loc2', tag: 'event:pride-run' })
+      expect(writeContactTag).toHaveBeenCalledWith(db, { contactId: 'c3', locationId: 'loc3', tag: 'host:acme' })
+      expect(writeContactTag).toHaveBeenCalledWith(db, { contactId: 'c3', locationId: 'loc3', tag: 'event:pride-run' })
+
+      // contacts.tags append-if-missing: one union update per contact that's
+      // missing anything; a contact with both tags already present gets NO
+      // update call at all.
+      expect(db.calls.contactsUpdates).toHaveLength(2)
+      const c1Update = db.calls.contactsUpdates.find((u) => u.id === 'c1')
+      expect(new Set(c1Update.patch.tags)).toEqual(new Set(['other', 'host:acme', 'event:pride-run']))
+      const c2Update = db.calls.contactsUpdates.find((u) => u.id === 'c2')
+      expect(new Set(c2Update.patch.tags)).toEqual(new Set(['host:acme', 'event:pride-run']))
+      expect(db.calls.contactsUpdates.some((u) => u.id === 'c3')).toBe(false)
+    })
+
+    it('tag failures do not throw past the sync', async () => {
+      writeContactTag.mockRejectedValue(new Error('tag write boom'))
+      const contactsById = { c1: { id: 'c1', location_id: 'loc1', tags: [] } }
+      const db = fakeListDb({ race, host, contactsById, regPages: [[reg(['c1'])]] })
+
+      await expect(addEventAttendeesToHostList(db, 'ev1')).resolves.toBe(1)
+      expect(writeContactTag).toHaveBeenCalledTimes(2) // still attempted both tags
+    })
+
+    // HOST-MASTER.5b — a failed/TOCTOU-missing host load must never fall
+    // back to hostTagFor(null)'s degenerate 'host:host' tag.
+    it('skips all attendee tagging when the host load errors', async () => {
+      const contactsById = { c1: { id: 'c1', location_id: 'loc1', tags: [] } }
+      const db = fakeListDb({
+        race, host: null, hostError: { message: 'boom' }, contactsById,
+        regPages: [[reg(['c1'])]],
+      })
+
+      const count = await addEventAttendeesToHostList(db, 'ev1')
+      expect(count).toBe(1) // host_contacts upsert count is unaffected
+      expect(writeContactTag).not.toHaveBeenCalled()
+      expect(db.calls.contactsSelects).toEqual([]) // never even loads attendee contacts
+      expect(db.calls.contactsUpdates).toEqual([])
+    })
+
+    it('skips all attendee tagging when the host row is missing (deleted host, no query error)', async () => {
+      const contactsById = { c1: { id: 'c1', location_id: 'loc1', tags: [] } }
+      const db = fakeListDb({ race, host: null, contactsById, regPages: [[reg(['c1'])]] })
+
+      const count = await addEventAttendeesToHostList(db, 'ev1')
+      expect(count).toBe(1)
+      expect(writeContactTag).not.toHaveBeenCalled()
+    })
+
+    // HOST-MASTER.5b — batched contact_tags delta pre-check per chunk:
+    // pairs already active are skipped, only the gaps go through
+    // writeContactTag (steady-state re-confirmations cost ~1 query, not
+    // ~2 per attendee).
+    it('skips writeContactTag for pairs the batched pre-check finds already active', async () => {
+      const contactsById = {
+        c1: { id: 'c1', location_id: 'loc1', tags: [] },
+        c2: { id: 'c2', location_id: 'loc2', tags: [] },
+      }
+      const db = fakeListDb({
+        race, host, contactsById,
+        regPages: [[reg(['c1', 'c2'])]],
+        existingTaggedPairs: [{ contact_id: 'c1', tag: 'host:acme' }],
+      })
+
+      await addEventAttendeesToHostList(db, 'ev1')
+
+      expect(db.calls.precheckQueries).toHaveLength(1)
+      expect(db.calls.precheckQueries[0].filters).toEqual({
+        contact_id: ['c1', 'c2'],
+        tag: ['host:acme', 'event:pride-run'],
+      })
+      // c1:host:acme is the only pre-tagged pair — skipped. The other 3 go through.
+      expect(writeContactTag).toHaveBeenCalledTimes(3)
+      expect(writeContactTag).not.toHaveBeenCalledWith(db, { contactId: 'c1', locationId: 'loc1', tag: 'host:acme' })
+      expect(writeContactTag).toHaveBeenCalledWith(db, { contactId: 'c1', locationId: 'loc1', tag: 'event:pride-run' })
+      expect(writeContactTag).toHaveBeenCalledWith(db, { contactId: 'c2', locationId: 'loc2', tag: 'host:acme' })
+      expect(writeContactTag).toHaveBeenCalledWith(db, { contactId: 'c2', locationId: 'loc2', tag: 'event:pride-run' })
+    })
+
+    it('falls back to calling writeContactTag for every pair when the pre-check errors (fail-open — writeContactTag is idempotent on its own)', async () => {
+      const contactsById = { c1: { id: 'c1', location_id: 'loc1', tags: [] } }
+      const db = fakeListDb({
+        race, host, contactsById,
+        regPages: [[reg(['c1'])]],
+        precheckError: { message: 'precheck boom' },
+      })
+
+      await addEventAttendeesToHostList(db, 'ev1')
+      expect(writeContactTag).toHaveBeenCalledTimes(2)
+      expect(writeContactTag).toHaveBeenCalledWith(db, { contactId: 'c1', locationId: 'loc1', tag: 'host:acme' })
+      expect(writeContactTag).toHaveBeenCalledWith(db, { contactId: 'c1', locationId: 'loc1', tag: 'event:pride-run' })
+    })
   })
 })
 

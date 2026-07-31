@@ -24,6 +24,11 @@ const ContactUpdateSchema = z.object({
   // studio TV. Shown by default (false); set true to hide. Exposed here so the
   // CRM edit form (and, later, a champ-app member-facing toggle) can write it.
   hr_leaderboard_opt_out: z.boolean().optional(),
+  // HOST-MASTER.6 (mig 464) — blocks AUTOMATIC sequence/automation enrolment
+  // only (manual staff enrolment ignores it). Staff-decision field: writable
+  // via the cookie path only (Manager+ — requireApiKeyOrManager gates it);
+  // API-key callers get it stripped in the handler below.
+  automations_exempt: z.boolean().optional(),
   // tags is a TEXT[] in Postgres. Frontend code that wants to "add a tag"
   // fetches current tags, appends, and PUTs the full new array. Sequence
   // tag_added triggers (sequences.js) fire on the set difference of
@@ -44,6 +49,14 @@ export async function PUT(request, props) {
   const validation = await validateBody(request, ContactUpdateSchema)
   if (!validation.ok) return validation.response
   const body = validation.data
+
+  // HOST-MASTER.6 — automations_exempt is a staff decision. The route has no
+  // per-field gating, but its cookie path is already Manager+-only
+  // (requireApiKeyOrManager), so auth.user present ⇒ MANAGER_ROLES. API-key
+  // callers (auth.user null — n8n / integrations) may not flip it: strip
+  // rather than 403 so integrations that PUT whole objects keep working.
+  if (!auth.user) delete body.automations_exempt
+
   const db = createServerClient()
 
   // APIKEYS.3 — per-org key may only update a contact in its org.

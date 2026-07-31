@@ -1,14 +1,18 @@
 // GET /api/contacts/[id]/races
 //
 // Returns every race the contact has competed in — captain or
-// member. Drives the "Races" section on the contact profile.
+// member. Drives the "Events" section on the contact profile.
 //
-// Manager+ at the contact's location.
+// HOST-MASTER.6b — any session user who can access the contact (was
+// Manager+): the profile page itself is staff-visible via
+// canViewContact, so the card it feeds shouldn't 403 for staff.
+// Gate mirrors the sibling /api/contacts/[id]/* subroutes
+// (command-centre / consent-log): getCurrentUser() → load contact →
+// location check answering 404 (not 403) so ids can't be enumerated.
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
-import { MANAGER_ROLES } from '@/lib/schemas'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -17,9 +21,6 @@ export async function GET(_request, props) {
   const params = await props.params;
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorised' }, { status: 401 })
-  if (!MANAGER_ROLES.includes(user.role)) {
-    return NextResponse.json({ success: false, error: 'Manager+ required' }, { status: 403 })
-  }
 
   const db = createServerClient()
   const { data: contact, error: contactErr } = await db
@@ -46,7 +47,7 @@ export async function GET(_request, props) {
         registrations:race_registrations (
           id, status, registered_at,
           race_started_at, race_finished_at, team_composition,
-          race:race_event_id ( id, name, slug, race_date, location_id ),
+          race:race_event_id ( id, name, slug, race_date, location_id, host:event_hosts!host_id ( name ) ),
           wave:wave_id ( id, start_time, label )
         )
       )
@@ -75,6 +76,9 @@ export async function GET(_request, props) {
       out.push({
         registration_id: reg.id,
         race: reg.race,
+        // HOST-MASTER.6b — NULL race_events.host_id = internal UN1T event
+        // (mig 381), so hostName is null for those.
+        hostName: reg.race?.host?.name || null,
         wave: reg.wave,
         team: { id: team.id, name: team.name, size: team.size },
         member_role: tm.role,

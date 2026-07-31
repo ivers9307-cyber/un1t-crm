@@ -33,7 +33,7 @@ import { getAppUrl } from '@/lib/app-url'
 import { findOrCreateRaceContact } from '@/lib/race-contact-linking'
 import { triggerSequencesForRaceRegistered } from '@/lib/sequences'
 import { logWarn } from '@/lib/log'
-import { eventIsPublic } from '@/lib/host-events'
+import { eventIsPublic, resolveMasterLocationId } from '@/lib/host-events'
 
 export const runtime = 'nodejs'
 
@@ -85,7 +85,7 @@ export async function POST(request, props) {
       id, location_id, name, slug, race_date, allowed_team_sizes,
       registration_opens_at, registration_closes_at, active, status,
       member_pricing_enabled, member_fee_cents, non_member_fee_cents,
-      members_only, payment_currency,
+      members_only, payment_currency, host_id,
       waves:race_waves ( id, start_time, capacity, label )
     `)
     .eq('slug', params.slug)
@@ -102,6 +102,22 @@ export async function POST(request, props) {
   if (!race || !eventIsPublic(race)) {
     return NextResponse.json({ success: false, error: 'Race not found' }, { status: 404 })
   }
+
+  // HOST-MASTER.4 — third-party host events place/match contacts at the org
+  // MASTER location (Stillorgan), exempt-on-create; internal events unchanged.
+  // Teams/registrations/payments stay keyed on the EVENT's location — only
+  // where the contact rows live changes.
+  let hostRow = null
+  if (race.host_id) {
+    const { data } = await db
+      .from('event_hosts')
+      .select('id, organization_id, anchor_location_id')
+      .eq('id', race.host_id)
+      .maybeSingle()
+    hostRow = data || null
+  }
+  const contactLocationId = hostRow ? (await resolveMasterLocationId(db, hostRow) || race.location_id) : race.location_id
+  const contactInsertFields = hostRow ? { automations_exempt: true } : {}
 
   // Registration-window check.
   const now = Date.now()
@@ -172,10 +188,11 @@ export async function POST(request, props) {
   const captainEmail = body.captain_email.toLowerCase().trim()
   const captainContactId = await findOrCreateRaceContact({
     db,
-    locationId: race.location_id,
+    locationId: contactLocationId,
     email: captainEmail,
     name: body.captain_name,
     phone: body.captain_phone || null,
+    insertFields: contactInsertFields,
   })
   if (!captainContactId) {
     return NextResponse.json({
@@ -295,9 +312,10 @@ export async function POST(request, props) {
     if (!contactId && m.email) {
       contactId = await findOrCreateRaceContact({
         db,
-        locationId: race.location_id,
+        locationId: contactLocationId,
         email: m.email,
         name: m.name,
+        insertFields: contactInsertFields,
       })
     }
     memberRows.push({

@@ -346,6 +346,7 @@ export default async function ContactDetailPage(props) {
         journey={journey}
         attention={attention}
         nextClassAt={nextClassAt}
+        canToggleExempt={MANAGER_ROLES.includes(user?.role)}
         metrics={{
           ltvCents,
           arrearsCents: metricArrearsCents,

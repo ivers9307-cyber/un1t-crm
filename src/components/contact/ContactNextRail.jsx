@@ -104,10 +104,11 @@ export default function ContactNextRail({
         ))}
       </div>
 
-      {/* Race history (mig 086). Always rendered; the component shows
+      {/* Race-event history (mig 086; HOST-MASTER.6b — host + internal
+          events, hence "Events"). Always rendered; the component shows
           a "no races yet" message when empty. */}
       <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Races</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-un1t-subtle mb-3">Events</h3>
         <ContactRaceHistory contactId={contact.id} />
       </div>
 

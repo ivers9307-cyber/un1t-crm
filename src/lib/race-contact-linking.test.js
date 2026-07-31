@@ -50,3 +50,30 @@ describe('findOrCreateRaceContact — restrictToLocation', () => {
     expect(await findOrCreateRaceContact({ db, ...base, restrictToLocation: true })).toBe('here')
   })
 })
+
+describe('findOrCreateRaceContact — insertFields', () => {
+  it('applies insertFields on create only', async () => {
+    // No existing match → the contact INSERT payload must include the extras.
+    const created = makeDb({ atLocation: null, anywhere: null, insertedId: 'fresh-id' })
+    const id = await findOrCreateRaceContact({
+      db: created.db, ...base, restrictToLocation: true,
+      insertFields: { automations_exempt: true },
+    })
+    expect(id).toBe('fresh-id')
+    expect(created.calls.inserted).toMatchObject({
+      location_id: 'loc-1',
+      email: 'sam@example.com',
+      automations_exempt: true,
+    })
+
+    // Existing match → return its id and issue NO insert (matched contacts
+    // keep their settings; the mock has no .update so any update would throw).
+    const matched = makeDb({ atLocation: { id: 'existing-contact' } })
+    const id2 = await findOrCreateRaceContact({
+      db: matched.db, ...base, restrictToLocation: true,
+      insertFields: { automations_exempt: true },
+    })
+    expect(id2).toBe('existing-contact')
+    expect(matched.calls.inserted).toBeNull()
+  })
+})
