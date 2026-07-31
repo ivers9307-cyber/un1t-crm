@@ -103,6 +103,22 @@ export async function syncGeofences() {
     if (imp?.targetId) return null
   } catch {}
 
+  // GEO-ATT.17 — paired studio kiosks never take part in geofence
+  // attendance. Same carve-out push-register.js already applies to push
+  // tokens, and for the same reason: a kiosk is a SHARED gym device.
+  // It sits permanently inside the gym's region, so an ENTER delivered
+  // after a reboot or a re-registration would stamp the arrival of
+  // whichever staff member's session the kiosk happens to hold — a
+  // person who may be at home. It also must never be permission-gated:
+  // a reception iPad without "Always" location would otherwise be
+  // blocked out of the app entirely (LocationGate applies the same
+  // guard). Returning null leaves any prior registration untouched;
+  // a device only becomes a kiosk deliberately, via pairing.
+  try {
+    const { getPairing } = await import('./studio-device')
+    if (await getPairing()) return null
+  } catch { /* SecureStore unreadable ⇒ treat as unpaired */ }
+
   // GEO-ATT.12 — drain the retry queue on every sync (auth bootstrap +
   // every foreground), not just inside the background task: a ping that
   // failed while the phone had no signal would otherwise sit queued
