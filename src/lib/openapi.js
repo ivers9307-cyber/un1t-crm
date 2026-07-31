@@ -4535,6 +4535,102 @@ registry.registerPath({
 })
 
 // ============================================================================
+// Equipment Maintenance (EQUIP-MAINT.2) — the inspection run: the due
+// list, draft create-or-resume, tick, and submit. PR 1 (above)
+// registered the register/types/settings routes; these four complete
+// the walk-round.
+// ============================================================================
+
+const InspectionTick = z.object({
+  itemId: z.string().min(1),
+  state: z.enum(['pass', 'fail']),
+  note: z.string().trim().max(500).optional().nullable(),
+}).openapi('InspectionTick')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/equipment/due',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: "What's due for inspection at the active location",
+  description: 'Computed, not pre-generated — one indexed comparison against equipment.next_due_on, plus the assets currently out of service. `enabled:false` (with empty due/outOfService lists) when inspections have never been configured, or have been switched off, for this location. Readable by anyone with equipment_inspect.',
+  responses: {
+    200: { description: 'Due list + out-of-service assets', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentDueResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/equipment/{id}/inspection',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: "Create-or-resume the inspection draft for an asset's current cycle (equipment_inspect)",
+  description: 'Lazily created on first open, snapshotting the type\'s checklist so a mid-walk-round type edit can\'t shift state — so an abandoned walk-round leaves a draft with ticks, not nothing. Idempotent by construction: unique (equipment_id, due_on) means a double-tap returns the same draft rather than minting a second. 404-not-403 on a cross-location asset.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The draft (newly created, or resumed)', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentInspectionDraftResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing asset or its type, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Asset is not in service, the inspection for this cycle has already been submitted, or the type has no checklist items', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/equipment/inspections/{id}',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Record one pass/fail mark on a draft inspection (equipment_inspect)',
+  description: "One item per request, so a dropped connection loses one tick rather than the whole walk-round. A fail requires a non-empty note. itemId must belong to this run's snapshot — a stale client can't write keys that no longer exist. 404-not-403 on a cross-location inspection.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: InspectionTick } } },
+  },
+  responses: {
+    200: { description: 'The updated inspection', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentInspectionTickResponse') } } },
+    400: { description: 'itemId not part of this snapshot, or a fail submitted with no note', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'This inspection has already been submitted', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/equipment/inspections/{id}/submit',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Submit a completed inspection (equipment_inspect)',
+  description: 'Ordering is load-bearing server-side: the fault issue (with photos) is created FIRST, then the inspection is marked submitted and the asset rolled forward — a failed issue insert leaves the inspection in draft so the inspector can retry with ticks intact. An all-pass run raises no issue; a run with any fail raises exactly one issues row carrying equipment_id and — when takeOutOfService is set — takes the asset off the floor until that issue resolves. Photos upload only here, never on the draft, since the storage path is namespaced by the issue id.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'multipart/form-data': {
+          schema: z.object({
+            results:          z.string().openapi({ description: 'JSON-encoded { [itemId]: { state, note?, at, by } } — the full local results map, submitted alongside the individual PATCH ticks' }),
+            note:              z.string().optional().openapi({ description: 'Overall note, appended to the fault report if any check failed' }),
+            takeOutOfService:  z.enum(['true', 'false']).optional().openapi({ description: 'Ignored server-side unless at least one item failed' }),
+            photo_0:           z.any().optional().openapi({ type: 'string', format: 'binary' }),
+            photo_1:           z.any().optional().openapi({ type: 'string', format: 'binary' }),
+            photo_2:           z.any().optional().openapi({ type: 'string', format: 'binary' }),
+          }).openapi('EquipmentInspectionSubmitBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Submitted — the inspection row, the raised issueId (if any), nextDueOn, and whether the asset was taken out of service', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentInspectionSubmitResponse') } } },
+    400: { description: 'Unmarked items (a `missing` array is included), malformed results JSON, a rejected photo, or an invalid inspection interval on the type', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'This inspection has already been submitted', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Photo upload failed, or the issue insert failed (the inspection stays draft, ticks intact)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
 //
