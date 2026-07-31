@@ -26,7 +26,7 @@ describe('planHostLeadMigration', () => {
 // Hand-rolled supabase-js stand-in, matching the estate's mock idiom: the
 // builder is a thenable, selects read from the `rows` fixture, and every
 // write (update/delete) is recorded IN ORDER so call sequencing is assertable.
-function makeDb(rows) {
+function makeDb(rows, failWrite) {
   const writes = []
   function run(st) {
     if (st.op === 'select') {
@@ -38,7 +38,7 @@ function makeDb(rows) {
       return { data, error: null }
     }
     writes.push({ op: st.op, table: st.table, payload: st.payload, filters: st.filters })
-    return { data: null, error: null }
+    return { data: null, error: failWrite ? failWrite(st) || null : null }
   }
   return {
     writes,
@@ -81,30 +81,58 @@ describe('runHostLeadMigration', () => {
     expect(summary.dry_run).toBe(true)
     expect(summary.planned).toBe(2)
     expect(summary.moved).toBe(1)
+    expect(summary.moved_ids).toEqual(['a2'])
+    expect(summary.moved_ids_truncated).toBeUndefined()
     expect(summary.needs_manual_merge).toEqual([{ anchor_id: 'a1', master_id: 'm1' }])
+    expect(summary.needs_manual_merge_count).toBe(1)
     expect(summary.needs_manual_merge_truncated).toBeUndefined()
     expect(summary.errors).toEqual([])
     expect(summary).not.toHaveProperty('merged')
   })
 
-  it('a move issues exactly one contacts update with location_id + automations_exempt', async () => {
+  it('a move updates the contact and carries its contact_tags to the master location', async () => {
     const db = makeDb({
       ...BASE,
-      contacts: [{ id: 'a2', email: 'new@x.com', tags: null, location_id: 'anchor-1' }],
+      contacts: [{ id: 'a2', email: 'new@x.com', location_id: 'anchor-1' }],
     })
 
     const summary = await runHostLeadMigration(db, { dryRun: false })
 
     expect(summary.moved).toBe(1)
+    expect(summary.moved_ids).toEqual(['a2'])
     expect(summary.errors).toEqual([])
     expect(db.writes).toEqual([
       {
         op: 'update',
         table: 'contacts',
         payload: { location_id: 'master-1', automations_exempt: true },
-        filters: [['eq', 'id', 'a2']],
+        // location_id in the filter makes the move TOCTOU-safe: a contact that
+        // moved since the scan is left where it now is.
+        filters: [['eq', 'id', 'a2'], ['eq', 'location_id', 'anchor-1']],
+      },
+      {
+        // Tag reads are location-scoped, so the tags have to travel or the
+        // contact's host:/event: tags vanish from master-scoped segments.
+        op: 'update',
+        table: 'contact_tags',
+        payload: { location_id: 'master-1' },
+        filters: [['eq', 'contact_id', 'a2'], ['eq', 'location_id', 'anchor-1']],
       },
     ])
+  })
+
+  it('a failed tag re-point is reported but still counts as moved', async () => {
+    const db = makeDb(
+      { ...BASE, contacts: [{ id: 'a2', email: 'new@x.com', location_id: 'anchor-1' }] },
+      (st) => (st.table === 'contact_tags' ? { message: 'tags exploded' } : null)
+    )
+
+    const summary = await runHostLeadMigration(db, { dryRun: false })
+
+    // The contact HAS moved — un-counting it would misreport the DB state.
+    expect(summary.moved).toBe(1)
+    expect(summary.moved_ids).toEqual(['a2'])
+    expect(summary.errors).toEqual([{ id: 'a2', message: 'contact_tags move: tags exploded' }])
   })
 
   // The whole point of HOST-MASTER.7b: an email collision is a REPORT, not an
@@ -123,7 +151,9 @@ describe('runHostLeadMigration', () => {
     expect(db.writes).toEqual([])
     expect(summary.planned).toBe(1)
     expect(summary.moved).toBe(0)
+    expect(summary.moved_ids).toEqual([])
     expect(summary.needs_manual_merge).toEqual([{ anchor_id: 'a1', master_id: 'm1' }])
+    expect(summary.needs_manual_merge_count).toBe(1)
     expect(summary.errors).toEqual([])
   })
 })
