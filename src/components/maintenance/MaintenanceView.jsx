@@ -1,17 +1,19 @@
 'use client'
 
-// EQUIP-MAINT.1 — /maintenance tab shell. PR 1 ships Equipment + Types;
-// the Due tab is a deliberate, visible stub that PR 2 fills in.
+// EQUIP-MAINT.1/2 — /maintenance tab shell. Due now runs real
+// inspections (EQUIP-MAINT.2); Equipment + Types shipped in PR 1.
 //
 // Equipment + Types are setup surfaces (register, checklists,
 // intervals, inspection weekday) and are only rendered when `canAdmin`
 // — a plain equipment_inspect grant (the universal default) sees the
-// Due stub only, with the setup tab pills never entering the DOM.
+// Due tab only, with the setup tab pills never entering the DOM.
 // `canAdmin` is resolved server-side in page.js via hasPermission();
-// this component never re-derives it from the client.
+// this component never re-derives it from the client. DueTab itself
+// must stay ungated by canAdmin — it is the surface every
+// equipment_inspect holder needs.
 
 import { useState } from 'react'
-import { Card } from '@/components/ui'
+import DueTab from './DueTab'
 import TypesTab from './TypesTab'
 import EquipmentTab from './EquipmentTab'
 
@@ -54,15 +56,7 @@ export default function MaintenanceView({ canAdmin }) {
         ))}
       </div>
 
-      {tab === 'due' && (
-        <Card>
-          <p className="py-8 text-center text-sm text-un1t-subtle">
-            Running inspections arrives in the next release.{canAdmin
-              ? ' Set up your equipment types and register in the meantime.'
-              : ' Check back once your studio has been set up.'}
-          </p>
-        </Card>
-      )}
+      {tab === 'due' && <DueTab />}
       {canAdmin && tab === 'equipment' && <EquipmentTab />}
       {canAdmin && tab === 'types' && <TypesTab />}
     </div>
