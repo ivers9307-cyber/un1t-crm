@@ -4304,6 +4304,237 @@ registry.registerPath({
 })
 
 // ============================================================================
+// Equipment Maintenance (EQUIP-MAINT.1) — register, types + checklists,
+// per-location inspection weekday. PR 1: no inspection-run routes yet.
+// ============================================================================
+
+const EquipmentChecklistItem = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  order: z.number().int().optional(),
+}).openapi('EquipmentChecklistItem')
+
+const EquipmentSettingsUpdate = z.object({
+  inspectionDayOfWeek: z.number().int().min(0).max(6),
+  enabled: z.boolean(),
+}).openapi('EquipmentSettingsUpdate')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/equipment/settings',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: "Get the location's equipment inspection settings",
+  description: 'The inspection weekday + feature switch for the active location, or null data if never configured. Readable by anyone with equipment_inspect.',
+  responses: {
+    200: { description: 'Settings, or null if unconfigured', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough().nullable()).openapi('EquipmentSettingsResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/equipment/settings',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: "Upsert the location's equipment inspection settings (equipment_admin)",
+  description: 'Sets the studio inspection weekday (Postgres dow, 0=Sunday) and whether the feature is enabled at this location. equipment_admin only.',
+  request: { body: { content: { 'application/json': { schema: EquipmentSettingsUpdate } } } },
+  responses: {
+    200: { description: 'Settings saved', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentSettingsUpdateResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — equipment_admin only', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+const EquipmentTypeCreate = z.object({
+  name: z.string().min(1).max(100),
+  intervalWeeks: z.number().int().min(1).max(52),
+  items: z.array(EquipmentChecklistItem),
+}).openapi('EquipmentTypeCreate')
+
+const EquipmentTypeUpdate = z.object({
+  name: z.string().min(1).max(100).optional(),
+  intervalWeeks: z.number().int().min(1).max(52).optional(),
+  items: z.array(EquipmentChecklistItem).optional(),
+  enabled: z.boolean().optional(),
+}).openapi('EquipmentTypeUpdate')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/equipment/types',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List equipment types for the active location',
+  description: 'Enabled types only by default; pass ?includeDisabled=1 for the full list (needed to re-enable a soft-disabled type). Readable by anyone with equipment_inspect — the walk-round needs the checklist items.',
+  request: { query: z.object({ includeDisabled: z.enum(['0', '1']).optional() }) },
+  responses: {
+    200: { description: 'Equipment types', content: { 'application/json': { schema: SuccessResponse(z.array(z.object({}).passthrough())).openapi('EquipmentTypeListResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/equipment/types',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create an equipment type (equipment_admin)',
+  description: 'Checklist items are validated + renumbered by order from array position (validateItems), so a stale client-sent order can never desync the list. equipment_admin only.',
+  request: { body: { content: { 'application/json': { schema: EquipmentTypeCreate } } } },
+  responses: {
+    200: { description: 'Type created', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentTypeCreateResponse') } } },
+    400: { description: 'Invalid checklist items (empty, duplicate id, over-long label, …)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — equipment_admin only', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'An equipment type with that name already exists at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/equipment/types/{id}',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Edit an equipment type (equipment_admin)',
+  description: 'Changing intervalWeeks deliberately does NOT touch existing equipment.next_due_on — it applies from the next roll-forward. 404-not-403 detail-route posture on a type at another location. equipment_admin only.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: EquipmentTypeUpdate } } },
+  },
+  responses: {
+    200: { description: 'Type updated', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentTypeUpdateResponse') } } },
+    400: { description: 'Invalid checklist items, or an empty patch', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'An equipment type with that name already exists at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/equipment/types/{id}',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Soft-disable an equipment type (equipment_admin)',
+  description: 'Sets enabled:false rather than deleting — equipment.type_id is `on delete restrict`, so a hard delete would 500 once assets exist. Refused with 409 while any non-retired asset still uses the type. 404-not-403 detail-route posture.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Type disabled', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentTypeDisableResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Equipment still uses this type — retire or re-type it first', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+const EquipmentCreate = z.object({
+  typeId: z.string().min(1),
+  name: z.string().min(1).max(100),
+  assetTag: z.string().max(50).nullish(),
+  serialNumber: z.string().max(100).nullish(),
+  manufacturer: z.string().max(100).nullish(),
+  zone: z.string().max(100).nullish(),
+  purchaseDate: isoDate.nullish(),
+  notes: z.string().max(2000).nullish(),
+  firstDueOn: isoDate.nullish(),
+}).openapi('EquipmentCreate')
+
+const EquipmentUpdate = z.object({
+  typeId: z.string().min(1).optional(),
+  name: z.string().min(1).max(100).optional(),
+  assetTag: z.string().max(50).nullish(),
+  serialNumber: z.string().max(100).nullish(),
+  manufacturer: z.string().max(100).nullish(),
+  zone: z.string().max(100).nullish(),
+  purchaseDate: isoDate.nullish(),
+  notes: z.string().max(2000).nullish(),
+  nextDueOn: isoDate.optional(),
+  status: z.enum(['in_service', 'out_of_service']).optional(),
+}).openapi('EquipmentUpdate')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/equipment',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List the equipment register for the active location',
+  description: 'Non-retired assets by default; pass ?includeRetired=1 for the full history view. Each row embeds its equipment_types (id, name, interval_weeks). Readable by anyone with equipment_inspect.',
+  request: { query: z.object({ includeRetired: z.enum(['0', '1']).optional() }) },
+  responses: {
+    200: { description: 'Equipment rows', content: { 'application/json': { schema: SuccessResponse(z.array(z.object({}).passthrough())).openapi('EquipmentListResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/equipment',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Register a new equipment asset (equipment_admin)',
+  description: 'next_due_on is computed server-side (firstDueOn) from the location inspection weekday — never trusted from the client — unless an operator supplies an explicit firstDueOn. The type must exist, belong to this location, and be enabled. equipment_admin only.',
+  request: { body: { content: { 'application/json': { schema: EquipmentCreate } } } },
+  responses: {
+    200: { description: 'Asset registered', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentCreateResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — equipment_admin only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Equipment type not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Type is disabled, or the asset tag is already in use at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/equipment/{id}',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Get a single equipment asset',
+  description: 'Embeds its equipment_types (id, name, interval_weeks, items) for use as the checklist snapshot source. 404-not-403 detail-route posture on an asset at another location.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Equipment asset', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentDetailResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/equipment/{id}',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Edit an equipment asset, or manually change its status (equipment_admin)',
+  description: 'Re-typing deliberately leaves next_due_on alone — the new checklist applies to the next inspection, its interval from the next roll-forward. A manual status change also clears out_of_service_issue_id, so a later resolve of an unrelated issue on this asset is a no-op rather than a surprise return-to-service. Refused with 409 on a retired asset. equipment_admin only.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: EquipmentUpdate } } },
+  },
+  responses: {
+    200: { description: 'Asset updated', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentUpdateResponse') } } },
+    400: { description: 'Empty patch', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — equipment_admin only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing asset or missing new type, at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Asset is retired, or the asset tag is already in use at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/equipment/{id}',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Retire an equipment asset (equipment_admin)',
+  description: 'Sets status:"retired" rather than hard-deleting — equipment_inspections references the asset with `on delete restrict`, so a hard delete would 500 once it has inspection history. Clears out_of_service_issue_id. 404-not-403 detail-route posture.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Asset retired', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentRetireResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
 // Spec generator — build once and cache
 // ============================================================================
 //

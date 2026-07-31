@@ -181,6 +181,13 @@ export const WEB_PERMISSIONS = Object.freeze([
   // handler inbox + claim/resolve actions. Master + owner only by
   // default per the "All owners at the studio" routing decision.
   { key: 'issues_inbox', label: 'Issues',                       hint: 'Handler inbox for staff-reported issues at the studio (broken kit, cleaning, safety). Master + owner only by default; the submitter surface is open to all staff.' },
+  // EQUIP-MAINT.1 — equipment maintenance. Two keys, deliberately
+  // split: `equipment_admin` is the setup surface (register, types,
+  // intervals, inspection weekday) and is owner + master only;
+  // `equipment_inspect` is doing the walk-round and is universal, the
+  // same way `issues` submission is open to all staff.
+  { key: 'equipment_admin',   label: 'Equipment setup',      hint: 'Manage the equipment register, define equipment types with their inspection checklists and intervals, and set the studio inspection day. Owner + master only by default.' },
+  { key: 'equipment_inspect', label: 'Equipment inspections', hint: 'See what equipment is due for inspection and complete the checklist. Universal by default — turning this OFF removes a person’s ability to run inspections.' },
   // INVOICES-QUEUE.1 (mig 185) — bookkeeper flag. Gates the
   // analyse + send-to-Xero actions inside /invoices and unlocks a
   // dedicated Bookkeeper queue tab in /approvals. Owners can still
@@ -259,6 +266,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     automations: true,
     challenges: true,
     issues_inbox: true,
+    equipment_admin: true, equipment_inspect: true,
     bookkeeper: true,
     contact_linking: true,
     consultations: true,
@@ -288,6 +296,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     automations: false,                             // operator surface — not a staff concern
     challenges: false,                              // operator challenge admin — not a staff concern
     issues_inbox: false,                            // staff submit; owner + master handle
+    equipment_admin: false, equipment_inspect: true, // setup is owner + master; anyone on shift runs a walk-round
     bookkeeper: false,                              // accountant sign-off — never the default
     contact_linking: false,                         // admin-level contact dedup action
     consultations: false,                            // coach/web surface — off for staff
@@ -321,6 +330,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     automations: false,
     challenges: false,
     issues_inbox: false,
+    equipment_admin: false, equipment_inspect: true, // front-of-house is on shift too
     bookkeeper: false,
     contact_linking: false,
     consultations: false,
@@ -351,6 +361,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     automations: false,                             // operator surface — head coach doesn't manage automations
     challenges: false,                              // operator challenge admin — head coach doesn't create challenges
     issues_inbox: false,                            // owner + master only by default
+    equipment_admin: false, equipment_inspect: true,
     bookkeeper: false,
     contact_linking: true,
     consultations: true,
@@ -382,6 +393,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     automations: true,                              // managers can toggle per-location automations
     challenges: true,                               // managers can create/edit challenges
     issues_inbox: false,                            // owner + master only by default
+    equipment_admin: false, equipment_inspect: true,
     bookkeeper: false,                              // grant temporarily for month-end cover if needed
     contact_linking: true,
     consultations: true,
@@ -413,6 +425,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     automations: true,                              // owner manages per-location automations
     challenges: true,                               // owner manages member challenges
     issues_inbox: true,                             // owner IS the handler per the routing design
+    equipment_admin: true, equipment_inspect: true, // owner owns the register + schedule
     bookkeeper: false,                              // owner approves at the source; accountant sign-off is master/dedicated only
     contact_linking: true,
     consultations: true,
@@ -530,6 +543,10 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // them for the parity linter, so issues_inbox drops out of WEB_ONLY_OK).
   // Master + owner only — matches the isHandler gate on every triage route.
   { key: 'issue_triage', label: 'Issue inbox',                hint: 'Triage staff-reported issues at the studio — claim, resolve and close them. Master + owner only (the submit + own-history surface stays open to all staff).', webEquivalent: 'issues_inbox' },
+  // EQUIP-MAINT.1 — the walk-round itself. This is where the work
+  // actually happens: staff on the floor tapping through due kit.
+  // webEquivalent links it to the web key for the parity linter.
+  { key: 'equipment_inspect', label: 'Equipment inspections', hint: 'See what equipment is due for inspection today and complete the checklist, reporting faults with photos.', webEquivalent: 'equipment_inspect' },
   // W2 — supplier/contractor-invoice approver inbox (review + approve /
   // decline) on mobile, mirroring the web invoices_inbox. Master + owner
   // only — the approve/decline routes enforce owner-at-location / master.
@@ -634,6 +651,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals: true,
     staff_management: true,
     issue_triage: true,
+    equipment_inspect: true,
     invoices_inbox: true,
     card_receipts: true,
     orders: true,
@@ -668,6 +686,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals: false,
     staff_management: false,
     issue_triage: false,
+    equipment_inspect: true,
     invoices_inbox: false,
     card_receipts: false,
     orders: false,
@@ -709,6 +728,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals: false,
     staff_management: false,
     issue_triage: false,
+    equipment_inspect: true,
     invoices_inbox: false,
     card_receipts: false,
     orders: false,
@@ -740,6 +760,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals: true,
     staff_management: false,
     issue_triage: false,
+    equipment_inspect: true,
     invoices_inbox: false,
     card_receipts: false,
     orders: false,
@@ -777,6 +798,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals: true,
     staff_management: true,
     issue_triage: false,
+    equipment_inspect: true,
     invoices_inbox: false,
     card_receipts: true,
     orders: true,
@@ -816,6 +838,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals: true,
     staff_management: true,
     issue_triage: true,
+    equipment_inspect: true,
     invoices_inbox: true,
     card_receipts: true,
     orders: true,
