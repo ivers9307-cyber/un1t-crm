@@ -227,6 +227,16 @@ always lands on that weekday.
   known-broken kit is noise.
 - **Retiring an asset** removes it from due lists and keeps its full history.
   The `on delete restrict` FK blocks deletion outright.
+- **Retiring an asset releases its `asset_tag`** (mig 469). The tag identifies
+  the *label on the wall*, not the machine, so when a treadmill is replaced the
+  new one reuses "TM-03" rather than the operator inventing "TM-03b".
+  `equipment_asset_tag_idx` is therefore partial on
+  `asset_tag is not null AND status <> 'retired'`. Two rows may share a tag at
+  one location provided at most one is live — so **any future lookup by
+  `asset_tag` must filter `status <> 'retired'`** or it will match the retired
+  row. There is no such lookup today; the tag is display-and-search only. There
+  is deliberately no un-retire path, so a retired row cannot return and collide
+  with the replacement that took its tag.
 - **Changing an asset's type** leaves `next_due_on` alone. The new type's
   checklist applies to the next inspection; its interval applies from the next
   roll-forward — the same rule as editing an interval.

@@ -98,9 +98,16 @@ export const PATCH = withAuth(
     try {
       asset = await updateEquipment(db, existing.id, patch)
     } catch (err) {
+      // Retired assets are excluded from equipment_asset_tag_idx (mig 469),
+      // so this only ever collides with a LIVE asset at this location.
       if (err?.code === '23505') {
         return NextResponse.json(
-          { success: false, error: 'That asset tag is already in use at this location.' },
+          {
+            success: false,
+            error:
+              'That asset tag is already in use by another piece of equipment here. ' +
+              'Retiring the old one frees the tag.',
+          },
           { status: 409 }
         )
       }

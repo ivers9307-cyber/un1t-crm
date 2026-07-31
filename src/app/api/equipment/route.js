@@ -95,10 +95,18 @@ export const POST = withAuth(
         next_due_on: nextDueOn,
       })
     } catch (err) {
-      // unique (location_id, asset_tag) where asset_tag is not null
+      // equipment_asset_tag_idx: unique (location_id, asset_tag) where
+      // asset_tag is not null AND status <> 'retired' (mig 469). Retiring
+      // an asset RELEASES its tag, because the tag belongs to the label on
+      // the wall, not to the machine — so the replacement can reuse it.
       if (err?.code === '23505') {
         return NextResponse.json(
-          { success: false, error: 'That asset tag is already in use at this location.' },
+          {
+            success: false,
+            error:
+              'That asset tag is already in use by another piece of equipment here. ' +
+              'Retiring the old one frees the tag.',
+          },
           { status: 409 }
         )
       }
