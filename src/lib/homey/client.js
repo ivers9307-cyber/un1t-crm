@@ -21,18 +21,20 @@
 //   - CONFIGURED (all three set and valid) — getHomeyConfig() returns
 //     `{ url, apiKey, locationId }` ready to use.
 //
-// homeyGetDevices/homeySetOnoff are deliberately thin I/O and NOT unit
-// tested (house pattern — see class-climate-runner.js and friends): they
-// never throw, always resolve to `{ ok, statusCode, body }` (or
-// `{ ok: false, statusCode: 0, networkError: true }` on a network/timeout
-// failure), and are exported separately from the orchestration in
-// reconcile.js (HOMEYD.3) so tests can inject fakes for them instead of
-// hitting the network.
+// homeyGetDevices/homeySetOnoff never throw, always resolve to
+// `{ ok, statusCode, body }` (or `{ ok: false, statusCode: 0,
+// networkError: true, body: null }` on a network/timeout failure), and are
+// exported separately from the orchestration in reconcile.js (HOMEYD.3) so
+// tests can inject fakes for them instead of hitting the network. They ARE
+// unit tested here against a mocked `global.fetch` (house pattern — see
+// sensibo.js/sensibo.test.js and thinq.js/thinq.test.js).
 //
 // The API key must never appear in a log line or a thrown error — every
 // error path below names the env var, never its value.
 
 import { uuidLike } from '@/lib/schemas'
+
+const REQUEST_TIMEOUT_MS = 8000
 
 const isBlank = (v) => v === undefined || v === null || String(v).trim() === ''
 
@@ -65,7 +67,11 @@ export function homeyConfigError(env) {
     return `HOMEY_API_URL must be a bare origin (no path/query) — the classic mis-paste is the Homey web-app URL instead of the remote API origin (https://<cloudid>.connect.athom.com): ${raw.HOMEY_API_URL}`
   }
 
-  if (!uuidLike.safeParse(raw.HOMEY_LOCATION_ID).success) {
+  // Trimmed before validation — a pasted trailing newline/space is an easy
+  // paste artefact, not a different id, and left un-trimmed the resulting
+  // error message renders visually identical to a valid uuid.
+  const locationId = String(raw.HOMEY_LOCATION_ID).trim()
+  if (!uuidLike.safeParse(locationId).success) {
     return `HOMEY_LOCATION_ID is not a valid UUID: ${raw.HOMEY_LOCATION_ID}`
   }
 
@@ -83,7 +89,7 @@ export function getHomeyConfig(env = process.env) {
   return {
     url: new URL(env.HOMEY_API_URL).origin,
     apiKey: env.HOMEY_API_KEY.trim(),
-    locationId: env.HOMEY_LOCATION_ID,
+    locationId: env.HOMEY_LOCATION_ID.trim(),
   }
 }
 
@@ -96,7 +102,7 @@ async function homeyJson(cfg, method, path, body) {
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       cache: 'no-store',
     })
     let parsed = null
@@ -108,7 +114,8 @@ async function homeyJson(cfg, method, path, body) {
   } catch {
     // Network error, timeout, DNS failure, etc — never throw out of a
     // reconcile tick over a Homey that's rebooting or a flaky Tailscale hop.
-    return { ok: false, statusCode: 0, networkError: true }
+    // body: null keeps the result shape uniform with the success path.
+    return { ok: false, statusCode: 0, networkError: true, body: null }
   }
 }
 
@@ -117,6 +124,10 @@ export async function homeyGetDevices(cfg) {
 }
 
 export async function homeySetOnoff(cfg, sidecarDeviceId, on) {
-  const homeyId = sidecarDeviceId.startsWith('homey:') ? sidecarDeviceId.slice(6) : sidecarDeviceId
+  // String()-coerced before .startsWith — a caller passing a non-string id
+  // (or null/undefined) must never make this reject; the contract is
+  // never-throw the same as homeyJson below it.
+  const idStr = String(sidecarDeviceId)
+  const homeyId = idStr.startsWith('homey:') ? idStr.slice(6) : idStr
   return homeyJson(cfg, 'PUT', `/api/manager/devices/device/${encodeURIComponent(homeyId)}/capability/onoff`, { value: on })
 }
