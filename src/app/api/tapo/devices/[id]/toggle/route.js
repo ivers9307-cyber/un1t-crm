@@ -33,6 +33,7 @@ import { uuidLike } from '@/lib/schemas'
 import { validateBody } from '@/lib/validate'
 import { dublinDayStartMs, dublinTodayStr, addDaysISO } from '@/lib/dublin-time'
 import { logWarn } from '@/lib/log'
+import { getHomeyConfig, homeySetOnoff } from '@/lib/homey/client'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -125,6 +126,24 @@ export async function POST(request, props) {
     }).then(() => {}).catch((e) => {
       logWarn('tapo-toggle', 'activity log failed', { err: e })
     })
+
+    // Fire the command directly for instant feedback; the per-minute
+    // homey-reconcile cron is the backstop if this call fails. Only when
+    // this toggle set a concrete on/off — a `clear` hands control back
+    // to the schedule, and figuring out what the schedule wants right
+    // now is runHomeyReconcile's job (desiredState + occurrences), not
+    // this route's; don't recompute it here.
+    if (!clear) {
+      try {
+        const cfg = getHomeyConfig()
+        if (cfg && !cfg.error && updated.sidecar_device_id) {
+          // homeySetOnoff resolves rather than rejects by contract, but
+          // belt-and-braces per house style: never let this block or
+          // change the toggle response.
+          homeySetOnoff(cfg, updated.sidecar_device_id, state === 'on').catch(() => {})
+        }
+      } catch { /* never blocks the toggle response */ }
+    }
 
     return NextResponse.json({ success: true, device: updated })
   } catch (e) {
