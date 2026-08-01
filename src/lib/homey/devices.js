@@ -45,7 +45,10 @@ export function mapHomeyDevices(raw) {
 // → [{ sidecar_device_id, state: 'on'|'off'|null, reachable }]. `state` is
 // strictly boolean-derived, never guessed: a missing/non-boolean onoff
 // value is null, and an unavailable device is null + reachable false
-// regardless of any stale onoff value, so planCommands skips it.
+// regardless of any stale onoff value, so planCommands skips it as
+// unreachable. A null state alone (device reachable, onoff value just
+// missing/non-boolean) does NOT skip — planCommands still commands a
+// reachable device with unknown state toward the desired state.
 export function mapHomeyStates(raw) {
   return controllableDevices(raw).map((d) => {
     const reachable = d.available !== false

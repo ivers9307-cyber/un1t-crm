@@ -123,6 +123,18 @@ describe('planCommands', () => {
     expect(planCommands(devices, states, T('12:00'), DAY, [])).toEqual([])
   })
 
+  it('a reachable device with unknown state (null) still gets commanded toward desired (unknown ≠ skip)', () => {
+    // mapHomeyStates emits state:null when the onoff value is missing/non-
+    // boolean but the device IS reachable (available !== false) — distinct
+    // from the unreachable case above. planCommands must not treat "unknown"
+    // as "assume already correct"; null !== desired, so it commands.
+    const devices = [inWindowDevice]
+    const states = [{ sidecar_device_id: 'homey:abc-1', state: null, reachable: true }]
+    expect(planCommands(devices, states, T('12:00'), DAY, [])).toEqual([
+      { sidecar_device_id: 'homey:abc-1', on: true },
+    ])
+  })
+
   it('an active override passes through and wins over the underlying schedule', () => {
     // Fixed window says 'on' at 12:00, but an override forces 'off' — actual
     // is 'on', so planCommands must emit the override's off, not skip it.
