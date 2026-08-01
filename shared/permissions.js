@@ -635,6 +635,12 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   //   report; they want closure).
   { key: 'notify_issue_submitted',      label: '… Issue submitted',         hint: 'Notify when a staff member at your studio reports a problem (owner + master by default)',                              mobileOnly: true, isNotify: true },
   { key: 'notify_issue_resolved',       label: '… Issue resolved',          hint: 'Notify when an issue you reported has been resolved',                                                                   mobileOnly: true, isNotify: true },
+  // EQUIP-MAINT.3 — inspection reminders. Registered here because an
+  // UNREGISTERED category resolves FALSE for every role but master, so
+  // an unregistered push reaches only whoever tested it and silently
+  // nobody else (bit app_update and test within a day of each other).
+  { key: 'notify_inspection_due',     label: '… Equipment inspections due', hint: 'Notify on your studio inspection day when equipment is due to be checked', mobileOnly: true, isNotify: true },
+  { key: 'notify_inspection_overdue', label: '… Inspections not done',      hint: 'Notify owners when equipment was due for inspection and no one submitted it', mobileOnly: true, isNotify: true },
 ])
 
 export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
@@ -671,6 +677,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_tasks: true, notify_bookings: true,
     notify_checklist_overdue: true, notify_checklist_compliance: true,
     notify_issue_submitted: true, notify_issue_resolved: true,
+    notify_inspection_due: true, notify_inspection_overdue: true,
   },
   staff: {
     hyrox: false,
@@ -712,6 +719,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // Staff don't handle issue reports — only get resolved on their
     // own reports.
     notify_issue_submitted: false, notify_issue_resolved: true,
+    notify_inspection_due: true, notify_inspection_overdue: false,
   },
   // Reception — staff-level mobile access + the WhatsApp inbox and
   // the operator bookings view (today/tomorrow is the desk's core
@@ -748,6 +756,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_tasks: true, notify_bookings: true,
     notify_checklist_overdue: true, notify_checklist_compliance: false,
     notify_issue_submitted: false, notify_issue_resolved: true,
+    notify_inspection_due: true, notify_inspection_overdue: false,
   },
   head_coach: {
     hyrox: true,
@@ -786,6 +795,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // Head coach isn't the issue handler by default (owner + master
     // routing) but can be granted via per-user opt-in.
     notify_issue_submitted: false, notify_issue_resolved: true,
+    notify_inspection_due: true, notify_inspection_overdue: false,
   },
   manager: {
     hyrox: true,
@@ -826,6 +836,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // Manager isn't the issue handler by default (owner + master
     // routing) but resolved stays on (parity-superset of staff).
     notify_issue_submitted: false, notify_issue_resolved: true,
+    notify_inspection_due: true, notify_inspection_overdue: false,
   },
   owner: {
     hyrox: true,
@@ -866,6 +877,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // Owner IS the issue handler by default (per the "all owners at
     // the studio" routing decision in REPORT-ISSUE.1).
     notify_issue_submitted: true, notify_issue_resolved: true,
+    notify_inspection_due: true, notify_inspection_overdue: true,
   },
 })
 
