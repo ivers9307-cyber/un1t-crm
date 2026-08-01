@@ -1,17 +1,20 @@
 'use client'
 
-// Big-screen kiosk TV: live HR leaderboard.
+// Big-screen kiosk TV: live HR leaderboard, on the Graft/Afterglow system.
 //
-// Polls /api/public/live/[locationId] every 2s. Renders a black
-// full-viewport grid of attendee tiles, sorted by UN1T Points.
-// Tile colour follows current zone; "stale" tiles dim themselves
-// after 2min without samples.
+// Polls /api/public/live/[locationId] every 2s. Renders an iron (#0F1216)
+// full-viewport grid of attendee tiles, sorted by UN1T Points. Tile colour
+// follows current zone via the shared dark-canvas palette
+// (@/lib/tv-zone-colors); "stale" tiles dim themselves after 2min without
+// samples.
 //
 // Layout choices for TV legibility (typically viewed from 5-10m):
 //   - Tile font size scales with viewport (clamp + vw units)
-//   - Tile count adapts the grid: ≤4 → 2 cols, ≤9 → 3 cols, ≤16 →
-//     4 cols, ≤25 → 5 cols, else 6 cols
-//   - Header is sparse: studio name + clock + 'Live'
+//   - Landscape grid: ≤4 → 2 cols, ≤16 → 4 cols (8 tiles is the canonical
+//     full screen on a 1080p landscape TV), ≤25 → 5, else 6. Portrait
+//     (matchMedia-detected, ?orientation= override — same pattern as the
+//     challenges board): ≤8 → 2, ≤18 → 3, else 4.
+//   - Header is sparse: studio name + room total + clock + 'Live'
 //   - No interactivity — touch input on TV browsers is unreliable
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -31,6 +34,8 @@ import {
   classDidEnd,
 } from '@/lib/tv-theatre'
 import { nextPollDelay, ACTIVE_POLL_MS } from '@/lib/live-poll'
+import { graftDisplay, graftBody, graftMono } from '@/fonts/graft'
+import { zoneColorDark, dominantZone } from '@/lib/tv-zone-colors'
 
 // Poll cadence (active few-seconds vs idle back-off) lives in @/lib/live-poll.
 
@@ -39,12 +44,33 @@ const TOAST_MS = 6000
 // Outro podium dwell before returning to the idle board.
 const OUTRO_MS = 40000
 
-const ZONE_BG = {
-  1: '#374151', // grey
-  2: '#1d4ed8', // blue
-  3: '#047857', // green
-  4: '#b45309', // amber/yellow
-  5: '#b91c1c', // red
+// ── Afterglow tokens (GRAFT-TV) ──────────────────────────────────
+const IRON = '#0F1216'     // canvas — never pure black
+const SURFACE = '#181D24'  // tile / card surface
+const HAIRLINE = '#2A323D' // hairline borders
+const CHALK = '#F4F1EA'    // primary text — never #FFF
+const CHALK_2 = '#A9B0BA'
+const CHALK_3 = '#66707E'
+const PEARL = '#D9D5CC'    // resting chrome
+const FURNACE = '#FFA928'  // Z4 / Burn / earned heat
+const REDLINE = '#FF4E42'  // Z5 / LIVE / attention
+const FIELD = '#22C58B'    // Z3 green — bridge online, timer complete
+
+// Board faces — the graft* next/font variables are mounted on the root
+// <main> className below, so every child (overlays included) can reach them.
+const FONT_DISPLAY = 'var(--font-graft-display), ui-sans-serif, system-ui, sans-serif'
+const FONT_BODY = 'var(--font-graft-body), ui-sans-serif, system-ui, sans-serif'
+const FONT_MONO = 'var(--font-graft-mono), ui-monospace, SFMono-Regular, Menlo, monospace'
+
+// Display remap of the canonical SEG_COLOR (shared/class-timer — untouched;
+// it also serves the coach screen + mobile) onto the dark-canvas palette.
+// Any future segment type not mapped here falls back to its canonical colour.
+const SEG_DISPLAY_COLOR = {
+  work: REDLINE,
+  rest: FIELD,
+  prep: '#A3ABB6',
+  station: '#4D9FFF',
+  custom: PEARL,
 }
 
 export default function LiveTvClient({ locationId, endpoint }) {
@@ -53,6 +79,27 @@ export default function LiveTvClient({ locationId, endpoint }) {
   const [now, setNow] = useState(new Date())
   const [kiosk] = useState(() => typeof window !== 'undefined' && isKioskParam(window.location.search))
   const [failures, setFailures] = useState(0)
+
+  // Orientation: matchMedia-detected, ?orientation=portrait|landscape forces
+  // it (the challenges board's pattern). Read the override once, like kiosk.
+  const [orientationOverride] = useState(() => {
+    if (typeof window === 'undefined') return null
+    const v = new URLSearchParams(window.location.search).get('orientation')
+    return v === 'portrait' || v === 'landscape' ? v : null
+  })
+  const [portrait, setPortrait] = useState(false)
+  useEffect(() => {
+    if (orientationOverride) {
+      setPortrait(orientationOverride === 'portrait')
+      return
+    }
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const mq = window.matchMedia('(orientation: portrait)')
+    const handler = (e) => setPortrait(e.matches)
+    setPortrait(mq.matches)
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [orientationOverride])
 
   // P0-3: the data URL. Defaults to the location-keyed endpoint (unchanged for
   // the live /tv/[locationId] TV). The token-gated /tv/live/[token] page passes
@@ -102,11 +149,13 @@ export default function LiveTvClient({ locationId, endpoint }) {
     return () => { released = true; document.removeEventListener('visibilitychange', onVis); try { lock && lock.release() } catch {} }
   }, [kiosk])
 
-  // Landscape lock (kiosk only, best-effort).
+  // Landscape lock (kiosk only, best-effort). Skipped when the operator
+  // explicitly mounts the panel portrait via ?orientation=portrait — the
+  // lock would fight the override on rotatable kiosks.
   useEffect(() => {
-    if (!kiosk) return
+    if (!kiosk || orientationOverride === 'portrait') return
     try { screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape').catch(() => {}) } catch {}
-  }, [kiosk])
+  }, [kiosk, orientationOverride])
 
   // Live wall clock — refreshes every second so the header time
   // ticks visibly, helping the coach confirm the screen isn't frozen.
@@ -136,10 +185,14 @@ export default function LiveTvClient({ locationId, endpoint }) {
   useEffect(() => {
     setSlotOrder((prev) => (sameOrder(prev, order) ? prev : order))
   }, [order])
-  const cols = gridColsFor(tiles.length)
+  const cols = gridColsFor(tiles.length, portrait)
 
   // ── Room-total ticker (replaces "N active") ──────────────────────
   const roomTotal = useMemo(() => roomTotalPoints(sessions), [sessions])
+
+  // The room-dominant-zone glow behind the header — the board runs hot
+  // when the class does. Pearl at rest (empty room / no straps).
+  const glowColor = useMemo(() => zoneColorDark(dominantZone(sessions)) || PEARL, [sessions])
 
   // ── Mid-class toasts (cross-poll threshold crossings) ────────────
   // Track previous per-session zone/burn state + the set of already-
@@ -204,49 +257,84 @@ export default function LiveTvClient({ locationId, endpoint }) {
     : 'Heart-rate bridge offline'
 
   return (
-    <main className="relative min-h-screen bg-black text-white" style={kiosk ? { cursor: 'none' } : undefined}>
+    <main
+      className={`${graftDisplay.variable} ${graftBody.variable} ${graftMono.variable} relative flex min-h-screen flex-col`}
+      style={{
+        background: IRON,
+        color: CHALK,
+        fontFamily: FONT_BODY,
+        ...(kiosk ? { cursor: 'none' } : {}),
+      }}
+    >
+      {/* Room-dominant-zone glow behind the header. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute left-1/2 -translate-x-1/2"
+        style={{
+          top: -70,
+          width: '70%',
+          height: 240,
+          background: `radial-gradient(closest-side, ${glowColor}24, transparent)`,
+        }}
+      />
       {kiosk && reconnecting && (
-        <div className="absolute top-4 right-4 z-40 rounded-full bg-white/10 px-3 py-1 text-xs text-white/60">● reconnecting…</div>
+        <div
+          className="absolute top-4 right-4 z-40 rounded-full px-3 py-1 text-xs"
+          style={{ fontFamily: FONT_MONO, background: SURFACE, border: `1px solid ${HAIRLINE}`, color: CHALK_3 }}
+        >
+          ● reconnecting…
+        </div>
       )}
-      <header className="flex items-center justify-between px-6 py-4 border-b border-neutral-800">
+      <header className={`relative flex items-start justify-between ${portrait ? 'px-4 py-3' : 'px-6 py-4'}`} style={{ borderBottom: `1px solid ${HAIRLINE}` }}>
         <div>
-          <p className="flex items-center gap-2 text-xs uppercase tracking-[0.3em] text-red-500 font-bold">
-            <span>● Live</span>
+          <p className="flex items-center gap-2">
             <span
-              className={`inline-block h-3 w-3 rounded-full ${
-                bridgeOnline ? 'bg-emerald-500 animate-pulse' : 'bg-neutral-600'
-              }`}
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ background: REDLINE, boxShadow: `0 0 8px ${REDLINE}AA` }}
+            />
+            <span className="text-[11px] font-medium uppercase tracking-[0.28em]" style={{ fontFamily: FONT_MONO, color: REDLINE }}>
+              Live
+            </span>
+            <span
+              className={`inline-block h-2 w-2 rounded-full ${bridgeOnline ? 'animate-pulse' : ''}`}
+              style={{ background: bridgeOnline ? FIELD : CHALK_3 }}
               role="img"
               aria-label={bridgeStatusLabel}
               title={bridgeStatusLabel}
             />
           </p>
-          <h1 className="mt-1 text-2xl font-bold">{data?.location?.name || 'Studio'}</h1>
+          <h1 className="mt-1 text-2xl font-bold" style={{ fontFamily: FONT_DISPLAY, color: CHALK }}>
+            {data?.location?.name || 'Studio'}
+          </h1>
         </div>
-        <div className="flex items-center gap-6">
+        <div className="flex items-start gap-6">
           {/* Room-total ticker — counts up smoothly between polls. */}
           <div className="text-right">
-            <p className="text-3xl font-bold tabular-nums leading-none text-white">
+            <p className="text-3xl leading-none tabular-nums" style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, color: CHALK }}>
               <CountUp value={roomTotal} />
-              <span className="ml-1.5 text-xs font-medium uppercase tracking-widest text-neutral-400">UN1T</span>
+              <span className="ml-1.5 text-xs tracking-[0.14em]" style={{ fontFamily: FONT_MONO, fontWeight: 500, color: FURNACE }}>PTS</span>
             </p>
-            <p className="mt-0.5 text-[10px] uppercase tracking-[0.25em] text-neutral-500">room total</p>
+            <p className="mt-0.5 text-[10px] uppercase tracking-[0.22em]" style={{ fontFamily: FONT_MONO, color: CHALK_3 }}>Room total</p>
           </div>
-          <div className="text-right">
-            <p className="text-xl font-mono tabular-nums">
-              {now.toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            </p>
-            <p className="text-xs text-neutral-400">
-              {sessions.length} live
-            </p>
-          </div>
+          {/* Portrait drops the clock column (approved portrait frame) — the
+              room total is the header's one number; 'n live' moves under it. */}
+          {!portrait && (
+            <div className="text-right">
+              <p className="text-xl tabular-nums" style={{ fontFamily: FONT_MONO, color: CHALK }}>
+                {now.toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </p>
+              <p className="text-xs" style={{ fontFamily: FONT_MONO, color: CHALK_3 }}>
+                {sessions.length} live
+              </p>
+            </div>
+          )}
         </div>
       </header>
 
       <TimerBanner timer={data?.timer} serverTime={data?.server_time} />
 
       {!kiosk && error && (
-        <p className="m-4 rounded-lg border border-red-700 bg-red-950 p-3 text-sm">
+        <p className="m-4 rounded-lg p-3 text-sm" style={{ border: `1px solid ${REDLINE}66`, background: SURFACE, color: CHALK_2 }}>
           Connection issue: {error}. Retrying…
         </p>
       )}
@@ -270,13 +358,18 @@ export default function LiveTvClient({ locationId, endpoint }) {
 
       {availableStraps.length > 0 && (
         <div className="mt-6 px-4 pb-4">
-          <p className="mb-2 text-xs uppercase tracking-wide text-white/40">Unpaired straps</p>
+          <p className="mb-2 text-xs uppercase tracking-[0.18em]" style={{ fontFamily: FONT_MONO, color: CHALK_3 }}>Unpaired straps</p>
           <div className="flex flex-wrap gap-3">
             {availableStraps.map((s, i) => (
-              <div key={`strap-${i}`} className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3 opacity-70">
-                <span className="font-mono text-sm text-white/70">{s.label}</span>
-                <span className="text-lg font-semibold tabular-nums text-white">
-                  {s.currentBpm ?? '—'}<span className="ml-1 text-xs font-normal text-white/40">bpm</span>
+              <div
+                key={`strap-${i}`}
+                className="flex items-center gap-3 rounded-xl px-4 py-3 opacity-70"
+                style={{ background: SURFACE, border: `1px solid ${HAIRLINE}` }}
+              >
+                <span className="text-sm" style={{ fontFamily: FONT_MONO, color: CHALK_2 }}>{s.label}</span>
+                <span className="text-lg tabular-nums" style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: CHALK }}>
+                  {s.currentBpm ?? '—'}
+                  <span className="ml-1 text-[10px] tracking-[0.12em]" style={{ fontFamily: FONT_MONO, fontWeight: 400, color: CHALK_3 }}>BPM</span>
                 </span>
               </div>
             ))}
@@ -284,12 +377,41 @@ export default function LiveTvClient({ locationId, endpoint }) {
         </div>
       )}
 
+      {/* The Graft signature — every board signs off the same way. */}
+      <GraftSignature caption="Scores land in your app" className="mt-auto" />
+
       <ClassStartIntro current={data?.current_class} serverTime={data?.server_time} />
 
       <ToastLayer queue={toastQueue} onDone={(t) => setToastQueue((q) => q.filter((x) => x !== t))} />
 
       {outro && <OutroPodium podium={outro.podium} total={outro.total} />}
     </main>
+  )
+}
+
+// The board's footer signature: mono handoff caption left, Stack mark +
+// 'graft' wordmark right. ~34px tall so the grid above still fits 8 tiles
+// on a 1080p landscape screen.
+function GraftSignature({ caption, className = '' }) {
+  return (
+    <div
+      className={`flex items-center justify-between px-6 py-2 ${className}`}
+      style={{ borderTop: `1px solid ${HAIRLINE}`, background: IRON }}
+    >
+      <span className="text-[10px] uppercase tracking-[0.18em]" style={{ fontFamily: FONT_MONO, color: CHALK_3 }}>{caption}</span>
+      <span className="flex items-center gap-2">
+        <svg viewBox="0 0 1024 1024" className="h-4 w-4 rounded" aria-hidden="true">
+          <rect width="1024" height="1024" fill="#0F1216" />
+          <rect x="199" y="721" width="470" height="122" rx="61" fill="#F4F1EA" />
+          <rect x="277" y="541" width="470" height="122" rx="61" fill="#F4F1EA" />
+          <rect x="355" y="361" width="470" height="122" rx="61" fill="#F4F1EA" />
+          <rect x="433" y="181" width="282" height="122" rx="61" fill="#FFA928" />
+        </svg>
+        <span className="text-[13px] lowercase" style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, letterSpacing: '-0.01em', color: CHALK }}>
+          graft
+        </span>
+      </span>
+    </div>
   )
 }
 
@@ -320,7 +442,9 @@ function CountUp({ value }) {
 }
 
 // Shows one toast at a time from the queue, auto-dismissing after TOAST_MS.
-// Broadcast-clean: slides down from the top, holds, fades out.
+// Broadcast-clean: slides down from the top, holds, fades out. Burn toasts
+// run Furnace-on-iron; Zone-5 toasts Redline-on-chalk. No emoji — the
+// system's voice is type, so any emoji in the message string is stripped.
 function ToastLayer({ queue, onDone }) {
   const active = queue[0] || null
   const [shown, setShown] = useState(false)
@@ -333,7 +457,8 @@ function ToastLayer({ queue, onDone }) {
     return () => { clearTimeout(inT); clearTimeout(outT); clearTimeout(doneT) }
   }, [active, onDone])
   if (!active) return null
-  const amber = active.event === 'burn'
+  const burnToast = active.event === 'burn'
+  const message = String(active.message || '').replace(/[🔥🔴]/gu, '').replace(/\s{2,}/g, ' ').trim()
   return (
     <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)', zIndex: 45,
       display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
@@ -341,12 +466,13 @@ function ToastLayer({ queue, onDone }) {
         marginTop: shown ? 22 : -80,
         opacity: shown ? 1 : 0,
         transition: 'margin-top .5s cubic-bezier(.2,.7,.2,1), opacity .5s ease',
-        background: amber ? '#b45309' : '#b91c1c',
-        color: '#fff', fontWeight: 800, fontSize: 26, letterSpacing: 1,
+        background: burnToast ? FURNACE : REDLINE,
+        color: burnToast ? IRON : CHALK,
+        fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 26, letterSpacing: 1,
         padding: '14px 34px', borderRadius: 999,
         boxShadow: '0 10px 40px rgba(0,0,0,.5)', whiteSpace: 'nowrap',
       }}>
-        {active.event === 'burn' ? '🔥 ' : '🔴 '}{active.message}
+        {message}
       </div>
     </div>
   )
@@ -354,41 +480,47 @@ function ToastLayer({ queue, onDone }) {
 
 // CLASS COMPLETE — TOP MOVERS podium. Shown for OUTRO_MS then the board
 // returns to idle. Top 3 by effort points + room total + app nudge.
+// De-metaled: heat is earned, not awarded — the winner runs Furnace (with
+// the Burn-style glow), 2nd reads chalk, 3rd chalk-2. No medals.
 function OutroPodium({ podium, total }) {
   const [shown, setShown] = useState(false)
   useEffect(() => { const t = setTimeout(() => setShown(true), 40); return () => clearTimeout(t) }, [])
   const order = [1, 0, 2] // render 2nd, 1st, 3rd for a real podium shape
   const heights = { 1: 220, 2: 160, 3: 120 }
-  const medal = { 1: '#F5C542', 2: '#C0C7CE', 3: '#B4783E' }
+  const heat = { 1: FURNACE, 2: CHALK, 3: CHALK_2 }
+  const barWash = { 1: 'rgba(255,169,40,.16)', 2: 'rgba(244,241,234,.10)', 3: 'rgba(169,176,186,.08)' }
   return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 55, background: '#08080A',
+    <div style={{ position: 'absolute', inset: 0, zIndex: 55, background: IRON,
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       opacity: shown ? 1 : 0, transition: 'opacity .6s ease' }}>
-      <span style={{ position: 'absolute', top: 24, left: 28, fontWeight: 700, letterSpacing: 6, color: '#fff' }}>UN1T</span>
-      <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: 8, color: '#7a7a82' }}>CLASS COMPLETE</span>
-      <span style={{ fontSize: '5.5vw', lineHeight: 1, fontWeight: 800, color: '#fff', letterSpacing: 2, margin: '6px 0 30px' }}>TOP MOVERS</span>
+      <span style={{ position: 'absolute', top: 24, left: 28, fontFamily: FONT_DISPLAY, fontWeight: 700, letterSpacing: 6, color: CHALK }}>UN1T</span>
+      <span style={{ fontFamily: FONT_MONO, fontSize: 14, fontWeight: 500, letterSpacing: '0.5em', color: CHALK_3, textTransform: 'uppercase' }}>Class complete</span>
+      <span style={{ fontFamily: FONT_DISPLAY, fontSize: '5.5vw', lineHeight: 1, fontWeight: 800, color: CHALK, letterSpacing: 2, margin: '6px 0 30px' }}>TOP MOVERS</span>
 
       {podium.length === 0 ? (
-        <span style={{ fontSize: 26, color: '#b8b8be' }}>Great work, everyone.</span>
+        <span style={{ fontSize: 26, color: CHALK_2 }}>Great work, everyone.</span>
       ) : (
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 28, height: 260 }}>
           {order.map((slot) => {
             const p = podium[slot]
             if (!p) return <div key={slot} style={{ width: 200 }} />
+            const c = heat[p.place]
             return (
               <div key={p.key} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 200 }}>
-                <span style={{ fontSize: 24, fontWeight: 700, color: '#fff', marginBottom: 6, textAlign: 'center' }}>{p.name}</span>
-                <span style={{ fontSize: 30, fontWeight: 800, color: medal[p.place], marginBottom: 10, fontVariantNumeric: 'tabular-nums' }}>
-                  {p.points}<span style={{ fontSize: 13, fontWeight: 600, color: '#888', marginLeft: 4 }}>UN1T</span>
+                <span style={{ fontSize: 24, fontWeight: 600, color: CHALK, marginBottom: 6, textAlign: 'center' }}>{p.name}</span>
+                <span style={{ fontFamily: FONT_DISPLAY, fontSize: 30, fontWeight: 700, color: c, marginBottom: 10, fontVariantNumeric: 'tabular-nums' }}>
+                  {p.points}
+                  <span style={{ fontFamily: FONT_MONO, fontSize: 13, fontWeight: 400, letterSpacing: '0.1em', color: p.place === 1 ? FURNACE : CHALK_3, marginLeft: 4 }}>PTS</span>
                 </span>
                 <div style={{
                   width: '100%', height: shown ? heights[p.place] : 0,
-                  background: `linear-gradient(180deg, ${medal[p.place]}33 0%, #111 100%)`,
-                  borderTop: `4px solid ${medal[p.place]}`, borderRadius: '8px 8px 0 0',
+                  background: `linear-gradient(180deg, ${barWash[p.place]} 0%, #151A21 100%)`,
+                  borderTop: `4px solid ${c}`, borderRadius: '10px 10px 0 0',
+                  boxShadow: p.place === 1 ? '0 0 26px rgba(255,169,40,.18)' : undefined,
                   transition: `height .8s cubic-bezier(.2,.7,.2,1) ${0.15 * p.place}s`,
                   display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 12,
                 }}>
-                  <span style={{ fontSize: 44, fontWeight: 900, color: medal[p.place] }}>{p.place}</span>
+                  <span style={{ fontFamily: FONT_DISPLAY, fontSize: 44, fontWeight: 900, color: c }}>{p.place}</span>
                 </div>
               </div>
             )
@@ -396,12 +528,10 @@ function OutroPodium({ podium, total }) {
         </div>
       )}
 
-      <div style={{ marginTop: 40, display: 'flex', alignItems: 'center', gap: 40 }}>
-        <span style={{ fontSize: 20, color: '#b8b8be' }}>
-          Room total <strong style={{ color: '#fff', fontVariantNumeric: 'tabular-nums' }}>{total}</strong> UN1T
-        </span>
-        <span style={{ fontSize: 20, color: '#b8b8be' }}>results in your app 📱</span>
-      </div>
+      <GraftSignature
+        caption={`Room total ${total} PTS · full results in Graft`}
+        className="absolute bottom-0 left-0 right-0"
+      />
     </div>
   )
 }
@@ -471,17 +601,17 @@ function ClassStartIntro({ current, serverTime }) {
   if (!visible || !cls) return null
   const meta = [cls.starts_at_label, cls.program].filter(Boolean).join('  ·  ')
   return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 50, background: '#08080A',
+    <div style={{ position: 'absolute', inset: 0, zIndex: 50, background: IRON,
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       opacity: shown ? 1 : 0, transition: 'opacity .6s ease' }}>
-      <span style={{ position: 'absolute', top: 24, left: 28, fontWeight: 700, letterSpacing: 6, color: '#fff' }}>UN1T</span>
-      <span style={{ position: 'absolute', top: 24, right: 28, fontSize: 14, fontWeight: 700, letterSpacing: 3, color: '#EF4444' }}>● LIVE</span>
-      <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: 8, color: '#7a7a82',
-        opacity: shown ? 1 : 0, transform: shown ? 'translateY(0)' : 'translateY(8px)', transition: 'all .6s ease .1s' }}>NOW STARTING</span>
-      <span style={{ fontSize: '11vw', lineHeight: 1, fontWeight: 800, color: '#fff', letterSpacing: 2, marginTop: 8,
+      <span style={{ position: 'absolute', top: 24, left: 28, fontFamily: FONT_DISPLAY, fontWeight: 700, letterSpacing: 6, color: CHALK }}>UN1T</span>
+      <span style={{ position: 'absolute', top: 24, right: 28, fontFamily: FONT_MONO, fontSize: 12, fontWeight: 500, letterSpacing: '0.28em', color: REDLINE, textTransform: 'uppercase' }}>● Live</span>
+      <span style={{ fontFamily: FONT_MONO, fontSize: 15, fontWeight: 500, letterSpacing: '0.5em', color: CHALK_3, textTransform: 'uppercase',
+        opacity: shown ? 1 : 0, transform: shown ? 'translateY(0)' : 'translateY(8px)', transition: 'all .6s ease .1s' }}>Now starting</span>
+      <span style={{ fontFamily: FONT_DISPLAY, fontSize: '11vw', lineHeight: 1, fontWeight: 800, color: CHALK, letterSpacing: 2, marginTop: 8,
         opacity: shown ? 1 : 0, transform: shown ? 'scale(1)' : 'scale(.92)', transition: 'all .7s cubic-bezier(.2,.7,.2,1) .25s' }}>{cls.class_name || 'CLASS'}</span>
-      <span style={{ height: 4, width: shown ? 160 : 0, background: '#EF4444', borderRadius: 2, margin: '22px 0 14px', transition: 'width .7s cubic-bezier(.4,0,.1,1) .5s' }} />
-      {meta ? <span style={{ fontSize: 22, fontWeight: 500, letterSpacing: 2, color: '#b8b8be',
+      <span style={{ height: 4, width: shown ? 160 : 0, background: REDLINE, borderRadius: 2, margin: '22px 0 14px', transition: 'width .7s cubic-bezier(.4,0,.1,1) .5s' }} />
+      {meta ? <span style={{ fontSize: 22, fontWeight: 500, letterSpacing: 2, color: CHALK_2,
         opacity: shown ? 1 : 0, transform: shown ? 'translateY(0)' : 'translateY(8px)', transition: 'all .6s ease .7s' }}>{meta}</span> : null}
     </div>
   )
@@ -511,44 +641,45 @@ function TimerBanner({ timer, serverTime }) {
   const nowMs = Date.now() + offset
   const st = resolveTimerState(timeline, computeEffectiveElapsedMs(timer, nowMs))
   const cur = st.currentStep
-  const segColor = SEG_COLOR[cur?.type] || '#374151'
+  const segColor = SEG_DISPLAY_COLOR[cur?.type] || SEG_COLOR[cur?.type] || '#A3ABB6'
   const segPct = cur && cur.seconds ? Math.min(100, (st.segmentElapsedMs / (cur.seconds * 1000)) * 100) : 0
   const paused = timer.status === 'paused'
+  const activeColor = st.finished ? FIELD : segColor
 
   return (
     <div
-      className="border-b border-neutral-800 px-6 py-4"
-      style={{ background: `linear-gradient(90deg, ${segColor}22 0%, #000 70%)` }}
+      className="px-6 py-4"
+      style={{ borderBottom: `1px solid ${HAIRLINE}`, background: `linear-gradient(90deg, ${segColor}22, transparent 65%)` }}
     >
       <div className="flex items-center gap-6">
         <div className="min-w-0">
-          <p className="truncate text-xs uppercase tracking-[0.25em] text-neutral-400">{timer.name || 'Class timer'}</p>
-          <p className="mt-0.5 text-3xl font-bold leading-tight" style={{ color: st.finished ? '#10B981' : segColor }}>
+          <p className="truncate text-xs uppercase tracking-[0.22em]" style={{ fontFamily: FONT_MONO, color: CHALK_2 }}>
+            {timer.name || 'Class timer'}
+            {st.roundCount ? ` · Round ${st.roundIndex}/${st.roundCount}` : ''}
+          </p>
+          <p className="mt-0.5 text-3xl leading-tight" style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: activeColor }}>
             {st.finished ? 'Complete' : (cur?.label || '—')}
-            {paused && <span className="ml-3 align-middle text-base font-medium text-neutral-400">paused</span>}
+            {paused && <span className="ml-3 align-middle text-base font-medium" style={{ fontFamily: FONT_BODY, color: CHALK_2 }}>paused</span>}
           </p>
         </div>
 
         <div className="ml-auto text-right">
-          <p className="text-6xl font-bold tabular-nums leading-none" style={{ color: st.finished ? '#10B981' : segColor }}>
+          <p className="text-6xl leading-none tabular-nums" style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, color: activeColor }}>
             {st.finished ? '0:00' : fmtClock(st.segmentRemainingMs)}
           </p>
         </div>
 
-        <div className="min-w-[9rem] text-right text-sm text-neutral-300">
-          {st.roundCount
-            ? <p className="font-bold">Round {st.roundIndex}/{st.roundCount}</p>
-            : <p className="text-neutral-600">—</p>}
+        <div className="min-w-[9rem] text-right text-xs" style={{ fontFamily: FONT_MONO, color: CHALK_2 }}>
           {st.nextStep && !st.finished && (
-            <p className="text-neutral-400">next: {st.nextStep.label} {fmtClock(st.nextStep.seconds * 1000)}</p>
+            <p>next: {st.nextStep.label} {fmtClock(st.nextStep.seconds * 1000)}</p>
           )}
-          <p className="mt-1 font-mono tabular-nums text-neutral-400">
+          <p className="mt-1 tabular-nums" style={{ color: CHALK_3 }}>
             {fmtClock(st.totalElapsedMs)} / {fmtClock(st.totalRemainingMs)}
           </p>
         </div>
       </div>
 
-      <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-black/40">
+      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full" style={{ background: 'rgba(0,0,0,.4)' }}>
         <div
           className="h-full transition-[width] duration-200"
           style={{ width: `${segPct}%`, backgroundColor: segColor }}
@@ -559,72 +690,80 @@ function TimerBanner({ timer, serverTime }) {
 }
 
 function Tile({ session, rank }) {
-  const zoneColor = session.currentZone?.color || '#374151'
-  const zoneBg = ZONE_BG[session.currentZone?.id] || '#1f2937'
+  const zoneId = Number(session.currentZone?.id)
+  const zoneColor = zoneColorDark(zoneId)
   // Burn = a session that has spent ≥12 min in Zone 4+ (shared helper).
   const burn = !session.stale && isBurn(session.zonesSeconds)
 
   return (
     <div
-      className={`relative flex flex-col rounded-2xl p-4 sm:p-5 transition-all duration-500 ${
+      className={`relative flex flex-col rounded-[14px] p-4 sm:p-5 transition-all duration-500 ${
         session.stale ? 'opacity-40' : ''
       }`}
       style={{
-        background: `linear-gradient(135deg, ${zoneBg} 0%, #000 140%)`,
-        borderLeft: `8px solid ${zoneColor}`,
-        // Burn flare — a soft amber (Zone 4) glow ringing the tile.
-        boxShadow: burn ? '0 0 0 2px #F59E0B, 0 0 26px 2px rgba(245,158,11,.5)' : undefined,
+        // Approved mockup: flat iron surface; the 6px zone edge carries the
+        // colour. (A zone-tinted wash variant was tried and cut in review.)
+        background: SURFACE,
+        border: `1px solid ${HAIRLINE}`,
+        borderLeft: `6px solid ${zoneColor || HAIRLINE}`,
+        // Burn — Furnace ring + soft outer glow (the chip carries the word).
+        boxShadow: burn ? '0 0 0 1.5px rgba(255,169,40,.65), 0 0 22px rgba(255,169,40,.25)' : undefined,
       }}
     >
-      {/* Rank badge (points rank — position is fixed, this is the leaderboard) */}
-      <span className="absolute right-3 top-3 rounded-full bg-black/40 px-2 py-0.5 text-xs font-bold text-white">
+      {/* Rank pill (points rank — position is fixed, this is the leaderboard) */}
+      <span
+        className="absolute right-3 top-3 rounded-full px-2 py-0.5 text-xs tabular-nums"
+        style={{ fontFamily: FONT_MONO, color: CHALK_2, background: 'rgba(0,0,0,.35)' }}
+      >
         #{rank ?? '—'}
       </span>
 
-      {/* Burn flare flag — in the Zone-4 amber, top-left. */}
+      {/* Burn chip — bordered mono, Furnace. No emoji anywhere on the board. */}
       {burn && (
         <span
-          className="absolute left-3 top-3 rounded-md px-2 py-0.5 text-xs font-extrabold tracking-wide"
-          style={{ backgroundColor: '#F59E0B', color: '#000' }}
+          className="absolute left-3 top-3 rounded-full px-2 py-0.5 text-xs uppercase tracking-[0.14em]"
+          style={{ fontFamily: FONT_MONO, color: FURNACE, border: '1px solid rgba(255,169,40,.5)' }}
         >
-          🔥 BURN
+          BURN
         </span>
       )}
 
-      {/* Name */}
-      <p className={`text-lg font-semibold leading-tight ${burn ? 'mt-6' : ''}`}>{session.displayName}</p>
+      {/* Name — clear of the rank/burn pills above. */}
+      <p className="mt-6 text-lg font-semibold leading-tight" style={{ color: CHALK }}>{session.displayName}</p>
 
       {/* BPM — the hero number */}
-      <div className="mt-2 flex items-baseline gap-2">
+      <div className="mt-2 flex items-baseline gap-1.5">
         <span
-          className="text-5xl sm:text-6xl font-bold tabular-nums leading-none"
-          style={{ color: zoneColor }}
+          className="text-5xl leading-none tabular-nums sm:text-6xl"
+          style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, letterSpacing: '-0.01em', color: zoneColor || CHALK_3 }}
         >
           {session.currentBpm ?? '—'}
         </span>
-        <span className="text-sm font-medium text-neutral-300">bpm</span>
+        <span className="text-xs tracking-[0.12em]" style={{ fontFamily: FONT_MONO, color: CHALK_3 }}>BPM</span>
       </div>
 
-      {/* Zone label + UN1T points */}
-      <div className="mt-3 flex items-center justify-between text-sm">
-        <span
-          className="rounded-md px-2 py-0.5 font-bold"
-          style={{ backgroundColor: zoneColor, color: '#000' }}
-        >
-          {zoneWord(session.currentZone?.id) || '—'}
-        </span>
-        <span className="font-bold tabular-nums">
+      {/* Zone chip + UN1T points */}
+      <div className="mt-3 flex items-center justify-between">
+        {session.stale ? (
+          <span className="text-xs uppercase tracking-[0.1em]" style={{ fontFamily: FONT_MONO, color: CHALK_3 }}>strap silent</span>
+        ) : zoneColor ? (
+          <span
+            className="rounded-full border px-2 py-0.5 text-xs uppercase tracking-[0.14em]"
+            style={{ fontFamily: FONT_MONO, color: zoneColor, borderColor: `${zoneColor}80` }}
+          >
+            {zoneWord(zoneId)}
+          </span>
+        ) : (
+          <span className="text-xs" style={{ fontFamily: FONT_MONO, color: CHALK_3 }}>—</span>
+        )}
+        <span className="text-base tabular-nums" style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: CHALK }}>
           {session.effortPoints ?? 0}
-          <span className="ml-1 text-[10px] font-medium text-neutral-300">UN1T</span>
+          <span className="ml-1 text-[10px] tracking-[0.1em]" style={{ fontFamily: FONT_MONO, fontWeight: 400, color: CHALK_3 }}>PTS</span>
         </span>
       </div>
 
-      {/* Inline zone breakdown bar */}
+      {/* Inline zone breakdown bar — gap-separated rounded segments */}
       <ZoneBar zonesSeconds={session.zonesSeconds} />
-
-      {session.stale && (
-        <p className="mt-2 text-xs text-neutral-300">strap silent</p>
-      )}
     </div>
   )
 }
@@ -634,16 +773,15 @@ function ZoneBar({ zonesSeconds }) {
   const totals = [1, 2, 3, 4, 5].map((id) => Number(zonesSeconds[id] ?? zonesSeconds[String(id)] ?? 0))
   const sum = totals.reduce((a, b) => a + b, 0)
   if (sum === 0) return null
-  const colors = { 1: '#9CA3AF', 2: '#3B82F6', 3: '#10B981', 4: '#F59E0B', 5: '#EF4444' }
   return (
-    <div className="mt-2 flex h-1.5 w-full overflow-hidden rounded-full bg-black/30">
+    <div className="mt-2 flex h-1.5 w-full gap-[2px]">
       {totals.map((sec, i) => {
         if (sec === 0) return null
-        const pct = (sec / sum) * 100
         return (
           <div
             key={i}
-            style={{ width: `${pct}%`, backgroundColor: colors[i + 1] }}
+            className="rounded-[3px]"
+            style={{ flex: sec, backgroundColor: zoneColorDark(i + 1) }}
           />
         )
       })}
@@ -654,8 +792,8 @@ function ZoneBar({ zonesSeconds }) {
 function EmptyBoard() {
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
-      <p className="text-2xl font-semibold text-neutral-300">Waiting for class to start</p>
-      <p className="mt-3 text-sm text-neutral-500">
+      <p className="text-2xl font-semibold" style={{ fontFamily: FONT_DISPLAY, color: CHALK_2 }}>Waiting for class to start</p>
+      <p className="mt-3 text-sm" style={{ color: CHALK_3 }}>
         Heart rate tiles appear automatically when members start training.
       </p>
     </div>
@@ -664,9 +802,18 @@ function EmptyBoard() {
 
 // ── helpers ──────────────────────────────────────────────────────
 
-function gridColsFor(n) {
+// Landscape: 8 tiles is the canonical full screen on a 1080p landscape TV
+// (2×4). Portrait stacks narrower columns.
+function gridColsFor(n, portrait = false) {
+  if (portrait) {
+    if (n <= 8) return 2
+    if (n <= 18) return 3
+    return 4
+  }
+  // <=4 keeps 2 big columns (a 3-person class gets huge tiles); from 5 up the
+  // 4-column grid applies — 8 tiles fill a 1080p landscape panel exactly
+  // (the canonical full screen, per the approved board spec).
   if (n <= 4) return 2
-  if (n <= 9) return 3
   if (n <= 16) return 4
   if (n <= 25) return 5
   return 6
