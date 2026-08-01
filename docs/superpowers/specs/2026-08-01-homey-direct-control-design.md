@@ -28,7 +28,7 @@ un1t-crm (Vercel) ──HTTPS──▶ Homey Pro remote API ──▶ Tapo devic
 | `HOMEY_API_KEY` | Scoped API key, trimmed. |
 | `HOMEY_LOCATION_ID` | uuid of the location this Homey serves (Stillorgan). Scopes the cron's device/occurrence queries. |
 
-`getHomeyConfig()` in the client returns `null` unless ALL THREE are set and valid (origin-only URL — the classic mis-paste is the Homey web-app URL with a path); when null the cron **stamps its heartbeat and exits success with `skipped: true`** (dormant convention — a not-yet-configured feature must not page as a stale cron). Multi-studio later = per-location config table; env triple is v1 (YAGNI).
+`getHomeyConfig()` in the client is tri-state: `null` when all three are unset (dormant), `{ error }` when partially set or invalid (the cron logs it loudly every tick — origin-only URL; the classic mis-paste is the Homey web-app URL with a path), the config object when fully valid. On both non-configured outcomes the cron **stamps its heartbeat and exits success with `skipped: true`** (dormant convention — a not-yet-configured feature must not page as a stale cron). Multi-studio later = per-location config table; env triple is v1 (YAGNI).
 
 ## Files
 
