@@ -11,13 +11,12 @@
 -- The next-tightest existing cron, process-invoice-analysis (mig 377,
 -- also a Vercel `*/2 * * * *` worker), budgets expected+grace = 120+240
 -- = 360s = 3x its own cadence. Scaling that ratio straight to 60s would
--- give a 180s (3min) window — too tight for a per-minute tick: Vercel
--- cron invocations jitter more than their nominal cadence suggests
--- (mig 119's process-contact-imports incident was exactly this, at a
--- much slower 60s cadence), and homey-reconcile's own body does a
--- network round-trip to a Homey Pro on someone's LAN before it can even
--- start committing writes, adding tail latency a pure-DB drain cron
--- doesn't have. So we go generous instead of ratio-exact: 60s expected
+-- give a 180s (3min) window. mig 119's process-contact-imports (also a
+-- 60s-cadence cron) has held stable at exactly that 180s budget since,
+-- so 180s would probably survive — but this cron differs: it does a
+-- network round-trip to a Homey Pro (via Athom's cloud relay) before it
+-- can even start committing writes, adding tail latency a pure-DB drain
+-- cron doesn't have. So we go generous instead of ratio-exact: 60s expected
 -- interval (matches the real schedule) + 840s grace = 900s (15min)
 -- total budget. Still tight enough to catch a genuinely dead cron (15
 -- consecutive missed ticks), loose enough that normal jitter or a

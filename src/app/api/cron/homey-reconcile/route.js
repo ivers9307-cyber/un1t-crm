@@ -29,9 +29,9 @@ export async function GET(request) {
 
   await stampHeartbeat('homey-reconcile').catch((err) =>
     logWarn('cron-homey-reconcile', 'heartbeat failed', { err }))
-  // Deliberately `out.ok !== false`, not `out.ok === true`: `skipped`
-  // (unconfigured/misconfigured) and `homeyDown` results carry no `ok` key
-  // at all in some branches, and a transient DB blip inside
+  // Deliberately `out.ok !== false`, not `out.ok === true`: the two
+  // `skipped` results (unconfigured/misconfigured) carry no `ok` key,
+  // `homeyDown` returns `ok: true`, and a transient DB blip inside
   // runHomeyReconcile returns `{ ok: false }` for THIS tick only — none of
   // those are a dead cron, so the heartbeat still stamps above and the
   // route still reports `success` unless the body explicitly said `ok:

@@ -136,7 +136,10 @@ export async function POST(request, props) {
     if (!clear) {
       try {
         const cfg = getHomeyConfig()
-        if (cfg && !cfg.error && updated.sidecar_device_id) {
+        // Scope to the configured Homey's location — the cron only ever
+        // commands cfg.locationId devices; a second studio's toggle must
+        // not PUT against this Homey.
+        if (cfg && !cfg.error && cfg.locationId === locationId && updated.sidecar_device_id) {
           // homeySetOnoff resolves rather than rejects by contract, but
           // belt-and-braces per house style: never let this block or
           // change the toggle response.
