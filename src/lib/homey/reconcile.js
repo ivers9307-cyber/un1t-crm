@@ -112,6 +112,10 @@ export async function runHomeyReconcile(db, deps = {}) {
   const getDevices = deps.getDevices || homeyGetDevices
   const setOnoff = deps.setOnoff || homeySetOnoff
   const now = deps.now || Date.now
+  // Injectable so tests can pin an exact Dublin calendar date instead of
+  // racing the real midnight boundary; production always leaves this at
+  // the real dublinTodayStr(), matching Date.now() default `now` above.
+  const today = deps.today || dublinTodayStr()
 
   const cfg = getConfig()
   // Fully unset — dormant, not yet turned on for this deploy. No logging:
@@ -151,7 +155,6 @@ export async function runHomeyReconcile(db, deps = {}) {
   const mergedRows = Array.from(merged.values())
 
   const nowMs = now()
-  const today = dublinTodayStr()
   const dayStart = new Date(dublinDayStartMs(today)).toISOString()
   // Today's Dublin day EXACTLY (DST-exact next-midnight bound, not a flat
   // +24h/+36h). Pulling tomorrow's occurrences in would be a real bug: class

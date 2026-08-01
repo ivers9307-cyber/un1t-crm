@@ -11,7 +11,7 @@ vi.mock('@/lib/log', () => ({ logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.f
 
 import { reportDeviceStates, runHomeyReconcile } from './reconcile.js'
 import { logWarn } from '@/lib/log'
-import { dublinTodayStr, dublinDayStartMs } from '@/lib/dublin-time'
+import { dublinDayStartMs, addDaysISO } from '@/lib/dublin-time'
 
 const LOC = 'a0000000-0000-0000-0000-000000000001'
 
@@ -200,20 +200,23 @@ const enabledDevice = {
   class_rule: {}, override: null,
 }
 
-// runHomeyReconcile derives `today` from the real dublinTodayStr() (ported
-// verbatim from the directives route, uncontrollable via deps — see the
-// spec) but `nowMs` from the injectable `now`. So nowMs must land inside
-// the ACTUAL Dublin today, not an arbitrary fixed date, or the fixed
-// 00:00-23:59 window (attributed to real-today by resolveDayWindows) and
-// nowMs disagree on which calendar day they're for.
-const NOON_TODAY_MS = dublinDayStartMs(dublinTodayStr()) + 12 * 60 * 60_000
+// runHomeyReconcile takes `today` from `deps.today || dublinTodayStr()`
+// (HOMEYD.3b) — production always falls through to the real Dublin date,
+// but tests pin an exact one so nothing races the real midnight boundary.
+// `nowMs` (from the injectable `now`) is pinned to noon on that SAME fixed
+// date, or the fixed 00:00-23:59 window (attributed to FIXED_TODAY by
+// resolveDayWindows) and nowMs would disagree on which calendar day
+// they're for.
+const FIXED_TODAY = '2026-07-06' // a Monday, comfortably clear of any DST edge
+const NOON_FIXED_TODAY_MS = dublinDayStartMs(FIXED_TODAY) + 12 * 60 * 60_000
 
-function baseDeps({ getConfig, getDevices, setOnoff } = {}) {
+function baseDeps({ getConfig, getDevices, setOnoff, today } = {}) {
   return {
     getConfig: getConfig || vi.fn(() => ({ url: 'https://x.connect.athom.com', apiKey: 'k', locationId: LOC })),
     getDevices: getDevices || vi.fn(async () => ({ ok: true, statusCode: 200, body: homeyRaw })),
     setOnoff: setOnoff || vi.fn(async () => ({ ok: true, statusCode: 200 })),
-    now: () => NOON_TODAY_MS, // noon Dublin today, inside the fixed all-day window
+    now: () => NOON_FIXED_TODAY_MS, // noon Dublin on FIXED_TODAY, inside the fixed all-day window
+    today: today || FIXED_TODAY,
   }
 }
 
@@ -248,15 +251,31 @@ describe('runHomeyReconcile', () => {
     expect(logWarn).toHaveBeenCalledWith('homey-reconcile', 'homey unreachable', { statusCode: 401 })
   })
 
-  it('happy path: commands only the mismatched device, reports all devices, counters correct', async () => {
+  it('happy path: commands only the mismatched device, reports all devices (incl. adopt-flow discovery), counters correct', async () => {
+    // A second Homey device with NO tapo_devices row at all — this is the
+    // orchestration-level adopt-flow invariant: planCommands only ever sees
+    // enabled tapo_devices rows, so an un-adopted device must never be
+    // commanded, but reportDeviceStates still adopt-registers it from the
+    // same GET (that's the whole discovery flow). A future "only report
+    // enabled devices" refactor would silently break this.
+    const homeyRawWithUnadopted = {
+      ...homeyRaw,
+      'xyz-9': {
+        id: 'xyz-9', name: 'Unregistered Light', class: 'light', available: true,
+        capabilities: ['onoff'], capabilitiesObj: { onoff: { value: true } },
+      },
+    }
     const db = makeDb({ tapo_devices: [{ id: 'd1', ...enabledDevice }] })
     const setOnoff = vi.fn(async () => ({ ok: true, statusCode: 200 }))
-    const out = await runHomeyReconcile(db, baseDeps({ setOnoff }))
+    const getDevices = vi.fn(async () => ({ ok: true, statusCode: 200, body: homeyRawWithUnadopted }))
+    const out = await runHomeyReconcile(db, baseDeps({ setOnoff, getDevices }))
     expect(setOnoff).toHaveBeenCalledTimes(1)
     expect(setOnoff).toHaveBeenCalledWith(expect.objectContaining({ locationId: LOC }), 'homey:abc-1', true)
-    expect(out).toMatchObject({ ok: true, commanded: 1, commandFailures: 0, updated: 1, discovered: 0, failed: 0 })
+    expect(out).toMatchObject({ ok: true, commanded: 1, commandFailures: 0, updated: 1, discovered: 1, failed: 0 })
     const row = db._store.tapo_devices.find((r) => r.id === 'd1')
     expect(row.last_state).toBe('off') // reported state is the pre-command GET snapshot
+    const discoveredRow = db._store.tapo_devices.find((r) => r.sidecar_device_id === 'homey:xyz-9')
+    expect(discoveredRow).toMatchObject({ enabled: false, schedule_mode: 'none', last_state: 'on' })
   })
 
   it('command failure: still reports, commandFailures counted', async () => {
@@ -276,5 +295,42 @@ describe('runHomeyReconcile', () => {
     const out = await runHomeyReconcile(db, baseDeps({ setOnoff }))
     expect(out).toEqual({ ok: false, error: 'db down' })
     expect(setOnoff).not.toHaveBeenCalled()
+  })
+
+  it('class-mode: commands follow the real desiredState against today\'s occurrences; tomorrow is excluded by the gte/lt day bounds', async () => {
+    const classDevice = {
+      id: 'd2', location_id: LOC, sidecar_device_id: 'homey:abc-1', enabled: true, schedule_mode: 'class',
+      fixed_windows: [], class_rule: { lead_min: 15, lag_min: 10 }, override: null,
+    }
+    // Today's class: 11:30-12:15 Dublin → window opens 11:15 (lead), closes
+    // 12:25 (lag). NOON_FIXED_TODAY_MS (12:00) sits inside it.
+    const todayOcc = {
+      location_id: LOC,
+      starts_at: new Date(`${FIXED_TODAY}T11:30:00+01:00`).toISOString(),
+      ends_at: new Date(`${FIXED_TODAY}T12:15:00+01:00`).toISOString(),
+      cancelled_at: null,
+    }
+    // Tomorrow's class must NOT be picked up by the query's gte/lt day
+    // bounds — this is exactly the bug the directives-route comment warns
+    // about (tomorrow's occurrence would hold the device on all night). If
+    // the bounds were wrong this occurrence would fold into the same class
+    // window and the test wouldn't distinguish the two cases, so we assert
+    // via the command outcome, not just row presence.
+    const tomorrowOcc = {
+      location_id: LOC,
+      starts_at: new Date(`${addDaysISO(FIXED_TODAY, 1)}T06:00:00+01:00`).toISOString(),
+      ends_at: new Date(`${addDaysISO(FIXED_TODAY, 1)}T07:00:00+01:00`).toISOString(),
+      cancelled_at: null,
+    }
+    const db = makeDb({
+      tapo_devices: [classDevice],
+      class_occurrences: [todayOcc, tomorrowOcc],
+    })
+    // homeyRaw's abc-1 is currently 'off'; the live class window desires 'on'.
+    const setOnoff = vi.fn(async () => ({ ok: true, statusCode: 200 }))
+    const out = await runHomeyReconcile(db, baseDeps({ setOnoff }))
+    expect(setOnoff).toHaveBeenCalledTimes(1)
+    expect(setOnoff).toHaveBeenCalledWith(expect.objectContaining({ locationId: LOC }), 'homey:abc-1', true)
+    expect(out.commanded).toBe(1)
   })
 })
