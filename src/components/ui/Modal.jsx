@@ -31,19 +31,39 @@ export default function Modal({ open, onClose, title, footer, size = 'md', dismi
   const panelRef = useRef(null)
   const titleId = useId()
 
+  // UI-MODAL-FOCUS.1 — the open-effect must depend on `open` ALONE.
+  //
+  // It previously listed [open, onClose, dismissable]. Every call site passes
+  // an inline arrow (onClose={() => setEditing(null)}), which is a fresh
+  // function identity on every render — so typing one character into any input
+  // inside a modal re-ran this effect, and its panelRef.focus() yanked focus
+  // out of the field. The operator had to re-click after EVERY keystroke
+  // (reported 2026-08-01 while entering equipment types).
+  //
+  // Keeping the callbacks in a ref lets the Escape listener always invoke the
+  // LATEST props without putting their identity in the deps. Regression-locked
+  // in Modal.focus.test.jsx.
+  const handlers = useRef({ onClose, dismissable })
+  useEffect(() => {
+    handlers.current = { onClose, dismissable }
+  }, [onClose, dismissable])
+
   useEffect(() => {
     if (!open) return undefined
-    const onKey = (e) => { if (e.key === 'Escape' && dismissable) onClose?.() }
+    const onKey = (e) => {
+      if (e.key === 'Escape' && handlers.current.dismissable) handlers.current.onClose?.()
+    }
     document.addEventListener('keydown', onKey)
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-    // Move focus into the dialog for keyboard + screen-reader users.
+    // Move focus into the dialog for keyboard + screen-reader users. This runs
+    // on OPEN only — re-running it on every render is the focus-steal bug.
     panelRef.current?.focus()
     return () => {
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = prevOverflow
     }
-  }, [open, onClose, dismissable])
+  }, [open])
 
   if (!open) return null
 
