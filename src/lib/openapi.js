@@ -1160,33 +1160,6 @@ registry.registerPath({
   },
 })
 
-registry.registerPath({
-  method: 'get',
-  path: '/api/bridge/tapo/directives',
-  tags: ['Bridge'],
-  security: [{ BridgeAuth: [] }],
-  summary: 'Desired on/off state per Tapo device',
-  description: "CRM → Pi bridge. Returns the desired power state for each enabled Tapo device at the bridge's location, computed from fixed windows / class-linked rules / manual overrides (src/lib/tapo/desired-state.js). Polled each reconcile tick.",
-  responses: {
-    200: { description: 'Directives', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeTapoDirectivesResponse') } } },
-    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
-
-registry.registerPath({
-  method: 'post',
-  path: '/api/bridge/tapo/state',
-  tags: ['Bridge'],
-  security: [{ BridgeAuth: [] }],
-  summary: 'Report actual Tapo device states',
-  description: 'Pi bridge → CRM. Reports each Tapo device\'s actual on/off state after a reconcile tick. Devices the CRM does not know yet auto-register as enabled=false (adoptable) rows.',
-  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeTapoState') } } } },
-  responses: {
-    200: { description: 'Stored — returns updated/discovered counts', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeTapoStateResponse') } } },
-    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
-
 // ============================================================================
 // Mobile — Staff App, CookieAuth on all routes
 // ============================================================================
