@@ -18,6 +18,7 @@ import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { issueBridgeToken } from '@/lib/bridge-auth'
+import { deriveBridgeStatus } from '@/lib/bridge-samples'
 import { logInfo, logWarn } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -102,5 +103,13 @@ export async function GET() {
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 400 })
   }
-  return NextResponse.json({ ok: true, bridges: data || [] })
+  // Derive `status` from heartbeat freshness rather than returning the stored
+  // column. Nothing ever writes 'offline' — a Pi that loses power can't send a
+  // final heartbeat — so the column only moves toward 'online' and then stays
+  // there. The Stillorgan bridge read ONLINE for 17 days after it died and the
+  // outage went unnoticed. The live board already keys off freshness; this
+  // makes the admin surface agree with it.
+  const now = Date.now()
+  const bridges = (data || []).map((b) => ({ ...b, status: deriveBridgeStatus(b, now) }))
+  return NextResponse.json({ ok: true, bridges })
 }

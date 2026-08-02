@@ -13,6 +13,7 @@ import {
   getActiveStrapMap,
   insertHrSamples,
   isBridgeOnline,
+  deriveBridgeStatus,
   latestBridgeSeenMs,
   BRIDGE_ONLINE_WINDOW_MS,
   dublinWallClockToMs,
@@ -817,5 +818,50 @@ describe('resolveStrapsForBatch: back-to-back class supersede (item 1)', () => {
     const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:12511'], nowMs: NOW })
     expect(map.get('ant:12511')).toMatchObject({ sessionId: 'old-sess', via: 'auto' })
     expect(inserted).toBeNull() // no fresh session created
+  })
+})
+
+describe('deriveBridgeStatus', () => {
+  const now = new Date('2026-06-17T18:00:00.000Z').getTime()
+  const ago = (ms) => new Date(now - ms).toISOString()
+
+  it('reports offline when the heartbeat is stale, whatever the column says', () => {
+    // The bug this exists for: the Stillorgan bridge sat at status='online'
+    // for 17 days after it died, because nothing ever writes 'offline' — a
+    // Pi that loses power cannot send a final heartbeat. The admin badge
+    // rendered the raw column and read ONLINE next to "Last seen 15 days ago".
+    const dead = { status: 'online', last_seen_at: ago(15 * 24 * 60 * 60 * 1000) }
+    expect(deriveBridgeStatus(dead, now)).toBe('offline')
+  })
+
+  it('reports online when the heartbeat is fresh', () => {
+    expect(deriveBridgeStatus({ status: 'online', last_seen_at: ago(5_000) }, now)).toBe('online')
+  })
+
+  it('preserves a self-reported error while the bridge is still alive', () => {
+    // 'error' is set by the bridge itself and is meaningful — freshness must
+    // not overwrite it, only outrank it once the bridge goes quiet.
+    expect(deriveBridgeStatus({ status: 'error', last_seen_at: ago(5_000) }, now)).toBe('error')
+  })
+
+  it('outranks a stale error with offline', () => {
+    expect(deriveBridgeStatus({ status: 'error', last_seen_at: ago(60 * 60 * 1000) }, now)).toBe('offline')
+  })
+
+  it('reports offline for a bridge that has never connected', () => {
+    expect(deriveBridgeStatus({ status: 'offline', last_seen_at: null }, now)).toBe('offline')
+    expect(deriveBridgeStatus({ status: 'online', last_seen_at: null }, now)).toBe('offline')
+  })
+
+  it('uses the same freshness window as the TV connection dot', () => {
+    const justInside = { status: 'online', last_seen_at: ago(BRIDGE_ONLINE_WINDOW_MS - 1_000) }
+    const justOutside = { status: 'online', last_seen_at: ago(BRIDGE_ONLINE_WINDOW_MS + 1_000) }
+    expect(deriveBridgeStatus(justInside, now)).toBe('online')
+    expect(deriveBridgeStatus(justOutside, now)).toBe('offline')
+  })
+
+  it('tolerates a missing or malformed row', () => {
+    expect(deriveBridgeStatus(null, now)).toBe('offline')
+    expect(deriveBridgeStatus({ status: 'online', last_seen_at: 'not-a-date' }, now)).toBe('offline')
   })
 })
