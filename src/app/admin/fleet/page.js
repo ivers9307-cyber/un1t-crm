@@ -52,7 +52,7 @@ export default async function FleetPage() {
 
   const names = visible.map((d) => d.device_name)
 
-  const [{ data: health }, { data: commands }, { data: locations }] = await Promise.all([
+  const [{ data: health }, { data: commands }] = await Promise.all([
     db.from('fleet_device_health')
       .select('device_name, state, state_since, suppressed_until, last_checked')
       .in('device_name', names),
@@ -61,9 +61,6 @@ export default async function FleetPage() {
       .in('device_name', names)
       .order('issued_at', { ascending: false })
       .limit(25),
-    user.isMaster
-      ? db.from('locations').select('id, name').eq('is_host_anchor', false).order('name')
-      : Promise.resolve({ data: [] }),
   ])
 
   const healthByName = new Map((health || []).map((h) => [h.device_name, h]))
@@ -94,7 +91,6 @@ export default async function FleetPage() {
     <FleetAdmin
       devices={rows}
       commands={commands || []}
-      locations={locations || []}
       isMaster={Boolean(user.isMaster)}
     />
   )

@@ -173,10 +173,12 @@ export async function GET() {
 
   const { data: commands } = await db
     .from('fleet_commands')
-    .select('id, device_name, action, status, issued_at, finished_at, exit_code, error, profiles:issued_by(full_name)')
+    .select('id, device_name, action, status, issued_at, finished_at, exit_code, error, screenshot_path, profiles:issued_by(full_name)')
     .in('device_name', visible)
     .order('issued_at', { ascending: false })
-    .limit(50)
+    // Matches the page's server-rendered slice, so a poll cannot make the list
+    // jump in length the first time it refreshes.
+    .limit(25)
 
   return NextResponse.json({ ok: true, commands: commands || [] })
 }
