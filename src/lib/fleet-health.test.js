@@ -5,6 +5,7 @@ import {
   deviceNameOf,
   gradeDevice,
   decideAlert,
+  isSuppressed,
   indexBridgesByDevice,
 } from './fleet-health.js'
 
@@ -264,5 +265,102 @@ describe('OFFLINE_AFTER_MS', () => {
 
   it('is short enough to catch an outage within a class', () => {
     expect(OFFLINE_AFTER_MS).toBeLessThanOrEqual(30 * 60 * 1000)
+  })
+})
+
+// FLEET-CMD.1 — the maintenance window.
+//
+// reboot deliberately has NO window: OFFLINE_AFTER_MS is already 15 minutes,
+// so a healthy ~90s reboot never grades unreachable, and a reboot that hangs
+// past 15 minutes is a real outage worth paging for. Shutdown is the whole
+// reason this exists.
+describe('alert suppression', () => {
+  const down = { name: 'stillorgan-tv2', state: 'unreachable', detail: 'offline', connected: false }
+  // Genuinely back on the tailnet.
+  const backOnline = { name: 'stillorgan-tv2', state: 'ok', detail: '', connected: true }
+  // Powered off, but still inside OFFLINE_AFTER_MS — grades healthy, NOT in contact.
+  const freshlyOff = { name: 'stillorgan-tv2', state: 'ok', detail: '', connected: false }
+
+  describe('isSuppressed', () => {
+    it('is false with no window', () => {
+      expect(isSuppressed(null, NOW)).toBe(false)
+      expect(isSuppressed({}, NOW)).toBe(false)
+      expect(isSuppressed({ suppressed_until: null }, NOW)).toBe(false)
+    })
+
+    it('handles the infinity a shutdown writes', () => {
+      // new Date('infinity') is NaN, so this has to be checked by hand.
+      expect(isSuppressed({ suppressed_until: 'infinity' }, NOW)).toBe(true)
+    })
+
+    it('expires', () => {
+      const until = new Date(NOW + 1000).toISOString()
+      expect(isSuppressed({ suppressed_until: until }, NOW)).toBe(true)
+      expect(isSuppressed({ suppressed_until: until }, NOW + 2000)).toBe(false)
+    })
+
+    it('fails closed on a value it cannot parse', () => {
+      // Quiet is recoverable; paging every 5 minutes about a device somebody
+      // deliberately switched off is what gets alerting muted for good.
+      expect(isSuppressed({ suppressed_until: 'not-a-date' }, NOW)).toBe(true)
+    })
+  })
+
+  it('stays silent about an outage the operator caused', () => {
+    const prior = { state: 'ok', state_since: ago(60000), alerted_at: null, suppressed_until: 'infinity' }
+    const { alert, row } = decideAlert(down, prior, NOW)
+    expect(alert).toBeNull()
+    // Still records the truth — a suppressed device reads as down in the UI.
+    // Hiding the grade would be the lie BRIDGE-STATUS.1 existed to fix.
+    expect(row.state).toBe('unreachable')
+    expect(row.suppressed_until).toBe('infinity')
+  })
+
+  it('does not stamp alerted_at while suppressed', () => {
+    // Load-bearing: stamping would make a later tick think somebody had
+    // already been told, and the alert would never fire.
+    const prior = { state: 'unreachable', state_since: ago(60000), alerted_at: null, suppressed_until: 'infinity' }
+    const { row } = decideAlert(down, prior, NOW)
+    expect(row.alerted_at).toBeNull()
+  })
+
+  it('alerts once a timed window lapses on a still-dead device', () => {
+    const prior = {
+      state: 'unreachable',
+      state_since: ago(20 * 60 * 1000),
+      alerted_at: null,
+      suppressed_until: new Date(NOW - 1000).toISOString(),
+    }
+    const { alert } = decideAlert(down, prior, NOW)
+    expect(alert).toBe('down')
+  })
+
+  it('clears the window when the device comes back', () => {
+    // This is how an infinity shutdown window ends: somebody power-cycles it.
+    const prior = { state: 'unreachable', state_since: ago(60000), alerted_at: null, suppressed_until: 'infinity' }
+    const { alert, row } = decideAlert(backOnline, prior, NOW)
+    expect(row.suppressed_until).toBeNull()
+    // No recovery notice, because no outage notice was ever sent.
+    expect(alert).toBeNull()
+  })
+
+  it('keeps the window through the patience period after a shutdown', () => {
+    // THE BUG THIS PINS: for the first 15 minutes after a shutdown the device
+    // is off but still inside OFFLINE_AFTER_MS, so gradeDevice returns 'ok'.
+    // Clearing the window on a healthy GRADE (rather than on real contact)
+    // dropped it exactly then, and the device alerted the moment the patience
+    // lapsed — a suppression that looked like it worked while guaranteeing the
+    // alert it was meant to prevent.
+    const prior = { state: 'ok', state_since: ago(60000), alerted_at: null, suppressed_until: 'infinity' }
+    const { alert, row } = decideAlert(freshlyOff, prior, NOW)
+    expect(row.suppressed_until).toBe('infinity')
+    expect(alert).toBeNull()
+  })
+
+  it('leaves an ordinary outage alerting exactly as before', () => {
+    const prior = { state: 'ok', state_since: ago(60000), alerted_at: null, suppressed_until: null }
+    const { alert, row } = decideAlert(down, prior, NOW)
+    expect(alert).toBe('down')
+    expect(row.alerted_at).toBe(new Date(NOW).toISOString())
   })
 })

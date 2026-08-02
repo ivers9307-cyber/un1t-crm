@@ -76,6 +76,13 @@ const WEB_ONLY_OK = {
   // MOBILE_PERMISSIONS entry (webEquivalent: 'contacts'), so it's matched,
   // not exempted here. Create/edit stays on web for now.
   events:         'Booking-link / event-type management is admin-only and rare on mobile.',
+  // FLEET-CMD.1 — deferred, NOT excluded on principle. Richard chose
+  // desktop-first for P1. `fleet_restart` in particular WANTS a mobile
+  // counterpart in P3: the person who notices a frozen leaderboard is a coach
+  // mid-class holding a phone, not someone at a desk. Revisit this entry then
+  // rather than treating it as settled.
+  fleet_restart:  'FLEET-CMD.1 P1 is desktop-only (Richard). Mobile is planned as P3 — see the spec; this exemption is temporary.',
+  fleet_admin:    'Reboot/shutdown/redeploy are deliberate, low-frequency actions taken at a desk. No mobile screen planned.',
   presentations:  'Desktop authoring + present-from-laptop surface; the public viewer is a plain URL opened on a screen. No mobile screen.',
   // MOBILE-RADAR: churn_radar + lead_radar now have a read-only mobile
   // glance (More tab → Radar). The full triage dashboards stay

@@ -98,9 +98,37 @@ export async function GET(request) {
   const bridgeByName = indexBridgesByDevice(bridgeRows)
 
   const names = fleet.map(deviceNameOf).filter(Boolean)
+
+  // FLEET-CMD.1 — register anything new before touching health.
+  //
+  // fleet_device_health now carries a foreign key to fleet_devices (mig 474),
+  // so the parent row has to exist or the upsert below fails. Auto-registering
+  // is deliberate: Tailscale is where a newly provisioned Pi shows up first,
+  // and the alternative — skipping devices nobody has claimed yet — would mean
+  // a Pi silently going unmonitored, which is precisely the 17-day failure
+  // this cron exists to prevent.
+  //
+  // ignoreDuplicates so this never clobbers the location_id, role or label an
+  // admin has set. A newly discovered device lands unclaimed (both NULL),
+  // which the page shows as "needs a home" and which offers no actions.
+  if (names.length) {
+    const { error: regError } = await db
+      .from('fleet_devices')
+      .upsert(names.map((device_name) => ({ device_name })), {
+        onConflict: 'device_name',
+        ignoreDuplicates: true,
+      })
+    if (regError) {
+      // Without the parent rows the health upsert would fail the FK for every
+      // device, so stop rather than press on and lose the whole tick's state.
+      logError('fleet-health', 'failed to register devices', { err: regError })
+      return NextResponse.json({ success: false, error: 'register_failed' }, { status: 200 })
+    }
+  }
+
   const { data: priorRows } = await db
     .from('fleet_device_health')
-    .select('device_name, state, state_since, alerted_at')
+    .select('device_name, state, state_since, alerted_at, suppressed_until')
     .in('device_name', names)
   const priorByName = new Map((priorRows || []).map((r) => [r.device_name, r]))
 
@@ -162,16 +190,54 @@ export async function GET(request) {
     if (error) logWarn('fleet-health', 'failed to persist device state', { err: error })
   }
 
+  // FLEET-CMD.1 — bury commands that were never delivered.
+  //
+  // The agent checks expiry itself before executing, so this is tidying rather
+  // than enforcement: it exists so the UI can say "not delivered — the Pi was
+  // offline" instead of leaving a row sitting at 'pending' forever, looking
+  // like something that might still happen.
+  //
+  // Riding this cron rather than adding one: it is a 5-minute sweep of a table
+  // with single-digit rows, and a new vercel.json entry would need its own
+  // heartbeat row and its own way to go stale.
+  const expired = await expireStaleCommands(db)
+
   await stampHeartbeat('fleet-health', {
     configured: true,
     checked: rows.length,
     alerted: alerts.length,
+    expired,
   })
 
   return NextResponse.json({
     success: true,
-    data: { checked: rows.length, alerted: alerts.length },
+    data: { checked: rows.length, alerted: alerts.length, expired },
   })
+}
+
+/**
+ * Mark undelivered commands dead. Returns how many.
+ *
+ * Never throws: a sweep failure must not fail the tick that alerts on dark
+ * devices, which is the more important job of the two.
+ */
+async function expireStaleCommands(db) {
+  try {
+    const { data, error } = await db
+      .from('fleet_commands')
+      .update({ status: 'expired', finished_at: new Date().toISOString() })
+      .in('status', ['pending', 'claimed'])
+      .lte('expires_at', new Date().toISOString())
+      .select('id')
+    if (error) {
+      logWarn('fleet-health', 'failed to sweep expired commands', { err: error })
+      return 0
+    }
+    return data?.length ?? 0
+  } catch (err) {
+    logWarn('fleet-health', 'failed to sweep expired commands', { err: String(err) })
+    return 0
+  }
 }
 
 /**

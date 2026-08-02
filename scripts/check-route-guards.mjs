@@ -58,6 +58,12 @@ const SESSION_GUARDS = [
   'loadLineForUser(',
   'loadBookkeeper(',
   'verifyBridgeToken(',
+  // verifyFleetDeviceToken resolves a sha256 bearer against
+  // fleet_devices.api_token_hash and returns the device it authenticates as;
+  // both /api/fleet/commands/* routes 401 on null and scope every read and
+  // write to that device_name — verified in src/lib/fleet-device-auth.js.
+  // (FLEET-CMD.1)
+  'verifyFleetDeviceToken(',
   "@/lib/studio-session",
   // resolveCustomerContact validates the member's Supabase JWT (getUser) AND
   // resolves + scopes to their contacts row — verified in src/lib/customer-auth.js.

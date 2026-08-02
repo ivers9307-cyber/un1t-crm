@@ -124,7 +124,16 @@ export function indexBridgesByDevice(rows) {
  * @param {object} device      Tailscale device row
  * @param {object|null} bridgeRow  matching ble_bridges row, or null for a kiosk
  * @param {number} nowMs
- * @returns {{ name: string|null, state: 'ok'|'unreachable'|'service_down', detail: string, since: string|null }}
+ *
+ * `connected` is deliberately separate from `state`. A device that dropped off
+ * the tailnet 30 seconds ago grades 'ok' — that is the whole point of
+ * OFFLINE_AFTER_MS — but it is NOT in contact, and FLEET-CMD.1's maintenance
+ * window has to tell those apart. Clearing a shutdown window on 'ok' alone
+ * would clear it during the first 15 minutes after the shutdown, guaranteeing
+ * an alert at minute 16.
+ *
+ * @returns {{ name: string|null, state: 'ok'|'unreachable'|'service_down',
+ *             detail: string, since: string|null, connected: boolean }}
  */
 export function gradeDevice(device, bridgeRow, nowMs = Date.now()) {
   const name = deviceNameOf(device)
@@ -141,10 +150,12 @@ export function gradeDevice(device, bridgeRow, nowMs = Date.now()) {
         state: 'unreachable',
         detail: `off the tailnet for ${Math.round(downMs / 60000)} min`,
         since: device.lastSeen ?? null,
+        connected: false,
       }
     }
-    // Inside the window — almost certainly the nightly reboot.
-    return { name, state: 'ok', detail: '', since: null }
+    // Inside the window — almost certainly the nightly reboot. Healthy for
+    // alerting purposes, but not in contact.
+    return { name, state: 'ok', detail: '', since: null, connected: false }
   }
 
   // Reachable. For a bridge, is the service actually doing anything?
@@ -158,11 +169,38 @@ export function gradeDevice(device, bridgeRow, nowMs = Date.now()) {
           ? 'on the tailnet, and the bridge service is reporting an error'
           : 'on the tailnet but the bridge service has stopped reporting',
         since: bridgeRow.last_seen_at ?? null,
+        connected: true,
       }
     }
   }
 
-  return { name, state: 'ok', detail: '', since: null }
+  return { name, state: 'ok', detail: '', since: null, connected: true }
+}
+
+/**
+ * Is alerting currently suppressed for this device? (FLEET-CMD.1)
+ *
+ * Set when an operator issues a shutdown from /admin/fleet — the device is off
+ * because somebody turned it off, and paging them about it would be the
+ * cry-wolf behaviour this whole feature depends on avoiding.
+ *
+ * Postgres stores 'infinity' for a shutdown, which `new Date()` cannot parse
+ * (it yields NaN), so it is checked explicitly. Any other unparseable value
+ * also counts as suppressed: failing closed here means a stuck window goes
+ * quiet, which is recoverable, while failing open would mean paging every five
+ * minutes about a device somebody deliberately switched off.
+ *
+ * @param {{ suppressed_until?: string|null }|null} prior
+ * @param {number} nowMs
+ * @returns {boolean}
+ */
+export function isSuppressed(prior, nowMs = Date.now()) {
+  const until = prior?.suppressed_until
+  if (!until) return false
+  if (until === 'infinity') return true
+  const at = new Date(until).getTime()
+  if (!Number.isFinite(at)) return true
+  return at > nowMs
 }
 
 /**
@@ -172,7 +210,8 @@ export function gradeDevice(device, bridgeRow, nowMs = Date.now()) {
  * caller persists `row` to fleet_device_health and sends `alert` if set.
  *
  * @param {{ name: string, state: string, detail: string }} graded
- * @param {{ state: string, state_since: string, alerted_at: string|null }|null} prior
+ * @param {{ state: string, state_since: string, alerted_at: string|null,
+ *           suppressed_until?: string|null }|null} prior
  * @param {number} nowMs
  * @returns {{ alert: 'down'|'recovered'|null, row: object }}
  */
@@ -186,7 +225,17 @@ export function decideAlert(graded, prior, nowMs = Date.now()) {
     state_since: changed || !prior ? now : prior.state_since,
     alerted_at: prior?.alerted_at ?? null,
     last_checked: now,
+    suppressed_until: prior?.suppressed_until ?? null,
   }
+
+  // A maintenance window ends when the device is genuinely back in contact —
+  // NOT merely when it grades healthy. Those differ for the first 15 minutes
+  // after a shutdown, when the device is off but still inside OFFLINE_AFTER_MS
+  // and therefore grading 'ok'. Clearing then would drop the window precisely
+  // when it is needed, and the device would alert as soon as the patience
+  // lapsed. This is how an 'infinity' shutdown window really ends: somebody
+  // walked over and power-cycled the Pi, and it rejoined the tailnet.
+  if (graded.connected) row.suppressed_until = null
 
   // Healthy and stayed healthy, or first sighting and healthy — no news.
   if (graded.state === 'ok') {
@@ -197,6 +246,14 @@ export function decideAlert(graded, prior, nowMs = Date.now()) {
     // Never told anyone it was down (e.g. it flapped inside one tick), so
     // announcing a recovery would be noise.
     row.alerted_at = null
+    return { alert: null, row }
+  }
+
+  // Unhealthy, but an operator caused it. Stay quiet, and deliberately do NOT
+  // stamp alerted_at: nothing was sent, so if the window ever lapses while the
+  // device is still down, the next tick alerts properly instead of believing
+  // somebody had already been told.
+  if (isSuppressed(prior, nowMs)) {
     return { alert: null, row }
   }
 
