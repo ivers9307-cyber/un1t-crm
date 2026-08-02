@@ -96,6 +96,12 @@ export const WEB_PERMISSIONS = Object.freeze([
   // future studio-ops actions (alarm arm/disarm, camera live view,
   // etc.) will land under the same gate.
   { key: 'studio_management', label: 'Studio Management',       hint: 'Remote door unlock + future on-site operations. Requires UniFi Access configured for the location.' },
+  // CLASS-TIMER-PERM.1 — split off `studio_management` so coaches on
+  // shift can run the class interval timer without also holding door
+  // unlock / AC control. Cross-platform (same key gates the web page,
+  // the mobile timer screen and every /api/timer/* route). ON for
+  // every role by default — revoke per user/role via the Roles tab.
+  { key: 'class_timer',       label: 'Class timer',             hint: 'Start, pause and stop the class interval timer on the studio TV, including quick-add presets and timer templates.' },
   // TAPO-T1.4 — Tapo plug/switch control. Registry, per-device
   // schedules (fixed windows + class-linked power), and manual
   // overrides live at /automations/devices. Web-only until the
@@ -252,7 +258,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pulse_admin: true,
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
-    schedule: true, attendance_reports: true, assistant: true, studio_management: true,
+    schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
     device_control: true,
     // Studio Management children (STUDIO-GROUP.1) — master has all.
     contracts: true, tv_displays: true, glofox_import: true, preferences_import: true,
@@ -282,7 +288,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pulse_admin: false,                            // Pulse operator hub — retention oversight, not a staff surface
     events: true, bookings: true, races: true,    // race-day starts/finishes are a front-of-house duty
     email: false, whatsapp: false, sms: false,
-    schedule: true, attendance_reports: false, assistant: false, studio_management: false,
+    schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true,
     device_control: false,                         // on-site device control — not a staff surface
     // Studio Management children — all off for staff.
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
@@ -317,7 +323,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pulse_admin: false,
     events: true, bookings: true, races: true,       // front desk runs the booking desk
     email: false, whatsapp: true, sms: false,        // WhatsApp inbox is the front-desk channel
-    schedule: true, attendance_reports: false, assistant: false, studio_management: false,
+    schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true,
     device_control: false,
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: false,
@@ -348,6 +354,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     email: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: false,    // head coaches don't see attendance — owner/manager only
     assistant: true, studio_management: false,    // explicit opt-in
+    class_timer: true,                             // running the class timer is a coaching duty
     device_control: false,                         // owner + manager by default; grant per-user
     // Studio Management children — all off for head_coach (explicit opt-in by admin).
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
@@ -377,7 +384,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pulse_admin: true,                             // managers run the Pulse operator hub
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
-    schedule: true, attendance_reports: true, assistant: true, studio_management: true,
+    schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
     device_control: true,                          // managers run on-site device control
     // Studio Management children — manager gets TV displays (marketing
     // surface they handle day-to-day). Contracts + imports stay
@@ -409,7 +416,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     pulse_admin: true,
     events: true, bookings: true, races: true,
     email: true, whatsapp: true, sms: true,
-    schedule: true, attendance_reports: true, assistant: true, studio_management: true,
+    schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
     device_control: true,
     // Studio Management children — owner gets contracts + TV displays
     // by default (mirroring the old role-only gates). Imports stay
@@ -982,6 +989,9 @@ export const CROSS_PLATFORM_DASHBOARD_KEYS = Object.freeze([
 export const CROSS_PLATFORM_KEYS = Object.freeze([
   ...CROSS_PLATFORM_DASHBOARD_KEYS,
   'studio_management',
+  // CLASS-TIMER-PERM.1 — one toggle governs the web timer page and
+  // the mobile timer screen, same shape as studio_management.
+  'class_timer',
   // INV-M.1 — the mobile bookkeeper queue (app/invoices/queue.jsx:
   // bulk extract + the Not-in-Xero supplier flag) reads the SAME
   // top-level key the /api/invoices-inbox bulk routes enforce, so

@@ -8,9 +8,11 @@
 //   • Class timer      → /timer  (Myzone-style interval timer on the TV)
 //   • TV displays      → /tv     (view TVs + current content + clear)
 //
-// AC + Door + Class timer gate on `studio_management` (cross-platform key,
-// mig 093); TV gates on the `tv_displays` mobile permission. Reached from
-// the Studio tile in More (or the bottom bar if pinned there).
+// AC + Door gate on `studio_management` (cross-platform key, mig 093);
+// Class timer gates on `class_timer` (CLASS-TIMER-PERM.1 — every role by
+// default, so coaches can run the timer without door unlock); TV gates on
+// the `tv_displays` mobile permission. Reached from the Studio tile in
+// More (or the bottom bar if pinned there).
 
 import { View, Text, Pressable, ScrollView } from 'react-native'
 import { useRouter } from 'expo-router'
@@ -43,11 +45,12 @@ export default function StudioHub() {
   const router = useRouter()
 
   const canStudio = canMobile(profile, 'studio_management', activeLocation)
+  const canTimer = canMobile(profile, 'class_timer', activeLocation)
   const canTv = canMobile(profile, 'tv_displays', activeLocation)
 
   // Defence in depth — the tab/tile won't show without access, but a
   // hand-typed deep link would otherwise reach the hub.
-  if (!canStudio && !canTv) {
+  if (!canStudio && !canTimer && !canTv) {
     return (
       <View className="flex-1 bg-un1t-bg items-center justify-center p-6">
         <Text className="text-sm text-un1t-subtle text-center">
@@ -81,7 +84,7 @@ export default function StudioHub() {
             onPress={() => router.push('/doors')}
           />
         )}
-        {canStudio && (
+        {canTimer && (
           <ChoiceCard
             icon="stopwatch-outline"
             tint="#10B981"

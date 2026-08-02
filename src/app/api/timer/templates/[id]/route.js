@@ -2,15 +2,16 @@
 // PUT    /api/timer/templates/[id]   — update (re-validate structure)
 // DELETE /api/timer/templates/[id]   — soft-delete (is_active=false)
 //
-// CLASS-TIMER. Manager-gated; loads the row first and checks location access,
-// returning 404 (not 403) on a missing/foreign row so ids can't be enumerated.
+// CLASS-TIMER. Gated by the `class_timer` permission (CLASS-TIMER-PERM.1);
+// loads the row first and checks location access, returning 404 (not 403) on
+// a missing/foreign row so ids can't be enumerated.
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES } from '@/lib/schemas'
 import { validateStructure, buildTimeline } from '@/lib/class-timer'
 
 export const runtime = 'nodejs'
@@ -35,7 +36,7 @@ async function loadOwned(db, user, id) {
 
 export async function GET(_request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasPermission(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const { id } = await params
@@ -47,7 +48,7 @@ export async function GET(_request, { params }) {
 
 export async function PUT(request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasPermission(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const { id } = await params
@@ -81,7 +82,7 @@ export async function PUT(request, { params }) {
 
 export async function DELETE(_request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasPermission(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const { id } = await params
