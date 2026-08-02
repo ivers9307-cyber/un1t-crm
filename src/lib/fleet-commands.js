@@ -67,6 +67,16 @@ export const ACTIONS = Object.freeze({
     danger: 'safe',
     blurb: 'Reads the last 300 journal lines. Changes nothing on the device.',
   },
+  screenshot: {
+    label: 'Screenshot',
+    roles: ['kiosk'],
+    // fleet_admin, NOT fleet_restart. A coach on shift can restart a frozen
+    // board; that must not also let them photograph the room's live heart
+    // rates. See mig 477 — the capture is special-category data.
+    permission: 'fleet_admin',
+    danger: 'safe',
+    blurb: 'Captures what the screen is showing right now. Kept for 24 hours, then deleted.',
+  },
   redeploy_bridge: {
     label: 'Redeploy bridge',
     roles: ['bridge'],

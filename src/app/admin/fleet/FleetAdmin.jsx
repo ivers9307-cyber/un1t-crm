@@ -52,6 +52,7 @@ export default function FleetAdmin({ devices, commands, locations, isMaster }) {
   const [typed, setTyped] = useState('')
   const [notice, setNotice] = useState(null)
   const [token, setToken] = useState(null)
+  const [shot, setShot] = useState(null)
 
   // Shut-down devices never alert, so they need somewhere to stay visible.
   const poweredOff = devices.filter((d) => d.health?.suppressed_until)
@@ -90,6 +91,20 @@ export default function FleetAdmin({ devices, commands, locations, isMaster }) {
     if (ACTIONS[action].danger === 'safe') return issue(device.device_name, action)
     setConfirming({ device, action })
     setTyped('')
+  }
+
+  // The bucket is private, so a fresh signed URL is minted per view rather
+  // than a link being stored anywhere. It expires in minutes.
+  async function viewShot(commandId, deviceName) {
+    setShot({ deviceName, url: null, loading: true })
+    try {
+      const res = await fetch(`/api/admin/fleet/screenshot/${commandId}`)
+      const json = await res.json()
+      if (json.ok) setShot({ deviceName, url: json.url, loading: false })
+      else setShot({ deviceName, url: null, loading: false, error: json.error || 'Not available' })
+    } catch {
+      setShot({ deviceName, url: null, loading: false, error: 'Could not load' })
+    }
   }
 
   async function rotateToken(deviceName) {
@@ -241,6 +256,15 @@ export default function FleetAdmin({ devices, commands, locations, isMaster }) {
                     {' · '}{c.device_name}
                     {c.profiles?.full_name ? ` · ${c.profiles.full_name}` : ''}
                     {c.error ? <span className="text-red-700"> · {c.error}</span> : null}
+                    {c.screenshot_path && (
+                      <button
+                        type="button"
+                        onClick={() => viewShot(c.id, c.device_name)}
+                        className="ml-2 underline underline-offset-2 text-un1t-subtle hover:text-un1t-text"
+                      >
+                        view
+                      </button>
+                    )}
                   </span>
                   <span className="flex items-center gap-2 shrink-0">
                     <span className="text-xs text-un1t-subtle">{timeAgo(c.issued_at)}</span>
@@ -307,6 +331,32 @@ export default function FleetAdmin({ devices, commands, locations, isMaster }) {
                 {ACTIONS[confirming.action].label}
               </Button>
             </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={Boolean(shot)}
+        onClose={() => setShot(null)}
+        title={shot ? `${shot.deviceName} — screen capture` : ''}
+      >
+        {shot && (
+          <div className="space-y-3">
+            {shot.loading && <p className="text-sm text-un1t-subtle">Loading…</p>}
+            {shot.error && <p className="text-sm text-red-700">{shot.error}</p>}
+            {shot.url && (
+              <>
+                {/* eslint-disable-next-line @next/next/no-img-element -- signed
+                    Supabase URL that expires in minutes; next/image would want
+                    a configured remote pattern for a host that changes. */}
+                <img src={shot.url} alt={`What ${shot.deviceName} is displaying`}
+                     className="w-full rounded-lg border border-un1t-border" />
+                <p className="text-xs text-un1t-subtle">
+                  Deleted automatically after 24 hours. Shows member names and
+                  heart rates, so treat it as health data.
+                </p>
+              </>
+            )}
           </div>
         )}
       </Modal>

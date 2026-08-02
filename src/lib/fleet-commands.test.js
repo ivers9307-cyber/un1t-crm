@@ -64,9 +64,20 @@ describe('the allowlist', () => {
   it('gates every destructive action behind fleet_admin', () => {
     for (const name of ACTION_NAMES) {
       const { danger, permission } = ACTIONS[name]
-      if (danger === 'safe') expect(permission).toBe('fleet_restart')
-      else expect(permission, `${name} must not be a safe-tier action`).toBe('fleet_admin')
+      if (danger !== 'safe') {
+        expect(permission, `${name} must not be a safe-tier action`).toBe('fleet_admin')
+      }
     }
+  })
+
+  it('keeps screenshot out of the coach tier even though it is harmless to the device', () => {
+    // The danger axis is about the DEVICE; this one is gated on PRIVACY. A
+    // board capture carries member first names and live BPM, so restarting a
+    // frozen TV must not come with photographing the room's vitals.
+    expect(ACTIONS.screenshot.danger).toBe('safe')
+    expect(ACTIONS.screenshot.permission).toBe('fleet_admin')
+    expect(availableActions('kiosk', only('fleet_restart')).map((a) => a.action))
+      .not.toContain('screenshot')
   })
 
   it('marks shutdown, and only shutdown, as stranding', () => {
@@ -124,6 +135,7 @@ describe('permission mapping', () => {
 
   it('gives a bridge admin the bridge actions and no kiosk ones', () => {
     const offered = availableActions('bridge', always).map((a) => a.action)
+    // No screenshot: a bridge is headless.
     expect(offered.sort()).toEqual(['pull_logs', 'reboot', 'redeploy_bridge', 'shutdown'])
   })
 })
