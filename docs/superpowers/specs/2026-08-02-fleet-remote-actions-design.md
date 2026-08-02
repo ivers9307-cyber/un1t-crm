@@ -3,7 +3,7 @@
 **Status:** design, not built
 **Date:** 2026-08-02
 **Follows:** BRIDGE-STATUS.1 (#1193), FLEET-ALERT.1 (#1194)
-**Decisions taken with Richard, 2026-08-02:** all five actions; **master-only**; **desktop CRM only**.
+**Decisions taken with Richard, 2026-08-02:** all five actions; **two permission tiers split by blast radius**; **desktop CRM first**; location mapping in scope.
 
 ---
 
@@ -23,14 +23,13 @@ Two working tools already cover the ad-hoc case, and a third covers monitoring:
 | Tailscale browser SSH | a real shell on any Pi, from any browser, already enabled (`action: accept` in the ACL) |
 | fleet-health cron | alerts when a Pi is unreachable or its bridge service dies |
 
-**This feature adds no capability Richard does not already have.** With master-only scope it serves exactly one person, who owns both tools above. That is worth stating up front, because it sets the bar: the justification is *convenience and audit*, not access. Every hour spent here is an hour not spent on something only this feature can do.
+**For Richard alone, this feature adds no capability he does not already have** — he owns both tools above. An earlier draft of this spec was master-only, and on that scope the honest justification was convenience plus an audit trail, which is thin.
 
-Two things it genuinely adds:
+The two-tier model is what changes that calculus. Three things it adds that neither tool can:
 
-1. **A record.** `pi run` leaves nothing behind. A command table says who restarted what, when, and whether it worked — which matters when a Pi has been misbehaving for a week and you are trying to remember what you already tried.
-2. **No laptop, no shell.** Even on desktop, "click Restart browser" beats opening a terminal, recalling the device name, and waiting on SSH.
-
-Richard chose **desktop only** over mobile-first. Noted and followed. It does mean the feature competes most directly with the CLI, which is the environment where the CLI is strongest — so keep the build small.
+1. **It reaches people who are not Richard.** A coach can see the frozen board and now fix it. `pi` and Tailscale SSH will only ever be in one person's hands, however good they are.
+2. **A record.** `pi run` leaves nothing behind. A command table says who restarted what, when, and whether it worked — which matters when a Pi has been flaky for a week and you are trying to remember what you already tried.
+3. **No laptop, no shell.** Even for Richard, "click Restart browser" beats opening a terminal and recalling the device name.
 
 ## The five actions
 
@@ -149,15 +148,71 @@ Two minutes is deliberately tight. These are interactive actions; if it did not 
 
 **The failure mode to watch:** a Pi that is rebooted and never comes back is now silent for 10 minutes and then alerts normally. That is correct. A Pi that is *shut down* and never comes back never alerts — also correct, because you turned it off, but it means a forgotten shutdown is invisible. Mitigate with a standing list on the page: **"Devices you have powered off: stillorgan-tv2, since 16:40 yesterday."** Not an alert; a visible piece of state that a human can notice.
 
-## Authorisation
+## Authorisation — two tiers, split by blast radius
 
-Master-only, enforced in **three** places, because service-role routes bypass RLS entirely and app code is the only real gate:
+The axis is **what the action can break**, not how senior the person is. This mirrors `equipment_admin` vs `equipment_inspect`, where setup is owner+master on desktop and the walk-round is universal on mobile.
 
-1. the page (`/admin/fleet`) redirects non-masters
-2. `POST /api/admin/fleet/commands` returns 403 for non-masters
+| Key | Actions | Default |
+|---|---|---|
+| `fleet_restart` | `restart_kiosk`, `pull_logs` | on for coach, head coach, manager, owner, master — anyone on shift |
+| `fleet_admin` | `reboot`, `shutdown`, `redeploy_bridge` | owner + master only |
+
+The reasoning is about who is standing next to the problem. A frozen leaderboard is noticed by a coach mid-class. Today the fix path is coach → messages Richard → Richard finds a laptop → SSH → `pkill chromium`, which is hours of dead screen for a five-second fix, and the bottleneck is one person. `restart_kiosk` cannot destroy anything: worst case someone presses it twice and the board blinks. Handing that button to the person who can already see the problem is the only thing this feature does that the `pi` CLI and Tailscale SSH structurally cannot, because those will only ever be in Richard's hands.
+
+Everything that can strand a device stays behind `fleet_admin`.
+
+Enforced in **three** places, because service-role routes bypass RLS entirely and app code is the only real gate:
+
+1. the page redirects anyone without at least `fleet_restart`
+2. `POST /api/admin/fleet/commands` checks the **per-action** key — not the page's key — and 403s otherwise
 3. RLS on `fleet_commands` denies `anon`/`authenticated` outright, as defence in depth
 
-Every issued command records `issued_by`. With one master today that reads as pointless; it is not — it is what makes the table an audit log rather than a queue, and it is what lets this widen to managers later without a migration.
+Location scope rides on the existing mechanism: non-masters may only act on devices at a location in `getUserLocationIds(user)`, exactly as `/api/live/[locationId]/*` already does. That is what makes the location mapping below load-bearing rather than cosmetic — without it there is no way to stop a Stillorgan coach restarting a Hatch TV.
+
+Every command records `issued_by`, which is what makes the table an audit log rather than a queue.
+
+### The surface tension worth naming
+
+Richard chose desktop-first. The safe tier's whole rationale is a coach holding a phone on the gym floor, and that value is **mostly unrealised until this is on mobile** — a coach mid-class is not walking to a desktop. The front-desk studio shell (`studio_devices`, PIN login) partly covers it, so desktop-first is not useless, but P3 below is where the coach tier actually starts paying.
+
+## Location mapping — much smaller than it looked
+
+I estimated this at half a day of extra work. That was wrong, and the correction matters because it changes what P1 costs.
+
+**The workout-results pipeline Richard needs this for already exists, and is already location-scoped.** Checked against the live database:
+
+- `contact_devices` permanently binds a strap to a member, and `resolveStrapsForBatch` auto-routes it to that member's session **every future class** — this is the "map workout results to the customer profile" path, and it is built
+- `hr_samples.session_id` carries results to a session, and from there to a contact
+- the entire `/api/live/[locationId]/*` surface is per-location, coach-role gated, and already enforces `getUserLocationIds(user)`
+- `ble_bridges` carries **both** `location_id` and `tailscale_hostname`, populated in production: `stillorgan-bridge` → UN1T Stillorgan
+- `tv_displays` carries `location_id` per screen
+
+So for the bridge, `device_name → location` **already joins today**, via the `tailscale_hostname` column FLEET-ALERT.1 added for an unrelated reason.
+
+**The entire gap is the two kiosk Pis.** They exist in `fleet.yaml` and in Tailscale, and nowhere in the CRM. `tv_displays` has one row ("Promo tv") which is a *display registration* — a token for a browser to pull content — not a record of the Raspberry Pi driving it. Nothing in the database knows that `stillorgan-tv1` is a machine at Stillorgan.
+
+### Recommended: a small `fleet_devices` registry
+
+```sql
+create table fleet_devices (
+  device_name text primary key,        -- matches the Tailscale hostname
+  location_id uuid not null references locations(id),
+  role        text not null check (role in ('kiosk','bridge')),
+  label       text                     -- "TV 1 (leaderboard)"
+);
+```
+
+Seeded from `fleet.yaml`, which is already the source of truth for what exists. `fleet_device_health.device_name` gains a foreign key to it.
+
+Why a registry rather than bolting `location_id` onto `fleet_device_health`:
+
+- it carries **`role`**, which the action model needs anyway — `restart_kiosk` must not be offered for a bridge, and `redeploy_bridge` must not be offered for a kiosk
+- `fleet_device_health` becomes health *about* a known device, rather than a free-floating row keyed on a string that arrived from Tailscale. Today a typo'd hostname silently creates a phantom device
+- it does not overload `tv_displays`, which means a registered *screen*, not a computer
+
+Not doing: parsing `stillorgan-` off the front of the hostname. That is exactly the clever-looking shortcut behind this morning's dead-code defect, where `hardware_id` and the Tailscale hostname looked related and weren't.
+
+Realistic cost: one table, one seed, one join in the existing cron. Well under the half-day I quoted, because the hard part — results to member, scoped per location — was already built.
 
 ## The Pi agent
 
@@ -173,16 +228,18 @@ Delivered as a new component in `un1t-pi/src/roles/common.js` (it applies to eve
 
 ## Phasing
 
-**P1 — prove the path.** Migration, agent, `POST /api/admin/fleet/commands`, result endpoint, `/admin/fleet` page, actions `restart_kiosk` + `reboot` + `shutdown`, maintenance-window suppression. This is the whole architecture; the remaining two actions are additions to a map.
+**P1 — prove the path.** `fleet_devices` registry + seed, `fleet_commands` migration, the Pi agent, `POST /api/admin/fleet/commands`, the result endpoint, the page, actions `restart_kiosk` + `reboot` + `shutdown`, both permission keys, and maintenance-window suppression. This is the whole architecture; the remaining actions are entries in a map.
 
-**P2 — the rest.** `redeploy_bridge` and `pull_logs`. `pull_logs` is separated because it is the only action that returns a *payload* rather than an exit code, which pulls in output truncation, a viewer, and a retention decision.
+**P2 — the rest of the actions.** `redeploy_bridge` and `pull_logs`. `pull_logs` is separated because it is the only action returning a *payload* rather than an exit code, which pulls in truncation, a viewer, and a retention decision.
 
-Ship P1 dark behind the absence of the agent: with no Pi running the agent, commands simply expire, and nothing else in the CRM changes.
+**P3 — mobile for the safe tier.** `fleet_restart` on the mobile app, `webEquivalent: 'fleet_restart'`. This is where the coach tier stops being theoretical, per the surface tension above.
+
+Ship P1 dark behind the absence of the agent: with no Pi running it, commands simply expire and nothing else in the CRM changes.
 
 ## What this does not do
 
 - **No arbitrary commands, ever.** `pi run` and Tailscale SSH remain the tools for that, and they should. The moment this grows a text box it becomes remote root execution with a web UI.
-- **No mobile.** Richard's call. The mobile app is where "TV frozen, no laptop" actually bites, so this may want revisiting.
+- **No mobile in P1.** Deferred to P3 rather than dropped, because the coach tier is where the feature earns its keep and a coach is holding a phone.
 - **No scheduling.** Actions fire now or expire.
 - **No fix for the black-screen kiosk.** A Pi that is up, on the tailnet, and showing nothing still reports healthy to fleet-health — `restart_kiosk` gives you a *remedy* to try, but not *detection*. That still needs device-side reporting.
 
