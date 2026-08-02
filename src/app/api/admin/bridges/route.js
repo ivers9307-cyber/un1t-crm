@@ -27,6 +27,13 @@ const BridgeCreateSchema = z.object({
   name:        z.string().min(1).max(80),
   location_id: uuidLike,
   hardware_id: z.string().min(1).max(100),
+  // FLEET-ALERT.1 (mig 473) — the Tailscale device this bridge runs on, so
+  // fleet-health can grade it on service health and not just reachability.
+  // Optional: a bridge that isn't on the tailnet is still a valid bridge.
+  // Empty string normalises to null so the partial unique index doesn't see
+  // '' as a real value shared by every unlinked row.
+  tailscale_hostname: z.string().max(100).trim().optional()
+    .transform((v) => (v ? v : null)),
 })
 
 export const runtime = 'nodejs'
@@ -43,7 +50,12 @@ export async function POST(request) {
 
   const v = await validateBody(request, BridgeCreateSchema)
   if (!v.ok) return v.response
-  const { name, location_id: locationId, hardware_id: hardwareId } = v.data
+  const {
+    name,
+    location_id: locationId,
+    hardware_id: hardwareId,
+    tailscale_hostname: tailscaleHostname,
+  } = v.data
 
   const { raw, hash } = issueBridgeToken()
 
@@ -54,17 +66,23 @@ export async function POST(request) {
       name,
       location_id: locationId,
       hardware_id: hardwareId,
+      tailscale_hostname: tailscaleHostname,
       api_token_hash: hash,
       status: 'offline',
     })
-    .select('id, name, hardware_id, location_id, status, created_at')
+    .select('id, name, hardware_id, tailscale_hostname, location_id, status, created_at')
     .single()
 
   if (error) {
     if (/duplicate key/i.test(error.message || '')) {
+      // Two unique constraints can land here — name the one that tripped so
+      // the operator isn't told to change the wrong field.
+      const onHostname = /tailscale_hostname/i.test(error.message || '')
       return NextResponse.json({
         ok: false,
-        error: 'A bridge with this hardware_id already exists.',
+        error: onHostname
+          ? 'Another bridge is already linked to this Tailscale hostname.'
+          : 'A bridge with this hardware_id already exists.',
       }, { status: 409 })
     }
     logWarn('bridge-admin', 'failed to insert ble_bridges', { err: error })
@@ -98,7 +116,7 @@ export async function GET() {
   const db = createServerClient()
   const { data, error } = await db
     .from('ble_bridges')
-    .select('id, name, hardware_id, location_id, status, software_version, last_seen_at, last_seen_straps, created_at')
+    .select('id, name, hardware_id, tailscale_hostname, location_id, status, software_version, last_seen_at, last_seen_straps, created_at')
     .order('created_at', { ascending: false })
   if (error) {
     return NextResponse.json({ ok: false, error: error.message }, { status: 400 })
