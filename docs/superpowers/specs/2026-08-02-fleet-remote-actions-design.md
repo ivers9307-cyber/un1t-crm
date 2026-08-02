@@ -187,11 +187,15 @@ I estimated this at half a day of extra work. That was wrong, and the correction
 - `ble_bridges` carries **both** `location_id` and `tailscale_hostname`, populated in production: `stillorgan-bridge` → UN1T Stillorgan
 - `tv_displays` carries `location_id` per screen
 
-So for the bridge, `device_name → location` **already joins today**, via the `tailscale_hostname` column FLEET-ALERT.1 added for an unrelated reason.
+So `device_name → location` already joins **for the bridge**, via the `tailscale_hostname` column FLEET-ALERT.1 added for an unrelated reason.
 
-**The entire gap is the two kiosk Pis.** They exist in `fleet.yaml` and in Tailscale, and nowhere in the CRM. `tv_displays` has one row ("Promo tv") which is a *display registration* — a token for a browser to pull content — not a record of the Raspberry Pi driving it. Nothing in the database knows that `stillorgan-tv1` is a machine at Stillorgan.
+**That join is not the model to generalise from.** `ble_bridges` became the CRM's de facto device registry by accident of build order — it was built first, for HR — and taking it as the template makes every other Pi look like a special case of a bridge. It isn't. The bridge is one role among three, and it holds no privileged position: no kiosk routes through it, and at runtime a kiosk talks only to the CRM (`roles/kiosk.js:59` points Chromium at `${crmBaseUrl}/tv/${location_id}?kiosk=1`).
 
-### Recommended: a small `fleet_devices` registry
+**The kiosks already know their own location.** `fleet.yaml` carries `location_id` per site, and provisioning bakes it into that Chromium URL. Every Pi has known where it lives since the day it was imaged. The CRM simply never wrote it down — `tv_displays` holds a display *registration* (a token for a browser to pull content), not a record of the machine driving the screen.
+
+So this is not new information to go and discover. It is the CRM catching up with the manifest.
+
+### `fleet_devices` — the primary record for every Pi
 
 ```sql
 create table fleet_devices (
@@ -206,6 +210,7 @@ Seeded from `fleet.yaml`, which is already the source of truth for what exists. 
 
 Why a registry rather than bolting `location_id` onto `fleet_device_health`:
 
+- **every Pi is a first-class row, whatever its role.** `ble_bridges` stops being the registry and becomes what it should always have been: bridge-specific detail (HR token, strap state, service status) hanging off a device that already exists. A kiosk is not a bridge with missing columns
 - it carries **`role`**, which the action model needs anyway — `restart_kiosk` must not be offered for a bridge, and `redeploy_bridge` must not be offered for a kiosk
 - `fleet_device_health` becomes health *about* a known device, rather than a free-floating row keyed on a string that arrived from Tailscale. Today a typo'd hostname silently creates a phantom device
 - it does not overload `tv_displays`, which means a registered *screen*, not a computer
@@ -226,11 +231,26 @@ New, small, and it must exist on **all three roles** — the kiosks currently ru
 
 Delivered as a new component in `un1t-pi/src/roles/common.js` (it applies to every role), which means all three Stillorgan Pis need a `pi deploy` — this is not a CRM-only change.
 
+### The agent gives the kiosks a voice — which closes the black-screen gap
+
+Today the bridge grades on two signals (tailnet reachability **and** `deriveBridgeStatus` over `ble_bridges.last_seen_at`), while a kiosk grades on reachability alone. That asymmetry is not architectural favouritism — the bridge is simply the only device currently running software that talks back. But it is why **a kiosk that is powered, on the tailnet, and displaying a black screen still grades `ok`**, which is the most likely real-world failure and the one fleet-health cannot see.
+
+Putting an agent on every Pi fixes that as a side effect, and the fix belongs here rather than in a dependency on the bridge:
+
+- **Liveness comes free from Realtime presence.** The agent already holds the connection; presence tells the CRM it is there without a single extra request.
+- **State is reported on change**, not on a timer — Chromium exited, the page failed to load, the last successful render timestamp. A low-frequency keepalive (~5 min) covers the case where nothing changes.
+
+`gradeDevice` then takes a third input alongside `bridgeRow`: an agent report. A kiosk reachable on the tailnet whose agent says Chromium is dead grades `degraded` and alerts, instead of grading `ok` and lying.
+
+**Trap, and it is a real one:** presence is *instant*, and wiring it straight to alerting would page you on every WiFi blip and every 04:00 reboot — destroying the property FLEET-ALERT.1 was built to protect. The 15-minute patience and the maintenance window stay exactly as they are. Presence enriches the grade; it does not shorten the fuse.
+
+**On the polling objection:** this is not the thing Richard rejected. That was a Pi making repeated empty round-trips *to ask whether a command exists*. Presence costs nothing per interval, and a state report only happens when there is something to say. Every message carries payload.
+
 ## Phasing
 
 **P1 — prove the path.** `fleet_devices` registry + seed, `fleet_commands` migration, the Pi agent, `POST /api/admin/fleet/commands`, the result endpoint, the page, actions `restart_kiosk` + `reboot` + `shutdown`, both permission keys, and maintenance-window suppression. This is the whole architecture; the remaining actions are entries in a map.
 
-**P2 — the rest of the actions.** `redeploy_bridge` and `pull_logs`. `pull_logs` is separated because it is the only action returning a *payload* rather than an exit code, which pulls in truncation, a viewer, and a retention decision.
+**P2 — the rest of the actions, plus agent reporting.** `redeploy_bridge` and `pull_logs`; `pull_logs` is separated because it is the only action returning a *payload* rather than an exit code, which pulls in truncation, a viewer, and a retention decision. Agent reporting lands here too — presence plus on-change state, and the third input to `gradeDevice` — which is what finally makes a black-screen kiosk visible.
 
 **P3 — mobile for the safe tier.** `fleet_restart` on the mobile app, `webEquivalent: 'fleet_restart'`. This is where the coach tier stops being theoretical, per the surface tension above.
 
@@ -241,7 +261,7 @@ Ship P1 dark behind the absence of the agent: with no Pi running it, commands si
 - **No arbitrary commands, ever.** `pi run` and Tailscale SSH remain the tools for that, and they should. The moment this grows a text box it becomes remote root execution with a web UI.
 - **No mobile in P1.** Deferred to P3 rather than dropped, because the coach tier is where the feature earns its keep and a coach is holding a phone.
 - **No scheduling.** Actions fire now or expire.
-- **No fix for the black-screen kiosk.** A Pi that is up, on the tailnet, and showing nothing still reports healthy to fleet-health — `restart_kiosk` gives you a *remedy* to try, but not *detection*. That still needs device-side reporting.
+- **The black-screen kiosk is fixed in P2, not P1.** P1 ships the *remedy* (`restart_kiosk`); detection arrives with agent reporting. Until then a dark screen still grades `ok`.
 
 ## Open questions
 
