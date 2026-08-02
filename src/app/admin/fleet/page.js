@@ -57,7 +57,7 @@ export default async function FleetPage() {
       .select('device_name, state, state_since, suppressed_until, last_checked')
       .in('device_name', names),
     db.from('fleet_commands')
-      .select('id, device_name, action, status, issued_at, finished_at, error, profiles:issued_by(full_name)')
+      .select('id, device_name, action, status, issued_at, finished_at, error, screenshot_path, profiles:issued_by(full_name)')
       .in('device_name', names)
       .order('issued_at', { ascending: false })
       .limit(25),

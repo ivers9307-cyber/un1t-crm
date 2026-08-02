@@ -212,17 +212,72 @@ export async function GET(request) {
   // heartbeat row and its own way to go stale.
   const expired = await expireStaleCommands(db)
 
+  // FLEET-CMD.3 — screenshots are not an archive.
+  //
+  // A board capture holds member first names and live BPM. It exists to answer
+  // "what is on that screen right now"; a day later it answers nothing and is
+  // purely a liability. Pruning here rather than on a lifecycle rule keeps the
+  // retention visible in the codebase, where a reviewer will see it.
+  const pruned = await pruneScreenshots(db)
+
   await stampHeartbeat('fleet-health', {
     configured: true,
     checked: rows.length,
     alerted: alerts.length,
     expired,
+    pruned,
   })
 
   return NextResponse.json({
     success: true,
-    data: { checked: rows.length, alerted: alerts.length, expired },
+    data: { checked: rows.length, alerted: alerts.length, expired, pruned },
   })
+}
+
+/** Screenshot retention, in hours. See mig 477 — this is health data. */
+const SCREENSHOT_TTL_HOURS = 24
+
+/**
+ * Delete captures older than the retention window, objects first.
+ *
+ * Objects before rows on purpose: if this dies halfway, an orphaned ROW with a
+ * dead path is harmless (the signed-url route 404s), whereas an orphaned
+ * OBJECT is member health data with nothing left pointing at it, and nothing
+ * would ever come back to remove it.
+ *
+ * Never throws — a prune failure must not fail the tick that alerts on dark
+ * devices.
+ */
+async function pruneScreenshots(db) {
+  try {
+    const cutoff = new Date(Date.now() - SCREENSHOT_TTL_HOURS * 3600_000).toISOString()
+    const { data: stale } = await db
+      .from('fleet_commands')
+      .select('id, screenshot_path')
+      .not('screenshot_path', 'is', null)
+      .lt('issued_at', cutoff)
+      .limit(500)
+
+    if (!stale?.length) return 0
+
+    const { error: rmError } = await db.storage
+      .from('fleet-screenshots')
+      .remove(stale.map((c) => c.screenshot_path))
+    if (rmError) {
+      logWarn('fleet-health', 'failed to delete screenshots', { err: rmError })
+      return 0
+    }
+
+    await db
+      .from('fleet_commands')
+      .update({ screenshot_path: null })
+      .in('id', stale.map((c) => c.id))
+
+    return stale.length
+  } catch (err) {
+    logWarn('fleet-health', 'failed to prune screenshots', { err: String(err) })
+    return 0
+  }
 }
 
 /**
