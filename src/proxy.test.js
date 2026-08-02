@@ -97,4 +97,33 @@ describe('proxy Bearer gate', () => {
     expect(admitted(res)).toBe(false)
     expect(res.status).toBe(307)
   })
+
+  // FLEET-CMD.1 — self-guarding device routes must reach their handler.
+  //
+  // These 307'd to /login on stillorgan-tv2 (2026-08-02): the agent received
+  // the login PAGE, tried to JSON.parse the HTML, and crash-looped. Nothing in
+  // CI could catch it, because no test ran the agent against a real proxy.
+  describe('device-authenticated API prefixes', () => {
+    it('lets the fleet agent through to its own bearer check', async () => {
+      const res = await proxy(makeReq({ path: '/api/fleet/commands/next' }))
+      expect(admitted(res)).toBe(true)
+    })
+
+    it('lets the fleet agent post a result', async () => {
+      const res = await proxy(makeReq({ path: '/api/fleet/commands/abc/result' }))
+      expect(admitted(res)).toBe(true)
+    })
+
+    it('still gates the STAFF fleet surface behind a session', async () => {
+      // /api/admin/fleet/* issues commands and mints device tokens. If the
+      // prefix match ever loosened to catch it, anyone could shut down a Pi.
+      const res = await proxy(makeReq({ path: '/api/admin/fleet/commands' }))
+      expect(admitted(res)).toBe(false)
+    })
+
+    it('keeps the bridge prefix working (regression)', async () => {
+      const res = await proxy(makeReq({ path: '/api/bridge/heartbeat' }))
+      expect(admitted(res)).toBe(true)
+    })
+  })
 })
