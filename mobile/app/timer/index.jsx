@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
+import { supabase } from '../../lib/supabase'
 import {
   buildTimeline,
   computeEffectiveElapsedMs,
@@ -103,6 +104,18 @@ export default function TimerScreen() {
     pollRef.current = setInterval(loadActive, POLL_MS)
     return () => clearInterval(pollRef.current)
   }, [allowed, loadTemplates, loadActive])
+
+  // TIMER-PUSH.1 — realtime nudge: the timer routes broadcast on
+  // `timer:<locationId>` after every start/pause/resume/skip/stop, so this
+  // screen reflects another device's action immediately instead of waiting
+  // out the 2s poll (which stays as the fallback).
+  useEffect(() => {
+    if (!allowed || !locationId) return undefined
+    const chan = supabase.channel(`timer:${locationId}`)
+    chan.on('broadcast', { event: 'timer' }, () => loadActive())
+    chan.subscribe()
+    return () => { supabase.removeChannel(chan) }
+  }, [allowed, locationId, loadActive])
 
   // Refresh on focus (a master could start/stop a run from web or another
   // device while this screen is backgrounded).

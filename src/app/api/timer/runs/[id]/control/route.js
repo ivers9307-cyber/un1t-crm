@@ -10,6 +10,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
+import { broadcastTimerPing } from '@/lib/timer-broadcast'
 import { nextRunState, buildTimeline } from '@/lib/class-timer'
 
 export const runtime = 'nodejs'
@@ -53,5 +54,6 @@ export async function POST(request, { params }) {
     .select('*')
     .single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  await broadcastTimerPing(run.location_id)
   return NextResponse.json({ success: true, run: data })
 }

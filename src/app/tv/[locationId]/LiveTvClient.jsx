@@ -34,6 +34,7 @@ import {
   classDidEnd,
 } from '@/lib/tv-theatre'
 import { nextPollDelay, ACTIVE_POLL_MS } from '@/lib/live-poll'
+import { createBrowserClient } from '@/lib/supabase'
 import { graftDisplay, graftBody, graftMono } from '@/fonts/graft'
 import { zoneColorDark, dominantZone } from '@/lib/tv-zone-colors'
 
@@ -111,6 +112,24 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
   const dataUrl = endpoint
     || `/api/public/live/${locationId}${device ? `?device=${encodeURIComponent(device)}` : ''}`
 
+  // TIMER-PUSH.1 — realtime nudge. The timer routes broadcast a ping on
+  // `timer:<locationId>` after every start/pause/resume/skip/stop; bumping
+  // this counter re-runs the poll effect below, which fetches immediately.
+  // The ping payload is never trusted — it only moves the NEXT poll to now,
+  // so a dropped websocket degrades to the normal cadence, never stale UI.
+  // The token-gated /tv/live/[token] variant has no locationId and keeps
+  // poll-only behaviour.
+  const [pushBump, setPushBump] = useState(0)
+  useEffect(() => {
+    if (!locationId) return undefined
+    let client
+    try { client = createBrowserClient() } catch { return undefined }
+    const chan = client.channel(`timer:${locationId}`)
+    chan.on('broadcast', { event: 'timer' }, () => setPushBump((b) => b + 1))
+    chan.subscribe()
+    return () => { client.removeChannel(chan) }
+  }, [locationId])
+
   // Poll the public endpoint. Self-scheduling so the cadence can adapt: fast
   // while a class / straps / timer is live, idle back-off otherwise, so an
   // all-day/overnight TV stops hammering the function when nothing is on.
@@ -139,7 +158,7 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
     }
     tick()
     return () => { cancelled = true; clearTimeout(handle) }
-  }, [dataUrl])
+  }, [dataUrl, pushBump])
 
   // Screen Wake Lock (kiosk only) — prevents display sleep on the Pi.
   useEffect(() => {
