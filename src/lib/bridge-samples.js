@@ -180,6 +180,32 @@ export function isBridgeOnline(bridges, nowMs = Date.now(), windowMs = BRIDGE_ON
   return last > 0 && (nowMs - last) < windowMs
 }
 
+/**
+ * Display status for ONE bridge row, derived from heartbeat freshness rather
+ * than trusting the stored column.
+ *
+ * `ble_bridges.status` only ever moves toward 'online' — the heartbeat route
+ * writes it and nothing writes it back, because a Pi that loses power cannot
+ * send a final 'offline'. The Stillorgan bridge therefore read ONLINE for 17
+ * days after it died, with "Last seen 15 days ago" rendered right next to it,
+ * and the outage went unnoticed.
+ *
+ * Freshness outranks the column, but only in one direction: a bridge that is
+ * still heartbeating and reporting 'error' is genuinely in error, and that
+ * must survive.
+ *
+ * Same window as the TV connection dot, so the two surfaces cannot disagree.
+ *
+ * @param {{ status?: string|null, last_seen_at?: string|null }|null} bridge
+ * @param {number} nowMs
+ * @param {number} windowMs
+ * @returns {'online'|'offline'|'error'}
+ */
+export function deriveBridgeStatus(bridge, nowMs = Date.now(), windowMs = BRIDGE_ONLINE_WINDOW_MS) {
+  if (!isBridgeOnline([bridge], nowMs, windowMs)) return 'offline'
+  return bridge?.status === 'error' ? 'error' : 'online'
+}
+
 // ── pure: build sample rows from a strap → session map ──────────
 
 /**
