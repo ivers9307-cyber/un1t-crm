@@ -16,7 +16,7 @@
 //     Suppressed devices never alert, by design, so a forgotten shutdown would
 //     otherwise be invisible precisely because the feature is working.
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button, Card, Modal, Field, EmptyState } from '@/components/ui'
 import { ACTIONS, availableActions } from '@/lib/fleet-commands'
 
@@ -46,13 +46,69 @@ function timeAgo(iso) {
   return `${Math.round(hrs / 24)}d ago`
 }
 
-export default function FleetAdmin({ devices, commands, locations, isMaster }) {
+// Poll cadences for the actions list.
+//
+// Deliberately adaptive rather than a flat interval. A command lands in about
+// a second, so what matters is the few seconds AFTER one is issued; the rest of
+// the time this page is a wall display that nobody is watching closely.
+//
+// Not Realtime, though the CRM uses it elsewhere: fleet_commands denies
+// anon/authenticated outright (mig 475), and postgres_changes honours RLS, so a
+// browser subscription would receive nothing. Opening a hole for it would
+// expose the whole command stream to any signed-in user to save a poll on one
+// admin page. The GET route already applies the per-location permission checks.
+const BUSY_POLL_MS = 2000
+const IDLE_POLL_MS = 20000
+
+export default function FleetAdmin({ devices, commands: initialCommands, isMaster }) {
   const [busy, setBusy] = useState(null)
   const [confirming, setConfirming] = useState(null)
   const [typed, setTyped] = useState('')
   const [notice, setNotice] = useState(null)
+  const [commands, setCommands] = useState(initialCommands)
   const [token, setToken] = useState(null)
   const [shot, setShot] = useState(null)
+
+  // Anything still in flight means a result is imminent — poll fast until the
+  // queue drains, then fall back so an idle page is not chatty.
+  const hasPending = commands.some((c) => c.status === 'pending' || c.status === 'claimed')
+  // Mirrored into a ref so the self-scheduling poll below reads the CURRENT
+  // value without the effect re-subscribing on every status change. Written in
+  // an effect, not during render — React 19 rejects touching a ref mid-render,
+  // and rightly: it makes the render impure.
+  const pendingRef = useRef(hasPending)
+  useEffect(() => { pendingRef.current = hasPending }, [hasPending])
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/fleet/commands', { cache: 'no-store' })
+      const json = await res.json()
+      if (json.ok && Array.isArray(json.commands)) setCommands(json.commands)
+    } catch {
+      // A failed poll is not worth surfacing — the next one is 2-20s away.
+    }
+  }, [])
+
+  useEffect(() => {
+    let handle
+    let cancelled = false
+    const tick = async () => {
+      // Nothing changes for a hidden tab, and a wall-mounted admin screen left
+      // open overnight should not poll until morning.
+      if (document.visibilityState === 'visible') await refresh()
+      if (!cancelled) handle = setTimeout(tick, pendingRef.current ? BUSY_POLL_MS : IDLE_POLL_MS)
+    }
+    handle = setTimeout(tick, pendingRef.current ? BUSY_POLL_MS : IDLE_POLL_MS)
+
+    // Catch up immediately on return rather than waiting out the idle interval.
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancelled = true
+      clearTimeout(handle)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [refresh])
 
   // Shut-down devices never alert, so they need somewhere to stay visible.
   const poweredOff = devices.filter((d) => d.health?.suppressed_until)
@@ -75,6 +131,8 @@ export default function FleetAdmin({ devices, commands, locations, isMaster }) {
           text: `${ACTIONS[action].label} sent to ${deviceName}. `
             + 'It expires in 2 minutes if the device is offline.',
         })
+        // Show the pending row straight away; the poll takes over from here.
+        refresh()
       }
     } catch {
       setNotice({ tone: 'error', text: 'Could not reach the server' })
