@@ -20,6 +20,7 @@
 // address on the resulting draft).
 
 import { createServerClient } from '@/lib/supabase'
+import { resolvePostmarkToken } from '@/lib/postmark-token'
 import { XeroError } from './client'
 
 const STORAGE_BUCKET = 'car-documents'
@@ -37,8 +38,8 @@ const DOC_TYPE_LABELS = {
 }
 
 function getPostmarkToken() {
-  const t = process.env.POSTMARK_API_KEY
-  if (!t) throw new XeroError('POSTMARK_API_KEY is not configured.')
+  const t = resolvePostmarkToken()
+  if (!t) throw new XeroError('Postmark is not configured (set POSTMARK_API_KEY).')
   return t
 }
 
