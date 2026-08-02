@@ -30,6 +30,17 @@ const PRESETS = [
   { name: 'EMOM — 10 min', structure: [
     { kind: 'round', count: 10, segments: [{ label: 'Minute', type: 'work', seconds: 60 }] },
   ] },
+  { name: '32 min — 2 × 16 (45/15) + water', structure: [
+    { kind: 'round', count: 16, segments: [
+      { label: 'Work', type: 'work', seconds: 45 },
+      { label: 'Rest', type: 'rest', seconds: 15 },
+    ] },
+    { kind: 'segment', label: 'Water break', type: 'rest', seconds: 120 },
+    { kind: 'round', count: 16, segments: [
+      { label: 'Work', type: 'work', seconds: 45 },
+      { label: 'Rest', type: 'rest', seconds: 15 },
+    ] },
+  ] },
 ]
 
 export default function TimerControlClient({ locationId }) {
