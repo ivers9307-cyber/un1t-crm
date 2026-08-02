@@ -194,6 +194,21 @@ export const WEB_PERMISSIONS = Object.freeze([
   // same way `issues` submission is open to all staff.
   { key: 'equipment_admin',   label: 'Equipment setup',      hint: 'Manage the equipment register, define equipment types with their inspection checklists and intervals, and set the studio inspection day. Owner + master only by default.' },
   { key: 'equipment_inspect', label: 'Equipment inspections', hint: 'See what equipment is due for inspection and complete the checklist. Universal by default — turning this OFF removes a person’s ability to run inspections.' },
+  // FLEET-CMD.1 — remote actions on the studio Raspberry Pis. Two keys,
+  // split by BLAST RADIUS rather than seniority, the same way
+  // equipment_admin/equipment_inspect splits setup from the walk-round.
+  //
+  // `fleet_restart` covers the actions that cannot break anything: restart
+  // the kiosk browser (5s, the launcher relaunches it) and read logs. It is
+  // on for anyone on shift because the person who notices a frozen
+  // leaderboard is a coach standing in the room, and the alternative is
+  // messaging Richard and waiting for a laptop.
+  //
+  // `fleet_admin` covers what can strand a device — reboot, shutdown (which
+  // needs a physical trip to undo; a Pi has no usable wake-on-LAN over WiFi)
+  // and redeploying the bridge service. Owner + master only.
+  { key: 'fleet_restart', label: 'Studio devices — restart', hint: 'Restart a frozen TV/kiosk browser and read device logs. Safe by design: the worst outcome is a screen blinking. On by default for anyone on shift.' },
+  { key: 'fleet_admin',   label: 'Studio devices — power',   hint: 'Reboot or shut down a studio Raspberry Pi and redeploy the HR bridge. Shutdown requires someone to physically power-cycle the device afterwards. Owner + master only by default.' },
   // INVOICES-QUEUE.1 (mig 185) — bookkeeper flag. Gates the
   // analyse + send-to-Xero actions inside /invoices and unlocks a
   // dedicated Bookkeeper queue tab in /approvals. Owners can still
@@ -273,6 +288,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     challenges: true,
     issues_inbox: true,
     equipment_admin: true, equipment_inspect: true,
+    fleet_restart: true, fleet_admin: true,
     bookkeeper: true,
     contact_linking: true,
     consultations: true,
@@ -303,6 +319,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     challenges: false,                              // operator challenge admin — not a staff concern
     issues_inbox: false,                            // staff submit; owner + master handle
     equipment_admin: false, equipment_inspect: true, // setup is owner + master; anyone on shift runs a walk-round
+    fleet_restart: true, fleet_admin: false,   // a coach on shift can restart a frozen board; nothing destructive
     bookkeeper: false,                              // accountant sign-off — never the default
     contact_linking: false,                         // admin-level contact dedup action
     consultations: false,                            // coach/web surface — off for staff
@@ -337,6 +354,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     challenges: false,
     issues_inbox: false,
     equipment_admin: false, equipment_inspect: true, // front-of-house is on shift too
+    fleet_restart: true, fleet_admin: false,   // front-of-house stands next to the TVs
     bookkeeper: false,
     contact_linking: false,
     consultations: false,
@@ -369,6 +387,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     challenges: false,                              // operator challenge admin — head coach doesn't create challenges
     issues_inbox: false,                            // owner + master only by default
     equipment_admin: false, equipment_inspect: true,
+    fleet_restart: true, fleet_admin: false,
     bookkeeper: false,
     contact_linking: true,
     consultations: true,
@@ -401,6 +420,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     challenges: true,                               // managers can create/edit challenges
     issues_inbox: false,                            // owner + master only by default
     equipment_admin: false, equipment_inspect: true,
+    fleet_restart: true, fleet_admin: false,   // reboot/shutdown can strand a device — owner + master only
     bookkeeper: false,                              // grant temporarily for month-end cover if needed
     contact_linking: true,
     consultations: true,
@@ -433,6 +453,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     challenges: true,                               // owner manages member challenges
     issues_inbox: true,                             // owner IS the handler per the routing design
     equipment_admin: true, equipment_inspect: true, // owner owns the register + schedule
+    fleet_restart: true, fleet_admin: true,    // owner owns the hardware at their location
     bookkeeper: false,                              // owner approves at the source; accountant sign-off is master/dedicated only
     contact_linking: true,
     consultations: true,
