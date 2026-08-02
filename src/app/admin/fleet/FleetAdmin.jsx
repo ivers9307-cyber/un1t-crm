@@ -57,6 +57,19 @@ function timeAgo(iso) {
 // browser subscription would receive nothing. Opening a hole for it would
 // expose the whole command stream to any signed-in user to save a poll on one
 // admin page. The GET route already applies the per-location permission checks.
+// A real shell stays OUT of the CRM, on purpose.
+//
+// This whole feature works by sending an action NAME that the Pi maps to a
+// fixed command — that is what stops a compromised admin session becoming root
+// on a box inside the gym. A web terminal here would hand back precisely the
+// capability the design spends its effort removing.
+//
+// So the portal POINTS AT the tool instead of becoming it: Tailscale's own
+// console offers browser SSH, authenticated by Tailscale, audited by Tailscale
+// and gated by the tailnet ACL. Nothing about that session flows through the
+// CRM. `?q=` filters the machine list to the one device.
+const TAILSCALE_MACHINES = 'https://login.tailscale.com/admin/machines'
+
 const BUSY_POLL_MS = 2000
 const IDLE_POLL_MS = 20000
 
@@ -283,17 +296,31 @@ export default function FleetAdmin({ devices, commands: initialCommands, isMaste
                   </div>
                 )}
 
-                {isMaster && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    loading={busy === `${device.device_name}:token`}
-                    onClick={() => rotateToken(device.device_name)}
-                  >
-                    {device.hasToken ? 'Rotate agent token' : 'Issue agent token'}
-                  </Button>
-                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  {device.canAdmin && (
+                    <Button
+                      as="a"
+                      size="sm"
+                      variant="ghost"
+                      href={`${TAILSCALE_MACHINES}?q=${encodeURIComponent(device.device_name)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Shell (Tailscale) ↗
+                    </Button>
+                  )}
+                  {isMaster && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      loading={busy === `${device.device_name}:token`}
+                      onClick={() => rotateToken(device.device_name)}
+                    >
+                      {device.hasToken ? 'Rotate agent token' : 'Issue agent token'}
+                    </Button>
+                  )}
+                </div>
               </div>
             </Card>
           )
