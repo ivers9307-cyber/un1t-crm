@@ -354,16 +354,21 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
         </div>
       </header>
 
-      <TimerBanner timer={data?.timer} serverTime={data?.server_time} />
-
       {!kiosk && error && (
         <p className="m-4 rounded-lg p-3 text-sm" style={{ border: `1px solid ${REDLINE}66`, background: SURFACE, color: CHALK_2 }}>
           Connection issue: {error}. Retrying…
         </p>
       )}
 
+      {/* TV-TIMER.1 — the timer follows the bands, not the class.
+          Nobody strapped in means there is nothing to rank, so the countdown
+          takes the screen; the first band to connect drops it to the bottom
+          bar and the tiles take over. A class with no timer still gets the
+          original idle board. */}
       {tiles.length === 0 ? (
-        <EmptyBoard />
+        data?.timer
+          ? <TimerBanner placement="hero" portrait={portrait} timer={data?.timer} serverTime={data?.server_time} />
+          : <EmptyBoard />
       ) : (
         <div
           className="grid gap-3 p-4"
@@ -400,8 +405,17 @@ export default function LiveTvClient({ locationId, endpoint, device }) {
         </div>
       )}
 
-      {/* The Graft signature — every board signs off the same way. */}
-      <GraftSignature caption="Scores land in your app" className="mt-auto" />
+      {/* TV-TIMER.1 — timer and signature ride down together.
+          mt-auto on the WRAPPER, not on the signature: it keeps the pair
+          welded to the bottom whether or not a timer is running, and leaves
+          the tile grid the whole middle of the screen. */}
+      <div className="mt-auto">
+        {tiles.length > 0 && (
+          <TimerBanner placement="bottom" portrait={portrait} timer={data?.timer} serverTime={data?.server_time} />
+        )}
+        {/* The Graft signature — every board signs off the same way. */}
+        <GraftSignature caption="Scores land in your app" />
+      </div>
 
       <ClassStartIntro current={data?.current_class} serverTime={data?.server_time} />
 
@@ -640,7 +654,24 @@ function ClassStartIntro({ current, serverTime }) {
   )
 }
 
-function TimerBanner({ timer, serverTime }) {
+// TV-TIMER.1 — one timer, two placements.
+//
+//   bottom — bands are live. The tiles own the middle of the screen and the
+//            countdown runs along the foot, with its progress bar full-bleed
+//            on the very bottom edge: an unbroken line whose colour and length
+//            carry the state from the back of the floor without anyone reading
+//            a number.
+//   hero   — nobody is wearing a band, so there is nothing to rank and the
+//            clock becomes the board.
+//
+// This is a MOVE, not an addition: the strip that used to sit under the header
+// is gone, so the board's height budget is roughly unchanged and the grid still
+// fits 8 tiles on a 1080p landscape screen (see GraftSignature).
+//
+// None of the timing logic below differs by placement — the server-clock
+// offset, the 250ms tick and the segment resolution are shared, so the two
+// layouts cannot disagree about what time it is.
+function TimerBanner({ timer, serverTime, placement = 'bottom', portrait = false }) {
   // Anchor the countdown on the server clock so a mis-set TV clock can't drift
   // the display. offset = serverNow − localNow, refreshed on each poll.
   const [offset, setOffset] = useState(0)
@@ -669,26 +700,84 @@ function TimerBanner({ timer, serverTime }) {
   const paused = timer.status === 'paused'
   const activeColor = st.finished ? FIELD : segColor
 
-  return (
+  const clock = st.finished ? '0:00' : fmtClock(st.segmentRemainingMs)
+  const stepLabel = st.finished ? 'Complete' : (cur?.label || '—')
+  const roundLabel = `${timer.name || 'Class timer'}${st.roundCount ? ` · Round ${st.roundIndex}/${st.roundCount}` : ''}`
+
+  // The progress rail. Square and full-bleed at the foot of the board, rounded
+  // and inset when it sits under the hero — the bottom edge of a screen is a
+  // natural line, the middle of one is not.
+  const rail = (flush) => (
     <div
-      className="px-6 py-4"
-      style={{ borderBottom: `1px solid ${HAIRLINE}`, background: `linear-gradient(90deg, ${segColor}22, transparent 65%)` }}
+      className={`h-1.5 w-full overflow-hidden ${flush ? '' : 'rounded-full'}`}
+      style={{ background: 'rgba(0,0,0,.4)' }}
     >
-      <div className="flex items-center gap-6">
+      <div
+        className="h-full transition-[width] duration-200"
+        style={{ width: `${segPct}%`, backgroundColor: segColor }}
+      />
+    </div>
+  )
+
+  if (placement === 'hero') {
+    // "Restrained" from the mockup — Richard's pick of four. Big enough to read
+    // down the length of the gym, short of shouting. Capped against viewport
+    // HEIGHT too so a portrait panel or an unusual aspect cannot overflow it.
+    const heroSize = portrait ? 'min(16vw, 20vh)' : 'min(8vw, 22vh)'
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center px-8 text-center">
+        <p className="text-3xl" style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, color: activeColor }}>
+          {stepLabel}
+          {paused && <span className="ml-4 align-middle text-xl font-medium" style={{ fontFamily: FONT_BODY, color: CHALK_2 }}>paused</span>}
+        </p>
+
+        <p
+          className="mt-2 leading-[0.84] tabular-nums"
+          style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, color: activeColor, fontSize: heroSize, letterSpacing: '-0.02em' }}
+        >
+          {clock}
+        </p>
+
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-x-10 gap-y-2 text-lg" style={{ fontFamily: FONT_MONO, color: CHALK_2 }}>
+          <span>{roundLabel}</span>
+          {st.nextStep && !st.finished && (
+            <span>next <span style={{ color: CHALK }}>{st.nextStep.label} {fmtClock(st.nextStep.seconds * 1000)}</span></span>
+          )}
+          <span className="tabular-nums" style={{ color: CHALK_3 }}>
+            {fmtClock(st.totalElapsedMs)} / {fmtClock(st.totalRemainingMs)}
+          </span>
+        </div>
+
+        <p className="mt-10 text-xs uppercase tracking-[0.22em]" style={{ fontFamily: FONT_MONO, color: CHALK_3 }}>
+          No heart-rate bands connected
+        </p>
+
+        <div className="mt-6 w-2/3 max-w-3xl">{rail(false)}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <div
+        className="flex items-center gap-6 px-6 pb-3 pt-4"
+        style={{ borderTop: `1px solid ${HAIRLINE}`, background: `linear-gradient(0deg, ${segColor}22, transparent 78%)` }}
+      >
         <div className="min-w-0">
           <p className="truncate text-xs uppercase tracking-[0.22em]" style={{ fontFamily: FONT_MONO, color: CHALK_2 }}>
-            {timer.name || 'Class timer'}
-            {st.roundCount ? ` · Round ${st.roundIndex}/${st.roundCount}` : ''}
+            {roundLabel}
           </p>
           <p className="mt-0.5 text-3xl leading-tight" style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: activeColor }}>
-            {st.finished ? 'Complete' : (cur?.label || '—')}
+            {stepLabel}
             {paused && <span className="ml-3 align-middle text-base font-medium" style={{ fontFamily: FONT_BODY, color: CHALK_2 }}>paused</span>}
           </p>
         </div>
 
+        {/* Up from text-6xl: moving the clock out of the crowded band under the
+            header is what buys the room to enlarge it. */}
         <div className="ml-auto text-right">
-          <p className="text-6xl leading-none tabular-nums" style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, color: activeColor }}>
-            {st.finished ? '0:00' : fmtClock(st.segmentRemainingMs)}
+          <p className="text-7xl leading-none tabular-nums" style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, color: activeColor }}>
+            {clock}
           </p>
         </div>
 
@@ -702,12 +791,7 @@ function TimerBanner({ timer, serverTime }) {
         </div>
       </div>
 
-      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full" style={{ background: 'rgba(0,0,0,.4)' }}>
-        <div
-          className="h-full transition-[width] duration-200"
-          style={{ width: `${segPct}%`, backgroundColor: segColor }}
-        />
-      </div>
+      {rail(true)}
     </div>
   )
 }
