@@ -154,10 +154,19 @@ export async function proxy(request) {
   // (sha256 match against ble_bridges.api_token_hash) — same self-guarding
   // pattern as /api/webhooks/ (HMAC) and /api/cron/ (CRON_SECRET). Without
   // this entry every bridge call 307s to /login and never reaches the handler.
+  // /api/fleet/ — the Pi fleet agent (FLEET-CMD.1). Exactly the /api/bridge/
+  // case: the agent authenticates per-request with its own `fdv_` bearer,
+  // verified in-handler by verifyFleetDeviceToken (sha256 match against
+  // fleet_devices.api_token_hash), and both routes scope every read and write
+  // to the device that token resolves to. Without this entry every agent call
+  // 307s to /login — which is precisely how it failed on stillorgan-tv2 on
+  // 2026-08-02: the agent received the login PAGE, tried to JSON.parse the
+  // HTML, and crash-looped. NOTE the admin side (/api/admin/fleet/*) is
+  // deliberately NOT here — that is session-authenticated staff surface.
   // /h/ — public host mailing-list signup pages (HOST-EMAIL.2); their backing
   // API (/api/public/host-list/) rides the existing /api/public/ prefix. The
   // per-host unsubscribe page (/unsubscribe/host/[token]) rides /unsubscribe/.
-  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/deposit/', '/welcome', '/free-class', '/start', '/privacy', '/terms', '/legal/', '/technical', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/']
+  const publicPaths = ['/login', '/auth/callback', '/reset-password', '/book/', '/event/', '/event-pay/', '/class-pay/', '/tv/', '/present/', '/api/public/', '/unsubscribe/', '/preferences/', '/api/unsubscribe/', '/api/preferences/', '/api/webhooks/', '/api/whatsapp/flow', '/api/cron/', '/api/bridge/', '/api/fleet/', '/deposit/', '/welcome', '/free-class', '/start', '/privacy', '/terms', '/legal/', '/technical', '/studio-login', '/api/auth/pin-login', '/api/auth/studio-heartbeat', '/api/auth/studio-signout', '/ffmpeg/', '/embed/', '/bca/', '/host-connect/', '/host', '/api/host/', '/h/']
   const isPublic = publicPaths.some(p => request.nextUrl.pathname.startsWith(p))
   if (isPublic) return NextResponse.next()
 
