@@ -12,6 +12,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { broadcastTimerPing } from '@/lib/timer-broadcast'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -66,5 +67,6 @@ export async function POST(request) {
     .select('*')
     .single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  await broadcastTimerPing(body.location_id)
   return NextResponse.json({ success: true, run: data })
 }
