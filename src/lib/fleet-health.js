@@ -11,6 +11,7 @@
 // all IO.
 
 import { deriveBridgeStatus } from '@/lib/bridge-samples'
+import { isOvernight } from '@/lib/live-poll'
 
 // Devices are identified as fleet members by this Tailscale ACL tag, set at
 // provisioning time by un1t-pi (`tailscale up --advertise-tags=tag:un1t-pi`).
@@ -45,6 +46,15 @@ export const OFFLINE_AFTER_MS = 15 * 60 * 1000
 // someone?". A self-reported 'error' is exempt — that is a real state the
 // bridge chose to report, not a timing artefact, so it alerts immediately.
 export const SERVICE_DOWN_AFTER_MS = OFFLINE_AFTER_MS
+
+// FLEET-CMD.2 — how long a kiosk may go without its board fetching data before
+// the screen counts as dark.
+//
+// The board polls every 4s, backing off to 30s only overnight, so ten minutes
+// is roughly twenty missed idle polls — far outside anything a wifi blip or the
+// nightly reboot (~90s) produces, while still catching a black screen inside a
+// single class.
+export const RENDER_STALE_AFTER_MS = 10 * 60 * 1000
 
 /** Is this Tailscale device part of the Pi fleet? */
 export function isFleetDevice(device) {
@@ -121,9 +131,20 @@ export function indexBridgesByDevice(rows) {
  * false. Its absence on a connected device is the healthy signal, not
  * "never seen" — reading it the other way would alert on every healthy device.
  *
+ * FLEET-CMD.2 adds a THIRD signal, for kiosks: `last_render_at`, stamped when
+ * the TV's own board poll reaches the CRM. This is what finally sees the
+ * failure mode the other two are blind to — a Pi that is powered, on the
+ * tailnet, answering SSH, and showing nothing. Reachability says it is fine and
+ * there is no bridge service to grade.
+ *
+ * A kiosk with last_render_at NULL is NOT graded on it. That is what makes this
+ * ship dark: a screen provisioned before the device-tagged URL existed has
+ * simply never reported, which is not the same as having stopped.
+ *
  * @param {object} device      Tailscale device row
  * @param {object|null} bridgeRow  matching ble_bridges row, or null for a kiosk
  * @param {number} nowMs
+ * @param {object|null} fleetRow   fleet_devices row (role + last_render_at)
  *
  * `connected` is deliberately separate from `state`. A device that dropped off
  * the tailnet 30 seconds ago grades 'ok' — that is the whole point of
@@ -135,7 +156,7 @@ export function indexBridgesByDevice(rows) {
  * @returns {{ name: string|null, state: 'ok'|'unreachable'|'service_down',
  *             detail: string, since: string|null, connected: boolean }}
  */
-export function gradeDevice(device, bridgeRow, nowMs = Date.now()) {
+export function gradeDevice(device, bridgeRow, nowMs = Date.now(), fleetRow = null) {
   const name = deviceNameOf(device)
 
   if (device?.connectedToControl === false) {
@@ -170,6 +191,31 @@ export function gradeDevice(device, bridgeRow, nowMs = Date.now()) {
           : 'on the tailnet but the bridge service has stopped reporting',
         since: bridgeRow.last_seen_at ?? null,
         connected: true,
+      }
+    }
+  }
+
+  // Reachable kiosk: is the board actually on screen?
+  //
+  // Reported as `service_down` rather than a new state, because that is exactly
+  // what it means — on the tailnet, but the thing the device exists to do is
+  // not happening. For a bridge that is the HR service; for a kiosk it is the
+  // board. Same condition, different role, and it keeps the state vocabulary
+  // (and mig 472's CHECK constraint) as it is.
+  if (fleetRow?.role === 'kiosk' && fleetRow.last_render_at) {
+    const lastMs = Date.parse(fleetRow.last_render_at)
+    if (Number.isFinite(lastMs) && nowMs - lastMs >= RENDER_STALE_AFTER_MS) {
+      return {
+        name,
+        state: 'service_down',
+        detail: `on the tailnet but the screen has not drawn for ${
+          Math.round((nowMs - lastMs) / 60000)} min`,
+        since: fleetRow.last_render_at,
+        connected: true,
+        // A dark board at 04:00 is nobody's emergency, and the nightly fleet
+        // reboot lives in that window. Grade it honestly — the admin page still
+        // shows it down — but do not wake anyone until the studio opens.
+        quiet: isOvernight(new Date(nowMs)),
       }
     }
   }
@@ -249,11 +295,12 @@ export function decideAlert(graded, prior, nowMs = Date.now()) {
     return { alert: null, row }
   }
 
-  // Unhealthy, but an operator caused it. Stay quiet, and deliberately do NOT
-  // stamp alerted_at: nothing was sent, so if the window ever lapses while the
+  // Unhealthy, but either an operator caused it or it is not worth waking
+  // anyone for right now. Stay quiet, and deliberately do NOT stamp alerted_at:
+  // nothing was sent, so when the window lapses (or the studio opens) while the
   // device is still down, the next tick alerts properly instead of believing
   // somebody had already been told.
-  if (isSuppressed(prior, nowMs)) {
+  if (isSuppressed(prior, nowMs) || graded.quiet) {
     return { alert: null, row }
   }
 

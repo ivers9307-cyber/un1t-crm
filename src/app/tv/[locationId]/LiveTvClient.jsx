@@ -73,7 +73,7 @@ const SEG_DISPLAY_COLOR = {
   custom: PEARL,
 }
 
-export default function LiveTvClient({ locationId, endpoint }) {
+export default function LiveTvClient({ locationId, endpoint, device }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [now, setNow] = useState(new Date())
@@ -105,7 +105,11 @@ export default function LiveTvClient({ locationId, endpoint }) {
   // the live /tv/[locationId] TV). The token-gated /tv/live/[token] page passes
   // an explicit `endpoint` so the same client polls /api/public/tv-live/[token]
   // instead. Same payload either way — the client is agnostic to which it hits.
-  const dataUrl = endpoint || `/api/public/live/${locationId}`
+  // FLEET-CMD.2 appends ?device= so the poll doubles as this kiosk's render
+  // heartbeat. Only on the location-keyed entrypoint: the token URL already
+  // identifies a specific display, so it needs no hint from the client.
+  const dataUrl = endpoint
+    || `/api/public/live/${locationId}${device ? `?device=${encodeURIComponent(device)}` : ''}`
 
   // Poll the public endpoint. Self-scheduling so the cadence can adapt: fast
   // while a class / straps / timer is live, idle back-off otherwise, so an

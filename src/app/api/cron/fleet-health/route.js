@@ -132,13 +132,23 @@ export async function GET(request) {
     .in('device_name', names)
   const priorByName = new Map((priorRows || []).map((r) => [r.device_name, r]))
 
+  // FLEET-CMD.2 — the render heartbeat, so a kiosk showing a black screen
+  // stops grading `ok`. Read after the auto-register above, so a device
+  // discovered on this very tick is present (with a null render time, which
+  // correctly grades on reachability alone).
+  const { data: fleetRows } = await db
+    .from('fleet_devices')
+    .select('device_name, role, last_render_at')
+    .in('device_name', names)
+  const fleetByName = new Map((fleetRows || []).map((r) => [r.device_name, r]))
+
   const alerts = []
   const rows = []
 
   for (const device of fleet) {
     const name = deviceNameOf(device)
     if (!name) continue
-    const graded = gradeDevice(device, bridgeByName.get(name) ?? null, now)
+    const graded = gradeDevice(device, bridgeByName.get(name) ?? null, now, fleetByName.get(name) ?? null)
     const { alert, row } = decideAlert(graded, priorByName.get(name) ?? null, now)
     rows.push(row)
     if (alert) alerts.push({ ...graded, alert, row })
