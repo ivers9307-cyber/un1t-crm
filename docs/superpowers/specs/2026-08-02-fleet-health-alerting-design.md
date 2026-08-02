@@ -87,6 +87,21 @@ create table fleet_device_health (
 
 This is alert bookkeeping, not an inventory: rows appear when Tailscale first reports a tagged device and carry no configuration. `fleet.yaml` remains the record of what *should* exist.
 
+### Joining a Tailscale device to its bridge row
+
+The service-health signal needs to know which `ble_bridges` row belongs to which Tailscale device, and **no such key existed**. The two candidates look alike and are unrelated:
+
+| | value | set by |
+|---|---|---|
+| Tailscale hostname | `stillorgan-bridge` | un1t-pi provisioning, from the `fleet.yaml` name |
+| `ble_bridges.hardware_id` | `stillorgan-pi-hr` | an operator in the bridges admin; the Pi sends it to authenticate |
+
+They do not match in prod. The first implementation keyed on `hardware_id`, which matched nothing — the service-health half of the alert was dead code that looked like it worked, and only checking the live table before merge caught it.
+
+Migration 473 adds an explicit nullable `ble_bridges.tailscale_hostname` (partial-unique) and backfills the one live bridge. `hardware_id` is deliberately *not* overloaded: it is an authentication identifier, and making it double as a network name would couple token auth to hostname changes. The register form now asks for the hostname so bridges are linked at registration rather than the column lying dormant.
+
+NULL stays legitimate — an unlinked bridge is graded on reachability alone, exactly like a kiosk.
+
 Transitions:
 - `ok` → not-ok: write the new state, alert, stamp `alerted_at`
 - not-ok → not-ok: no alert (already told)
