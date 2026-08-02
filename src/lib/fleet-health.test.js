@@ -6,6 +6,7 @@ import {
   gradeDevice,
   decideAlert,
   isSuppressed,
+  RENDER_STALE_AFTER_MS,
   indexBridgesByDevice,
 } from './fleet-health.js'
 
@@ -362,5 +363,77 @@ describe('alert suppression', () => {
     const { alert, row } = decideAlert(down, prior, NOW)
     expect(alert).toBe('down')
     expect(row.alerted_at).toBe(new Date(NOW).toISOString())
+  })
+})
+
+// FLEET-CMD.2 — the render heartbeat.
+//
+// This closes the blind spot that mattered most: a Pi that is powered, on the
+// tailnet, answering SSH, and showing a black screen graded `ok`, because
+// reachability is fine and a kiosk has no bridge service to grade.
+describe('kiosk render heartbeat', () => {
+  const kiosk = online('stillorgan-tv1')
+  const stale = (ms) => ({ role: 'kiosk', last_render_at: new Date(NOW - ms).toISOString() })
+
+  it('grades a reachable kiosk with a dark screen as service_down', () => {
+    const g = gradeDevice(kiosk, null, NOW, stale(RENDER_STALE_AFTER_MS))
+    expect(g.state).toBe('service_down')
+    expect(g.detail).toMatch(/has not drawn/)
+    // Still genuinely in contact — this is NOT a reachability problem, and the
+    // maintenance window must not be cleared or held on the wrong signal.
+    expect(g.connected).toBe(true)
+  })
+
+  it('leaves a freshly drawing kiosk alone', () => {
+    expect(gradeDevice(kiosk, null, NOW, stale(30_000)).state).toBe('ok')
+    expect(gradeDevice(kiosk, null, NOW, stale(RENDER_STALE_AFTER_MS - 1)).state).toBe('ok')
+  })
+
+  it('SHIPS DARK: a kiosk that has never reported is graded on reachability only', () => {
+    // Load-bearing. Every existing kiosk has last_render_at NULL until it is
+    // redeployed with the device-tagged URL; if null counted as stale, merging
+    // this would alert on the whole fleet at once.
+    expect(gradeDevice(kiosk, null, NOW, { role: 'kiosk', last_render_at: null }).state).toBe('ok')
+    expect(gradeDevice(kiosk, null, NOW, null).state).toBe('ok')
+  })
+
+  it('never applies the render signal to a bridge', () => {
+    // A bridge runs no browser, so a null/ancient render time means nothing.
+    const g = gradeDevice(online('stillorgan-bridge'), null, NOW,
+      { role: 'bridge', last_render_at: new Date(NOW - 86_400_000).toISOString() })
+    expect(g.state).toBe('ok')
+  })
+
+  it('grades a dark screen overnight but does NOT wake anyone', () => {
+    // 03:00 Dublin: the gym is shut, nobody is looking at the board, and the
+    // 04:00 fleet reboot lives in this window. The row still records the truth
+    // — the admin page shows it down — but the alert waits for opening time.
+    const night = new Date('2026-08-02T02:00:00.000Z').getTime()
+    const g = gradeDevice(kiosk, null, night, {
+      role: 'kiosk', last_render_at: new Date(night - RENDER_STALE_AFTER_MS).toISOString(),
+    })
+    expect(g.state).toBe('service_down')
+    expect(g.quiet).toBe(true)
+
+    const { alert, row } = decideAlert(g, null, night)
+    expect(alert).toBeNull()
+    expect(row.state).toBe('service_down')
+    // Nothing was sent, so nothing may claim it was — otherwise the 06:00 tick
+    // would think somebody had already been told and stay silent for good.
+    expect(row.alerted_at).toBeNull()
+  })
+
+  it('alerts on the same dark screen during opening hours', () => {
+    const g = gradeDevice(kiosk, null, NOW, stale(RENDER_STALE_AFTER_MS))
+    expect(g.quiet).toBe(false)
+    expect(decideAlert(g, null, NOW).alert).toBe('down')
+  })
+
+  it('does not let a dark screen mask an outright outage', () => {
+    // Unreachable wins: the device being gone is the bigger fact, and its
+    // detail line is the one an operator needs.
+    const g = gradeDevice(offline('stillorgan-tv1', 60 * 60 * 1000), null, NOW,
+      stale(60 * 60 * 1000))
+    expect(g.state).toBe('unreachable')
   })
 })

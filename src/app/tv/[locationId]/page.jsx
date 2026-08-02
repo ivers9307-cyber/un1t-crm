@@ -17,6 +17,12 @@ import LiveTvClient from './LiveTvClient'
 export const dynamic = 'force-dynamic'
 
 export default async function TvPage(props) {
-  const params = await props.params;
-  return <LiveTvClient locationId={params.locationId} />
+  const params = await props.params
+  const searchParams = await props.searchParams
+  // FLEET-CMD.2 — un1t-pi provisions the kiosk URL with ?device=<fleet name>,
+  // so the board's own poll becomes per-device proof that this screen is
+  // rendering. Absent for any other viewer (a laptop, the promo TV), and the
+  // API ignores anything that is not a device at this location.
+  const device = typeof searchParams?.device === 'string' ? searchParams.device : null
+  return <LiveTvClient locationId={params.locationId} device={device} />
 }

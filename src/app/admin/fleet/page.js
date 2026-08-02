@@ -27,7 +27,7 @@ export default async function FleetPage() {
 
   const { data: devices } = await db
     .from('fleet_devices')
-    .select('device_name, location_id, role, label, api_token_hash, locations(name)')
+    .select('device_name, location_id, role, label, api_token_hash, last_render_at, locations(name)')
     .order('device_name', { ascending: true })
 
   // Scope in app code — this is a service-role read, so RLS does nothing here.
@@ -81,6 +81,9 @@ export default async function FleetPage() {
       location: d.locations?.name ?? null,
       claimed: Boolean(d.location_id),
       hasToken: Boolean(d.api_token_hash),
+      // FLEET-CMD.2 — null means this kiosk has never reported a render, which
+      // is "not yet redeployed", not "dark". The UI must say which.
+      lastRenderAt: d.last_render_at,
       health: healthByName.get(d.device_name) ?? null,
       canRestart: can('fleet_restart'),
       canAdmin: can('fleet_admin'),

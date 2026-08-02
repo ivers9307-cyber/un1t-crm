@@ -178,6 +178,14 @@ export default function FleetAdmin({ devices, commands, locations, isMaster }) {
                   </p>
                 )}
 
+                {device.role === 'kiosk' && device.claimed && (
+                  <p className="text-xs text-un1t-subtle">
+                    {device.lastRenderAt
+                      ? `Screen last drew ${timeAgo(device.lastRenderAt)}`
+                      : 'Screen never reported — redeploy the kiosk to enable render monitoring'}
+                  </p>
+                )}
+
                 {device.claimed && !device.hasToken && (
                   <p className="text-sm text-un1t-subtle">
                     No agent token issued — actions will expire undelivered until
