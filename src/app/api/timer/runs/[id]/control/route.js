@@ -1,14 +1,15 @@
 // POST /api/timer/runs/[id]/control  — { action: pause|resume|skip|stop, direction? }
 //
-// CLASS-TIMER. Manager-gated. Loads the run, applies the pure transition
-// (class-timer.js nextRunState), persists. No-op actions return the run unchanged.
+// CLASS-TIMER. Gated by the `class_timer` permission (CLASS-TIMER-PERM.1).
+// Loads the run, applies the pure transition (class-timer.js nextRunState),
+// persists. No-op actions return the run unchanged.
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
-import { MANAGER_ROLES } from '@/lib/schemas'
 import { nextRunState, buildTimeline } from '@/lib/class-timer'
 
 export const runtime = 'nodejs'
@@ -21,7 +22,7 @@ const ControlSchema = z.object({
 
 export async function POST(request, { params }) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasPermission(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const { id } = await params

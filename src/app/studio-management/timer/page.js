@@ -1,6 +1,7 @@
 // /studio-management/timer — coach control for the class interval timer shown
-// on the studio TV. Gated by the existing `studio_management` permission (it's
-// an on-site studio action, same family as door unlock). CLASS-TIMER PR1.
+// on the studio TV. Gated by the dedicated `class_timer` permission
+// (CLASS-TIMER-PERM.1 — split off `studio_management` so coaches on shift can
+// run the timer without holding door unlock). CLASS-TIMER PR1.
 
 import { redirect } from 'next/navigation'
 import { getCurrentUser } from '@/lib/auth'
@@ -12,7 +13,7 @@ export const dynamic = 'force-dynamic'
 export default async function StudioTimerPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
-  if (!hasPermission(user, 'studio_management')) redirect('/')
+  if (!hasPermission(user, 'class_timer')) redirect('/')
 
   const locationId = user.activeLocation?.id
   return (

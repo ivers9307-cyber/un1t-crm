@@ -169,7 +169,7 @@ export const ALL_NAV = [
     section: 'gym',
     groupId: 'live',  // localStorage key for expand state
     children: [
-      { href: '/studio-management/timer', label: 'Class timer', icon: Timer, permission: 'studio_management' },
+      { href: '/studio-management/timer', label: 'Class timer', icon: Timer, permission: 'class_timer' },
     ],
   },
   // EQUIP-MAINT.1 — equipment register + inspection checklists. Visible

@@ -5,9 +5,10 @@
 // offsets) and never streams the clock; this computes the live tick locally
 // (250ms) and corrects on the 2s /active poll.
 //
-// Gated by studio_management — a CROSS_PLATFORM_KEY, the same toggle as the web
-// Studio Management page + the mobile AC/Doors screens. The server independently
-// enforces MANAGER_ROLES on start/control as defence in depth.
+// Gated by class_timer — a CROSS_PLATFORM_KEY, the same toggle as the web
+// Class timer page (CLASS-TIMER-PERM.1: split off studio_management so coaches
+// on shift can run the timer without holding door unlock). The server
+// independently enforces the same permission on start/control as defence in depth.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, Pressable, ScrollView, ActivityIndicator, Alert } from 'react-native'
@@ -68,7 +69,7 @@ export default function TimerScreen() {
   const { profile, activeLocation } = useAuth()
   const router = useRouter()
   const locationId = activeLocation?.id
-  const allowed = canMobile(profile, 'studio_management', activeLocation)
+  const allowed = canMobile(profile, 'class_timer', activeLocation)
 
   const [templates, setTemplates] = useState([])
   const [run, setRun] = useState(null)

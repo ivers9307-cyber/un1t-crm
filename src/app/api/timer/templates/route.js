@@ -1,14 +1,17 @@
 // GET  /api/timer/templates?location_id=<uuid>   — list active templates
 // POST /api/timer/templates                       — create a template
 //
-// CLASS-TIMER — reusable interval-timer templates. Manager-gated.
+// CLASS-TIMER — reusable interval-timer templates. Gated by the `class_timer`
+// permission (CLASS-TIMER-PERM.1 — the quick-add preset flow POSTs here, so
+// template create shares the run-control gate).
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike } from '@/lib/schemas'
 import { validateStructure, buildTimeline } from '@/lib/class-timer'
 
 export const runtime = 'nodejs'
@@ -23,7 +26,7 @@ const CreateSchema = z.object({
 
 export async function GET(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasPermission(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const url = new URL(request.url)
@@ -47,7 +50,7 @@ export async function GET(request) {
 
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasPermission(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const validation = await validateBody(request, CreateSchema)

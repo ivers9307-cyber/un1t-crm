@@ -19,7 +19,7 @@
 export const MOBILE_NAV_FEATURES = Object.freeze([
   { key: 'schedule', label: 'Schedule',  permKeys: ['schedule'],                   barEligible: true },
   { key: 'whatsapp', label: 'WhatsApp',  permKeys: ['whatsapp'],                   barEligible: true },
-  { key: 'studio',   label: 'Studio',    permKeys: ['studio_management'],          barEligible: true },
+  { key: 'studio',   label: 'Studio',    permKeys: ['studio_management', 'class_timer', 'tv_displays'], barEligible: true },
   { key: 'pipeline', label: 'Pipeline',  permKeys: ['pipeline'],                   barEligible: true },
   { key: 'bookings', label: 'Bookings',  permKeys: ['bookings'],                   barEligible: true },
   { key: 'invoices', label: 'Invoices',  permKeys: ['invoices'], employmentType: 'contractor', barEligible: true },
