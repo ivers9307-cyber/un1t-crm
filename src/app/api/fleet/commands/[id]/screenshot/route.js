@@ -1,7 +1,7 @@
 // FLEET-CMD.3 — the agent posts back what the screen is showing.
 //
 // POST /api/fleet/commands/[id]/screenshot   Bearer fdv_…
-//   Content-Type: image/jpeg, body = raw bytes
+//   Content-Type: image/png, body = raw bytes
 //
 // Separate from the JSON result route because this is binary and large: the
 // result endpoint caps `output` at 64KB of TEXT, and base64 in a JSON body
@@ -19,8 +19,10 @@ import { logInfo, logWarn } from '@/lib/log'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// Matches the bucket's own limit (mig 477). A 1080p JPEG of a leaderboard is
-// well under 500KB; anything near this ceiling is a bug or an abuse.
+// Matches the bucket's own limit (mig 477). A full-resolution PNG of the live
+// board measured ~111KB on real hardware — a leaderboard is mostly flat
+// near-black, which PNG compresses well. Anything near this ceiling is a bug
+// or an abuse.
 const MAX_BYTES = 5 * 1024 * 1024
 
 export async function POST(request, props) {
@@ -39,10 +41,12 @@ export async function POST(request, props) {
   if (bytes.length > MAX_BYTES) {
     return NextResponse.json({ ok: false, error: 'Too large' }, { status: 413 })
   }
-  // Verify it really is a JPEG rather than trusting the header — this writes
-  // to a bucket, and the content type is attacker-controlled.
-  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) {
-    return NextResponse.json({ ok: false, error: 'Not a JPEG' }, { status: 400 })
+  // Verify it really is a PNG rather than trusting the header — this writes to
+  // a bucket, and the content type is attacker-controlled. First 8 bytes of the
+  // PNG signature.
+  const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+  if (bytes.length < 8 || PNG_MAGIC.some((b, i) => bytes[i] !== b)) {
+    return NextResponse.json({ ok: false, error: 'Not a PNG' }, { status: 400 })
   }
 
   // Ownership in the WHERE clause: a device may only complete a screenshot
@@ -64,10 +68,10 @@ export async function POST(request, props) {
 
   // Path carries the device and the command id, so a prune can find them by
   // prefix and a stray object is always traceable to the action that made it.
-  const path = `${device.device_name}/${command.id}.jpg`
+  const path = `${device.device_name}/${command.id}.png`
   const { error: uploadError } = await db.storage
     .from('fleet-screenshots')
-    .upload(path, bytes, { contentType: 'image/jpeg', upsert: true })
+    .upload(path, bytes, { contentType: 'image/png', upsert: true })
 
   if (uploadError) {
     logWarn('fleet-cmd', 'screenshot upload failed', {
