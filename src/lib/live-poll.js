@@ -7,14 +7,32 @@
 // Fluid-compute cost for a screen showing "no live class".
 //
 // So the boards back off to a slow IDLE cadence when nothing is live, and run
-// at the ACTIVE cadence otherwise. A board wakes to ACTIVE within one idle
-// interval as soon as a strap connects or a class/timer starts — imperceptible
-// at class start (nobody is mid-effort in the first ~30s) and it removes the
-// bulk of the all-day/overnight polls. Pure so both boards share one definition
+// at the ACTIVE cadence otherwise. TV-POLL-FAST.1: the idle back-off is now
+// OVERNIGHT-ONLY (22:00–06:00 Dublin). The 30s idle interval made a coach's
+// "Start" take up to 30s to appear on the TV whenever no class/strap was
+// already live (e.g. events) — unacceptable on the floor. During opening
+// hours an idle board keeps the ACTIVE cadence so a timer start shows within
+// one 4s poll; the overnight window still removes the bulk of the wasted
+// polls (a kiosk left on all night). Pure so both boards share one definition
 // and it can be unit-tested without a DOM.
 
 export const ACTIVE_POLL_MS = 4000
 export const IDLE_POLL_MS = 30000
+export const OVERNIGHT_START_HOUR = 22 // Dublin wall-clock, inclusive
+export const OVERNIGHT_END_HOUR = 6    // Dublin wall-clock, exclusive
+
+/** Hour-of-day in Dublin regardless of the device/server TZ. */
+function dublinHour(now) {
+  return Number(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Dublin', hour: 'numeric', hour12: false,
+  }).format(now))
+}
+
+/** Overnight = the only window where an idle board may back off. */
+export function isOvernight(now = new Date()) {
+  const h = dublinHour(now)
+  return h >= OVERNIGHT_START_HOUR || h < OVERNIGHT_END_HOUR
+}
 
 /**
  * Is there anything live worth refreshing at the fast cadence?
@@ -34,6 +52,7 @@ export function boardIsActive(payload) {
 }
 
 /** Delay (ms) before the next poll after a successful fetch. */
-export function nextPollDelay(payload) {
-  return boardIsActive(payload) ? ACTIVE_POLL_MS : IDLE_POLL_MS
+export function nextPollDelay(payload, now = new Date()) {
+  if (boardIsActive(payload)) return ACTIVE_POLL_MS
+  return isOvernight(now) ? IDLE_POLL_MS : ACTIVE_POLL_MS
 }
