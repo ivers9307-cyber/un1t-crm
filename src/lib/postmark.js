@@ -1,4 +1,5 @@
 import { createServerClient } from './supabase'
+import { resolvePostmarkToken } from './postmark-token'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
 import { htmlToPlainText } from './email-content'
 import { resolveEmailSender } from './tenant-email'
@@ -42,7 +43,7 @@ export function isTransientSendError(result) {
 }
 
 function getPostmarkToken() {
-  const token = process.env.POSTMARK_API_KEY || process.env.POSTMARK_SERVER_TOKEN
+  const token = resolvePostmarkToken()
   if (!token) {
     throw new Error(
       'Postmark API key not configured. Set POSTMARK_API_KEY in your environment variables. ' +

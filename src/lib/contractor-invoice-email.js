@@ -13,11 +13,12 @@ import { createServerClient } from '@/lib/supabase'
 import { periodLabel } from './contractor-invoices.js'
 import { formatFullDateTimeInTZ } from './dates.js'
 import { getLocationBranding } from './location-branding.js'
+import { resolvePostmarkToken } from './postmark-token.js'
 
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'
 
 function getPostmarkToken() {
-  return process.env.POSTMARK_API_KEY
+  return resolvePostmarkToken()
 }
 
 function getFromAddress() {
@@ -30,7 +31,7 @@ function appUrl() {
 
 async function postmarkSend({ to, subject, htmlBody, textBody, tag, metadata }) {
   const token = getPostmarkToken()
-  if (!token) throw new Error('POSTMARK_API_KEY is not configured.')
+  if (!token) throw new Error('Postmark is not configured (set POSTMARK_API_KEY).')
   const res = await fetch(`${POSTMARK_API_URL}/email`, {
     method: 'POST',
     headers: {
