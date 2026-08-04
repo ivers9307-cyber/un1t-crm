@@ -356,7 +356,7 @@ export async function glofoxCredentialsForLocation(db, locationId) {
     // (e.g. "untstillorgan"). Surface it via settings.glofox.namespace
     // — one row UPDATE per location to backfill.
     namespace:     cfg.namespace      || null,
-    // STUDIO-KPI.2: operator-editable trainer-id → display-name map
+    // STUDIO-KPI.4: operator-editable trainer-id → display-name map
     // (settings.glofox.trainer_names, via the Glofox settings tab).
     // Overrides API-resolved names in resolveTrainerNames.
     trainerNames:  (cfg.trainer_names && typeof cfg.trainer_names === 'object')
@@ -1261,7 +1261,7 @@ export async function fetchUserBookingsResult(creds, userId, opts = {}) {
 }
 
 /**
- * STUDIO-KPI.2 — a Glofox user's display name. Event payloads carry
+ * STUDIO-KPI.4 — a Glofox user's display name. Event payloads carry
  * only trainer ids (trainers_obj arrives empty), so trainer names are
  * resolved via the API and this picks the name off whatever user/
  * trainer shape comes back.
@@ -1277,7 +1277,7 @@ export function glofoxDisplayName(user) {
 }
 
 /**
- * STUDIO-KPI.2 — best-effort trainer list via GET /2.0/trainers.
+ * STUDIO-KPI.4 — best-effort trainer list via GET /2.0/trainers.
  * UNPROBED endpoint: it may not exist on this Glofox tier (like
  * /2.0/calendar, which WRONG_URLs). Any failure returns [] and the
  * caller falls back to per-id /2.0/members lookups — trainers are

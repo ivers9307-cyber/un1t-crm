@@ -81,7 +81,7 @@ describe('class-occurrences: mapEventToOccurrence', () => {
   })
 })
 
-// STUDIO-KPI.2 — trainer-id → name mapping so the scorecard's floor
+// STUDIO-KPI.4 — trainer-id → name mapping so the scorecard's floor
 // table can group per coach instead of per class.
 describe('class-occurrences: mapEventToOccurrence trainer-name map', () => {
   const loc = 'a0000000-0000-0000-0000-000000000001'

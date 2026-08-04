@@ -35,7 +35,7 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
       ? initial.hidden_class_keywords.join(', ')
       : (initial.hidden_class_keywords || '')
   )
-  // STUDIO-KPI.2 — trainer-id → name overrides, edited as "id = Name"
+  // STUDIO-KPI.4 — trainer-id → name overrides, edited as "id = Name"
   // lines. Backs the scorecard's per-coach floor table when the Glofox
   // API can't resolve a trainer id itself.
   const [trainerNames, setTrainerNames] = useState(formatTrainerNames(initial.trainer_names))

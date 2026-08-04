@@ -1,6 +1,6 @@
 // GET /api/locations/[id]/glofox-trainers
 //
-// STUDIO-KPI.2 — the trainer ids seen in this location's Glofox
+// STUDIO-KPI.4 — the trainer ids seen in this location's Glofox
 // timetable (class_occurrences, last 28 days) and how each currently
 // resolves to a display name: an operator override
 // (settings.glofox.trainer_names), the Glofox API, or not at all.

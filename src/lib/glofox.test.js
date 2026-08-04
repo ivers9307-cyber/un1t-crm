@@ -501,7 +501,7 @@ describe('interpretBookingResult', () => {
   })
 })
 
-// STUDIO-KPI.2 — trainer-name resolution for class_occurrences.instructor.
+// STUDIO-KPI.4 — trainer-name resolution for class_occurrences.instructor.
 
 describe('glofoxDisplayName', () => {
   it('prefers a trimmed name field', async () => {

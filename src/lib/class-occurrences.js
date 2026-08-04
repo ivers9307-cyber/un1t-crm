@@ -48,7 +48,7 @@ export function durationToMinutes(duration) {
 const TRAINER_ID_RE = /^[0-9a-f]{24}$/i
 
 /**
- * STUDIO-KPI.2 — pure: distinct trainer ids (24-hex, lowercased) across
+ * STUDIO-KPI.4 — pure: distinct trainer ids (24-hex, lowercased) across
  * a batch of Glofox events. Entries arrive as bare id strings or as
  * objects carrying _id; anything name-like is not an id.
  */
@@ -122,7 +122,7 @@ export function mapEventToOccurrence(event, locationId, trainerNames = null) {
   }
 }
 
-// STUDIO-KPI.2 — cap on per-id /2.0/members fallback lookups per sync
+// STUDIO-KPI.4 — cap on per-id /2.0/members fallback lookups per sync
 // run. Stillorgan has ~3 distinct trainers; the cap only guards against
 // a pathological payload fanning out into dozens of API calls.
 const TRAINER_MEMBER_LOOKUP_CAP = 10
@@ -133,7 +133,7 @@ const TRAINER_MEMBER_LOOKUP_CAP = 10
 const BACKFILL_DAYS = 35
 
 /**
- * STUDIO-KPI.2 — IO: trainer id → display name for a batch of ids.
+ * STUDIO-KPI.4 — IO: trainer id → display name for a batch of ids.
  * Resolution order, all best-effort (an unresolved id just stays out
  * of the map and the occurrence's instructor stays null):
  *   1. operator overrides — settings.glofox.trainer_names, carried on
@@ -228,7 +228,7 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
     return { ok: false, error: result.body?.message || `HTTP ${result.status}`, upserted: 0 }
   }
 
-  // STUDIO-KPI.2 — resolve trainer ids to names (operator overrides →
+  // STUDIO-KPI.4 — resolve trainer ids to names (operator overrides →
   // Glofox API, best-effort) so class_occurrences.instructor populates
   // and the scorecard's floor table can group per coach.
   const trainerNames = await resolveTrainerNames(creds, extractTrainerIds(result.events))
@@ -294,7 +294,7 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
     }
   }
 
-  // STUDIO-KPI.2 — instructor backfill. The sync window is [now, +48h],
+  // STUDIO-KPI.4 — instructor backfill. The sync window is [now, +48h],
   // so PAST rows are never re-upserted — but the scorecard's floor table
   // reads 28 days of history. For every trainer we can name, patch the
   // last BACKFILL_DAYS of this location's rows:

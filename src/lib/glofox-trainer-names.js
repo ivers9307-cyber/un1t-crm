@@ -1,4 +1,4 @@
-// STUDIO-KPI.2 — the operator-editable trainer-name map
+// STUDIO-KPI.4 — the operator-editable trainer-name map
 // (settings.glofox.trainer_names: { <24-hex trainer id>: 'Name' }).
 // The Glofox settings tab edits it as "trainerId = Name" lines; these
 // pure helpers round-trip between that text and the stored map.

@@ -1,4 +1,4 @@
-// STUDIO-KPI.2 — trainer-name resolution + instructor backfill.
+// STUDIO-KPI.4 — trainer-name resolution + instructor backfill.
 //
 // resolveTrainerNames: operator overrides (settings.glofox.trainer_names,
 // carried on creds) → /2.0/trainers list → per-id /2.0/members fallback,

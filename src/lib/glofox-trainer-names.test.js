@@ -1,4 +1,4 @@
-// STUDIO-KPI.2 — parse/format for the operator-editable trainer-name
+// STUDIO-KPI.4 — parse/format for the operator-editable trainer-name
 // mapping (settings.glofox.trainer_names). The settings tab shows the
 // map as "trainerId = Name" lines; these helpers round-trip it.
 
