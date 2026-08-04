@@ -45,7 +45,7 @@ export default function EnquiryForm() {
     return (
       <div className="ccf-form-card ccf-sent" role="status">
         <span className="ccf-sent-mark" aria-hidden="true">✓</span>
-        <h3>Thanks — we&apos;ll be in touch.</h3>
+        <h3>Thanks, we&apos;ll be in touch.</h3>
         <p>
           Your enquiry is with us. If it&apos;s urgent, call{' '}
           <a href="tel:+353868225779">086 822 5779</a>.
@@ -76,7 +76,7 @@ export default function EnquiryForm() {
           name="message"
           maxLength={2000}
           rows={4}
-          placeholder="Make, model, budget — or just say hello (optional)"
+          placeholder="Make, model, budget, or anything else we can help with (optional)"
         />
       </label>
       {status === 'error' && (
