@@ -82,7 +82,9 @@ export async function POST(request) {
 
   let inserted = 0
   if (rows.length > 0) {
-    const out = await insertHrSamples(db, rows)
+    // locationId → the aggregate scores with the location's zone_points
+    // (operator settings), matching endSession's authoritative recompute.
+    const out = await insertHrSamples(db, rows, { locationId: bridge.locationId })
     inserted = out.inserted
     if (out.error) {
       logWarn('bridge-samples', 'partial insert error — bridge will retry', {
