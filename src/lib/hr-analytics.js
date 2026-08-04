@@ -1,3 +1,12 @@
+// BYTE-SYNC: champ-app/shared/hr-analytics.js ↔ un1t-crm/src/lib/hr-analytics.js.
+// The two files are identical except the dublin-time import below
+// ('./dublin-time.js' in champ-app, '@/lib/dublin-time' in un1t-crm).
+// champ-app is the canonical copy — edit there first, then mirror the change.
+// Both apps render these numbers to the SAME member: drift here means the CRM
+// coach view and the member app disagree on totals. The twin test files are
+// fully byte-identical (they import './hr-analytics.js' relatively) — port
+// tests both ways too.
+//
 // HR analytics helpers — pure functions that turn arrays of historical
 // sessions into the comparisons the post-class email leans on.
 //
@@ -22,7 +31,7 @@
 // type) and percentile rounding is fine for "you were faster than
 // 8 of your last 10 RIDE classes".
 
-import { dublinDayStr, addDaysISO } from '@/lib/dublin-time'
+import { dublinDateKey, dublinDayStartMs, dublinAddDays, dublinWeekStartMs } from '@/lib/dublin-time'
 
 const RECENT_DAYS = 28
 const PRIOR_DAYS = 56
@@ -161,7 +170,7 @@ const HIGHLIGHT_RULES = [
     },
     msg: ({ thisSession }) => {
       const z5min = Math.round(Number(thisSession.zones_seconds?.[5] ?? thisSession.zones_seconds?.['5'] ?? 0) / 60)
-      return `First time in red zone — you held Z5 for ${z5min} min.`
+      return `First time in red zone — you held Zone 5 for ${z5min} min.`
     },
   },
   // New peak HR (highest ever).
@@ -199,7 +208,10 @@ const HIGHLIGHT_RULES = [
     msg: ({ thisSession, recentSessionsExclThis }) => {
       const pct = percentileOf(Number(thisSession.effort_points), recentSessionsExclThis, 'effort_points')
       const pctRound = Math.round(pct * 100)
-      return `In the top ${100 - pctRound}% of your last 4 weeks — ${thisSession.effort_points} UN1T Points.`
+      // Clamp to 1: a best-ever session has percentile 1 → 100-100 = 0,
+      // which would read "top 0%" (nonsense). "Top 1%" is the floor.
+      const topPct = Math.max(1, 100 - pctRound)
+      return `In the top ${topPct}% of your last 4 weeks — ${thisSession.effort_points} UN1T Points.`
     },
   },
   // Streak — Nth class in N days.
@@ -237,25 +249,25 @@ export function pickHighlight({ thisSession, history, eventTypeName, nowMs = Dat
 // ── helpers ──────────────────────────────────────────────────────
 
 /**
- * Counts consecutive days ending on `thisSession`'s day on which the member
- * trained. `thisSession` counts as its own day; we walk back through history
- * one CALENDAR day at a time.
+ * Counts consecutive days ending on `thisSession`'s day on which the
+ * member trained. `thisSession` counts as its own day; we walk back one
+ * Europe/Dublin calendar day at a time while history covers it.
  *
- * Item 7 — the day boundary is Europe/Dublin, not UTC. A UTC boundary
- * mis-buckets an evening session during BST (a 23:30 Dublin session is the
- * previous UTC day at 22:30 in winter but the same day flips near midnight in
- * summer), so the app's streak and this streak disagreed. dublinDayStr keys each
- * session on its Dublin calendar day; addDaysISO steps calendar days purely.
+ * Day-buckets are Europe/Dublin calendar days (via dublinDateKey), the
+ * same boundary `currentStreak` uses — so the email `streak` highlight
+ * and the in-app live streak agree near midnight during IST/BST.
  */
 function computeStreak(thisSession, history) {
-  const days = new Set([dublinDayStr(thisSession.started_at)])
-  for (const s of history) days.add(dublinDayStr(s.started_at))
+  const days = new Set([dublinDateKey(thisSession.started_at)])
+  for (const s of history) days.add(dublinDateKey(s.started_at))
 
   let streak = 0
-  let cursor = dublinDayStr(thisSession.started_at) // YYYY-MM-DD, Dublin
-  while (days.has(cursor)) {
+  // Walk back one Europe/Dublin calendar day per step. dublinAddDays
+  // steps via a Dublin-noon anchor so it never drifts across a DST edge.
+  let cursorKey = dublinDateKey(thisSession.started_at)
+  while (days.has(cursorKey)) {
     streak++
-    cursor = addDaysISO(cursor, -1)
+    cursorKey = dublinAddDays(cursorKey, -1)
   }
   return streak
 }
@@ -263,7 +275,8 @@ function computeStreak(thisSession, history) {
 /**
  * Live consecutive-day training streak as of `nowMs`.
  *
- * `current` = the run of consecutive UTC days ending today OR yesterday
+ * `current` = the run of consecutive Europe/Dublin calendar days ending
+ * today OR yesterday
  * (one-day gap tolerance, so a member who hasn't trained YET today still
  * sees yesterday's streak). 0 if the most recent session is older than
  * yesterday. `best` = the longest consecutive-day run anywhere in the input.
@@ -278,45 +291,109 @@ function computeStreak(thisSession, history) {
  * @returns {{current:number, best:number, lastDayMs:number|null}}
  */
 export function currentStreak(sessions, nowMs = Date.now()) {
-  const DAY = 24 * 3600 * 1000
-  // Item 7 — bucket each session on its Europe/Dublin calendar day, not UTC, so
-  // the streak matches what the member sees in the app. dublinDayStr → YYYY-MM-DD
-  // in Dublin; we then canonicalise that to a UTC-midnight epoch-ms purely so the
-  // ±DAY consecutive-day arithmetic below still holds (Dublin calendar days are
-  // exactly 24h apart in this y/m/d representation).
-  const dayMs = (iso) => {
-    const [y, mo, d] = dublinDayStr(iso).split('-').map(Number)
-    return Date.UTC(y, mo - 1, d)
-  }
+  // Bucket each session into its Europe/Dublin calendar day.
   const days = new Set()
   for (const s of sessions || []) {
     const iso = s && (s.started_at || s.ended_at)
-    if (iso) days.add(dayMs(iso))
+    if (iso) days.add(dublinDateKey(iso))
   }
   if (days.size === 0) return { current: 0, best: 0, lastDayMs: null }
 
-  const sorted = [...days].sort((a, b) => b - a) // unique day-ms, most recent first
-  const lastDayMs = sorted[0]
+  // Sort descending: 'YYYY-MM-DD' strings sort lexicographically.
+  const sorted = [...days].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
+  // lastDayMs = UTC-ms of Dublin midnight for the most recent day, the
+  // same anchor streakAtRisk compares against (Dublin day boundaries).
+  const lastDayMs = dublinDayStartMs(sorted[0])
 
-  const todayMs = dayMs(nowMs)
+  const todayKey = dublinDateKey(nowMs)
+  const yesterdayKey = dublinAddDays(todayKey, -1)
 
   let current = 0
-  if (lastDayMs === todayMs || lastDayMs === todayMs - DAY) {
+  if (sorted[0] === todayKey || sorted[0] === yesterdayKey) {
     current = 1
-    let cursor = lastDayMs
+    let cursor = sorted[0]
     for (let i = 1; i < sorted.length; i++) {
-      if (sorted[i] === cursor - DAY) { current++; cursor -= DAY } else break
+      // The previous Europe/Dublin calendar day.
+      const prevKey = dublinAddDays(cursor, -1)
+      if (sorted[i] === prevKey) { current++; cursor = sorted[i] } else break
     }
   }
 
   let best = 1
   let run = 1
   for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i] === sorted[i - 1] - DAY) { run++; if (run > best) best = run } else { run = 1 }
+    const prevKey = dublinAddDays(sorted[i - 1], -1)
+    if (sorted[i] === prevKey) { run++; if (run > best) best = run } else { run = 1 }
   }
   if (current > best) best = current
 
   return { current, best, lastDayMs }
+}
+
+/**
+ * Weeks-based training streak — the count of consecutive Europe/Dublin ISO
+ * weeks (Mon-anchored) in which the member trained at least `minPerWeek`
+ * sessions, ending on the CURRENT week or the LAST completed week (one-week
+ * grace so a member who hasn't trained yet THIS week still sees last week's
+ * streak). This is the streak the Home hero leads with — it rewards a weekly
+ * training habit rather than day-perfect consistency.
+ *
+ * Distinct from `currentStreak` (consecutive days). Returns 0 when the most
+ * recent qualifying week is older than last week.
+ *
+ * @param {Array<{started_at?:string, ended_at?:string}>} sessions
+ * @param {object} [opts]
+ * @param {number} [opts.minPerWeek=1]  sessions needed for a week to "count"
+ * @param {number} [opts.nowMs=Date.now()]
+ * @returns {{current:number, best:number, thisWeekCount:number, minPerWeek:number}}
+ */
+export function weeklyStreak(sessions, { minPerWeek = 1, nowMs = Date.now() } = {}) {
+  const min = Math.max(1, Number(minPerWeek) || 1)
+
+  // Count sessions per Dublin ISO-week-start (UTC ms of that Monday 00:00).
+  const perWeek = new Map()
+  for (const s of sessions || []) {
+    const iso = s && (s.started_at || s.ended_at)
+    if (!iso) continue
+    const wk = dublinWeekStartMs(iso)
+    perWeek.set(wk, (perWeek.get(wk) || 0) + 1)
+  }
+
+  const thisWeekMs = dublinWeekStartMs(nowMs)
+  // Previous week's Monday: step back 7 days from mid-week to dodge any DST edge.
+  const prevWeekMs = (ms) => dublinWeekStartMs(ms - 3.5 * 24 * 3600 * 1000)
+  const thisWeekCount = perWeek.get(thisWeekMs) || 0
+
+  if (perWeek.size === 0) return { current: 0, best: 0, thisWeekCount: 0, minPerWeek: min }
+
+  const qualifies = (ms) => (perWeek.get(ms) || 0) >= min
+
+  // current: walk back from this week (or last week if this week hasn't
+  // qualified yet) while each week qualifies.
+  let current = 0
+  let anchor = qualifies(thisWeekMs) ? thisWeekMs : prevWeekMs(thisWeekMs)
+  while (qualifies(anchor)) {
+    current++
+    anchor = prevWeekMs(anchor)
+  }
+
+  // best: longest run of consecutive qualifying weeks anywhere in the data.
+  const qualifyingWeeks = [...perWeek.entries()]
+    .filter(([, c]) => c >= min)
+    .map(([ms]) => ms)
+    .sort((a, b) => a - b)
+  let best = 0
+  let run = 0
+  let prev = null
+  for (const ms of qualifyingWeeks) {
+    if (prev != null && prevWeekMs(ms) === prev) run++
+    else run = 1
+    if (run > best) best = run
+    prev = ms
+  }
+  if (current > best) best = current
+
+  return { current, best, thisWeekCount, minPerWeek: min }
 }
 
 // ── public summary builder ──────────────────────────────────────
@@ -328,8 +405,8 @@ export function currentStreak(sessions, nowMs = Date.now()) {
 export function buildSessionAnalytics({ thisSession, history, eventTypeName, nowMs = Date.now() }) {
   const historyExclThis = (history || []).filter((s) => s.id !== thisSession.id)
   const sameType = sameClass(historyExclThis, thisSession.class_name)
-  // Item 7 — the "last 8" MUST be the 8 most RECENT qualifying sessions. The
-  // loader returns rows in no guaranteed order, so a bare .slice(0, 8) took an
+  // The "last 8" MUST be the 8 most RECENT qualifying sessions. The loader
+  // returns rows in no guaranteed order, so a bare .slice(0, 8) took an
   // arbitrary 8 whenever a member had >8 in-window sessions of a class/category,
   // making the mean/percentile non-deterministic. Sort started_at DESC first.
   const sameTypeRecent = byStartedDesc(withinDays(sameType, RECENT_DAYS, nowMs)).slice(0, 8)

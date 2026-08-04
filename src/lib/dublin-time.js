@@ -185,4 +185,32 @@ export function dublinDayRangeMs(startDate, endDate) {
   return { startMs, endMs }
 }
 
+/**
+ * Europe/Dublin calendar day → the calendar day `n` days before/after,
+ * as a 'YYYY-MM-DD' key. Walks via Dublin midnights so it never drifts
+ * across a DST edge.
+ * @param {string} dateKey 'YYYY-MM-DD'
+ * @param {number} n days to add (negative to subtract)
+ */
+export function dublinAddDays(dateKey, n) {
+  // Anchor at noon Dublin then step whole days: noon is far from both
+  // DST transition hours, so + n*DAY stays on the intended calendar day
+  // regardless of a 23h or 25h civil day in between.
+  const noonMs = dublinDayStartMs(dateKey) + 12 * 3600 * 1000
+  return dublinDateKey(noonMs + n * DAY_MS)
+}
+
+/**
+ * UTC-ms start of the Europe/Dublin ISO week (Monday 00:00 Dublin)
+ * containing the given instant.
+ * @param {number|string|Date} isoOrMs
+ */
+export function dublinWeekStartMs(isoOrMs) {
+  const key = dublinDateKey(isoOrMs)
+  const [y, m, d] = key.split('-').map(Number)
+  const dayNum = (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7 // Mon=0
+  const mondayKey = dublinAddDays(key, -dayNum)
+  return dublinDayStartMs(mondayKey)
+}
+
 export { DAY_MS as DUBLIN_DAY_MS }

@@ -4,6 +4,7 @@
 // fixture-testable.
 
 import { currentStreak } from '@/lib/hr-analytics'
+import { dublinDateKey, dublinDayStartMs } from '@/lib/dublin-time'
 
 function pointsPhrase(effortPoints) {
   return Number.isFinite(effortPoints) ? `${effortPoints} UN1T Points` : 'Tap to see your stats'
@@ -113,11 +114,14 @@ export function buildReactionPush({ fromName, reactionEmoji, context }) {
  * (not today) and the run ending yesterday is >= minStreak; else 0.
  */
 export function streakAtRisk(sessions, nowMs = Date.now(), minStreak = 3) {
-  const DAY = 24 * 3600 * 1000
-  const n = new Date(nowMs)
-  const today = Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate())
+  // currentStreak returns lastDayMs as the Dublin-midnight instant of the
+  // most recent training day. "Yesterday" must be the Dublin-midnight of
+  // the previous Dublin calendar day (not nowMs - 24h), so this stays
+  // correct across an IST/GMT DST-transition night.
+  const yesterdayKey = dublinDateKey(dublinDayStartMs(dublinDateKey(nowMs)) - 12 * 3600 * 1000)
+  const yesterdayMs = dublinDayStartMs(yesterdayKey)
   const st = currentStreak(sessions, nowMs)
-  if (st.lastDayMs === today - DAY && st.current >= minStreak) return st.current
+  if (st.lastDayMs === yesterdayMs && st.current >= minStreak) return st.current
   return 0
 }
 

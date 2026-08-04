@@ -94,6 +94,19 @@ describe('streakAtRisk', () => {
     const ss = [{ started_at: dayAgo(2) }, { started_at: dayAgo(3) }, { started_at: dayAgo(4) }]
     expect(streakAtRisk(ss, N, 3)).toBe(0)
   })
+
+  it('flags at the Dublin midnight edge (23:30Z BST = 00:30 next Dublin day)', () => {
+    // 2026-06-20T23:30Z is already 00:30 on 06-21 in Dublin (IST). A member
+    // whose run ended on the 06-20 Dublin day is at risk NOW — a UTC "today"
+    // comparison (still 06-20 in UTC) misses this whole 23:00-24:00Z window.
+    const edge = new Date('2026-06-20T23:30:00Z').getTime()
+    const ss = [
+      { started_at: '2026-06-20T10:00:00Z' },
+      { started_at: '2026-06-19T10:00:00Z' },
+      { started_at: '2026-06-18T10:00:00Z' },
+    ]
+    expect(streakAtRisk(ss, edge, 3)).toBe(3)
+  })
 })
 
 describe('buildTargetHitPush', () => {
