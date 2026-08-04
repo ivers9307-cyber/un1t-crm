@@ -25,7 +25,9 @@ const config = [
     ],
   },
   {
-    files: ['src/**/*.{js,jsx}'],
+    // shared/ is the web/mobile data seam — full of Supabase fetchers, so the
+    // same defect classes (1k-row cap, Dublin-time parsing) apply there too.
+    files: ['src/**/*.{js,jsx}', 'shared/**/*.js'],
     // react-hooks + @next/next are registered with NO rules enabled, only so the
     // inline `// eslint-disable react-hooks/*` / `@next/next/*` comments in the
     // components don't trip "Definition for rule not found" under this standalone

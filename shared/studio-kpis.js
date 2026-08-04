@@ -16,13 +16,26 @@
 //   only (Hatch has no Glofox connection) → fetchFloor returns
 //   noData: true when a location has no occurrences in the window.
 
-import { isoDate, startOfMonth } from './dashboard-data.js'
+import { isoDate } from './dashboard-data.js'
 import {
   computeMrr, summariseCancels, computeEngagement, computeFloor,
-  computeActivation, ACTIVATION_WINDOW_DAYS,
+  computeActivation, windowBounds, windowDelta,
+  ACTIVATION_WINDOW_DAYS, WINDOW_DAYS,
 } from './studio-kpi-math.js'
 
 const MEMBER_STATUSES = ['member', 'credit_member']
+
+// Day the mig 456 trigger began logging membership transitions in prod
+// (mirrors CANCEL_TRACKING_START in src/lib/membership-flows.js, which
+// shared/ cannot import). A comparator window that starts before this
+// has no rows because nothing was recorded yet — NOT because nothing
+// happened, so any delta against it is suppressed rather than rendered
+// as a flattering improvement.
+const TRANSITIONS_TRACKING_START = '2026-07-29T00:00:00.000Z'
+
+function comparableTransitions(prevStartIso) {
+  return prevStartIso >= TRANSITIONS_TRACKING_START
+}
 const PAGE = 1000
 const HARD_LIMIT = 100_000
 
@@ -41,10 +54,14 @@ async function selectAll(makeQuery) {
   return { rows }
 }
 
-function daysAgoIso(days, now = new Date()) {
+function daysAgo(days, now = new Date()) {
   const d = new Date(now)
   d.setDate(d.getDate() - days)
-  return d.toISOString()
+  return d
+}
+
+function daysAgoIso(days, now = new Date()) {
+  return daysAgo(days, now).toISOString()
 }
 
 // ============================================================
@@ -78,66 +95,142 @@ export async function fetchMrr(supabase, locationId) {
 // Base growth MTD — joins, starts, cancels, net.
 // ============================================================
 
-// New-lead volume lives in fetchFunnelCounts' `entered` (joined_at is
-// stamped for every Glofox contact, leads included) — this fetcher is
-// strictly the recurring-membership flow. New MEMBERS this month =
-// fetchFunnelCounts' `converted` (write-once converted_at, mig 350).
+// Recurring-membership flow over the rolling window, with the preceding
+// window as the comparator. New-lead / new-member volume is
+// fetchAcquisition's job (joined_at is stamped for every Glofox contact,
+// leads included, so it is NOT a membership signal).
 export async function fetchGrowth(supabase, locationId, now = new Date()) {
   if (!locationId) return { success: false, error: 'No location' }
-  const monthStartIso = startOfMonth(now).toISOString()
+  const { startIso, prevStartIso } = windowBounds(now)
 
-  const [starts, cancels] = await Promise.all([
-    supabase.from('membership_transitions')
+  const countKind = (kind, fromIso, toIso) => {
+    let q = supabase.from('membership_transitions')
       .select('id', { count: 'exact', head: true })
       .eq('location_id', locationId)
-      .eq('kind', 'recurring_start')
-      .gte('occurred_at', monthStartIso),
-    supabase.from('membership_transitions')
-      .select('id', { count: 'exact', head: true })
-      .eq('location_id', locationId)
-      .eq('kind', 'recurring_cancel')
-      .gte('occurred_at', monthStartIso),
+      .eq('kind', kind)
+      .gte('occurred_at', fromIso)
+    if (toIso) q = q.lt('occurred_at', toIso)
+    return q
+  }
+
+  const [starts, cancels, prevStarts, prevCancels] = await Promise.all([
+    countKind('recurring_start', startIso),
+    countKind('recurring_cancel', startIso),
+    countKind('recurring_start', prevStartIso, startIso),
+    countKind('recurring_cancel', prevStartIso, startIso),
   ])
-  const err = starts.error || cancels.error
+  const err = starts.error || cancels.error || prevStarts.error || prevCancels.error
   if (err) return { success: false, error: err.message }
 
+  const net = (starts.count || 0) - (cancels.count || 0)
+  const prevNet = (prevStarts.count || 0) - (prevCancels.count || 0)
   return {
     success: true,
     data: {
-      recurringStartsMTD: starts.count || 0,
-      recurringCancelsMTD: cancels.count || 0,
-      netRecurringMTD: (starts.count || 0) - (cancels.count || 0),
+      windowDays: WINDOW_DAYS,
+      recurringStarts: starts.count || 0,
+      recurringCancels: cancels.count || 0,
+      netRecurring: net,
+      netRecurringDelta: comparableTransitions(prevStartIso) ? windowDelta(net, prevNet) : null,
     },
   }
 }
 
 // ============================================================
-// Revenue churn MTD — cancels priced at their stamped (mig 480)
-// price, tenure-split on the contact's joined_at. estYieldCents
-// prices pre-480 rows (estimate, labelled).
+// Acquisition — leads in, members out, over the same rolling window.
+// Deliberately NOT fetchFunnelCounts: that one is calendar-month by
+// design and the Business dashboard depends on those semantics.
+// ============================================================
+
+export async function fetchAcquisition(supabase, locationId, now = new Date()) {
+  if (!locationId) return { success: false, error: 'No location' }
+  const { startIso, prevStartIso } = windowBounds(now)
+
+  const countCol = (col, fromIso, toIso) => {
+    let q = supabase.from('contacts')
+      .select('id', { count: 'exact', head: true })
+      .eq('location_id', locationId)
+      .gte(col, fromIso)
+    if (toIso) q = q.lt(col, toIso)
+    return q
+  }
+
+  const [leads, members, prevLeads, prevMembers, trials] = await Promise.all([
+    countCol('joined_at', startIso),
+    countCol('converted_at', startIso),
+    countCol('joined_at', prevStartIso, startIso),
+    countCol('converted_at', prevStartIso, startIso),
+    // Point-in-time, not windowed: who is sitting at the decision point
+    // right now.
+    supabase.from('contacts')
+      .select('id', { count: 'exact', head: true })
+      .eq('location_id', locationId)
+      .eq('pipeline_stage_slug', 'trial_done'),
+  ])
+  const err = leads.error || members.error || prevLeads.error || prevMembers.error || trials.error
+  if (err) return { success: false, error: err.message }
+
+  const pct = (num, den) => (den > 0 ? Math.round((num / den) * 100) : null)
+  const conversionPct = pct(members.count || 0, leads.count || 0)
+  return {
+    success: true,
+    data: {
+      windowDays: WINDOW_DAYS,
+      leads: leads.count || 0,
+      newMembers: members.count || 0,
+      trialsDone: trials.count || 0,
+      conversionPct,
+      // Exposed for CAC's comparator (spend ÷ members, both windows).
+      prevNewMembers: prevMembers.count || 0,
+      leadsDelta: windowDelta(leads.count || 0, prevLeads.count || 0),
+      newMembersDelta: windowDelta(members.count || 0, prevMembers.count || 0),
+      conversionDelta: windowDelta(conversionPct, pct(prevMembers.count || 0, prevLeads.count || 0)),
+    },
+  }
+}
+
+// ============================================================
+// Revenue churn over the rolling window — cancels priced at their
+// stamped (mig 480) price, tenure-split on the contact's joined_at.
+// estYieldCents prices pre-480 rows (estimate, labelled). One query
+// covers both windows; the split happens in memory.
 // ============================================================
 
 export async function fetchRevenueChurn(supabase, locationId, estYieldCents, now = new Date()) {
   if (!locationId) return { success: false, error: 'No location' }
-  const monthStartIso = startOfMonth(now).toISOString()
+  const { startIso, prevStartIso } = windowBounds(now)
 
-  const { data, error } = await supabase
+  const res = await selectAll((from, to) => supabase
     .from('membership_transitions')
     .select('occurred_at, price_cents, billing_interval, contacts!contact_id(joined_at)')
     .eq('location_id', locationId)
     .eq('kind', 'recurring_cancel')
-    .gte('occurred_at', monthStartIso)
-    .order('occurred_at', { ascending: true })
-    .limit(999)
-  if (error) return { success: false, error: error.message }
+    .gte('occurred_at', prevStartIso)
+    .order('id', { ascending: true })
+    .range(from, to))
+  if (res.error) return { success: false, error: res.error.message }
 
-  const summary = summariseCancels((data || []).map(r => ({
+  const shape = r => ({
     occurred_at: r.occurred_at,
     joined_at: r.contacts?.joined_at || null,
     price_cents: r.price_cents,
     interval: r.billing_interval,
-  })), estYieldCents || 0)
-  return { success: true, data: summary }
+  })
+  const current = res.rows.filter(r => r.occurred_at >= startIso).map(shape)
+  const previous = res.rows.filter(r => r.occurred_at < startIso).map(shape)
+
+  const summary = summariseCancels(current, estYieldCents || 0)
+  const prev = summariseCancels(previous, estYieldCents || 0)
+  return {
+    success: true,
+    data: {
+      ...summary,
+      windowDays: WINDOW_DAYS,
+      churnCentsDelta: comparableTransitions(prevStartIso)
+        ? windowDelta(summary.churnCents, prev.churnCents)
+        : null,
+    },
+  }
 }
 
 // ============================================================
@@ -233,27 +326,35 @@ export async function fetchFloor(supabase, locationId, now = new Date()) {
 }
 
 // ============================================================
-// Acquisition cost MTD — campaign-level ad spend over joins.
-// (ad_insights_daily stores campaign+adset+ad rows per day — the
-// level filter must stay in the query or spend triple-counts.)
+// Ad spend over the rolling window (+ the preceding one, for CAC's
+// comparator). ad_insights_daily.date is a DATE column, so the bounds
+// are day strings, not timestamps. The level filter must stay IN the
+// query — the table also holds adset+ad rows per day and summing
+// without it triple-counts spend.
 // ============================================================
 
-export async function fetchAdSpendMTD(supabase, locationId, now = new Date()) {
+export async function fetchAdSpend(supabase, locationId, now = new Date()) {
   if (!locationId) return { success: false, error: 'No location' }
-  const monthStartStr = isoDate(startOfMonth(now))
+  const startDay = isoDate(daysAgo(WINDOW_DAYS, now))
+  const prevStartDay = isoDate(daysAgo(WINDOW_DAYS * 2, now))
+
   const res = await selectAll((from, to) => supabase
     .from('ad_insights_daily')
-    .select('level, spend')
+    .select('level, spend, date')
     .eq('location_id', locationId)
     .eq('level', 'campaign')
-    .gte('date', monthStartStr)
+    .gte('date', prevStartDay)
     .order('id', { ascending: true })
     .range(from, to))
   if (res.error) return { success: false, error: res.error.message }
+
   let spend = 0
+  let prevSpend = 0
   for (const r of res.rows) {
     if (r.level !== 'campaign') continue
-    spend += Number(r.spend) || 0
+    const amount = Number(r.spend) || 0
+    if (r.date >= startDay) spend += amount
+    else prevSpend += amount
   }
-  return { success: true, data: { spendMTD: spend } }
+  return { success: true, data: { windowDays: WINDOW_DAYS, spend, prevSpend } }
 }
