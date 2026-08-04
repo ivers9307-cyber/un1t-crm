@@ -201,6 +201,35 @@ export function dublinAddDays(dateKey, n) {
 }
 
 /**
+ * Europe/Dublin ISO-week idempotency/period key.
+ * Returns 'YYYY-Www' where the week is the ISO-8601 week that the
+ * Dublin calendar day belongs to (weeks start Monday; the week-year can
+ * differ from the calendar year near Jan 1 / Dec 31).
+ * @param {number|string|Date} isoOrMs
+ */
+export function dublinIsoWeekKey(isoOrMs) {
+  const [y, m, d] = dublinDateKey(isoOrMs).split('-').map(Number)
+  // Work in a UTC proxy Date for the pure calendar arithmetic — no tz
+  // math needed once we're on the Dublin calendar date.
+  const date = new Date(Date.UTC(y, m - 1, d))
+  const dayNum = (date.getUTCDay() + 6) % 7 // Mon=0 … Sun=6
+  date.setUTCDate(date.getUTCDate() - dayNum + 3) // Thursday of this ISO week
+  const isoYear = date.getUTCFullYear()
+  const firstThursday = new Date(Date.UTC(isoYear, 0, 4))
+  const ftDayNum = (firstThursday.getUTCDay() + 6) % 7
+  const week = 1 + Math.round(((date - firstThursday) / DAY_MS - 3 + ftDayNum) / 7)
+  return `${isoYear}-W${String(week).padStart(2, '0')}`
+}
+
+/**
+ * Europe/Dublin month key 'YYYY-MM' for a UTC instant.
+ * @param {number|string|Date} isoOrMs
+ */
+export function dublinMonthKey(isoOrMs) {
+  return dublinDateKey(isoOrMs).slice(0, 7)
+}
+
+/**
  * UTC-ms start of the Europe/Dublin ISO week (Monday 00:00 Dublin)
  * containing the given instant.
  * @param {number|string|Date} isoOrMs
@@ -211,6 +240,16 @@ export function dublinWeekStartMs(isoOrMs) {
   const dayNum = (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7 // Mon=0
   const mondayKey = dublinAddDays(key, -dayNum)
   return dublinDayStartMs(mondayKey)
+}
+
+/**
+ * UTC-ms start of the Europe/Dublin calendar month (1st 00:00 Dublin)
+ * containing the given instant.
+ * @param {number|string|Date} isoOrMs
+ */
+export function dublinMonthStartMs(isoOrMs) {
+  const [y, m] = dublinDateKey(isoOrMs).split('-').map(Number)
+  return dublinDayStartMs({ y, mo: m, d: 1 })
 }
 
 export { DAY_MS as DUBLIN_DAY_MS }
