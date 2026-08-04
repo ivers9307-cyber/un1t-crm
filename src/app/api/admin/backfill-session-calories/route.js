@@ -7,6 +7,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
 import { resolveBodyMetrics } from '@/lib/body-metrics'
 import { estimateCaloriesKcal } from '@/lib/calories'
+import { zonesTotalSeconds } from '@/lib/heart-rate'
 import { selectAll } from '@/lib/select-all'
 
 export const runtime = 'nodejs'
@@ -28,7 +29,7 @@ export async function POST(request) {
   try {
     sessions = await selectAll((from, to) => db
       .from('heart_rate_sessions')
-      .select('id, contact_id, started_at, ended_at, avg_hr_bpm, calories_kcal')
+      .select('id, contact_id, started_at, ended_at, avg_hr_bpm, calories_kcal, zones_seconds')
       .eq('location_id', locationId)
       .eq('source', 'ble_bridge')
       .not('ended_at', 'is', null)
@@ -46,9 +47,17 @@ export async function POST(request) {
   let filled = 0, skipped = 0
   for (const s of sessions) {
     if (!s.contact_id || s.avg_hr_bpm == null) { skipped++; continue }
-    const startMs = new Date(s.started_at).getTime()
+    // Duration = the session's gap-capped SAMPLED seconds (the zones_seconds
+    // sum endSession stored — the same totalSeconds summariseSession
+    // produces), NOT wall-clock ended_at − started_at. An auto-closed session
+    // sits open until the 4h backstop, so wall-clock re-mints the exact
+    // ~3,000-kcal ghost workout the endSession fix (item 6) removed. Zero
+    // sampled seconds → no samples → skip rather than overwrite with a
+    // fabricated number.
+    const totalSeconds = zonesTotalSeconds(s.zones_seconds)
+    if (totalSeconds <= 0) { skipped++; continue }
+    const durationMin = totalSeconds / 60
     const endMs = new Date(s.ended_at).getTime()
-    const durationMin = (endMs - startMs) / 60000
     const bm = await resolveBodyMetrics(db, s.contact_id, endMs)
     const kcal = estimateCaloriesKcal({ avgHr: s.avg_hr_bpm, durationMin, age: bm.age, weightKg: bm.weightKg, gender: bm.gender })
     if (kcal == null) { skipped++; continue }

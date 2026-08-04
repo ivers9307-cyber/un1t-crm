@@ -18,6 +18,7 @@ import {
   applyBatchToRunningSummary,
   flushRunningSummary,
   MAX_SAMPLE_GAP_SECONDS,
+  zonesTotalSeconds,
 } from './heart-rate.js'
 
 // ── ZONE_DEFS shape ──────────────────────────────────────────────
@@ -552,5 +553,33 @@ describe('applyBatchToRunningSummary — state round-trip / normalisation', () =
     expect(reloaded.sampleCount).toBe(mem.sampleCount)
     expect(reloaded.peakBpm).toBe(mem.peakBpm)
     expect(flushRunningSummary(reloaded, { maxHr: max })).toEqual(flushRunningSummary(mem, { maxHr: max }))
+  })
+})
+
+// C1 remainder — the calorie backfill recovers a session's ACTUAL sampled
+// duration from the stored zones_seconds sum instead of wall-clock
+// ended_at − started_at (which re-mints ghost kcal for 4h-auto-closed rows).
+describe('zonesTotalSeconds', () => {
+  it('sums the stored zones_seconds values (string or numeric keys)', () => {
+    expect(zonesTotalSeconds({ 1: 60, 2: 30, 3: 0, 4: 0, 5: 0 })).toBe(90)
+    expect(zonesTotalSeconds({ '1': 10, '5': 5 })).toBe(15)
+  })
+  it('matches summariseSession.totalSeconds for a real sample run', () => {
+    const t0 = Date.parse('2026-08-04T10:00:00Z')
+    const samples = Array.from({ length: 120 }, (_, i) => ({
+      recorded_at: new Date(t0 + i * 1000).toISOString(),
+      bpm: 140,
+    }))
+    const summary = summariseSession(samples, 190)
+    expect(zonesTotalSeconds(summary.zonesSeconds)).toBe(summary.totalSeconds)
+  })
+  it('returns 0 for null/empty/non-object input — the backfill must SKIP, not fabricate', () => {
+    expect(zonesTotalSeconds(null)).toBe(0)
+    expect(zonesTotalSeconds(undefined)).toBe(0)
+    expect(zonesTotalSeconds({})).toBe(0)
+    expect(zonesTotalSeconds('240')).toBe(0)
+  })
+  it('ignores non-numeric and negative values', () => {
+    expect(zonesTotalSeconds({ 1: 'x', 2: NaN, 3: -10, 4: 30 })).toBe(30)
   })
 })

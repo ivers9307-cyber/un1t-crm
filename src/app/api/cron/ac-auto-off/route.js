@@ -14,20 +14,28 @@
 //
 // Per-row error handling: a vendor blip on one device shouldn't
 // stop the loop for others. Failed rows get status='failed' +
-// failure_reason and stay there — the next tick re-picks 'failed'
-// rows, so the cron has a self-healing property until the vendor
-// recovers.
+// failure_reason and self-heal — but on a BACKOFF, not every tick
+// (C7 remainder): a failed row is only re-picked once its
+// updated_at (bumped by the mig 103 touch trigger on each failure
+// write) is older than FAILED_RETRY_BACKOFF_MS, and each vendor
+// failure raises a sendOpsAlert (org email / master-push fallback,
+// the glofox-data-quality convention) instead of a bare
+// console.warn. The backoff doubles as the alert rate limit:
+// at most ~one alert per hour per failing row.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { vendorTurnOff, loadDeviceWithLocation } from '@/lib/ac-devices'
-import { AC_SESSION_STATUS } from '@/lib/enums'
+import { failedRetryCutoffIso, buildAutoOffFailureAlert } from '@/lib/ac-auto-off'
+import { sendOpsAlert } from '@/lib/ops-alerts'
+import { AC_SESSION_STATUS, AC_SESSION_ACTIVE_STATUSES } from '@/lib/enums'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { logWarn } from '@/lib/log'
 
-// Cron picks up these statuses — 'on' and 'extended' are the live
-// states; 'failed' is included so a transient vendor error
-// self-heals on the next tick.
+// Statuses this cron owns. 'on' and 'extended' are the live states,
+// picked up every tick; 'failed' rows are picked up separately on
+// the retry backoff. The success-update guard below still checks
+// against all three.
 const CRON_PICKUP_STATUSES = [
   AC_SESSION_STATUS.ON, AC_SESSION_STATUS.EXTENDED, AC_SESSION_STATUS.FAILED,
 ]
@@ -43,15 +51,16 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  const nowIso = new Date().toISOString()
+  const nowMs = Date.now()
+  const nowIso = new Date(nowMs).toISOString()
 
   // Find expired sessions across every location. Service-role
-  // bypasses RLS — exactly what we want here. Include 'failed' so
-  // a transient vendor error self-heals on the next tick.
-  const { data: expired, error } = await db
+  // bypasses RLS — exactly what we want here. Live rows ('on' /
+  // 'extended') are picked up every tick.
+  const { data: liveRows, error } = await db
     .from('ac_sessions')
     .select('id, location_id, device_id, sensibo_pod_id, auto_off_at, status')
-    .in('status', CRON_PICKUP_STATUSES)
+    .in('status', AC_SESSION_ACTIVE_STATUSES)
     .not('auto_off_at', 'is', null)
     .lte('auto_off_at', nowIso)
     .order('auto_off_at', { ascending: true })
@@ -61,9 +70,28 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 
-  const stats = { found: expired?.length || 0, off: 0, failed: 0, skipped: 0 }
+  // 'failed' rows self-heal on a backoff, not every tick: only rows
+  // whose last write is older than the retry window get re-picked.
+  // Separate query so a pile-up of failed rows can never starve the
+  // live pickup out of its limit.
+  const { data: failedRows, error: failedErr } = await db
+    .from('ac_sessions')
+    .select('id, location_id, device_id, sensibo_pod_id, auto_off_at, status')
+    .eq('status', AC_SESSION_STATUS.FAILED)
+    .not('auto_off_at', 'is', null)
+    .lte('auto_off_at', nowIso)
+    .lt('updated_at', failedRetryCutoffIso(nowMs))
+    .order('auto_off_at', { ascending: true })
+    .limit(20)
 
-  for (const row of expired || []) {
+  if (failedErr) {
+    return NextResponse.json({ success: false, error: failedErr.message }, { status: 500 })
+  }
+
+  const expired = [...(liveRows || []), ...(failedRows || [])]
+  const stats = { found: expired.length, off: 0, failed: 0, skipped: 0 }
+
+  for (const row of expired) {
     if (!row.device_id) {
       // Legacy session with no device link (pre-mig 210 and the
       // backfill didn't match — should be vanishingly rare). Mark
@@ -98,7 +126,9 @@ export async function GET(request) {
     const off = await vendorTurnOff(loaded.device, loaded.location)
     if (!off.ok) {
       // Vendor refused (offline, rate-limited, creds wiped, etc.).
-      // Stay in 'failed' so the next tick retries.
+      // Stay in 'failed' — this write bumps updated_at (touch
+      // trigger), so the row is re-picked only after the retry
+      // backoff elapses.
       await db
         .from('ac_sessions')
         .update({
@@ -107,7 +137,15 @@ export async function GET(request) {
         })
         .eq('id', row.id)
       stats.failed++
-      console.warn(`[ac-auto-off] device ${row.device_id} (${loaded.device.label}): ${off.error}`)
+      logWarn('cron-ac-auto-off', `device ${row.device_id} (${loaded.device.label}) auto-off failed`, { err: off.error })
+      // Tell an operator the unit may still be running — sendOpsAlert
+      // is best-effort/never throws, and the backoff pickup caps this
+      // at ~one alert per hour per row while the vendor stays down.
+      await sendOpsAlert(buildAutoOffFailureAlert({
+        device: loaded.device,
+        location: loaded.location,
+        failureReason: off.error,
+      }), { db })
       continue
     }
 
