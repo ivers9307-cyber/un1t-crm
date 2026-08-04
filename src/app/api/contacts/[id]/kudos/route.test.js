@@ -49,7 +49,12 @@ const COACH = { id: USER_ID, role: 'head_coach', full_name: 'Coach Casey', locat
 
 // ─── DB mock helpers ──────────────────────────────────────────────────────────
 
-function makeDb(insertSpy, contact = CONTACT) {
+// Default seeded session: belongs to the recipient, same location — a valid
+// session_id link. Pass `session: null` to model "not found", or a row with a
+// different contact_id/location_id to model the mismatch cases.
+const SESSION = { id: SESSION_ID, contact_id: CONTACT_ID, location_id: LOC_ID }
+
+function makeDb(insertSpy, contact = CONTACT, session = SESSION) {
   return {
     from: vi.fn((table) => {
       if (table === 'contacts') {
@@ -57,6 +62,15 @@ function makeDb(insertSpy, contact = CONTACT) {
           select: vi.fn(() => ({
             eq: vi.fn(() => ({
               single: vi.fn(() => Promise.resolve({ data: contact, error: null })),
+            })),
+          })),
+        }
+      }
+      if (table === 'heart_rate_sessions') {
+        return {
+          select: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              maybeSingle: vi.fn(() => Promise.resolve({ data: session, error: null })),
             })),
           })),
         }
@@ -153,7 +167,7 @@ describe('POST /api/contacts/[id]/kudos', () => {
     expect(insertSpy.captured().sender_name).toBe('Your coach')
   })
 
-  it('passes emoji and session_id through', async () => {
+  it('passes emoji and a VALID session_id (recipient\'s own, in-location) through', async () => {
     const insertSpy = echoInsert()
     createServerClient.mockReturnValue(makeDb(insertSpy))
 
@@ -161,6 +175,52 @@ describe('POST /api/contacts/[id]/kudos', () => {
     const payload = insertSpy.captured()
     expect(payload.emoji).toBe('🔥')
     expect(payload.session_id).toBe(SESSION_ID)
+  })
+
+  it('rejects a session_id belonging to ANOTHER member with 400 (re-audit)', async () => {
+    const insertSpy = vi.fn()
+    const otherMembersSession = { id: SESSION_ID, contact_id: 'f0000000-0000-0000-0000-000000000009', location_id: LOC_ID }
+    createServerClient.mockReturnValue(makeDb(insertSpy, CONTACT, otherMembersSession))
+
+    const res = await POST(postReq({ message: 'Hi', session_id: SESSION_ID }), props)
+    expect(res.status).toBe(400)
+    const json = await res.json()
+    expect(json.error).toMatch(/does not belong/)
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('rejects a session_id from another location with 400', async () => {
+    const insertSpy = vi.fn()
+    const otherLocSession = { id: SESSION_ID, contact_id: CONTACT_ID, location_id: OTHER_LOC }
+    createServerClient.mockReturnValue(makeDb(insertSpy, CONTACT, otherLocSession))
+
+    const res = await POST(postReq({ message: 'Hi', session_id: SESSION_ID }), props)
+    expect(res.status).toBe(400)
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('rejects a nonexistent session_id with 400', async () => {
+    const insertSpy = vi.fn()
+    createServerClient.mockReturnValue(makeDb(insertSpy, CONTACT, null))
+
+    const res = await POST(postReq({ message: 'Hi', session_id: SESSION_ID }), props)
+    expect(res.status).toBe(400)
+    expect(insertSpy).not.toHaveBeenCalled()
+  })
+
+  it('never returns the raw DB error message on insert failure', async () => {
+    const failingInsert = vi.fn(() => ({
+      select: vi.fn(() => ({
+        single: vi.fn(() => Promise.resolve({ data: null, error: { message: 'duplicate key value violates unique constraint "secret_internal_idx"' } })),
+      })),
+    }))
+    createServerClient.mockReturnValue(makeDb(failingInsert))
+
+    const res = await POST(postReq({ message: 'Hi' }), props)
+    expect(res.status).toBe(500)
+    const json = await res.json()
+    expect(json.error).toBe('Could not send kudos')
+    expect(JSON.stringify(json)).not.toContain('secret_internal_idx')
   })
 
   it('trims the message before insert', async () => {
