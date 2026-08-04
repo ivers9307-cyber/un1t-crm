@@ -433,11 +433,16 @@ export async function fetchStudioDashboardData(supabase, locationId) {
       .eq('location_id', locationId)
       .eq('status', 'pending'),
 
+    // joined_at, NOT lead_created_at: the latter defaults to NOW() at
+    // insert (mig 001), so every bulk-imported contact carries its
+    // import day and any import spikes this count into the thousands.
+    // joined_at is the Glofox-side signup date — the same signal
+    // fetchFunnelCounts uses for "entered" below.
     supabase
       .from('contacts')
       .select('id', { count: 'exact', head: true })
       .eq('location_id', locationId)
-      .gte('lead_created_at', weekStartIso),
+      .gte('joined_at', weekStartIso),
 
     supabase
       .from('whatsapp_conversations')
