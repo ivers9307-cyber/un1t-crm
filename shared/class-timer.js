@@ -138,21 +138,47 @@ export function applySkip(run, timeline, direction, nowMs) {
 /**
  * Pure: pick the template whose `glofox_program` best matches a live class name
  * (CLASS-TIMER PR4 — "DR1VE is live → load DR1VE intervals?"). `templates` is
- * assumed ordered by preference (most-recently-updated first). Case-insensitive,
- * trimmed; matches on equality OR either-contains-the-other so a "DR1VE" tag
- * still catches a "DR1VE 45" / "DR1VE Express" class. Returns the matched
- * template object, or null. Templates with a blank `glofox_program` are skipped.
+ * assumed ordered by preference (most-recently-updated first).
+ *
+ * Matching is WHOLE-TOKEN, not substring (audit C10 — a bare either-contains
+ * made a "RIDE" tag match a "PRIDE" class). Both sides are normalised
+ * (case-insensitive, trimmed) and split into alphanumeric tokens; a template
+ * matches when its full token sequence appears as a contiguous run of whole
+ * tokens in the class name (so a "DR1VE" tag still catches "DR1VE 45" /
+ * "DR1VE Express"), or vice versa (a "DR1VE intervals" tag still catches a
+ * class named just "DR1VE"). "RIDE" vs "PRIDE" share no whole token → no
+ * match. Returns the matched template object, or null. Templates with a
+ * blank `glofox_program` are skipped.
  */
 export function matchTemplateToClassName(templates, className) {
   if (!Array.isArray(templates) || !className) return null
-  const target = String(className).trim().toLowerCase()
-  if (!target) return null
+  const targetTokens = tokenizeProgramName(className)
+  if (targetTokens.length === 0) return null
   for (const t of templates) {
-    const prog = (t?.glofox_program || '').trim().toLowerCase()
-    if (!prog) continue
-    if (target === prog || target.includes(prog) || prog.includes(target)) return t
+    const progTokens = tokenizeProgramName(t?.glofox_program || '')
+    if (progTokens.length === 0) continue
+    if (hasContiguousTokenRun(targetTokens, progTokens) || hasContiguousTokenRun(progTokens, targetTokens)) {
+      return t
+    }
   }
   return null
+}
+
+/** Normalise a program/class name into lowercase alphanumeric tokens. */
+function tokenizeProgramName(value) {
+  return String(value).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+}
+
+/** Whether `needle` appears in `haystack` as a contiguous run of whole tokens. */
+function hasContiguousTokenRun(haystack, needle) {
+  if (needle.length === 0 || needle.length > haystack.length) return false
+  outer: for (let i = 0; i + needle.length <= haystack.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) continue outer
+    }
+    return true
+  }
+  return false
 }
 
 /** Pure: the DB patch for a run control action. {} = no-op. */

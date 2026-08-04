@@ -52,8 +52,9 @@ describe('sha256Hex', () => {
 // ── verifyBridgeToken ──────────────────────────────────────────
 
 // The lookup is now `.from().select().or().maybeSingle()` (matches either the
-// current OR the previous/grace token hash).
-function mockDb({ row, error } = {}) {
+// current OR the previous/grace token hash). `rpc` backs the failed-auth
+// limiter (rate_limit_hit) — recorded ONLY on failed verification.
+function mockDb({ row, error, rpcCount = 1 } = {}) {
   return {
     from: vi.fn(() => ({
       select: vi.fn(() => ({
@@ -62,6 +63,7 @@ function mockDb({ row, error } = {}) {
         })),
       })),
     })),
+    rpc: vi.fn(() => Promise.resolve({ data: rpcCount, error: null })),
   }
 }
 
@@ -82,6 +84,13 @@ function bridgeRow(rawToken, overrides = {}) {
 }
 
 describe('verifyBridgeToken', () => {
+  // The failure-limiter path calls createServerClient() itself when the
+  // failure happens before the lookup client exists (parse failures), so
+  // give every test a working default db.
+  beforeEach(() => {
+    createServerClient.mockReturnValue(mockDb({ row: null }))
+  })
+
   it('returns null when no Authorization header is present', async () => {
     const fakeRequest = new Request('http://localhost/api/bridge/heartbeat', { method: 'POST' })
     expect(await verifyBridgeToken(fakeRequest)).toBe(null)
@@ -225,5 +234,68 @@ describe('verifyBridgeToken', () => {
       const out = await verifyBridgeToken('Bearer bbr_validtoken')
       expect(out?.status).toBe(status)
     }
+  })
+
+  // ── failed-auth rate limiter (audit H2) ────────────────────────
+  // Hits are recorded per IP ONLY on failed verification; successful auth
+  // never touches the limiter (the ~2s sample hot path pays zero extra RPCs).
+
+  function requestWithIp(headers = {}) {
+    return new Request('http://localhost/api/bridge/heartbeat', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '203.0.113.7', ...headers },
+    })
+  }
+
+  it('records a failed-auth hit (keyed on IP) when the token is unknown', async () => {
+    const db = mockDb({ row: null })
+    createServerClient.mockReturnValue(db)
+    const out = await verifyBridgeToken(requestWithIp({ authorization: 'Bearer bbr_wrongguess' }))
+    expect(out).toBe(null)
+    expect(db.rpc).toHaveBeenCalledTimes(1)
+    expect(db.rpc).toHaveBeenCalledWith('rate_limit_hit', expect.objectContaining({
+      p_key: 'bridge-auth-fail:203.0.113.7',
+    }))
+  })
+
+  it('records a failed-auth hit on a missing/malformed Authorization header', async () => {
+    const db = mockDb({ row: null })
+    createServerClient.mockReturnValue(db)
+    await verifyBridgeToken(requestWithIp())
+    expect(db.rpc).toHaveBeenCalledTimes(1)
+    expect(db.rpc).toHaveBeenCalledWith('rate_limit_hit', expect.objectContaining({
+      p_key: 'bridge-auth-fail:203.0.113.7',
+    }))
+  })
+
+  it('NEVER touches the limiter on successful auth (zero extra RPCs on the hot path)', async () => {
+    const db = mockDb({ row: bridgeRow('bbr_validtoken') })
+    createServerClient.mockReturnValue(db)
+    const out = await verifyBridgeToken(requestWithIp({ authorization: 'Bearer bbr_validtoken' }))
+    expect(out?.bridgeId).toBe('bridge-1')
+    expect(db.rpc).not.toHaveBeenCalled()
+  })
+
+  it('still returns null (not a throw) when an IP is over the failure limit', async () => {
+    const db = mockDb({ row: null, rpcCount: 10_000 }) // way over max
+    createServerClient.mockReturnValue(db)
+    const out = await verifyBridgeToken(requestWithIp({ authorization: 'Bearer bbr_wrongguess' }))
+    expect(out).toBe(null)
+  })
+
+  it('fails open: a limiter RPC error never changes the (rejected) outcome', async () => {
+    const db = mockDb({ row: null })
+    db.rpc = vi.fn(() => Promise.resolve({ data: null, error: { message: 'rpc down' } }))
+    createServerClient.mockReturnValue(db)
+    const out = await verifyBridgeToken(requestWithIp({ authorization: 'Bearer bbr_wrongguess' }))
+    expect(out).toBe(null)
+  })
+
+  it('skips the limiter for raw header-string input (no network context to key on)', async () => {
+    const db = mockDb({ row: null })
+    createServerClient.mockReturnValue(db)
+    const out = await verifyBridgeToken('Bearer bbr_wrongguess')
+    expect(out).toBe(null)
+    expect(db.rpc).not.toHaveBeenCalled()
   })
 })

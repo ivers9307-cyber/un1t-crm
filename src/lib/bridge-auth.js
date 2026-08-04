@@ -38,8 +38,17 @@
 
 import { createHash, randomBytes } from 'node:crypto'
 import { createServerClient } from '@/lib/supabase'
+import { checkRateLimit, getClientIp } from '@/lib/rate-limit'
 
 const TOKEN_PREFIX = 'bbr_'
+
+// Failed-auth limiter (audit H2): counted ONLY on FAILED token verification,
+// so the success hot path (a live class heartbeats + samples every ~2s) pays
+// ZERO extra RPCs. 20 failures / 15 min per IP is far above anything a
+// mis-provisioned Pi produces while making unlimited token guessing loud and
+// slow. Fail-open like the rest of rate-limit.js — a limiter outage must
+// never take live HR ingest down.
+export const AUTH_FAIL_LIMIT = { max: 20, windowMs: 15 * 60_000 }
 
 // Rotation grace window: how long the PREVIOUS token keeps authenticating
 // after a rotation, so live HR ingest doesn't drop while the Pi is updated.
@@ -84,6 +93,10 @@ export function sha256Hex(input) {
  * response — both are 401, and tighter error info just helps an
  * attacker enumerate.
  *
+ * Every failure path records a per-IP hit against AUTH_FAIL_LIMIT
+ * (see rejectAuthFailure) so brute-force guessing is rate-tracked;
+ * a SUCCESSFUL verification never touches the limiter.
+ *
  * @param {Request|Headers|string} requestOrHeaderValue
  *        A Request, Headers, or the raw "Bearer xxx" string.
  * @returns {Promise<{
@@ -96,7 +109,7 @@ export function sha256Hex(input) {
  */
 export async function verifyBridgeToken(requestOrHeaderValue) {
   const raw = parseBearer(requestOrHeaderValue)
-  if (!raw) return null
+  if (!raw) return rejectAuthFailure(requestOrHeaderValue)
   const hash = sha256Hex(raw)
   const db = createServerClient()
   // Match either the current token OR the grace-window previous token. The
@@ -113,13 +126,13 @@ export async function verifyBridgeToken(requestOrHeaderValue) {
       .or(`api_token_hash.eq.${hash},previous_token_hash.eq.${hash}`)
       .maybeSingle())
   } catch {
-    return null
+    return rejectAuthFailure(requestOrHeaderValue, db)
   }
-  if (error || !data) return null
+  if (error || !data) return rejectAuthFailure(requestOrHeaderValue, db)
 
   // A retired bridge must not authenticate even though its row (and hash)
   // survive (security audit L2).
-  if (BLOCKED_STATUSES.has(data.status)) return null
+  if (BLOCKED_STATUSES.has(data.status)) return rejectAuthFailure(requestOrHeaderValue, db)
 
   // If the match was on the current token, accept. Otherwise it matched the
   // previous token — accept only inside the grace window.
@@ -128,7 +141,7 @@ export async function verifyBridgeToken(requestOrHeaderValue) {
     const expiresAt = data.previous_token_expires_at
       ? new Date(data.previous_token_expires_at).getTime()
       : 0
-    if (!(expiresAt > Date.now())) return null
+    if (!(expiresAt > Date.now())) return rejectAuthFailure(requestOrHeaderValue, db)
   }
 
   return {
@@ -141,6 +154,43 @@ export async function verifyBridgeToken(requestOrHeaderValue) {
 }
 
 // ── internals ────────────────────────────────────────────────────
+
+/**
+ * Record one failed-auth hit for the caller's IP and return null (the
+ * uniform 401 sentinel every failure path already returns). The hit is
+ * fixed-window counted per IP via rate_limit_hit; when an IP is over
+ * AUTH_FAIL_LIMIT the attempt is rejected (it already is — verification
+ * failed) and we log so a guessing spree is visible in Vercel logs.
+ *
+ * Only Request/Headers inputs carry network context; a raw header-string
+ * caller has no IP to key on, so nothing is recorded. Fail-open: a limiter
+ * error never changes the outcome (still null) and never throws.
+ */
+async function rejectAuthFailure(input, db = null) {
+  try {
+    const ip = clientIpFrom(input)
+    if (!ip) return null
+    const result = await checkRateLimit(db || createServerClient(), `bridge-auth-fail:${ip}`, AUTH_FAIL_LIMIT)
+    if (!result.allowed) {
+      console.warn(`[bridge-auth] failed-auth rate limit exceeded for ${ip} (${AUTH_FAIL_LIMIT.max}/${AUTH_FAIL_LIMIT.windowMs}ms)`)
+    }
+  } catch (err) {
+    // Fail open — the request is already rejected; the limiter must never 500.
+    console.error('[bridge-auth] failure-limiter error (ignored):', err?.message || err)
+  }
+  return null
+}
+
+/** Client IP from a Request or Headers input; null for raw header strings. */
+function clientIpFrom(input) {
+  if (input && input.headers && typeof input.headers.get === 'function') {
+    return getClientIp(input) // Request
+  }
+  if (input && typeof input.get === 'function') {
+    return getClientIp({ headers: input }) // Headers
+  }
+  return null
+}
 
 function parseBearer(input) {
   let header = null
