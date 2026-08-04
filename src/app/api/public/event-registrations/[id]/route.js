@@ -12,12 +12,24 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { signCheckinToken } from '@/lib/event-checkin-tokens'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 
-export async function GET(_request, props) {
+export async function GET(request, props) {
   const params = await props.params;
   const db = createServerClient()
+
+  // Id-enumeration guard (audit H2a). Keyed on IP alone — an enumerator varies
+  // the UUID, so a per-id bucket would never fill (deposit-view convention).
+  // Sized 60-per-5-min, double the usual 30: RaceConfirmedPage polls this at
+  // 2s for up to 20s while the payment webhook lands (≈11 requests per buyer),
+  // so a couple of buyers behind one NAT must fit comfortably. Fails open
+  // inside checkRateLimit so a limiter outage never hides a confirmation.
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `event-reg:${ip}`, { max: 60, windowMs: 5 * 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
+
   const { data, error } = await db
     .from('race_registrations')
     .select(`

@@ -22,15 +22,26 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getLocationBranding } from '@/lib/location-branding'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
+export async function GET(request, props) {
   const params = await props.params;
   const { token } = params
   if (!token) return NextResponse.json({ error: 'missing_token' }, { status: 400 })
 
   const db = createServerClient()
+
+  // Abuse limiter (audit H2a) — POLLED route: the /tv page polls every ~3s
+  // (≈20 req/min per screen). 240-per-minute per token+IP is the tv-live
+  // polled-route convention, 12x headroom per display — a legit TV can never
+  // hit it — while capping token enumeration and floods. Run BEFORE the token
+  // lookup so enumeration attempts are still capped. Fails open inside
+  // checkRateLimit — a limiter outage must never black out a studio TV.
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `tv-content:${token}:${ip}`, { max: 240, windowMs: 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
 
   // 1. Resolve the token → display
   const { data: display, error: dErr } = await db
