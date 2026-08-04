@@ -245,9 +245,11 @@ export function emptyRunningSummary() {
  * an ISO string, any counter as null on a fresh session.
  *
  * @param {object|null|undefined} prev
+ * @param {{ zonePoints?: { [zoneId: number]: number } }} [opts]  location scoring
+ *   overrides for the derived-points recompute — omit for defaults.
  * @returns {ReturnType<typeof emptyRunningSummary>}
  */
-export function normaliseRunningState(prev) {
+export function normaliseRunningState(prev, opts = {}) {
   const base = emptyRunningSummary()
   if (!prev || typeof prev !== 'object') return base
   const z = prev.zonesSeconds || prev.zones_seconds || {}
@@ -268,8 +270,9 @@ export function normaliseRunningState(prev) {
     base.lastAtMs = Number.isFinite(ms) ? ms : null
   }
   // effortPoints is derived, not authoritative — recompute from zones so it is
-  // always consistent with the zone tally we just loaded.
-  base.effortPoints = effortPointsFromZones(base.zonesSeconds)
+  // always consistent with the zone tally we just loaded (and with the
+  // location's scoring config when the caller passes it).
+  base.effortPoints = effortPointsFromZones(base.zonesSeconds, opts.zonePoints)
   return base
 }
 
@@ -304,7 +307,9 @@ export const MAX_SAMPLE_GAP_SECONDS = 5
  * @returns {ReturnType<typeof emptyRunningSummary>}  the new state
  */
 export function applyBatchToRunningSummary(prevState, batchSamples, maxHr, opts = {}) {
-  const state = normaliseRunningState(prevState)
+  // Thread the scoring opts into the normalise so the empty-batch early return
+  // below can never rewrite custom-scored points with default-scored ones.
+  const state = normaliseRunningState(prevState, opts)
 
   // Defensive sort — the batch SHOULD already be recorded_at-ascending (the
   // bridge buffers in order), but a caller must never corrupt the aggregate on

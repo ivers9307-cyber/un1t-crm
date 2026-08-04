@@ -219,7 +219,7 @@ describe('insertHrSamples', () => {
   // `sessionsById` seeds the current running state per session; `allSamplesById`
   // seeds the full persisted sample set the fallback pages. Every update is
   // captured on the session's `updates[]`.
-  function makeDb({ upsertResult = { error: null, count: 0 }, sessionsById = {}, allSamplesById = {}, sessionSelectError = null, sessionUpdateError = null } = {}) {
+  function makeDb({ upsertResult = { error: null, count: 0 }, sessionsById = {}, allSamplesById = {}, locationsById = {}, sessionSelectError = null, sessionUpdateError = null } = {}) {
     const state = JSON.parse(JSON.stringify(sessionsById))
     const updates = []
     const upsert = vi.fn(() => Promise.resolve(upsertResult))
@@ -259,10 +259,18 @@ describe('insertHrSamples', () => {
       },
     })
 
+    const locationsSelect = () => {
+      const chain = {}
+      chain.eq = (col, id) => { chain._id = id; return chain }
+      chain.maybeSingle = () => Promise.resolve({ data: locationsById[chain._id] || null, error: null })
+      return chain
+    }
+
     return {
       from: vi.fn((table) => {
         if (table === 'hr_samples') return { upsert, select: () => hrSamplesSelect() }
         if (table === 'heart_rate_sessions') return { select: sessionsSelect, update: sessionsUpdate }
+        if (table === 'locations') return { select: locationsSelect }
         throw new Error(`unexpected table ${table}`)
       }),
       _updates: updates,
@@ -315,6 +323,44 @@ describe('insertHrSamples', () => {
     expect(p.live_last_bpm).toBe(145)
     expect(p.live_last_at).toBe('2026-05-21T16:00:02.000Z')
     expect(p.last_sample_at).toBe('2026-05-21T16:00:02.000Z')
+  })
+
+  it('scores the running aggregate with the LOCATION\'s zone_points, not defaults (re-audit A4)', async () => {
+    // Operator sets Zone 3 to 30 pts/min. 2 counted seconds in Z3 → floor(2·30/60)
+    // = 1 point; the default 3 pts/min would floor to 0. Uses a unique location
+    // id so the module-level 60s zone-points cache can't leak across tests.
+    const db = makeDb({
+      upsertResult: { error: null, count: 3 },
+      sessionsById: { s: { id: 's', max_hr_used: 200 } },
+      locationsById: { 'loc-a4-zp': { settings: { scoring: { zone_points: { 3: 30 } } } } },
+    })
+    const rows = [
+      { session_id: 's', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 145 },
+      { session_id: 's', recorded_at: '2026-05-21T16:00:01.000Z', bpm: 145 },
+      { session_id: 's', recorded_at: '2026-05-21T16:00:02.000Z', bpm: 145 },
+    ]
+    await insertHrSamples(db, rows, { locationId: 'loc-a4-zp' })
+    const u = updatesFor(db, 's')
+    expect(u).toHaveLength(1)
+    expect(u[0].patch.zones_seconds[3]).toBe(2)
+    expect(u[0].patch.effort_points).toBe(1) // custom 30/min, NOT the default-scored 0
+    expect(db.from).toHaveBeenCalledWith('locations')
+  })
+
+  it('scores with defaults (and never reads locations) when no locationId is passed', async () => {
+    const db = makeDb({
+      upsertResult: { error: null, count: 3 },
+      sessionsById: { s: { id: 's', max_hr_used: 200 } },
+    })
+    const rows = [
+      { session_id: 's', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 145 },
+      { session_id: 's', recorded_at: '2026-05-21T16:00:01.000Z', bpm: 145 },
+      { session_id: 's', recorded_at: '2026-05-21T16:00:02.000Z', bpm: 145 },
+    ]
+    await insertHrSamples(db, rows)
+    const u = updatesFor(db, 's')
+    expect(u[0].patch.effort_points).toBe(0) // default Z3 = 3/min → floor(2·3/60) = 0
+    expect(db.from).not.toHaveBeenCalledWith('locations')
   })
 
   it('continues the fold from persisted running state (second in-order batch)', async () => {
