@@ -125,6 +125,30 @@ export const BRANDS = [
     fallbackHandler: 'reject',
   },
 
+  // ─── CCF Autos — public marketing site (coming soon) ───────────
+  // Apex + www. "/" rewrites to /ccf (the coming-soon landing page,
+  // src/app/ccf) so the URL bar stays clean. Strays rewrite back to
+  // the landing rather than 404 — public marketing host, the
+  // un1t-marketing pattern, not the buyer-payment 'reject' pattern.
+  // Only the landing + its enquiry API resolve on this hostname, so
+  // nothing hints at the CRM. In-code (not a tenant_domains row)
+  // because it's deployment-critical brand infrastructure like the
+  // pay subdomain above. (CCF-WEB.1)
+  {
+    id: 'ccfautos-web',
+    description: 'CCF Autos public marketing site (apex + www)',
+    hostnames: (process.env.CCF_MARKETING_HOSTNAMES || 'ccfautos.com,www.ccfautos.com')
+      .split(',').map((s) => s.trim()).filter(Boolean),
+    allowedPaths: [
+      '/ccf',                    // coming-soon landing page (src/app/ccf)
+      '/api/public/ccf-enquiry', // contact-form capture
+    ],
+    rootHandler: 'rewrite',
+    rootRewriteTo: '/ccf',
+    fallbackHandler: 'rewrite',
+    fallbackRewriteTo: '/ccf',
+  },
+
   // ─── Adding another brand ──────────────────────────────────────
   // Prefer a tenant_domains row (SAAS-8, /admin/tenant-domains) —
   // live without a deploy, and it carries the organization linkage.
