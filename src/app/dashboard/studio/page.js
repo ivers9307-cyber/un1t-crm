@@ -5,6 +5,13 @@
 // side-by-side across locations, which the (single-location) Business
 // tab deliberately doesn't do.
 //
+// STUDIO-KPI.3 — every flow metric is a ROLLING 28-day window with the
+// preceding 28 days as its comparator, not month-to-date. The board is
+// read at a weekly management meeting, and an MTD figure means one
+// thing on week 1 and another on week 4, so week-over-week movement was
+// mostly the calendar refilling. Stocks (MRR, arrears, at-risk, trials
+// done) stay point-in-time — a rolling window is meaningless for them.
+//
 // Degradation follows the Business-page rule: a failing data source
 // blanks its own cells ('unavailable'), never the column — only a
 // wholesale failure shows BlockError. The pre-KPI operational Studio
@@ -18,12 +25,12 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { loadRadar } from '@/lib/churn-radar-data'
-import { fetchFunnelCounts } from '@shared/dashboard-data'
 import {
   fetchMrr, fetchGrowth, fetchRevenueChurn, fetchEngagement,
-  fetchFloor, fetchAdSpendMTD,
+  fetchFloor, fetchAdSpend, fetchAcquisition,
 } from '@shared/studio-kpis'
 import { BlockSkeleton, BlockError } from '@/components/dashboard/BusinessBlocks'
+import { WINDOW_DAYS } from '@shared/studio-kpi-math'
 import {
   ScoreCell, ScoreGrid, RoleSection, FloorTable, LocationEmptyState,
   NotTrackedYet, euros,
@@ -64,20 +71,20 @@ async function loadLocationScorecard(locationId) {
   const mrr = await soft(fetchMrr(db, locationId))
   const estYield = mrr?.yieldCents || 0
 
-  const [growth, churn, funnel, engagement, floor, spend, radar] =
+  const [growth, churn, acq, engagement, floor, spend, radar] =
     await Promise.all([
       soft(fetchGrowth(db, locationId)),
       soft(fetchRevenueChurn(db, locationId, estYield)),
-      soft(fetchFunnelCounts(db, locationId)),
+      soft(fetchAcquisition(db, locationId)),
       soft(fetchEngagement(db, locationId)),
       soft(fetchFloor(db, locationId)),
-      soft(fetchAdSpendMTD(db, locationId)),
+      soft(fetchAdSpend(db, locationId)),
       loadRadar(db, locationId).catch(() => null),
     ])
   // Wholesale failure (e.g. DB unreachable) → column-level error.
-  if (!mrr && !growth && !funnel && !engagement && !floor) return null
+  if (!mrr && !growth && !acq && !engagement && !floor) return null
   return {
-    mrr, growth, churn, funnel, engagement, floor, spend,
+    mrr, growth, churn, acq, engagement, floor, spend,
     radarSummary: radar?.summary || null,
   }
 }
@@ -91,7 +98,8 @@ async function LocationColumn({ location }) {
   }
   if (!vm) return <BlockError label={`${location.name} scorecard`} />
 
-  const { mrr, growth, churn, funnel, engagement, floor, spend, radarSummary } = vm
+  const { mrr, growth, churn, acq, engagement, floor, spend, radarSummary } = vm
+  const W = WINDOW_DAYS
 
   // A location with no recurring base AND no class sync has no Glofox
   // connection yet (Hatch until onboarded) — say so instead of zeros.
@@ -102,13 +110,17 @@ async function LocationColumn({ location }) {
   // CAC divides by NEW MEMBERS (converted_at), not new contacts —
   // joined_at is stamped for every Glofox lead, and spend ÷ leads
   // masquerading as cost-per-member would flatter the number badly.
-  const cac = spend && funnel && spend.spendMTD > 0 && funnel.converted > 0
-    ? Math.round(spend.spendMTD / funnel.converted)
-    : null
+  // Both sides share the window, and so does the comparator.
+  const cacFor = (spendAmount, members) => (spendAmount > 0 && members > 0
+    ? Math.round(spendAmount / members)
+    : null)
+  const cac = spend && acq ? cacFor(spend.spend, acq.newMembers) : null
+  const prevCac = spend && acq ? cacFor(spend.prevSpend, acq.prevNewMembers) : null
+  // Lower CAC is better, so the delta's "good" direction is inverted.
+  const cacDelta = cac != null && prevCac != null ? cac - prevCac : null
   const saveRate = radarSummary?.recovery?.contacted > 0
     ? Math.round(radarSummary.recovery.recoveryRate * 100)
     : null
-  const trialDone = funnel?.stages.find(s => s.slug === 'trial_done')?.count ?? null
 
   return (
     <div>
@@ -121,39 +133,50 @@ async function LocationColumn({ location }) {
             : UNAVAILABLE}
         />
         <ScoreCell
-          label="Net growth MTD"
+          label={`Net growth ${W}d`}
           value={growth
-            ? (growth.netRecurringMTD > 0 ? `+${growth.netRecurringMTD}` : growth.netRecurringMTD)
+            ? (growth.netRecurring > 0 ? `+${growth.netRecurring}` : growth.netRecurring)
             : null}
           sublabel={growth
-            ? `${growth.recurringStartsMTD} started · ${growth.recurringCancelsMTD} cancelled`
+            ? `${growth.recurringStarts} started · ${growth.recurringCancels} cancelled`
             : UNAVAILABLE}
-          accent={growth && growth.netRecurringMTD !== 0
-            ? (growth.netRecurringMTD > 0 ? 'text-green-700' : 'text-red-700')
+          accent={growth && growth.netRecurring !== 0
+            ? (growth.netRecurring > 0 ? 'text-green-700' : 'text-red-700')
             : undefined}
+          delta={growth?.netRecurringDelta}
+          windowDays={W}
         />
         <ScoreCell
-          label="New members MTD"
-          value={funnel ? funnel.converted : null}
-          sublabel={funnel ? 'became members this month' : UNAVAILABLE}
+          label={`New members ${W}d`}
+          value={acq ? acq.newMembers : null}
+          sublabel={acq ? 'became members' : UNAVAILABLE}
+          delta={acq?.newMembersDelta}
+          windowDays={W}
           href="/contacts"
         />
         <ScoreCell
           label="Trial conversion"
-          value={funnel?.conversionPct != null ? `${funnel.conversionPct}%` : null}
-          sublabel={funnel
-            ? `${funnel.converted} converted · ${funnel.entered} entered this month · target ${TARGETS.trialConversionPct}%`
+          value={acq?.conversionPct != null ? `${acq.conversionPct}%` : null}
+          sublabel={acq
+            ? `${acq.newMembers} of ${acq.leads} leads · target ${TARGETS.trialConversionPct}%`
             : UNAVAILABLE}
-          accent={toneAbove(funnel?.conversionPct, TARGETS.trialConversionPct)}
+          accent={toneAbove(acq?.conversionPct, TARGETS.trialConversionPct)}
+          delta={acq?.conversionDelta}
+          deltaFormat={n => `${n}pp`}
+          windowDays={W}
         />
         <ScoreCell
-          label="Revenue churn MTD"
+          label={`Revenue churn ${W}d`}
           value={churn ? euros(churn.churnCents) : null}
           estimated={churn?.estimatedCount > 0}
           sublabel={churn
             ? `${churn.total} cancels · ${churn.early} early / ${churn.tenured} tenured`
             : UNAVAILABLE}
           accent={churn?.total > 0 ? 'text-red-700' : undefined}
+          delta={churn?.churnCentsDelta}
+          deltaHigherIsBetter={false}
+          deltaFormat={n => euros(n)}
+          windowDays={W}
         />
         <ScoreCell
           label="Arrears"
@@ -169,27 +192,33 @@ async function LocationColumn({ location }) {
       <RoleSection title="Grow the base" hint="GM">
         <ScoreGrid>
           <ScoreCell
-            label="New leads MTD"
-            value={funnel ? funnel.entered : null}
-            sublabel={funnel ? 'entered the funnel' : UNAVAILABLE}
+            label={`New leads ${W}d`}
+            value={acq ? acq.leads : null}
+            sublabel={acq ? 'entered the funnel' : UNAVAILABLE}
+            delta={acq?.leadsDelta}
+            windowDays={W}
             href="/dashboard/lead-radar"
           />
           <ScoreCell
             label="Trials done"
-            value={trialDone}
-            sublabel={funnel ? 'at the decision point now' : UNAVAILABLE}
+            value={acq ? acq.trialsDone : null}
+            sublabel={acq ? 'at the decision point now' : UNAVAILABLE}
             href="/contacts?status=trial_done"
           />
           <ScoreCell
-            label="Ad spend MTD"
-            value={spend && spend.spendMTD > 0 ? euros(Math.round(spend.spendMTD * 100)) : null}
+            label={`Ad spend ${W}d`}
+            value={spend && spend.spend > 0 ? euros(Math.round(spend.spend * 100)) : null}
             sublabel={spend ? 'Meta, campaign level' : UNAVAILABLE}
             href="/dashboard/ads"
           />
           <ScoreCell
             label="CAC"
             value={cac != null ? `€${cac}` : null}
-            sublabel={spend ? 'Meta spend ÷ new members' : UNAVAILABLE}
+            sublabel={spend ? `Meta spend ÷ new members, ${W}d` : UNAVAILABLE}
+            delta={cacDelta}
+            deltaHigherIsBetter={false}
+            deltaFormat={n => `€${n}`}
+            windowDays={W}
           />
         </ScoreGrid>
       </RoleSection>

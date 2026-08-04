@@ -4,9 +4,8 @@
 import { createClient } from '@supabase/supabase-js'
 import {
   fetchMrr, fetchGrowth, fetchRevenueChurn, fetchEngagement,
-  fetchFloor, fetchAdSpendMTD,
+  fetchFloor, fetchAdSpend, fetchAcquisition,
 } from '../shared/studio-kpis.js'
-import { fetchFunnelCounts } from '../shared/dashboard-data.js'
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -20,16 +19,16 @@ const mrr = await fetchMrr(db, locationId)
 if (!mrr.success) throw new Error(`mrr: ${mrr.error}`)
 const estYield = mrr.data.yieldCents || 0
 
-const [growth, churn, funnel, engagement, floor, spend] = await Promise.all([
+const [growth, churn, acq, engagement, floor, spend] = await Promise.all([
   fetchGrowth(db, locationId),
   fetchRevenueChurn(db, locationId, estYield),
-  fetchFunnelCounts(db, locationId),
+  fetchAcquisition(db, locationId),
   fetchEngagement(db, locationId),
   fetchFloor(db, locationId),
-  fetchAdSpendMTD(db, locationId),
+  fetchAdSpend(db, locationId),
 ])
 
-for (const [name, r] of Object.entries({ growth, churn, funnel, engagement, floor, spend })) {
+for (const [name, r] of Object.entries({ growth, churn, acq, engagement, floor, spend })) {
   if (!r.success) throw new Error(`${name}: ${r.error}`)
 }
 
@@ -37,7 +36,7 @@ console.log(JSON.stringify({
   mrr: mrr.data,
   growth: growth.data,
   churn: churn.data,
-  funnel: { entered: funnel.data.entered, converted: funnel.data.converted, conversionPct: funnel.data.conversionPct },
+  acq: acq.data,
   engagement: engagement.data,
   floor: { ...floor.data, groupTable: floor.data.groupTable.slice(0, 8) },
   spend: spend.data,
