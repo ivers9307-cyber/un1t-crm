@@ -396,7 +396,7 @@ export async function loadDeviceWithLocation(deviceId, db) {
 
   const { data: locationRow } = await db
     .from('locations')
-    .select('id, name, sensibo_api_key, sensibo_pod_id, thinq_pat, thinq_client_id, thinq_country_code')
+    .select('id, name, organization_id, sensibo_api_key, sensibo_pod_id, thinq_pat, thinq_client_id, thinq_country_code')
     .eq('id', device.location_id)
     .single()
   if (!locationRow) return { ok: false, status: 404, error: 'Location for AC device not found.', code: 'location_not_found' }

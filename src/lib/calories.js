@@ -3,6 +3,8 @@
 // Used to fill heart_rate_sessions.calories_kcal for in-studio bridge sessions
 // (imported wearable sessions already carry a provider value).
 
+import { normaliseGender } from './gender.js'
+
 function maleKcalPerMin(hr, weightKg, age) {
   return (-55.0969 + 0.6309 * hr + 0.1988 * weightKg + 0.2017 * age) / 4.184
 }
@@ -13,7 +15,9 @@ function femaleKcalPerMin(hr, weightKg, age) {
 /**
  * @param {{ avgHr:number, durationMin:number, age:number, weightKg:number, gender:string|null }} args
  * @returns {number|null} whole kcal, or null if any required input is missing/non-positive.
- *   gender other than 'male'/'female' (incl. legacy 'P', 'other', null) → sex-neutral mean.
+ *   gender is normalised via normaliseGender ('M'/'Female'/case variants map to
+ *   the sex-specific curve); anything unknown (legacy 'P', 'other', null,
+ *   'not_specified') → sex-neutral mean.
  */
 export function estimateCaloriesKcal({ avgHr, durationMin, age, weightKg, gender }) {
   const ok = (n) => Number.isFinite(n) && n > 0
@@ -21,9 +25,10 @@ export function estimateCaloriesKcal({ avgHr, durationMin, age, weightKg, gender
 
   const male = maleKcalPerMin(avgHr, weightKg, age) * durationMin
   const female = femaleKcalPerMin(avgHr, weightKg, age) * durationMin
+  const g = normaliseGender(gender)
   let total
-  if (gender === 'male') total = male
-  else if (gender === 'female') total = female
+  if (g === 'male') total = male
+  else if (g === 'female') total = female
   else total = (male + female) / 2
 
   if (!Number.isFinite(total) || total <= 0) return null

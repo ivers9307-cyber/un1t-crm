@@ -11,6 +11,10 @@ export function normalizeHealthMetricKey(metric) {
   return METRIC_KEY_ALIASES[k] || k
 }
 
+// NOTE: deliberately NOT the shared normaliseGender (src/lib/gender.js) —
+// Apple Health's biological_sex preserves 'other' as a stored contacts.gender
+// value (member-owned, only-if-null), while normaliseGender folds anything
+// non-male/female to null. Different semantics; keep them separate.
 const GENDERS = ['female', 'male', 'other']
 
 export function mapBiologicalSexToGender(raw) {

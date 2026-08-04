@@ -89,7 +89,9 @@ describe('POST /api/admin/backfill-session-calories', () => {
     getCurrentUser.mockResolvedValue({ id: 'm1', isMaster: true })
 
     const sessions = [
-      // Should be filled — has contact_id + avg_hr_bpm, resolveBodyMetrics returns metrics
+      // Should be filled — has contact_id + avg_hr_bpm + stored zones_seconds,
+      // resolveBodyMetrics returns metrics. Duration comes from the
+      // zones_seconds sum (3000s = 50min), NOT ended_at − started_at (60min).
       {
         id: 'sess-1',
         contact_id: 'c-1',
@@ -97,6 +99,7 @@ describe('POST /api/admin/backfill-session-calories', () => {
         ended_at: '2026-06-01T11:00:00Z',
         avg_hr_bpm: 145,
         calories_kcal: null,
+        zones_seconds: { 1: 600, 2: 900, 3: 1500, 4: 0, 5: 0 },
       },
       // Should be skipped — no contact_id
       {
@@ -106,6 +109,7 @@ describe('POST /api/admin/backfill-session-calories', () => {
         ended_at: '2026-06-01T13:00:00Z',
         avg_hr_bpm: 130,
         calories_kcal: null,
+        zones_seconds: { 1: 3600, 2: 0, 3: 0, 4: 0, 5: 0 },
       },
     ]
 
@@ -159,14 +163,96 @@ describe('POST /api/admin/backfill-session-calories', () => {
     expect(resolveBodyMetrics).toHaveBeenCalledTimes(1)
     expect(resolveBodyMetrics).toHaveBeenCalledWith(db, 'c-1', expect.any(Number))
 
-    // estimateCaloriesKcal called with correct shape
+    // estimateCaloriesKcal called with correct shape — durationMin is the
+    // SAMPLED duration (zones_seconds sum / 60), not the 60min wall clock.
     expect(estimateCaloriesKcal).toHaveBeenCalledWith({
       avgHr: 145,
-      durationMin: 60,
+      durationMin: 50,
       age: 30,
       weightKg: 80,
       gender: 'male',
     })
+  })
+
+  // C1 remainder — the backfill must not re-mint the 4h-auto-close ghost kcal
+  // the endSession fix removed: duration comes from the gap-capped sampled
+  // seconds already stored on zones_seconds, and a session with no samples is
+  // SKIPPED, never overwritten with a wall-clock fabrication.
+  it('uses sampled seconds for a 4h auto-closed session and skips zero-sample sessions', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'm1', isMaster: true })
+
+    const sessions = [
+      // Auto-closed at the 4h backstop but only 2 minutes of samples →
+      // durationMin must be 2, not 240.
+      {
+        id: 'sess-ghost',
+        contact_id: 'c-1',
+        started_at: '2026-06-01T10:00:00Z',
+        ended_at: '2026-06-01T14:00:00Z',
+        avg_hr_bpm: 145,
+        calories_kcal: null,
+        zones_seconds: { 1: 120, 2: 0, 3: 0, 4: 0, 5: 0 },
+      },
+      // Ended with no samples at all (null zones) → skip, no overwrite.
+      {
+        id: 'sess-empty',
+        contact_id: 'c-2',
+        started_at: '2026-06-01T10:00:00Z',
+        ended_at: '2026-06-01T14:00:00Z',
+        avg_hr_bpm: 140,
+        calories_kcal: 999,
+        zones_seconds: null,
+      },
+      // All-zero zones (summariseSession over an empty sample set) → skip too.
+      {
+        id: 'sess-zero',
+        contact_id: 'c-3',
+        started_at: '2026-06-01T10:00:00Z',
+        ended_at: '2026-06-01T14:00:00Z',
+        avg_hr_bpm: 140,
+        calories_kcal: 999,
+        zones_seconds: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+      },
+    ]
+
+    const updatedIds = []
+    const db = {
+      from(table) {
+        if (table === 'heart_rate_sessions') {
+          let isUpdate = false
+          const builder = {
+            select: function () { return this },
+            not: function () { return this },
+            gte: function () { return this },
+            order: function () { return this },
+            range: (from) => Promise.resolve({ data: from === 0 ? sessions : [], error: null }),
+            update: function () { isUpdate = true; return this },
+            eq: function (col, val) {
+              if (isUpdate && col === 'id') {
+                updatedIds.push(val)
+                return Promise.resolve({ error: null })
+              }
+              return this
+            },
+          }
+          return builder
+        }
+        return { select: function () { return this }, range: () => Promise.resolve({ data: [], error: null }) }
+      },
+    }
+
+    createServerClient.mockReturnValue(db)
+    resolveBodyMetrics.mockResolvedValue({ age: 30, weightKg: 80, gender: 'male' })
+    estimateCaloriesKcal.mockReturnValue(50)
+
+    const res = await POST(makeReq({ location_id: 'loc-1', since: '2026-06-01' }))
+    const json = await res.json()
+    expect(json.data).toMatchObject({ scanned: 3, filled: 1, skipped: 2 })
+    expect(updatedIds).toEqual(['sess-ghost'])
+    expect(estimateCaloriesKcal).toHaveBeenCalledTimes(1)
+    expect(estimateCaloriesKcal).toHaveBeenCalledWith(expect.objectContaining({ durationMin: 2 }))
+    // The no-sample sessions never even resolved body metrics.
+    expect(resolveBodyMetrics).toHaveBeenCalledTimes(1)
   })
 
   it('skips a session when estimateCaloriesKcal returns null (insufficient metrics)', async () => {
@@ -180,6 +266,7 @@ describe('POST /api/admin/backfill-session-calories', () => {
         ended_at: '2026-06-01T11:00:00Z',
         avg_hr_bpm: 145,
         calories_kcal: null,
+        zones_seconds: { 1: 3000, 2: 0, 3: 0, 4: 0, 5: 0 },
       },
     ]
 

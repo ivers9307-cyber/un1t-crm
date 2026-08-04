@@ -947,6 +947,20 @@ describe('extractMemberProfile', () => {
     expect(out.glofox_signup_answers).toBeNull()
   })
 
+  // C12 — Glofox gender variants are canonicalised at the producer so
+  // newly-synced rows store 'male'/'female'/null, never 'M'/'F'/'P'.
+  it('canonicalises Glofox gender variants (case + single-letter codes)', () => {
+    expect(extractMemberProfile({ gender: 'Male' }).gender).toBe('male')
+    expect(extractMemberProfile({ gender: 'M' }).gender).toBe('male')
+    expect(extractMemberProfile({ gender: 'F' }).gender).toBe('female')
+    expect(extractMemberProfile({ gender: 'FEMALE' }).gender).toBe('female')
+  })
+  it('maps the legacy P code (and any unknown value) to null', () => {
+    expect(extractMemberProfile({ gender: 'P' }).gender).toBeNull()
+    expect(extractMemberProfile({ gender: 'x' }).gender).toBeNull()
+    expect(extractMemberProfile({ gender: '' }).gender).toBeNull()
+  })
+
   it('uses singular "month" for an interval count of 1', () => {
     const out = extractMemberProfile({
       membership: { subscription: { price: 179, interval: 'month', interval_count: 1 } },

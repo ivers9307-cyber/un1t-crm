@@ -10,6 +10,7 @@ import { classifyContact } from './pipeline-classifier.js'
 import { upsertClassBookings } from './class-bookings.js'
 import { logWarn } from './log.js'
 import { matchesPush } from './glofox-notes.js'
+import { normaliseGender } from './gender.js'
 //
 // Source-of-truth contract:
 //   Glofox owns:  glofox_member_id, glofox_membership_status,
@@ -728,8 +729,11 @@ export function extractMemberProfile(member) {
   const ecRaw = typeof m.emergency_contact === 'string' ? m.emergency_contact.trim() : ''
   const emergency = ecRaw && !/^contact person:\s*,\s*phone number:\s*$/i.test(ecRaw)
     ? ecRaw : null
-  const gender = typeof m.gender === 'string' && m.gender && m.gender !== 'not_specified'
-    ? m.gender : null
+  // Canonicalise at the producer so newly-synced rows store 'male'/'female'
+  // or null — Glofox carries case variants, 'M'/'F' and a legacy 'P' code,
+  // and the raw pass-through silently degraded the calorie estimate to the
+  // sex-neutral mean for every non-exact value (C12).
+  const gender = normaliseGender(m.gender)
   // GYMPASS.1 — Gympass (Wellhub) stamps its own block on the member
   // profile: member.metadata.gympass = { id }. It's the reliable positive
   // marker for a Gympass user. (ClassPass uses metadata.classpass +
