@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   intervalMonths, computeMrr, summariseCancels, computeEngagement,
-  computeFloor, computeActivation,
+  computeFloor, computeActivation, windowBounds, windowDelta, WINDOW_DAYS,
 } from './studio-kpi-math.js'
 
 describe('intervalMonths', () => {
@@ -181,5 +181,42 @@ describe('computeActivation', () => {
   })
   it('nulls on an empty cohort', () => {
     expect(computeActivation([], [], now).activatedPct).toBe(null)
+  })
+})
+
+describe('windowBounds', () => {
+  const now = new Date('2026-08-04T12:00:00Z')
+
+  it('returns a current window of WINDOW_DAYS ending now', () => {
+    const { startIso, endIso, days } = windowBounds(now)
+    expect(days).toBe(WINDOW_DAYS)
+    expect(endIso).toBe(now.toISOString())
+    const spanDays = (Date.parse(endIso) - Date.parse(startIso)) / 86_400_000
+    expect(spanDays).toBe(WINDOW_DAYS)
+  })
+
+  it('makes the previous window the same width, immediately before', () => {
+    const { startIso, prevStartIso } = windowBounds(now)
+    const prevSpan = (Date.parse(startIso) - Date.parse(prevStartIso)) / 86_400_000
+    expect(prevSpan).toBe(WINDOW_DAYS)
+  })
+
+  it('honours a custom width', () => {
+    const { startIso, endIso } = windowBounds(now, 7)
+    expect((Date.parse(endIso) - Date.parse(startIso)) / 86_400_000).toBe(7)
+  })
+})
+
+describe('windowDelta', () => {
+  it('subtracts the previous window', () => {
+    expect(windowDelta(10, 6)).toBe(4)
+    expect(windowDelta(6, 10)).toBe(-4)
+    expect(windowDelta(5, 5)).toBe(0)
+  })
+
+  it('is null when either side is unknown, so the UI shows no delta', () => {
+    expect(windowDelta(null, 6)).toBe(null)
+    expect(windowDelta(10, null)).toBe(null)
+    expect(windowDelta(undefined, undefined)).toBe(null)
   })
 })

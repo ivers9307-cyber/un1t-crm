@@ -17,6 +17,46 @@ export const ACTIVATION_VISITS = 3
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
+// STUDIO-KPI.3 — every flow metric on the scorecard is measured over a
+// rolling window, not month-to-date. The board is reviewed at a WEEKLY
+// management meeting (Richard 2026-08-04): an MTD figure means something
+// different on week 1 than on week 4, so week-over-week movement is
+// mostly the calendar refilling. A fixed-width window always compares
+// like with like. 28 days (not 7) because the event counts are small —
+// live Stillorgan runs ~4 new members a week, where a swing to 2 is
+// noise; 28 days aggregates to a readable number and matches the window
+// the floor metrics already use.
+export const WINDOW_DAYS = 28
+
+/**
+ * Current + preceding window bounds as ISO strings:
+ * current = [startIso, endIso], previous = [prevStartIso, startIso).
+ * The previous window is the same width, immediately before — so the
+ * delta between them is a like-for-like comparison.
+ */
+export function windowBounds(now = new Date(), days = WINDOW_DAYS) {
+  const end = new Date(now)
+  const start = new Date(now)
+  start.setDate(start.getDate() - days)
+  const prevStart = new Date(now)
+  prevStart.setDate(prevStart.getDate() - days * 2)
+  return {
+    startIso: start.toISOString(),
+    endIso: end.toISOString(),
+    prevStartIso: prevStart.toISOString(),
+    days,
+  }
+}
+
+/**
+ * current − previous, or null when either side is unknown (so the UI
+ * renders no delta rather than a misleading one).
+ */
+export function windowDelta(current, previous) {
+  if (current == null || previous == null) return null
+  return current - previous
+}
+
 /**
  * Months in a Glofox billing interval string ("1 month", "3 months",
  * "1 year", "2 weeks"). Unit-aware — mirrors the private

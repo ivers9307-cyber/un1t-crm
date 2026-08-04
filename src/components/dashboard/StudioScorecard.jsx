@@ -5,10 +5,32 @@
 import Link from 'next/link'
 import { formatCurrency } from '@/components/dashboard/Cards'
 
+// Movement against the preceding window of the same width. `higherIsBetter`
+// flips the colour for cells where up is bad (churn). A zero delta reads
+// "level" rather than "+0" — in a review meeting "no change" is the
+// meaning, not the arithmetic.
+function DeltaChip({ delta, higherIsBetter = true, format }) {
+  if (delta == null) return null
+  const fmt = format || (n => `${n}`)
+  if (delta === 0) {
+    return <span className="text-[11px] text-un1t-subtle">level</span>
+  }
+  const good = higherIsBetter ? delta > 0 : delta < 0
+  const tone = good ? 'text-green-700' : 'text-red-700'
+  return (
+    <span className={`text-[11px] font-medium ${tone}`}>
+      {delta > 0 ? '+' : '−'}{fmt(Math.abs(delta))}
+    </span>
+  )
+}
+
 // Compact KPI cell — the scorecard packs 6+ per location column, so
 // these are denser than the full-width KpiCard. href follows the
 // KpiCard rule: hover affordance only when the cell actually links.
-export function ScoreCell({ label, value, sublabel, accent, estimated, href }) {
+export function ScoreCell({
+  label, value, sublabel, accent, estimated, href,
+  delta, deltaHigherIsBetter = true, deltaFormat, windowDays,
+}) {
   const Wrap = href ? Link : 'div'
   const wrapProps = href ? { href } : {}
   const interactive = href
@@ -21,6 +43,14 @@ export function ScoreCell({ label, value, sublabel, accent, estimated, href }) {
         {value ?? '—'}
         {estimated ? <span className="text-xs font-normal text-un1t-subtle ml-1">est.</span> : null}
       </div>
+      {delta != null ? (
+        <div className="mt-0.5">
+          <DeltaChip delta={delta} higherIsBetter={deltaHigherIsBetter} format={deltaFormat} />
+          {windowDays ? (
+            <span className="text-[11px] text-un1t-subtle ml-1">vs prev {windowDays}d</span>
+          ) : null}
+        </div>
+      ) : null}
       {sublabel ? (
         <div className="text-[11px] text-un1t-subtle mt-0.5">{sublabel}</div>
       ) : null}
