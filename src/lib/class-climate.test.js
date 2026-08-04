@@ -3,6 +3,7 @@ import {
   toMillis,
   durationToMinutes,
   mapEventToOccurrence,
+  extractTrainerIds,
   occurrenceIsLive,
   DEFAULT_CLASS_MINUTES,
 } from './class-occurrences'
@@ -77,6 +78,65 @@ describe('class-occurrences: mapEventToOccurrence', () => {
   it('reads capacity from an object shape', () => {
     const row = mapEventToOccurrence({ _id: 'e', time_start: startSec, size: { limit: 20 } }, loc)
     expect(row.capacity).toBe(20)
+  })
+})
+
+// STUDIO-KPI.4 — trainer-id → name mapping so the scorecard's floor
+// table can group per coach instead of per class.
+describe('class-occurrences: mapEventToOccurrence trainer-name map', () => {
+  const loc = 'a0000000-0000-0000-0000-000000000001'
+  const startSec = 1_700_000_000
+  const ID1 = '61a38e7d0cf1970aae0fb3a9'
+  const ID2 = 'deadbeefdeadbeefdeadbeef'
+
+  it('resolves a trainer id through the map', () => {
+    const row = mapEventToOccurrence(
+      { _id: 'e', time_start: startSec, trainers: [ID1] }, loc, { [ID1]: 'Jess Murphy' })
+    expect(row.instructor).toBe('Jess Murphy')
+  })
+
+  it('joins mapped ids with inline names; unmapped ids still drop', () => {
+    const row = mapEventToOccurrence(
+      { _id: 'e', time_start: startSec, trainers: [ID1, 'Coach Mia', ID2] }, loc, { [ID1]: 'Jess' })
+    expect(row.instructor).toBe('Jess, Coach Mia')
+  })
+
+  it('resolves object-shaped trainer entries via _id', () => {
+    const row = mapEventToOccurrence(
+      { _id: 'e', time_start: startSec, trainers: [{ _id: ID1 }] }, loc, { [ID1]: 'Jess' })
+    expect(row.instructor).toBe('Jess')
+  })
+
+  it('matches map keys case-insensitively', () => {
+    const row = mapEventToOccurrence(
+      { _id: 'e', time_start: startSec, trainers: [ID1.toUpperCase()] }, loc, { [ID1]: 'Jess' })
+    expect(row.instructor).toBe('Jess')
+  })
+
+  it('behaves exactly as before when no map is given', () => {
+    const row = mapEventToOccurrence({ _id: 'e', time_start: startSec, trainers: [ID1] }, loc)
+    expect(row.instructor).toBeNull()
+  })
+})
+
+describe('class-occurrences: extractTrainerIds', () => {
+  const ID1 = '61a38e7d0cf1970aae0fb3a9'
+  const ID2 = 'DEADBEEFDEADBEEFDEADBEEF'
+
+  it('collects distinct 24-hex ids (string + object entries), lowercased', () => {
+    const events = [
+      { trainers: [ID1, 'Coach Mia'] },
+      { trainers: [{ _id: ID2 }, ID1] },
+      { trainers: 'not-an-array' },
+      null,
+    ]
+    expect(extractTrainerIds(events).sort()).toEqual([ID1, ID2.toLowerCase()].sort())
+  })
+
+  it('returns [] for empty / trainer-less input', () => {
+    expect(extractTrainerIds([])).toEqual([])
+    expect(extractTrainerIds(null)).toEqual([])
+    expect(extractTrainerIds([{ trainers: ['Coach Mia'] }])).toEqual([])
   })
 })
 

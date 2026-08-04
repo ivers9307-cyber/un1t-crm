@@ -6,7 +6,7 @@
 // Pure mappers are exported + unit-tested; syncOccurrencesForLocation
 // does the IO (fetch + upsert).
 
-import { fetchUpcomingEvents } from '@/lib/glofox'
+import { fetchUpcomingEvents, fetchGlofoxTrainers, fetchMemberResult, glofoxDisplayName } from '@/lib/glofox'
 import { logWarn } from '@/lib/log'
 
 export const DEFAULT_CLASS_MINUTES = 60
@@ -45,14 +45,55 @@ export function durationToMinutes(duration) {
   return Math.round(n / 60000)
 }
 
+const TRAINER_ID_RE = /^[0-9a-f]{24}$/i
+
+/**
+ * STUDIO-KPI.4 — pure: distinct trainer ids (24-hex, lowercased) across
+ * a batch of Glofox events. Entries arrive as bare id strings or as
+ * objects carrying _id; anything name-like is not an id.
+ */
+export function extractTrainerIds(events) {
+  const ids = new Set()
+  for (const e of Array.isArray(events) ? events : []) {
+    if (!Array.isArray(e?.trainers)) continue
+    for (const t of e.trainers) {
+      const id = typeof t === 'string' ? t : (t?._id != null ? String(t._id) : null)
+      if (id && TRAINER_ID_RE.test(id)) ids.add(id.toLowerCase())
+    }
+  }
+  return [...ids]
+}
+
+/**
+ * Pure: one event's trainers[] → the instructor label. Ids resolve
+ * through nameMap (keys lowercase); inline name strings/objects pass
+ * through as before; unresolved ids drop so the label never shows a
+ * raw ObjectId.
+ */
+function resolveInstructor(trainers, nameMap) {
+  if (!Array.isArray(trainers)) return null
+  return (
+    trainers
+      .map((t) => {
+        const id = typeof t === 'string' ? t : (t?._id != null ? String(t._id) : null)
+        const mapped = id && nameMap ? nameMap[id.toLowerCase()] : null
+        if (typeof mapped === 'string' && mapped.trim()) return mapped.trim()
+        return typeof t === 'string' ? t : t?.name || t?.first_name || null
+      })
+      .filter((t) => t && !TRAINER_ID_RE.test(t))
+      .join(', ') || null
+  )
+}
+
 /**
  * Pure: shape one Glofox event into a class_occurrences upsert row.
  * Returns null when the event lacks the bits we need (id or start).
  *
  * @param {object} event       a /2.0/events item
  * @param {string} locationId
+ * @param {object} [trainerNames]  trainer id (lowercase) → display name
  */
-export function mapEventToOccurrence(event, locationId) {
+export function mapEventToOccurrence(event, locationId, trainerNames = null) {
   if (!event || !event._id || !locationId) return null
   const startMs = toMillis(event.time_start)
   if (startMs == null) return null
@@ -60,12 +101,7 @@ export function mapEventToOccurrence(event, locationId) {
   const durMin = durationToMinutes(event.duration) ?? DEFAULT_CLASS_MINUTES
   const endMs = startMs + durMin * 60_000
 
-  const instructor = Array.isArray(event.trainers)
-    ? (event.trainers
-        .map((t) => (typeof t === 'string' ? t : t?.name || t?.first_name || null))
-        .filter((t) => t && !/^[0-9a-f]{24}$/i.test(t))
-        .join(', ') || null)
-    : null
+  const instructor = resolveInstructor(event.trainers, trainerNames)
 
   const capRaw = event.size
   const capacity = (capRaw && typeof capRaw === 'object' && !Array.isArray(capRaw))
@@ -84,6 +120,73 @@ export function mapEventToOccurrence(event, locationId) {
     raw: event,
     synced_at: new Date().toISOString(),
   }
+}
+
+// STUDIO-KPI.4 — cap on per-id /2.0/members fallback lookups per sync
+// run. Stillorgan has ~3 distinct trainers; the cap only guards against
+// a pathological payload fanning out into dozens of API calls.
+const TRAINER_MEMBER_LOOKUP_CAP = 10
+
+// How far back the instructor backfill patches historical rows. The
+// scorecard's floor table reads 28 days (shared/studio-kpis.js
+// fetchFloor) — 35 gives it margin without touching deep history.
+const BACKFILL_DAYS = 35
+
+/**
+ * STUDIO-KPI.4 — IO: trainer id → display name for a batch of ids.
+ * Resolution order, all best-effort (an unresolved id just stays out
+ * of the map and the occurrence's instructor stays null):
+ *   1. operator overrides — settings.glofox.trainer_names, carried on
+ *      creds.trainerNames by glofoxCredentialsForLocation;
+ *   2. GET /2.0/trainers (may not exist on this tier — returns []);
+ *   3. GET /2.0/members/{id} per remaining id (trainers are users in
+ *      Glofox's model), capped at TRAINER_MEMBER_LOOKUP_CAP per run.
+ *
+ * @param {object} creds  per-location credentials (+ trainerNames)
+ * @param {string[]} trainerIds
+ * @returns {Promise<Record<string, string>>}  keys lowercase
+ */
+export async function resolveTrainerNames(creds, trainerIds) {
+  const ids = [...new Set((trainerIds || []).filter(Boolean).map((id) => String(id).toLowerCase()))]
+  const map = {}
+  if (ids.length === 0) return map
+
+  const overrides = {}
+  if (creds?.trainerNames && typeof creds.trainerNames === 'object') {
+    for (const [id, name] of Object.entries(creds.trainerNames)) {
+      if (typeof name === 'string' && name.trim()) overrides[id.toLowerCase()] = name.trim()
+    }
+  }
+  for (const id of ids) {
+    if (overrides[id]) map[id] = overrides[id]
+  }
+
+  let unknown = ids.filter((id) => !map[id])
+  if (unknown.length === 0) return map
+
+  const trainers = await fetchGlofoxTrainers(creds)
+  if (trainers.length > 0) {
+    const byId = new Map()
+    for (const t of trainers) {
+      const id = t?._id != null ? String(t._id).toLowerCase() : null
+      const name = glofoxDisplayName(t)
+      if (id && name) byId.set(id, name)
+    }
+    for (const id of unknown) {
+      const name = byId.get(id)
+      if (name) map[id] = name
+    }
+    unknown = unknown.filter((id) => !map[id])
+  }
+
+  for (const id of unknown.slice(0, TRAINER_MEMBER_LOOKUP_CAP)) {
+    const { ok, member } = await fetchMemberResult(creds, id)
+    if (ok) {
+      const name = glofoxDisplayName(member)
+      if (name) map[id] = name
+    }
+  }
+  return map
 }
 
 /**
@@ -125,6 +228,11 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
     return { ok: false, error: result.body?.message || `HTTP ${result.status}`, upserted: 0 }
   }
 
+  // STUDIO-KPI.4 — resolve trainer ids to names (operator overrides →
+  // Glofox API, best-effort) so class_occurrences.instructor populates
+  // and the scorecard's floor table can group per coach.
+  const trainerNames = await resolveTrainerNames(creds, extractTrainerIds(result.events))
+
   // Events Glofox currently reports as real (active OR private — private
   // classes still happen). Their spine rows must NOT be cancelled.
   const seenEventIds = new Set()
@@ -133,7 +241,7 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
     if (e?.active === false) continue // inactive → treat as gone (don't mark seen)
     if (e?._id) seenEventIds.add(String(e._id))
     if (e?.private === true) continue // real class, but not upserted into spine columns
-    const row = mapEventToOccurrence(e, locationId)
+    const row = mapEventToOccurrence(e, locationId, trainerNames)
     if (row) rows.push(row)
   }
 
@@ -186,7 +294,47 @@ export async function syncOccurrencesForLocation(db, { locationId, creds, window
     }
   }
 
-  return { ok: true, upserted, cancelled, seen: (result.events || []).length }
+  // STUDIO-KPI.4 — instructor backfill. The sync window is [now, +48h],
+  // so PAST rows are never re-upserted — but the scorecard's floor table
+  // reads 28 days of history. For every trainer we can name, patch the
+  // last BACKFILL_DAYS of this location's rows:
+  //   1. fill: instructor IS NULL + raw.trainers[0] = id → name. Covers
+  //      the whole pre-mapping backlog in the first tick after deploy.
+  //   2. correct: single-trainer rows (raw->trainers->>1 is null) whose
+  //      stored instructor differs → name. Makes an operator override
+  //      retroactive. Multi-trainer rows are owned by the upsert path
+  //      (joined "A, B" labels) — correcting them down to trainers[0]
+  //      would churn against the next upsert, so they're excluded.
+  // Both UPDATEs are bounded (location + window + trainer id) and
+  // idempotent — steady-state they match zero rows.
+  for (const [trainerId, name] of Object.entries(trainerNames)) {
+    const label = name.slice(0, 200)
+    const backfillSinceIso = new Date(nowMs - BACKFILL_DAYS * 86_400_000).toISOString()
+    const { error: fillErr } = await db
+      .from('class_occurrences')
+      .update({ instructor: label })
+      .eq('location_id', locationId)
+      .is('instructor', null)
+      .gte('starts_at', backfillSinceIso)
+      .eq('raw->trainers->>0', trainerId)
+    if (fillErr) {
+      logWarn('class-occurrences', 'instructor backfill failed', { locationId, trainerId, error: fillErr.message })
+      continue
+    }
+    const { error: correctErr } = await db
+      .from('class_occurrences')
+      .update({ instructor: label })
+      .eq('location_id', locationId)
+      .neq('instructor', label)
+      .gte('starts_at', backfillSinceIso)
+      .eq('raw->trainers->>0', trainerId)
+      .is('raw->trainers->>1', null)
+    if (correctErr) {
+      logWarn('class-occurrences', 'instructor correction failed', { locationId, trainerId, error: correctErr.message })
+    }
+  }
+
+  return { ok: true, upserted, cancelled, seen: (result.events || []).length, trainersMapped: Object.keys(trainerNames).length }
 }
 
 // ── "which class is on right now?" (HR-CLASS-ALLOC.1) ────────────
