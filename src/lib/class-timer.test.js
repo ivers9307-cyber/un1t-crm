@@ -152,6 +152,26 @@ describe('class-timer: matchTemplateToClassName (PR4 Glofox auto-link)', () => {
     ]
     expect(matchTemplateToClassName(ordered, 'DR1VE')?.id).toBe('newer')
   })
+  // C10 — whole-token matching: a program tag must never match on a bare
+  // substring inside a longer word.
+  it('does NOT match a program that is only a substring of the class name (RIDE vs PRIDE)', () => {
+    const ride = [{ id: 'ride', glofox_program: 'RIDE' }]
+    expect(matchTemplateToClassName(ride, 'PRIDE')).toBeNull()
+    expect(matchTemplateToClassName([{ id: 'd', glofox_program: 'DR1VE' }], 'HYDR1VE')).toBeNull()
+  })
+  it('does NOT match a class name that is only a substring of the program tag', () => {
+    expect(matchTemplateToClassName([{ id: 'p', glofox_program: 'PRIDE intervals' }], 'RIDE')).toBeNull()
+  })
+  it('still matches whole tokens regardless of surrounding punctuation', () => {
+    const ride = [{ id: 'ride', glofox_program: 'RIDE' }]
+    expect(matchTemplateToClassName(ride, 'RIDE 45')?.id).toBe('ride')
+    expect(matchTemplateToClassName(ride, 'Ride: Express')?.id).toBe('ride')
+  })
+  it('requires a contiguous whole-token run for multi-word programs', () => {
+    const t = [{ id: 'multi', glofox_program: 'DR1VE intervals' }]
+    expect(matchTemplateToClassName(t, 'DR1VE intervals 45')?.id).toBe('multi')
+    expect(matchTemplateToClassName(t, 'DR1VE express intervals')).toBeNull()
+  })
   it('skips blank-program templates and returns null when nothing matches', () => {
     expect(matchTemplateToClassName(templates, 'Yoga')).toBeNull()
     expect(matchTemplateToClassName([{ id: 'b', glofox_program: '   ' }], 'anything')).toBeNull()

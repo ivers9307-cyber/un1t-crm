@@ -39,6 +39,8 @@ import { POST as funnelEventPOST } from './funnel-event/route.js'
 import { POST as bookPOST } from './book/route.js'
 import { GET as preferencesGET } from '../preferences/[token]/route.js'
 import { POST as unsubscribePOST } from '../unsubscribe/[token]/route.js'
+import { GET as depositGET } from './deposit/[token]/route.js'
+import { POST as depositPayPOST } from './deposit/[token]/accept-and-pay/route.js'
 
 const IP = '203.0.113.9'
 const LOC_A = 'aaaaaaaa-0000-0000-0000-0000000000aa'
@@ -184,6 +186,32 @@ describe('SAAS-6 tenant-keyed rate limits — swept call sites', () => {
       body: { event_type_id: EVENT_TYPE, booking_date: '2026-08-01', start_time: '10:00', customer_name: 'A', customer_email: 'a@example.com' },
     }))
     expect(res.status).toBe(404)
+    expect(checkRateLimit).not.toHaveBeenCalled()
+  })
+})
+
+describe('H2 — car-deposit token endpoints are rate limited', () => {
+  it('deposit view keys on IP alone (anti-enumeration — the enumerator varies the token)', async () => {
+    const res = await depositGET(req('/api/public/deposit/some-token'), props({ token: 'some-token' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`deposit-view:${IP}`)
+  })
+
+  it('accept-and-pay keys on token + IP (strict payment-initiation guard)', async () => {
+    const res = await depositPayPOST(
+      req('/api/public/deposit/some-token/accept-and-pay', { method: 'POST', body: { terms_version: 1 } }),
+      props({ token: 'some-token' }),
+    )
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`deposit-pay:some-token:${IP}`)
+  })
+
+  it('accept-and-pay: a malformed body 400s WITHOUT consuming the limiter window', async () => {
+    const res = await depositPayPOST(
+      req('/api/public/deposit/some-token/accept-and-pay', { method: 'POST', body: {} }),
+      props({ token: 'some-token' }),
+    )
+    expect(res.status).toBe(400)
     expect(checkRateLimit).not.toHaveBeenCalled()
   })
 })
