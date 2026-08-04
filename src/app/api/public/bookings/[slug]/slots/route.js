@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { computeAvailableSlots } from '@/lib/booking-slots'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 // GET /api/public/bookings/:slug/slots?date=2026-04-28
 // Returns available time slots for a given date.
@@ -37,6 +38,15 @@ export async function GET(request, props) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return NextResponse.json({ success: false, error: 'date must be YYYY-MM-DD' }, { status: 400 })
   }
+
+  // Public-browse abuse limiter (audit H2a) — 60-per-5-min per slug+IP: each
+  // date the visitor clicks costs one request, so even an indecisive human
+  // browsing weeks of dates stays far under the cap; only scripted floods hit
+  // it. Placed after the cheap date validation so malformed requests never
+  // consume the window. Fails open inside checkRateLimit.
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `pubslots:${params.slug}:${ip}`, { max: 60, windowMs: 5 * 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
 
   // Get event type
   const { data: event, error: eventErr } = await db.from('event_types')

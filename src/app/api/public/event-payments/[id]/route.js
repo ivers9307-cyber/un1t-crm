@@ -15,12 +15,24 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { refreshRacePaymentFromProvider } from '@/lib/race-payments'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 
-export async function GET(_request, props) {
+export async function GET(request, props) {
   const params = await props.params;
   const db = createServerClient()
+
+  // Id-enumeration guard (audit H2a). Keyed on IP alone — an enumerator varies
+  // the UUID, so a per-id bucket would never fill (deposit-view convention).
+  // The checkout page fetches this once per load (no poll loop), so 30-per-
+  // 5-min is generous for a buyer reloading; it also caps the provider-refresh
+  // side effect (each pending read may call Stripe/Revolut). Fails open inside
+  // checkRateLimit so a limiter outage never blocks a real checkout.
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `event-payment:${ip}`, { max: 30, windowMs: 5 * 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
+
   const { data, error } = await db
     .from('race_payments')
     .select(`
