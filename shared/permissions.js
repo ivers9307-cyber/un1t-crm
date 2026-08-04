@@ -33,7 +33,7 @@
 export const WEB_PERMISSIONS = Object.freeze([
   // — Dashboards (cross-platform, see CROSS_PLATFORM_DASHBOARD_KEYS) —
   { key: 'dashboard_personal', label: 'Dashboard · Today',     hint: 'Personal home view — your shifts, swaps, inbox' },
-  { key: 'dashboard_studio',   label: 'Dashboard · Studio',    hint: 'Operational view — leads, members, approvals' },
+  { key: 'dashboard_studio',   label: 'Dashboard · Studio',    hint: 'Web: revenue KPI scorecard by location · mobile: ops view' },
   { key: 'dashboard_business', label: 'Dashboard · Business',  hint: 'Owner-level — pipeline, won deals, payroll' },
   // ADS-REPORT.0 — paid-ad performance dashboard (/dashboard/ads).
   // Desktop analytics surface, like the other radar/analytics
@@ -1286,7 +1286,7 @@ export const LANDING_PREFERENCE_VALUES = Object.freeze([
 export const LANDING_PREFERENCE_OPTIONS = Object.freeze([
   { value: 'auto',     label: 'Smart default',    hint: 'Lands on the most-aggregated dashboard you have access to (Business → Studio → Today)' },
   { value: 'personal', label: 'Today',            hint: 'Your shifts across all locations, swap requests, inbox', perm: 'dashboard_personal' },
-  { value: 'studio',   label: 'Studio',           hint: 'Operational view for the active location', perm: 'dashboard_studio' },
+  { value: 'studio',   label: 'Studio',           hint: 'Revenue KPI scorecard by location', perm: 'dashboard_studio' },
   { value: 'business', label: 'Business',         hint: 'Owner-level view for the active location',  perm: 'dashboard_business' },
 ])
 
