@@ -17,7 +17,7 @@
     "check:mobile-imports": "eslint --config eslint.mobile-imports.config.mjs 'mobile/**/*.{js,jsx}'",
     "check:route-guards": "node scripts/check-route-guards.mjs",
     "check:location-scoping": "node scripts/check-location-scoping.mjs",
-    "check:guardrails": "eslint --config eslint.guardrails.config.mjs 'src/**/*.{js,jsx}'",
+    "check:guardrails": "eslint --config eslint.guardrails.config.mjs 'src/**/*.{js,jsx}' 'shared/**/*.js'",
     "postinstall": "node scripts/copy-ffmpeg-core.mjs",
     "eval:agent": "vitest run --config vitest.evals.config.mjs",
     "test:e2e": "playwright test"

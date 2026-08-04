@@ -224,12 +224,34 @@ describe('fetchAdsSummary', () => {
     }
   }
 
-  it("filters level='campaign' in the query itself and orders by date", async () => {
+  it("filters level='campaign' in the query itself and pages with a stable id order", async () => {
     const supabase = adsSupabase({ adsRows: [], attributedCount: 0 })
     await fetchAdsSummary(supabase, 'loc1')
     const calls = supabase.builders.ad_insights_daily[0].calls
     expect(calls).toContainEqual(['eq', 'level', 'campaign'])
-    expect(calls).toContainEqual(['order', 'date', { ascending: true }])
+    expect(calls).toContainEqual(['order', 'id', { ascending: true }])
+    expect(calls).toContainEqual(['range', 0, 999])
+  })
+
+  it('paginates past the 1k-row cap and sums every page', async () => {
+    // 1001 campaign rows → page 1 (1000) + page 2 (1), summed exactly.
+    const adsRows = Array.from({ length: 1001 }, () => ({ level: 'campaign', spend: '1.00', results: 1 }))
+    let adsFetches = 0
+    const supabase = {
+      from: vi.fn(table => {
+        if (table !== 'ad_insights_daily') return chainableBuilder({ count: 0, error: null })
+        adsFetches++
+        return chainableBuilder(calls => {
+          const [, from, to] = calls.find(c => c[0] === 'range')
+          return { data: adsRows.slice(from, to + 1), error: null }
+        })
+      }),
+    }
+    const res = await fetchAdsSummary(supabase, 'loc1')
+    expect(res.success).toBe(true)
+    expect(res.data.spend).toBe(1001)
+    expect(res.data.results).toBe(1001)
+    expect(adsFetches).toBe(2)
   })
 
   it('sums campaign spend/results and computes costPerResult + attributed', async () => {

@@ -614,21 +614,31 @@ export async function fetchFunnelCounts(supabase, locationId, now = new Date()) 
 
 // Last-7-days ad performance. level='campaign' filtered IN THE QUERY —
 // ad_insights_daily also stores adset+ad rows for the same days, and
-// fetching all levels then filtering client-side can blow the 1000-row cap
-// and silently truncate spend. sumCampaignRows keeps the level guard as
-// defence-in-depth; .order() makes any residual cap deterministic.
+// fetching all levels then filtering client-side multiplies the row count.
+// sumCampaignRows keeps the level guard as defence-in-depth; the .range()
+// loop pages past the 1k-row select cap so a many-campaign week can never
+// silently truncate spend (order by id for stable pages, like
+// paginatedSumCents above).
 export async function fetchAdsSummary(supabase, locationId, now = new Date()) {
   const since = new Date(now); since.setDate(since.getDate() - 7)
   const sinceIso = isoDate(since)
-  const { data, error } = await supabase.from('ad_insights_daily')
-    .select('level, spend, results')
-    .eq('location_id', locationId)
-    .eq('level', 'campaign')
-    .gte('date', sinceIso)
-    .order('date', { ascending: true })
-    .limit(1000)
-  if (error) return { success: false, error: error.message }
-  const { spend, results } = sumCampaignRows(data || [])
+  let from = 0
+  const page = 1000
+  const rows = []
+  for (;;) {
+    const { data, error } = await supabase.from('ad_insights_daily')
+      .select('level, spend, results')
+      .eq('location_id', locationId)
+      .eq('level', 'campaign')
+      .gte('date', sinceIso)
+      .order('id', { ascending: true })
+      .range(from, from + page - 1)
+    if (error) return { success: false, error: error.message }
+    rows.push(...(data || []))
+    if (!data || data.length < page) break
+    from += page
+  }
+  const { spend, results } = sumCampaignRows(rows)
   const { count: attributed, error: e2 } = await supabase.from('contacts')
     .select('id', { count: 'exact', head: true })
     .eq('location_id', locationId)
