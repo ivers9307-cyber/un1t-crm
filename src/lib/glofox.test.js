@@ -500,3 +500,64 @@ describe('interpretBookingResult', () => {
     expect(interpretBookingResult({ ok: true, status: 200, body: { _id: 'bk1' } }).alreadyBooked).toBe(false)
   })
 })
+
+// STUDIO-KPI.2 — trainer-name resolution for class_occurrences.instructor.
+
+describe('glofoxDisplayName', () => {
+  it('prefers a trimmed name field', async () => {
+    const { glofoxDisplayName } = await import('./glofox.js')
+    expect(glofoxDisplayName({ name: '  Jess Murphy ' })).toBe('Jess Murphy')
+  })
+
+  it('falls back to first_name + last_name (either alone works)', async () => {
+    const { glofoxDisplayName } = await import('./glofox.js')
+    expect(glofoxDisplayName({ first_name: 'Jess', last_name: 'Murphy' })).toBe('Jess Murphy')
+    expect(glofoxDisplayName({ first_name: ' Jess ' })).toBe('Jess')
+    expect(glofoxDisplayName({ last_name: 'Murphy' })).toBe('Murphy')
+  })
+
+  it('returns null when nothing name-like exists', async () => {
+    const { glofoxDisplayName } = await import('./glofox.js')
+    expect(glofoxDisplayName({})).toBeNull()
+    expect(glofoxDisplayName({ name: '   ' })).toBeNull()
+    expect(glofoxDisplayName(null)).toBeNull()
+    expect(glofoxDisplayName('Jess')).toBeNull()
+  })
+})
+
+describe('fetchGlofoxTrainers', () => {
+  beforeEach(() => vi.stubGlobal('fetch', vi.fn()))
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  const res = (status, body) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: () => null },
+    json: async () => body,
+  })
+  const creds = { branchId: 'b', apiKey: 'k', apiToken: 't' }
+
+  it('returns the data array from /2.0/trainers', async () => {
+    const { fetchGlofoxTrainers } = await import('./glofox.js')
+    global.fetch.mockResolvedValueOnce(res(200, { data: [{ _id: 't1', name: 'Jess' }] }))
+    const out = await fetchGlofoxTrainers(creds)
+    expect(out).toEqual([{ _id: 't1', name: 'Jess' }])
+    expect(global.fetch.mock.calls[0][0]).toContain('/2.0/trainers')
+  })
+
+  it('tolerates a bare-array body', async () => {
+    const { fetchGlofoxTrainers } = await import('./glofox.js')
+    global.fetch.mockResolvedValueOnce(res(200, [{ _id: 't1' }]))
+    expect(await fetchGlofoxTrainers(creds)).toEqual([{ _id: 't1' }])
+  })
+
+  it('returns [] on non-ok, network error, or missing creds (best-effort)', async () => {
+    const { fetchGlofoxTrainers } = await import('./glofox.js')
+    global.fetch.mockResolvedValueOnce(res(404, {}))
+    expect(await fetchGlofoxTrainers(creds)).toEqual([])
+    global.fetch.mockRejectedValueOnce(new Error('boom'))
+    expect(await fetchGlofoxTrainers(creds)).toEqual([])
+    expect(await fetchGlofoxTrainers(null)).toEqual([])
+    expect(await fetchGlofoxTrainers({ branchId: null })).toEqual([])
+  })
+})

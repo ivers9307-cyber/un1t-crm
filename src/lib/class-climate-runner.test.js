@@ -20,6 +20,11 @@ vi.mock('@/lib/ac-devices', () => ({
 const fetchUpcomingEvents = vi.fn()
 vi.mock('@/lib/glofox', () => ({
   fetchUpcomingEvents: (...a) => fetchUpcomingEvents(...a),
+  // STUDIO-KPI.2 trainer-name resolution — inert here (events in these
+  // tests carry no trainer ids, so resolveTrainerNames never calls these).
+  fetchGlofoxTrainers: vi.fn(async () => []),
+  fetchMemberResult: vi.fn(async () => ({ ok: false, member: null })),
+  glofoxDisplayName: () => null,
 }))
 
 import { runClassClimateForLocation } from './class-climate-runner.js'

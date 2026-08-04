@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
 import { buildTrialOptions } from '@/lib/glofox-trial-options'
+import { parseTrainerNames, formatTrainerNames } from '@/lib/glofox-trainer-names'
 import { Save, Loader2, Check, AlertCircle } from 'lucide-react'
 
 export default function GlofoxIntegrationTab({ location, canEdit }) {
@@ -34,6 +35,11 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
       ? initial.hidden_class_keywords.join(', ')
       : (initial.hidden_class_keywords || '')
   )
+  // STUDIO-KPI.2 — trainer-id → name overrides, edited as "id = Name"
+  // lines. Backs the scorecard's per-coach floor table when the Glofox
+  // API can't resolve a trainer id itself.
+  const [trainerNames, setTrainerNames] = useState(formatTrainerNames(initial.trainer_names))
+  const [seenTrainers, setSeenTrainers] = useState([])
 
   const [memberships, setMemberships] = useState([])
   const [membershipsLoading, setMembershipsLoading] = useState(false)
@@ -65,10 +71,30 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
     return () => { cancelled = true }
   }, [location.id, branchId, apiKey])
 
+  // Reference list: the trainer ids Glofox actually sent in the last 28
+  // days + how each currently resolves. Without it the override field
+  // is un-fillable — the opaque ids appear nowhere else in the UI.
+  useEffect(() => {
+    if (!branchId || !apiKey) { setSeenTrainers([]); return }
+    let cancelled = false
+    async function loadTrainers() {
+      try {
+        const r = await fetch(`/api/locations/${location.id}/glofox-trainers`, { cache: 'no-store' })
+        const j = await r.json()
+        if (!cancelled && r.ok && j.success) setSeenTrainers(j.data?.trainers || [])
+      } catch {
+        // Silently ignore — the textarea still works without the list.
+      }
+    }
+    loadTrainers()
+    return () => { cancelled = true }
+  }, [location.id, branchId, apiKey])
+
   async function save() {
     setSaving(true); setError(null); setSavedAt(null)
     const [trialMembershipId, trialPlanCode] = trialKey ? trialKey.split(':') : ['', '']
     const hiddenList = hiddenClasses.split(/[\n,]/).map((s) => s.trim()).filter(Boolean)
+    const trainerMap = parseTrainerNames(trainerNames)
     const db = createBrowserClient()
     // Re-read current settings so we merge rather than clobber any
     // other tab's slice. Tiny race window if two tabs save at the
@@ -78,7 +104,7 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
     if (readErr) { setError(readErr.message); setSaving(false); return }
     const nextSettings = {
       ...(row?.settings || {}),
-      glofox: (branchId || apiKey || apiToken || webhookSecret || namespace || trialMembershipId || hiddenList.length)
+      glofox: (branchId || apiKey || apiToken || webhookSecret || namespace || trialMembershipId || hiddenList.length || trainerMap)
         ? {
             branch_id: branchId || null,
             api_key: apiKey || null,
@@ -88,6 +114,7 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
             trial_membership_id: trialMembershipId || null,
             trial_plan_code: trialPlanCode || null,
             hidden_class_keywords: hiddenList.length ? hiddenList : null,
+            trainer_names: trainerMap,
           }
         : null,
     }
@@ -183,6 +210,31 @@ export default function GlofoxIntegrationTab({ location, canEdit }) {
           placeholder="EL1TES, OPEN GYM"
           className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm text-un1t-text"
         />
+      </Field>
+
+      <Field
+        label="Trainer names"
+        hint="One per line: trainerId = Name. Glofox class events carry only opaque trainer IDs — this map (or the Glofox API, when it can) turns them into the coach names the Studio scorecard groups by. Entries here override API-resolved names."
+      >
+        <textarea
+          value={trainerNames}
+          onChange={e => setTrainerNames(e.target.value)}
+          rows={3}
+          placeholder="61a38e7d0cf1970aae0fb3a9 = Jess Murphy"
+          className="w-full bg-un1t-bg border border-un1t-border rounded-md px-3 py-2 text-sm font-mono text-un1t-text"
+        />
+        {seenTrainers.length > 0 && (
+          <div className="mt-2 text-[11px] text-un1t-muted space-y-0.5">
+            <p className="font-semibold">Seen in the timetable (last 28 days):</p>
+            {seenTrainers.map(t => (
+              <p key={t.id} className="font-mono">
+                {t.id} — {t.name
+                  ? <>{t.name} <span className="text-un1t-subtle">({t.source === 'override' ? 'mapped here' : 'from Glofox'}, {t.classes} classes)</span></>
+                  : <span className="text-amber-700">unresolved — add a line above ({t.classes} classes)</span>}
+              </p>
+            ))}
+          </div>
+        )}
       </Field>
 
       <div className="flex justify-end pt-2 border-t border-un1t-border/40">
