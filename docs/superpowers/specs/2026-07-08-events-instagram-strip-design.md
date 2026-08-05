@@ -34,8 +34,10 @@ location's connected Instagram account; zero ongoing operator effort.
   component, `force-dynamic`) → renders `PublicEventsList`
   (`src/components/landing-page/`). Landing theme: `#lp-shell`, Poppins,
   dark. Resolves the studio via `landing_page_settings.public_path`.
-- **CSP:** `next.config.js` sets only `Content-Security-Policy: frame-ancestors *`
-  — no `img-src`/`script-src` restriction, so rendering IG media is unconstrained.
+- **CSP:** the app's only CSP header is `frame-ancestors *`, and it is **scoped to
+  `/embed/*` + `/book/*`** — everything else, this page included, ships
+  `X-Frame-Options: SAMEORIGIN`. There is no `img-src`/`script-src` anywhere in
+  the app, so rendering IG media is unconstrained.
 - **Media re-host precedent:** the estate already re-hosts inbound WhatsApp
   media to Supabase Storage because provider URLs expire/require auth. Same
   pattern here.
