@@ -157,8 +157,12 @@ its own protection. Three facts about the codebase set the bar:
 
 - No sanitiser dependency exists (`dompurify` / `sanitize-html` are absent from
   `package.json`).
-- There is no meaningful CSP — `next.config.js` sets only `frame-ancestors *`,
-  with no `script-src` or `default-src`.
+- There is no meaningful CSP — the app has no `script-src` or `default-src` at
+  all. (`next.config.js` does set `frame-ancestors *`, but only on `/embed/*` and
+  `/book/*`; it is not a page-level policy this feature could lean on.) Worth
+  knowing for later: a `srcdoc` iframe **inherits its parent's CSP**, so if a
+  global policy ever lands it covers the rendered email for free — a third layer
+  behind the sandbox and the sanitiser, at no cost to this design.
 - React's raw-HTML escape hatch is used **nowhere** in `src/` today. This
   feature does not introduce it either: rendering goes through an iframe
   `srcdoc`, which is stricter, because the untrusted document then lives in its
@@ -202,11 +206,22 @@ tracking pixel, and auto-loading it reports the studio's read back to a third
 party and leaks the server's IP — for a member's email, on a GDPR footing, with
 nobody having consented. Blocked-by-default is what every mail client does.
 
-### Not in scope, but noticed
+### Not in scope, but checked — resolved, no action
 
-`frame-ancestors *` lets any site iframe the CRM. That may well be deliberate
-(TV displays, embedded events), but it should be confirmed rather than
-inherited. Tracked separately; not part of this work.
+An earlier draft of this spec flagged `frame-ancestors *` as letting any site
+iframe the CRM. **Investigated 2026-08-06: it does not.** `next.config.js` ships
+`X-Frame-Options: SAMEORIGIN` on `/(.*)` and grants `frame-ancestors *` to only
+two subtrees — `/embed/:path*` and `/book/:path*`, the paste-anywhere signup and
+booking widgets. Both were exempted deliberately in AUDIT-JUN10.2 (#409), after a
+path-to-regexp negative-lookahead exclusion was tried and found to mis-match.
+
+Verified against production: `/login`, `/tv/*`, `/host` and `/ccf` all return
+`X-Frame-Options: SAMEORIGIN` and no CSP; only `/embed/*` and `/book/*` carry the
+`frame-ancestors` override. The authenticated CRM is not frameable cross-origin,
+so there is no clickjacking exposure here and nothing to narrow.
+
+Do **not** "tidy" the two exemptions away — they are load-bearing for the
+external event-signup embed and the booking widget.
 
 ## Storage quota
 
