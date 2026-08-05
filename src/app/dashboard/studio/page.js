@@ -129,7 +129,7 @@ async function LocationColumn({ location }) {
           label="MRR"
           value={mrr ? euros(mrr.mrrCents) : null}
           sublabel={mrr
-            ? `${mrr.recurringMembers} active recurring · ${euros(mrr.yieldCents) ?? '—'}/member yield`
+            ? `${mrr.recurringMembers} billing now · ${euros(mrr.yieldCents) ?? '—'}/member yield`
             : UNAVAILABLE}
         />
         <ScoreCell
@@ -229,7 +229,7 @@ async function LocationColumn({ location }) {
             label="Active member rate"
             value={engagement?.activeRatePct != null ? `${engagement.activeRatePct}%` : null}
             sublabel={engagement
-              ? `≥1 class in 30d · target ${TARGETS.activeRatePct}%`
+              ? `${engagement.activeMembers} of ${engagement.members} monthly recurring · target ${TARGETS.activeRatePct}%`
               : UNAVAILABLE}
             accent={toneAbove(engagement?.activeRatePct, TARGETS.activeRatePct)}
           />
@@ -237,7 +237,7 @@ async function LocationColumn({ location }) {
             label="Visits / member / wk"
             value={engagement ? engagement.visitsPerMemberWeek : null}
             sublabel={engagement
-              ? `across ${engagement.members} members · target ${TARGETS.visitsPerMemberWeek}`
+              ? `across ${engagement.members} monthly recurring · target ${TARGETS.visitsPerMemberWeek}`
               : UNAVAILABLE}
             accent={toneAbove(engagement?.visitsPerMemberWeek, TARGETS.visitsPerMemberWeek)}
           />
