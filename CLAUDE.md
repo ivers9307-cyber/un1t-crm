@@ -16,6 +16,7 @@ The "if you miss one, you break prod or burn a session" list. Terse on purpose; 
 - **Migrations are forward-only**; apply via Supabase MCP (`apply_migration`) against the **un1t-crm** project (ref `iyvtbjjxdggiadzwwvdj`; confirm via `list_projects` — NOT the sentinel project `tpttqakxmyxrwnqjepfm`). Run `get_advisors` (type=security) after any DDL. Apply the migration *before* the code that depends on it deploys.
 - **Supabase views default to SECURITY DEFINER** (bypass RLS). Always `WITH (security_invoker = on)`. The advisor flags it ERROR-level.
 - **RLS policies: wrap `auth.uid()` in `(SELECT auth.uid())`** (advisor `auth_rls_initplan` — per-row vs per-query eval).
+- **A restrictive `FOR ALL` policy denies SELECT too.** RLS is (OR of permissive) AND (AND of restrictive), and `FOR ALL` includes SELECT — so the natural-looking `<x>_deny_writes ... AS RESTRICTIVE FOR ALL TO authenticated, anon USING (false)` does not deny *writes*, it denies **everything**, folding the table's own permissive SELECT away (`EXPLAIN` → `One-Time Filter: false`). It fails silently: reads return an **empty set, not an error**, and Supabase realtime — which authorises each `postgres_changes` row through the subscriber's SELECT policy — just never fires. Reached 16 tables and killed the Email/IG/Unified inbox listeners under a 60s poll. Write denial goes per-command (`FOR INSERT` + `FOR UPDATE` + `FOR DELETE`), keeping a `FOR ALL TO anon` backstop if anon must stay shut out. Migs 483, 485; `check:rls-restrictive` now gates it.
 - **One permissive policy per (table, command).** Don't pair a `FOR ALL` "manage" policy with a separate read policy — the `FOR ALL` overlaps the read on SELECT and trips `multiple_permissive_policies` (counted ×5 grant roles). Instead write the manage side as **explicit `INSERT`/`UPDATE`/`DELETE`** policies and keep a **single `SELECT`** policy whose `USING` is the OR of every population that may read. RLS ORs permissive policies, so `FOR ALL` ≡ the four per-command policies and merging reads is behaviour-preserving. Scope policies `TO authenticated` unless anon genuinely needs them. Reference cleanup: mig 320 (and 167).
 
 **supabase-js / PostgREST traps** (these fail *silently*)
@@ -69,13 +70,14 @@ npm test             # vitest run (~2950 pure-lib tests, no DB)
 npm run lint         # eslint .
 ```
 
-**CI mirror — run all six before pushing:**
+**CI mirror — run all seven before pushing:**
 ```bash
-npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:route-guards && npm run check:guardrails
+npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:route-guards && npm run check:rls-restrictive && npm run check:guardrails
 ```
 
 - **`next build` is NOT in the local CI mirror** (it's slow), but since SAAS4-W0.3 GitHub Actions runs it as a parallel "Next build" job on every PR. Green vitest + eslint alone still does **not** mean the build passes — tests run on mocked imports, so a missing/renamed export or unresolvable import sails through them. For any change adding an import or a new route/page, run `npm run build` locally before pushing rather than discovering it in CI; the Actions build job and the Vercel check on the PR are the enforcing gates.
 - **`npx next lint` no longer exists** (removed in Next 16 — the CLI parses `lint` as a directory arg and errors). `npm run lint` (`eslint .`, flat config spreading `eslint-config-next`) is the ONLY lint entry point. Caveat: `@next/next/no-html-link-for-pages` resolves as `error` in the config but is **inert in this app-router-only repo** — it only checks `<a>` hrefs against a `pages/` directory, which doesn't exist (probe-verified 2026-07-04: a raw `<a href="/dashboard">` in an app route lints clean). Keep using `<Link>` for internal links as a convention; no linter enforces it.
+- **`check:rls-restrictive`** fails if a restrictive `USING (false)` policy covering SELECT coexists with a permissive SELECT policy for `authenticated` (the mig 485 class). It computes the *net* policy state by replaying every migration, so it sees drops/recreates. Anon-only restrictives and conditional ones (storage private buckets) are correctly ignored.
 - **`check:route-guards`** fails if an `/api` route ships with no auth guard (the #408 class). Session routes need `getCurrentUser`/`withAuth`; webhooks need `verify*()`; cron needs `CRON_SECRET`; genuinely-public token routes go in the script's `EXEMPT` map.
 - **If you touched `mobile/package.json`,** re-sync the lock: `cd mobile && npm install --package-lock-only` (EAS `npm ci` refuses a mismatched lock). The lock carries the seam: `"shared": "file:../shared"` reifies as a `link: true` symlink entry — don't hand-edit it away.
 

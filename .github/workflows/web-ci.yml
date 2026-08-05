@@ -119,6 +119,16 @@ jobs:
       - name: Location scoping presence
         run: npm run check:location-scoping
 
+      # Catches the RLS-RESTRICTIVE.1 class — a restrictive `FOR ALL ...
+      # USING (false)` deny-writes policy that also folds away the table's
+      # permissive SELECT (FOR ALL includes SELECT). The read returns an
+      # EMPTY SET rather than an error, and realtime subscribers silently
+      # never fire. Reached 16 tables before anything noticed. Derived from
+      # the net policy state in supabase/migrations. See migration 485 and
+      # scripts/check-rls-restrictive.mjs.
+      - name: RLS restrictive-policy sanity
+        run: npm run check:rls-restrictive
+
       # Catches the audit's recurring silent-data-loss classes — a .catch on a
       # supabase thenable (throws, query never runs) and a .limit(>=1000) without
       # .range() (PostgREST silently caps at 1000 rows). ERROR-level custom ESLint
