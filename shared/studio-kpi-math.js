@@ -153,7 +153,9 @@ export function summariseCancels(rows = [], estYieldCents = 0) {
  */
 export function computeEngagement(rows = []) {
   const members = rows.length
-  if (members === 0) return { members: 0, activeRatePct: null, visitsPerMemberWeek: null }
+  if (members === 0) {
+    return { members: 0, activeMembers: 0, activeRatePct: null, visitsPerMemberWeek: null }
+  }
   let active = 0
   let visits30 = 0
   for (const r of rows) {
@@ -163,6 +165,7 @@ export function computeEngagement(rows = []) {
   }
   return {
     members,
+    activeMembers: active,
     activeRatePct: Math.round((active / members) * 100),
     visitsPerMemberWeek: Math.round((visits30 / members / (30 / 7)) * 10) / 10,
   }

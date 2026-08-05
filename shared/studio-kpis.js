@@ -240,11 +240,24 @@ export async function fetchRevenueChurn(supabase, locationId, estYieldCents, now
 
 export async function fetchEngagement(supabase, locationId) {
   if (!locationId) return { success: false, error: 'No location' }
+  // Denominator = the MONTHLY RECURRING base: subscribers (type 'time')
+  // in any state — active, paused and locked are all still members you
+  // have. This is Richard's definition of "the membership base"
+  // (2026-08-04) and it is exactly membership-snapshot.js's
+  // `monthly_recurring`, i.e. the number the Business tab already shows
+  // as "Monthly recurring" — so the two boards agree.
+  //
+  // It deliberately EXCLUDES class packs and payg. Counting them (the
+  // pre-fix behaviour, every member-status contact) put ~395 spent
+  // class packs and ~430 dormant payg accounts in the denominator and
+  // reported the active rate as 20% when the actual subscriber base was
+  // running at 83% — a retention crisis that did not exist.
   const res = await selectAll((from, to) => supabase
     .from('contacts')
     .select('total_attended_30d')
     .eq('location_id', locationId)
     .in('glofox_membership_status', MEMBER_STATUSES)
+    .eq('glofox_membership_type', 'time')
     .order('id', { ascending: true })
     .range(from, to))
   if (res.error) return { success: false, error: res.error.message }

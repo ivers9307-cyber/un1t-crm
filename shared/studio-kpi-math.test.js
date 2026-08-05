@@ -93,12 +93,13 @@ describe('computeEngagement', () => {
       { total_attended_30d: null },
     ])
     expect(out.members).toBe(4)
+    expect(out.activeMembers).toBe(2)
     expect(out.activeRatePct).toBe(50)
     // 12 visits / 4 members / (30/7) weeks = 0.7
     expect(out.visitsPerMemberWeek).toBe(0.7)
   })
   it('nulls out on an empty base', () => {
-    expect(computeEngagement([])).toEqual({ members: 0, activeRatePct: null, visitsPerMemberWeek: null })
+    expect(computeEngagement([])).toEqual({ members: 0, activeMembers: 0, activeRatePct: null, visitsPerMemberWeek: null })
   })
 })
 
