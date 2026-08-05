@@ -118,7 +118,7 @@
 --      Splitting it into write-only commands would expose private bucket
 --      objects to any authenticated client. MUST NOT be "fixed".
 --
--- Enumerated by replaying all 484 migrations in order and computing the
+-- Enumerated by replaying every migration in order and computing the
 -- net policy state (CREATE/DROP/ALTER), not by grepping for CREATE —
 -- several of these were dropped and recreated along the way.
 --
