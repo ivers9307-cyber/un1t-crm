@@ -7,8 +7,7 @@ import {
   resolveTicketAction,
   shouldStampFirstResponse,
   ticketSubject,
-  ticketsDueForAutoClose,
-  DEFAULT_AUTO_CLOSE_DAYS,
+  pickThreadedTicket,
 } from './email-tickets'
 
 describe('resolveTicketAction', () => {
@@ -84,64 +83,41 @@ describe('ticketSubject', () => {
   })
 })
 
-describe('ticketsDueForAutoClose', () => {
-  const now = Date.parse('2026-08-05T12:00:00Z')
+describe('pickThreadedTicket', () => {
+  const a = { ticket_id: 'T1', created_at: '2026-08-01T10:00:00Z' }
+  const b = { ticket_id: 'T2', created_at: '2026-08-05T10:00:00Z' }
 
-  it('closes a solved ticket past the window', () => {
-    const t = { id: 'a', status: 'solved', solved_at: '2026-07-20T12:00:00Z' }
-    expect(ticketsDueForAutoClose([t], 7, now)).toEqual([t])
+  it('picks the most recent message’s ticket, whatever order the rows arrive in', () => {
+    expect(pickThreadedTicket([a, b])).toBe('T2')
+    expect(pickThreadedTicket([b, a])).toBe('T2')
   })
 
-  it('leaves a solved ticket inside the window', () => {
-    const t = { id: 'b', status: 'solved', solved_at: '2026-08-04T12:00:00Z' }
-    expect(ticketsDueForAutoClose([t], 7, now)).toEqual([])
+  it('ignores rows with no ticket_id, however recent', () => {
+    expect(pickThreadedTicket([{ ticket_id: null, created_at: '2026-08-09T10:00:00Z' }, a]))
+      .toBe('T1')
   })
 
-  it('ignores tickets that are not solved', () => {
-    const t = { id: 'c', status: 'open', solved_at: '2026-07-01T12:00:00Z' }
-    expect(ticketsDueForAutoClose([t], 7, now)).toEqual([])
+  it('returns null when nothing threads', () => {
+    expect(pickThreadedTicket([])).toBeNull()
+    expect(pickThreadedTicket(null)).toBeNull()
+    expect(pickThreadedTicket(undefined)).toBeNull()
+    expect(pickThreadedTicket([{ ticket_id: null, created_at: '2026-08-01T10:00:00Z' }])).toBeNull()
   })
 
-  it('ignores a solved ticket with no solved_at', () => {
-    expect(ticketsDueForAutoClose([{ id: 'd', status: 'solved', solved_at: null }], 7, now)).toEqual([])
+  it('is deterministic when timestamps tie — lowest id wins', () => {
+    // Rows written in one transaction share a created_at. Falling back to
+    // array order there is routing by database row order, which is the bug
+    // class this whole module exists to refuse.
+    const t = '2026-08-05T10:00:00Z'
+    expect(pickThreadedTicket([{ ticket_id: 'B', created_at: t }, { ticket_id: 'A', created_at: t }]))
+      .toBe('A')
+    expect(pickThreadedTicket([{ ticket_id: 'A', created_at: t }, { ticket_id: 'B', created_at: t }]))
+      .toBe('A')
   })
 
-  it('returns nothing for a nonsense window rather than closing everything', () => {
-    const t = { id: 'e', status: 'solved', solved_at: '2026-01-01T12:00:00Z' }
-    expect(ticketsDueForAutoClose([t], -1, now)).toEqual([])
-    expect(ticketsDueForAutoClose([t], 'soon', now)).toEqual([])
-    // These are the shapes that actually occur — an unset Postgres settings
-    // column reads back null, an empty operator form field posts '' — not
-    // exotic inputs. Number() coerces all four of these to 0, which is
-    // finite and >= 0, so a loose guard lets them straight through.
-    expect(ticketsDueForAutoClose([t], null, now)).toEqual([])
-    expect(ticketsDueForAutoClose([t], '', now)).toEqual([])
-    expect(ticketsDueForAutoClose([t], false, now)).toEqual([])
-    expect(ticketsDueForAutoClose([t], [], now)).toEqual([])
-  })
-
-  it('honours an explicit numeric 0 as close-as-soon-as-solved', () => {
-    const t = { id: 'f', status: 'solved', solved_at: '2026-08-05T11:00:00Z' }
-    expect(ticketsDueForAutoClose([t], 0, now)).toEqual([t])
-  })
-
-  it('tolerates a non-array', () => {
-    for (const bad of [null, undefined, '', {}, 0]) {
-      expect(ticketsDueForAutoClose(bad, 7, now)).toEqual([])
-    }
-  })
-
-  it('uses DEFAULT_AUTO_CLOSE_DAYS as a real window, and includes the exact cutoff', () => {
-    const dayMs = 86_400_000
-    const atCutoff = {
-      id: 'g', status: 'solved',
-      solved_at: new Date(now - DEFAULT_AUTO_CLOSE_DAYS * dayMs).toISOString(),
-    }
-    const anHourFresher = {
-      id: 'h', status: 'solved',
-      solved_at: new Date(now - DEFAULT_AUTO_CLOSE_DAYS * dayMs + 3_600_000).toISOString(),
-    }
-    expect(ticketsDueForAutoClose([atCutoff, anHourFresher], DEFAULT_AUTO_CLOSE_DAYS, now))
-      .toEqual([atCutoff])
+  it('skips an unparseable created_at rather than choosing it', () => {
+    expect(pickThreadedTicket([{ ticket_id: 'X', created_at: 'nonsense' }, b])).toBe('T2')
+    expect(pickThreadedTicket([{ ticket_id: 'X', created_at: null }])).toBeNull()
+    expect(pickThreadedTicket([{ ticket_id: 'X' }])).toBeNull()
   })
 })

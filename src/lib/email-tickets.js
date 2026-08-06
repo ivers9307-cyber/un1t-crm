@@ -15,9 +15,6 @@
 // Everything here is pure (no DB, no env, no clock) so the webhook's decisions
 // are unit-testable; the route owns the queries and passes `now` in.
 
-/** Default window before a solved ticket closes itself. Operator-editable. */
-export const DEFAULT_AUTO_CLOSE_DAYS = 7
-
 /**
  * Given the ticket an inbound message threaded to (or null), decide whether
  * to append to it or mint a new one.
@@ -72,26 +69,32 @@ export function ticketSubject(existingSubject, inboundSubject) {
 }
 
 /**
- * Solved tickets past the auto-close window. Pure: the caller passes `now` in
- * milliseconds so this is testable without faking a clock.
+ * Which ticket a set of threading-matched message rows belongs to.
  *
- * `autoCloseDays` must already be a real number — this does not coerce.
- * `Number(x)` maps `null`, `''`, `false` and `[]` all to `0`, which is exactly
- * the shape an unset Postgres settings column or an empty form field takes,
- * so a coercing guard would let those through and mass-close every solved
- * ticket. Anything that isn't already a finite, non-negative number returns
- * nothing rather than closing the whole queue — failing closed is correct
- * here; a stringly-typed `'7'` is a caller bug to fix upstream, not something
- * to paper over in this function. An explicit `0` stays legal and means
- * "close as soon as solved".
+ * A long reply chain touches many of our messages, so several rows can match
+ * one In-Reply-To/References header. The most recent wins: a member replying
+ * to an old message in a thread that has since moved on means the live ticket,
+ * not the archived one.
+ *
+ * Ties break on the lowest ticket id so the result is deterministic — rows
+ * written in one transaction share a timestamp, and a coin-flip there is the
+ * same class of bug as routing by database row order.
+ *
+ * @param {Array<{ticket_id: string|null, created_at: string}>} rows
+ * @returns {string|null} ticket id, or null if nothing threads
  */
-export function ticketsDueForAutoClose(tickets, autoCloseDays, nowMs) {
-  if (!Array.isArray(tickets)) return []
-  if (typeof autoCloseDays !== 'number' || !Number.isFinite(autoCloseDays) || autoCloseDays < 0) return []
-  const cutoff = nowMs - autoCloseDays * 86_400_000
-  return tickets.filter((t) => {
-    if (t?.status !== 'solved') return false
-    const solved = Date.parse(t?.solved_at ?? '')
-    return Number.isFinite(solved) && solved <= cutoff
-  })
+export function pickThreadedTicket(rows) {
+  if (!Array.isArray(rows)) return null
+  let bestId = null
+  let bestAt = -Infinity
+  for (const r of rows) {
+    if (!r?.ticket_id) continue
+    const at = Date.parse(r.created_at ?? '')
+    if (!Number.isFinite(at)) continue
+    if (at > bestAt || (at === bestAt && String(r.ticket_id) < String(bestId))) {
+      bestAt = at
+      bestId = r.ticket_id
+    }
+  }
+  return bestId
 }
