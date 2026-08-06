@@ -30,6 +30,7 @@ describe('zoom client', () => {
     process.env.ZOOM_ACCOUNT_ID = 'acct'
     process.env.ZOOM_CLIENT_ID = 'cid'
     process.env.ZOOM_CLIENT_SECRET = 'secret'
+    process.env.ZOOM_SYNC_ORGANIZATION_ID = 'org-un1t'
   })
   afterEach(() => {
     vi.restoreAllMocks()
@@ -40,6 +41,16 @@ describe('zoom client', () => {
     delete process.env.ZOOM_CLIENT_SECRET
     expect(zoomConfigured()).toBe(false)
     process.env.ZOOM_CLIENT_SECRET = 'secret'
+    expect(zoomConfigured()).toBe(true)
+  })
+
+  // ZOOMSYNC.2 — the tenant boundary gates the sync exactly like a credential.
+  // Without it there is no safe read of `contacts`, so it must ship dark
+  // rather than run unscoped.
+  it('reports unconfigured when the organisation boundary is missing', () => {
+    delete process.env.ZOOM_SYNC_ORGANIZATION_ID
+    expect(zoomConfigured()).toBe(false)
+    process.env.ZOOM_SYNC_ORGANIZATION_ID = 'org-un1t'
     expect(zoomConfigured()).toBe(true)
   })
 

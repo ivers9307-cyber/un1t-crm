@@ -1,25 +1,102 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { buildDesiredContacts, pickWinner } from './desired-contacts'
 
 /**
- * Minimal stub of the supabase-js builder chain used by buildDesiredContacts.
- * Serves `rows` in 1000-row pages so the .range() paging path is exercised.
+ * Minimal stub of the two supabase-js builder chains buildDesiredContacts uses:
+ *
+ *   locations → .select('id').eq('organization_id', …)
+ *   contacts  → .select(cols).in('location_id', […]).order('id').range(a, b)
+ *
+ * The contacts chain applies the `.in()` filter for real rather than ignoring
+ * it, so the ZOOMSYNC.2 organisation boundary is exercised by every case in
+ * this file instead of only the ones that name it — and an implementation that
+ * drops the filter cannot pass, because `.select()` here exposes no `.order()`.
+ * Rows are served in 1000-row pages so the .range() paging path stays covered.
  */
-function stubDb(rows) {
+function stubDb(rows, { locations = [{ id: 'loc-un1t' }] } = {}) {
   return {
-    from: () => ({
-      select: () => ({
-        order: () => ({
-          range: (from, to) => Promise.resolve({ data: rows.slice(from, to + 1), error: null }),
+    from: (table) => {
+      if (table === 'locations') {
+        return { select: () => ({ eq: () => Promise.resolve({ data: locations, error: null }) }) }
+      }
+      return {
+        select: () => ({
+          in: (_col, ids) => ({
+            order: () => ({
+              range: (from, to) => {
+                // `IN` never matches NULL — the reason unlocated contacts drop
+                // out without needing a rule of their own.
+                const scoped = rows.filter((r) => r.location_id != null && ids.includes(r.location_id))
+                return Promise.resolve({ data: scoped.slice(from, to + 1), error: null })
+              },
+            }),
+          }),
         }),
-      }),
-    }),
+      }
+    },
   }
 }
 
 const row = (over = {}) => ({
   id: 'c1', first_name: 'Aoife', last_name: 'Ryan', phone: '+353871111111',
-  lead_source: 'walk-in', created_at: '2025-01-01T00:00:00Z', ...over,
+  lead_source: 'walk-in', created_at: '2025-01-01T00:00:00Z',
+  location_id: 'loc-un1t', ...over,
+})
+
+const ORIGINAL_ORG = process.env.ZOOM_SYNC_ORGANIZATION_ID
+beforeEach(() => { process.env.ZOOM_SYNC_ORGANIZATION_ID = 'org-un1t' })
+afterEach(() => {
+  if (ORIGINAL_ORG === undefined) delete process.env.ZOOM_SYNC_ORGANIZATION_ID
+  else process.env.ZOOM_SYNC_ORGANIZATION_ID = ORIGINAL_ORG
+})
+
+describe('organisation boundary (ZOOMSYNC.2)', () => {
+  // The whole point: `contacts` is shared across tenants, the Zoom directory
+  // is not. A CCF Autos customer must never reach a UN1T handset.
+  it('never includes a contact from another organisation', async () => {
+    const res = await buildDesiredContacts(stubDb([
+      row({ id: 'ours', phone: '+353871111111', location_id: 'loc-un1t' }),
+      row({ id: 'theirs', phone: '+353872222222', location_id: 'loc-ccf-autos' }),
+    ]))
+    expect(res.ok).toBe(true)
+    expect([...res.desired.keys()]).toEqual(['+353871111111'])
+  })
+
+  it('excludes a contact with no location at all', async () => {
+    const res = await buildDesiredContacts(stubDb([
+      row({ id: 'ours', phone: '+353871111111' }),
+      row({ id: 'orphan', phone: '+353872222222', location_id: null }),
+    ]))
+    expect([...res.desired.keys()]).toEqual(['+353871111111'])
+  })
+
+  it('includes every location in the organisation, not just the first', async () => {
+    const res = await buildDesiredContacts(stubDb(
+      [
+        row({ id: 'stillorgan', phone: '+353871111111', location_id: 'loc-un1t' }),
+        row({ id: 'hatch-st', phone: '+353872222222', location_id: 'loc-hatch' }),
+      ],
+      { locations: [{ id: 'loc-un1t' }, { id: 'loc-hatch' }] },
+    ))
+    expect(res.desired.size).toBe(2)
+    expect(res.stats.orgLocations).toBe(2)
+  })
+
+  // Fail closed. An empty desired Map reads to diffContacts() as "delete
+  // everything" — the deletion guard is the backstop, not the boundary.
+  it('aborts rather than returning an empty map when the org id is unset', async () => {
+    delete process.env.ZOOM_SYNC_ORGANIZATION_ID
+    const res = await buildDesiredContacts(stubDb([row()]))
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/ZOOM_SYNC_ORGANIZATION_ID/)
+    expect(res.desired).toBeUndefined()
+  })
+
+  it('aborts when the organisation resolves to no locations', async () => {
+    const res = await buildDesiredContacts(stubDb([row()], { locations: [] }))
+    expect(res.ok).toBe(false)
+    expect(res.desired).toBeUndefined()
+  })
 })
 
 describe('pickWinner', () => {
