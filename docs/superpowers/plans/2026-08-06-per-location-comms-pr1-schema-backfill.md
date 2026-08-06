@@ -30,16 +30,38 @@ Read these before starting:
 
 Split follows the existing precedent of `482_email_tickets.sql` / `484_email_tickets_backfill.sql`.
 
-### Live baseline (measured 2026-08-06 — re-measure in Task 1, do not trust these blindly)
+### Live baseline (measured 2026-08-06 ~15:30 — these drift, do not hardcode them)
 
 | Fact | Count |
 |---|---|
-| `contacts` | 8,558 |
-| `contacts` with non-null `location_id` | 8,555 |
+| `contacts` | 8,559 |
+| `contacts` with non-null `location_id` | 8,556 |
 | `contacts` with NULL `location_id` | 3 |
-| `contact_preferences` rows | 8,557 |
-| Contacts with no preferences row | 1 |
-| Active `hatch-founding-member` tags (all Hatch-scoped) | 81 |
+| `contact_preferences` rows | 8,558 |
+| Active `hatch-founding-member` tags (all Hatch-scoped) | 82 |
+| **`email_status = 'unsubscribed'` (retired by step 2)** | **2,680** |
+| Opted out via preferences only (`email_status='active'`) | 2,430 |
+| **Total email opt-outs the backfill must preserve** | **5,110** |
+| `bounced` / `complained` (untouched — reputation stays global) | 23 |
+
+These moved between two measurements 20 minutes apart (contacts 8,558→8,559, Hatch
+tags 81→82 — the LEADCAP.1 fix is capturing signups again). **Every assertion computes
+its expected value from the database, so drift is handled.** The table is for
+sanity-checking the `raise notice` output, nothing more.
+
+**Safety check already performed (2026-08-06):** zero contacts have
+`email_status='unsubscribed'` together with `email_marketing=true`. That matters because
+the send path gates on `email_marketing`, *not* on `email_status` — so step 2 flipping
+2,680 rows to `'active'` cannot make anyone newly mailable. **Re-run this check before
+applying**; if it ever returns non-zero, stop, because those people would start receiving
+email immediately:
+
+```sql
+select count(*) from contacts c
+left join contact_preferences p on p.contact_id = c.id
+where c.email_status = 'unsubscribed' and coalesce(p.email_marketing, true) = true;
+```
+Expected: `0`.
 
 ---
 
@@ -188,6 +210,24 @@ Every expected value in the assertions is computed from the database at apply ti
 -- this work. Hence the assertions: they raise, which rolls the whole migration
 -- back rather than leaving a half-populated table.
 
+-- 0. Capture the pre-migration truth BEFORE anything mutates it. Step 2 below
+--    sets email_status='active' on ~2,680 rows, which destroys one of the two
+--    signals that mean "opted out of email" — so the expected counts must be
+--    taken now or the assertions in step 4 would silently under-count and pass.
+--    Temp table: session-scoped, gone when the migration finishes.
+create temporary table loccomms_pre_state as
+select
+  (select count(*) from contacts where location_id is not null) as expected_contacts,
+  (select count(*)
+     from contacts c
+     left join contact_preferences p on p.contact_id = c.id
+    where c.location_id is not null
+      and (coalesce(p.email_marketing, true) = false or c.email_status = 'unsubscribed')
+  ) as expected_email_optouts,
+  (select count(*) from contact_tags
+    where tag='hatch-founding-member' and removed_at is null and location_id is not null
+  ) as expected_hatch;
+
 -- 1. Every contact WITH a location gets a row at that location.
 --    A contact with no contact_preferences row defaults to TRUE, because
 --    applyFormMarketingConsent already treats a missing row as opted in
@@ -249,17 +289,21 @@ declare
   null_loc          int;
   hatch_people      int;
   hatch_expected    int;
+  expected_optouts  int;
+  actual_optouts    int;
 begin
-  select count(*) into expected_contacts from contacts where location_id is not null;
+  -- Expected values come from the pre-state snapshot, not from live tables,
+  -- because step 2 has already mutated email_status by the time we get here.
+  select expected_contacts, expected_email_optouts, expected_hatch
+    into expected_contacts, expected_optouts, hatch_expected
+    from loccomms_pre_state;
+
   select count(distinct contact_id) into actual_contacts from contact_location_preferences;
   select count(*) into null_loc from contacts where location_id is null;
 
-  -- Expected = every active, location-scoped tag. Actual = those that ended up
-  -- with a matching preference row. Counting them from different tables is what
-  -- makes this a real check rather than a tautology.
-  select count(*) into hatch_expected
-    from contact_tags
-   where tag = 'hatch-founding-member' and removed_at is null and location_id is not null;
+  select count(*) into actual_optouts
+    from contact_location_preferences
+   where source = 'migration' and email_marketing = false;
 
   select count(distinct clp.contact_id) into hatch_people
     from contact_location_preferences clp
@@ -275,6 +319,15 @@ begin
       expected_contacts, actual_contacts;
   end if;
 
+  -- THE important one. Every person opted out of email before this migration
+  -- must still be opted out after it. Under-counting here means people who
+  -- unsubscribed start receiving mail again at the PR 3 cutover.
+  if actual_optouts <> expected_optouts then
+    raise exception
+      'LOCCOMMS.1 consent preservation FAILED: % contacts were opted out of email, but only % migration rows have email_marketing=false',
+      expected_optouts, actual_optouts;
+  end if;
+
   if hatch_people <> hatch_expected then
     raise exception
       'LOCCOMMS.1 Hatch seed FAILED: % active Hatch tags but only % have a preference row',
@@ -285,9 +338,11 @@ begin
     raise exception 'LOCCOMMS.1 FAILED: contacts.email_status still contains ''unsubscribed''';
   end if;
 
-  raise notice 'LOCCOMMS.1 backfill OK — % contacts, % Hatch list members, % null-location contacts skipped (already unreachable by every campaign)',
-    actual_contacts, hatch_people, null_loc;
+  raise notice 'LOCCOMMS.1 backfill OK — % contacts, % email opt-outs preserved, % Hatch list members, % null-location contacts skipped (already unreachable by every campaign)',
+    actual_contacts, actual_optouts, hatch_people, null_loc;
 end $$;
+
+drop table loccomms_pre_state;
 ```
 
 - [ ] **Step 2: Commit**
