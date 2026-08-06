@@ -199,10 +199,19 @@ function PlatformMemberPrivacyPolicy() {
             We do not sell your personal data. We share it only with trusted
             service providers who help us run our business, including Glofox
             (membership management), our payment processors, email and messaging
-            platforms, Meta, Google and TikTok (advertising and analytics), and
-            our IT, hosting and automation providers. We may also disclose data
-            where required by law, to enforce our terms, or to protect the rights,
-            safety or property of UN1T Dublin, our members or others.
+            platforms, Meta, Google and TikTok (advertising and analytics), our
+            telephone provider, and our IT, hosting and automation providers. We
+            may also disclose data where required by law, to enforce our terms,
+            or to protect the rights, safety or property of UN1T Dublin, our
+            members or others.
+          </p>
+          <p className="mt-3">
+            Your name and phone number are held in the contact directory of our
+            telephone system (Zoom) so that when you call a studio, our team can
+            see who is calling rather than an unrecognised number. This directory
+            is visible to staff who use our phone system. It is not used for
+            marketing, and you can ask us to remove your details from it at any
+            time using the contact details in section 16.
           </p>
 
           <h2 className="text-xl font-semibold mt-8 mb-3">10. How long we keep it</h2>

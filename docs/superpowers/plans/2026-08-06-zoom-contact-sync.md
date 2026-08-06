@@ -1688,10 +1688,47 @@ git commit -m "ZOOMSYNC.1 — register nightly cron, document go-live"
 3. `GET /api/cron/zoom-contact-sync?dry=1` with the cron secret. Expect roughly `creates: 6330, updates: 0, deletes: 0`. A wildly different number means stop and investigate before writing anything.
 4. `GET /api/cron/zoom-contact-sync?limit=200`. Wait for the queue to drain.
 5. **Ring the studio from a number you know is in the CRM and confirm the name appears on the actual handset.** This is the step the whole rollout exists to protect — Zoom Phone Appliances and Yealink desk phones surface the shared directory differently from the Workplace app, and that has not been verified on this hardware.
-6. Let the nightly run drain the rest, or trigger once without a limit.
+6. Let the nightly run drain the rest, or trigger once without a limit. If you want to de-risk the timing first, `?limit=1000` a few times — runs are idempotent and self-resuming, so there is no cost to going in stages.
 7. Confirm in the Zoom admin portal that the directory holds ~6,330 entries **and that hand-added contacts are still present**.
+
+### If the deletion guard trips
+
+The run returns `success: false` with `guardTripped: true`, applies the creates and updates, and suppresses **every** delete. That is deliberate — it is the tripwire for a broken desired-state query about to wipe the directory.
+
+It does not clear itself. Suppressing the deletes keeps the directory large, so the same batch trips the same threshold again the following night, forever, until someone intervenes.
+
+1. `?dry=1` — returns the diff plus a `sample` of the first ten numbers it intended to delete. Read them.
+2. If they are genuinely gone from the CRM and should go from Zoom, `?force=1` runs once with the guard bypassed.
+3. If they are not, the desired-state query is broken. Fix that first — the guard just did its job.
 
 ## Outstanding, not solved by this plan
 
 - **Data protection.** ~6,330 members' names and numbers land in Zoom's cloud directory, visible to every Zoom Phone user on the account, making Zoom a processor for that data. Needs a privacy-notice line and a ROPA entry before step 4.
 - The 35 unnormalisable rows are logged each run but not repaired. That is data entry, not code.
+
+---
+
+## Executed — deviations from this plan
+
+The code above is what was *proposed*. Execution found seven defects in it, four of which would have shipped silently. This section records what was actually built, so the plan is not misleading to the next reader. Where this section and the tasks above disagree, **this section is correct**.
+
+**The normaliser (Task 1) was rewritten twice.**
+
+- It no longer strips all non-digits. `s.replace(/\D/g, '')` could not distinguish a legitimate separator from junk, so junk sitting *between* digits spliced the survivors into a plausible-looking wrong number. Verified against live data: 8 non-ClassPass rows — curly quotes, stray symbols, an email address with digits in it — produced fabricated E.164 numbers that would have published under real members' names. Now an explicit separator allowlist, rejecting anything else.
+- It strips Unicode direction marks (U+202A–U+202C) before testing for a leading `+`. WhatsApp and iOS wrap pasted numbers in these and `.trim()` does not remove them, so a real `+` was invisible to `startsWith('+')`.
+- It disambiguates UK `07…` national numbers from Irish ones, gated on length (IE mobile is `08X`+7 = 10 digits, UK is `07`+9 = 11, no overlap). 4 live rows would otherwise have become fabricated `+353` numbers.
+
+**`pickWinner` (Task 5) uses an explicit `Number.isNaN` check.** The plan's `Date.parse(…) || Number.MAX_SAFE_INTEGER` treats the Unix epoch as unparseable, because `Date.parse` returns `0` for it and `0` is falsy — so a row dated 1970-01-01 sorted as *newest*, inverting the oldest-wins rule. No rows hit it today, but `created_at` is nullable and imported data could.
+
+**`diffContacts` (Task 6) compares names normalised** (trim + NFC) rather than byte-literally. Zoom may canonicalise a name on save, and accented names can differ by Unicode composition form — either would make the same entry "differ" every night forever, generating endless pointless writes that never converge.
+
+**The orchestrator (Task 8) gained two things.**
+
+- `force`, to override the deletion guard for one run. Without it a legitimately large cleanup can never drain: suppressing the deletes keeps the directory large, so the same batch trips the same threshold every night, permanently.
+- Bounded-concurrency publishing, batches of 25. The plan's sequential loop needed 5–15 minutes to enqueue a 6,330-job cold start against a 300-second cron budget — it would have timed out on the single run that matters most. Safe to parallelise because the queue's own parallelism throttles *delivery* to Zoom; publishing faster only fills the queue quicker.
+
+**Task 2's second guard was reverted.** The plan's test asserted `toMobileE164('+35315551234')` returns null. That assertion was simply wrong — `3531…` is never touched by the trunk-zero repair and always fell through to the generic international branch. Making it pass required rejecting `+353` non-mobiles outright, which silently narrows a live public lead-capture gate. Reverted; the trunk-zero repair alone is the task's scope. The landline question is tracked separately.
+
+**Task 9's test had a stale-mock bug.** `beforeEach` cleared `stampHeartbeat` but not `runZoomContactSync`, and this repo's vitest config sets no `clearMocks`, so three assertions read a call from an earlier test rather than their own.
+
+**Task 11 added a migration the plan omitted.** House convention requires a new cron to seed a `cron_heartbeats` row. Without it `stampHeartbeat('zoom-contact-sync')` updates zero rows every night and logs a warning, leaving the job permanently invisible to monitoring — the exact failure mode that let a dead heart-rate bridge go unnoticed for 17 days. The spec's "no migration" claim was true only of *tables*.
