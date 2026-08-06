@@ -36,6 +36,17 @@ export function toMobileE164(raw) {
   else { digits = s.replace(/\D/g, '') }
   if (!digits) return null
 
+  // A country code is never followed by the national trunk zero — E.164 drops
+  // it. Repair the double prefix before the mobile tests, otherwise
+  // +3530871234567 fails IE_MOBILE_E164 and the generic international branch
+  // below waves it through as a valid foreign number, storing an unusable
+  // string. 106 rows in `contacts` carry the +353 form and 2 the +44 form (one
+  // of them a member). Unambiguous in both cases: 44 and 353 are the only
+  // country codes those digits can start with, and neither has a national
+  // number beginning 0.
+  if (digits.startsWith('3530')) digits = `353${digits.slice(4)}`
+  if (digits.startsWith('440')) digits = `44${digits.slice(3)}`
+
   // Country-coded forms (work whether or not a + was typed).
   if (IE_MOBILE_E164.test(digits)) return `+${digits}`
   if (UK_MOBILE_E164.test(digits)) return `+${digits}`

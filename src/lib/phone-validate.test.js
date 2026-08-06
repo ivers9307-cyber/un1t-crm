@@ -50,6 +50,31 @@ describe('toMobileE164 — UK mobiles', () => {
   })
 })
 
+describe('toMobileE164 — country code followed by a national trunk zero', () => {
+  // Without the repair these fail the E.164 mobile tests and get waved through
+  // by the generic international branch, storing a string that is not valid
+  // E.164 and cannot be dialled or messaged. 106 rows in prod hold the +353
+  // form, 2 the +44 form.
+  it('repairs +3530… to +353…', () => {
+    expect(toMobileE164('+3530871234567')).toBe('+353871234567')
+    expect(toMobileE164('3530871234567')).toBe('+353871234567')
+    expect(toMobileE164('003530871234567')).toBe('+353871234567')
+  })
+  it('repairs +440… to +44…', () => {
+    expect(toMobileE164('+4407911123456')).toBe('+447911123456')
+    expect(toMobileE164('4407911123456')).toBe('+447911123456')
+    expect(toMobileE164('004407911123456')).toBe('+447911123456')
+  })
+  // The repair must not fire on a legitimate 44…/353… that merely contains a
+  // zero further in, nor disturb the already-correct forms.
+  it('leaves correct country-coded numbers alone', () => {
+    expect(toMobileE164('+447911023456')).toBe('+447911023456') // 0 mid-number
+    expect(toMobileE164('+353870234567')).toBe('+353870234567') // 0 mid-number
+    expect(toMobileE164('+447911123456')).toBe('+447911123456')
+    expect(toMobileE164('+353871234567')).toBe('+353871234567')
+  })
+})
+
 describe('toMobileE164 — international fallback', () => {
   it('accepts a well-formed E.164 from another country', () => {
     expect(toMobileE164('+34 612 345 678')).toBe('+34612345678') // Spain mobile
