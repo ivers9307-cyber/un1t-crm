@@ -1,10 +1,10 @@
-// EMAIL-INBOX.1 — Postmark inbound webhook for the unified inbox's
+// EMAIL-INBOX.1 / EMAIL-TICKET.3 — Postmark inbound webhook for the
 // email channel.
 //
-// Postmark's inbound stream POSTs every email received on the inbound
-// address here. We thread it into email_conversations /
-// email_inbox_messages (mig 394) so it shows up alongside WhatsApp +
-// Instagram at /communications/inbox.
+// Postmark's inbound stream POSTs every email received on a configured
+// inbound address here. Each one becomes a TICKET (email_tickets, mig
+// 482) filed against the MAILBOX it was delivered to (email_mailboxes,
+// mig 485).
 //
 // Auth — token-in-URL pattern (same as invoices-inbound): Postmark's
 // inbound webhook config only lets you set a URL, not custom headers,
@@ -14,23 +14,44 @@
 // POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN_PREVIOUS, then unset PREVIOUS.
 // Wrong token 404s (not 403) so the URL pattern can't be probed.
 //
-// Threading resolution (helpers in src/lib/email-inbox.js):
-//   (a) In-Reply-To / References ids matched against
-//       email_sends.postmark_message_id → that send's contact +
-//       location (a reply to OUR campaign/sequence mail — the
-//       highest-signal path).
-//   (b) else From address → contacts by email. Location comes from
-//       the recipient address (locations.email_inbox_reply_to match)
-//       when derivable; contact pick is deterministic (location match
-//       preferred, then oldest created_at).
-//   (c) unmatched sender → conversation with contact_id NULL at the
-//       recipient-matched location, falling back to the oldest active
-//       location (deterministic default for single-inbound-address
-//       estates).
+// WHERE the mail landed — the recipient address is matched against
+// ACTIVE email_mailboxes and the mailbox carries the location. There
+// is NO fallback: an unmatched recipient DEAD-LETTERS. The route used
+// to default to "the oldest active location", which is how Postmark's
+// own sample payload filed itself into Stillorgan's queue on
+// 2026-08-05. With several addresses across several domains that
+// silently mixes one studio's mail into another's. Consequence, stated
+// plainly: with Postmark inbound-domain forwarding EVERY address at a
+// configured domain reaches this route, so anything@ that is not a
+// configured mailbox now dead-letters. That is correct — it is not a
+// mailbox — and webhook_dead_letter is a surface someone can look at,
+// unlike a wrong studio's queue. Operators who want everything
+// captured configure a catch-all mailbox.
 //
-// Conversation model: one per (location, counterpart email) — see the
-// mig 394 header. New inbound clears resolved_at (re-enters the
-// Needs-reply queue) and bumps unread atomically.
+// WHO it is from (helpers in src/lib/email-inbox.js):
+//   (a) In-Reply-To / References ids matched against
+//       email_sends.postmark_message_id → that send's contact (a reply
+//       to OUR campaign/sequence mail — the highest-signal path).
+//       Contact ONLY: the mailbox is authoritative about location and
+//       nothing else may override it.
+//   (b) else From address → contacts by email; the pick is
+//       deterministic (mailbox location preferred, then oldest
+//       created_at). An unknown sender still gets a ticket, with
+//       contact_id NULL.
+//
+// WHICH ticket it joins: threading ids are matched against this
+// location's own email_inbox_messages, most recent wins
+// (pickThreadedTicket), and resolveTicketAction decides append vs
+// create. A reply to a CLOSED ticket mints a NEW one carrying
+// reopened_from — that single rule is what stops a ticket decaying
+// back into mig 394's immortal per-person thread.
+//
+// DUAL-WRITE, deliberately. Nine files still read email_conversations
+// (EmailInbox.jsx, UnifiedInbox.jsx, the conversations + send routes,
+// …), so every inbound also maintains its mig 394 conversation row and
+// the message carries BOTH ids. Dropping the conversation write before
+// the tickets UI ships would blank the live inbox. email_conversations
+// goes only after that UI is live.
 //
 // Why no queue table (unlike the outbound Postmark webhook): inbound
 // human replies are low-volume (no 5k-in-20s bursts) and each event
@@ -45,6 +66,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifySharedSecret } from '@/lib/webhook-auth'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
+import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { htmlToPlainText } from '@/lib/email-content'
 import {
   normalizeEmail,
@@ -52,11 +74,12 @@ import {
   extractCandidateMessageIds,
   extractRfcMessageId,
   recipientEmails,
-  matchLocationByRecipient,
   pickContact,
   inboundPreview,
   truncateHtmlBody,
 } from '@/lib/email-inbox'
+import { resolveMailboxByRecipient } from '@/lib/email-mailboxes'
+import { resolveTicketAction, ticketSubject, pickThreadedTicket } from '@/lib/email-tickets'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -137,15 +160,18 @@ export async function POST(request, { params }) {
 
   // ── Threading resolution ──────────────────────────────────────────
   const headers = Array.isArray(body.Headers) ? body.Headers : []
+  const recipients = recipientEmails(body)
   let contactId = null
-  let locationId = null
   let matchedVia = 'unmatched'
 
   // (a) Reply to one of OUR sends — In-Reply-To/References ↔ email_sends.
+  // Resolves CONTACT only. It used to resolve location too; since the
+  // mailbox cutover the delivered-to address is the only thing that says
+  // where mail landed, and a threading header is attacker-controlled.
   const candidates = extractCandidateMessageIds(headers).slice(0, MAX_THREAD_CANDIDATES)
   if (candidates.length) {
     const { data: sends, error: sendsErr } = await db.from('email_sends')
-      .select('contact_id, location_id, postmark_message_id, sent_at')
+      .select('contact_id, postmark_message_id, sent_at')
       .in('postmark_message_id', candidates)
       .order('sent_at', { ascending: false })
       .limit(1)
@@ -156,37 +182,50 @@ export async function POST(request, { params }) {
     const send = sends?.[0]
     if (send) {
       contactId = send.contact_id || null
-      locationId = send.location_id || null
       matchedVia = 'in_reply_to'
     }
   }
 
-  // Recipient address → location (locations.email_inbox_reply_to).
-  // Also the (c) default-location resolver. Small table — match in JS.
-  if (!locationId) {
-    const { data: locations, error: locErr } = await db.from('locations')
-      .select('id, email_inbox_reply_to, active, created_at')
-      .eq('active', true)
-      .order('created_at', { ascending: true })
-    if (locErr) {
-      console.error('[postmark-inbound] locations lookup failed:', locErr.message)
-      return NextResponse.json({ success: false, error: 'location_lookup_failed' }, { status: 500 })
-    }
-    const byRecipient = matchLocationByRecipient(locations || [], recipientEmails(body))
-    if (byRecipient) {
-      locationId = byRecipient.id
-      matchedVia = matchedVia === 'unmatched' ? 'recipient_address' : matchedVia
-    } else {
-      // Deterministic default: the oldest active location. Correct for a
-      // single-inbound-address estate (today: one live studio); once each
-      // location has its own inbound address the recipient match wins.
-      locationId = locations?.[0]?.id || null
-    }
+  // Recipient address → mailbox → location. AUTHORITATIVE, and the only
+  // thing that decides where this mail is filed. Small table — match in JS
+  // (resolveMailboxByRecipient also enforces the recipient precedence order,
+  // so a message addressed to two of our mailboxes resolves the same way
+  // regardless of what order the rows came back in).
+  const { data: mailboxes, error: mbErr } = await db.from('email_mailboxes')
+    .select('id, location_id, address, active')
+    .eq('active', true)
+  if (mbErr) {
+    console.error('[postmark-inbound] email_mailboxes lookup failed:', mbErr.message)
+    return NextResponse.json({ success: false, error: 'mailbox_lookup_failed' }, { status: 500 })
   }
+  const mailbox = resolveMailboxByRecipient(mailboxes || [], recipients)
+  if (!mailbox) {
+    // No fallback, by design — see the header. 200 because retrying will not
+    // conjure a mailbox and a non-2xx makes Postmark disable the webhook.
+    //
+    // provider is 'postmark_inbound', NOT WEBHOOK_PROVIDERS.POSTMARK: that
+    // key is registered auto-replayable and its re-driver re-inserts the
+    // payload into postmark_webhook_queue — the OUTBOUND delivery-event
+    // queue. Replaying an inbound email through it would push an email into
+    // the wrong pipeline AND mark the dead-letter row resolved when nothing
+    // was. This failure is not replayable: it needs an operator to configure
+    // a mailbox, so the row stays pending and visible for triage.
+    await deadLetterWebhook(db, {
+      provider: 'postmark_inbound',
+      eventType: 'inbound_email',
+      payload: body,
+      error: 'no_matching_mailbox',
+    })
+    console.warn('[postmark-inbound] no active mailbox matched — dead-lettered', {
+      messageId, recipients,
+    })
+    return NextResponse.json({ success: true, dead_lettered: 'no_matching_mailbox' })
+  }
+  const locationId = mailbox.location_id
 
-  // (b) From address → contacts (deterministic pick; prefer the
-  // resolved location). Runs even when (a) matched but the send had no
-  // contact — and fills contact linkage for recipient-only matches.
+  // (b) From address → contacts (deterministic pick; prefer the mailbox's
+  // location). Runs even when (a) matched but the send had no contact — and
+  // fills contact linkage for recipient-only matches.
   if (!contactId) {
     const { data: contacts, error: cErr } = await db.from('contacts')
       .select('id, location_id, created_at')
@@ -199,17 +238,59 @@ export async function POST(request, { params }) {
     const picked = pickContact(contacts || [], locationId)
     if (picked) {
       contactId = picked.id
-      if (!locationId) locationId = picked.location_id
       if (matchedVia === 'unmatched') matchedVia = 'from_address'
     }
   }
 
-  if (!locationId) {
-    // No active locations at all — nothing to attach to. 200: retrying
-    // won't conjure a location.
-    console.error('[postmark-inbound] no location resolvable (no active locations?)', { messageId })
-    return NextResponse.json({ success: true, ignored: 'no_location' })
+  // Stamped last, so matched_via still reports the strongest signal we had:
+  // 'recipient_address' now means "the mailbox matched but we could not
+  // identify the sender", which is the diagnostic worth having.
+  if (matchedVia === 'unmatched') matchedVia = 'recipient_address'
+
+  // ── Which ticket does this join? ──────────────────────────────────
+  // Our own earlier messages in this location whose ids a threading header
+  // names. Location-scoped: an RFC id is guessable text in an attacker-
+  // supplied header, and without the scope a crafted In-Reply-To could
+  // thread a stranger's mail into another studio's ticket — the very
+  // cross-studio mixing the mailbox routing exists to prevent.
+  //
+  // Two `.in()` queries rather than one `.or()`: `.or()` takes a RAW
+  // PostgREST filter string, so a stray `)` in a References header would
+  // rewrite the filter. `.in()` is escaped by postgrest-js.
+  let threadedTicket = null
+  if (candidates.length) {
+    const [byRfc, byPostmark] = await Promise.all([
+      db.from('email_inbox_messages')
+        .select('ticket_id, created_at')
+        .eq('location_id', locationId)
+        .not('ticket_id', 'is', null)
+        .in('rfc_message_id', candidates),
+      db.from('email_inbox_messages')
+        .select('ticket_id, created_at')
+        .eq('location_id', locationId)
+        .not('ticket_id', 'is', null)
+        .in('postmark_message_id', candidates),
+    ])
+    const threadErr = byRfc.error || byPostmark.error
+    if (threadErr) {
+      console.error('[postmark-inbound] ticket thread lookup failed:', threadErr.message)
+      return NextResponse.json({ success: false, error: 'ticket_lookup_failed' }, { status: 500 })
+    }
+    const threadedTicketId = pickThreadedTicket([...(byRfc.data || []), ...(byPostmark.data || [])])
+    if (threadedTicketId) {
+      const { data: found, error: tErr } = await db.from('email_tickets')
+        .select('id, status, subject, first_response_at')
+        .eq('id', threadedTicketId)
+        .eq('location_id', locationId)
+        .maybeSingle()
+      if (tErr) {
+        console.error('[postmark-inbound] ticket lookup failed:', tErr.message)
+        return NextResponse.json({ success: false, error: 'ticket_lookup_failed' }, { status: 500 })
+      }
+      threadedTicket = found || null
+    }
   }
+  const action = resolveTicketAction(threadedTicket)
 
   // ── Upsert conversation (one per location + counterpart email) ────
   const { data: existing, error: convErr } = await db.from('email_conversations')
@@ -263,16 +344,53 @@ export async function POST(request, { params }) {
     contactId = existing.contact_id
   }
 
-  // ── Insert the message ────────────────────────────────────────────
   const textBody = (body.TextBody || '').trim() || htmlToPlainText(body.HtmlBody) || ''
   const now = new Date().toISOString()
+  const preview = inboundPreview(textBody) || (subject ? inboundPreview(subject) : '')
+
+  // ── Create or append the ticket ───────────────────────────────────
+  // `append` writes nothing yet — its summary update runs after the message
+  // lands, mirroring the conversation bump. `create` has to insert first:
+  // email_inbox_messages.ticket_id is a foreign key.
+  let ticketId = null
+  if (action.action === 'append') {
+    ticketId = action.ticketId
+  } else {
+    const { data: createdTicket, error: ticketErr } = await db.from('email_tickets')
+      .insert({
+        location_id: locationId,
+        mailbox_id: mailbox.id,
+        contact_id: contactId,
+        requester_email: fromEmail,
+        requester_name: counterpartName,
+        subject: ticketSubject(null, subject),
+        status: 'open',
+        // Set only when this reply threaded to a CLOSED ticket. That ticket
+        // stays closed — this is its successor, not its resurrection.
+        reopened_from: action.reopenedFrom,
+        last_message_at: now,
+        last_message_direction: 'inbound',
+        last_message_preview: preview,
+      })
+      .select('id')
+      .single()
+    if (ticketErr || !createdTicket) {
+      console.error('[postmark-inbound] ticket insert failed:', ticketErr?.message)
+      return NextResponse.json({ success: false, error: 'ticket_insert_failed' }, { status: 500 })
+    }
+    ticketId = createdTicket.id
+  }
+
+  // ── Insert the message ────────────────────────────────────────────
+  // Carries BOTH ids for the length of the transition.
   const { error: msgErr } = await db.from('email_inbox_messages').insert({
+    ticket_id: ticketId,
     conversation_id: conversationId,
     contact_id: contactId,
     location_id: locationId,
     direction: 'inbound',
     from_email: fromEmail,
-    to_email: recipientEmails(body)[0] || null,
+    to_email: recipients[0] || null,
     subject,
     text_body: textBody,
     html_body: truncateHtmlBody(body.HtmlBody || null),
@@ -293,17 +411,40 @@ export async function POST(request, { params }) {
     return NextResponse.json({ success: false, error: 'message_insert_failed' }, { status: 500 })
   }
 
+  // ── Bump the ticket ───────────────────────────────────────────────
+  // No `subject` here on purpose: a ticket is named by the issue that opened
+  // it. Mig 394 tracked the latest inbound and thread names drifted with
+  // every "Re: Re: Fwd:".
+  if (action.action === 'append') {
+    await db.from('email_tickets').update({
+      status: 'open',
+      last_message_at: now,
+      last_message_direction: 'inbound',
+      last_message_preview: preview,
+      updated_at: now,
+    }).eq('id', ticketId)
+  }
+  // supabase-js builders are thenables with no .catch — try/catch, not
+  // .catch(), or the rpc never fires.
+  try { await db.rpc('increment_email_ticket_unread', { p_ticket_id: ticketId }) } catch {}
+
   // ── Bump conversation summary + unread (mirrors the IG ingest) ────
   await db.from('email_conversations').update({
     subject: subject || undefined,
     counterpart_name: counterpartName || undefined,
     last_message_at: now,
     last_message_direction: 'inbound',
-    last_message_preview: inboundPreview(textBody) || (subject ? inboundPreview(subject) : ''),
+    last_message_preview: preview,
     resolved_at: null,
     updated_at: now,
   }).eq('id', conversationId)
   try { await db.rpc('increment_email_conversation_unread', { p_conversation_id: conversationId }) } catch {}
 
-  return NextResponse.json({ success: true, conversation_id: conversationId, matched_via: matchedVia })
+  return NextResponse.json({
+    success: true,
+    ticket_id: ticketId,
+    conversation_id: conversationId,
+    mailbox_id: mailbox.id,
+    matched_via: matchedVia,
+  })
 }
