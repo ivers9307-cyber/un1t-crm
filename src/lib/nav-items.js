@@ -24,7 +24,7 @@ import {
   CalendarClock, Settings, Car, Flag, Receipt, DoorOpen, FileSignature,
   Heart, Globe, Tv, BookOpen, Inbox, ClipboardCheck, AlertCircle, CreditCard,
   Workflow, Timer, Projector, Trophy, Activity, Landmark, Building2, Dumbbell,
-  Wrench,
+  Wrench, Mail,
 } from 'lucide-react'
 
 // The sidebar Dashboard link is visible if ANY of these are true. The
@@ -72,6 +72,16 @@ export const ALL_NAV = [
   // sub-tabs inside the hub gate themselves further.
   { href: '/communications', label: 'Communications', icon: MessagesSquare,
     anyPermission: ['email', 'whatsapp', 'sms'], section: 'work' },
+  // EMAIL-TICKET.4 — the studio email queue, a Work-section action queue in
+  // its own right (it accrues unanswered tickets the way Approvals accrues
+  // pending items). It lives at a /communications/* URL and shows in that
+  // hub's tab strip too, but it gets its own sidebar entry because its
+  // permission population is different: `email_inbox` gates the ticket
+  // surface, while the neighbouring Communications entry ORs the marketing
+  // `email` / `whatsapp` / `sms` keys. Someone who answers accounts@ all day
+  // need not hold any of those.
+  { href: '/communications/tickets', label: 'Email tickets', icon: Mail,
+    permission: 'email_inbox', section: 'work' },
   // Single entry replacing the old Events + Bookings ("Calendly").
   // The hub lands on /bookings (the high-frequency operational view —
   // "what's booked today / coming up") with a tab strip at the top of
