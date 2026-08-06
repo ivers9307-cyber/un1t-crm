@@ -83,6 +83,12 @@ export const STRAVA_EXPORTS_QUEUE_PARALLELISM = 2
 export const RECEIPT_HUNTS_WORKER_PATH = '/api/webhooks/qstash/receipt-hunts'
 export const RECEIPT_HUNTS_QUEUE_NAME = 'receipt-hunts'
 export const RECEIPT_HUNTS_QUEUE_PARALLELISM = 1
+// ZOOMSYNC.1 — one job per external-contact write. Parallelism 2 is deliberate
+// pacing, not a rate-limit necessity: Zoom allows 30/sec on Pro and 80/sec on
+// Business+, and the cold start is ~6,330 writes we are happy to drain slowly.
+export const ZOOM_CONTACTS_WORKER_PATH = '/api/webhooks/qstash/zoom-contacts'
+export const ZOOM_CONTACTS_QUEUE_NAME = 'zoom-contacts'
+export const ZOOM_CONTACTS_QUEUE_PARALLELISM = 2
 
 const QSTASH_PUBLISH_BASE = 'https://qstash.upstash.io/v2/publish/'
 // Enqueue onto a named FIFO queue: /v2/enqueue/<queueName>/<destination>.
