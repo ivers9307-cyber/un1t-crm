@@ -77,4 +77,9 @@ describe('GET /api/cron/zoom-contact-sync', () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ success: true, skipped: 'unconfigured' })
   })
+
+  it('identifies itself as the cron trigger', async () => {
+    await GET(req())
+    expect(vi.mocked(runZoomContactSync).mock.calls[0][0].trigger).toBe('cron')
+  })
 })
