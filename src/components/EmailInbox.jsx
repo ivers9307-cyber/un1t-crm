@@ -113,9 +113,14 @@ export default function EmailInbox({ locationId, initialConversationId, embedded
     if (embedded) setSelectedId(initialConversationId || null)
   }, [embedded, initialConversationId])
 
-  // Realtime push (mig 394 publishes the email tables); until the
-  // migration lands the listeners simply never fire and the 60s poll
-  // below covers it — same posture as the IG inbox pre-mig-256.
+  // Realtime push (mig 394 publishes the email tables).
+  //
+  // RLS-RESTRICTIVE.1: both listeners below were dead from mig 394 until
+  // mig 485. Realtime authorises each row through the subscriber's SELECT
+  // policy, and mig 394's `email_conv_deny_writes` / `email_msg_deny_writes`
+  // were `AS RESTRICTIVE FOR ALL USING (false)` — FOR ALL includes SELECT,
+  // so the permissive SELECT policy was ANDed away and no event was ever
+  // delivered. The 60s poll below is what made the inbox appear to work.
   useEffect(() => {
     if (!locationId) return
     const supabase = createBrowserClient()

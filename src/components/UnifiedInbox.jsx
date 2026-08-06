@@ -123,6 +123,13 @@ export default function UnifiedInbox({ locationId, userId, initialConversationId
   // so every inbound/outbound/resolve change now refreshes the list
   // instantly. The poll below drops to a 60s safety net (same shape
   // as WAInbox's heartbeat).
+  //
+  // RLS-RESTRICTIVE.1: 4 of the 7 tables below (the IG pair and the
+  // email pair) delivered nothing until mig 485 — their restrictive
+  // `FOR ALL ... USING (false)` deny-writes policies also denied SELECT,
+  // and realtime authorises each row through the SELECT policy. Only the
+  // WA pair and agent_membership_requests ever fired; the 60s poll
+  // covered the rest.
   useEffect(() => {
     if (!locationId) return
     const supabase = createBrowserClient()
