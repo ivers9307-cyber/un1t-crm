@@ -44,11 +44,15 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
+  // Computed once and reused for both the write gate below and the response
+  // redaction further down, so the two can never diverge.
+  const canManage = hasPermission(user, 'integrations_zoom_manage')
+
   // A preview is safe. Anything that writes, or that overrides the deletion
   // guard, is gated on the permission key added in Task 6 — NOT on a hand-rolled
   // role check, or the key would be dead and the two would drift the first time
   // someone edited the role defaults.
-  if ((!dry || force) && !hasPermission(user, 'integrations_zoom_manage')) {
+  if ((!dry || force) && !canManage) {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 
@@ -57,5 +61,14 @@ export async function POST(request) {
     db, dry, limit, force, trigger: 'manual', triggeredBy: user.id,
   })
 
-  return NextResponse.json({ success: out.ok !== false, data: out })
+  // guard.sample is real member phone numbers. The force-confirmation UI needs
+  // them, but it reads them from the stored run row — nothing in the response
+  // requires them, and a preview is open to callers who cannot act on them.
+  // Redact rather than widen who may preview: the counts are what a previewer
+  // actually needs.
+  const data = canManage || !out?.guard?.sample
+    ? out
+    : { ...out, guard: { ...out.guard, sample: undefined, sampleRedacted: out.guard.sample.length } }
+
+  return NextResponse.json({ success: out.ok !== false, data })
 }

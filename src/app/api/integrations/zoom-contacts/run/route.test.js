@@ -81,4 +81,25 @@ describe('POST /api/integrations/zoom-contacts/run', () => {
   it('400s on a bad limit', async () => {
     expect((await POST(post({ limit: -5 }))).status).toBe(400)
   })
+
+  it('redacts the guard sample for a caller who cannot act on it', async () => {
+    vi.mocked(hasPermission).mockReturnValue(false)
+    vi.mocked(runZoomContactSync).mockResolvedValue({
+      ok: false, guardTripped: true,
+      guard: { threshold: 20, attempted: 400, sample: ['+353871111111', '+353872222222'] },
+    })
+    const body = await (await POST(post({ dry: true }))).json()
+    expect(body.data.guard.sample).toBeUndefined()
+    expect(body.data.guard.sampleRedacted).toBe(2)
+    expect(body.data.guard.attempted).toBe(400)   // counts still useful
+  })
+
+  it('gives the sample to a caller who can act on it', async () => {
+    vi.mocked(runZoomContactSync).mockResolvedValue({
+      ok: false, guardTripped: true,
+      guard: { threshold: 20, attempted: 400, sample: ['+353871111111'] },
+    })
+    const body = await (await POST(post({ dry: true }))).json()
+    expect(body.data.guard.sample).toEqual(['+353871111111'])
+  })
 })
