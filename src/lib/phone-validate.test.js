@@ -97,3 +97,18 @@ describe('isValidMobileNumber — rejects non-mobiles + junk', () => {
     expect(isValidMobileNumber('+353871234567')).toBe(true)
   })
 })
+
+// The trunk-zero repair this block used to also cover now lives in
+// "country code followed by a national trunk zero" above, which tests both
+// +353 and +44. Only the landline documentation is kept here.
+describe('toMobileE164 — +353 landline in E.164 form', () => {
+  // toMobileE164 accepts any well-formed 8–15 digit international number it
+  // cannot classify, so a +353 landline passes this mobile-only gate. Raised
+  // during ZOOMSYNC.1 and left alone as out of scope; since measured against
+  // prod and left alone again on the numbers — the shape reaches 3 rows in
+  // `contacts`, one of which converted to a member, so rejecting it would have
+  // cost more than it saved. Pinned so it reads as a decision, not an oversight.
+  it('lets an Irish landline through — measured, deliberately not narrowed', () => {
+    expect(toMobileE164('+35315551234')).toBe('+35315551234')
+  })
+})
