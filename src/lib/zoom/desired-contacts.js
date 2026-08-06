@@ -1,13 +1,54 @@
 // ZOOMSYNC.1 — CRM → the directory we want Zoom to hold.
 //
-// Owns three rules: ClassPass is excluded, numbers are normalised to E.164,
-// and where two profiles share a number the OLDEST profile supplies the name.
+// Owns four rules: the ORGANISATION BOUNDARY, ClassPass is excluded, numbers
+// are normalised to E.164, and where two profiles share a number the OLDEST
+// profile supplies the name.
+//
+// ZOOMSYNC.2 — the boundary is the rule that is not about phone numbers.
+// `contacts` is a shared multi-tenant table: UN1T Group's gyms live in it, but
+// so do CCF Autos, Givers Consultancy, and every future Repset tenant. The Zoom
+// Phone external-contacts directory is the opposite — ONE account-wide
+// directory, on UN1T's Zoom account, readable by every Zoom Phone user on it.
+// An unfiltered read publishes one company's customers onto another company's
+// staff handsets. CCF Autos is a separate business with its own customers and
+// its own data-controller relationship, and it already runs a `car_enquiries`
+// funnel; it holds no phone-bearing contacts today, which is the only reason
+// this shipped as a latent problem rather than a live one.
+//
+// `contacts` carries no organization_id (only location_id, mig 004), so the
+// boundary resolves through locations.organization_id (mig 079).
+//
+// It FAILS CLOSED. A missing org id, or an org resolving to no locations,
+// aborts the build rather than returning an empty Map: empty desired reads to
+// diffContacts() as "delete every entry", and applyDeletionGuard() is meant to
+// be the second line of defence, not the first.
 
 import { normaliseForZoom } from './normalise-phone'
 
 const PAGE_SIZE = 1000       // PostgREST caps every select at 1000 rows
 const HARD_LIMIT = 40_000    // ~6.7k today; crossing this means streaming, not a bigger number
 const SELECT_COLS = 'id, first_name, last_name, phone, lead_source, created_at'
+
+/**
+ * ZOOMSYNC.2 — location ids for the synced organisation, or null when the
+ * boundary cannot be established.
+ *
+ * Deliberately NOT orgLocationIds() from src/lib/api-auth.js, despite the
+ * identical lookup: that module is the request-auth layer (it imports
+ * next/server, getCurrentUser and createServerClient, and nothing else in
+ * src/lib imports it), and this one fails closed where that one returns [].
+ * One duplicated query beats dragging that graph into a cron lib.
+ */
+async function syncScopeLocationIds(db, orgId) {
+  // Supabase builders are thenables, not Promises — no .catch() here.
+  const { data, error } = await db
+    .from('locations')
+    .select('id')
+    .eq('organization_id', orgId)
+
+  if (error || !Array.isArray(data) || data.length === 0) return null
+  return data.map((l) => l.id)
+}
 
 /**
  * Date.parse(...) returns NaN for a genuinely unparseable/missing value, but
@@ -46,7 +87,20 @@ function nameOf(row) {
  *                 | {ok: false, error: string}>}
  */
 export async function buildDesiredContacts(db) {
-  const stats = { scanned: 0, excludedClassPass: 0, rejected: 0, noName: 0, collapsed: 0 }
+  // ZOOMSYNC.2 — the boundary first, before a single contact row is read.
+  const orgId = process.env.ZOOM_SYNC_ORGANIZATION_ID
+  if (!orgId) {
+    return { ok: false, error: 'ZOOM_SYNC_ORGANIZATION_ID is unset — refusing to read contacts unscoped' }
+  }
+  const locationIds = await syncScopeLocationIds(db, orgId)
+  if (!locationIds) {
+    return { ok: false, error: `organization ${orgId} resolved to no locations — refusing to sync an empty desired set` }
+  }
+
+  const stats = {
+    scanned: 0, excludedClassPass: 0, rejected: 0, noName: 0, collapsed: 0,
+    orgLocations: locationIds.length,
+  }
   const winners = new Map() // e164 → row
 
   let pageStart = 0
@@ -56,6 +110,9 @@ export async function buildDesiredContacts(db) {
     const { data: page, error } = await db
       .from('contacts')
       .select(SELECT_COLS)
+      // The tenant boundary. Also drops location_id IS NULL, since `IN` never
+      // matches NULL — a contact with no provable tenant is not published.
+      .in('location_id', locationIds)
       .order('id', { ascending: true })
       .range(pageStart, pageEnd)
 

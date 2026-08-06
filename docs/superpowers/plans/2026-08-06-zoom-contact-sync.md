@@ -1712,6 +1712,20 @@ It does not clear itself. Suppressing the deletes keeps the directory large, so 
 
 The code above is what was *proposed*. Execution found seven defects in it, four of which would have shipped silently. This section records what was actually built, so the plan is not misleading to the next reader. Where this section and the tasks above disagree, **this section is correct**.
 
+**An eighth defect was found after merge, and it was in the plan itself (ZOOMSYNC.2).**
+
+Task 5's `buildDesiredContacts()` reads `contacts` with no tenant filter — and `contacts` is shared by every organisation in the CRM, while the Zoom directory belongs to one. Both the spec and this plan defined desired state as "everything in `contacts`", so execution reproduced it faithfully; it shipped in #1233 and was fixed in a follow-up. Nothing leaked: every non-UN1T organisation held zero phone-bearing contacts, and the sync was dark behind its secrets the whole time. But the first phone number CCF Autos captured would have gone onto UN1T's handsets.
+
+What changed:
+
+- `buildDesiredContacts()` resolves `ZOOM_SYNC_ORGANIZATION_ID` → `locations.organization_id` (mig 079) → `.in('location_id', …)`. `contacts` has no `organization_id` of its own (only `location_id`, mig 004), so the hop through `locations` is necessary rather than incidental.
+- It **fails closed**: an unset org id, or an org resolving to no locations, aborts the build. It must not return an empty Map — `diffContacts()` reads that as *delete every entry*, which would make `applyDeletionGuard()` the boundary instead of the backstop.
+- `ZOOM_SYNC_ORGANIZATION_ID` joined `zoomConfigured()`, so "configured" means "safe to run", not "has credentials". There is no state in which the sync reads `contacts` unscoped.
+- Contacts with `location_id IS NULL` (3 rows) drop out with no rule of their own — SQL `IN` never matches `NULL`, and a contact with no provable tenant should not be published.
+- The test stub now applies the `.in()` filter for real and exposes no `.order()` on a bare `.select()`, so an implementation that omits the filter **cannot** pass. Removing the `.in()` line fails 9 of 13 cases rather than silently passing.
+
+The lesson is about *where* the defect lived. A route with this bug would have been caught by `check:location-scoping`, but `/api/cron/**` is exempt by path — deliberately, because most crons genuinely fan out across all tenants. This one is different not because it is a cron but because its **destination is single-tenant**, which is a property of the sink that no query-shape linter can see. When a cron writes tenant data into an external system, the boundary belongs at the read and has to be explicit.
+
 **The normaliser (Task 1) was rewritten twice.**
 
 - It no longer strips all non-digits. `s.replace(/\D/g, '')` could not distinguish a legitimate separator from junk, so junk sitting *between* digits spliced the survivors into a plausible-looking wrong number. Verified against live data: 8 non-ClassPass rows — curly quotes, stray symbols, an email address with digits in it — produced fabricated E.164 numbers that would have published under real members' names. Now an explicit separator allowlist, rejecting anything else.

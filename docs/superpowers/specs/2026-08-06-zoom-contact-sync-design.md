@@ -1,8 +1,10 @@
 # Zoom Phone contact sync — design
 
 **Date:** 2026-08-06
-**Status:** Spec, awaiting approval
-**Ticket:** ZOOMSYNC.1
+**Status:** Shipped (ZOOMSYNC.1, PRs #1232 / #1233). Amended by **ZOOMSYNC.2** — the organisation boundary below was missing from the original spec and from the code that shipped from it.
+**Ticket:** ZOOMSYNC.1, ZOOMSYNC.2
+
+> **ZOOMSYNC.2 amendment.** The original spec defined desired state as "everything in `contacts`", which is a cross-tenant read: `contacts` is shared by every organisation in the CRM, while the Zoom directory belongs to one. It shipped that way in #1233. No member data crossed a boundary — every non-UN1T organisation held zero phone-bearing contacts, and the sync was dark behind its secrets throughout — but the code would have published CCF Autos' customers onto UN1T's handsets the moment CCF captured a phone number. See [The organisation boundary](#the-organisation-boundary).
 
 ## Problem
 
@@ -14,7 +16,7 @@ Zoom Phone has the right receptacle — **External Contacts**, an account-wide s
 
 ## Goals
 
-- Every distinct member/lead phone number in the CRM is present in Zoom's external contacts directory, named.
+- Every distinct member/lead phone number **belonging to the organisation that owns the Zoom account** is present in Zoom's external contacts directory, named.
 - The directory stays correct as the CRM changes — new numbers appear, renamed contacts get corrected, numbers that leave the CRM leave Zoom.
 - Reproducible from an empty Zoom directory with no manual steps.
 
@@ -24,6 +26,7 @@ Zoom Phone has the right receptacle — **External Contacts**, an account-wide s
 - **No Zoom Contact Center.** Zoom Phone external contacts only.
 - **No new customer-facing surface.** Nothing in the CRM UI changes.
 - **No sync of staff, suppliers, or contractors.** Those are hand-managed in Zoom and must stay that way.
+- **No cross-tenant sync.** One Zoom account, one organisation. A second tenant wanting this needs its own Zoom account and its own value for `ZOOM_SYNC_ORGANIZATION_ID`, not a widening of this one.
 
 ## The API constraints that shape everything
 
@@ -51,11 +54,32 @@ The reconcile filters the Zoom list down to entries whose `id` starts with `crm:
 From `contacts`:
 
 ```
-WHERE phone IS NOT NULL AND trim(phone) <> ''
+WHERE location_id IN (SELECT id FROM locations
+                       WHERE organization_id = $ZOOM_SYNC_ORGANIZATION_ID)
+  AND phone IS NOT NULL AND trim(phone) <> ''
   AND coalesce(lower(lead_source), '') <> 'classpass'
 ```
 
 then normalise to E.164, drop what fails, group by number, and pick a winner.
+
+### The organisation boundary
+
+The first clause is the one that is not about phone numbers, and it is load-bearing.
+
+`contacts` is a **shared multi-tenant table**. UN1T Group's two gyms live in it, but so do CCF Autos, Givers Consultancy, and every future Repset tenant. The Zoom Phone external-contacts directory is the opposite: **one account-wide directory, on UN1T's Zoom account, readable by every Zoom Phone user on it.** An unfiltered read therefore publishes one company's customers into another company's staff handsets.
+
+That is not a hypothetical for CCF Autos specifically — it is a separate business, with its own customers and its own data-controller relationship, and it already runs a `car_enquiries` funnel. It holds no phone-bearing contacts *today*, which is the only reason this is a latent boundary problem rather than a live incident. The moment it starts capturing numbers, an unfiltered sync would push them to UN1T's phones with nothing in the path to stop it.
+
+**The boundary is one organisation**, configured as `ZOOM_SYNC_ORGANIZATION_ID`. `contacts` carries no `organization_id` — only `location_id` (mig 004) — so it resolves through `locations.organization_id` (mig 079).
+
+Chosen over the two alternatives because it matches the shape of the destination:
+
+- *An explicit list of location ids* resolves to the same set today, but is hand-maintained. A new UN1T location — Pride Training Club is already one — would silently miss the directory until somebody remembered to edit an env var.
+- *Per-location opt-in, mirroring Glofox* is more granular than the destination warrants. Glofox is per-location because each gym has its own Glofox branch; Zoom has a single shared directory for the whole account, so every location in the org would always be switched on. Knobs that can only ever hold one value are a maintenance cost with no expressive gain.
+
+**It fails closed.** An unset `ZOOM_SYNC_ORGANIZATION_ID`, or an org that resolves to no locations, aborts the desired-state build and returns an error. It must not return an empty Map: `diffContacts()` reads an empty desired set as *delete every entry*, and the deletion guard is designed to be the second line of defence, not the first. `ZOOM_SYNC_ORGANIZATION_ID` is consequently part of `zoomConfigured()` alongside the three credentials — "configured" means "safe to run", so there is no state in which the sync reads `contacts` without a boundary.
+
+**Contacts with no location at all are excluded**, and get no rule of their own: SQL `IN` never matches `NULL`. There were 3 such rows when this was written. Excluding them is the right answer rather than a gap — a contact with no provable tenant should not be published into a tenant's directory.
 
 **Winner rule:** lowest `created_at`, with `contacts.id` as a deterministic tiebreak so two rows created in the same transaction cannot flip the name between runs. `created_at` is populated on every row in the table, so the rule never falls through.
 
@@ -78,6 +102,19 @@ then normalise to E.164, drop what fails, group by number, and pick a winner.
 | **Zoom entries created** | **6,330** |
 
 Split: Ireland 6,394, UK 186, other international 111 across roughly 44 country prefixes.
+
+**These figures predate the organisation boundary and are essentially unchanged by it.** A separate count of phone-bearing contacts by tenant, taken shortly after:
+
+| Organisation | Location | Contacts with a phone |
+|---|---|---|
+| UN1T Group | Stillorgan | 8,278 |
+| UN1T Group | Hatch Street | 59 |
+| UN1T Group | Pride Training Club | 0 |
+| CCF Autos | CCF Autos | 0 |
+| Givers Consultancy | SourceIt | 0 |
+| — | *(no location)* | 3 |
+
+Every non-UN1T organisation holds zero, so the boundary removes only the 3 unlocated rows, and the expected output stays at **≤6,330**. The two counts differ by one row and were taken at different moments; neither is precise enough to carry a delta that small. The filter exists for what happens *next* — the first CCF Autos customer phone number — not for what it removes today.
 
 ## Normalisation
 
@@ -155,7 +192,7 @@ There is no run lock, and none is needed.
 |---|---|---|
 | `src/lib/zoom/client.js` | Server-to-Server OAuth token cached to expiry; `zoomFetch()` with 429/`Retry-After` handling | env only |
 | `src/lib/zoom/external-contacts.js` | list / create / update / delete | client |
-| `src/lib/zoom/desired-contacts.js` | CRM → desired Map. Owns exclusion, normalisation, oldest-wins | db |
+| `src/lib/zoom/desired-contacts.js` | CRM → desired Map. Owns the **organisation boundary**, exclusion, normalisation, oldest-wins | db |
 | `src/lib/zoom/normalise-phone.js` | Raw string → E.164 or null | nothing |
 | `src/lib/zoom/reconcile.js` | Pure diff + guard + enqueue orchestration | the above |
 | `src/app/api/cron/zoom-contact-sync/route.js` | `CRON_SECRET` wrapper, heartbeat | reconcile |
@@ -165,20 +202,21 @@ Each is small enough to hold in context whole. `normalise-phone` and `reconcile`
 
 ## Auth and configuration
 
-A Zoom **Server-to-Server OAuth** app, three secrets in Vercel:
+A Zoom **Server-to-Server OAuth** app, three secrets in Vercel, plus the tenant boundary:
 
 - `ZOOM_ACCOUNT_ID`
 - `ZOOM_CLIENT_ID`
 - `ZOOM_CLIENT_SECRET`
+- `ZOOM_SYNC_ORGANIZATION_ID` — the `organizations.id` of UN1T Group. Not a credential: it decides *whose customers* reach the directory. Pointing it at another tenant would publish that tenant's contacts onto UN1T's handsets, and nothing downstream would catch it, because from the sync's point of view that is a correctly-scoped run.
 
 Exact granular scope strings are pinned during implementation against the live account — Zoom's phone scopes have been reorganised more than once and vary by account tier. The app needs read and write on Zoom Phone external contacts.
 
-**Ships dark.** With any of the three unset the cron returns `{ skipped: 'unconfigured' }` and does nothing, matching the Homey and fleet-health pattern. Go-live is setting the secrets.
+**Ships dark.** With any of the four unset the cron returns `{ skipped: 'unconfigured' }` and does nothing, matching the Homey and fleet-health pattern. Go-live is setting the secrets. The boundary is deliberately inside that gate rather than beside it: "configured" should mean "safe to run", not "has credentials".
 
 ## Testing
 
 - `normalise-phone.test.js` — table-driven over every shape in the rules table above, with the `3530…` double-prefix and the `+10000000000` placeholder as named cases.
-- `desired-contacts.test.js` — ClassPass excluded; oldest-wins picks the earlier `created_at`; `contacts.id` breaks a `created_at` tie deterministically; a row with no name is skipped, not pushed blank.
+- `desired-contacts.test.js` — **a contact from another organisation never appears in the desired map**; a contact with no `location_id` never appears; every location in the org is included, not just the first; an unset `ZOOM_SYNC_ORGANIZATION_ID` and an org with no locations both abort rather than yielding an empty map. Then: ClassPass excluded; oldest-wins picks the earlier `created_at`; `contacts.id` breaks a `created_at` tie deterministically; a row with no name is skipped, not pushed blank. The test's Supabase stub applies the `.in('location_id', …)` filter for real, so the boundary is exercised by every case in the file rather than only the ones that name it.
 - `reconcile.test.js` — creates/updates/deletes computed correctly; entries without the `crm:` marker never appear in any bucket; guard trips at the threshold and suppresses only deletes; guard does not trip at threshold minus one.
 - `external-contacts.test.js` — 409 treated as success; 429 honours `Retry-After`; token refreshed when expired.
 - Route tests per house pattern — 401 without `CRON_SECRET`, `skipped` when unconfigured, QStash signature rejection on the worker.
@@ -186,14 +224,15 @@ Exact granular scope strings are pinned during implementation against the live a
 ## Rollout
 
 1. Merge dark. Nothing happens.
-2. Create the Zoom Server-to-Server OAuth app, set the three secrets.
+2. Create the Zoom Server-to-Server OAuth app, set the three secrets, and set `ZOOM_SYNC_ORGANIZATION_ID` to UN1T Group's `organizations.id` — read off the row, not guessed.
 3. **Pilot.** Run once with a `limit` parameter capping the diff at ~200 entries. Confirm on a real handset that an inbound call from a known member shows their name.
 4. Remove the cap, let the cold start drain overnight.
 5. Verify the directory count in the Zoom admin portal lands near 6,330, and that hand-added entries are still present.
 
 ## Risks and what this does not fix
 
-- **Data protection.** This publishes ~6,330 members' names and numbers into Zoom's cloud directory, visible to every Zoom Phone user on the account. Zoom becomes a processor for that data. Needs a line in the privacy notice and the ROPA before go-live. Flagged, not resolved by this spec.
+- **Data protection.** This publishes ~6,330 members' names and numbers into Zoom's cloud directory, visible to every Zoom Phone user on the account. Zoom becomes a processor for that data. Needs a line in the privacy notice and the ROPA before go-live. Flagged, not resolved by this spec. The organisation boundary keeps it to **one data controller** — UN1T Group — so that entry covers one legal entity rather than every tenant in the CRM, and CCF Autos does not acquire a Zoom processor relationship it never agreed to.
+- **The boundary is only as good as the env var.** Nothing validates that `ZOOM_SYNC_ORGANIZATION_ID` names the organisation that actually owns the Zoom account — the sync cannot tell a correct id from a wrong one, only a resolvable one from an unresolvable one. The `?dry=1` step in the rollout is where that gets checked, by eye, against the expected create count.
 - **Name quality is inherited.** Where the CRM holds a sloppy name, Zoom will show a sloppy name. The sync does not clean names.
 - **The 35 rejected rows stay invisible.** They are logged each run but not repaired. Fixing them is data entry, not code.
 - **Desk phones may differ.** Name resolution is confirmed behaviour in the Zoom Workplace app. Zoom Phone Appliances and Yealink handsets surface the shared directory differently, and step 3 of the rollout is where that gets checked on the actual hardware.

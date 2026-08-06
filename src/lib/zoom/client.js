@@ -1,6 +1,6 @@
 // ZOOMSYNC.1 — Zoom Server-to-Server OAuth + a thin fetch wrapper.
 //
-// Ships dark: with any of the three secrets unset, zoomConfigured() is false
+// Ships dark: with any of the four required env vars unset, zoomConfigured() is false
 // and callers no-op rather than erroring. Same pattern as the Homey client.
 
 const TOKEN_URL = 'https://zoom.us/oauth/token'
@@ -19,7 +19,12 @@ export function zoomConfigured() {
   return Boolean(
     process.env.ZOOM_ACCOUNT_ID &&
     process.env.ZOOM_CLIENT_ID &&
-    process.env.ZOOM_CLIENT_SECRET
+    process.env.ZOOM_CLIENT_SECRET &&
+    // ZOOMSYNC.2 — the tenant boundary is a precondition for running at all,
+    // not a runtime option. Without it there is no safe read of `contacts`, so
+    // an unset value must ship dark exactly like a missing credential:
+    // "configured" means "safe to run", not "has credentials".
+    process.env.ZOOM_SYNC_ORGANIZATION_ID
   )
 }
 
