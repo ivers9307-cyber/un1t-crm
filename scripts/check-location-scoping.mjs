@@ -87,6 +87,16 @@ const SCOPING_HELPERS = [
   'assertCreateInOrg(',
   'orgScopeLocationIds(',
   'orgLocationIds(',
+  // src/app/api/email/tickets/_helpers.js — EMAIL-TICKET.4's two-level gate.
+  // loadTicketForUser runs assertLocationAccessOr404 on the ticket's own
+  // location AND requires the ticket's mailbox to be in the caller's visible
+  // set; loadVisibleMailboxes builds that set with .eq('location_id', …) plus
+  // the caller's email_mailbox_access grants, and a NULL-mailbox ticket is
+  // elevated-only. Rows derived from the returned ticket — email_inbox_messages
+  // by ticket_id, contacts by the ticket's own contact_id — inherit that
+  // scoping, which is why the handlers look unscoped in isolation.
+  'loadTicketForUser(',
+  'loadVisibleMailboxes(',
   // src/lib/audience-filter.js — every send audience goes through the
   // whitelist filter, which applies the location scope with the audience.
   'applyAudienceFilter(',

@@ -70,14 +70,15 @@ npm test             # vitest run (~2950 pure-lib tests, no DB)
 npm run lint         # eslint .
 ```
 
-**CI mirror — run all seven before pushing:**
+**CI mirror — run all eight before pushing:**
 ```bash
-npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:route-guards && npm run check:rls-restrictive && npm run check:guardrails
+npm test && npm run lint && npm run check:mobile-parity && npm run check:mobile-imports && npm run check:route-guards && npm run check:location-scoping && npm run check:rls-restrictive && npm run check:guardrails
 ```
 
 - **`next build` is NOT in the local CI mirror** (it's slow), but since SAAS4-W0.3 GitHub Actions runs it as a parallel "Next build" job on every PR. Green vitest + eslint alone still does **not** mean the build passes — tests run on mocked imports, so a missing/renamed export or unresolvable import sails through them. For any change adding an import or a new route/page, run `npm run build` locally before pushing rather than discovering it in CI; the Actions build job and the Vercel check on the PR are the enforcing gates.
 - **`npx next lint` no longer exists** (removed in Next 16 — the CLI parses `lint` as a directory arg and errors). `npm run lint` (`eslint .`, flat config spreading `eslint-config-next`) is the ONLY lint entry point. Caveat: `@next/next/no-html-link-for-pages` resolves as `error` in the config but is **inert in this app-router-only repo** — it only checks `<a>` hrefs against a `pages/` directory, which doesn't exist (probe-verified 2026-07-04: a raw `<a href="/dashboard">` in an app route lints clean). Keep using `<Link>` for internal links as a convention; no linter enforces it.
 - **`check:rls-restrictive`** fails if a restrictive `USING (false)` policy covering SELECT coexists with a permissive SELECT policy for `authenticated` (the mig 485 class). It computes the *net* policy state by replaying every migration, so it sees drops/recreates. Anon-only restrictives and conditional ones (storage private buckets) are correctly ignored.
+- **`check:location-scoping`** fails on a tenant-table query with no location/org filter in the handler — the IDOR class, since service-role routes bypass RLS. The tenant-table set is derived from `supabase/migrations` at runtime. When the scoping legitimately lives in a shared helper, register that helper in `SCOPING_HELPERS` **after verifying it really applies the filter** — do not reach for `EXEMPT`, which is for genuine residue and demands a reason. This one was missing from the mirror above until 2026-08-06 and cost a CI round trip; it is CI-enforced either way.
 - **`check:route-guards`** fails if an `/api` route ships with no auth guard (the #408 class). Session routes need `getCurrentUser`/`withAuth`; webhooks need `verify*()`; cron needs `CRON_SECRET`; genuinely-public token routes go in the script's `EXEMPT` map.
 - **If you touched `mobile/package.json`,** re-sync the lock: `cd mobile && npm install --package-lock-only` (EAS `npm ci` refuses a mismatched lock). The lock carries the seam: `"shared": "file:../shared"` reifies as a `link: true` symlink entry — don't hand-edit it away.
 
