@@ -187,6 +187,13 @@ export const WEB_PERMISSIONS = Object.freeze([
   // handler inbox + claim/resolve actions. Master + owner only by
   // default per the "All owners at the studio" routing decision.
   { key: 'issues_inbox', label: 'Issues',                       hint: 'Handler inbox for staff-reported issues at the studio (broken kit, cleaning, safety). Master + owner only by default; the submitter surface is open to all staff.' },
+  // EMAIL-TICKET.2 — the studio email inbox. NOT the same as `email`, which
+  // gates marketing/campaign email. Two levels, like approvals_inbox: this key
+  // gates the surface, and a row in email_mailbox_access (mig 485) gates each
+  // individual account within it. Holding this key alone shows nothing — a
+  // studio with no mailboxes, or a person with no grants, gets no inbox.
+  { key: 'email_inbox', label: 'Email inbox',
+    hint: 'Ticketed inbox for the studio email accounts (accounts@, sales@, studio@). Access to each individual account is granted separately per person. Master + owner + manager by default.' },
   // EQUIP-MAINT.1 — equipment maintenance. Two keys, deliberately
   // split: `equipment_admin` is the setup surface (register, types,
   // intervals, inspection weekday) and is owner + master only;
@@ -272,7 +279,12 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: true,
     pulse_admin: true,
     events: true, bookings: true, races: true,
-    email: true, whatsapp: true, sms: true,
+    // EMAIL-TICKET.2 — email_inbox is deliberately coarse: it only gates
+    // the inbox surface. The real control is the per-account grant in
+    // email_mailbox_access (mig 485) — holding this key alone shows
+    // nothing until a studio has a mailbox and the person has a grant
+    // on it, the same two-level shape as approvals_inbox.
+    email: true, email_inbox: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
     device_control: true,
     // Studio Management children (STUDIO-GROUP.1) — master has all.
@@ -303,7 +315,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: false,                   // retention analytics — not a staff surface
     pulse_admin: false,                            // Pulse operator hub — retention oversight, not a staff surface
     events: true, bookings: true, races: true,    // race-day starts/finishes are a front-of-house duty
-    email: false, whatsapp: false, sms: false,
+    email: false, email_inbox: false, whatsapp: false, sms: false,
     schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true,
     device_control: false,                         // on-site device control — not a staff surface
     // Studio Management children — all off for staff.
@@ -339,7 +351,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: false,
     pulse_admin: false,
     events: true, bookings: true, races: true,       // front desk runs the booking desk
-    email: false, whatsapp: true, sms: false,        // WhatsApp inbox is the front-desk channel
+    email: false, email_inbox: false, whatsapp: true, sms: false,        // WhatsApp inbox is the front-desk channel
     schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true,
     device_control: false,
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
@@ -369,7 +381,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: true,                    // retention analytics — head coaches own retention
     pulse_admin: true,                             // Pulse operator hub — head coaches own retention
     events: true, bookings: true, races: true,
-    email: true, whatsapp: true, sms: true,
+    email: true, email_inbox: false, whatsapp: true, sms: true,
     schedule: true, attendance_reports: false,    // head coaches don't see attendance — owner/manager only
     assistant: true, studio_management: false,    // explicit opt-in
     class_timer: true,                             // running the class timer is a coaching duty
@@ -402,7 +414,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: true,                    // managers track engagement / retention by default
     pulse_admin: true,                             // managers run the Pulse operator hub
     events: true, bookings: true, races: true,
-    email: true, whatsapp: true, sms: true,
+    email: true, email_inbox: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
     device_control: true,                          // managers run on-site device control
     // Studio Management children — manager gets TV displays (marketing
@@ -435,7 +447,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: true,
     pulse_admin: true,
     events: true, bookings: true, races: true,
-    email: true, whatsapp: true, sms: true,
+    email: true, email_inbox: true, whatsapp: true, sms: true,
     schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
     device_control: true,
     // Studio Management children — owner gets contracts + TV displays
