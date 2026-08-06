@@ -13,6 +13,33 @@ describe('toMobileE164 — Irish mobiles', () => {
     expect(toMobileE164('00353871234567')).toBe('+353871234567')
     expect(toMobileE164('353871234567')).toBe('+353871234567')
   })
+
+  // The trunk zero is dropped when a number is written for a +353 prefix, so
+  // the bare 9-digit NSN is a normal way to hold (and type) an Irish mobile —
+  // 431 contacts are stored in exactly this shape. toE164Ireland() in twilio.js
+  // has always accepted it; this gate used to reject it outright.
+  it('accepts the bare 9-digit form with no trunk zero and no country code', () => {
+    expect(toMobileE164('871234567')).toBe('+353871234567')
+    expect(toMobileE164('87 123 4567')).toBe('+353871234567')
+    expect(toMobileE164('83-123-4567')).toBe('+353831234567')
+    expect(toMobileE164('851234567')).toBe('+353851234567')
+    expect(toMobileE164('861234567')).toBe('+353861234567')
+    expect(toMobileE164('891234567')).toBe('+353891234567')
+  })
+
+  // Guards the narrowing: bare 8… is deliberately NOT as broad as the 08* used
+  // for the trunk-zero form, or 0818 lo-call (not a mobile, not
+  // WhatsApp-reachable) would ride in on the new branch.
+  //
+  // The asymmetry below is intentional. The national 0818 form is accepted
+  // today by the pre-existing broad IE_MOBILE_NATIONAL (08*), and this change
+  // leaves that exactly as it was — narrowing a live public gate is the
+  // separate decision we explicitly declined to make here. The point is only
+  // that widening must not ADD a second way in for a non-mobile.
+  it('does not widen into 0818 lo-call', () => {
+    expect(toMobileE164('818123456')).toBeNull() // bare form — rejected by the new branch
+    expect(toMobileE164('0818123456')).toBe('+353818123456') // national form — pre-existing, unchanged
+  })
 })
 
 describe('toMobileE164 — UK mobiles', () => {
