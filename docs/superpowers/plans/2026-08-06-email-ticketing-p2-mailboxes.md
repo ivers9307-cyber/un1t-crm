@@ -38,6 +38,36 @@ The mailbox also turns out to be the natural access-control unit, which is bette
 
 ---
 
+## As built — deltas from this plan
+
+Executed 2026-08-06. Three things differ from the text below; the decisions are
+unchanged, the code moved on.
+
+1. **`resolveMailboxByRecipient` loops the other way round.** As drafted it
+   iterated *mailboxes* on the outside, so when a message named two estate
+   addresses the winner was whichever DB row came back first — and
+   `email_mailboxes` has no natural `ORDER BY`. Review proved it: `To: accounts@`
+   + `Cc: stillorgan@` resolved to a different studio depending on row order.
+   That is the same silent-misrouting class the module exists to kill. It now
+   builds a Map of active mailboxes by address and iterates *recipients*, so the
+   caller's precedence (To → Cc → `OriginalRecipient`, as `recipientEmails()`
+   returns it) decides. Recipient order is now a documented contract.
+2. **The local `norm()` helper is gone**, replaced by `normalizeEmail` imported
+   from `./email-inbox`. It could not cause a wrong match, but two halves of the
+   estate's email routing normalising through different functions would drift the
+   moment either is hardened.
+3. **Two tests were vacuous and were replaced.** Deleting the entire
+   `is_default` sort key left every test passing, because the fixture's default
+   also sorted first alphabetically; and the inactive-mailbox case only covered
+   the elevated branch, so a granted user keeping access to a deactivated
+   mailbox went uncaught. Final count is 23, not 21.
+
+Also: migration **485 collides** with `485_rls_restrictive_forall_kills_select`
+(#1223), which merged first. The prefix is kept, not renumbered — see the header
+comment in the migration for why.
+
+---
+
 ## Task 1: Branch and confirm the migration number
 
 **Files:** none (setup only)

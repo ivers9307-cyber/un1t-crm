@@ -1,6 +1,16 @@
 -- EMAIL-TICKET.2 — a studio gets ONE inbox holding MANY email accounts.
 -- Spec: docs/superpowers/specs/2026-08-05-email-ticketing-design.md
 --
+-- ⚠️ DUPLICATE PREFIX, DELIBERATE. There are two 485s:
+--   485_email_mailboxes.sql              (this one)
+--   485_rls_restrictive_forall_kills_select.sql  (RLS-RESTRICTIVE.1, #1223)
+-- Both were authored and applied in parallel; that one merged first. The prefix
+-- is kept rather than renumbered because the live schema_migrations row for this
+-- file is already named `485_email_mailboxes`, and renaming the file would
+-- desync it from the database for purely cosmetic gain. The repo already carries
+-- duplicate prefixes (480 twice, plus 284/301/367 on purpose). The two are
+-- independent — replay order between them does not matter.
+--
 -- WHY
 -- Mig 394 put a single inbound address on locations.email_inbox_reply_to,
 -- uniquely indexed — one mailbox per studio. A studio actually needs several:
