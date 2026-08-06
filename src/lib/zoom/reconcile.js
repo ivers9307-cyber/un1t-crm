@@ -82,6 +82,13 @@ function dedupId(op, e164) {
   return `zoom-contact-${op}-${e164.replace(/\D/g, '')}`
 }
 
+// Publishing is a network round trip each, and a cold start is ~6,330 of them.
+// Sequentially that is 5-15 minutes and blows the cron's 300s budget on the one
+// run that matters most. Bounded concurrency fixes it safely: the queue's own
+// parallelism (2) throttles DELIVERY to Zoom, so publishing faster does not
+// increase pressure on the Zoom API — it only fills the queue quicker.
+export const PUBLISH_CONCURRENCY = 25
+
 /**
  * Builds the diff and enqueues one QStash job per write. Performs no Zoom
  * writes itself — the worker route does those, one per delivery.
@@ -138,16 +145,32 @@ export async function runZoomContactSync({ db, dry = false, limit = null, force 
 
   let enqueued = 0
   const failures = []
-  for (const job of capped) {
-    const res = await publishQueuePush({
-      path: ZOOM_CONTACTS_WORKER_PATH,
-      body: job,
-      deduplicationId: dedupId(job.op, job.e164),
-      queueName: ZOOM_CONTACTS_QUEUE_NAME,
-      queueParallelism: ZOOM_CONTACTS_QUEUE_PARALLELISM,
-    })
-    if (res.ok) enqueued++
-    else failures.push(`${job.op} ${job.e164}: ${res.error ?? 'skipped'}`)
+  for (let i = 0; i < capped.length; i += PUBLISH_CONCURRENCY) {
+    const batch = capped.slice(i, i + PUBLISH_CONCURRENCY)
+    // publishQueuePush's real implementation never rejects — the whole body
+    // is try/caught and every branch resolves {ok:false, error}. This inner
+    // try/catch is a second belt anyway: a bare Promise.all rejects the
+    // WHOLE batch on a single thrown error (from a future qstash.js change,
+    // or a test mock), which would discard every sibling's already-in-flight
+    // result. One job's failure must stay one job's failure.
+    const results = await Promise.all(batch.map(async (job) => {
+      try {
+        const res = await publishQueuePush({
+          path: ZOOM_CONTACTS_WORKER_PATH,
+          body: job,
+          deduplicationId: dedupId(job.op, job.e164),
+          queueName: ZOOM_CONTACTS_QUEUE_NAME,
+          queueParallelism: ZOOM_CONTACTS_QUEUE_PARALLELISM,
+        })
+        return { job, res }
+      } catch (err) {
+        return { job, res: { ok: false, error: err?.message || 'publish_failed' } }
+      }
+    }))
+    for (const { job, res } of results) {
+      if (res.ok) enqueued++
+      else failures.push(`${job.op} ${job.e164}: ${res.error ?? 'skipped'}`)
+    }
   }
 
   return {
