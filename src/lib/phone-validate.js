@@ -25,6 +25,12 @@ export function toMobileE164(raw) {
   else { digits = s.replace(/\D/g, '') }
   if (!digits) return null
 
+  // A country code is never followed by the national trunk zero. Strip it
+  // before the mobile tests, otherwise +3530871234567 fails IE_MOBILE_E164
+  // and gets waved through by the generic international branch below as a
+  // valid foreign number. 106 rows in `contacts` are stored this way.
+  if (digits.startsWith('3530')) digits = `353${digits.slice(4)}`
+
   // Country-coded forms (work whether or not a + was typed).
   if (IE_MOBILE_E164.test(digits)) return `+${digits}`
   if (UK_MOBILE_E164.test(digits)) return `+${digits}`
@@ -34,6 +40,11 @@ export function toMobileE164(raw) {
     if (UK_MOBILE_NATIONAL.test(digits)) return `+44${digits.slice(1)}`
     return null // bare national digits that aren't a recognised mobile
   }
+
+  // 353 is Ireland's country code, not "some other country" — if we're here
+  // it already failed IE_MOBILE_E164, so it isn't a mobile (e.g. a landline
+  // in E.164 form) and must not be waved through by the generic fallback below.
+  if (digits.startsWith('353')) return null
 
   // Other countries: we can't tell mobile from fixed-line without a full
   // libphonenumber, so accept a well-formed E.164 (8–15 digits, not all the

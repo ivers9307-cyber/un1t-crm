@@ -45,3 +45,15 @@ describe('isValidMobileNumber — rejects non-mobiles + junk', () => {
     expect(isValidMobileNumber('+353871234567')).toBe(true)
   })
 })
+
+describe('toMobileE164 — 353 with national trunk zero', () => {
+  it('repairs the double prefix rather than passing it through', () => {
+    expect(toMobileE164('+3530871234567')).toBe('+353871234567')
+    expect(toMobileE164('3530871234567')).toBe('+353871234567')
+    expect(toMobileE164('003530871234567')).toBe('+353871234567')
+  })
+
+  it('still rejects a 353-prefixed non-mobile', () => {
+    expect(toMobileE164('+35315551234')).toBeNull()
+  })
+})
