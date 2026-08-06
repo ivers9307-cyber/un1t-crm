@@ -210,6 +210,10 @@ const WEB_ONLY_OK = {
   // approvals_hyrox_sessions dropped from WEB_ONLY_OK: the mobile `hyrox`
   // feature (webEquivalent: 'approvals_hyrox_sessions') now covers it.
   equipment_admin: 'Register + checklist + interval setup is a desktop task; the mobile counterpart is equipment_inspect (the walk-round), which is matched via webEquivalent.',
+  // EMAIL-TICKET.2 — the studio email inbox (email_mailboxes, mig 485).
+  // Feature-gate half of a two-level permission; the fine-grained half
+  // is per-account grants in email_mailbox_access, not a mobile screen.
+  email_inbox: 'desktop operator surface — the tabbed inbox with per-account permissions is a wide layout; a mobile counterpart is deferred until the UI exists rather than reserved speculatively',
 }
 
 const webDrift = []
