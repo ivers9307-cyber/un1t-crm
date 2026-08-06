@@ -150,6 +150,7 @@ export async function POST(request) {
         consent,
         source:    'booking_form',
         ipAddress: ip,
+        locationId: event.location_id,
       })
     }
   } catch (e) {
