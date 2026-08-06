@@ -143,8 +143,34 @@ relocating them would misfile them out of the studio they actually train at.
 db.from('contacts').select(...).eq('location_id', locationId).eq(consentField, true)
 ```
 
-They instead **join the preference row for the sending location** and require the channel
-true, while keeping the reputation gates global:
+> **SUPERSEDED 2026-08-07 — do NOT join.** `buildAudienceQuery` carries the CLASSIFY.1
+> note: the codebase already tried inner-joining `contact_preferences` and moved to a
+> denormalised column because of *"a long line of PostgREST embedded-resource bugs in the
+> count path"* — `head:true` counts silently returning wrong numbers. `CLAUDE.md` records
+> the same trap. A wrong count in the send path is a campaign that under- or over-sends
+> with no error: the exact failure this programme exists to eliminate.
+>
+> Resolving ids and using `.in('id', …)` is closed too — that is the tag-filter pattern,
+> deliberately bounded by `MAX_EXCLUSION_IDS` with a comment about *"blowing the
+> URL-length limit"*. Stillorgan's membership is ~8,500 ids.
+>
+> **Decision (Richard, 2026-08-07): use a database VIEW.**
+> `contact_location_audience` = `contacts` ⋈ `contact_location_preferences`, exposing every
+> `contacts` column plus the **location's** channel flags under the *same names* and the
+> row's `location_id`. Send paths keep doing **single-table filtering** — the very thing
+> CLASSIFY.1 protects — just against the view:
+> ```js
+> db.from('contact_location_audience').eq('location_id', locationId).eq('email_marketing', true)
+> ```
+> No embeds, so the count-path bugs cannot recur. No id lists, so no URL limit. Every
+> existing `applyAudienceFilter` filter works untouched because the column names are
+> identical. `security_invoker = on`, matching `cron_health` / `tenant_cron_health`.
+>
+> **Three call sites**, not two: `postmark.js` (`buildAudienceQuery` AND
+> `buildAudienceQueryAsync`), `whatsapp.js`, and `sms.js` — which still uses a
+> `contact_preferences!inner(...)` embed, the shape email already abandoned.
+
+The original (rejected) approach was to join the preference row directly:
 
 - join `contact_location_preferences` on `contact_id`, `location_id = <sending location>`
 - require the relevant channel `true`
@@ -243,9 +269,28 @@ Five PRs. Each ships independently and leaves the system working.
 |---|---|---|
 | 1 | Schema, backfill, `consent_log.location_id`. No reads. | Low — additive |
 | 2 | Capture path writes per-location (dual-write; global still authoritative) | Low |
-| 3 | **Send paths cut over to per-location** | **High — see below** |
-| 4 | Unsubscribe token, one-click, preference centre, `List-Unsubscribe` headers | Medium |
+| 3 | **Send paths cut over to per-location** (view + reconcile). **`email_status` is NOT touched** | **High — see below** |
+| 4 | Unsubscribe token, one-click, preference centre, `List-Unsubscribe` headers, **and the `email_status` retirement** | Medium |
 | 5 | Audience builder + `AUDIENCE_FIELDS`; deprecate `contact_preferences` and the denormalised columns | Medium |
+
+### Scope correction 2026-08-07 — the `email_status` retirement moves to PR 4
+
+PR 3 was going to bundle the send-path cutover *and* the retirement of
+`email_status='unsubscribed'`. Enumerating the readers showed that is too much for one
+PR, and the two are separable concerns:
+
+- **PR 3** changes who receives a *broadcast*. Read path only.
+- The `email_status` retirement changes who can receive a *manual staff email*, and it
+  touches five readers (`/api/contacts/[id]/email`, the contact page and `ContactDrawer`
+  badges, `booking-confirmations.js`, `event-attendee-reminders.js`) plus four writers.
+
+Bundling them means one PR that can break both broadcast **and** manual sends at once.
+Worse, the retirement is only *coherent* once unsubscribe is per-location: today
+`email_status='unsubscribed'` is ambiguous under the new model — unsubscribed from
+*which* business? — so it belongs with the PR 4 work that makes that question answerable.
+
+Leaving it in place through PR 3 is safe: it is a redundant belt-and-braces guard that
+blocks manual sends to people who opted out, which is the conservative direction.
 
 ### PR 3 is the sharp edge
 
