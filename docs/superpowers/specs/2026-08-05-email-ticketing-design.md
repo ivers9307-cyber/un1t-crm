@@ -431,9 +431,16 @@ These rules are what make this a ticketing system rather than a renamed inbox.
    mailbox carries the location, so location falls out of it rather than being
    resolved separately. Recipient precedence decides when a message names more
    than one estate address; row order must never decide.
-4. `solved` auto-closes after N days, **default 7**. N is an operator-editable
-   setting, not a constant — customer-affecting thresholds must be editable by
-   operators.
+4. **Nothing ever closes itself.** Every ticket is either responded to or
+   manually closed (Richard, 2026-08-06). An earlier draft auto-closed `solved`
+   tickets after an operator-editable number of days; that is removed, along
+   with `ticketsDueForAutoClose` and `DEFAULT_AUTO_CLOSE_DAYS`, which were never
+   wired to anything.
+
+   The reasoning is a support one, not a technical one: a ticket ageing out is
+   indistinguishable from a ticket being handled, and the queue silently
+   shrinking is how enquiries get lost. Making an operator close it means
+   someone has looked at it.
 5. Outbound sets `first_response_at` if unset and `is_internal_note` is false.
 
 Rule 2 is what stops a ticket becoming an immortal per-person thread again.
@@ -581,5 +588,14 @@ Quota:
    invoices is forced by Postmark; marketing vs the rest is a deliberate
    reputation firebreak.
 
-Nothing open. Plan 1 is merged; the mailbox model lands with Plan 2, which is
-the plan that changes recipient resolution anyway.
+10. **No auto-close, ever** — Richard, 2026-08-06. Everything is responded to or
+    manually closed. See identity rule 4.
+11. **Sequencing changed: the UI comes early** — Richard, 2026-08-06. The
+    original order put quota, HTML rendering and the grant editor ahead of any
+    human seeing a ticket, which front-loaded four plans of infrastructure on an
+    unvalidated model. Revised order: **3** webhook cutover, **4** ticket UI +
+    reply path (a read-only inbox is not a working tool). Quota, HTML rendering
+    and the per-account grant editor are deferred until the queue has been
+    worked — plain text and owner-level access are enough to start.
+
+Plans 1 and 2 are merged.
