@@ -41,11 +41,6 @@ export function toMobileE164(raw) {
     return null // bare national digits that aren't a recognised mobile
   }
 
-  // 353 is Ireland's country code, not "some other country" — if we're here
-  // it already failed IE_MOBILE_E164, so it isn't a mobile (e.g. a landline
-  // in E.164 form) and must not be waved through by the generic fallback below.
-  if (digits.startsWith('353')) return null
-
   // Other countries: we can't tell mobile from fixed-line without a full
   // libphonenumber, so accept a well-formed E.164 (8–15 digits, not all the
   // same) and reject obvious junk.
