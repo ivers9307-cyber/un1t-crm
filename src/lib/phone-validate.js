@@ -1,12 +1,23 @@
 // Validate that a raw user-entered phone is a plausible MOBILE number so the
 // public funnels only capture WhatsApp/SMS-reachable leads. Irish-first (the
 // audience), with UK + generic E.164 international accepted. Prefix rules
-// mirror normalizePhone() in glofox-sync.js (08* = IE mobile, 07* = UK mobile).
+// mirror normalizePhone() in glofox-sync.js (08* = IE mobile, 07* = UK mobile),
+// plus the bare no-country-code Irish mobile that toE164Ireland() in twilio.js
+// accepts — see IE_MOBILE_BARE. normalizePhone() still passes that shape through
+// unchanged; it is a sync-side normaliser, not a gate, so it is left alone here.
 //
 // toMobileE164 returns the E.164 form when the input looks like a mobile, else
 // null; isValidMobileNumber is the boolean gate used by forms + Zod refines.
 
 const IE_MOBILE_NATIONAL = /^08\d{8}$/ // 08X + 7 digits = 10, national 0-trunk form
+// Same mobile with the trunk zero already dropped and no country code — the
+// shape an Irish number takes once it's been prepared for a +353 prefix. 431
+// contacts hold exactly this form (all five active prefixes; every one of them
+// has a correct +3538… wa_phone and 93 have live WhatsApp threads), so it is a
+// real, reachable representation people also type. Deliberately NARROWER than
+// the 08* used above: bare 81… would swallow 0818 lo-call, which is not a
+// mobile. 83/85/86/87/89 are active; 84/88 are headroom.
+const IE_MOBILE_BARE = /^8[3-9]\d{7}$/ // 8X + 7 digits = 9, no trunk zero, no CC
 const IE_MOBILE_E164 = /^3538\d{8}$/ // +353 8X……, 12 digits
 const UK_MOBILE_NATIONAL = /^07\d{9}$/ // 07 + 9 digits = 11
 const UK_MOBILE_E164 = /^447\d{9}$/ // +44 7………, 12 digits
@@ -25,11 +36,16 @@ export function toMobileE164(raw) {
   else { digits = s.replace(/\D/g, '') }
   if (!digits) return null
 
-  // A country code is never followed by the national trunk zero. Strip it
-  // before the mobile tests, otherwise +3530871234567 fails IE_MOBILE_E164
-  // and gets waved through by the generic international branch below as a
-  // valid foreign number. 106 rows in `contacts` are stored this way.
+  // A country code is never followed by the national trunk zero — E.164 drops
+  // it. Repair the double prefix before the mobile tests, otherwise
+  // +3530871234567 fails IE_MOBILE_E164 and the generic international branch
+  // below waves it through as a valid foreign number, storing an unusable
+  // string. 106 rows in `contacts` carry the +353 form and 2 the +44 form (one
+  // of them a member). Unambiguous in both cases: 44 and 353 are the only
+  // country codes those digits can start with, and neither has a national
+  // number beginning 0.
   if (digits.startsWith('3530')) digits = `353${digits.slice(4)}`
+  if (digits.startsWith('440')) digits = `44${digits.slice(3)}`
 
   // Country-coded forms (work whether or not a + was typed).
   if (IE_MOBILE_E164.test(digits)) return `+${digits}`
@@ -38,6 +54,10 @@ export function toMobileE164(raw) {
   if (!intl) {
     if (IE_MOBILE_NATIONAL.test(digits)) return `+353${digits.slice(1)}`
     if (UK_MOBILE_NATIONAL.test(digits)) return `+44${digits.slice(1)}`
+    // No trunk zero to strip — the country code is simply absent. toE164Ireland()
+    // in twilio.js already accepts this shape for SMS; this gate was the strictest
+    // of the three normalisers and the only public-facing one.
+    if (IE_MOBILE_BARE.test(digits)) return `+353${digits}`
     return null // bare national digits that aren't a recognised mobile
   }
 
