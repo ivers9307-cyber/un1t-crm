@@ -206,3 +206,55 @@ describe('buildDesiredContacts', () => {
     expect(res.stats.scanned).toBe(2000)
   })
 })
+
+describe('buildDesiredContacts — collect mode', () => {
+  it('returns nothing extra when collectRejects is off', async () => {
+    const res = await buildDesiredContacts(stubDb([row({ id: 'a', phone: '12345' })]))
+    expect(res.rejects).toBeUndefined()
+    expect(res.stats.rejected).toBe(1)
+  })
+
+  it('collects each rejection with a reason code', async () => {
+    const res = await buildDesiredContacts(stubDb([
+      row({ id: 'ok', phone: '+353871111111' }),
+      row({ id: 'nophone', phone: null }),
+      row({ id: 'junk', phone: 'boothjody@gmail.com' }),
+      row({ id: 'noname', first_name: '  ', last_name: null, phone: '+353872222222' }),
+    ]), { collectRejects: true })
+
+    const byId = Object.fromEntries(res.rejects.map((r) => [r.id, r]))
+    expect(byId.nophone.reason).toBe('no_phone')
+    expect(byId.junk.reason).toBe('unparseable')
+    expect(byId.noname.reason).toBe('no_name')
+    expect(byId.ok).toBeUndefined()
+  })
+
+  it('carries the name and raw value so the report is readable', async () => {
+    const res = await buildDesiredContacts(stubDb([
+      row({ id: 'j', first_name: 'Aoife', last_name: 'Ryan', phone: '085143”754' }),
+    ]), { collectRejects: true })
+    expect(res.rejects[0]).toMatchObject({ id: 'j', name: 'Aoife Ryan', phone: '085143”754', reason: 'unparseable' })
+  })
+
+  // The test that keeps the report honest. If these ever disagree, the report
+  // is lying about the sync's own behaviour.
+  it('collect mode produces exactly the counts that counting mode reports', async () => {
+    const rows = [
+      row({ id: 'a', phone: '+353871111111' }),
+      row({ id: 'b', phone: null }),
+      row({ id: 'c', phone: '12345' }),
+      row({ id: 'd', phone: '6978291516' }),
+      row({ id: 'e', first_name: '', last_name: '', phone: '+353873333333' }),
+      row({ id: 'f', phone: '+353874444444', lead_source: 'classpass' }),
+    ]
+    const counted = await buildDesiredContacts(stubDb(rows))
+    const collected = await buildDesiredContacts(stubDb(rows), { collectRejects: true })
+
+    expect(collected.stats).toEqual(counted.stats)
+    expect(collected.rejects.filter((r) => r.reason === 'no_phone').length
+      + collected.rejects.filter((r) => r.reason === 'unparseable').length)
+      .toBe(counted.stats.rejected)
+    expect(collected.rejects.filter((r) => r.reason === 'no_name').length)
+      .toBe(counted.stats.noName)
+  })
+})

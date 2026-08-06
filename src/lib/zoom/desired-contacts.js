@@ -83,10 +83,17 @@ function nameOf(row) {
 }
 
 /**
- * @returns {Promise<{ok: true, desired: Map<string, {name: string, contactId: string}>, stats: object}
+ * @param {object} db
+ * @param {object} [opts]
+ * @param {boolean} [opts.collectRejects] — also return the rejected rows with a
+ *   reason code. Off by default so the nightly run pays nothing for it. This is
+ *   deliberately the SAME code path the sync uses: a separate "which rows would
+ *   be skipped" query is a second source of truth that drifts at the first
+ *   normaliser change.
+ * @returns {Promise<{ok: true, desired: Map<string, {name: string, contactId: string}>, stats: object, rejects?: object[]}
  *                 | {ok: false, error: string}>}
  */
-export async function buildDesiredContacts(db) {
+export async function buildDesiredContacts(db, { collectRejects = false } = {}) {
   // ZOOMSYNC.2 — the boundary first, before a single contact row is read.
   const orgId = process.env.ZOOM_SYNC_ORGANIZATION_ID
   if (!orgId) {
@@ -100,6 +107,10 @@ export async function buildDesiredContacts(db) {
   const stats = {
     scanned: 0, excludedClassPass: 0, rejected: 0, noName: 0, collapsed: 0,
     orgLocations: locationIds.length,
+  }
+  const rejects = collectRejects ? [] : null
+  const note = (row, reason) => {
+    if (rejects) rejects.push({ id: String(row.id), name: nameOf(row), phone: row.phone ?? null, reason })
   }
   const winners = new Map() // e164 → row
 
@@ -127,8 +138,12 @@ export async function buildDesiredContacts(db) {
         continue
       }
       const e164 = normaliseForZoom(row.phone)
-      if (!e164) { stats.rejected++; continue }
-      if (!nameOf(row)) { stats.noName++; continue }
+      if (!e164) {
+        stats.rejected++
+        note(row, String(row.phone ?? '').trim() ? 'unparseable' : 'no_phone')
+        continue
+      }
+      if (!nameOf(row)) { stats.noName++; note(row, 'no_name'); continue }
 
       const held = winners.get(e164)
       if (!held) { winners.set(e164, row); continue }
@@ -145,5 +160,5 @@ export async function buildDesiredContacts(db) {
   for (const [e164, row] of winners) {
     desired.set(e164, { name: nameOf(row), contactId: String(row.id) })
   }
-  return { ok: true, desired, stats }
+  return { ok: true, desired, stats, ...(rejects ? { rejects } : {}) }
 }
