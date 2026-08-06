@@ -253,6 +253,31 @@ failure mode of the incident that prompted this work. Gate the cutover on:
 
 Do not merge PR 3 on green unit tests alone; these are live-data assertions.
 
+### The drift window — PR 3 MUST re-reconcile before cutover
+
+PR 1 backfills a snapshot. Until PR 2 ships dual-writes, every opt-out still goes
+**only** into `contact_preferences` via the existing `applyFormMarketingConsent` path.
+Those people are then invisible to `contact_location_preferences`, so a straight cutover
+at PR 3 would **re-subscribe everyone who unsubscribed during the window** — silently,
+and at a scale set by however long the window lasts. On current volumes there are ~5,110
+email opt-outs on file, and the rate is not zero.
+
+The same applies to contacts *created* during the window: they get a
+`contact_preferences` row from the mig 005 trigger but no location row, so they would
+become unreachable — the mirror-image failure.
+
+**PR 3 must therefore begin by re-running the mig 487 backfill logic as an idempotent
+delta** (its `on conflict do nothing` inserts plus an update pass that pushes any
+`contact_preferences` change made since the snapshot into the matching location row),
+and only then cut the read path over. The parity assertions run *after* that delta, not
+before. Treat this as a hard requirement of PR 3, not an optimisation — it is the single
+most likely way for this programme to lose someone's consent.
+
+Note also that until PR 2 lands, `applyFormMarketingConsent` keeps writing
+`email_status='unsubscribed'`, so that value will reappear after mig 487 retires it.
+That is expected and harmless (nothing reads it for consent once PR 3 lands), but it
+means the "no `unsubscribed` remains" assertion proves state at migration time only.
+
 ---
 
 ## Known wrinkles
