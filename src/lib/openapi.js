@@ -739,6 +739,43 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/webhooks/qstash/zoom-contacts',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker applying one Zoom Phone external-contact write',
+  description:
+    'QStash → CRM. Delivers a single `{ op, e164, … }` job published by the /api/cron/zoom-contact-sync reconcile ' +
+    'onto the `zoom-contacts` QUEUE (parallelism 2 — deliberate pacing; Zoom allows 30/sec on Pro), verified via the ' +
+    'Upstash-Signature HS256 JWT (current + next signing keys). Applies exactly ONE create / update / delete against ' +
+    "Zoom's /phone/external_contacts, because Zoom has no batch endpoint. Every write is idempotent: a 409 duplicate " +
+    'on create and a 404 on delete both count as success, so an overlapping run or a redelivery is harmless. ' +
+    '400 for a malformed or unknown-op job (retrying can never help); 500 on a Zoom-side failure so QStash retries.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            op: z.enum(['create', 'update', 'delete']),
+            e164: z.string().optional(),
+            name: z.string().optional(),
+            contactId: z.string().optional(),
+            zoomId: z.string().optional(),
+          }).openapi('QstashZoomContactsMessage'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Write applied (including the idempotent 409-duplicate and 404-already-gone cases)' },
+    400: { description: 'Malformed JSON or unknown op — not retryable', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Our own QStash signing keys are unset', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Zoom-side failure — QStash should retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/webhooks/qstash/receipt-hunts',
   tags: ['Webhooks (Inbound)'],
   security: [{ WebhookToken: [] }],

@@ -40,8 +40,17 @@ export async function GET(request) {
   const db = createServerClient()
   const out = await runZoomContactSync({ db, dry, limit, force })
 
-  await stampHeartbeat('zoom-contact-sync').catch((err) =>
-    logWarn('cron-zoom-contact-sync', 'heartbeat failed', { err }))
+  // Pass the outcome, don't just stamp the time. Without it the only record of
+  // what a night's run did is this HTTP response, which nobody reads at 04:30 —
+  // a tripped deletion guard or a run that enqueued nothing would look
+  // identical to a healthy one. Same shape as fleet-health.
+  await stampHeartbeat('zoom-contact-sync', {
+    counts: out.counts ?? null,
+    enqueued: out.enqueued ?? 0,
+    guardTripped: out.guardTripped ?? false,
+    ...(out.skipped ? { skipped: out.skipped } : {}),
+    ...(out.failures?.length ? { failureCount: out.failures.length } : {}),
+  }).catch((err) => logWarn('cron-zoom-contact-sync', 'heartbeat failed', { err }))
 
   // `out.ok !== false` deliberately, matching homey-reconcile: the unconfigured
   // skip carries no `ok` key and is not a dead cron. A tripped deletion guard

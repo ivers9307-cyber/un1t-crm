@@ -33,7 +33,9 @@ describe('GET /api/cron/zoom-contact-sync', () => {
     const res = await GET(req())
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ success: true, enqueued: 1 })
-    expect(stampHeartbeat).toHaveBeenCalledWith('zoom-contact-sync')
+    expect(stampHeartbeat).toHaveBeenCalledWith('zoom-contact-sync', expect.objectContaining({
+      counts: { creates: 1, updates: 0, deletes: 0 }, enqueued: 1, guardTripped: false,
+    }))
   })
 
   it('passes ?limit through as a number', async () => {
@@ -62,6 +64,11 @@ describe('GET /api/cron/zoom-contact-sync', () => {
     })
     const res = await GET(req())
     expect(await res.json()).toMatchObject({ success: false, guardTripped: true })
+    // The trip must be durable, not only present in an HTTP response nobody
+    // reads at 04:30.
+    expect(stampHeartbeat).toHaveBeenCalledWith('zoom-contact-sync', expect.objectContaining({
+      guardTripped: true,
+    }))
   })
 
   it('reports success for a clean unconfigured skip', async () => {

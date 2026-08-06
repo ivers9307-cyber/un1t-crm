@@ -1688,8 +1688,18 @@ git commit -m "ZOOMSYNC.1 — register nightly cron, document go-live"
 3. `GET /api/cron/zoom-contact-sync?dry=1` with the cron secret. Expect roughly `creates: 6330, updates: 0, deletes: 0`. A wildly different number means stop and investigate before writing anything.
 4. `GET /api/cron/zoom-contact-sync?limit=200`. Wait for the queue to drain.
 5. **Ring the studio from a number you know is in the CRM and confirm the name appears on the actual handset.** This is the step the whole rollout exists to protect — Zoom Phone Appliances and Yealink desk phones surface the shared directory differently from the Workplace app, and that has not been verified on this hardware.
-6. Let the nightly run drain the rest, or trigger once without a limit.
+6. Let the nightly run drain the rest, or trigger once without a limit. If you want to de-risk the timing first, `?limit=1000` a few times — runs are idempotent and self-resuming, so there is no cost to going in stages.
 7. Confirm in the Zoom admin portal that the directory holds ~6,330 entries **and that hand-added contacts are still present**.
+
+### If the deletion guard trips
+
+The run returns `success: false` with `guardTripped: true`, applies the creates and updates, and suppresses **every** delete. That is deliberate — it is the tripwire for a broken desired-state query about to wipe the directory.
+
+It does not clear itself. Suppressing the deletes keeps the directory large, so the same batch trips the same threshold again the following night, forever, until someone intervenes.
+
+1. `?dry=1` — returns the diff plus a `sample` of the first ten numbers it intended to delete. Read them.
+2. If they are genuinely gone from the CRM and should go from Zoom, `?force=1` runs once with the guard bypassed.
+3. If they are not, the desired-state query is broken. Fix that first — the guard just did its job.
 
 ## Outstanding, not solved by this plan
 
