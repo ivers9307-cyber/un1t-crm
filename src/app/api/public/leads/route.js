@@ -96,7 +96,7 @@ export async function POST(request) {
   // Marketing consent (best-effort; helper short-circuits ClassPass).
   try {
     const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
-    await applyFormMarketingConsent(db, { contactId, consent: true, source: 'waitlist_form', ipAddress: ip })
+    await applyFormMarketingConsent(db, { contactId, consent: true, source: 'waitlist_form', ipAddress: ip, locationId })
   } catch (e) { logWarn('leads', 'consent write failed', { err: e }) }
 
   // Nurture-seam tag (idempotent; fires tag_added sequences exactly once).

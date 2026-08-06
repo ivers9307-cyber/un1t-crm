@@ -127,7 +127,7 @@ export async function POST(request) {
   try { await writeContactTag(db, { contactId, locationId, tag }) } catch (e) { logWarn('classbook', 'tag failed', { err: e }) }
   try {
     const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
-    await applyFormMarketingConsent(db, { contactId, consent: true, source: 'start_class', ipAddress: ip })
+    await applyFormMarketingConsent(db, { contactId, consent: true, source: 'start_class', ipAddress: ip, locationId })
   } catch (e) { logWarn('classbook', 'consent failed', { err: e }) }
   try {
     const { data: openDeal } = await db.from('deals').select('id').eq('contact_id', contactId).eq('status', 'open').maybeSingle()

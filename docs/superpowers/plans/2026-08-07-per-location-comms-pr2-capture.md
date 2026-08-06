@@ -374,11 +374,24 @@ git commit -m "LOCCOMMS.2 — applyFormMarketingConsent records consent at the f
 
 - [ ] **Step 1: Add the argument at each call site**
 
-Each route already resolves its own `locationId`. Add it to the
-`applyFormMarketingConsent(...)` call — nothing else changes.
+There are **seven** call sites, not the three this plan first listed — `/api/public/book`
+and `src/lib/whatsapp-flow/completion.js` were missed, and `events/[slug]/register` has
+**two**. Six get the argument; the seventh is deliberately skipped.
 
-**Leave `/api/public/host-list/[slug]/subscribe` alone.** Host lists have their
-own mechanism (`host_contacts` + `host_email_suppressions`) and are out of scope.
+| Call site | Variable to pass |
+|---|---|
+| `api/public/leads/route.js:99` | `locationId` |
+| `api/public/class-booking/route.js:130` | `locationId` |
+| `api/public/book/route.js:148` | **`event.location_id`** — there is no `locationId` in scope |
+| `api/public/events/[slug]/register/route.js:175` | **`contactLocationId`** — no `locationId` in scope |
+| `api/public/events/[slug]/register/route.js:355` | **`contactLocationId`** (HOST-MASTER.4: host-event contacts live at the org master, matching the `writeContactTags` call above) |
+| `lib/whatsapp-flow/completion.js:19` | `locationId` (already a function parameter) |
+| `api/public/host-list/[slug]/subscribe/route.js:104` | **SKIP** — hosts have their own mechanism (`host_contacts` + `host_email_suppressions`) |
+
+**Do not assume the variable is called `locationId`.** Three of the six are not, and
+passing a bare `locationId` there is a `ReferenceError` *inside a try/catch* — so consent
+capture would silently stop for those forms with only a log line to show for it. `eslint`
+`no-undef` catches it; run lint before trusting any edit here.
 
 - [ ] **Step 2: Run the CI mirror**
 

@@ -44,6 +44,13 @@ const MARKETING_CHANNELS = ['email_marketing', 'sms_marketing', 'whatsapp_market
  * @param {boolean} args.consent          true = enroll in marketing, false = opt out
  * @param {string}  args.source           consent_log.source ('booking_form', 'event_form', etc.)
  * @param {string}  [args.ipAddress]      caller IP for the audit row
+ * @param {string}  [args.locationId]     LOCCOMMS.2 — the location the FORM belongs to,
+ *        which is often NOT contacts.location_id. Supplying it records the decision in
+ *        contact_location_preferences for that location; omitting it writes only the
+ *        global row. Every public form should pass it — a form that forgets records the
+ *        consent globally and the location can never send to that person (row absent =
+ *        never send). Host-list signups deliberately omit it: hosts have their own
+ *        mechanism (host_contacts + host_email_suppressions).
  *
  * @returns {Promise<{
  *   ok:      boolean,
@@ -53,7 +60,7 @@ const MARKETING_CHANNELS = ['email_marketing', 'sms_marketing', 'whatsapp_market
  * }>}
  */
 export async function applyFormMarketingConsent(db, args) {
-  const { contactId, consent, source, ipAddress = null } = args || {}
+  const { contactId, consent, source, ipAddress = null, locationId = null } = args || {}
   if (!db || !contactId || typeof consent !== 'boolean' || !source) {
     return { ok: false, error: 'invalid args', skipped: null, changed: [] }
   }
@@ -76,6 +83,34 @@ export async function applyFormMarketingConsent(db, args) {
   }
   if (contact.glofox_membership_status === 'classpass_payg') {
     return { ok: true, skipped: 'classpass', changed: [] }
+  }
+
+  // LOCCOMMS.2 — record the decision at the location the FORM belongs to, which
+  // is frequently NOT contacts.location_id: a Stillorgan member joining the
+  // Hatch Street waitlist needs a row at Hatch. The mig 489 sync triggers
+  // deliberately never create that row, because a global preference change is
+  // not evidence that someone joined a particular location's list. This is.
+  //
+  // MUST run before the "nothing changed" early return below. Someone already
+  // opted in globally who joins a new location produces an empty `changed` set,
+  // so anything written after that return would never run — the person would
+  // join the list with nothing recording it, and row-absent means that location
+  // may never send to them.
+  if (locationId) {
+    const locRow = {
+      contact_id:      contactId,
+      location_id:     locationId,
+      source,
+      updated_at:      new Date().toISOString(),
+      unsubscribed_at: consent ? null : new Date().toISOString(),
+    }
+    for (const ch of MARKETING_CHANNELS) locRow[ch] = consent
+    const { error: locErr } = await db
+      .from('contact_location_preferences')
+      .upsert(locRow, { onConflict: 'contact_id,location_id' })
+    if (locErr) {
+      logWarn('marketing-consent', 'location preference write failed', { err: locErr.message, locationId })
+    }
   }
 
   // 2. Load current preferences (if any). Mig 005 trigger creates a
