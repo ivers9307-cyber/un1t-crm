@@ -147,3 +147,45 @@ export function hasPermissionForLocation(user, locationId, key) {
     key,
   })
 }
+
+/**
+ * Org-scoped mirror of hasPermissionForLocation(): does this user hold `key`
+ * ANYWHERE inside `organizationId`?
+ *
+ * Use for operations that belong to an organisation as a whole rather than to
+ * one location — an integration that syncs the whole org's directory, say —
+ * where "can they do this?" must not depend on which location happens to be
+ * selected in their session.
+ *
+ * Why this exists rather than `hasPermission(user, key)` plus an org check:
+ * hasPermission resolves against `user.role` / `activeAssignment` /
+ * `activeRoleTemplate`, all of which mirror the ACTIVE location. Pairing it
+ * with a membership test on some other organisation silently decouples the
+ * two — an owner at a CCF Autos location who is merely staff at a UN1T one
+ * would pass both halves and act on UN1T's behalf with a capability they only
+ * earned at CCF Autos. Resolving the permission at each location INSIDE the
+ * target org keeps the capability and the organisation bound together.
+ *
+ * Each candidate location goes through hasPermissionForLocation, so the full
+ * tier order (location feature gate → per-location user override → role
+ * template → code default) applies at the location being scored — not at the
+ * active one. SAAS-4 org admins (mig 417) are covered without a special case:
+ * getCurrentUser gives them a synthetic 'owner' assignment at every active
+ * location of their org, so the scan resolves them as owner there.
+ *
+ * Master short-circuits, matching every other guard in this module. Both the
+ * `isMaster` flag and the resolved `role` are accepted so a caller holding
+ * either shape of user object gets the same answer.
+ *
+ * @param {object|null} user            — getCurrentUser() result
+ * @param {string|null} organizationId
+ * @param {string} key                  — WEB_PERMISSIONS key
+ * @returns {boolean}
+ */
+export function hasPermissionInOrganization(user, organizationId, key) {
+  if (!user || !organizationId) return false
+  if (user.isMaster || user.role === 'master') return true
+  return (user.locations || []).some(
+    (l) => l?.organization_id === organizationId && hasPermissionForLocation(user, l.id, key)
+  )
+}

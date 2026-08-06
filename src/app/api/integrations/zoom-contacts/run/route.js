@@ -10,8 +10,8 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { getCurrentUser, assertOrganizationAccess } from '@/lib/auth'
+import { hasPermissionInOrganization } from '@/lib/permissions'
 import { runZoomContactSync } from '@/lib/zoom/reconcile'
 
 export const runtime = 'nodejs'
@@ -39,14 +39,40 @@ export async function POST(request) {
 
   // The sync belongs to one organisation; nobody outside it may drive it, even
   // as an owner of their own org.
+  //
+  // Membership is a fact about the caller's ASSIGNMENTS, so it is read through
+  // assertOrganizationAccess (locations' orgs ∪ SAAS-4 org-admin grants) and
+  // deliberately NOT through `user.activeOrganization`, which merely mirrors
+  // whichever LOCATION is selected in the session right now. Reading that meant
+  // someone who genuinely runs a studio inside the synced org was refused for
+  // having a CCF Autos location active — the same person, same rights, two
+  // different answers depending on a dropdown, and nothing in the 403 hinting
+  // that switching location was the fix.
   const syncOrgId = process.env.ZOOM_SYNC_ORGANIZATION_ID || null
-  if (!user.isMaster && (!syncOrgId || user.activeOrganization?.id !== syncOrgId)) {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+  if (!user.isMaster) {
+    // Fail closed on an unset env var BEFORE delegating: assertOrganizationAccess
+    // reads a null org id as "the caller named no organisation" and PASSES it,
+    // which would hand this route to every authenticated user. Unset is the live
+    // state — the sync ships dark until the ZOOM_* secrets land.
+    if (!syncOrgId) {
+      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 })
+    }
+    const orgGuard = assertOrganizationAccess(user, syncOrgId)
+    if (orgGuard) return orgGuard
   }
 
   // Computed once and reused for both the write gate below and the response
   // redaction further down, so the two can never diverge.
-  const canManage = hasPermission(user, 'integrations_zoom_manage')
+  //
+  // Scored INSIDE the synced org rather than with hasPermission(), which
+  // resolves at the caller's ACTIVE location. While the gate above demanded the
+  // active org BE the synced org, those two questions could not disagree; now
+  // that membership is read properly they can. An owner at a CCF Autos location
+  // who is only staff at a UN1T one would otherwise clear both halves and drive
+  // UN1T's directory writes on authority they never held there. Master keeps the
+  // unconditional bypass, including when syncOrgId is unset.
+  const canManage = user.isMaster
+    || hasPermissionInOrganization(user, syncOrgId, 'integrations_zoom_manage')
 
   // A preview is safe. Anything that writes, or that overrides the deletion
   // guard, is gated on the permission key added in Task 6 — NOT on a hand-rolled
@@ -61,14 +87,30 @@ export async function POST(request) {
     db, dry, limit, force, trigger: 'manual', triggeredBy: user.id,
   })
 
-  // guard.sample is real member phone numbers. The force-confirmation UI needs
-  // them, but it reads them from the stored run row — nothing in the response
-  // requires them, and a preview is open to callers who cannot act on them.
-  // Redact rather than widen who may preview: the counts are what a previewer
-  // actually needs.
-  const data = canManage || !out?.guard?.sample
-    ? out
-    : { ...out, guard: { ...out.guard, sample: undefined, sampleRedacted: out.guard.sample.length } }
+  // The guard carries real member numbers in two different shapes, and the dry
+  // branch returns it whether or not it tripped:
+  //   tripped  → `sample`, the first 10 suppressed numbers
+  //   UNtripped → `deletes`, EVERY delete candidate, uncapped
+  // The second is the ordinary preview and the bigger leak. A preview is
+  // deliberately open to callers without integrations_zoom_manage, and the
+  // force-confirmation UI reads the numbers from the stored zoom_sync_runs row
+  // rather than from this response — so an unprivileged caller keeps the counts
+  // and loses the numbers. Redact rather than narrow who may preview.
+  const data = canManage || !out?.guard ? out : { ...out, guard: redactGuard(out.guard) }
 
   return NextResponse.json({ success: out.ok !== false, data })
+}
+
+/**
+ * Allowlist, not denylist: a field added to the guard later must fail closed
+ * (absent from an unprivileged response) rather than leak by default.
+ */
+function redactGuard(guard) {
+  return {
+    tripped: guard.tripped,
+    threshold: guard.threshold,
+    attempted: guard.attempted,
+    ...(Array.isArray(guard.deletes) ? { deletesRedacted: guard.deletes.length } : {}),
+    ...(Array.isArray(guard.sample) ? { sampleRedacted: guard.sample.length } : {}),
+  }
 }
