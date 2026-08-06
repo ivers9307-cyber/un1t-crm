@@ -214,6 +214,8 @@ const WEB_ONLY_OK = {
   // Feature-gate half of a two-level permission; the fine-grained half
   // is per-account grants in email_mailbox_access, not a mobile screen.
   email_inbox: 'desktop operator surface — the tabbed inbox with per-account permissions is a wide layout; a mobile counterpart is deferred until the UI exists rather than reserved speculatively',
+  // ZOOMOPS.1 — Zoom Phone contact sync operator controls.
+  integrations_zoom_manage: 'Settings surface — no mobile equivalent; the destructive controls need a confirmation dialog the mobile app has no home for.',
 }
 
 const webDrift = []
