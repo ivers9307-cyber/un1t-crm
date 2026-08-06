@@ -9,19 +9,34 @@
 // look like a well-formed foreign number and would be published against a real
 // member's name.
 
+// Unicode direction marks. WhatsApp and iOS wrap pasted numbers in these, and
+// String.trim() does not remove them — left in, they hide a leading '+'.
+const BIDI_MARKS = /[‎‏‪-‮⁦-⁩]/g
+// The only characters a human legitimately types inside a phone number.
+const SEPARATORS = /[\s\-().]/g
+const UK_MOBILE_NATIONAL = /^07\d{9}$/
+
 const MIN_DIGITS = 8
 const MAX_DIGITS = 15
 
 export function normaliseForZoom(raw) {
   if (typeof raw !== 'string') return null
-  const s = raw.trim()
+  const s = raw.replace(BIDI_MARKS, '').trim()
   if (!s) return null
 
   const hasPlus = s.startsWith('+')
-  let digits = s.replace(/\D/g, '')
-  if (!digits) return null
+  const stripped = (hasPlus ? s.slice(1) : s).replace(SEPARATORS, '')
 
-  // 00 is the other way of writing +.
+  // Anything still non-digit means this is not a phone number — an email, a
+  // note, a stray quote that probably ate a digit. Reject rather than splicing
+  // the surviving digits into a plausible-looking wrong number: 8 rows in
+  // `contacts` are stored this way, and a wrong entry in a shared directory is
+  // worse than no entry.
+  if (!/^\d+$/.test(stripped)) return null
+  let digits = stripped
+
+  // 00 is the other way of writing +. Must run before the national branches
+  // below, or a 00-prefixed number falls through and gets treated as national.
   if (!hasPlus && digits.startsWith('00')) digits = digits.slice(2)
 
   // Irish country code followed by the national trunk zero. The trunk zero is
@@ -33,7 +48,7 @@ export function normaliseForZoom(raw) {
   // +353. Lengths disambiguate cleanly — an Irish national mobile is 08X + 7
   // = 10 digits, a UK one is 11. Same rule as UK_MOBILE_NATIONAL in
   // src/lib/phone-validate.js. 4 rows in `contacts` are stored this way.
-  if (!hasPlus && /^07\d{9}$/.test(digits)) {
+  if (!hasPlus && UK_MOBILE_NATIONAL.test(digits)) {
     digits = `44${digits.slice(1)}`
   }
 

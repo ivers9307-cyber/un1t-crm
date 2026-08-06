@@ -10,8 +10,24 @@ describe('normaliseForZoom', () => {
     expect(normaliseForZoom('+353 (87) 123-4567')).toBe('+353871234567')
   })
 
+  it('still accepts ordinary human separators', () => {
+    expect(normaliseForZoom('(087) 123-4567')).toBe('+353871234567')
+    expect(normaliseForZoom('+353 87 123 4567')).toBe('+353871234567')
+    expect(normaliseForZoom('087.123.4567')).toBe('+353871234567')
+  })
+
+  it('sees through Unicode direction marks around a pasted number', () => {
+    expect(normaliseForZoom('‪+353 85 262 0774‬')).toBe('+353852620774')
+  })
+
   it('converts a 00 international prefix to +', () => {
     expect(normaliseForZoom('00353871234567')).toBe('+353871234567')
+  })
+
+  // The 00-strip must run before every other branch; without it, 00-prefixed
+  // numbers fall through to the national rules and get mangled.
+  it('handles a 00 prefix combined with the trunk-zero defect', () => {
+    expect(normaliseForZoom('003530871234567')).toBe('+353871234567')
   })
 
   // The 106-row defect: country code 353 followed by the national trunk 0.
@@ -33,14 +49,6 @@ describe('normaliseForZoom', () => {
     expect(normaliseForZoom('07700900123')).toBe('+447700900123')
   })
 
-  it('still treats a 10-digit 08 number as Irish', () => {
-    expect(normaliseForZoom('0871234567')).toBe('+353871234567')
-  })
-
-  it('does not reclaim an explicit +3530 number as UK', () => {
-    expect(normaliseForZoom('+3530871234567')).toBe('+353871234567')
-  })
-
   // Landlines matter here even though toMobileE164() rejects them — a landline
   // that rings the studio still deserves a name on the handset.
   it('keeps an Irish landline', () => {
@@ -55,6 +63,13 @@ describe('normaliseForZoom', () => {
     expect(normaliseForZoom('871234567')).toBe('+353871234567')
   })
 
+  it('pins the digit-length bounds', () => {
+    expect(normaliseForZoom('+12345678')).toBe('+12345678')        // 8, the floor
+    expect(normaliseForZoom('+1234567')).toBeNull()                // 7
+    expect(normaliseForZoom('+123456789012345')).toBe('+123456789012345') // 15, the ceiling
+    expect(normaliseForZoom('+1234567890123456')).toBeNull()       // 16
+  })
+
   it('rejects the ClassPass placeholder', () => {
     expect(normaliseForZoom('+10000000000')).toBeNull()
   })
@@ -66,5 +81,15 @@ describe('normaliseForZoom', () => {
     expect(normaliseForZoom('n/a')).toBeNull()
     expect(normaliseForZoom('12345')).toBeNull()          // too short
     expect(normaliseForZoom('+1111111111111')).toBeNull() // all same digit
+  })
+
+  it('rejects junk characters rather than splicing the digits around them', () => {
+    // All real rows from the contacts table.
+    expect(normaliseForZoom('085143”754')).toBeNull()
+    expect(normaliseForZoom('0&63301306')).toBeNull()
+    expect(normaliseForZoom('087093061:')).toBeNull()
+    expect(normaliseForZoom('#832007475')).toBeNull()
+    expect(normaliseForZoom('353896161640@ymail.com06')).toBeNull()
+    expect(normaliseForZoom('boothjody@gmail.com')).toBeNull()
   })
 })
