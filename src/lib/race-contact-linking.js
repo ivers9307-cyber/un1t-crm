@@ -44,13 +44,51 @@ import { splitName } from './name-utils'
  *        forms set this so a known email can't resolve an existing person at
  *        another location (and then have attribution/consent/a deal written
  *        against them) — an IDOR on a public write path.
+ * @param {boolean} [args.restrictToOrg=false]  LEADCAP.1 — match at this
+ *        location first, then fall back to sibling locations in the SAME
+ *        organisation, never globally. Public forms want this rather than
+ *        restrictToLocation: `contacts_email_unique` (mig 008) is a GLOBAL
+ *        unique index on email, so restricting to the location left a known
+ *        email with nowhere to go — the lookup missed, the INSERT hit 23505,
+ *        and the form 500'd. Org scope keeps the cross-TENANT IDOR closed
+ *        (that was the real exposure) while letting a Stillorgan member join
+ *        a Hatch Street list. Takes precedence over restrictToLocation.
  * @param {object} [args.insertFields={}]  extra columns stamped onto the
  *        contact INSERT only (HOST-MASTER.4: e.g. { automations_exempt: true }
  *        for host-sourced signups). NEVER applied to a matched existing
  *        contact — matches keep their settings untouched.
  * @returns {Promise<string|null>}
  */
-export async function findOrCreateRaceContact({ db, locationId, email, name = null, phone = null, restrictToLocation = false, insertFields = {} }) {
+/**
+ * Resolve an email to a contact at any location in the SAME organisation as
+ * locationId. Two hops (location → org → its locations) rather than a
+ * PostgREST embed: the embed form is ambiguous once a table has ≥2 FKs and
+ * the explicit .in('location_id', …) keeps the query legibly location-scoped.
+ * Returns the contact_id or null; never throws.
+ */
+async function findContactInOrg(db, locationId, normalisedEmail) {
+  const { data: loc } = await db
+    .from('locations')
+    .select('organization_id')
+    .eq('id', locationId)
+    .maybeSingle()
+  const orgId = loc?.organization_id
+  if (!orgId) return null
+
+  const { data: siblings } = await db.from('locations').select('id').eq('organization_id', orgId)
+  const ids = (siblings || []).map((l) => l.id).filter(Boolean)
+  if (!ids.length) return null
+
+  const { data: match } = await db
+    .from('contacts')
+    .select('id')
+    .ilike('email', normalisedEmail)
+    .in('location_id', ids)
+    .maybeSingle()
+  return match?.id || null
+}
+
+export async function findOrCreateRaceContact({ db, locationId, email, name = null, phone = null, restrictToLocation = false, restrictToOrg = false, insertFields = {} }) {
   if (!email || typeof email !== 'string') return null
   const normalised = email.toLowerCase().trim()
   if (!normalised || !normalised.includes('@')) return null
@@ -72,7 +110,13 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
     // team_members row just points across. Public lead/booking forms set
     // restrictToLocation so they never resolve a cross-location contact from a
     // bare email (IDOR).
-    if (!restrictToLocation) {
+    if (restrictToOrg) {
+      // LEADCAP.1: sibling locations in the same org only. Mutually exclusive
+      // with the global fallback below — an org match is the widest a public
+      // form may ever resolve.
+      const sibling = await findContactInOrg(db, locationId, normalised)
+      if (sibling) return sibling
+    } else if (!restrictToLocation) {
       const { data: anywhere } = await db
         .from('contacts')
         .select('id')
@@ -107,6 +151,17 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
       .select('id')
       .single()
     if (error) {
+      // 23505 = the GLOBAL contacts_email_unique index (mig 008): this email
+      // already exists somewhere. Under restrictToOrg that can only be a
+      // concurrent insert racing us in-org (two rapid submits), or another
+      // TENANT's contact. Re-check in-org and adopt the winner; otherwise
+      // fail closed rather than link across organisations.
+      if (error.code === '23505' && restrictToOrg) {
+        const raced = await findContactInOrg(db, locationId, normalised)
+        if (raced) return raced
+        logWarn('race-contact-linking', `email exists outside this org, refusing to link: ${normalised}`, { locationId })
+        return null
+      }
       logWarn('race-contact-linking', `insert failed for ${normalised}`, { err: error })
       return null
     }

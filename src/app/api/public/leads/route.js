@@ -63,9 +63,12 @@ export async function POST(request) {
   }
 
   // Find-or-create the contact at this studio (shared public-form helper).
-  // restrictToLocation: a public form must not resolve (and then write consent/
-  // a deal against) an existing contact at another location from a bare email.
-  const contactId = await findOrCreateRaceContact({ db, locationId, email, name: firstName, phone, restrictToLocation: true })
+  // restrictToOrg (LEADCAP.1): match here first, then sibling locations in the
+  // same organisation, never globally. restrictToLocation used to be the flag,
+  // but `contacts_email_unique` is a GLOBAL index — so an existing Stillorgan
+  // member joining the Hatch Street waitlist found no match, hit 23505 on the
+  // insert, and got a 500. Org scope keeps the cross-TENANT IDOR closed.
+  const contactId = await findOrCreateRaceContact({ db, locationId, email, name: firstName, phone, restrictToOrg: true })
   if (!contactId) {
     return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
   }
