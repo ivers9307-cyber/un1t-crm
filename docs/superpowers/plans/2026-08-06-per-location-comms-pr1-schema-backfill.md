@@ -24,11 +24,29 @@ Read these before starting:
 
 | File | Responsibility |
 |---|---|
-| `supabase/migrations/486_contact_location_preferences.sql` | DDL only — table, index, RLS policy, updated_at trigger, `consent_log.location_id`, deprecation comments |
-| `supabase/migrations/487_contact_location_preferences_backfill.sql` | Data only — backfill, `unsubscribed` retirement, Hatch seed, assertions |
+| `supabase/migrations/487_contact_location_preferences.sql` | DDL only — table, index, RLS policy, updated_at trigger, `consent_log.location_id`, deprecation comments |
+| `supabase/migrations/488_contact_location_preferences_backfill.sql` | Data only — backfill, tag seed, assertions. **Purely additive; mutates nothing outside the new table.** |
 | `docs/CHANGELOG.md` | One entry, per repo convention |
 
 Split follows the existing precedent of `482_email_tickets.sql` / `484_email_tickets_backfill.sql`.
+
+> **Tasks 2 and 3 are COMPLETE** — both files are written and committed. The SQL quoted
+> in those tasks below is the *original* draft and has since been superseded by adversarial
+> review; **the committed files are the source of truth.** What changed:
+> - Numbered 487/488, not 486/487 — `486_zoom_contact_sync_heartbeat.sql` landed on main
+>   after this branch was cut.
+> - **The `email_status` flip was removed entirely** and deferred to PR 3. It is a hard
+>   suppressor in `/api/contacts/[id]/email` (which never fetches `email_marketing`), the
+>   contact-page and drawer badges, booking confirmations and event reminders. Flipping it
+>   here would have un-blocked manual staff sends to 2,680 unsubscribed people. The
+>   migration now reads the signal and leaves it intact, so it destroys no evidence and
+>   the statement ordering is no longer load-bearing.
+> - **The assertions were rewritten.** The originals compared `A and B` against
+>   `not A or not B` over the same join — De Morgan makes that unfalsifiable. They now
+>   compare against `contacts.email_marketing`, maintained by a different trigger
+>   (mig 155) and the column the live send path actually reads.
+> - **The tag seed gained a consent-ordering rule** (decision 3b in the spec), per-channel,
+>   handling both the `opt_out` and `opted_out` spellings that exist live.
 
 ### Live baseline (measured 2026-08-06 ~15:30 — these drift, do not hardcode them)
 
@@ -375,15 +393,23 @@ Expected: success. **If an assertion raised, nothing was written** — read the 
 
 ```sql
 select
-  (select count(*) from contact_location_preferences)                       as rows_total,
-  (select count(distinct contact_id) from contact_location_preferences)     as distinct_contacts,
-  (select count(*) from contacts where location_id is not null)             as expected_contacts,
-  (select count(*) from contacts where email_status = 'unsubscribed')       as should_be_zero,
-  (select count(*) from contact_location_preferences where source='waitlist_form') as hatch_seeded;
+  (select count(*) from contact_location_preferences)                              as rows_total,
+  (select count(distinct contact_id) from contact_location_preferences
+     where source='migration')                                                     as backfilled_contacts,
+  (select count(*) from contacts where location_id is not null)                    as expected_contacts,
+  (select count(*) from contact_location_preferences where source='waitlist_form') as tag_seeded,
+  (select count(*) from contacts where email_status = 'unsubscribed')              as unsub_untouched,
+  (select count(*) from contacts c
+     join contact_location_preferences clp on clp.contact_id=c.id
+      and clp.location_id=c.location_id and clp.source='migration'
+    where c.email_marketing = false and clp.email_marketing = true)                as consent_leaks;
 ```
 
-Expected: `distinct_contacts == expected_contacts`; `should_be_zero == 0`;
-`rows_total > distinct_contacts` (the extra rows are the cross-location Hatch seeds).
+Expected: `backfilled_contacts == expected_contacts`; `consent_leaks == 0`;
+`tag_seeded` ≈ 82; `rows_total > backfilled_contacts` (the extra rows are the
+cross-location tag seeds). **`unsub_untouched` must still be ~2,680** — this migration
+deliberately does NOT retire `email_status`; a zero here means something flipped it and
+manual-send blocking has been lost.
 
 - [ ] **Step 5: Verify the two known cases resolved correctly**
 
@@ -453,8 +479,9 @@ Report the PR URL. Pushing is not shipping.
 - [ ] `contact_location_preferences` exists with the PK, index, RLS policy and trigger
 - [ ] `consent_log.location_id` exists and is nullable
 - [ ] Every contact with a non-null `location_id` has exactly one `source='migration'` row
-- [ ] All active `hatch-founding-member` tag-holders have a Hatch row
-- [ ] No `contacts.email_status = 'unsubscribed'` remains
+- [ ] All active `hatch-founding-member` tag-holders have a row at the tag's location
+- [ ] **`contacts.email_status` is UNCHANGED** — ~2,680 `unsubscribed` still present
+- [ ] Zero consent leaks: nobody globally opted out of email has a backfilled row saying opted in
 - [ ] Emily and David each have two rows: Hatch true, Stillorgan false
 - [ ] Advisors clean; all eight CI-mirror checks pass
 - [ ] **No application behaviour changed** — nothing reads the new table yet

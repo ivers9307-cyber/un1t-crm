@@ -86,6 +86,7 @@ Recorded so implementers do not relitigate them.
 | 1 | **Per-location is authoritative; global keeps reputation only.** | A bounce is a fact about an email *address* and is true everywhere. Consent is a fact about a *relationship with one business*. Splitting them lets Hatch mail its own list even when that person left Stillorgan. |
 | 2 | **Explicit opt-in per location. No auto-seeding from the org.** | A location's list contains only people who actively joined it. Launch marketing to the existing base is **a Stillorgan campaign about Hatch** — those people did consent to hear from Stillorgan. No new concept needed and no reliance on soft opt-in for cold leads. |
 | 3 | **One-click unsubscribe removes the sending location only, then shows all lists.** | Satisfies the Gmail/Yahoo bulk-sender one-click mandate, makes the per-location model self-service, and gives an easy global exit so nobody reaches for the spam button — complaints damage the sending domain every location shares. |
+| 3b | **A later opt-out beats an earlier location opt-in — unless it was an administrative correction rather than a customer decision.** (Richard, 2026-08-07) | Without an explicit rule the outcome is decided by the incidental location of the contact row: a tag-holder already at the location keeps their opt-out, an identical person at a sibling location gets seeded opted-in. Same evidence, opposite consent. The carve-out exists because the only post-tag opt-outs in the data are `leadcap1_scope_correction` — an administrative fix applied on 2026-08-07, not a withdrawal. The strict reading would have dropped the two people the recovery was for. Implemented as a **denylist**, so unknown sources count as genuine and fail safe. |
 | 4 | **Single `contact_location_preferences` table** (over mirroring the two host tables, or a general `subscriber_lists` abstraction). | Same *shape* as today's `contact_preferences`, so the consent helper, sync triggers, `consent_log`, audience filter and both send paths translate by adding a location key rather than being rewritten. Covers all three channels uniformly. A general list abstraction is the eventual direction if Repset needs it — migrating working host code now is risk for no gain (YAGNI). |
 
 ---
@@ -207,9 +208,17 @@ after DDL. **Day one must be a zero-behaviour-change event for Stillorgan.**
      copying that default preserves today's behaviour exactly. Backfilling only the
      contacts that happen to have a row would silently make everyone else unreachable —
      the same class of failure this whole programme exists to fix.
-3. **Retire the `unsubscribed` status**: where `contacts.email_status='unsubscribed'`, set
-   that row's `email_marketing=false`, then set the column to `active`.
-   Leave `bounced`/`complained` untouched.
+3. **Retire the `unsubscribed` status — in PR 3, NOT PR 1.** The backfill *reads*
+   `email_status='unsubscribed'` to derive per-location consent but must leave the column
+   alone, because `email_status` is a hard suppressor in code the send-path analysis
+   missed: `/api/contacts/[id]/email` gates manual staff sends on
+   `BLOCKED_EMAIL_STATUSES` and **never fetches `email_marketing` at all**, so
+   `email_status` is its only consent check. The "email blocked" badge on the contact
+   page and in `ContactDrawer`, plus `booking-confirmations.js` and
+   `event-attendee-reminders.js`, read it too. Flipping 2,680 rows before those readers
+   change would silently un-block manual sends to everyone who unsubscribed. The flip
+   ships in the same deploy as the readers that stop consuming it, and
+   `bounced`/`complained` stay untouched throughout.
 4. **Seed Hatch Street** from evidence already in the database: for every holder of an
    active `hatch-founding-member` tag scoped to Hatch, insert a Hatch row with
    `source='waitlist_form'` and `subscribed_at = contact_tags.added_at`. This covers all
@@ -266,12 +275,26 @@ The same applies to contacts *created* during the window: they get a
 `contact_preferences` row from the mig 005 trigger but no location row, so they would
 become unreachable — the mirror-image failure.
 
-**PR 3 must therefore begin by re-running the mig 487 backfill logic as an idempotent
-delta** (its `on conflict do nothing` inserts plus an update pass that pushes any
-`contact_preferences` change made since the snapshot into the matching location row),
-and only then cut the read path over. The parity assertions run *after* that delta, not
-before. Treat this as a hard requirement of PR 3, not an optimisation — it is the single
-most likely way for this programme to lose someone's consent.
+**PR 3 must therefore begin by re-reconciling, and `ON CONFLICT DO NOTHING` will not do
+it.** The mig 488 inserts leave every pre-existing row exactly as it was — which is
+precisely the population that needs correcting — so re-running them is a no-op for their
+entire target. The reconcile must be `ON CONFLICT ... DO UPDATE`, and it must be
+**one-directional: it may only turn channels OFF, never on**, or it will clobber the
+per-location opt-ins PR 2 has been capturing. Roughly:
+
+```sql
+on conflict (contact_id, location_id) do update
+   set email_marketing = contact_location_preferences.email_marketing and excluded.email_marketing
+```
+
+Only then cut the read path over, with the parity assertions running *after* the delta.
+Treat this as a hard requirement of PR 3, not an optimisation — it is the single most
+likely way for this programme to lose someone's consent.
+
+**Strictly better alternative worth costing first:** ship a
+`sync_contact_location_preferences` trigger on `contact_preferences` in PR 2, mirroring
+the existing mig 155 trigger. That closes the window outright rather than reconciling
+after the fact, and removes the need to get the one-directional merge exactly right.
 
 Note also that until PR 2 lands, `applyFormMarketingConsent` keeps writing
 `email_status='unsubscribed'`, so that value will reappear after mig 487 retires it.

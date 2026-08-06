@@ -1,4 +1,4 @@
--- 486 — contact_location_preferences (LOCCOMMS.1, spec 2026-08-06).
+-- 487 — contact_location_preferences (LOCCOMMS.1, spec 2026-08-06).
 --
 -- Hatch Street is a standalone business sharing an org with Stillorgan, and
 -- `contact_preferences` cannot express that: it carries UNIQUE (contact_id), so
@@ -61,4 +61,4 @@ comment on table contact_location_preferences is
   'LOCCOMMS.1 — per-location marketing consent. Row absent = that location may never send. Supersedes the marketing columns on contact_preferences.';
 
 comment on column contact_preferences.location_id is
-  'DECORATIVE. contact_preferences has UNIQUE(contact_id), so this column can never express per-location state — it is a denormalised copy of contacts.location_id and nothing reads it. Superseded by contact_location_preferences (mig 486). DO NOT DRIVE.';
+  'DECORATIVE. contact_preferences has UNIQUE(contact_id), so this column can never express per-location state — it is a denormalised copy of contacts.location_id and nothing reads it. Superseded by contact_location_preferences (mig 487). DO NOT DRIVE.';
