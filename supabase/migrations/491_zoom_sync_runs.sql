@@ -1,4 +1,4 @@
--- ZOOMOPS.1 — run history for the Zoom Phone contact sync.
+-- ZOOMOPS.1 — run history for the Zoom Phone contact sync (mig 491).
 --
 -- cron_heartbeats.last_outcome (mig 486) holds ONE row and is overwritten
 -- nightly, so "did last Tuesday also trip the guard?" is unanswerable. This is
