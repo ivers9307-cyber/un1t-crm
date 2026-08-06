@@ -64,7 +64,20 @@ where ct.tag = 'hatch-founding-member'
   and ct.location_id is not null
 on conflict (contact_id, location_id) do nothing;
 
--- 3. Assertions. A raise here aborts the transaction and rolls back 1-2.
+-- 3. Assertions. A raise aborts the migration.
+--
+--    If apply_migration runs this file in one transaction (the normal case),
+--    a raise rolls back steps 1-2 and nothing persists. If it does NOT, the
+--    inserts survive — and that is still safe here, deliberately:
+--      * steps 1 and 2 are both ON CONFLICT DO NOTHING, so re-running after a
+--        fix is idempotent rather than duplicating rows;
+--      * no application code reads this table until PR 3, so a partially
+--        populated table changes no behaviour;
+--      * step 4 has not run yet, so email_status is untouched.
+--    Explicit begin/commit is deliberately NOT used: if the runner already
+--    opened a transaction, the COMMIT would close it early and leave the
+--    remaining statements running outside it — worse than the situation it
+--    would fix.
 do $$
 declare
   expected_contacts int;
@@ -92,7 +105,17 @@ begin
     from contact_tags
    where tag='hatch-founding-member' and removed_at is null and location_id is not null;
 
-  select count(distinct contact_id) into actual_contacts from contact_location_preferences;
+  -- Scoped to source='migration' so this mirrors expected_contacts exactly.
+  -- Counting ALL rows would couple this check to the step-2 seed: a tag-holder
+  -- whose contacts.location_id is NULL gets a seed row but no backfill row, so
+  -- actual would exceed expected and abort the migration for a reason that has
+  -- nothing to do with backfill parity. Zero such contacts exist today
+  -- (verified 2026-08-06), but the seed is driven by an operator-editable tag,
+  -- so the coupling is a live trip-hazard rather than a hypothetical one. The
+  -- seed has its own assertion below.
+  select count(distinct contact_id) into actual_contacts
+    from contact_location_preferences where source = 'migration';
+
   select count(*) into null_loc from contacts where location_id is null;
 
   select count(*) into actual_optouts
