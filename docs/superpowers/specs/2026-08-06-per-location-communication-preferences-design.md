@@ -45,6 +45,29 @@ with no error and no warning.**
 Both failures are the same root error as LEADCAP.1 itself: **location is the wrong axis.**
 A contact belongs to an organisation; a *communication relationship* belongs to a location.
 
+### Trap: `contact_preferences.location_id` already exists and is a decoy
+
+The table **already has a `location_id` column**, populated on 8,476 of 8,557 rows,
+indexed, with an FK to `locations`. Do not mistake this for a working per-location model
+and do not try to repurpose it. The table carries a hard **`UNIQUE (contact_id)`**
+constraint, so it structurally cannot hold more than one row per person — verified live:
+8,557 rows across 8,557 distinct contacts, zero extras. The column is a denormalised copy
+of `contacts.location_id`, not a second key.
+
+Nothing in `src/` reads it (verified 2026-08-06). Dropping the unique constraint to
+repurpose the table was considered and rejected: `applyFormMarketingConsent` upserts with
+`onConflict: 'contact_id'` and `unsubscribe_token` is unique per contact, so both would
+need reworking under a composite key — more risk than an additive new table, for no gain.
+
+### Live baseline (measured 2026-08-06)
+
+| Fact | Count | Consequence for the backfill |
+|---|---|---|
+| `contacts` | 8,558 | Target row count for the new table |
+| `contact_preferences` rows | 8,557 | Source for the three booleans |
+| Contacts with **no** preferences row | **1** | Must still get a row, defaulting true — see migration step 2 |
+| Contacts with **NULL** `location_id` | **3** | Cannot be given a location row. They are already unreachable by every campaign (`buildAudienceQueryAsync` filters `.eq('location_id', …)`), so skipping them preserves behaviour exactly — but the migration must skip them **explicitly and assert the count**, never silently. |
+
 ### Prior art in this repo
 
 Hosts already solve exactly this problem: `host_contacts` (membership of that sender's
@@ -220,8 +243,9 @@ Five PRs. Each ships independently and leaves the system working.
 A backfill that misses anyone means campaigns **silently under-send** — precisely the
 failure mode of the incident that prompted this work. Gate the cutover on:
 
-- row-count parity: **every** contact has ≥1 location row (not merely those that had a
-  `contact_preferences` row) — assert `count(distinct contact_id) == count(contacts)`
+- row-count parity: every contact **with a non-null `location_id`** has ≥1 location row —
+  assert `count(distinct contact_id) == count(contacts where location_id is not null)`
+  (8,555 as of 2026-08-06), and assert the 3 null-location contacts are the only omissions
 - **audience-count parity**: for every existing campaign/segment, compute the audience
   under the old and new query and require an **exact match**, except the Hatch Street
   list, which must grow by exactly the 23 known cases
