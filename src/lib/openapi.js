@@ -1051,6 +1051,96 @@ registry.registerPath({
   },
 })
 
+// Email tickets (cookie auth) — EMAIL-TICKET.4.
+// TWO GATES on every route below: the `email_inbox` permission gates the
+// surface (NOT the older `email` key, which gates marketing mail), and a row
+// in email_mailbox_access gates each individual account. A ticket on a mailbox
+// the caller cannot see is a 404, never a 403.
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/tickets',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List email tickets + the caller’s visible mailboxes',
+  description: 'The studio ticket queue at one location, plus the mailboxes this caller may see (already in tab order). Filtered to those mailboxes and capped at 200, newest activity first. No visible mailboxes = an empty list, not an error.',
+  request: {
+    query: z.object({
+      location_id: uuidLike,
+      mailbox_id: uuidLike.optional(),
+      view: z.enum(['unassigned', 'mine', 'needs_reply', 'closed']).optional(),
+    }),
+  },
+  responses: {
+    200: { description: '{ mailboxes, tickets }' },
+    400: { description: 'Missing location_id / unknown view', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing email_inbox permission or foreign location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/tickets/{id}',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Ticket + its message thread',
+  description: 'Returns the ticket (with its mailbox and linked contact) and the thread oldest-first, text bodies only. 404 — never 403 — when the ticket is missing, at a foreign location, or on a mailbox the caller cannot see. Does NOT mark it read; that is POST /read.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ ticket, messages }' },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/reply',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Reply to a ticket, or add an internal note',
+  description: "internal:true writes a staff-only note to the thread and sends NOTHING (no first_response_at, no status change). Otherwise the reply goes out on Postmark's transactional stream ('outbound', no marketing-consent gate — the member wrote to us first), threaded off the last inbound message, Reply-To the ticket's own mailbox; the ticket then moves to pending and stamps first_response_at if unset. A failed send leaves the ticket untouched.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ text: z.string().min(1).max(10000), internal: z.boolean().optional() }).openapi('EmailTicketReply') } } },
+  },
+  responses: {
+    200: { description: 'Note written / reply sent' },
+    400: { description: 'Invalid body, no recipient, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/status',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Move a ticket through its lifecycle',
+  description: 'Sets solved_at / closed_at moving into those states and clears them moving out. Nothing auto-closes anywhere in this feature — this route is the only way a ticket leaves the queue.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ status: z.enum(['open', 'pending', 'solved', 'closed']) }).openapi('EmailTicketStatus') } } },
+  },
+  responses: {
+    200: { description: 'Updated ticket' },
+    400: { description: 'Invalid status', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/read',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Mark a ticket read',
+  description: 'Zeroes unread_count and nothing else (updated_at deliberately does not move). Its own endpoint so the detail GET stays free of writes.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Marked read' },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/webhooks/sequence/{token}',

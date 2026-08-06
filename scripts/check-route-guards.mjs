@@ -116,6 +116,10 @@ const INBOX_ROUTE_PREFIXES = [
   'src/app/api/instagram/conversations',
   'src/app/api/instagram/media',
   'src/app/api/email/conversations',
+  // EMAIL-TICKET.4 — the ticket routes are the same class: service-role, no
+  // RLS, so the `email_inbox` hasPermission() check in each route IS the
+  // channel gate (the per-account email_mailbox_access gate sits behind it).
+  'src/app/api/email/tickets',
 ]
 const INBOX_PERMISSION_GUARDS = ['requireInboxPermission(', 'hasPermission(']
 
