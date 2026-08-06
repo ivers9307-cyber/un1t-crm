@@ -30,7 +30,8 @@ channel, on its own surface.
 | Conversations vs tickets | `email_tickets` **replaces** `email_conversations` | Email no longer mirrors the IG twin, so identity can change without touching WA/IG. |
 | Views | Saved filters, with `queue_id` reserved | YAGNI. Same trick mig 213 used with its `closed` column. |
 | Inbound HTML | **Rendered**, sandboxed + sanitised | Richard, 2026-08-05. Reverses the mig 394 plain-text-only decision; see "Inbound HTML rendering". |
-| Storage | 5 GB quota per mailbox (= per location) | Richard, 2026-08-05. Never rejects inbound mail; see "Storage quota". |
+| Mailboxes | **Many per location**, one location per mailbox | Richard, 2026-08-06. `accounts@` is distinct from `sales@` and `studio@`, across multiple domains. Supersedes the single `locations.email_inbox_reply_to` column. |
+| Storage | 5 GB quota **per mailbox** | Richard, 2026-08-05/06. A mailbox is a row in `email_mailboxes`, NOT a location — a studio with three addresses holds 3 × 5 GB. Never rejects inbound mail; see "Storage quota". |
 
 ## Non-goals for v1
 
@@ -44,8 +45,15 @@ known.
 
 ## Surface
 
-New page at `/communications/tickets`, its own nav entry, gated by a new
-`tickets` permission key in `WEB_PERMISSION_KEYS` (`shared/permissions.js`).
+New page at `/communications/tickets`, its own nav entry, gated by the
+**`email_inbox`** permission key in `WEB_PERMISSION_KEYS`
+(`shared/permissions.js`) — deliberately distinct from the existing `email` key,
+which gates marketing and campaign email. Access to each individual account
+within the inbox is a separate, finer gate: a row in `email_mailbox_access`.
+Holding `email_inbox` alone shows nothing.
+
+An earlier draft of this spec called the key `tickets`; `email_inbox` is the
+settled name (see Settled #8).
 
 Email is **removed** from the unified inbox at `/communications/inbox`. WA and
 IG stay exactly as they are. The existing `?ch=em` deep-link parameter (see
@@ -55,10 +63,113 @@ Rationale for removal rather than duplication: the same email workable from two
 places under two different state models is a correctness problem, not a
 convenience. One channel, one home.
 
+## Postmark topology — an invariant, not a preference
+
+Two separate axes, often confused. Get both right.
+
+### Axis 1 — stream: ticket replies are TRANSACTIONAL
+
+A ticket reply goes to one person who just wrote to us. It is transactional, not
+marketing, so it uses the path that already exists:
+
+| Purpose | Helper | Stream | Consent family |
+|---|---|---|---|
+| **Ticket replies** | `sendTransactionalEmail()` | `outbound` | `email_administrative` |
+| Campaigns, broadcasts | `sendMarketingEmail()` | `broadcast` | `email_marketing` |
+
+**Plan 3 must call `sendTransactionalEmail()`, never `sendMarketingEmail()`**
+(Richard, 2026-08-06). `consentFieldForStream()` in `src/lib/postmark.js` already
+encodes the mapping, and the repo's standing consent invariant is that
+`_administrative` covers transactional while `_marketing` covers broadcasts. A
+support reply landing on the broadcast stream would be wrong on three counts —
+consent family, reputation pool, and analytics.
+
+One thing Plan 3 must decide rather than inherit: whether a reply to someone who
+just emailed us should be gated on `email_administrative` at all. They initiated
+contact; a suppression flag silently swallowing the answer to their own question
+is worse than the consent risk it avoids. Recommendation: replies within a
+ticket are exempt, and only *unsolicited* outbound honours the flag.
+
+### Axis 2 — server: three of them, always
+
+| Server | Carries |
+|---|---|
+| **Marketing** | Bulk campaigns and broadcasts |
+| **Email inbox** | Ticket inbound, and the transactional replies staff send from it |
+| **Invoices inbound** | Accounts invoice processing (mig 184) |
+
+**Inbox vs invoices is forced.** A Postmark server has exactly one inbound
+stream and one inbound address, so two inbound purposes cannot share a server
+whatever anyone prefers.
+
+**Marketing vs the rest is deliberate.** Bulk sending is where reputation damage
+happens — a bad list, a spam-trap hit, a complaint spike. If support replies
+leave from the same server, one bad campaign starts bouncing the answers members
+are waiting for. Separating them makes the worst case a marketing problem rather
+than a support outage, and keeps each server's bounce and complaint statistics
+readable instead of a broadcast burying every transactional signal.
+
+Note the axes interact: streams live *within* a server, so honouring the server
+split means the inbox's transactional sends resolve a token for the **inbox**
+server rather than assuming the global one. `resolvePostmarkToken()` returns the
+global token today; `src/lib/tenant-email.js` already demonstrates the shape for
+resolving a specific server token and falling back safely without ever throwing
+in a send path.
+
+**Do not "simplify" this later.** Consolidating servers looks like tidying,
+saves nothing, and is discovered only when support mail stops being delivered.
+
 ## Data model
 
-Next free migration number at implementation time (≈481 — confirm against
-`supabase/migrations/` before writing, forward-only).
+Migrations are forward-only; confirm the next free number against the live
+project rather than the filesystem before writing (local files lag behind
+MCP-applied ones — this caught a real collision on 482). Applied so far:
+**482** tickets + attachments, **483** RLS and FK corrections, **484** backfill.
+**485** is the mailbox model below.
+
+### `email_mailboxes` — one row per inbound address
+
+Mig 394 put a single address on `locations.email_inbox_reply_to`, uniquely
+indexed. That models one mailbox per studio, which is wrong: a studio needs
+`accounts@`, `sales@` and `studio@`, potentially on different domains, routed to
+different people.
+
+```
+id             uuid PRIMARY KEY
+location_id    uuid NOT NULL REFERENCES locations(id) ON DELETE CASCADE
+address        text NOT NULL
+label          text NOT NULL         -- 'Accounts', 'Sales', 'Studio'
+is_default     boolean NOT NULL DEFAULT false
+active         boolean NOT NULL DEFAULT true
+created_at     timestamptz NOT NULL DEFAULT now()
+updated_at     timestamptz NOT NULL DEFAULT now()
+```
+
+`UNIQUE (lower(address))` globally — an address resolves to exactly one mailbox,
+so routing is never ambiguous. A partial unique index on
+`(location_id) WHERE is_default` keeps one default per studio; that default is
+the Reply-To stamped on campaign and marketing sends, preserving today's
+behaviour.
+
+**A mailbox belongs to exactly one location** (Richard, 2026-08-06). A
+central org-wide `accounts@` was considered and rejected: per-location scoping is
+what the existing RLS, staff permissions and location-access checks are entirely
+built on, and breaking that alignment for one mailbox would be a large cost for
+a small convenience.
+
+`email_tickets` carries `mailbox_id`, so a ticket records which address it
+arrived at and replies leave from the same one. Without it, a member who writes
+to `accounts@` could be answered from `sales@`.
+
+Backfill: one row from each `locations.email_inbox_reply_to` that is set,
+`is_default = true`. That column is then marked DEPRECATED and dropped with
+`email_conversations`.
+
+**Postmark shape:** one server per *domain* — inbound domain forwarding routes
+every address on a domain to its server — with many addresses per domain. Every
+server POSTs to the same webhook URL and token, because resolution is by
+recipient address, not by which server delivered it. Adding an address on an
+already-configured domain therefore costs nothing but a row.
 
 ### `email_tickets` — one row per issue
 
@@ -225,15 +336,17 @@ external event-signup embed and the booking widget.
 
 ## Storage quota
 
-5 GB **per mailbox**, where a mailbox is a location's inbound address
-(`locations.email_inbox_reply_to`, already uniquely indexed). Stillorgan and
-Hatch therefore hold 5 GB each rather than sharing a pool.
+5 GB **per mailbox** — per row in `email_mailboxes`, not per location. A studio
+running `accounts@`, `sales@` and `studio@` therefore holds 3 × 5 GB, and a
+noisy sales inbox can never starve the accounts one.
 
-Per-mailbox is the finer of the two grains Richard offered ("per mailbox or
-domain") and satisfies both readings: a single-location tenant's mailbox *is*
-its domain, and a domain-wide figure is the sum of its mailboxes whenever one is
-wanted for display. A domain-level ceiling, if it is ever needed, is an
-additional cap over that sum rather than a change to this model.
+This is the finer of the two grains Richard offered ("per mailbox or domain"),
+and it is genuinely per-mailbox rather than per-location: an earlier draft keyed
+it to `location_id` on the assumption that a location had exactly one address,
+which the multi-mailbox decision of 2026-08-06 disproved. A per-domain or
+per-location figure is the sum of the relevant mailboxes whenever one is wanted
+for display; a ceiling at either level, if ever needed, is an additional cap
+over that sum rather than a change to this model.
 
 Supabase Storage's `file_size_limit` is **per file, not per bucket**, so an
 aggregate quota is not something the platform enforces. It has to be accounted
@@ -243,20 +356,20 @@ for in app code.
 
 ```
 email_storage_usage
-  location_id   uuid PRIMARY KEY REFERENCES locations(id) ON DELETE CASCADE
+  mailbox_id    uuid PRIMARY KEY REFERENCES email_mailboxes(id) ON DELETE CASCADE
   bytes_used    bigint NOT NULL DEFAULT 0
   quota_bytes   bigint NOT NULL DEFAULT 5368709120   -- 5 GiB, per-mailbox overridable
   updated_at    timestamptz NOT NULL DEFAULT now()
 ```
 
 `bytes_used` counts attachment bytes plus `text_body` + `html_body` lengths.
-Updated through an atomic `increment_email_storage_bytes(p_location_id,
-p_delta)` RPC following the mig 314 pattern — `SECURITY INVOKER`, `search_path`
-pinned to `''`, `COALESCE` on the counter. Read-modify-write from JS loses
-increments under concurrent inbound.
+Updated through an atomic `increment_email_storage_bytes(p_mailbox_id, p_delta)`
+RPC following the mig 314 pattern — `SECURITY INVOKER`, `search_path` pinned to
+`''`, `COALESCE` on the counter. Read-modify-write from JS loses increments
+under concurrent inbound.
 
-A row exists only for locations with `email_inbox_reply_to` set, matching mig
-394's "NULL = email channel off for the location".
+One row per mailbox, created with the mailbox. Deleting a mailbox cascades the
+counter away with it.
 
 Counters drift. A nightly cron reconciles `bytes_used` against a real `SUM` and
 logs any correction rather than silently fixing it.
@@ -311,8 +424,13 @@ These rules are what make this a ticketing system rather than a renamed inbox.
    or `pending`, flip it back to `open`.
 2. Inbound matching a **closed** ticket → open a **new** ticket with
    `reopened_from` set to the closed one.
-3. Inbound with no threading match → new ticket. Location resolves by matching
-   recipients against `locations.email_inbox_reply_to`, as today.
+3. Inbound with no threading match → new ticket, on the mailbox the message was
+   delivered to. Resolution is `resolveMailboxByRecipient` in
+   `src/lib/email-mailboxes.js`, matching against `email_mailboxes` — **not**
+   against `locations.email_inbox_reply_to`, which mig 485 deprecates. The
+   mailbox carries the location, so location falls out of it rather than being
+   resolved separately. Recipient precedence decides when a message names more
+   than one estate address; row order must never decide.
 4. `solved` auto-closes after N days, **default 7**. N is an operator-editable
    setting, not a constant — customer-affecting thresholds must be editable by
    operators.
@@ -329,12 +447,23 @@ v1 ships saved filters over one shared per-location queue:
 - **Needs reply** — `status = 'open'` and last message inbound
 - **Solved** — `status IN ('solved','closed')`
 
-Anyone with the `tickets` permission sees all tickets at their assigned
-locations; master sees all. No row-level scoping in v1.
+Those filters apply **within a mailbox**, and the mailbox is the access unit.
+Access is two-level:
 
-`queue_id` exists but is always NULL. v2 adds an `email_ticket_queues` table,
-routing rules, and per-queue grants modelled on `issue_handler` — additive, no
-rewrite, no backfill.
+1. The **`email_inbox`** feature key gates the surface.
+2. A row in **`email_mailbox_access`** gates each individual account inside it.
+
+Master and owner-at-location are elevated and need no grant rows. Everyone else
+sees only accounts they have been granted — so a coach can hold `studio@`
+without ever seeing the billing correspondence in `accounts@`. Holding the
+feature key alone shows nothing, and a studio with no mailboxes shows no inbox
+at all rather than an empty one.
+
+This supersedes an earlier draft that had a single shared per-location queue
+with no row-level scoping and a reserved `queue_id`. The mailbox turned out to
+be the access unit operators actually think in — "who can see this address" is
+answerable, "which queue is this" is not. `queue_id` remains on `email_tickets`,
+still always NULL; if sub-queues are ever wanted they live *within* a mailbox.
 
 ## Migration and backfill
 
@@ -359,9 +488,16 @@ Step 2 must be idempotent — re-running it may not duplicate tickets.
 - **Threading headers absent or forged.** Fall back to `(location_id,
   requester_email)` plus an open ticket within a recency window; never merge
   across locations.
-- **Unresolvable location.** Today's behaviour: no `email_inbox_reply_to` match
-  means the channel is off. Do not silently drop — dead-letter it, consistent
-  with `webhook-dead-letter.js`.
+- **Unresolvable recipient. 🔴 THE EXISTING FALLBACK MUST BE REMOVED.**
+  `src/app/api/webhooks/postmark-inbound/[token]/route.js` currently resolves an
+  unmatched recipient to *"the oldest active location"* — a deliberate default
+  for a single-inbound-address estate, and actively dangerous with several
+  addresses across several domains. A near-miss on an `accounts@` address does
+  not error; it silently files that studio's mail into whichever location is
+  oldest, which today means Stillorgan. Replace it with a dead-letter, consistent
+  with `webhook-dead-letter.js`, so a misconfigured mailbox is loud rather than
+  quietly wrong. **Any onboarding test must assert on the resolved
+  `location_id`, not merely that a row appeared.**
 - **Attachment re-host fails.** Persist the message anyway with a visible note.
   Losing the body because a PDF failed is the worse outcome.
 - **Send fails.** The message row records `status`; the ticket does not advance
@@ -386,7 +522,9 @@ Step 2 must be idempotent — re-running it may not duplicate tickets.
 - `is_internal_note` never reaches Postmark — assert on the payload shaper.
 - `bcc_emails` never appears in any client-facing payload.
 - Permission tests per the `shared/permissions.test.js` pattern: the new
-  `tickets` key present for every role, no orphans.
+  `email_inbox` key present for every role, no orphans. Plus the per-account
+  gate: a staff member granted `studio@` must not see `accounts@` tickets at the
+  same studio, and an elevated user must see both without any grant rows.
 - Attachment signed-URL scoping: a staff member at location A cannot fetch an
   attachment on a ticket at location B.
 
@@ -428,5 +566,20 @@ Quota:
    sets a retention maximum.
 6. **"Show images" is per-message** — Richard, 2026-08-05, the safe default. No
    per-sender trust list.
+7. **Many mailboxes per location, one location per mailbox** — Richard,
+   2026-08-06. `accounts@` is a distinct address from `sales@` and `studio@`,
+   potentially on different domains. Supersedes the single
+   `locations.email_inbox_reply_to` column, and re-keys the storage quota from
+   location to mailbox. `accounts@` is the only address wanted on day one.
+8. **One inbox per studio, tabbed per account, permissioned at both levels** —
+   Richard, 2026-08-06. An `email_inbox` feature key gates the surface; a row in
+   `email_mailbox_access` gates each account within it. Mirrors
+   `approvals_inbox` + `approvals_*`, except the per-item half is a table
+   because mailboxes are rows rather than static keys.
+9. **Three separate Postmark servers — marketing, email inbox, invoices
+   inbound** — Richard, 2026-08-06. See "Postmark server topology". Inbox vs
+   invoices is forced by Postmark; marketing vs the rest is a deliberate
+   reputation firebreak.
 
-Nothing open. Ready for an implementation plan.
+Nothing open. Plan 1 is merged; the mailbox model lands with Plan 2, which is
+the plan that changes recipient resolution anyway.
