@@ -20,13 +20,21 @@ function jsonResponse(body, status = 200, headers = {}) {
 }
 
 describe('zoom client', () => {
+  // `global.fetch = fn` below is a plain property reassignment, not a
+  // vi.spyOn() spy — vi.restoreAllMocks() does not undo it. Save/restore it
+  // ourselves, same as src/lib/homey/client.test.js.
+  let originalFetch
   beforeEach(() => {
+    originalFetch = global.fetch
     __resetTokenCache()
     process.env.ZOOM_ACCOUNT_ID = 'acct'
     process.env.ZOOM_CLIENT_ID = 'cid'
     process.env.ZOOM_CLIENT_SECRET = 'secret'
   })
-  afterEach(() => { vi.restoreAllMocks() })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    global.fetch = originalFetch
+  })
 
   it('reports unconfigured when any secret is missing', () => {
     delete process.env.ZOOM_CLIENT_SECRET
