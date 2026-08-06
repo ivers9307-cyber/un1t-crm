@@ -10,11 +10,17 @@ vi.mock('@/lib/qstash', () => ({
   ZOOM_CONTACTS_QUEUE_NAME: 'zoom-contacts',
   ZOOM_CONTACTS_QUEUE_PARALLELISM: 2,
 }))
+vi.mock('./sync-runs', () => ({
+  startRun: vi.fn(async () => 'run-1'),
+  finishRun: vi.fn(async () => {}),
+  pruneRuns: vi.fn(async () => {}),
+}))
 
 import { listOwnedContacts } from './external-contacts'
 import { buildDesiredContacts } from './desired-contacts'
 import { zoomConfigured } from './client'
 import { publishQueuePush } from '@/lib/qstash'
+import { startRun, finishRun, pruneRuns } from './sync-runs'
 import { runZoomContactSync, PUBLISH_CONCURRENCY } from './reconcile'
 
 const desiredMap = (n, prefix = 'Name') => new Map(
@@ -26,6 +32,8 @@ beforeEach(() => {
   vi.mocked(publishQueuePush).mockClear()
   vi.mocked(buildDesiredContacts).mockResolvedValue({ ok: true, desired: desiredMap(3), stats: {} })
   vi.mocked(listOwnedContacts).mockResolvedValue({ ok: true, contacts: new Map(), scanned: 0 })
+  vi.mocked(startRun).mockClear()
+  vi.mocked(finishRun).mockClear()
 })
 
 describe('runZoomContactSync', () => {
@@ -170,5 +178,48 @@ describe('runZoomContactSync', () => {
     expect(out.limited).toBe(true)
     const ops = vi.mocked(publishQueuePush).mock.calls.map((c) => c[0].body.op)
     expect(ops).toEqual(['create', 'create', 'create', 'update']) // limit spends itself on creates first
+  })
+})
+
+describe('runZoomContactSync — run recording', () => {
+  // db is passed explicitly here (unlike the tests above, which never need
+  // it) because these assertions check it was forwarded to startRun/finishRun
+  // via expect.anything() — which, in Vitest/Jest, matches anything EXCEPT
+  // null or undefined. Omitting db (as the tests above do) makes it
+  // `undefined` inside runZoomContactSync, and expect.anything() then fails
+  // against the very thing it's meant to confirm was threaded through.
+  const db = {}
+
+  it('records a run and closes it out', async () => {
+    await runZoomContactSync({ db, trigger: 'cron' })
+    expect(startRun).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ trigger: 'cron' }))
+    expect(finishRun).toHaveBeenCalledWith(expect.anything(), 'run-1', expect.objectContaining({ ok: true }))
+  })
+
+  it('passes the manual trigger and actor through', async () => {
+    await runZoomContactSync({ db, trigger: 'manual', triggeredBy: 'user-9', limit: 5 })
+    expect(startRun).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      trigger: 'manual', triggeredBy: 'user-9', limit: 5,
+    }))
+  })
+
+  it('closes out the row even when the run fails', async () => {
+    vi.mocked(listOwnedContacts).mockResolvedValue({ ok: false, error: 'zoom down' })
+    await runZoomContactSync({ db, trigger: 'cron' })
+    expect(finishRun).toHaveBeenCalledWith(expect.anything(), 'run-1', expect.objectContaining({ error: 'zoom down' }))
+  })
+
+  it('does not record an unconfigured skip — nothing ran', async () => {
+    vi.mocked(zoomConfigured).mockReturnValue(false)
+    await runZoomContactSync({})
+    expect(startRun).not.toHaveBeenCalled()
+  })
+
+  it('prunes after a real run but not after a dry one', async () => {
+    vi.mocked(pruneRuns).mockClear()
+    await runZoomContactSync({ dry: true })
+    expect(pruneRuns).not.toHaveBeenCalled()
+    await runZoomContactSync({})
+    expect(pruneRuns).toHaveBeenCalled()
   })
 })
