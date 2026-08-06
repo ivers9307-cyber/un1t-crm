@@ -23,7 +23,7 @@ function makeFakeQuery() {
 }
 
 describe('buildSmsAudience', () => {
-  it('starts at the contacts table and applies the standard send-eligibility gates', () => {
+  it('starts at the contact_location_audience view and applies the standard send-eligibility gates', () => {
     const { builder, calls } = makeFakeQuery()
     const db = { from: (t) => { calls.push({ method: 'from', args: [t] }); return builder } }
 
@@ -31,12 +31,12 @@ describe('buildSmsAudience', () => {
 
     // Order of fluent calls matters for SQL clarity. Pin them so a
     // refactor that loosens the gates is caught immediately.
-    expect(calls[0]).toEqual({ method: 'from', args: ['contacts'] })
+    expect(calls[0]).toEqual({ method: 'from', args: ['contact_location_audience'] })
     expect(calls[1].method).toBe('select')
-    expect(calls[2]).toEqual({ method: 'eq', args: ['location_id', 'loc-uuid'] })
+    expect(calls[2]).toEqual({ method: 'eq', args: ['audience_location_id', 'loc-uuid'] })
     expect(calls[3]).toEqual({ method: 'eq', args: ['sms_status', 'active'] })
     // Mig 064 — also gates on the marketing opt-in.
-    expect(calls[4]).toEqual({ method: 'eq', args: ['contact_preferences.sms_marketing', true] })
+    expect(calls[4]).toEqual({ method: 'eq', args: ['loc_sms_marketing', true] })
     expect(calls[5]).toEqual({ method: 'not', args: ['phone', 'is', null] })
   })
 
@@ -53,9 +53,14 @@ describe('buildSmsAudience', () => {
     expect(cols).toContain('name')
     expect(cols).toContain('pipeline_stage_slug')
     expect(cols).toContain('location_id')
-    // Mig 064 — inner-join the preferences table so sms_marketing
-    // can be filtered in the same query.
-    expect(cols).toContain('contact_preferences!inner(sms_marketing)')
+    // LOCCOMMS.3 — the mig 064 contact_preferences!inner embed is RETIRED.
+    // It is the shape email abandoned under CLASSIFY.1: PostgREST embedded-
+    // resource filters silently break head:true counts, so any count over this
+    // audience would have been quietly wrong. Consent now comes from the
+    // contact_location_audience view (mig 491) as a plain column, which keeps
+    // this single-table and therefore safe to count.
+    expect(cols).toContain('loc_sms_marketing')
+    expect(cols).not.toContain('contact_preferences')
   })
 
   it('passes through to applyAudienceFilter for user filters (no field-name leakage)', () => {
@@ -84,9 +89,9 @@ describe('buildSmsAudienceAsync', () => {
     const { builder, calls } = makeFakeQuery()
     const db = { from: (t) => { calls.push({ method: 'from', args: [t] }); return builder } }
     await buildSmsAudienceAsync(db, { logic: 'and', filters: [] }, 'loc-uuid')
-    expect(calls[0]).toEqual({ method: 'from', args: ['contacts'] })
+    expect(calls[0]).toEqual({ method: 'from', args: ['contact_location_audience'] })
     expect(calls).toContainEqual({ method: 'eq', args: ['sms_status', 'active'] })
-    expect(calls).toContainEqual({ method: 'eq', args: ['contact_preferences.sms_marketing', true] })
+    expect(calls).toContainEqual({ method: 'eq', args: ['loc_sms_marketing', true] })
     expect(calls).toContainEqual({ method: 'not', args: ['phone', 'is', null] })
   })
 })
