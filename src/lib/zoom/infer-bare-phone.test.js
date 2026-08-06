@@ -95,15 +95,63 @@ describe('the Greek row that started ZOOMSYNC.2', () => {
 })
 
 describe('corroborated — shape plus an independent signal', () => {
-  it('accepts an assigned NANP area code seconded by USD', () => {
-    const r = inferBarePhone(row({ phone: '3128291516', lifetime_currency: 'USD' }))
+  it('accepts an assigned NANP area code seconded by a .us email', () => {
+    const r = inferBarePhone(row({ phone: '3128291516', email: 'ada@example.us' }))
     expect(r.tier).toBe('corroborated')
     expect(r.e164).toBe('+13128291516')
   })
 
   it.each(['312', '347', '317', '310'])('recognises sampled area code %s', code => {
-    const r = inferBarePhone(row({ phone: `${code}5717693`.padEnd(10, '0').slice(0, 10), lifetime_currency: 'USD' }))
-    expect(r.e164).toBe(`+1${`${code}5717693`.padEnd(10, '0').slice(0, 10)}`)
+    const digits = `${code}5717693`
+    const r = inferBarePhone(row({ phone: digits, email: 'ada@example.us' }))
+    expect(r.e164).toBe(`+1${digits}`)
+  })
+})
+
+// Measured 2026-08-06: 7 of the 37 ten-digit rows are UK mobiles that lost
+// their trunk zero, so "bare 10 digits ≈ North American" is wrong for a fifth
+// of the population. Two of those seven also carry an assigned NANP area code.
+describe('UK mobiles missing the trunk zero', () => {
+  it.each(['7459064601', '7469683980', '7598156332', '7902917955', '7920038848'])(
+    'reads %s as +44 when no NANP code competes', digits => {
+      const r = inferBarePhone(row({ phone: digits, email: 'x@example.uk' }))
+      expect(r.tier).toBe('corroborated')
+      expect(r.e164).toBe(`+44${digits}`)
+    },
+  )
+
+  // 730 (Illinois) and 740 (Ohio) ARE assigned NANP area codes, so on the area
+  // code alone these look like UK/NANP collisions. They are not: a NANP central
+  // office code cannot begin 0 or 1, and both carry one (…009…, …018…). The
+  // exchange test is what resolves them to a clean UK read — checking only the
+  // area code would have left two repairable numbers sitting in `ambiguous`.
+  it.each(['7300093740', '7400183722'])('resolves %s to UK — its NANP exchange is invalid', digits => {
+    const r = inferBarePhone(row({ phone: digits, email: 'x@example.uk' }))
+    expect(r.tier).toBe('corroborated')
+    expect(r.e164).toBe(`+44${digits}`)
+    expect(r.evidence.some(e => e.includes('+1'))).toBe(false)
+  })
+
+  // 70xx is UK personal numbering, not mobile — so this stays a clean NANP read.
+  it('does not claim 7082895093, which is NANP 708 (Chicago)', () => {
+    const r = inferBarePhone(row({ phone: '7082895093', email: 'x@example.us' }))
+    expect(r.tier).toBe('corroborated')
+    expect(r.e164).toBe('+17082895093')
+  })
+})
+
+// Currency reflects the merchant, not the member: UN1T bills in EUR, so an EUR
+// invoice says nothing about where a phone is registered.
+describe('currency is not treated as a country signal', () => {
+  it('ignores EUR rather than reading it as +353', () => {
+    const r = inferBarePhone(row({ phone: '3475717693', lifetime_currency: 'EUR' }))
+    expect(r.tier).toBe('ambiguous')
+    expect(r.conflicts).toEqual([])
+    expect(r.evidence.some(e => /currency/i.test(e))).toBe(false)
+  })
+
+  it('ignores USD too — it cannot corroborate on its own', () => {
+    expect(inferBarePhone(row({ phone: '3128291516', lifetime_currency: 'USD' })).tier).toBe('ambiguous')
   })
 })
 
@@ -122,19 +170,30 @@ describe('ambiguous — the safe default', () => {
     expect(r.conflicts[0]).toMatch(/\+353/)
   })
 
-  it('refuses an unassigned area code even with USD', () => {
-    const r = inferBarePhone(row({ phone: '6978291516', lifetime_currency: 'USD' }))
-    expect(r.tier).toBe('ambiguous') // 697 unassigned ⇒ no +1 hypothesis to corroborate
+  it('refuses an unassigned area code with a mismatched TLD', () => {
+    const r = inferBarePhone(row({ phone: '6978291516', email: 'x@example.us' }))
+    expect(r.tier).toBe('ambiguous') // 697 unassigned ⇒ no +1 hypothesis; .us contradicts +30
   })
 
   it('refuses a shape no country claims', () => {
-    expect(inferBarePhone(row({ phone: '22345678', lifetime_currency: 'EUR' })).tier).toBe('ambiguous')
+    expect(inferBarePhone(row({ phone: '22345678', email: 'x@example.ie' })).tier).toBe('ambiguous')
   })
+
+  // The 8-digit bucket is mostly truncation damage, not a missing country code:
+  // measured 2026-08-06, 4 of the 9 are Irish mobile prefixes (83/85/86/89) one
+  // digit short of a complete number. A lost digit is unrecoverable.
+  it.each(['83282139', '85225058', '86036107', '89631460'])(
+    'leaves %s alone — an Irish mobile one digit short is not repairable', digits => {
+      const r = inferBarePhone(row({ phone: digits, email: 'x@example.ie' }))
+      expect(r.tier).toBe('ambiguous')
+      expect(r.e164).toBeNull()
+    },
+  )
 })
 
 describe('8-digit Dublin landline shape', () => {
-  it('is corroborated by EUR', () => {
-    const r = inferBarePhone(row({ phone: '12345678', lifetime_currency: 'EUR' }))
+  it('is corroborated by a .ie email', () => {
+    const r = inferBarePhone(row({ phone: '12345678', email: 'sean@example.ie' }))
     expect(r.tier).toBe('corroborated')
     expect(r.e164).toBe('+35312345678')
   })
@@ -173,8 +232,9 @@ describe('every proposal round-trips through normaliseForZoom', () => {
     const proposals = [
       inferBarePhone(row({ phone: '3475717693', wa_phone: '+13475717693' })),
       inferBarePhone(row({ phone: '6978291516', email: 'n@example.gr' })),
-      inferBarePhone(row({ phone: '3128291516', lifetime_currency: 'USD' })),
-      inferBarePhone(row({ phone: '12345678', lifetime_currency: 'EUR' })),
+      inferBarePhone(row({ phone: '3128291516', email: 'x@example.us' })),
+      inferBarePhone(row({ phone: '7459064601', email: 'x@example.uk' })),
+      inferBarePhone(row({ phone: '12345678', email: 'sean@example.ie' })),
     ]
     for (const p of proposals) {
       expect(p.e164).not.toBeNull()

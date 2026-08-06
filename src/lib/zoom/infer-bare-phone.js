@@ -113,6 +113,15 @@ function shapeHypotheses(digits) {
     if (structural && NANP_AREA_CODES.has(area)) {
       out.push({ cc: '1', e164: `+1${digits}`, why: `NANP area code ${area} is assigned` })
     }
+    // A UK mobile that lost its trunk zero: 07xxx xxxxxx written bare is
+    // 7[1-9] + 8 digits, exactly ten. Measured 2026-08-06, SEVEN of the 37
+    // ten-digit rows read this way — the "bare 10 digits ≈ North American"
+    // assumption is wrong for a fifth of the population. 76xx is excluded
+    // (pagers) and 70xx is personal numbering, not mobile, which is why
+    // 7082895093 correctly reads as NANP 708 (Chicago) and not as UK.
+    if (/^7[1-9]\d{8}$/.test(digits) && !/^76/.test(digits)) {
+      out.push({ cc: '44', e164: `+44${digits}`, why: 'UK mobile shape (07xxx xxxxxx without the trunk zero)' })
+    }
     // Greek mobiles are exactly 69X + 7 digits. This is the shape that started
     // ZOOMSYNC.2 — and 697 is not an assigned NANP code, so it does not also
     // produce a +1 hypothesis. Where both fire, the row stays ambiguous.
@@ -139,10 +148,13 @@ function contextSignals(row) {
   const tld = email.includes('@') ? email.split('.').pop() : ''
   if (TLD_COUNTRY[tld]) signals.push({ cc: TLD_COUNTRY[tld], why: `email TLD .${tld}` })
 
-  const cur = typeof row.lifetime_currency === 'string' ? row.lifetime_currency.trim().toUpperCase() : ''
-  if (cur === 'USD') signals.push({ cc: '1', why: 'lifetime_currency USD' })
-  if (cur === 'EUR') signals.push({ cc: '353', why: 'lifetime_currency EUR' })
-  if (cur === 'GBP') signals.push({ cc: '44', why: 'lifetime_currency GBP' })
+  // Currency is deliberately NOT a signal. It reflects the MERCHANT, not the
+  // member: every UN1T invoice is EUR because the gym bills in Dublin, so an
+  // EUR row says nothing about where the person's phone is registered. Reading
+  // it as evidence for +353 was wrong and would have fought the correct answer
+  // on genuinely foreign numbers. Measured 2026-08-06: of the 46 bare rows only
+  // 2 have any invoice at all, both EUR — so the rule was simultaneously wrong
+  // and useless. Same trap applies to `contacts.lifetime_currency`.
   return signals
 }
 
