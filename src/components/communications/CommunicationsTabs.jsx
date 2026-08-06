@@ -9,7 +9,7 @@ import { usePathname } from 'next/navigation'
 import clsx from 'clsx'
 import { usePolledCount } from '../use-polled-count'
 
-export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp }) {
+export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp, canEmailInbox }) {
   const pathname = usePathname()
 
   // Conversations needing action (awaiting a reply or handed off) at the
@@ -29,6 +29,10 @@ export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp }) {
     // UIX-P1b: one unified WhatsApp + Instagram queue — the separate
     // Instagram tab retired (/communications/instagram redirects here).
     canWhatsapp && { id: 'inbox',      label: 'Inbox',      href: '/communications/inbox' },
+    // EMAIL-TICKET.4 — the studio email queue. Its own key (`email_inbox`),
+    // not the marketing `email` one, so it appears for the people who
+    // actually answer accounts@/sales@ and for nobody else.
+    canEmailInbox && { id: 'tickets',  label: 'Tickets',    href: '/communications/tickets' },
     (canEmail || canWhatsapp) && { id: 'templates', label: 'Templates', href: '/communications/templates' },
     // Segments tab (mig 085, moved from top-level /segments).
     (canEmail || canWhatsapp) && { id: 'segments',  label: 'Segments',  href: '/communications/segments' },

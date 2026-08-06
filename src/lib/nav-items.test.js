@@ -81,10 +81,21 @@ describe('Work — the action queues, grouped and ordered', () => {
   it('contains exactly the queue surfaces (finance moved to Accounting in RCOV.P2)', () => {
     expect(hrefsIn('work')).toEqual([
       '/communications',
+      // EMAIL-TICKET.4 — the studio email queue is an action queue too, and
+      // sits next to the hub it lives inside.
+      '/communications/tickets',
       '/bookings',
       '/approvals',
       '/issues',
     ])
+  })
+
+  it('gates the email ticket queue on email_inbox, NOT the marketing `email` key', () => {
+    // Two different populations: `email` is campaign/broadcast mail,
+    // `email_inbox` is the ticketed studio accounts (accounts@, sales@).
+    const tickets = ALL_NAV.find((i) => i.href === '/communications/tickets')
+    expect(tickets.permission).toBe('email_inbox')
+    expect(tickets.anyPermission).toBeUndefined()
   })
 })
 

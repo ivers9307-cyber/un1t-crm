@@ -23,6 +23,9 @@ export const NAV_COMMANDS = [
   { id: 'lead-radar', label: 'Lead Radar', href: '/dashboard/lead-radar', permission: 'lead_radar' },
   { id: 'bookings', label: 'Bookings', href: '/bookings', anyPermission: ['events', 'bookings'] },
   { id: 'communications', label: 'Communications', href: '/communications', anyPermission: ['email', 'whatsapp', 'sms'] },
+  // EMAIL-TICKET.4 — the studio email queue. `email_inbox`, not the
+  // marketing `email` key (different population of people).
+  { id: 'email-tickets', label: 'Email tickets', href: '/communications/tickets', permission: 'email_inbox' },
   { id: 'schedule', label: 'Schedule', href: '/schedule', permission: 'schedule' },
   { id: 'events', label: 'Events', href: '/events', permission: 'races' },
   // EQUIP-MAINT.1 — mirrors the nav-items.js Sidebar entry's gate.
