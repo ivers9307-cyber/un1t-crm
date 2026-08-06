@@ -70,6 +70,30 @@ describe('normaliseForZoom', () => {
     expect(normaliseForZoom('+1234567890123456')).toBeNull()       // 16
   })
 
+  // A bare number too short to carry a country code must be rejected, not
+  // published with its leading digits masquerading as one. All real stored
+  // values from `contacts`; +6978291516 is the one Zoom rejected outright
+  // during the go-live pilot (69 is not an assigned country code — it is a
+  // Greek mobile missing its +30).
+  it('rejects a bare number too short to contain a country code', () => {
+    expect(normaliseForZoom('6978291516')).toBeNull()   // Greek mobile, no +30
+    expect(normaliseForZoom('3475717693')).toBeNull()   // US, no +1
+    expect(normaliseForZoom('3125221673')).toBeNull()
+    expect(normaliseForZoom('25880855')).toBeNull()     // 8 digits, no country code
+    expect(normaliseForZoom('85225058')).toBeNull()
+  })
+
+  it('still accepts a bare number long enough to carry a country code', () => {
+    expect(normaliseForZoom('447700900123')).toBe('+447700900123')
+    expect(normaliseForZoom('353871234567')).toBe('+353871234567')
+  })
+
+  it('does not reject short numbers that an explicit + vouches for', () => {
+    // hasPlus means the author asserted a country code; only bare digits are
+    // ambiguous, so the new rule must not touch these.
+    expect(normaliseForZoom('+12345678')).toBe('+12345678')
+  })
+
   it('rejects the ClassPass placeholder', () => {
     expect(normaliseForZoom('+10000000000')).toBeNull()
   })

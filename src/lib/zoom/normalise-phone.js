@@ -65,6 +65,18 @@ export function normaliseForZoom(raw) {
     digits = `353${digits}`
   }
 
+  // A bare number (no explicit +) shorter than 11 digits cannot hold both a
+  // country code and a subscriber number, so nothing vouches for its leading
+  // digits. Every bare form we CAN map has already been rewritten above and is
+  // >= 11 digits by now: an 08x/07 national number, a 9-digit Irish subscriber
+  // number, a 353- or 00-prefixed string. What reaches here is a number typed
+  // without its country code — a US 3475717693 would publish as +347…, a Greek
+  // 6978291516 as +69…. Zoom rejects some of those outright and SILENTLY
+  // ACCEPTS the rest as a wrong number under a real member's name, which is
+  // the exact harm this function exists to prevent. Found during the go-live
+  // pilot; 46 rows in `contacts` are stored this way.
+  if (!hasPlus && digits.length < 11) return null
+
   if (digits.length < MIN_DIGITS || digits.length > MAX_DIGITS) return null
   if (digits.startsWith('0')) return null      // no country code starts with 0
   if (/^(\d)\1+$/.test(digits)) return null    // 1111…, 0000…
