@@ -14,6 +14,7 @@
 
 import { applyMarketingPreferencesBulk } from './marketing-consent.js'
 import { findBcaSubmissionByMessageId, recordBcaPostmarkEvent } from './bca-events.js'
+import { recordTicketMessageDelivery } from './email-delivery-status.js'
 
 /**
  * Process a single Postmark webhook payload.
@@ -46,6 +47,22 @@ export async function processPostmarkEvent(db, body) {
     // erroring (the dedup gate has already done its job).
     return { ok: true }
   }
+
+  // EMAIL-DELIVERY.1 — stamp the outcome onto the OUTBOUND TICKET MESSAGE, if
+  // this event belongs to one. Placed before the switch, not inside three of
+  // its cases, for two reasons: the three record types get provably identical
+  // treatment, and the thread marker still lands even if a campaign counter RPC
+  // below blows up and sends the event round for a retry (the write is
+  // idempotent under the severity lattice, so the retry re-runs it harmlessly).
+  //
+  // Everything about it is a no-op unless the MessageID matches a ticket
+  // message we sent: a campaign, invoice or booking-confirmation event simply
+  // matches zero rows. It NEVER fails the event — see the header of
+  // email-delivery-status.js — so nothing here can turn a bounce into a
+  // dead-letter, which is the hole POSTMARK-DLQ.1 closed and this must not
+  // reopen from the other side. The suppression and auto-unsubscribe behaviour
+  // below is untouched and remains the authority on what a bounce DOES.
+  await recordTicketMessageDelivery(db, body)
 
   try {
     switch (recordType) {

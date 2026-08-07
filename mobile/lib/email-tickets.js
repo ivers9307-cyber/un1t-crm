@@ -134,6 +134,90 @@ export function ticketMessageKind(message) {
   return message.direction === 'outbound' ? 'outbound' : 'inbound'
 }
 
+// ── Delivery status (EMAIL-DELIVERY.1) ───────────────────────────────
+//
+// A re-statement of src/lib/ticket-display.js's deliveryMeta, for the reason
+// in this file's header (mobile cannot reach into src/lib; the web version
+// carries Tailwind chip strings shaped for the web DOM). The RULES are the
+// ones that must not diverge, so they are spelled out again here:
+//
+//   • `delivery_status` NULL means WE HAVE NOT HEARD. That is the state of
+//     every outbound message the instant it is sent, of the entire
+//     back-catalogue, and of any message whose webhook never arrives. It
+//     renders as NEITHER delivered NOR failed — the bubble keeps its plain
+//     "Sent to …" line and makes no claim.
+//   • delivered is QUIET (one word on a line that is already there).
+//   • bounced is LOUD (its own red panel, outside the bubble) because the
+//     member never got the answer.
+//   • complained is its own amber panel: they DID get it and reported it,
+//     which is a different problem with a different fix.
+//
+// Split into `cls`/`text` like TICKET_STATUS_META: RN does not inherit text
+// colour through a View.
+const BOUNCE_ADVICE = Object.freeze({
+  hard: 'That address does not exist or refused the message outright — check it with them before replying again.',
+  soft: 'The address exists but could not take it right now (mailbox full, message too big, or their server was down). Worth trying again later.',
+  transient: 'Their mail server rejected it. The reason from the provider is below.',
+})
+
+/**
+ * How a message's delivery outcome must be rendered, or null when there is
+ * nothing to say (inbound, an internal note, or no event yet).
+ *
+ * Notes and inbound mail are excluded FIRST: a note is never sent, so
+ * "delivered" is a category error on it, and an inbound message's delivery is
+ * the sender's business.
+ *
+ * @returns {null | {status: string, tone: 'quiet'|'warn'|'alarm', label: string,
+ *   headline?: string, advice?: string, detail?: string|null,
+ *   cls?: string, text?: string, icon?: string, iconColor?: string}}
+ */
+export function ticketDeliveryMeta(message) {
+  if (!message) return null
+  if (message.is_internal_note) return null
+  if (message.direction !== 'outbound') return null
+
+  const status = message.delivery_status
+  const detail = message.delivery_detail || null
+
+  if (status === 'delivered') {
+    return { status, tone: 'quiet', label: 'Delivered', detail: null }
+  }
+
+  if (status === 'bounced') {
+    return {
+      status,
+      tone: 'alarm',
+      label: 'Not delivered',
+      headline: 'Not delivered — the member never got this reply',
+      advice: BOUNCE_ADVICE[message.delivery_bounce_type] || BOUNCE_ADVICE.transient,
+      detail,
+      cls: 'bg-red-500/10 border-red-500/60',
+      text: 'text-red-700',
+      icon: 'mail-unread-outline',
+      iconColor: '#B91C1C',
+    }
+  }
+
+  if (status === 'complained') {
+    return {
+      status,
+      tone: 'warn',
+      label: 'Marked as spam',
+      headline: 'Marked as spam by the recipient',
+      advice: 'It reached them, but they reported it. Further email to this address is likely to be filtered — reach them another way.',
+      detail,
+      cls: 'bg-amber-500/10 border-amber-500/60',
+      text: 'text-amber-700',
+      icon: 'warning-outline',
+      iconColor: '#B45309',
+    }
+  }
+
+  // NULL / anything unrecognised — say nothing. See the block comment above.
+  return null
+}
+
 // ── Labels ───────────────────────────────────────────────────────────
 /** Who wrote in: their name if we have one, else the address they wrote from. */
 export function requesterLabel(ticket) {

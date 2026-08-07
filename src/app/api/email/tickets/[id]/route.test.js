@@ -172,3 +172,48 @@ describe('GET /api/email/tickets/[id] — query failures are loud', () => {
     expect(thread[0].columns).toContain('html_body')
   })
 })
+
+// EMAIL-DELIVERY.1 — the thread cannot show a bounce it never fetched.
+//
+// This is the cheap half of the feature and the easy half to break: the
+// stamper can be writing delivery_status perfectly while the GET quietly omits
+// it from MESSAGE_COLUMNS, and every bounced reply then renders as an ordinary
+// one — the exact failure this ticket exists to fix, restored by omission.
+describe('GET /api/email/tickets/[id] — delivery status reaches the thread', () => {
+  beforeEach(() => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [
+        {
+          id: 'm-bounced', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+          direction: 'outbound', text_body: 'We open at 6.', is_internal_note: false,
+          created_at: '2026-08-06T09:30:00Z',
+          delivery_status: 'bounced',
+          delivery_status_at: '2026-08-06T09:31:00Z',
+          delivery_detail: 'smtp;550 5.1.1 User unknown',
+          delivery_bounce_type: 'hard',
+        },
+      ],
+    }))
+  })
+
+  it('asks for all four delivery columns', async () => {
+    await get(T_STUDIO.id)
+    const [thread] = selectsFrom(db, 'email_inbox_messages')
+    for (const col of ['delivery_status', 'delivery_status_at', 'delivery_detail', 'delivery_bounce_type']) {
+      expect(thread.columns).toContain(col)
+    }
+  })
+
+  it('passes them through to the client untouched', async () => {
+    const res = await get(T_STUDIO.id)
+    expect(res.status).toBe(200)
+    const [msg] = (await res.json()).data.messages
+    expect(msg).toMatchObject({
+      delivery_status: 'bounced',
+      delivery_bounce_type: 'hard',
+      delivery_detail: 'smtp;550 5.1.1 User unknown',
+      delivery_status_at: '2026-08-06T09:31:00Z',
+    })
+  })
+})

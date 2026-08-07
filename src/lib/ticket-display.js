@@ -171,6 +171,94 @@ export function messageKind(message) {
   return message.direction === 'outbound' ? 'outbound' : 'inbound'
 }
 
+// ── Delivery status (EMAIL-DELIVERY.1) ───────────────────────────────
+//
+// THREE OUTCOMES AND A SILENCE, AND THE SILENCE IS THE SUBTLE ONE.
+// `delivery_status` is NULL on every outbound message the moment it is sent,
+// on the whole back-catalogue, and forever on any message whose webhook never
+// arrives. It means WE HAVE NOT HEARD, which is neither "delivered" nor
+// "failed", so it renders as neither: the bubble keeps the plain "Sent to …"
+// line it has always had and makes no claim at all. Inventing a "Pending
+// delivery" chip would promise an update that nothing guarantees is coming.
+//
+// The asymmetry between the other three is the point of the feature:
+//   • delivered — QUIET. A small marker in the meta line that is already
+//     there. Confirming the normal case must not compete for attention.
+//   • bounced   — LOUD. Its own red panel outside the bubble, because the
+//     member did not get the answer and someone has to do something.
+//   • complained — its own amber panel. They DID get it and marked it spam:
+//     a different problem with a different fix, so not the same colour and
+//     not the same words.
+//
+// Chips follow the light-theme idiom (bg-<c>-500/10 + text-<c>-700).
+const BOUNCE_ADVICE = Object.freeze({
+  hard: 'That address does not exist or refused the message outright — check it with them before replying again.',
+  soft: 'The address exists but could not take it right now (mailbox full, message too big, or their server was down). Worth trying again later.',
+  transient: 'Their mail server rejected it. The reason from the provider is below.',
+})
+
+/**
+ * How a message's delivery outcome must be rendered, or null when there is
+ * nothing to say (inbound, an internal note, or no event yet).
+ *
+ * Notes and inbound mail are excluded FIRST and unconditionally: a note is
+ * never sent, so "delivered" is a category error on it, and an inbound
+ * message's delivery is the sender's business, not ours.
+ *
+ * @returns {null | {status: string, tone: 'quiet'|'warn'|'alarm', label: string,
+ *   headline?: string, advice?: string, detail?: string|null, chip?: string}}
+ */
+export function deliveryMeta(message) {
+  if (!message) return null
+  if (message.is_internal_note) return null
+  if (message.direction !== 'outbound') return null
+
+  const status = message.delivery_status
+  const detail = message.delivery_detail || null
+
+  if (status === 'delivered') {
+    return {
+      status,
+      tone: 'quiet',
+      label: 'Delivered',
+      detail: null,
+    }
+  }
+
+  if (status === 'bounced') {
+    const type = message.delivery_bounce_type
+    return {
+      status,
+      tone: 'alarm',
+      label: 'Not delivered',
+      headline: 'Not delivered — the member never got this reply',
+      advice: BOUNCE_ADVICE[type] || BOUNCE_ADVICE.transient,
+      detail,
+      chip: 'bg-red-500/10 text-red-700',
+    }
+  }
+
+  if (status === 'complained') {
+    return {
+      status,
+      tone: 'warn',
+      label: 'Marked as spam',
+      headline: 'Marked as spam by the recipient',
+      advice: 'It reached them, but they reported it. Further email to this address is likely to be filtered — reach them another way.',
+      detail,
+      chip: 'bg-amber-500/10 text-amber-700',
+    }
+  }
+
+  // NULL / anything unrecognised — say nothing. See the block comment above.
+  return null
+}
+
+/** The time a delivery outcome was recorded, formatted like the rest of the thread. */
+export function deliveryTimestamp(message) {
+  return messageTimestamp(message?.delivery_status_at)
+}
+
 // ── Labels ───────────────────────────────────────────────────────────
 /** Who wrote in: their name if we have one, else the address they wrote from. */
 export function requesterLabel(ticket) {

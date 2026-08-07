@@ -8,6 +8,7 @@ import {
   ticketViewWire,
   isArchivedStatus,
   ticketMessageKind,
+  ticketDeliveryMeta,
   requesterLabel,
   mailboxLabel,
   ticketToInboxRow,
@@ -210,5 +211,66 @@ describe('ticketsToInboxRows', () => {
   it('handles the empty payload a studio with no addresses returns', () => {
     expect(ticketsToInboxRows({})).toEqual([])
     expect(ticketsToInboxRows({ tickets: [], mailboxes: [] })).toEqual([])
+  })
+})
+
+// EMAIL-DELIVERY.1 — mobile's copy of the delivery rules.
+//
+// This surface's tests exist because the web and mobile helpers are a
+// deliberate RE-STATEMENT, not an import (mobile cannot reach into src/lib).
+// A re-statement drifts unless both sides are pinned, and the two rules that
+// must never drift are the ones asserted here: NULL says nothing, and a note
+// never claims delivery.
+describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
+  const outbound = (extra) => ({ direction: 'outbound', is_internal_note: false, ...extra })
+
+  it('says NOTHING about a message with no provider event yet', () => {
+    expect(ticketDeliveryMeta(outbound({ delivery_status: null }))).toBeNull()
+    expect(ticketDeliveryMeta(outbound({}))).toBeNull()
+    expect(ticketDeliveryMeta(null)).toBeNull()
+  })
+
+  it('never claims anything about an internal note or an inbound message', () => {
+    expect(ticketDeliveryMeta({ direction: 'outbound', is_internal_note: true, delivery_status: 'delivered' })).toBeNull()
+    expect(ticketDeliveryMeta({ direction: 'inbound', delivery_status: 'delivered' })).toBeNull()
+  })
+
+  it('renders a delivery quietly — no panel classes at all', () => {
+    const m = ticketDeliveryMeta(outbound({ delivery_status: 'delivered' }))
+    expect(m).toMatchObject({ tone: 'quiet', label: 'Delivered' })
+    expect(m.cls).toBeUndefined()
+    expect(m.headline).toBeUndefined()
+  })
+
+  it('renders a bounce loudly, with the light-theme chip ramp and an icon', () => {
+    const m = ticketDeliveryMeta(outbound({
+      delivery_status: 'bounced', delivery_bounce_type: 'hard', delivery_detail: 'User unknown',
+    }))
+    expect(m.tone).toBe('alarm')
+    expect(m.headline).toMatch(/never got this reply/i)
+    expect(m.detail).toBe('User unknown')
+    // RN does not inherit text colour through a View, so background and
+    // foreground are separate — never the -300/-400 ramp.
+    expect(m.cls).toContain('bg-red-500/10')
+    expect(m.text).toBe('text-red-700')
+    expect(m.icon).toBeTruthy()
+  })
+
+  it('gives hard and soft bounces different advice', () => {
+    const hard = ticketDeliveryMeta(outbound({ delivery_status: 'bounced', delivery_bounce_type: 'hard' }))
+    const soft = ticketDeliveryMeta(outbound({ delivery_status: 'bounced', delivery_bounce_type: 'soft' }))
+    expect(hard.advice).not.toBe(soft.advice)
+    expect(soft.advice).toMatch(/mailbox full/i)
+  })
+
+  it('treats a spam complaint as its own problem, not as non-delivery', () => {
+    const m = ticketDeliveryMeta(outbound({ delivery_status: 'complained' }))
+    expect(m.tone).toBe('warn')
+    expect(m.text).toBe('text-amber-700')
+    expect(m.headline).not.toMatch(/never got/i)
+  })
+
+  it('says nothing about an unrecognised status', () => {
+    expect(ticketDeliveryMeta(outbound({ delivery_status: 'opened' }))).toBeNull()
   })
 })

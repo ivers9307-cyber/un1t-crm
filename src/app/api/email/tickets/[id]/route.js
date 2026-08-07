@@ -43,6 +43,10 @@ const MESSAGE_COLUMNS = [
   'from_email', 'to_email', 'cc_emails', 'subject', 'text_body', 'html_body',
   'is_internal_note', 'author_profile_id',
   'postmark_message_id', 'rfc_message_id', 'source', 'status', 'sent_at', 'created_at',
+  // EMAIL-DELIVERY.1 (mig 498) — what Postmark told us happened to an outbound
+  // message. All four are NULL until an event arrives, and the thread renders
+  // that silence as "no claim", never as success or failure.
+  'delivery_status', 'delivery_status_at', 'delivery_detail', 'delivery_bounce_type',
 ].join(', ')
 
 // A thread's authors are a handful of people, but every .select() caps at

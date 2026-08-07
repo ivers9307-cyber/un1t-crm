@@ -39,7 +39,7 @@ import {
   getTicket, replyToTicket, setTicketStatus, markTicketRead, emailDisplayName,
 } from '../../lib/email-api'
 import {
-  ticketMessageKind, ticketStatusMeta, mailboxLabel,
+  ticketMessageKind, ticketStatusMeta, mailboxLabel, ticketDeliveryMeta,
   isArchivedStatus, TICKET_STATUS_ORDER,
 } from '../../lib/email-tickets'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
@@ -88,20 +88,54 @@ function MessageBubble({ msg }) {
 
   // ── A reply that actually went to the member ──────────────────────
   if (kind === 'outbound') {
+    // EMAIL-DELIVERY.1 — null for "sent, no event yet", which is most messages
+    // and every message written before mig 498. Nothing is rendered for it, so
+    // the bubble makes no claim it cannot back up.
+    const delivery = ticketDeliveryMeta(msg)
     return (
-      <View className="flex-row mb-1.5 justify-end">
-        <View className="max-w-[85%] px-3.5 py-2 rounded-2xl bg-blue-500">
-          <View className="flex-row items-center mb-1">
-            <Ionicons name="mail-open-outline" size={11} color="rgba(255,255,255,0.75)" style={{ marginRight: 4 }} />
-            <Text className="text-[11px] text-white/75 flex-1" numberOfLines={1}>
-              Sent to {msg.to_email || 'the member'}
+      <View className="mb-1.5">
+        <View className="flex-row justify-end">
+          <View className="max-w-[85%] px-3.5 py-2 rounded-2xl bg-blue-500">
+            <View className="flex-row items-center mb-1">
+              <Ionicons name="mail-open-outline" size={11} color="rgba(255,255,255,0.75)" style={{ marginRight: 4 }} />
+              <Text className="text-[11px] text-white/75 flex-1" numberOfLines={1}>
+                Sent to {msg.to_email || 'the member'}
+              </Text>
+            </View>
+            <Text className="text-base text-white">{body}</Text>
+            <Text className="text-[10px] text-white/60 mt-1 text-right">
+              {msg.author_name ? `${msg.author_name} · ` : ''}{stamp}
+              {/* The QUIET half: one word, in the line that is already there.
+                  Confirming the normal case must not compete with the panel
+                  below, which is the entire point of the feature. */}
+              {delivery?.tone === 'quiet' ? ' · Delivered' : ''}
             </Text>
           </View>
-          <Text className="text-base text-white">{body}</Text>
-          <Text className="text-[10px] text-white/60 mt-1 text-right">
-            {msg.author_name ? `${msg.author_name} · ` : ''}{stamp}
-          </Text>
         </View>
+        {/* The LOUD half. Full width and outside the bubble, because the
+            bubble's whole visual language says "we answered them" — and that
+            belief is exactly what is wrong when a reply bounced. */}
+        {delivery && delivery.tone !== 'quiet' && (
+          <View className={`mt-1.5 rounded-xl border px-3.5 py-3 ${delivery.cls}`}>
+            <View className="flex-row items-center mb-1">
+              <Ionicons name={delivery.icon} size={12} color={delivery.iconColor} style={{ marginRight: 5 }} />
+              <Text className={`text-[11px] font-bold uppercase flex-1 ${delivery.text}`}>
+                {delivery.headline}
+              </Text>
+            </View>
+            <Text className={`text-xs ${delivery.text}`}>{delivery.advice}</Text>
+            {/* The provider's exact words — this is where "mailbox full" and
+                "no such address" actually differ. */}
+            {delivery.detail ? (
+              <Text className={`text-[11px] mt-1.5 ${delivery.text}`}>{delivery.detail}</Text>
+            ) : null}
+            {delivery.status && formatTime(msg.delivery_status_at) ? (
+              <Text className={`text-[11px] mt-1.5 ${delivery.text}`}>
+                Reported {formatTime(msg.delivery_status_at)}
+              </Text>
+            ) : null}
+          </View>
+        )}
       </View>
     )
   }
