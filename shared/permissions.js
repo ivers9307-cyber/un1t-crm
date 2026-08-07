@@ -1049,6 +1049,17 @@ export const CROSS_PLATFORM_KEYS = Object.freeze([
   // one admin toggle governs both platforms. Field edits + the
   // send-to-Xero step stay web-only.
   'bookkeeper',
+  // EMAIL-TICKET-M.1 — the mobile email surface now rides
+  // /api/email/tickets*, and EVERY one of those routes gates on the
+  // top-level `email_inbox` key (hasPermission / hasPermissionForLocation
+  // — they are service-role routes, so that check IS the gate). A
+  // separate mobile-namespaced key would let the UI gate and the server
+  // gate disagree in the worst direction: `.mobile.email_inbox` ON with
+  // the web key OFF renders an inbox where every call 403s. Same
+  // reasoning as `bookkeeper` above — the platform that enforces the key
+  // decides which key it is. Per-account visibility is still the
+  // email_mailbox_access grant, on both platforms.
+  'email_inbox',
 ])
 
 // ============================================================

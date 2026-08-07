@@ -210,10 +210,14 @@ const WEB_ONLY_OK = {
   // approvals_hyrox_sessions dropped from WEB_ONLY_OK: the mobile `hyrox`
   // feature (webEquivalent: 'approvals_hyrox_sessions') now covers it.
   equipment_admin: 'Register + checklist + interval setup is a desktop task; the mobile counterpart is equipment_inspect (the walk-round), which is matched via webEquivalent.',
-  // EMAIL-TICKET.2 — the studio email inbox (email_mailboxes, mig 485).
-  // Feature-gate half of a two-level permission; the fine-grained half
-  // is per-account grants in email_mailbox_access, not a mobile screen.
-  email_inbox: 'desktop operator surface — the tabbed inbox with per-account permissions is a wide layout; a mobile counterpart is deferred until the UI exists rather than reserved speculatively',
+  // email_inbox (EMAIL-TICKET-M.1 parity inversion): dropped from this list.
+  // The mobile UI it was waiting on now exists — the Messages tab's email
+  // channel and the ticket thread ride /api/email/tickets*, and those routes
+  // gate on the TOP-LEVEL `email_inbox` key. Mobile therefore reads the same
+  // top-level key via CROSS_PLATFORM_KEYS (like `bookkeeper`) rather than a
+  // `.mobile`-namespaced counterpart, so the UI gate and the server gate
+  // cannot drift apart. Mailbox tabs / compose-new / HTML rendering stay
+  // desktop-only, but they are sub-features of the same key.
   // ZOOMOPS.1 — Zoom Phone contact sync operator controls.
   integrations_zoom_manage: 'Settings surface — no mobile equivalent; the destructive controls need a confirmation dialog the mobile app has no home for.',
 }
