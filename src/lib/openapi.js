@@ -1205,6 +1205,93 @@ registry.registerPath({
   },
 })
 
+// ── Email accounts (mailboxes) + per-account access — EMAIL-MAILBOX-ADMIN.1 ──
+// Master or owner-AT-LOCATION only, NOT the `email_inbox` permission: a
+// manager holds that key and is not elevated, so gating here on it would let
+// a manager grant themselves accounts@ — the exact hole the per-account model
+// exists to close.
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/email/mailboxes',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'The studio’s email accounts and who may read each',
+  description: "Returns { mailboxes, staff }. Unlike the inbox this INCLUDES deactivated accounts — managing them is the point of the surface. Each mailbox carries an `access` array listing every active staff member at the location tagged implicit (owner-at-location or master — no grant row exists and none can be created), granted (a row in email_mailbox_access) or none. Master or owner-at-location only.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ mailboxes, staff }' },
+    403: { description: 'Not at this location, or not master/owner here', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/locations/{id}/email/mailboxes',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Add an email account to a studio',
+  description: "Creates an email_mailboxes row (mig 485). The address is stored trimmed + lowercased and must be free ESTATE-WIDE — UNIQUE(lower(address)) is global, so a clash may be at a studio the caller cannot see; the 409 explains the rule rather than reporting a constraint, and names the other studio only for a master. is_default=true clears the location's incumbent default first (at most one per location). Master or owner-at-location only.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      address: z.string().email(),
+      label: z.string().min(1).max(40),
+      is_default: z.boolean().optional(),
+    }).openapi('EmailMailboxCreate') } } },
+  },
+  responses: {
+    201: { description: '{ mailbox }' },
+    400: { description: 'Invalid address or label', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not master/owner at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Address already belongs to an account somewhere in the estate', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/locations/{id}/email/mailboxes/{mailboxId}',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Rename, re-default, deactivate or reactivate an account',
+  description: "THERE IS NO DELETE: email_tickets.mailbox_id is ON DELETE SET NULL, so deleting would strip historic tickets of the address they arrived at. active=false is the removal path — it stops inbound routing and hides the tab from everyone including owners, keeping the row and its history — and it CLEARS is_default so a studio never defaults to an undeliverable address. The address itself is immutable (editing it would reattribute history). is_default=true clears the incumbent first and is refused for a deactivated account. Master or owner-at-location only; another studio's mailbox id is 404, never 403.",
+  request: {
+    params: z.object({ id: uuidLike, mailboxId: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      label: z.string().min(1).max(40).optional(),
+      is_default: z.boolean().optional(),
+      active: z.boolean().optional(),
+    }).openapi('EmailMailboxPatch') } } },
+  },
+  responses: {
+    200: { description: '{ mailbox }' },
+    400: { description: 'Empty patch, bad label, or default-on-a-deactivated-account', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not master/owner at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such mailbox at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/email/mailboxes/{mailboxId}/access',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Grant or revoke one person’s access to one account',
+  description: "Idempotent set-access: { profile_id, granted } → { granted, changed }. Grants stamp granted_by with the acting user; revokes DELETE the row, so both directions also write an audit_events row (the revoke would otherwise leave no record anywhere that access ever existed). The grantee must be an active staff member at this location — email_mailbox_access carries no location of its own, so without that check a grant could be minted for any profile in the estate. Owners-at-location and masters are refused in BOTH directions with an explanation: they read every account here implicitly, no row exists for them, and silently no-opping would have an operator toggling an owner and watching nothing happen. Master or owner-at-location only.",
+  request: {
+    params: z.object({ id: uuidLike, mailboxId: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      profile_id: uuidLike,
+      granted: z.boolean(),
+    }).openapi('EmailMailboxAccessSet') } } },
+  },
+  responses: {
+    200: { description: '{ granted, changed }' },
+    400: { description: 'Not staff here, or the person is implicitly elevated', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not master/owner at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such mailbox at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/webhooks/sequence/{token}',
@@ -2831,6 +2918,10 @@ registry.registerPath({
             active: z.boolean().optional(),
             monthly_contractor_budget_eur: z.number().min(0).nullish(),
             invoices_inbound_slug: z.string().nullish(),
+            // DEPRECATED (mig 485) — superseded by email_mailboxes. Still
+            // accepted so an existing integration does not break, but the CRM
+            // no longer sends it: add the studio's addresses with
+            // POST /api/locations/{id}/email/mailboxes instead.
             email_inbox_reply_to: z.string().email().nullish(),
           }).openapi('LocationCreate'),
         },

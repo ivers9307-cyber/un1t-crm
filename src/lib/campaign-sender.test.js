@@ -299,6 +299,61 @@ describe('tickCampaignSend — preheader + text alternative (CAMPAIGN-REL.3/.4)'
   })
 })
 
+describe('tickCampaignSend — Reply-To (EMAIL-MAILBOX-ADMIN.1)', () => {
+  // routeFor() answers { data: [] } for every table but campaign_recipients,
+  // so this route adds the studio's default account on top of it. The lookup
+  // ends in .maybeSingle(), so the shape is a ROW (or null) — the proxy fake
+  // does not unwrap it, the route function decides.
+  function routeWithMailbox(mailboxes, base) {
+    return (state) => (state.table === 'email_mailboxes' ? { data: mailboxes[0] ?? null } : base(state))
+  }
+
+  it('stamps the studio’s DEFAULT account, not the deprecated column', async () => {
+    const base = routeFor({ candidates: [makeRecipient('r1', 0)] })
+    const { db } = makeDb(routeWithMailbox([{ address: 'studio@un1tdublin.com' }], base))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, {
+      ...campaign,
+      locations: { name: 'Stillorgan', email_inbox_reply_to: 'legacy@un1tdublin.com' },
+    })
+
+    expect(sendBatch.mock.calls[0][0][0].replyTo).toBe('studio@un1tdublin.com')
+  })
+
+  it('falls back to the deprecated column when the studio has no default account', async () => {
+    const base = routeFor({ candidates: [makeRecipient('r1', 0)] })
+    const { db } = makeDb(routeWithMailbox([], base))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, {
+      ...campaign,
+      locations: { name: 'Stillorgan', email_inbox_reply_to: 'legacy@un1tdublin.com' },
+    })
+
+    expect(sendBatch.mock.calls[0][0][0].replyTo).toBe('legacy@un1tdublin.com')
+  })
+
+  it('a per-campaign reply_to still wins over both', async () => {
+    const base = routeFor({ candidates: [makeRecipient('r1', 0)] })
+    const { db } = makeDb(routeWithMailbox([{ address: 'studio@un1tdublin.com' }], base))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, { ...campaign, reply_to: 'hello@un1t.ie' })
+
+    expect(sendBatch.mock.calls[0][0][0].replyTo).toBe('hello@un1t.ie')
+  })
+
+  it('sends with no Reply-To at a studio that has neither', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, campaign)
+
+    expect(sendBatch.mock.calls[0][0][0].replyTo).toBeUndefined()
+  })
+})
+
 // ── CAMPAIGN-AB (COMMS-AUDIT 2026-07-10) — subject-line A/B testing ──
 
 const HOUR = 3600_000

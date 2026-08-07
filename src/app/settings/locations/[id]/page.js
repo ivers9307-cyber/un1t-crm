@@ -16,7 +16,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
-import { ToggleRight, Image as ImageIcon, Clock, CalendarDays, ChevronRight, Bell } from 'lucide-react'
+import { ToggleRight, Image as ImageIcon, Clock, CalendarDays, ChevronRight, Bell, Mail } from 'lucide-react'
 import { isFeatureEnabledAtLocation } from '@shared/permissions'
 import { canEditLocationFeatures } from '@/lib/staff-access'
 import LocationForm from '@/components/LocationForm'
@@ -27,6 +27,7 @@ import BrandingSettings from '@/components/BrandingSettings'
 import OrgBrandingSettings from '@/components/OrgBrandingSettings'
 import LocationIntegrations from '@/components/settings/LocationIntegrations'
 import NotificationConfigCard from '@/components/settings/NotificationConfigCard'
+import EmailMailboxesCard from '@/components/settings/EmailMailboxesCard'
 import CommsFrequencyCapCard from '@/components/settings/CommsFrequencyCapCard'
 import GeofenceAttendanceCard from '@/components/settings/GeofenceAttendanceCard'
 
@@ -89,10 +90,19 @@ export default async function EditLocationPage(props) {
   const showRoles = user.role === 'master' || user.profileRole === 'master'
     || user.rolesByLocation?.[location.id] === 'owner'
   const showDeposits = isFeatureEnabledAtLocation(location, 'car_processing')
+  // EMAIL-MAILBOX-ADMIN.1 — the mailbox + per-account grant editor. SAME gate
+  // as Roles: master, or owner AT THIS LOCATION. It must NOT follow the page's
+  // outer `user.role === 'owner'` check, which reads the caller's ACTIVE
+  // location's role — an owner elsewhere would see the tab for a studio they
+  // may not administer. The API routes enforce the same rule with
+  // guardMasterOrOwner and are the real boundary; this only decides whether
+  // the tab is worth rendering.
+  const showEmail = showRoles
   const tabs = [
     { key: 'details', label: 'Details' },
     ...(showFeatures ? [{ key: 'features', label: 'Features' }] : []),
     ...(showRoles ? [{ key: 'roles', label: 'Roles' }] : []),
+    ...(showEmail ? [{ key: 'email', label: 'Email' }] : []),
     { key: 'branding', label: 'Branding' },
     ...(showDeposits ? [{ key: 'deposits', label: 'Deposits' }] : []),
     { key: 'schedule', label: 'Schedule' },
@@ -150,7 +160,7 @@ export default async function EditLocationPage(props) {
 
       {active === 'details' && (
         <>
-          <LocationForm location={location} callerRole={user.role} organizations={organizations || []} />
+          <LocationForm location={location} callerRole={user.role} organizations={organizations || []} showEmailTab={showEmail} />
           {/* FREQ-CAP.1 — cross-channel marketing frequency cap. Lives on
               Details (not Integrations — it carries no credentials and
               spans email + WhatsApp, so no single integration tab fits). */}
@@ -182,6 +192,20 @@ export default async function EditLocationPage(props) {
             <h3 className="text-lg font-semibold">Role permissions</h3>
           </div>
           <RolePermissions locationId={location.id} />
+        </section>
+      )}
+
+      {/* Email accounts + who may read each (EMAIL-MAILBOX-ADMIN.1, mig 485).
+          Replaces the single Reply-To field that used to sit on Details: a
+          studio has many accounts now, each separately permissioned, and one
+          text input could never express that. */}
+      {active === 'email' && showEmail && (
+        <section>
+          <div className="flex items-center gap-2 mb-3">
+            <Mail size={16} className="text-un1t-subtle" />
+            <h3 className="text-lg font-semibold">Email accounts</h3>
+          </div>
+          <EmailMailboxesCard locationId={location.id} />
         </section>
       )}
 
