@@ -16,7 +16,7 @@ export async function handleFlowCompletion(db, { interactive, contact, locationI
   const { path, selection, contactFields } = parsed
 
   if (contactFields.marketing_opt_in) {
-    try { await applyFormMarketingConsent(db, { contactId: contact.id, consent: true, source: 'whatsapp_flow' }) }
+    try { await applyFormMarketingConsent(db, { contactId: contact.id, consent: true, source: 'whatsapp_flow', locationId }) }
     catch (e) { console.warn('[wa-flow] consent record failed:', e.message) }
   }
 
