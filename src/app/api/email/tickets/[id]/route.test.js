@@ -20,7 +20,7 @@ import { GET } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
-import { makeDb } from '../_test-db'
+import { makeDb, selectsFrom } from '../_test-db'
 import {
   LOC_B, MB_STUDIO, MB_ACCOUNTS, T_STUDIO, T_ACCOUNTS,
   COACH, OWNER, GRANT_STUDIO, baseState,
@@ -115,5 +115,58 @@ describe('GET /api/email/tickets/[id]', () => {
     await get(T_STUDIO.id)
     // Marking read is its own POST — a GET must not write.
     expect(db.updates).toHaveLength(0)
+  })
+})
+
+// EMAIL-TICKET.6 — a failed query must not read as an empty thread.
+//
+// The messages select used to be destructured as `{ data: messagesDesc }` with
+// `.error` never inspected and the result used as `messagesDesc || []`, so ANY
+// failure returned HTTP 200 with a ticket and zero messages — on web and on
+// mobile, nothing logged, nothing surfaced. That is also the landmine under the
+// email_conversations retirement: MESSAGE_COLUMNS named `conversation_id`, so
+// dropping the column would have turned every ticket in the estate into a
+// silently empty thread rather than an outage anybody could see.
+describe('GET /api/email/tickets/[id] — query failures are loud', () => {
+  it('500s when the messages query errors — never 200 with an empty thread', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: MESSAGES,
+      errors: { email_inbox_messages: { code: '42703', message: 'column email_inbox_messages.conversation_id does not exist' } },
+    }))
+    const res = await get(T_STUDIO.id)
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    // The reason travels — a 500 saying nothing is only marginally better
+    // than a 200 saying nothing.
+    expect(body.error).toContain('conversation_id')
+  })
+
+  it('500s when the contact lookup errors', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: MESSAGES,
+      errors: { contacts: { code: '42P01', message: 'relation "contacts" does not exist' } },
+    }))
+    expect((await get(T_STUDIO.id)).status).toBe(500)
+  })
+
+  it('still returns a healthy thread normally', async () => {
+    const res = await get(T_STUDIO.id)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.messages.map(m => m.id)).toEqual(['m-1', 'm-2'])
+  })
+
+  it('does not ASK for conversation_id — email_conversations is being retired', async () => {
+    // Nothing in the response shape reads it, so naming it in the select only
+    // buys a dependency on a column scheduled to disappear.
+    await get(T_STUDIO.id)
+    const thread = selectsFrom(db, 'email_inbox_messages')
+    expect(thread).toHaveLength(1)
+    expect(thread[0].columns).not.toContain('conversation_id')
+    // …while still asking for the columns the thread genuinely renders.
+    expect(thread[0].columns).toContain('text_body')
+    expect(thread[0].columns).toContain('html_body')
   })
 })

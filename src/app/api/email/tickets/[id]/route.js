@@ -27,8 +27,14 @@ const MESSAGE_LIMIT = 200
 // sanitiser can be improved later without having destroyed the evidence.
 // bcc_emails remains absent: it is stored for audit only and the spec pins
 // "bcc_emails never appears in any client-facing payload".
+//
+// conversation_id is absent too (EMAIL-TICKET.6). Nothing downstream read it —
+// shapeMessages spread it straight through to the client and no web or mobile
+// surface touched it — while email_conversations is being retired, so naming it
+// here was a live dependency on a column scheduled to be dropped. The reply
+// route's legacy mirror still reads the column, but through its own select.
 const MESSAGE_COLUMNS = [
-  'id', 'ticket_id', 'conversation_id', 'contact_id', 'location_id', 'direction',
+  'id', 'ticket_id', 'contact_id', 'location_id', 'direction',
   'from_email', 'to_email', 'cc_emails', 'subject', 'text_body', 'html_body',
   'is_internal_note', 'author_profile_id',
   'postmark_message_id', 'rfc_message_id', 'source', 'status', 'sent_at', 'created_at',
@@ -60,7 +66,10 @@ export async function GET(request, props) {
   if (loaded.response) return loaded.response
   const { ticket, mailbox } = loaded
 
-  const [{ data: messagesDesc }, { data: contact }] = await Promise.all([
+  const [
+    { data: messagesDesc, error: messagesErr },
+    { data: contact, error: contactErr },
+  ] = await Promise.all([
     db.from('email_inbox_messages')
       .select(MESSAGE_COLUMNS)
       .eq('ticket_id', ticket.id)
@@ -71,8 +80,23 @@ export async function GET(request, props) {
         .select('id, name, first_name, email, pipeline_stage_slug')
         .eq('id', ticket.contact_id)
         .maybeSingle()
-      : Promise.resolve({ data: null }),
+      : Promise.resolve({ data: null, error: null }),
   ])
+
+  // FAIL LOUDLY (EMAIL-TICKET.6). Both results used to be destructured without
+  // their `.error` and consumed as `x || []` / `x || null`, so any query
+  // failure — a dropped column, a revoked grant, a connection blip — was
+  // served as HTTP 200 with an empty thread. An operator would read that as
+  // "the member never wrote", which is the single worst thing a support queue
+  // can say, and nothing was logged for anyone to notice it happening.
+  if (messagesErr) {
+    console.error('[tickets/:id] messages query failed:', messagesErr.message)
+    return NextResponse.json({ success: false, error: messagesErr.message }, { status: 500 })
+  }
+  if (contactErr) {
+    console.error('[tickets/:id] contact lookup failed:', contactErr.message)
+    return NextResponse.json({ success: false, error: contactErr.message }, { status: 500 })
+  }
 
   const messages = await shapeMessages(db, messagesDesc || [])
 
@@ -105,10 +129,17 @@ async function shapeMessages(db, rows) {
   const authorIds = [...new Set(rows.map(m => m.author_profile_id).filter(Boolean))]
   let authorNames = new Map()
   if (authorIds.length > 0) {
-    const { data: profiles } = await db.from('profiles')
+    const { data: profiles, error: authorErr } = await db.from('profiles')
       .select('id, full_name')
       .in('id', authorIds)
       .limit(AUTHOR_LIMIT)
+    // Deliberately NOT a 500, unlike the two queries above (EMAIL-TICKET.6):
+    // the thread itself is complete either way, and an unresolved name degrades
+    // to `author_name: null` — already the normal render for every message
+    // written before mig 493 added the column. Refusing to open a support
+    // ticket because a display-name lookup blipped would be the disproportionate
+    // answer. It is logged rather than swallowed so it is still discoverable.
+    if (authorErr) console.error('[tickets/:id] author name lookup failed:', authorErr.message)
     authorNames = new Map((profiles || []).map(p => [p.id, p.full_name]))
   }
 

@@ -9,9 +9,11 @@ import { getCurrentUser, assertLocationAccess, getUserLocationIds, requireInboxP
 // authenticated writes and we re-impose the read scope here in the query.
 //
 // INBOX-SPLIT.1 (2026-08-07) — the WEB unified inbox no longer calls this;
-// email is worked at /communications/tickets. The route stays because the
-// MOBILE app still reads it (mobile/lib/email-api.js → the Messages tab and
-// mobile/app/email/[conversationId].jsx). What went with the web inbox is
+// email is worked at /communications/tickets. Nothing at HEAD calls it either:
+// EMAIL-TICKET-M.1 moved mobile/lib/email-api.js onto /api/email/tickets*. The
+// route stays for INSTALLED builds on frozen OTA lanes, which still point here.
+// Those users need `email_inbox` from INBOX-PERM.2 onwards. What went with the
+// web inbox is
 // the ?q= branch: it existed only for INBOX-SEARCH.1's fan-out, mobile never
 // sends ?q=, and `email_conversations` has left INBOX_SEARCH_FIELDS (where
 // buildInboxSearchOr now throws on it), so keeping the branch would have
@@ -20,7 +22,10 @@ export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
+  // Channel permission — service-role client, so this IS the gate. The `em`
+  // channel resolves to the `email_inbox` key (INBOX-PERM.2); it used to
+  // resolve to `whatsapp`, which opened this route to anyone with the WhatsApp
+  // inbox and no email access at all.
   const perm = requireInboxPermission(user, 'em')
   if (perm) return perm
 

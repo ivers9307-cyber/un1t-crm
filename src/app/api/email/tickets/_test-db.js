@@ -1,4 +1,5 @@
-// Test double for the service-role client, shared by the ticket route tests.
+// Test double for the service-role client, shared by the ticket route tests
+// and the legacy /api/email/conversations tests next door.
 //
 // It honours eq / in / is / not / or / ilike / order / limit rather than
 // no-opping them, because the property under test IS a filter: "a coach
@@ -13,6 +14,14 @@
 //
 // Writes are recorded AND applied to the in-memory rows, so a test can assert
 // both "the route wrote this" and "the row now looks like this".
+//
+// `state.errors` injects a PostgREST failure per table:
+//   makeDb({ ...base, errors: { email_inbox_messages: { code: '42703', … } } })
+// Every operation on that table then returns `{ data: null, error }`, which is
+// exactly what a dropped column looks like from the client. Without it there
+// is no way to test that a route inspects `.error` at all — a route that
+// ignores it and one that handles it are indistinguishable against a fake that
+// can only succeed (EMAIL-TICKET.6).
 
 import { ilikeMatches } from '@/lib/like-escape.test-helpers'
 
@@ -71,14 +80,22 @@ const TABLE_KEYS = {
   email_inbox_messages: 'messages',
   email_sends: 'sends',
   contacts: 'contacts',
+  // The mig 394 legacy surface — same message table, its own conversation row.
+  email_conversations: 'conversations',
+  locations: 'locations',
 }
 
 export function makeDb(state = {}) {
   const s = {
     mailboxes: [], grants: [], tickets: [], messages: [], sends: [], contacts: [],
+    conversations: [], locations: [], errors: {},
     ...state,
   }
-  const db = { inserts: [], updates: [], _state: s }
+  // `selects` records the COLUMN STRING each read asked for. The fake itself
+  // returns whole rows regardless (modelling PostgREST's projection would buy
+  // nothing), so this is the only way a test can assert what actually goes on
+  // the wire — e.g. that a route stopped naming a column that is being dropped.
+  const db = { inserts: [], updates: [], selects: [], _state: s }
   let seq = 0
 
   function rowsFor(b) {
@@ -99,6 +116,10 @@ export function makeDb(state = {}) {
 
   function settle(b, shape) {
     const key = TABLE_KEYS[b._table]
+    // A failing table fails every operation on it, data null — the real shape
+    // of a PostgREST error (a dropped column, a revoked grant, a bad cast).
+    const injected = s.errors?.[b._table]
+    if (injected) return { data: null, error: injected }
     if (b._op === 'insert') {
       db.inserts.push({ table: b._table, payload: b._payload })
       const row = { id: `new-${b._table}-${++seq}`, created_at: `2026-08-06T12:00:0${seq}Z`, ...b._payload }
@@ -111,6 +132,7 @@ export function makeDb(state = {}) {
       for (const r of hit) Object.assign(r, b._payload)
       return { data: hit[0] ?? null, error: null }
     }
+    db.selects.push({ table: b._table, columns: b._select ?? '*' })
     const rows = rowsFor(b)
     return shape === 'list' ? { data: rows, error: null } : { data: rows[0] ?? null, error: null }
   }
@@ -118,7 +140,7 @@ export function makeDb(state = {}) {
   db.from = (table) => {
     const b = { _table: table, _op: 'select', _payload: null, _filters: [], _order: null, _limit: null }
     const filter = (kind) => (...args) => { b._filters.push([kind, ...args]); return b }
-    b.select = () => b
+    b.select = (columns) => { b._select = columns ?? '*'; return b }
     b.insert = (p) => { b._op = 'insert'; b._payload = p; return b }
     b.update = (p) => { b._op = 'update'; b._payload = p; return b }
     b.eq = filter('eq')
@@ -141,3 +163,4 @@ export function makeDb(state = {}) {
 
 export const insertsInto = (db, table) => db.inserts.filter(i => i.table === table)
 export const updatesTo = (db, table) => db.updates.filter(u => u.table === table)
+export const selectsFrom = (db, table) => db.selects.filter(sel => sel.table === table)

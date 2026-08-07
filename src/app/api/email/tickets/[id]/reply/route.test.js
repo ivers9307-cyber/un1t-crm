@@ -362,3 +362,25 @@ describe('POST …/reply — legacy email_conversations mirror (EMAIL-TICKET.5)'
     errors.mockRestore()
   })
 })
+
+// EMAIL-TICKET.6 — the threading lookup no longer swallows its error.
+describe('POST …/reply — query failures are loud', () => {
+  it('500s BEFORE sending when the threading lookup errors', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [LAST_INBOUND],
+      errors: { email_inbox_messages: { code: '42703', message: 'column rfc_message_id does not exist' } },
+    }))
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    expect(res.status).toBe(500)
+    expect((await res.json()).success).toBe(false)
+    // The whole point of failing HERE: the ordering means nothing went out, so
+    // there is no half-sent reply to reconcile.
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(errors).toHaveBeenCalled()
+    errors.mockRestore()
+  })
+})

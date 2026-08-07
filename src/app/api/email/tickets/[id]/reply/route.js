@@ -163,13 +163,23 @@ export async function POST(request, props) {
 
   // Thread off the last thing the member sent us, so the reply lands in their
   // existing mail-client thread rather than starting a new one.
-  const { data: lastInbound } = await db.from('email_inbox_messages')
+  //
+  // EMAIL-TICKET.6 — `.error` is inspected. Swallowing it degraded silently:
+  // no In-Reply-To/References, so every reply started a NEW thread in the
+  // member's client while the operator saw a normal send. NOTHING HAS BEEN SENT
+  // YET at this point, so refusing costs a retry and can never produce a wrong
+  // outcome — the ordering is what makes 500 the safe answer here.
+  const { data: lastInbound, error: lastInboundErr } = await db.from('email_inbox_messages')
     .select('rfc_message_id, references_header, subject')
     .eq('ticket_id', ticket.id)
     .eq('direction', 'inbound')
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
+  if (lastInboundErr) {
+    console.error('[tickets/reply] threading lookup failed BEFORE sending:', lastInboundErr.message)
+    return NextResponse.json({ success: false, error: lastInboundErr.message }, { status: 500 })
+  }
 
   const subject = replySubject(lastInbound?.subject || ticket.subject)
   const headers = buildReplyHeaders({

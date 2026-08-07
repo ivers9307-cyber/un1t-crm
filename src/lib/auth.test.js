@@ -644,13 +644,25 @@ describe('requireInboxPermission', () => {
     expect(requireInboxPermission(staffWith({ whatsapp: true }), 'wa')).toBeNull()
   })
 
-  it('ig and em currently ride the whatsapp key (matches the /communications/inbox page gate)', () => {
-    const granted = staffWith({ whatsapp: true })
-    const denied = staffWith({ whatsapp: false })
-    expect(requireInboxPermission(granted, 'ig')).toBeNull()
-    expect(requireInboxPermission(granted, 'em')).toBeNull()
-    expect(requireInboxPermission(denied, 'ig')?.status).toBe(403)
-    expect(requireInboxPermission(denied, 'em')?.status).toBe(403)
+  it('ig still rides the whatsapp key — there is no Instagram permission key to point it at', () => {
+    expect(requireInboxPermission(staffWith({ whatsapp: true }), 'ig')).toBeNull()
+    expect(requireInboxPermission(staffWith({ whatsapp: false }), 'ig')?.status).toBe(403)
+  })
+
+  // INBOX-PERM.2 — the live bypass. `em` used to resolve against `whatsapp`,
+  // so a coach with the WhatsApp inbox on could read and SEND the studio's
+  // email through the legacy /api/email/conversations* routes without holding
+  // `email_inbox` or a single email_mailbox_access grant. Both directions are
+  // asserted: holding whatsapp must NOT open email, and holding email_inbox
+  // must open it without whatsapp.
+  it('em rides the email_inbox key — whatsapp alone does NOT open the email channel', () => {
+    expect(requireInboxPermission(staffWith({ whatsapp: true, email_inbox: false }), 'em')?.status).toBe(403)
+    expect(requireInboxPermission(staffWith({ whatsapp: false, email_inbox: true }), 'em')).toBeNull()
+  })
+
+  it('the wa channel is unaffected by the email key', () => {
+    expect(requireInboxPermission(staffWith({ whatsapp: true, email_inbox: false }), 'wa')).toBeNull()
+    expect(requireInboxPermission(staffWith({ whatsapp: false, email_inbox: true }), 'wa')?.status).toBe(403)
   })
 
   it('fails CLOSED on an unknown channel — even for master', () => {

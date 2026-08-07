@@ -1020,20 +1020,26 @@ registry.registerPath({
   },
 })
 
-// Email inbox conversations (cookie auth) — EMAIL-INBOX.1
+// Email inbox conversations (cookie auth) — EMAIL-INBOX.1.
+// LEGACY: superseded by /api/email/tickets*, kept for frozen mobile lanes.
+// INBOX-PERM.2 — every route below gates on the `email_inbox` permission (it
+// used to resolve the `em` channel against `whatsapp`, which let a WhatsApp-only
+// staffer read and send the studio's email). Unlike the ticket routes there is
+// no per-mailbox grant check here — these routes predate email_mailbox_access.
 registry.registerPath({
   method: 'get',
   path: '/api/email/conversations',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'List email inbox conversations',
-  description: "Operator inbox list for the email channel. Location-scoped: ?location_id (access-checked) or the union of the caller's locations.",
+  description: "Operator inbox list for the email channel. Location-scoped: ?location_id (access-checked) or the union of the caller's locations. Requires the `email_inbox` permission.",
   request: {
     query: z.object({ location_id: uuidLike.optional() }),
   },
   responses: {
     200: { description: 'Conversation list' },
     401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing the email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -1043,12 +1049,13 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'Email conversation + message thread',
-  description: 'Returns the conversation and its most recent messages (text bodies only) and resets unread_count. 404 for foreign-location ids.',
+  description: 'Returns the conversation and its most recent messages (text bodies only) and resets unread_count. 404 for foreign-location ids. Requires the `email_inbox` permission.',
   request: {
     params: z.object({ id: uuidLike }),
   },
   responses: {
     200: { description: 'Conversation + messages' },
+    403: { description: 'Missing the email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -1059,13 +1066,14 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'Resolve / reopen an email conversation',
-  description: 'Stamps or clears resolved_at (UIX-P1 queue semantics). A new inbound email auto-clears it in the webhook.',
+  description: 'Stamps or clears resolved_at (UIX-P1 queue semantics). A new inbound email auto-clears it in the webhook. Requires the `email_inbox` permission.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ resolved: z.boolean() }).openapi('EmailConversationPatch') } } },
   },
   responses: {
     200: { description: 'Updated' },
+    403: { description: 'Missing the email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -1076,7 +1084,7 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'Reply to an email conversation',
-  description: "Sends a plain-text operator reply via Postmark's transactional stream with In-Reply-To/References threading headers, logs it to the thread (and email_sends when a contact is linked).",
+  description: "Sends a plain-text operator reply via Postmark's transactional stream with In-Reply-To/References threading headers, logs it to the thread (and email_sends when a contact is linked). Requires the `email_inbox` permission.",
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ text: z.string().min(1).max(10000), subject: z.string().max(500).optional() }).openapi('EmailInboxReply') } } },
@@ -1084,6 +1092,7 @@ registry.registerPath({
   responses: {
     200: { description: 'Reply sent' },
     400: { description: 'Send failed / no recipient', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing the email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
