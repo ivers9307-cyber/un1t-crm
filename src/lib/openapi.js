@@ -1141,7 +1141,7 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'Ticket + its message thread',
-  description: 'Returns the ticket (with its mailbox and linked contact) and the thread oldest-first, text bodies only. 404 — never 403 — when the ticket is missing, at a foreign location, or on a mailbox the caller cannot see. Does NOT mark it read; that is POST /read.',
+  description: 'Returns the ticket (with its mailbox and linked contact) and the thread oldest-first, text bodies only. 404 — never 403 — when the ticket is missing, at a foreign location, or on a mailbox the caller cannot see. Does NOT mark it read; that is POST /read. EMAIL-DELIVERY.1: each OUTBOUND message also carries delivery_status (null | delivered | bounced | complained), delivery_status_at, delivery_detail and delivery_bounce_type (hard | soft | transient). NULL means sent with no provider event yet — it is NOT a failure and must never render as one.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ ticket, messages }' },

@@ -159,3 +159,104 @@ describe('processPostmarkEvent — SubscriptionChange', () => {
     expect(rpcCalls).toEqual([])
   })
 })
+
+// EMAIL-DELIVERY.1 — the processor hands Delivery / Bounce / SpamComplaint to
+// the ticket-thread stamper, and nothing else to it.
+//
+// Two properties are load-bearing here and neither is about the stamp itself:
+//   • The stamp NEVER fails the event. A queue row that fails is retried and
+//     eventually dead-lettered (POSTMARK-DLQ.1) — dead-lettering a real bounce
+//     because a display column would not write is the hole this must not
+//     reopen from the other side.
+//   • The existing SUPPRESSION behaviour is untouched. A hard bounce still
+//     marks the contact and auto-unsubscribes, whatever the stamper does.
+//
+// The fake RECORDS THE FILTERS rather than no-opping them: the correlation
+// (postmark_message_id + direction) and the severity lattice (the `or=`) are
+// the whole feature, and a permissive fake would pass these with both deleted.
+function stubDeliveryDb({ send = null, stampError = null } = {}) {
+  const messageUpdates = []
+
+  function builder(table) {
+    const b = { _op: 'select', _values: null, _filters: [] }
+    const settle = (shape) => {
+      if (b._op === 'update' && table === 'email_inbox_messages') {
+        messageUpdates.push({ values: b._values, filters: b._filters })
+        if (stampError) return Promise.resolve({ data: null, error: stampError })
+        return Promise.resolve({ data: [], error: null })
+      }
+      if (b._op === 'update') return Promise.resolve({ data: null, error: null })
+      const row = table === 'email_sends' ? send : null
+      return Promise.resolve({ data: shape === 'single' ? row : [], error: null })
+    }
+    b.select = () => (b._op === 'update' ? settle('list') : b)
+    b.update = (values) => { b._op = 'update'; b._values = values; return b }
+    b.eq = (col, val) => { b._filters.push(['eq', col, val]); return b }
+    b.in = (col, val) => { b._filters.push(['in', col, val]); return b }
+    b.not = (col, op, val) => { b._filters.push(['not', col, op, val]); return b }
+    b.or = (expr) => { b._filters.push(['or', expr]); return b }
+    b.single = () => settle('single')
+    b.maybeSingle = () => settle('single')
+    b.then = (resolve, reject) => settle('list').then(resolve, reject)
+    return b
+  }
+
+  return { messageUpdates, from: builder, rpc: () => Promise.resolve({ error: null }) }
+}
+
+describe('processPostmarkEvent — ticket delivery stamping (EMAIL-DELIVERY.1)', () => {
+  it.each([
+    ['Delivery', 'delivered'],
+    ['Bounce', 'bounced'],
+    ['SpamComplaint', 'complained'],
+  ])('%s stamps the outbound ticket message with %s', async (RecordType, expected) => {
+    const db = stubDeliveryDb({ send: { contact_id: 'c1', campaign_id: null } })
+    applyMarketingPreferencesBulk.mockResolvedValue({ ok: true, changed: [] })
+
+    const r = await processPostmarkEvent(db, { RecordType, MessageID: 'pm-1', Type: 'HardBounce' })
+
+    expect(r.ok).toBe(true)
+    const stamp = db.messageUpdates.find(u => u.values?.delivery_status === expected)
+    expect(stamp).toBeTruthy()
+    // The correlation, in the filters that actually go on the wire.
+    expect(stamp.filters).toContainEqual(['eq', 'postmark_message_id', 'pm-1'])
+    expect(stamp.filters).toContainEqual(['eq', 'direction', 'outbound'])
+    // The lattice, as a WHERE clause.
+    expect(stamp.filters.some(([kind, expr]) => kind === 'or' && String(expr).includes('delivery_status.is.null'))).toBe(true)
+  })
+
+  it.each(['Open', 'Click', 'SubscriptionChange'])('%s never touches email_inbox_messages', async (RecordType) => {
+    // Open and Click are OUT OF SCOPE by decision, not omission. This pins that
+    // the stamper has no opinion about them so no later edit can grow one.
+    const db = stubDeliveryDb({ send: { id: 's1', contact_id: 'c1', campaign_id: null } })
+    applyMarketingPreferencesBulk.mockResolvedValue({ ok: true, changed: [] })
+
+    const r = await processPostmarkEvent(db, { RecordType, MessageID: 'pm-1', SuppressSending: true })
+
+    expect(r.ok).toBe(true)
+    expect(db.messageUpdates).toEqual([])
+  })
+
+  it('still processes the event when the stamp fails — a bounce is never dead-lettered over a display column', async () => {
+    const db = stubDeliveryDb({
+      send: { contact_id: 'c1', campaign_id: null },
+      stampError: { message: 'column "delivery_status" does not exist' },
+    })
+    applyMarketingPreferencesBulk.mockResolvedValue({ ok: true, changed: ['email_marketing'] })
+
+    const r = await processPostmarkEvent(db, { RecordType: 'Bounce', MessageID: 'pm-1', Type: 'HardBounce' })
+
+    expect(r.ok).toBe(true)
+    // The suppression half ran regardless — that is what a bounce is FOR.
+    expect(applyMarketingPreferencesBulk).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      source: 'postmark_hard_bounce',
+    }))
+  })
+
+  it('an event with no MessageID is refused before anything is stamped', async () => {
+    const db = stubDeliveryDb({})
+    const r = await processPostmarkEvent(db, { RecordType: 'Delivery' })
+    expect(r).toEqual({ ok: false, error: 'missing_message_id' })
+    expect(db.messageUpdates).toEqual([])
+  })
+})

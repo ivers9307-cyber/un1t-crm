@@ -15,6 +15,8 @@ import {
   isArchivedStatus,
   priorityMeta,
   messageKind,
+  deliveryMeta,
+  deliveryTimestamp,
   requesterLabel,
   initialsOf,
   assigneeLabel,
@@ -178,5 +180,85 @@ describe('time', () => {
 
   it('does not render a negative age for a clock-skewed future stamp', () => {
     expect(relativeTime('2026-08-06T12:00:30.000Z', now)).toBe('now')
+  })
+})
+
+// EMAIL-DELIVERY.1 — the three outcomes and the silence.
+//
+// The silence is the one that gets broken by accident: `delivery_status` is
+// NULL on every message sent before mig 498, on every message the instant it
+// goes out, and forever on any message whose webhook never arrives. Rendering
+// it as either "delivered" or "failed" would be a lie in one direction or the
+// other, and the second one is the lie this whole feature exists to stop.
+describe('deliveryMeta (EMAIL-DELIVERY.1)', () => {
+  const outbound = (extra) => ({ direction: 'outbound', is_internal_note: false, ...extra })
+
+  it('says NOTHING about a message with no provider event yet', () => {
+    expect(deliveryMeta(outbound({ delivery_status: null }))).toBeNull()
+    expect(deliveryMeta(outbound({}))).toBeNull()
+  })
+
+  it('says nothing about an unrecognised status rather than guessing', () => {
+    expect(deliveryMeta(outbound({ delivery_status: 'opened' }))).toBeNull()
+  })
+
+  it('never claims anything about an INTERNAL NOTE — nothing was ever sent', () => {
+    // A note is stored with direction='outbound', so testing direction alone
+    // would put "Delivered" on staff-only text that went to nobody.
+    expect(deliveryMeta({ direction: 'outbound', is_internal_note: true, delivery_status: 'delivered' })).toBeNull()
+  })
+
+  it('never claims anything about an INBOUND message', () => {
+    expect(deliveryMeta({ direction: 'inbound', delivery_status: 'delivered' })).toBeNull()
+  })
+
+  it('renders a delivery QUIETLY — one word, no panel, no colour', () => {
+    const m = deliveryMeta(outbound({ delivery_status: 'delivered' }))
+    expect(m).toMatchObject({ status: 'delivered', tone: 'quiet', label: 'Delivered' })
+    // No headline and no chip: a delivered message must not grow a panel.
+    expect(m.headline).toBeUndefined()
+    expect(m.chip).toBeUndefined()
+  })
+
+  it('renders a bounce LOUDLY, and says the member never got it', () => {
+    const m = deliveryMeta(outbound({
+      delivery_status: 'bounced',
+      delivery_bounce_type: 'hard',
+      delivery_detail: 'smtp;550 5.1.1 User unknown',
+    }))
+    expect(m.tone).toBe('alarm')
+    expect(m.headline).toMatch(/never got this reply/i)
+    expect(m.detail).toBe('smtp;550 5.1.1 User unknown')
+    // Light-theme chip ramp (CLAUDE.md) — never -300/-400.
+    expect(m.chip).toBe('bg-red-500/10 text-red-700')
+  })
+
+  it('gives HARD and SOFT bounces different advice — they call for different actions', () => {
+    const hard = deliveryMeta(outbound({ delivery_status: 'bounced', delivery_bounce_type: 'hard' }))
+    const soft = deliveryMeta(outbound({ delivery_status: 'bounced', delivery_bounce_type: 'soft' }))
+    expect(hard.advice).not.toBe(soft.advice)
+    expect(hard.advice).toMatch(/does not exist/i)
+    expect(soft.advice).toMatch(/mailbox full/i)
+  })
+
+  it('falls back to transient advice for an unknown or missing bounce type', () => {
+    const m = deliveryMeta(outbound({ delivery_status: 'bounced' }))
+    expect(m.tone).toBe('alarm')
+    expect(m.advice).toBeTruthy()
+  })
+
+  it('treats a spam complaint as its own problem — they DID receive it', () => {
+    const m = deliveryMeta(outbound({ delivery_status: 'complained' }))
+    expect(m.tone).toBe('warn')
+    expect(m.chip).toBe('bg-amber-500/10 text-amber-700')
+    expect(m.headline).toMatch(/spam/i)
+    // Must not claim non-delivery: that is the bounce's story, not this one.
+    expect(m.headline).not.toMatch(/never got/i)
+  })
+
+  it('deliveryTimestamp is empty when there is no stamp', () => {
+    expect(deliveryTimestamp({})).toBe('')
+    expect(deliveryTimestamp(null)).toBe('')
+    expect(deliveryTimestamp({ delivery_status_at: '2026-08-07T09:15:00Z' })).toBeTruthy()
   })
 })

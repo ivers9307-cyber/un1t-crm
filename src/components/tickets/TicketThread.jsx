@@ -29,7 +29,7 @@ import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft, Lock, Mail, AlertCircle, MailCheck, ImageOff, Maximize2, Minimize2,
-  ShieldAlert, Paperclip, Download, FileWarning,
+  ShieldAlert, Paperclip, Download, FileWarning, Check, MailX, ShieldX,
 } from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
 import { formatBytes, SKIPPED_REASON_LABEL } from '@/lib/email-attachment-quota'
@@ -41,6 +41,8 @@ import {
   STATUS_ORDER,
   messageKind,
   messageTimestamp,
+  deliveryMeta,
+  deliveryTimestamp,
   assigneeLabel,
   mailboxLabel,
 } from '@/lib/ticket-display'
@@ -395,6 +397,63 @@ function Attachments({ ticketId, attachments, onAccent = false }) {
   )
 }
 
+/**
+ * "Delivered" — the QUIET half of EMAIL-DELIVERY.1.
+ *
+ * It rides the meta line the bubble already has, in the same muted ramp, and
+ * says one word. Confirming that the normal thing happened normally must never
+ * compete for attention with the panel below, which is the whole reason this
+ * feature exists. There is deliberately NO counterpart for a message with no
+ * event yet: that renders as the bare "Sent to …" it always did.
+ */
+function DeliveredMarker({ message }) {
+  const stamp = deliveryTimestamp(message)
+  return (
+    <span className="inline-flex items-center gap-0.5" title={stamp ? `Delivered ${stamp}` : 'Delivered'}>
+      <Check size={11} className="shrink-0" aria-hidden="true" />
+      Delivered
+    </span>
+  )
+}
+
+/**
+ * The LOUD half. A failed reply gets its own panel OUTSIDE the bubble, full
+ * width, in a colour nothing else in the thread uses.
+ *
+ * Why not a chip on the bubble: the bubble is a dark accent block whose whole
+ * visual language says "we answered them". A small marker on it reads as
+ * decoration on a message that looks handled. This breaks the rhythm of the
+ * thread instead — which is the accurate signal, because the operator's mental
+ * model ("I replied, that's done") is exactly what is wrong.
+ *
+ * Three lines, in the order an operator needs them: WHAT happened, WHAT TO DO,
+ * and then the provider's own words — which is where "mailbox full" and "no
+ * such address" actually differ, and why the raw text is shown rather than
+ * summarised away.
+ */
+function DeliveryFailureNotice({ delivery, stamp }) {
+  const alarm = delivery.tone === 'alarm'
+  const Icon = alarm ? MailX : ShieldX
+  const box = alarm
+    ? 'border-red-500/60 bg-red-500/10 text-red-700'
+    : 'border-amber-500/60 bg-amber-500/10 text-amber-700'
+
+  return (
+    <div className={`rounded-xl border px-4 py-3 ${box}`}>
+      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide">
+        <Icon size={12} className="shrink-0" aria-hidden="true" />
+        {delivery.headline}
+      </p>
+      <p className="mt-1 text-xs">{delivery.advice}</p>
+      {delivery.detail && (
+        // The provider's exact words, not our paraphrase of them.
+        <p className="mt-1.5 break-words text-[11px] opacity-90">{delivery.detail}</p>
+      )}
+      {stamp && <p className="mt-1.5 text-[11px] opacity-75">Reported {stamp}</p>}
+    </div>
+  )
+}
+
 /** The attachment list itself could not be loaded — say so, don't imply none. */
 function AttachmentsUnavailableNotice() {
   return (
@@ -436,29 +495,38 @@ function ThreadMessage({ message, ticketId }) {
   }
 
   if (kind === 'outbound') {
+    // EMAIL-DELIVERY.1 — null for "sent, no event yet", which is most messages
+    // and every message written before mig 498. Nothing is rendered for it.
+    const delivery = deliveryMeta(message)
     return (
-      <div className="flex justify-end">
-        <div className={`rounded-2xl rounded-tr-sm bg-un1t-accent px-4 py-3 text-white ${html ? 'w-full' : 'max-w-[85%]'}`}>
-          <p className="mb-1 flex items-center gap-1.5 text-[11px] text-white/75">
-            <MailCheck size={12} className="shrink-0" aria-hidden="true" />
-            Sent to {message.to_email || 'the member'}
-            {message.author_name && ` · Replied by ${message.author_name}`}
-            {stamp && ` · ${stamp}`}
-          </p>
-          {html ? (
-            <EmailFrame
-              html={html}
-              blockedImages={message.html_blocked_images}
-              label={`Reply sent to ${message.to_email || 'the member'}`}
-              onAccent
-            />
-          ) : (
-            <p className="whitespace-pre-wrap break-words text-sm">{body}</p>
-          )}
-          {message.html_unsafe && <UnsafeHtmlNotice />}
-          {message.html_omitted && <HtmlOmittedNotice />}
-          <Attachments ticketId={ticketId} attachments={message.attachments} onAccent />
+      <div className="space-y-1.5">
+        <div className="flex justify-end">
+          <div className={`rounded-2xl rounded-tr-sm bg-un1t-accent px-4 py-3 text-white ${html ? 'w-full' : 'max-w-[85%]'}`}>
+            <p className="mb-1 flex items-center gap-1.5 text-[11px] text-white/75">
+              <MailCheck size={12} className="shrink-0" aria-hidden="true" />
+              Sent to {message.to_email || 'the member'}
+              {message.author_name && ` · Replied by ${message.author_name}`}
+              {stamp && ` · ${stamp}`}
+              {delivery?.tone === 'quiet' && <>{' · '}<DeliveredMarker message={message} /></>}
+            </p>
+            {html ? (
+              <EmailFrame
+                html={html}
+                blockedImages={message.html_blocked_images}
+                label={`Reply sent to ${message.to_email || 'the member'}`}
+                onAccent
+              />
+            ) : (
+              <p className="whitespace-pre-wrap break-words text-sm">{body}</p>
+            )}
+            {message.html_unsafe && <UnsafeHtmlNotice />}
+            {message.html_omitted && <HtmlOmittedNotice />}
+            <Attachments ticketId={ticketId} attachments={message.attachments} onAccent />
+          </div>
         </div>
+        {delivery && delivery.tone !== 'quiet' && (
+          <DeliveryFailureNotice delivery={delivery} stamp={deliveryTimestamp(message)} />
+        )}
       </div>
     )
   }
