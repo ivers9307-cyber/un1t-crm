@@ -9,11 +9,19 @@
 // Currently supported keys:
 //   - landing_preference: which dashboard /dashboard redirects to
 //     ('auto' | 'personal' | 'studio' | 'business')
+//     — stored inside profiles.permissions (JSONB)
+//   - email_signature: the plain-text sign-off appended to this
+//     person's ticket replies (EMAIL-TICKET.5, mig 493)
+//     — stored as a profiles COLUMN, not in the JSONB
 //
 // Authorization model:
 //   - Any authenticated user.
 //   - Mutates ONLY their own row (profiles.id = user.id) — there's
-//     no `id` parameter, the caller can't edit anyone else.
+//     no `id` parameter, the caller can't edit anyone else. That is
+//     load-bearing for the signature in particular: this route runs on
+//     the service-role client (no RLS), so "which row" is decided here
+//     and nowhere else. A body-supplied id would let anyone rewrite
+//     what a colleague's replies go out signed as.
 //   - Permission validation is best-effort — if a user picks a
 //     dashboard they don't have access to, we still store the
 //     preference. The /dashboard redirect then falls through to the
@@ -30,12 +38,47 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { LANDING_PREFERENCE_VALUES } from '@shared/permissions'
+import { MAX_SIGNATURE_LENGTH, normalizeSignature } from '@/lib/email-signature'
 
 export const runtime = 'nodejs'
 
 const PreferencesSchema = z.object({
   landing_preference: z.enum(LANDING_PREFERENCE_VALUES).optional(),
+  // Plain text, bounded by the same 2,000 chars as the mig 493 CHECK so a
+  // long paste is a 400 here rather than a Postgres constraint violation.
+  // Nullable so the editor can clear it back to "no signature".
+  email_signature: z.string().max(MAX_SIGNATURE_LENGTH).nullable().optional(),
 }).strict()
+
+// GET /api/me/preferences — the caller's OWN preferences.
+//
+// Exists so a client surface can show what it is about to do on the user's
+// behalf — the ticket composer renders the signature it is going to append.
+// Same scoping as PATCH: profiles.id = user.id, no id parameter.
+export async function GET() {
+  const user = await getCurrentUser()
+  if (!user) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const db = createServerClient()
+  const { data, error } = await db
+    .from('profiles')
+    .select('permissions, email_signature')
+    .eq('id', user.id)
+    .single()
+  if (error) {
+    return NextResponse.json({ success: false, error: error.message }, { status: 400 })
+  }
+
+  return NextResponse.json({
+    success: true,
+    data: {
+      landing_preference: data?.permissions?.landing_preference || 'auto',
+      email_signature: data?.email_signature || '',
+    },
+  })
+}
 
 export async function PATCH(request) {
   const user = await getCurrentUser()
@@ -53,7 +96,17 @@ export async function PATCH(request) {
   if (body.landing_preference !== undefined) {
     patch.landing_preference = body.landing_preference
   }
-  if (Object.keys(patch).length === 0) {
+
+  // Column-level fields (not JSONB). Whitespace-only is stored as NULL,
+  // not as a blank string, so "no signature" has exactly one
+  // representation everywhere — the append helper treats them the same,
+  // but a NULL is what the column comment describes.
+  const columnPatch = {}
+  if (body.email_signature !== undefined) {
+    columnPatch.email_signature = normalizeSignature(body.email_signature) || null
+  }
+
+  if (Object.keys(patch).length === 0 && Object.keys(columnPatch).length === 0) {
     return NextResponse.json({ success: false, error: 'No preference fields to update' }, { status: 400 })
   }
 
@@ -63,24 +116,39 @@ export async function PATCH(request) {
   // collide with themselves only — last write wins, acceptable for
   // a personal preference. The whole-blob update preserves any
   // admin-set keys (mobile.*, dashboard_*, etc.) untouched.
-  const { data: current, error: readErr } = await db
-    .from('profiles')
-    .select('permissions')
-    .eq('id', user.id)
-    .single()
-  if (readErr) {
-    return NextResponse.json({ success: false, error: readErr.message }, { status: 400 })
+  //
+  // Skipped entirely when the caller only touched a column field, so a
+  // signature edit can't rewrite the permissions blob as a side effect.
+  const update = { ...columnPatch }
+  let merged = null
+  if (Object.keys(patch).length > 0) {
+    const { data: current, error: readErr } = await db
+      .from('profiles')
+      .select('permissions')
+      .eq('id', user.id)
+      .single()
+    if (readErr) {
+      return NextResponse.json({ success: false, error: readErr.message }, { status: 400 })
+    }
+    merged = { ...(current?.permissions || {}), ...patch }
+    update.permissions = merged
   }
-
-  const merged = { ...(current?.permissions || {}), ...patch }
 
   const { error: writeErr } = await db
     .from('profiles')
-    .update({ permissions: merged })
+    .update(update)
+    // The ONLY row this route may touch. No id parameter exists, so a
+    // caller cannot aim this at someone else's signature.
     .eq('id', user.id)
   if (writeErr) {
     return NextResponse.json({ success: false, error: writeErr.message }, { status: 400 })
   }
 
-  return NextResponse.json({ success: true, data: { permissions: merged } })
+  return NextResponse.json({
+    success: true,
+    data: {
+      ...(merged ? { permissions: merged } : {}),
+      ...(body.email_signature !== undefined ? { email_signature: update.email_signature } : {}),
+    },
+  })
 }

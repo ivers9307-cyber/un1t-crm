@@ -16,13 +16,13 @@ vi.mock('@/lib/auth', async () => {
 })
 vi.mock('@/lib/permissions', async () => {
   const actual = await vi.importActual('@/lib/permissions')
-  return { ...actual, hasPermission: vi.fn(() => true) }
+  return { ...actual, hasPermissionForLocation: vi.fn(() => true) }
 })
 
 import { GET } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { makeDb } from './_test-db'
 import {
   LOC_A, LOC_B, MB_STUDIO, MB_ACCOUNTS, T_STUDIO, T_ACCOUNTS,
@@ -49,7 +49,7 @@ function setupDb(state) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  hasPermission.mockReturnValue(true)
+  hasPermissionForLocation.mockReturnValue(true)
   getCurrentUser.mockResolvedValue(COACH)
   setupDb(baseState({ grants: [GRANT_STUDIO] }))
 })
@@ -61,10 +61,11 @@ describe('GET /api/email/tickets — gates', () => {
   })
 
   it('403s without the email_inbox permission', async () => {
-    hasPermission.mockReturnValue(false)
+    hasPermissionForLocation.mockReturnValue(false)
     expect((await list()).res.status).toBe(403)
-    // …and it is THAT key, not the older marketing-email one.
-    expect(hasPermission).toHaveBeenCalledWith(COACH, 'email_inbox')
+    // …and it is THAT key, not the older marketing-email one, resolved at the
+    // REQUESTED location rather than the caller's active one.
+    expect(hasPermissionForLocation).toHaveBeenCalledWith(COACH, LOC_A, 'email_inbox')
   })
 
   it('400s without a location_id', async () => {
@@ -80,6 +81,53 @@ describe('GET /api/email/tickets — gates', () => {
   it('400s on an unknown view rather than silently defaulting', async () => {
     const { res } = await list(`?location_id=${LOC_A}&view=archived`)
     expect(res.status).toBe(400)
+  })
+})
+
+describe('GET /api/email/tickets — the permission follows the REQUESTED location', () => {
+  // EMAIL-TICKET.5. The gate used to be hasPermission(), which resolves
+  // against the caller's ACTIVE location — a different question from the one
+  // this route is asked. One user, two locations, opposite answers, and the
+  // REAL resolver rather than a mock, because a mock cannot fail the way the
+  // shipped code did.
+  //
+  // Their session is pointed at LOC_B (role: 'staff'), where email_inbox is
+  // false by role default; at LOC_A they are a manager, where it is true.
+  const MULTI = {
+    id: COACH.id, email: 'multi@un1tdublin.com',
+    role: 'staff', profileRole: 'manager',
+    locations: [{ id: LOC_A }, { id: LOC_B }],
+    rolesByLocation: { [LOC_A]: 'manager', [LOC_B]: 'staff' },
+    assignmentsByLocation: {
+      [LOC_A]: { role: 'manager', permissions: {} },
+      [LOC_B]: { role: 'staff', permissions: {} },
+    },
+  }
+
+  beforeEach(async () => {
+    const real = await vi.importActual('@/lib/permissions')
+    hasPermissionForLocation.mockImplementation(real.hasPermissionForLocation)
+    getCurrentUser.mockResolvedValue(MULTI)
+  })
+
+  it('ALLOWS the location where they hold the key, even though their session is elsewhere', async () => {
+    // The old gate denied this outright — the wrongly-denied direction.
+    setupDb(baseState({ grants: [GRANT_STUDIO] }))
+    const { res } = await list(`?location_id=${LOC_A}`)
+    expect(res.status).toBe(200)
+  })
+
+  it('DENIES the location where they do not, even holding a mailbox grant there', async () => {
+    // The wrongly-ALLOWED direction, and the one that leaks: a grant on
+    // another studio's address must not become readable just because the
+    // caller's active location says manager.
+    setupDb(baseState({
+      mailboxes: [MB_STUDIO, MB_ACCOUNTS, { ...MB_STUDIO, id: 'mb-b', location_id: LOC_B }],
+      grants: [{ mailbox_id: 'mb-b', profile_id: MULTI.id }],
+    }))
+    const { res, body } = await list(`?location_id=${LOC_B}`)
+    expect(res.status).toBe(403)
+    expect(body.success).toBe(false)
   })
 })
 

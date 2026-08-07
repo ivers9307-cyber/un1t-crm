@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { loadVisibleMailboxes } from './_helpers'
 
 // GET /api/email/tickets — the studio's ticket queue (EMAIL-TICKET.4).
@@ -19,6 +19,16 @@ import { loadVisibleMailboxes } from './_helpers'
 // resolved in _helpers.js. No visible mailboxes is an EMPTY LIST, not an
 // error: a studio that does not do email and a coach with no grants are both
 // normal states, and a 403 there would look like a bug to whoever hit it.
+//
+// The surface gate resolves AT THE REQUESTED LOCATION (EMAIL-TICKET.5), not
+// at the caller's active one. This route takes location_id as a parameter, so
+// plain hasPermission() answered a different question than the one asked: a
+// manager at Stillorgan who is only staff at Hatch was denied Stillorgan's
+// queue whenever their session happened to be pointed at Hatch, and — the
+// direction that actually matters — was ALLOWED Hatch's queue, mailbox grants
+// and all, purely because their active location said manager. Resolving the
+// permission at the target location binds capability and tenant together.
+// (Same reasoning as hasPermissionInOrganization; see src/lib/permissions.js.)
 export const VIEWS = Object.freeze(['unassigned', 'mine', 'needs_reply', 'closed'])
 
 // One screen of queue. Well under the 1,000-row select cap; the operator
@@ -45,10 +55,6 @@ export async function GET(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  if (!hasPermission(user, 'email_inbox')) {
-    return NextResponse.json({ success: false, error: 'Forbidden — email inbox permission required' }, { status: 403 })
-  }
-
   const { searchParams } = new URL(request.url)
   const locationId = searchParams.get('location_id')
   if (!locationId) {
@@ -60,6 +66,13 @@ export async function GET(request) {
   // enumerable).
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+
+  // Surface gate, resolved at the REQUESTED location — see the header. It runs
+  // after assertLocationAccess so a location the caller has no business in
+  // reads as "not in your assignments" rather than a permission complaint.
+  if (!hasPermissionForLocation(user, locationId, 'email_inbox')) {
+    return NextResponse.json({ success: false, error: 'Forbidden — email inbox permission required' }, { status: 403 })
+  }
 
   const view = searchParams.get('view')
   if (view && !VIEWS.includes(view)) {
