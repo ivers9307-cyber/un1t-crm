@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import {
   advisoryId,
   collectAdvisories,
@@ -211,5 +212,55 @@ describe('classifyAdvisories', () => {
     const post = collectAdvisories(CLEAN_REPORT)
     const { unlisted, expired, accepted, stale } = classifyAdvisories(post.gated, [], '2026-08-07')
     expect([unlisted, expired, accepted, stale].every((a) => a.length === 0)).toBe(true)
+  })
+})
+
+// DEPAUDIT.2 — the allowlist files that actually ship.
+//
+// check-dependency-audit.mjs validates whatever allowlist it is handed at
+// runtime, so a malformed one fails the CI job rather than the test suite —
+// and only on a dep-touching PR, since that is the workflow's `paths:`
+// trigger. These read the real files off disk so a typo (missing expiry, bad
+// date, id/package mix-up) fails locally on `npm test` instead.
+//
+// The mobile file arrived with DEPAUDIT.2, which turned on the mobile tree's
+// audit for the first time. It carries the two linkify-it advisories that have
+// NO published fix at any version (npm reports fixAvailable:false against a
+// range of <=5.0.1), so an accept is the only option short of dropping
+// markdown rendering from the contracts screen.
+describe('the shipped allowlist files', () => {
+  const load = (p) => JSON.parse(readFileSync(new URL(p, import.meta.url), 'utf8'))
+
+  for (const [label, path] of [
+    ['web', '../.audit-allowlist.json'],
+    ['mobile', '../mobile/.audit-allowlist.json'],
+  ]) {
+    it(`${label}: is valid JSON with a well-formed accepted[]`, () => {
+      const file = load(path)
+      expect(Array.isArray(file.accepted)).toBe(true)
+      expect(validateAllowlist(file.accepted)).toEqual([])
+    })
+
+    it(`${label}: every entry has a real reason and an unexpired date`, () => {
+      for (const entry of load(path).accepted) {
+        // A generic "low risk" is explicitly not a reason — the readme asks
+        // for the code path, so require something substantive.
+        expect(entry.reason.length, `${entry.id} reason too thin`).toBeGreaterThan(60)
+        // An entry shipped already-expired would fail CI the moment it lands.
+        expect(
+          new Date(entry.expires).getTime(),
+          `${entry.id} expires in the past`,
+        ).toBeGreaterThan(new Date('2026-08-07').getTime())
+      }
+    })
+  }
+
+  it('mobile accepts exactly the two unfixable linkify-it advisories', () => {
+    const ids = load('../mobile/.audit-allowlist.json').accepted.map((e) => e.id).sort()
+    expect(ids).toEqual(['GHSA-22p9-wv53-3rq4', 'GHSA-v245-v573-v5vm'])
+  })
+
+  it('web accepts nothing — empty is the healthy state', () => {
+    expect(load('../.audit-allowlist.json').accepted).toEqual([])
   })
 })
