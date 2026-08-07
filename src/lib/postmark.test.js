@@ -572,3 +572,37 @@ describe('sendMarketingEmail — broadcast stream + one-click unsubscribe header
     expect(createServerClient).not.toHaveBeenCalled()
   })
 })
+
+// LOCCOMMS.4 — the unsubscribe URL carries the SENDING location, so opting out
+// of a Hatch Street email does not silently remove someone from Stillorgan's
+// list. Stillorgan has 3,364 reachable contacts against Hatch's 82, so a global
+// unsubscribe fired from a Hatch campaign strips members off the list of the
+// gym they actually attend.
+describe('LOCCOMMS.4 — unsubscribe URL carries the sending location', () => {
+  const contact = { contact_preferences: [{ unsubscribe_token: 'tok' }] }
+
+  it('appends ?l= when a location is supplied', () => {
+    expect(buildUnsubscribeUrl(contact, 'https://crm.example', 'loc-hatch'))
+      .toBe('https://crm.example/unsubscribe/tok?l=loc-hatch')
+  })
+
+  it('omits ?l= when no location is supplied — that means GLOBAL unsubscribe', () => {
+    // BACK-COMPAT: emails already delivered carry the old, location-less URL.
+    // Those must keep working, and with no `l` they unsubscribe from EVERY
+    // location — today's exact behaviour, and the only direction that cannot
+    // generate a spam complaint.
+    expect(buildUnsubscribeUrl(contact, 'https://crm.example'))
+      .toBe('https://crm.example/unsubscribe/tok')
+  })
+
+  it('survives the List-Unsubscribe transform with the param intact', () => {
+    const page = buildUnsubscribeUrl(contact, 'https://crm.example', 'loc-hatch')
+    expect(toListUnsubscribeUrl(page))
+      .toBe('https://crm.example/api/unsubscribe/tok?l=loc-hatch')
+  })
+
+  it('still falls back to contact.id when there is no preferences token', () => {
+    expect(buildUnsubscribeUrl({ id: 'c1' }, 'https://crm.example', 'loc-hatch'))
+      .toBe('https://crm.example/unsubscribe/c1?l=loc-hatch')
+  })
+})

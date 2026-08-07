@@ -431,7 +431,7 @@ export async function tickCampaignSend(db, campaign) {
     const contact = row.contact
     // Utility (outbound) emails carry no marketing chrome — no unsubscribe
     // footer, no List-Unsubscribe header, empty {{unsubscribe_url}} merge tag.
-    const unsubscribeUrl = stream === 'broadcast' ? buildUnsubscribeUrl(contact, baseUrl) : null
+    const unsubscribeUrl = stream === 'broadcast' ? buildUnsubscribeUrl(contact, baseUrl, campaign.location_id) : null
     const prefs = contact.contact_preferences?.[0] || contact.contact_preferences
     const preferenceUrl = `${baseUrl}/preferences/${prefs?.unsubscribe_token || contact.id}`
 
