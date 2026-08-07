@@ -1,58 +1,115 @@
-// Email inbox API helpers for mobile (INBOX-EMAIL-M.1).
+// Email TICKET API helpers for mobile (EMAIL-TICKET-M.1, was INBOX-EMAIL-M.1).
 //
-// Same posture as Instagram: the email_* tables carry a RESTRICTIVE
-// deny-all policy for authenticated/anon (mig 394 mirrors the
-// instagram_* RLS from mig 231), so mobile never reads them direct —
-// every call rides the existing /api/email/* web routes via the api()
-// helper, which carries the Bearer token + x-active-location +
-// x-impersonate-target headers. The thread GET resets unread_count
-// server-side, so there's no separate mark-read call.
+// The CRM's email channel is a ticket system now (/communications/tickets on
+// web). Mobile keeps email — backed by tickets, not the deprecated
+// email_conversations rows this file used to read.
+//
+// Same posture as before: the email_* tables carry a RESTRICTIVE deny-all
+// policy for authenticated/anon, so mobile never reads them direct. Every call
+// rides the /api/email/tickets* routes via the api() helper, which carries the
+// Bearer token + x-active-location + x-impersonate-target headers. Those routes
+// are service-role (no RLS), and they gate on the top-level `email_inbox`
+// permission plus a per-account email_mailbox_access grant — the SAME two
+// levels the web inbox is behind. Screens must gate on `email_inbox` too
+// (canMobile routes it through CROSS_PLATFORM_KEYS to the top-level key), or
+// the UI offers something every call will 403.
+//
+// TWO DIFFERENCES FROM THE OLD CONVERSATIONS API, both deliberate:
+//   • the list route returns { mailboxes, tickets }, NOT a flat list — the
+//     mailboxes are the access model made visible and are what lets a row say
+//     which account it arrived at.
+//   • reading a ticket no longer clears its unread badge as a side effect;
+//     markTicketRead() is its own call, so a GET stays a GET.
 
 import { api } from './api'
+import { ticketsToInboxRows } from './email-tickets'
 
-export async function listConversations(locationId) {
-  const qs = locationId ? `?location_id=${encodeURIComponent(locationId)}` : ''
-  const res = await api(`/api/email/conversations${qs}`, { locationId })
+// Re-exported so screens that already import their display helper from here
+// keep one import for "the email surface". requesterLabel is the ticket-era
+// precedence: requester_name → requester_email.
+export { requesterLabel as emailDisplayName } from './email-tickets'
+
+// The four the route whitelists. Anything else is a 400, and omitting the
+// param entirely is the live queue (open + pending) — which is what the
+// Messages tab wants, so nothing here sends one by default.
+export const TICKET_VIEWS = Object.freeze(['unassigned', 'mine', 'needs_reply', 'closed'])
+
+/**
+ * The studio's live ticket queue, shaped into rows the merged Messages list
+ * can hold beside WhatsApp and Instagram.
+ *
+ * A caller with no visible mailboxes gets an empty list, not an error — a
+ * studio that does not do email and a coach with no account grants are both
+ * normal states.
+ *
+ * @param {string} locationId  required by the route (400 without it)
+ * @param {object} [opts]
+ * @param {'unassigned'|'mine'|'needs_reply'|'closed'} [opts.view]
+ * @returns {Promise<{success: boolean, data?: object[], mailboxes?: object[], error?: string}>}
+ */
+export async function listTickets(locationId, { view } = {}) {
+  if (!locationId) return { success: false, error: 'No active location' }
+  const params = new URLSearchParams({ location_id: locationId })
+  if (view) params.set('view', view)
+
+  const res = await api(`/api/email/tickets?${params.toString()}`, { locationId })
   if (!res.success) return { success: false, error: res.error || 'Failed to load email' }
-  return { success: true, data: res.conversations || [] }
+
+  const mailboxes = res.data?.mailboxes || []
+  return {
+    success: true,
+    data: ticketsToInboxRows({ tickets: res.data?.tickets || [], mailboxes }),
+    mailboxes,
+  }
 }
 
-// Conversation + newest messages in one call. Resets unread server-side.
-export async function getThread(conversationId, locationId) {
-  const res = await api(`/api/email/conversations/${conversationId}`, { locationId })
-  if (!res.success) return { success: false, error: res.error || 'Failed to load conversation' }
-  return { success: true, conversation: res.conversation, messages: res.messages || [] }
+/**
+ * One ticket and its thread, oldest message first.
+ *
+ * Does NOT clear the unread badge — call markTicketRead() for that.
+ * 404s (not 403s) for a ticket the caller may not see, so an id can't be
+ * probed; surface it as a plain "not found" rather than a permission story.
+ */
+export async function getTicket(ticketId, locationId) {
+  const res = await api(`/api/email/tickets/${ticketId}`, { locationId })
+  if (!res.success) return { success: false, error: res.error || 'Failed to load ticket' }
+  return { success: true, ticket: res.data?.ticket || null, messages: res.data?.messages || [] }
 }
 
-// Operator reply. Server-side this sends via Postmark's transactional
-// stream with threading headers (In-Reply-To / References) so the reply
-// lands in the customer's mail-client thread — see the web send route.
-export function sendText(conversationId, text, locationId) {
-  return api(`/api/email/conversations/${conversationId}/send`, {
+/**
+ * Answer the member, or add a staff-only note.
+ *
+ * `internal: true` writes to the thread and SENDS NOTHING — the member never
+ * sees it, and the ticket does not move to pending. Callers must make which
+ * one happened unmistakable in the UI before this is invoked.
+ *
+ * A real reply rides Postmark's transactional stream with threading headers
+ * and the sender's signature, all server-side.
+ */
+export function replyToTicket(ticketId, text, { internal = false, locationId } = {}) {
+  return api(`/api/email/tickets/${ticketId}/reply`, {
     method: 'POST',
     locationId,
-    body: { text },
+    body: { text, internal: !!internal },
   })
 }
 
-// Resolve (or un-resolve). Email has no customer agent, so unlike
-// WhatsApp/Instagram there's no agent re-arm side effect — resolve is
-// purely the queue state (UIX-P1 semantics).
-export function resolveConversation(conversationId, resolved, locationId) {
-  return api(`/api/email/conversations/${conversationId}`, {
-    method: 'PATCH',
+/**
+ * Move a ticket through its lifecycle: open | pending | solved | closed.
+ *
+ * This is the ONLY way a ticket leaves the queue — nothing auto-closes
+ * anywhere in this feature by design, so a surface that hides this leaves
+ * tickets to age forever.
+ */
+export function setTicketStatus(ticketId, status, locationId) {
+  return api(`/api/email/tickets/${ticketId}/status`, {
+    method: 'POST',
     locationId,
-    body: { resolved: !!resolved },
+    body: { status },
   })
 }
 
-// Display-name precedence for an email conversation row — mirrors the
-// web EmailInbox displayName / UnifiedInbox rowName exactly.
-export function emailDisplayName(conv) {
-  const c = conv?.contacts
-  return c?.name
-    || c?.first_name
-    || conv?.counterpart_name
-    || conv?.counterpart_email
-    || 'Email contact'
+/** Zero the unread badge. Idempotent; safe to fire on open. */
+export function markTicketRead(ticketId, locationId) {
+  return api(`/api/email/tickets/${ticketId}/read`, { method: 'POST', locationId })
 }

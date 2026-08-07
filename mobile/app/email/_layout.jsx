@@ -1,4 +1,4 @@
-// Email conversation stack — push from the Messages tab. iOS-native
+// Email ticket stack — push from the Messages tab. iOS-native
 // back-swipe and breadcrumb header (same shell as whatsapp/_layout).
 
 import { Stack } from 'expo-router'

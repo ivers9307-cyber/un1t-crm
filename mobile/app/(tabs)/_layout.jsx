@@ -27,8 +27,9 @@ export default function TabsLayout() {
   const pushRegistered = useRef(false)
   // INBOX-EMAIL-M.1 — Messages tab badge. Same endpoint as the web
   // sidebar badge (SIDEBAR-BADGES.2): conversations needing a human
-  // (needs-reply or agent handoff) across WhatsApp + Instagram + Email
-  // at the active location. 60s poll, mirroring the web's cadence;
+  // (needs-reply or agent handoff) across WhatsApp + Instagram at the
+  // active location. Email left this count when it became a ticket
+  // system (INBOX-SPLIT.1). 60s poll, mirroring the web's cadence;
   // failures leave the last-known count rather than flashing it away.
   const [needsActionCount, setNeedsActionCount] = useState(0)
 
