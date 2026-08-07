@@ -361,7 +361,13 @@ describe('threading', () => {
     expect(insertsInto(db, 'email_inbox_messages')[0].payload.ticket_id).toBe('T-open')
   })
 
-  it('mints a NEW ticket when the reply threads to a CLOSED one', async () => {
+  it('REOPENS a closed ticket rather than forking a new one', async () => {
+    // Richard, 2026-08-07. Closing is internal bookkeeping — the status route
+    // sends the member nothing — so replying to their own old email is simply
+    // continuing the conversation. Forking would make our record disagree with
+    // the thread sitting in their mail client. RFC threading headers are what
+    // separate one issue from the next: a genuinely new enquiry matches no
+    // message, resolves to no ticket, and takes the create branch.
     db = makeDb({
       threadRows: [{ ticket_id: 'T-closed', created_at: '2026-07-01T08:00:00Z', location_id: 'loc-hatch', rfc_message_id: 'ours-1@mtasv.net' }],
       tickets: { 'T-closed': { id: 'T-closed', location_id: 'loc-hatch', status: 'closed', subject: 'Billing question', first_response_at: '2026-07-01T09:00:00Z' } },
@@ -370,13 +376,17 @@ describe('threading', () => {
 
     const res = await post(reply())
 
-    const tickets = insertsInto(db, 'email_tickets')
-    expect(tickets).toHaveLength(1)
-    expect(tickets[0].payload.reopened_from).toBe('T-closed')
-    expect(tickets[0].payload.status).toBe('open')
-    // The closed predecessor is NOT resurrected.
-    expect(updatesTo(db, 'email_tickets')).toHaveLength(0)
-    expect((await res.json()).ticket_id).toBe('new-ticket')
+    // No second ticket.
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+
+    // The closed one comes back to open, and keeps its original subject.
+    const update = updatesTo(db, 'email_tickets')[0]
+    expect(update.payload.status).toBe('open')
+    expect(update.payload).not.toHaveProperty('subject')
+    expect(update.filters).toContainEqual(['eq', 'id', 'T-closed'])
+
+    expect(insertsInto(db, 'email_inbox_messages')[0].payload.ticket_id).toBe('T-closed')
+    expect((await res.json()).ticket_id).toBe('T-closed')
   })
 
   it('picks the most recent thread match when several rows match', async () => {

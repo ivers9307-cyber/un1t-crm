@@ -37,7 +37,12 @@ channel, on its own surface.
 
 SLA timers and breach alerts · CSAT surveys · a public help centre or knowledge
 base · macros and canned replies · merging tickets · cross-channel tickets ·
-automatic pruning of stored mail.
+automatic pruning of stored mail · storage quota accounting · the per-account
+grant editor UI (grants are inserted directly for now) · sending **from** the
+mailbox address rather than `POSTMARK_FROM_EMAIL`, which needs per-domain DKIM.
+
+**No longer deferred** — pulled forward 2026-08-07 after the queue was worked
+for real: HTML rendering, per-user signatures, and composing a new email.
 
 Canned replies are the likeliest v2 addition, but should be built once the team
 has worked the queue for a month and the five replies they actually send are
@@ -422,8 +427,21 @@ These rules are what make this a ticketing system rather than a renamed inbox.
 1. Inbound whose `In-Reply-To` or `References` matches a message on a ticket
    that is **not** `closed` → append to that ticket. If the ticket was `solved`
    or `pending`, flip it back to `open`.
-2. Inbound matching a **closed** ticket → open a **new** ticket with
-   `reopened_from` set to the closed one.
+2. Inbound matching a **closed** ticket → **reopen that ticket**, back to
+   `open`. It does **not** fork into a new one (Richard, 2026-08-07).
+
+   Closing is internal bookkeeping. The status route sends the member nothing —
+   they are never told a ticket closed — so from their side replying to their
+   own old email is simply continuing the conversation. Forking would make the
+   studio's record disagree with the thread sitting in their mail client.
+
+   An earlier draft forked here and called it the load-bearing rule against mig
+   394's immortal per-person thread. That was wrong: **threading is what
+   separates issues**, not the closed state. A genuinely new enquiry carries no
+   `In-Reply-To`/`References` match, resolves to no ticket, and takes rule 3.
+   Closing was a second, redundant boundary — and the only one a member could
+   trip by replying to their own old email. `email_tickets.reopened_from`
+   remains on the table, now unused.
 3. Inbound with no threading match → new ticket, on the mailbox the message was
    delivered to. Resolution is `resolveMailboxByRecipient` in
    `src/lib/email-mailboxes.js`, matching against `email_mailboxes` — **not**
@@ -598,4 +616,23 @@ Quota:
     and the per-account grant editor are deferred until the queue has been
     worked — plain text and owner-level access are enough to start.
 
-Plans 1 and 2 are merged.
+12. **Per-user signatures** — Richard, 2026-08-07. `profiles.email_signature`,
+    plain text, per profile rather than per location: a signature is a name and
+    a role, and someone working two studios signs off the same way in both.
+    Appended after a `--` delimiter line (RFC 3676, which mail clients collapse).
+    Deliberately **plain text** — replies are composed as text and converted to
+    HTML on send, so an HTML signature would be the one un-sanitised HTML path
+    into outbound mail. Never appended to internal notes; a note is sent to
+    nobody.
+13. **Message authorship** — mig 493 adds `email_inbox_messages.author_profile_id`.
+    A shared queue without it is a pile of anonymous text: you cannot ask a
+    colleague about their reply if you cannot see it was theirs. Nullable
+    (inbound has no author), `ON DELETE SET NULL` so a departing staff member
+    never deletes correspondence.
+14. **Composing a new email** — Richard, 2026-08-07. A composed email is simply
+    **a ticket whose first message is outbound** — not a second concept. From
+    then on it behaves like any other ticket and a reply threads back into it
+    normally. The sender may only choose a mailbox they can already see;
+    otherwise someone holding `sales@` could send as `accounts@`.
+
+Plans 1 through 4 are merged and the tool is in use.
