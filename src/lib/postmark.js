@@ -605,16 +605,56 @@ export async function sendTransactionalEmail({
 }
 
 /**
- * EMAIL-INBOX.1 — the location's inbound-inbox address (mig 394,
- * locations.email_inbox_reply_to). When set, campaign + marketing
- * sends stamp it as Reply-To so customer replies route back into the
- * unified inbox via /api/webhooks/postmark-inbound. Returns null when
- * unset or on any error (callers treat it as best-effort).
+ * EMAIL-MAILBOX-ADMIN.1 — the address of a location's DEFAULT email account
+ * (email_mailboxes, mig 485), or null.
+ *
+ * `is_default` was documented from the start as "the address stamped as
+ * Reply-To on campaign + marketing sends" (mig 485's own COMMENT), but until
+ * the account editor shipped nothing could set it, so the send paths still
+ * read the column it replaced. Now that an operator can choose the default,
+ * the default is what they get.
+ *
+ * Active only: a deactivated account stops accepting inbound, so stamping it
+ * as Reply-To would invite customers to write to an address whose mail
+ * dead-letters.
+ *
+ * Takes the caller's client rather than making one — the send paths already
+ * hold a service-role client, and this runs per campaign tick.
+ */
+export async function getDefaultMailboxAddress(db, locationId) {
+  if (!db || !locationId) return null
+  try {
+    const { data } = await db.from('email_mailboxes')
+      .select('address')
+      .eq('location_id', locationId)
+      .eq('is_default', true)
+      .eq('active', true)
+      .limit(1)
+      .maybeSingle()
+    return data?.address || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * EMAIL-INBOX.1 — the location's inbound-inbox address. When set, campaign +
+ * marketing sends stamp it as Reply-To so customer replies route back in via
+ * /api/webhooks/postmark-inbound. Returns null when unset or on any error
+ * (callers treat it as best-effort).
+ *
+ * The default email_mailboxes row wins; locations.email_inbox_reply_to (mig
+ * 394, DEPRECATED by mig 485) is the fallback, kept because it still holds a
+ * live value for studios configured before the accounts model and nothing
+ * writes it any more. A studio with no default account and no legacy column
+ * gets null — replies then go to the sending address, exactly as before.
  */
 export async function getLocationInboxReplyTo(locationId) {
   if (!locationId) return null
   try {
     const db = createServerClient()
+    const fromMailbox = await getDefaultMailboxAddress(db, locationId)
+    if (fromMailbox) return fromMailbox
     const { data } = await db.from('locations')
       .select('email_inbox_reply_to')
       .eq('id', locationId)

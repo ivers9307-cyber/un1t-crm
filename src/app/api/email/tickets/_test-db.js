@@ -87,19 +87,26 @@ const TABLE_KEYS = {
   // on db.inserts/db.updates before the key is consulted, which is what lets
   // `updatesTo(db, 'email_conversations')` prove a reintroduced write.
   locations: 'locations',
+  // EMAIL-MAILBOX-ADMIN.1 — the mailbox/grant editor lists the studio's staff,
+  // so its tests need the roster the routes actually read.
+  profile_locations: 'profileLocations',
+  profiles: 'profiles',
+  // audit_events is DELIBERATELY ABSENT, same reasoning as email_conversations:
+  // logAuditEvent() builds its own client (which the tests point at this fake),
+  // so its inserts land on db.inserts — assertable — without polluting a read.
 }
 
 export function makeDb(state = {}) {
   const s = {
     mailboxes: [], grants: [], tickets: [], messages: [], sends: [], contacts: [],
-    locations: [], errors: {},
+    locations: [], profileLocations: [], profiles: [], errors: {},
     ...state,
   }
   // `selects` records the COLUMN STRING each read asked for. The fake itself
   // returns whole rows regardless (modelling PostgREST's projection would buy
   // nothing), so this is the only way a test can assert what actually goes on
   // the wire — e.g. that a route stopped naming a column that is being dropped.
-  const db = { inserts: [], updates: [], selects: [], _state: s }
+  const db = { inserts: [], updates: [], deletes: [], selects: [], _state: s }
   let seq = 0
 
   function rowsFor(b) {
@@ -136,6 +143,18 @@ export function makeDb(state = {}) {
       for (const r of hit) Object.assign(r, b._payload)
       return { data: hit[0] ?? null, error: null }
     }
+    // EMAIL-MAILBOX-ADMIN.1 — revoking a mailbox grant DELETES the row, and
+    // "the person can no longer see it" is only proven if the fake actually
+    // removes it (a recorded-but-not-applied delete would let a broken revoke
+    // pass). Rows are removed IN PLACE so an array captured before the call
+    // still reflects the deletion, matching update's behaviour.
+    if (b._op === 'delete') {
+      db.deletes.push({ table: b._table, filters: b._filters })
+      const rows = key ? s[key] : []
+      const removed = rows.filter(r => b._filters.every(f => matches(r, f)))
+      for (const r of removed) rows.splice(rows.indexOf(r), 1)
+      return { data: removed, error: null }
+    }
     db.selects.push({ table: b._table, columns: b._select ?? '*' })
     const rows = rowsFor(b)
     return shape === 'list' ? { data: rows, error: null } : { data: rows[0] ?? null, error: null }
@@ -147,6 +166,7 @@ export function makeDb(state = {}) {
     b.select = (columns) => { b._select = columns ?? '*'; return b }
     b.insert = (p) => { b._op = 'insert'; b._payload = p; return b }
     b.update = (p) => { b._op = 'update'; b._payload = p; return b }
+    b.delete = () => { b._op = 'delete'; return b }
     b.eq = filter('eq')
     b.in = filter('in')
     b.is = filter('is')
@@ -167,4 +187,17 @@ export function makeDb(state = {}) {
 
 export const insertsInto = (db, table) => db.inserts.filter(i => i.table === table)
 export const updatesTo = (db, table) => db.updates.filter(u => u.table === table)
+export const deletesFrom = (db, table) => db.deletes.filter(d => d.table === table)
 export const selectsFrom = (db, table) => db.selects.filter(sel => sel.table === table)
+
+/**
+ * Every write this fake saw, whatever the table — the assertion a
+ * "refused" test needs. `expect(writesTo(db)).toEqual([])` fails if a route
+ * denied the caller but wrote anyway, which per-table helpers cannot show
+ * (they only prove the tables you thought to name stayed clean).
+ */
+export const writesTo = (db) => [
+  ...db.inserts.map(i => ({ op: 'insert', table: i.table })),
+  ...db.updates.map(u => ({ op: 'update', table: u.table })),
+  ...db.deletes.map(d => ({ op: 'delete', table: d.table })),
+]

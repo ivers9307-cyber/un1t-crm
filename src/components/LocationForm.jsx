@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
 
-export default function LocationForm({ location, callerRole = 'owner', organizations = [] }) {
+export default function LocationForm({ location, callerRole = 'owner', organizations = [], showEmailTab = false }) {
   const router = useRouter()
   const isEditing = !!location
   // SETTINGS.1 — Integration configs (UniFi, Sensibo, Glofox) used
@@ -50,15 +50,16 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
   const INVOICE_SLUG_RE = /^[a-z0-9][a-z0-9-]{1,40}$/
   const invoiceSlugInvalid = invoicesInboundSlug.length > 0 && !INVOICE_SLUG_RE.test(invoicesInboundSlug)
 
-  // EMAIL-INBOX.1 (mig 394) — the Postmark inbound address stamped as
-  // Reply-To on campaign + marketing sends so customer replies land in
-  // the unified inbox. Empty = email inbox channel off. DB CHECK
-  // enforces the address shape; mirrored client-side for feedback.
-  const [emailInboxReplyTo, setEmailInboxReplyTo] = useState(
-    location?.email_inbox_reply_to || ''
-  )
-  const REPLY_TO_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
-  const replyToInvalid = emailInboxReplyTo.trim().length > 0 && !REPLY_TO_RE.test(emailInboxReplyTo.trim())
+  // EMAIL-MAILBOX-ADMIN.1 — the "Email Inbox / Reply-To" field that used to
+  // live here is GONE. It wrote locations.email_inbox_reply_to, which mig 485
+  // deprecated in favour of email_mailboxes: a studio has many accounts now
+  // (studio@, accounts@, sales@), each separately permissioned, and a single
+  // text input cannot express that. Worse, it still LOOKED authoritative —
+  // editing it implied you were changing where mail routes, which it no
+  // longer does (the inbound webhook resolves the recipient against
+  // email_mailboxes and dead-letters on no match). The replacement is the
+  // Email tab on this page (<EmailMailboxesCard>). The column stays on disk,
+  // read-only, per the deprecated-column convention.
 
   // SETTINGS.1 — Glofox / UniFi / Sensibo / AC are now their own
   // tabs under <LocationIntegrations> below this form. Their state
@@ -89,12 +90,6 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
       setSaving(false)
       return
     }
-    if (replyToInvalid) {
-      setError('Email inbox Reply-To must be a valid email address (or blank to disable).')
-      setSaving(false)
-      return
-    }
-
     // Shared field normalisation (create + edit).
     // mig 071 — null = not configured (summary panel shows total spend
     // without an over/under chip). 0 IS valid and means "no contractor
@@ -104,8 +99,6 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
       : (Number.isFinite(Number(contractorBudget)) ? Number(contractorBudget) : null)
     // INVOICES.1 — null = inbound invoice ingest disabled.
     const invoicesSlugValue = invoicesInboundSlug.trim() === '' ? null : invoicesInboundSlug.trim()
-    // EMAIL-INBOX.1 — null = email inbox channel off for this location.
-    const replyToValue = emailInboxReplyTo.trim() === '' ? null : emailInboxReplyTo.trim().toLowerCase()
 
     if (isEditing) {
       // Edits stay browser-side (RLS-checked). SETTINGS.1 —
@@ -125,7 +118,9 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
         organization_id: location.organization_id,
         monthly_contractor_budget_eur: contractorBudgetValue,
         invoices_inbound_slug: invoicesSlugValue,
-        email_inbox_reply_to: replyToValue,
+        // email_inbox_reply_to is DELIBERATELY absent — deprecated by mig 485
+        // and superseded by email_mailboxes (the Email tab). Omitting the key
+        // leaves the existing value untouched rather than nulling it.
         updated_at: new Date().toISOString(),
       }
       const result = await db.from('locations').update(payload).eq('id', location.id).select().single()
@@ -156,7 +151,9 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
             active,
             monthly_contractor_budget_eur: contractorBudgetValue,
             invoices_inbound_slug: invoicesSlugValue,
-            email_inbox_reply_to: replyToValue,
+            // No email_inbox_reply_to: a new studio's inbound address is an
+            // email_mailboxes row now, added from the Email tab once the
+            // location exists.
           }),
         })
         json = await res.json()
@@ -377,35 +374,21 @@ export default function LocationForm({ location, callerRole = 'owner', organizat
       </div>
 
 
-      {/* EMAIL-INBOX.1 — per-location email inbox Reply-To (mig 394).
-          Set this to the Postmark inbound-stream address (or an alias
-          forwarding to it). Campaign + marketing sends stamp it as
-          Reply-To, and the inbound webhook routes replies delivered to
-          it into this location's unified inbox. */}
-      <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-4">
-        <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Email Inbox</h3>
-        <p className="text-xs text-un1t-muted">
-          Replies to campaign and marketing emails land in the <a href="/communications/inbox" className="underline text-un1t-subtle">unified inbox</a> when this is set to the Postmark inbound address for this studio. Outbound marketing mail uses it as the Reply-To. Leave blank to keep replies going to the sender mailbox.
-        </p>
-
-        <div>
-          <label className="block text-sm mb-1.5">Reply-To / inbound address</label>
-          <input
-            type="email"
-            value={emailInboxReplyTo}
-            onChange={e => setEmailInboxReplyTo(e.target.value)}
-            placeholder="e.g. replies@mail.un1tdublin.com"
-            className={`w-80 max-w-full bg-un1t-bg border rounded-md px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted ${
-              replyToInvalid ? 'border-red-500' : 'border-un1t-border'
-            }`}
-          />
-          {replyToInvalid && (
-            <p className="text-[11px] text-red-400 mt-1">
-              Must be a valid email address.
-            </p>
-          )}
+      {/* EMAIL-MAILBOX-ADMIN.1 — the single "Email Inbox / Reply-To" field
+          that used to sit here is gone; a studio has many accounts now, each
+          separately permissioned. Pointer, not a form: the editor lives on
+          the Email tab of this page, which is master/owner-gated. */}
+      {isEditing && showEmailTab && (
+        <div className="bg-un1t-surface border border-un1t-border rounded-lg p-5 space-y-2">
+          <h3 className="font-semibold text-sm text-un1t-subtle uppercase tracking-wider">Email Accounts</h3>
+          <p className="text-xs text-un1t-muted">
+            This studio&apos;s inbound email addresses — and who may read each one — are managed on the{' '}
+            <a href="?section=email" className="underline text-un1t-subtle">Email tab</a>. A studio can
+            run several (studio@, accounts@, sales@); the default account is the one stamped as
+            Reply-To on campaign and marketing sends.
+          </p>
         </div>
-      </div>
+      )}
 
 
       {/* Submit */}

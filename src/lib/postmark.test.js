@@ -29,8 +29,14 @@ import {
   sendBatch,
   isTransientSendError,
   sendMarketingEmail,
+  getLocationInboxReplyTo,
+  getDefaultMailboxAddress,
 } from './postmark.js'
 import { createServerClient } from './supabase'
+// EMAIL-MAILBOX-ADMIN.1 — the Reply-To resolution reads two tables in
+// sequence, which the fluent recorder above cannot model. Reuse the shared
+// ticket-suite fake, which honours eq/limit/maybeSingle for real.
+import { makeDb } from '@/app/api/email/tickets/_test-db'
 
 // Fluent fake recording method calls (mirrors sms.test.js).
 function makeFakeQuery() {
@@ -604,5 +610,70 @@ describe('LOCCOMMS.4 — unsubscribe URL carries the sending location', () => {
   it('still falls back to contact.id when there is no preferences token', () => {
     expect(buildUnsubscribeUrl({ id: 'c1' }, 'https://crm.example', 'loc-hatch'))
       .toBe('https://crm.example/unsubscribe/c1?l=loc-hatch')
+  })
+})
+
+describe('EMAIL-MAILBOX-ADMIN.1 — where a studio’s replies go', () => {
+  const LOC = 'loc-1'
+  const mailbox = (over = {}) => ({
+    id: 'mb-1', location_id: LOC, address: 'studio@un1tdublin.com',
+    label: 'Studio', is_default: true, active: true, ...over,
+  })
+
+  it('prefers the DEFAULT email account over the deprecated column', async () => {
+    // mig 485 documented is_default as the Reply-To source from the start,
+    // but nothing could set it until the accounts editor shipped — so this
+    // path kept reading a column no operator can edit any more.
+    const db = makeDb({
+      mailboxes: [mailbox()],
+      locations: [{ id: LOC, email_inbox_reply_to: 'legacy@un1tdublin.com' }],
+    })
+    createServerClient.mockReturnValue(db)
+    expect(await getLocationInboxReplyTo(LOC)).toBe('studio@un1tdublin.com')
+  })
+
+  it('ignores a DEACTIVATED default — its mail dead-letters', async () => {
+    const db = makeDb({
+      mailboxes: [mailbox({ active: false })],
+      locations: [{ id: LOC, email_inbox_reply_to: 'legacy@un1tdublin.com' }],
+    })
+    createServerClient.mockReturnValue(db)
+    expect(await getLocationInboxReplyTo(LOC)).toBe('legacy@un1tdublin.com')
+  })
+
+  it('ignores a non-default account — an address nobody chose is not a Reply-To', async () => {
+    const db = makeDb({
+      mailboxes: [mailbox({ is_default: false })],
+      locations: [{ id: LOC, email_inbox_reply_to: null }],
+    })
+    createServerClient.mockReturnValue(db)
+    expect(await getLocationInboxReplyTo(LOC)).toBeNull()
+  })
+
+  it('falls back to the deprecated column for studios configured before mig 485', async () => {
+    const db = makeDb({ mailboxes: [], locations: [{ id: LOC, email_inbox_reply_to: 'legacy@un1tdublin.com' }] })
+    createServerClient.mockReturnValue(db)
+    expect(await getLocationInboxReplyTo(LOC)).toBe('legacy@un1tdublin.com')
+  })
+
+  it('never picks up ANOTHER studio’s default account', async () => {
+    const db = makeDb({
+      mailboxes: [mailbox({ location_id: 'loc-other', address: 'studio@hatch.ie' })],
+      locations: [{ id: LOC, email_inbox_reply_to: null }],
+    })
+    createServerClient.mockReturnValue(db)
+    expect(await getLocationInboxReplyTo(LOC)).toBeNull()
+  })
+
+  it('is null rather than throwing when the lookup fails — the send still goes', async () => {
+    const db = makeDb({ errors: { email_mailboxes: { message: 'boom' }, locations: { message: 'boom' } } })
+    createServerClient.mockReturnValue(db)
+    expect(await getLocationInboxReplyTo(LOC)).toBeNull()
+    expect(await getDefaultMailboxAddress(db, LOC)).toBeNull()
+  })
+
+  it('getDefaultMailboxAddress needs both a client and a location', async () => {
+    expect(await getDefaultMailboxAddress(null, LOC)).toBeNull()
+    expect(await getDefaultMailboxAddress(makeDb({ mailboxes: [mailbox()] }), null)).toBeNull()
   })
 })

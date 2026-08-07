@@ -65,7 +65,7 @@
 // before any phase work, so mid-test cancels behave exactly like
 // mid-send cancels.
 
-import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch, consentFieldForStream, isTransientSendError } from './postmark.js'
+import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch, consentFieldForStream, isTransientSendError, getDefaultMailboxAddress } from './postmark.js'
 import { resolveEmailSender } from './tenant-email.js'
 import { injectPreheader, htmlToPlainText } from './email-content.js'
 import { resolveAbPhase, assignAbVariants, clampAbTestPct, decideAbWinner, subjectForVariant } from './campaign-ab.js'
@@ -427,6 +427,20 @@ export async function tickCampaignSend(db, campaign) {
 
   // Build email batch for this chunk.
   const baseUrl = getAppUrl()
+
+  // EMAIL-MAILBOX-ADMIN.1 — where replies to this campaign go. Resolved ONCE
+  // per chunk, not per recipient. A per-campaign reply_to still wins; below
+  // it the studio's DEFAULT email account (email_mailboxes, mig 485), and
+  // below that the deprecated locations.email_inbox_reply_to the embed still
+  // carries for studios configured before the accounts model. Without the
+  // mailbox lookup this path would keep reading a column no operator can edit
+  // any more — the Reply-To would silently freeze at whatever it held when
+  // the accounts editor shipped.
+  const locationReplyTo = campaign.reply_to
+    ? null
+    : (await getDefaultMailboxAddress(db, campaign.location_id))
+      || campaign.locations?.email_inbox_reply_to
+      || null
   const emailBatch = queuedRows.map(row => {
     const contact = row.contact
     // Utility (outbound) emails carry no marketing chrome — no unsubscribe
@@ -468,10 +482,9 @@ export async function tickCampaignSend(db, campaign) {
       from: campaign.from_name
         ? `${campaign.from_name} <${campaign.from_email || process.env.POSTMARK_FROM_EMAIL}>`
         : undefined,
-      // EMAIL-INBOX.1 — a per-campaign reply_to still wins; otherwise
-      // default to the location's inbound-inbox address (mig 394) so
-      // replies land in the unified inbox instead of an external mailbox.
-      replyTo: campaign.reply_to || campaign.locations?.email_inbox_reply_to || undefined,
+      // EMAIL-INBOX.1 / EMAIL-MAILBOX-ADMIN.1 — a per-campaign reply_to wins;
+      // otherwise the studio's default account, resolved once above.
+      replyTo: campaign.reply_to || locationReplyTo || undefined,
       stream,
       tag: `campaign-${campaignId}`,
       metadata: {
