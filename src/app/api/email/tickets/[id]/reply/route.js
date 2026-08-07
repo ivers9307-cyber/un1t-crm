@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
-import { sendEmail } from '@/lib/postmark'
+import { sendTicketEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { replySubject, buildReplyHeaders, inboundPreview } from '@/lib/email-inbox'
 import { shouldStampFirstResponse } from '@/lib/email-tickets'
 import { appendSignature } from '@/lib/email-signature'
@@ -155,35 +155,40 @@ export async function POST(request, props) {
   // in one pass — see the note on textToHtml.
   const outboundText = appendSignature(text, user.email_signature)
 
-  let result
-  try {
-    result = await sendEmail({
-      to: ticket.requester_email,
-      subject,
-      htmlBody: textToHtml(outboundText),
-      textBody: outboundText,
-      // Reply-To is the ticket's OWN mailbox, so the member's next reply comes
-      // back to the address they wrote to and threads onto this ticket. A
-      // ticket with no mailbox (an elevated caller answering correspondence
-      // whose address was deleted) still sends — their reply just lands on the
-      // From mailbox instead of back in the queue.
-      //
-      // From stays POSTMARK_FROM_EMAIL (sendEmail's default). Sending FROM the
-      // mailbox address needs per-domain DKIM that is not universally in place
-      // — un-aligned SPF/DKIM would land support replies in spam — so it is a
-      // later plan, not a one-line change here.
-      replyTo: mailbox?.address || undefined,
-      stream: 'outbound',
-      tag: 'ticket-reply',
-      metadata: { ticket_id: ticket.id, contact_id: ticket.contact_id || '' },
-      headers,
-    })
-  } catch (err) {
+  // EMAIL-OUTBOUND-SERVER.1 — the reply leaves on the SUPPORT INBOX'S OWN
+  // Postmark server, from the ticket's own mailbox address, on Postmark's
+  // `email-send` stream. All three live in sendTicketEmail; see that file's
+  // header for the topology and for why a Postmark stream id must never be
+  // confused with our internal 'outbound'.
+  //
+  // Reply-To stays the ticket's mailbox so the member's next reply comes back
+  // to the address they wrote to and threads onto this ticket. A ticket with no
+  // mailbox (an elevated caller answering correspondence whose address was
+  // deleted) still sends, from a domain we own.
+  const send = await sendTicketEmail({
+    mailboxAddress: mailbox?.address || null,
+    to: ticket.requester_email,
+    subject,
+    htmlBody: textToHtml(outboundText),
+    textBody: outboundText,
+    tag: 'ticket-reply',
+    metadata: { ticket_id: ticket.id, contact_id: ticket.contact_id || '' },
+    headers,
+  })
+  if (!send.ok) {
     // Send failed → the ticket does NOT advance to pending. A queue that says
     // "waiting on the member" when the member was never written to is the
     // worst possible lie for a support tool to tell.
-    return NextResponse.json({ success: false, error: err.message }, { status: 400 })
+    //
+    // 503 for an unconfigured ticketing server, 400 for a Postmark refusal:
+    // the first is ours to fix and retryable unchanged, the second is about
+    // this particular message. Both write nothing.
+    return NextResponse.json(
+      { success: false, error: send.error },
+      { status: send.reason === 'not_configured' ? 503 : 400 }
+    )
   }
+  const result = send.result
 
   const { data: message, error: msgErr } = await db.from('email_inbox_messages').insert({
     ticket_id: ticket.id,
@@ -191,9 +196,12 @@ export async function POST(request, props) {
     location_id: ticket.location_id,
     direction: 'outbound',
     // WHO sent it (mig 493). from_email stays the Postmark From, which is what
-    // actually went on the wire — it is not an author field.
+    // actually went on the wire — it is not an author field. EMAIL-OUTBOUND
+    // -SERVER.1: that is now usually the mailbox's own address, and on the
+    // degraded path a domain we own — so it is read back off the send verdict
+    // rather than assumed from POSTMARK_FROM_EMAIL, which would be a lie.
     author_profile_id: user.id,
-    from_email: process.env.POSTMARK_FROM_EMAIL || null,
+    from_email: send.fromEmail || null,
     to_email: ticket.requester_email,
     subject,
     // The SIGNED body — the message row is the record of what the member
@@ -213,16 +221,26 @@ export async function POST(request, props) {
   // back to this contact via postmark_message_id. contact_id is NOT NULL
   // there, so an unlinked requester skips the log — the message row above is
   // still the operator-facing record.
+  //
+  // EMAIL-OUTBOUND-SERVER.1 — the row still describes the send correctly now
+  // that a DIFFERENT Postmark server sent it. postmark_message_id is an
+  // account-wide GUID, so the delivery webhook still correlates on it whichever
+  // server the event comes from; from_email records the real From; and
+  // postmark_stream is THIS APP'S 'outbound', written from the shared constant,
+  // NEVER the Postmark stream id the message actually rode. That column feeds
+  // consent classification (consentFieldForStream → email_administrative) and
+  // the email-hygiene sweeps' `= 'broadcast'` filters; a provider slug in it
+  // would be read as "not marketing" by accident rather than by rule.
   if (ticket.contact_id) {
     await db.from('email_sends').insert({
       contact_id: ticket.contact_id,
       location_id: ticket.location_id,
       source_type: 'inbox_reply',
       subject,
-      from_email: process.env.POSTMARK_FROM_EMAIL,
+      from_email: send.fromEmail,
       to_email: ticket.requester_email,
       postmark_message_id: result.messageId,
-      postmark_stream: 'outbound',
+      postmark_stream: TICKET_INTERNAL_STREAM,
       status: 'sent',
     })
   }
