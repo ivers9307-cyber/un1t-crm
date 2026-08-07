@@ -362,10 +362,18 @@ export function applyMergeTags(html, contact, extras = {}) {
  * provides baseUrl from getAppUrl() so this is unit-testable
  * without env vars.
  */
-export function buildUnsubscribeUrl(contact, baseUrl) {
+export function buildUnsubscribeUrl(contact, baseUrl, locationId) {
   const prefs = contact?.contact_preferences?.[0] || contact?.contact_preferences
   const token = prefs?.unsubscribe_token || contact?.id
-  return `${baseUrl}/unsubscribe/${token}`
+  // LOCCOMMS.4 — `?l=` scopes the opt-out to the SENDING location, so leaving a
+  // Hatch Street list does not silently remove someone from Stillorgan's.
+  //
+  // OMITTING IT IS MEANINGFUL, NOT A BUG: no `l` = unsubscribe from EVERY
+  // location. Emails already delivered carry the old location-less URL and must
+  // keep working; someone clicking one expects to be removed, and removing them
+  // from everything is the only direction that cannot generate a complaint.
+  const scope = locationId ? `?l=${encodeURIComponent(locationId)}` : ''
+  return `${baseUrl}/unsubscribe/${token}${scope}`
 }
 
 /**

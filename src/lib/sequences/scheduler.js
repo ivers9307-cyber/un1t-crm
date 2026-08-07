@@ -271,7 +271,7 @@ export async function runSequences({ now = new Date() } = {}) {
       // Reload the parent sequence + the contact in one go.
       const [{ data: sequence }, { data: contact }] = await Promise.all([
         db.from('email_sequences').select('*').eq('id', enrollment.sequence_id).single(),
-        db.from('contacts').select('*').eq('id', enrollment.contact_id).single(),
+        db.from('contacts').select('*, contact_preferences(unsubscribe_token)').eq('id', enrollment.contact_id).single(),
       ])
       if (!sequence || !contact) {
         await db.from('sequence_enrollments').update({

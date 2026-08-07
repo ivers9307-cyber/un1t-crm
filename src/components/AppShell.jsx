@@ -36,6 +36,13 @@ import { Analytics } from '@vercel/analytics/next'
 // per-host /unsubscribe/host/[token]): anonymous email recipients arrive with
 // no session, and without this entry the null-user redirect below bounced
 // them to /login. Mirrors the proxy.js allowlist — add new paths in BOTH.
+// '/preferences' — the preference centre (/preferences/[token]). LOCCOMMS.4
+// found this MISSING while the proxy.js allowlist already had '/preferences/',
+// so the server rendered the page and this client gate then bounced the visitor
+// to /login: every "manage your preferences" link in every marketing email led
+// to a login wall. Anonymous recipients have no session by definition. Same
+// class as the '/unsubscribe' and '/privacy' entries above — the third
+// allowlist is the one that keeps getting missed.
 // '/privacy' — public legal pages (/privacy, /privacy/members,
 // /privacy/authority-requests) and '/terms' — the Terms of Service. These
 // are server-rendered public policy pages (App Store + Meta App Review link
@@ -43,7 +50,7 @@ import { Analytics } from '@vercel/analytics/next'
 // host was bounced to /login → which that host rewrites to /welcome, i.e. the
 // server-rendered policy flashed then vanished into the studio chooser.
 // Mirrors the proxy.js + brands.js allowlists — add new paths in ALL THREE.
-const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/deposit', '/book', '/event', '/event-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/privacy', '/terms', '/legal', '/technical', '/ccf']
+const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/welcome', '/stillorgan', '/hatch-street', '/free-class', '/start', '/deposit', '/book', '/event', '/event-pay', '/class-pay', '/tv', '/present', '/studio-login', '/bca', '/host-connect', '/host', '/h', '/unsubscribe', '/preferences', '/privacy', '/terms', '/legal', '/technical', '/ccf']
 
 export default function AppShell({ user, children, isLinkedHost = false }) {
   const pathname = usePathname()

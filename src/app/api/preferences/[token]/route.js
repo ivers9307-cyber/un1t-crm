@@ -5,6 +5,10 @@ import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit
 import { validateBody } from '@/lib/validate'
 
 const PreferencesUpdateSchema = z.object({
+  // LOCCOMMS.4 — when present, the update applies to THAT location's list only.
+  // Absent = the global row, which the mig 489 trigger then fans out to every
+  // location (the "unsubscribe from everything" control).
+  locationId: z.string().optional(),
   email_marketing: z.boolean().optional(),
   email_administrative: z.boolean().optional(),
   whatsapp_marketing: z.boolean().optional(),
@@ -45,12 +49,31 @@ export async function GET(request, props) {
     return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
   }
 
+  // LOCCOMMS.4 — every list this person is actually on. Each location is a
+  // standalone business, so leaving one must not remove them from the others;
+  // showing all of them is what makes that legible instead of surprising.
+  const { data: locRows } = await db
+    .from('contact_location_preferences')
+    .select('location_id, email_marketing, sms_marketing, whatsapp_marketing, locations(name)')
+    .eq('contact_id', pref.contact_id)
+
+  const lists = (locRows || [])
+    .map((r) => ({
+      locationId: r.location_id,
+      locationName: r.locations?.name || 'UN1T',
+      email_marketing: r.email_marketing,
+      sms_marketing: r.sms_marketing,
+      whatsapp_marketing: r.whatsapp_marketing,
+    }))
+    .sort((a, b) => a.locationName.localeCompare(b.locationName))
+
   return NextResponse.json({
     success: true,
     contact: {
       name: pref.contacts?.name,
       email: pref.contacts?.email,
     },
+    lists,
     preferences: {
       email_marketing: pref.email_marketing,
       email_administrative: pref.email_administrative,
@@ -94,8 +117,26 @@ export async function PUT(request, props) {
   const updates = {}
   const logEntries = []
 
+  // LOCCOMMS.4 — a scoped update compares against THAT location's row, not the
+  // global one. Someone opted out globally but opted in at one location (the
+  // shape of the leads recovered in LEADCAP.1) would otherwise produce an empty
+  // patch and their change would silently do nothing.
+  let current = pref
+  if (body.locationId) {
+    const { data: locRow } = await db
+      .from('contact_location_preferences')
+      .select('email_marketing, sms_marketing, whatsapp_marketing')
+      .eq('contact_id', pref.contact_id)
+      .eq('location_id', body.locationId)
+      .maybeSingle()
+    if (!locRow) {
+      return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 404 })
+    }
+    current = locRow
+  }
+
   for (const channel of allowed) {
-    if (typeof body[channel] === 'boolean' && body[channel] !== pref[channel]) {
+    if (typeof body[channel] === 'boolean' && body[channel] !== current[channel]) {
       updates[channel] = body[channel]
       logEntries.push({
         contact_id: pref.contact_id,
@@ -103,6 +144,7 @@ export async function PUT(request, props) {
         action: body[channel] ? 'opt_in' : 'opt_out',
         source: 'preference_centre',
         ip_address: ip,
+        location_id: body.locationId || null,
       })
     }
   }
@@ -113,10 +155,22 @@ export async function PUT(request, props) {
 
   updates.updated_at = new Date().toISOString()
 
-  await db
-    .from('contact_preferences')
-    .update(updates)
-    .eq('id', pref.id)
+  // LOCCOMMS.4 — scoped writes go to the location row ONLY. Writing
+  // contact_preferences would trip the mig 489 trigger, which fans any channel
+  // going FALSE out to every location — turning "leave the Hatch list" into
+  // "leave every UN1T list", which is the harm this PR exists to prevent.
+  if (body.locationId) {
+    await db
+      .from('contact_location_preferences')
+      .update(updates)
+      .eq('contact_id', pref.contact_id)
+      .eq('location_id', body.locationId)
+  } else {
+    await db
+      .from('contact_preferences')
+      .update(updates)
+      .eq('id', pref.id)
+  }
 
   // Log all changes to consent audit trail
   if (logEntries.length > 0) {

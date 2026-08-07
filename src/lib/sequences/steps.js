@@ -164,7 +164,7 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
   // unsubscribe link, appendUnsubscribeFooter skips it so recipients
   // don't see two "Unsubscribe" links.
   const baseUrl = getAppUrl()
-  const unsubscribeUrl = buildUnsubscribeUrl(contact, baseUrl)
+  const unsubscribeUrl = buildUnsubscribeUrl(contact, baseUrl, sequence?.location_id)
   const mergedSubject = applyMergeTags(subject, contact)
   const merged = applyMergeTags(html, contact, {
     unsubscribe_url: unsubscribeUrl,
