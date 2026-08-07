@@ -141,6 +141,30 @@
 // Idempotency: recordWebhookEvent on Postmark's MessageID (released again
 // on any 5xx — see above), plus the unique index on
 // email_inbox_messages.postmark_message_id as the belt-and-braces layer.
+//
+// ATTACHMENTS (EMAIL-ATTACH.1, mig 496). Postmark inlines the files as base64
+// in `Attachments`; they are re-hosted into the private email-attachments
+// bucket and metered against the delivering mailbox's 5 GB quota. The whole
+// step is subordinate to filing the message: it runs after the message insert,
+// answers nothing, and records a row with a skipped_reason for any file it
+// could not keep. See src/lib/email-attachments-server.js.
+//
+// ⚠️ THE REAL CEILING IS VERCEL'S REQUEST-BODY CAP, NOT OUR SIZE CHECK.
+// Nothing in this route, next.config.mjs or vercel.json limits the body — App
+// Router route handlers have no bodyParser.sizeLimit (that was Pages Router)
+// and `await request.json()` reads whatever arrives. What DOES cap it is the
+// platform: a Vercel Node function rejects a request body over ~4.5 MB with a
+// 413 before this handler is ever invoked (the same cap that forced
+// direct-to-storage uploads in WA-PIPELINE #450 and the contractor-invoice
+// path #453). Because Postmark base64-encodes inline attachments (~4/3
+// expansion), that puts the practical inbound ceiling at roughly 3.3 MB of
+// attachment bytes per EMAIL — well under Postmark's own 25 MB inbound limit
+// and under our per-file MAX_ATTACHMENT_BYTES. A larger mail therefore does
+// not reach the `too_large` branch at all: Postmark sees a 413, retries, and
+// the message is never filed. That is a pre-existing property of every inbound
+// email on this route (bodies too), not something attachments introduced, and
+// fixing it needs Postmark's inbound "strip attachments + fetch by URL" mode
+// rather than a code change here. Flagged rather than papered over.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -161,6 +185,7 @@ import {
 import { resolveMailboxByRecipient } from '@/lib/email-mailboxes'
 import { resolveTicketAction, ticketSubject, pickThreadedTicket } from '@/lib/email-tickets'
 import { escapeLikePattern } from '@/lib/like-escape'
+import { storeInboundAttachments } from '@/lib/email-attachments-server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -516,7 +541,12 @@ async function processInboundEmail(db, body, messageId) {
   // ── Insert the message ────────────────────────────────────────────
   // ticket_id ONLY. conversation_id is left NULL — the column survives this
   // change (a later migration drops it) but nothing writes it any more.
-  const { error: msgErr } = await db.from('email_inbox_messages').insert({
+  //
+  // `.select('id')` since EMAIL-ATTACH.1: email_ticket_attachments.message_id
+  // is a foreign key, so the attachments cannot be written without the row's
+  // own id. It changes nothing about the insert itself — 23505 on the unique
+  // postmark_message_id index still arrives as an error with the same code.
+  const { data: insertedMessage, error: msgErr } = await db.from('email_inbox_messages').insert({
     ticket_id: ticketId,
     contact_id: contactId,
     location_id: locationId,
@@ -533,6 +563,8 @@ async function processInboundEmail(db, body, messageId) {
     status: 'received',
     sent_at: body.Date ? new Date(body.Date).toISOString() : now,
   })
+    .select('id')
+    .single()
   if (msgErr) {
     // 23505 = the unique postmark_message_id index caught a racing
     // duplicate — that's a success, not an error.
@@ -541,6 +573,39 @@ async function processInboundEmail(db, body, messageId) {
     }
     console.error('[postmark-inbound] message insert failed:', msgErr.message)
     return NextResponse.json({ success: false, error: 'message_insert_failed' }, { status: 500 })
+  }
+
+  // ── Attachments (EMAIL-ATTACH.1) ──────────────────────────────────
+  // AFTER the message row exists (they FK to it) and BEFORE nothing: this call
+  // can never fail the email. storeInboundAttachments() catches everything it
+  // does, records a row with a skipped_reason for each file it could not keep,
+  // and returns a summary — there is no error here for this route to answer
+  // with, and there must not be. An oversized invoice, a full mailbox or a
+  // Storage outage must all still leave the member's message filed and
+  // readable, exactly as they would if the mail carried no attachment at all.
+  //
+  // The try/catch is belt-and-braces on a function that already swallows its
+  // own faults, because the cost of being wrong here is losing an email.
+  //
+  // Metered against THIS mailbox — the one the mail was actually delivered to,
+  // which is also the only mailbox that could possibly be involved on the
+  // inbound path (an unmatched recipient dead-letters long before this line).
+  if (Array.isArray(body.Attachments) && body.Attachments.length > 0 && insertedMessage?.id) {
+    try {
+      const stored = await storeInboundAttachments(db, {
+        attachments: body.Attachments,
+        messageId: insertedMessage.id,
+        locationId,
+        mailboxId: mailbox.id,
+      })
+      if (stored.skipped > 0) {
+        console.warn('[postmark-inbound] attachments not stored', {
+          messageId, ticketId, ...stored.reasons,
+        })
+      }
+    } catch (err) {
+      console.error('[postmark-inbound] attachment storage threw (email still filed):', err?.message)
+    }
   }
 
   // ── Bump the ticket ───────────────────────────────────────────────

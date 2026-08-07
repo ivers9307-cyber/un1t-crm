@@ -1205,6 +1205,59 @@ registry.registerPath({
   },
 })
 
+// ── Attachments + storage quota — EMAIL-ATTACH.1 (mig 496) ──────────────────
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/tickets/{id}/attachments/{attachmentId}',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Short-lived signed URL for one stored attachment',
+  description: "The email-attachments bucket is private, so this is the only way a client sees the bytes; the URL expires in 5 minutes. Access is the TICKET's access (location + the mailbox the ticket arrived at) PLUS a check that the attachment belongs to THIS ticket — without that pairing check, any ticket the caller can open would unlock any attachment id in the estate. 404 — never 403 — for a missing attachment, one on another ticket, and one whose bytes were never stored (the body then names the skipped_reason so staff can ask for a resend). storage_path is never returned.",
+  request: { params: z.object({ id: uuidLike, attachmentId: uuidLike }) },
+  responses: {
+    200: { description: '{ url, filename, mime_type, size_bytes, expires_in }' },
+    404: { description: 'Not found / not accessible / not stored', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Recorded as stored but Storage would not sign it', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/email/storage',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Attachment storage used per email account',
+  description: "Per-mailbox fill against the 5 GB ceiling (mig 496), with a level of ok / warning (≥80%) / critical (≥95%) / full (≥100%), plus the location's `unfiled` bucket when a removed account has left bytes behind. Accounts with no counter row yet report 0 rather than being omitted. Inbound email is NEVER rejected on a full mailbox — the message lands in full and the attachment is recorded with skipped_reason 'quota'. Master or owner-at-location only.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ quota_bytes, mailboxes, unfiled, prune_batch_limit }' },
+    403: { description: 'Not master/owner at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/locations/{id}/email/storage',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Reclaim attachment storage, or repair a drifted counter',
+  description: "action='prune' deletes the stored bytes for attachments older than older_than_days (default 365) on SOLVED or CLOSED tickets only — a ticket someone is still working is never touched. The attachment ROW survives with storage_path NULL and skipped_reason 'pruned', so staff can still see a file existed and ask for a resend, and the mailbox counter is DECREMENTED by exactly what was removed (a prune that freed bytes without moving the counter would leave the mailbox permanently full). Bounded per call; `remaining` > 0 means run it again. mailbox_id null targets the location's unfiled bucket. action='recalculate' re-derives every counter at the location from the attachment rows. Master or owner-at-location only; another studio's mailbox id is 404.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      action: z.enum(['prune', 'recalculate']),
+      mailbox_id: uuidLike.nullable().optional(),
+      older_than_days: z.number().int().min(0).max(3650).optional(),
+    }).openapi('EmailStorageAction') } } },
+  },
+  responses: {
+    200: { description: '{ pruned, bytes_freed, remaining } or { recalculated }' },
+    400: { description: 'Unknown action or invalid body', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not master/owner at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such mailbox at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // ── Email accounts (mailboxes) + per-account access — EMAIL-MAILBOX-ADMIN.1 ──
 // Master or owner-AT-LOCATION only, NOT the `email_inbox` permission: a
 // manager holds that key and is not elevated, so gating here on it would let

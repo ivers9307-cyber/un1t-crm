@@ -52,6 +52,11 @@ export default function TicketInbox({ locationId, locationName, userId }) {
   const [selectedId, setSelectedId] = useState(null)
   const [ticket, setTicket] = useState(null)
   const [messages, setMessages] = useState([])
+  // EMAIL-ATTACH.1 — the route reports when its attachment query failed. The
+  // thread is still complete; the file lists on it are not, and rendering that
+  // silently as "no attachments" is the one wrong answer a support queue must
+  // never give.
+  const [attachmentsUnavailable, setAttachmentsUnavailable] = useState(false)
   const [threadLoading, setThreadLoading] = useState(false)
   const [threadError, setThreadError] = useState(null)
   const [sending, setSending] = useState(false)
@@ -112,6 +117,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
       }
       setTicket(body.data?.ticket || null)
       setMessages(body.data?.messages || [])
+      setAttachmentsUnavailable(!!body.data?.attachments_unavailable)
     } catch {
       setThreadError('Could not load this ticket')
     } finally {
@@ -139,6 +145,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
     // with the full record (mailbox + linked contact) a moment later.
     setTicket(row)
     setMessages([])
+    setAttachmentsUnavailable(false)
     setThreadError(null)
     if (row.unread_count > 0) markRead(row.id)
   }
@@ -157,6 +164,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
     setSelectedId(null)
     setTicket(null)
     setMessages([])
+    setAttachmentsUnavailable(false)
     setThreadError(null)
   }
 
@@ -389,6 +397,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
             hasSelection={!!selectedId}
             ticket={ticket}
             messages={messages}
+            attachmentsUnavailable={attachmentsUnavailable}
             loading={threadLoading}
             error={threadError}
             currentUserId={userId}

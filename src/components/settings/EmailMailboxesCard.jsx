@@ -23,9 +23,13 @@
 // trusting the screen.
 
 import { useCallback, useEffect, useState } from 'react'
-import { Mail, Loader2, Plus, Star, EyeOff, Eye, Check, AlertTriangle, Users } from 'lucide-react'
+import {
+  Mail, Loader2, Plus, Star, EyeOff, Eye, Check, AlertTriangle, Users,
+  HardDrive, Trash2, RefreshCw,
+} from 'lucide-react'
 import { Button, Card } from '@/components/ui'
 import { MAILBOX_LABEL_MAX, mailboxInputIssues } from '@/lib/email-mailbox-admin'
+import { EMAIL_MAILBOX_QUOTA_BYTES, formatBytes, quotaMessage } from '@/lib/email-attachment-quota'
 
 const CHIP = 'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium'
 
@@ -46,12 +50,91 @@ function AccessChip({ access }) {
   return <span className={`${CHIP} bg-slate-500/10 text-slate-700`}>No access</span>
 }
 
+// EMAIL-ATTACH.1 — the fill bar's colours per level. Chips follow the repo's
+// light-theme recipe (bg-<c>-500/10 + text-<c>-700); the bar itself is a solid
+// fill, so it takes the -500 ramp.
+const LEVEL_STYLE = {
+  ok: { bar: 'bg-un1t-accent', chip: 'bg-slate-500/10 text-slate-700', word: null },
+  warning: { bar: 'bg-amber-500', chip: 'bg-amber-500/10 text-amber-700', word: '80% full' },
+  critical: { bar: 'bg-orange-500', chip: 'bg-orange-500/10 text-orange-700', word: '95% full' },
+  full: { bar: 'bg-red-500', chip: 'bg-red-500/10 text-red-700', word: 'Full' },
+}
+
+/**
+ * One account's storage, with the release valve attached.
+ *
+ * The valve is ALWAYS offered once there is anything to reclaim, not only at
+ * 100%. An operator who can see the bar filling should be able to act on it
+ * before the mailbox stops keeping files, and a control that appears only in
+ * the failure state is a control nobody has ever used before they need it.
+ */
+function StorageRow({ row, onPrune, busy }) {
+  const style = LEVEL_STYLE[row.level] || LEVEL_STYLE.ok
+  const message = quotaMessage(row)
+  const name = row.mailbox_id
+    ? (row.label || row.address)
+    : 'Unfiled (accounts that were removed)'
+
+  return (
+    <li className="rounded-lg border border-un1t-border bg-un1t-bg/40 p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <span className="text-sm font-medium text-un1t-text">{name}</span>
+        <span className="text-xs text-un1t-subtle">
+          {formatBytes(row.bytes_used)} of {formatBytes(row.quota_bytes)}
+          {style.word && (
+            <span className={`${CHIP} ml-2 ${style.chip}`}>{style.word}</span>
+          )}
+        </span>
+      </div>
+
+      <div
+        className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-un1t-border"
+        role="progressbar"
+        aria-valuenow={row.percent}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={`${name} storage used`}
+      >
+        <div className={`h-full ${style.bar}`} style={{ width: `${row.percent}%` }} />
+      </div>
+
+      {message && <p className="mt-2 text-[11px] text-un1t-muted">{message}</p>}
+
+      {row.bytes_used > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant={row.level === 'full' ? 'danger' : 'ghost'}
+            icon={Trash2}
+            loading={busy}
+            onClick={() => onPrune(row)}
+          >
+            Free up space
+          </Button>
+          <span className="text-[11px] text-un1t-muted">
+            Deletes attachments on solved and closed tickets older than a year. The message and
+            the file&apos;s name stay on the ticket, so you can still ask for a resend.
+          </span>
+        </div>
+      )}
+    </li>
+  )
+}
+
 export default function EmailMailboxesCard({ locationId }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [mailboxes, setMailboxes] = useState([])
   const [busy, setBusy] = useState(null)
   const [openAccess, setOpenAccess] = useState(null)
+
+  // Storage (EMAIL-ATTACH.1). Loaded alongside the accounts but kept in its
+  // own state so a storage fault never blanks the account list — managing
+  // addresses has to keep working when the quota view does not.
+  const [storage, setStorage] = useState(null)
+  const [storageError, setStorageError] = useState(null)
+  const [storageNote, setStorageNote] = useState(null)
 
   // Add form
   const [address, setAddress] = useState('')
@@ -82,7 +165,28 @@ export default function EmailMailboxesCard({ locationId }) {
     }
   }, [locationId])
 
+  const loadStorage = useCallback(async () => {
+    setStorageError(null)
+    try {
+      const res = await fetch(`/api/locations/${locationId}/email/storage`)
+      const j = await res.json()
+      if (!res.ok || !j.success) {
+        // Said out loud rather than rendered as an empty bar: "0 of 5 GB" on a
+        // failed read is the reassuring wrong answer on the one screen an
+        // operator opens to find out whether there is room.
+        setStorageError(j.error || `HTTP ${res.status}`)
+        setStorage(null)
+      } else {
+        setStorage(j.data)
+      }
+    } catch (e) {
+      setStorageError(e.message || 'Network error')
+      setStorage(null)
+    }
+  }, [locationId])
+
   useEffect(() => { load() }, [load])
+  useEffect(() => { loadStorage() }, [loadStorage])
 
   // Client-side mirror of the DB's own CHECKs, from the same pure module the
   // route uses — so the message is identical whichever side catches it.
@@ -121,6 +225,48 @@ export default function EmailMailboxesCard({ locationId }) {
     if (!j.success) { setError(j.error || 'Could not save that change.'); return false }
     await load()
     return true
+  }
+
+  // Attachments are a member's correspondence and the bytes do not come back,
+  // so this confirms before it acts. `confirm` matches the rest of the settings
+  // surface; a bespoke modal here would be the only one of its kind.
+  async function prune(row) {
+    const name = row.mailbox_id ? (row.label || row.address) : 'the unfiled attachments'
+    if (!window.confirm(
+      `Permanently delete attachments on solved and closed tickets older than a year for ${name}?\n\n` +
+      'The messages and the file names stay on the tickets. The files themselves cannot be recovered.'
+    )) return
+
+    setBusy(`storage:${row.mailbox_id || 'unfiled'}`)
+    setStorageError(null)
+    setStorageNote(null)
+    const j = await send(`/api/locations/${locationId}/email/storage`, 'POST', {
+      action: 'prune',
+      mailbox_id: row.mailbox_id,
+      older_than_days: 365,
+    })
+    setBusy(null)
+    if (!j.success) { setStorageError(j.error || 'Could not free up space.'); return }
+
+    const freed = formatBytes(j.data.bytes_freed)
+    setStorageNote(
+      j.data.pruned === 0
+        ? 'Nothing to remove — every attachment here is either recent or on a ticket that is still open.'
+        : `Removed ${j.data.pruned} attachment${j.data.pruned === 1 ? '' : 's'}, freeing ${freed}.` +
+          (j.data.remaining > 0 ? ' There is more to clear — run it again.' : '')
+    )
+    await loadStorage()
+  }
+
+  async function recalculate() {
+    setBusy('storage:recalc')
+    setStorageError(null)
+    setStorageNote(null)
+    const j = await send(`/api/locations/${locationId}/email/storage`, 'POST', { action: 'recalculate' })
+    setBusy(null)
+    if (!j.success) { setStorageError(j.error || 'Could not recalculate.'); return }
+    setStorageNote('Recalculated from the stored files.')
+    await loadStorage()
   }
 
   async function setAccess(mailboxId, profileId, granted) {
@@ -326,6 +472,80 @@ export default function EmailMailboxesCard({ locationId }) {
             )
           })}
         </ul>
+      </Card>
+
+      {/* EMAIL-ATTACH.1 — storage, on the same screen as the accounts because
+          "how full is accounts@" is a question about an account, and a separate
+          page is a page nobody opens until the mailbox has already stopped
+          keeping files. */}
+      <Card title="Attachment storage">
+        <p className="text-xs text-un1t-muted">
+          Files members send are kept in a private store, {formatBytes(storage?.quota_bytes || EMAIL_MAILBOX_QUOTA_BYTES)} per
+          account. <strong>Email is never rejected</strong> — if an account fills up the message still
+          arrives in full, and the attachment is listed on the ticket as &ldquo;not stored&rdquo; so you
+          can ask for a resend.
+        </p>
+
+        {storageError && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-700">
+            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
+            <span>Could not read storage usage: {storageError}</span>
+          </div>
+        )}
+        {storageNote && (
+          <p className="mt-3 rounded-lg border border-un1t-border bg-un1t-bg/60 p-3 text-sm text-un1t-subtle">
+            {storageNote}
+          </p>
+        )}
+
+        {storage && (
+          <>
+            <ul className="mt-4 space-y-3">
+              {storage.mailboxes.length === 0 && (
+                <li className="text-sm text-un1t-subtle">No accounts yet, so nothing is stored.</li>
+              )}
+              {storage.mailboxes.map(row => (
+                <StorageRow
+                  key={row.mailbox_id}
+                  row={row}
+                  onPrune={prune}
+                  busy={busy === `storage:${row.mailbox_id}`}
+                />
+              ))}
+              {storage.unfiled && (
+                <StorageRow
+                  row={storage.unfiled}
+                  onPrune={prune}
+                  busy={busy === 'storage:unfiled'}
+                />
+              )}
+            </ul>
+
+            {storage.unfiled && (
+              <p className="mt-2 text-[11px] text-un1t-muted">
+                &ldquo;Unfiled&rdquo; holds files from accounts that no longer exist. Their tickets are
+                kept, so the files are still charged to this studio until you clear them.
+              </p>
+            )}
+
+            <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-un1t-border pt-3">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                icon={RefreshCw}
+                loading={busy === 'storage:recalc'}
+                onClick={recalculate}
+              >
+                Recalculate
+              </Button>
+              <span className="inline-flex items-center gap-1 text-[11px] text-un1t-muted">
+                <HardDrive className="h-3 w-3" aria-hidden="true" />
+                Re-counts these figures from the files themselves. Worth doing if a number looks wrong.
+              </span>
+            </div>
+          </>
+        )}
       </Card>
 
       <Card title="Add an account">
