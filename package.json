@@ -18,6 +18,7 @@
     "check:route-guards": "node scripts/check-route-guards.mjs",
     "check:location-scoping": "node scripts/check-location-scoping.mjs",
     "check:rls-restrictive": "node scripts/check-rls-restrictive.mjs",
+    "check:dependency-audit": "npm audit --omit=dev --audit-level=high --json | node scripts/check-dependency-audit.mjs",
     "check:guardrails": "eslint --config eslint.guardrails.config.mjs 'src/**/*.{js,jsx}' 'shared/**/*.js'",
     "postinstall": "node scripts/copy-ffmpeg-core.mjs",
     "eval:agent": "vitest run --config vitest.evals.config.mjs",
