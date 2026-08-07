@@ -8,6 +8,7 @@ import { uuidLike, email as emailAddress } from '@/lib/schemas'
 import { sendEmail } from '@/lib/postmark'
 import { normalizeEmail, pickContact, inboundPreview } from '@/lib/email-inbox'
 import { ticketSubject } from '@/lib/email-tickets'
+import { escapeLikePattern } from '@/lib/like-escape'
 import { loadVisibleMailboxes, ticketNotFound } from '../_helpers'
 
 // POST /api/email/tickets/compose — start a conversation (EMAIL-TICKET.5).
@@ -107,13 +108,21 @@ export async function POST(request) {
   // Same resolution as the inbound webhook (pickContact), deliberately: a
   // ticket we start and a ticket they start must agree on who the member is.
   //
-  // The ILIKE is re-checked in JS before it is trusted. `_` and `%` are ILIKE
-  // wildcards AND legal characters in an email local part, so `a_b@x.com`
-  // matches `axb@x.com` server-side — filing a ticket against the wrong member
-  // is far worse than filing it against nobody.
+  // `_` is an ILIKE wildcard AND a legal email character, so an unescaped
+  // `a_b@x.com` also matches `axb@x.com` server-side — filing a ticket against
+  // the wrong member is far worse than filing it against nobody.
+  // escapeLikePattern makes the QUERY mean what it says (ILIKE-WILDCARD.1 fixed
+  // the same shape in the inbound webhook and six other lookups); the JS
+  // re-check below stays as defence in depth, so a future edit to either line
+  // alone cannot reopen the hole.
+  //
+  // `%` never gets this far on THIS route — `to` is validated by the strict
+  // Zod email schema, which rejects a `%` local part. The inbound webhook has
+  // no such gate (it parses the sender with the permissive normalizeEmail
+  // regex), which is why the `%@domain` variant was live there and not here.
   const { data: candidates } = await db.from('contacts')
     .select('id, location_id, email, created_at')
-    .ilike('email', to)
+    .ilike('email', escapeLikePattern(to))
     .limit(CONTACT_MATCH_LIMIT)
   const exact = (candidates || []).filter(c => normalizeEmail(c.email) === to)
   const contact = pickContact(exact, locationId)
