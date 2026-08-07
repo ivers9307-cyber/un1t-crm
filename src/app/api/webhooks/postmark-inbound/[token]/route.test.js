@@ -23,6 +23,14 @@
 //   email is filed NOWHERE, with no error anywhere.
 // One test below makes every email_conversations access throw and asserts the
 // mail still lands. It is what says the table can now be dropped safely.
+//
+// THE THIRD PROPERTY (EMAIL-DEDUPE-RELEASE.1) is that chain closed at its
+// source rather than one table at a time: the last describe block breaks each
+// of the route's seven 5xx paths in turn and asserts the dedupe claim is
+// GIVEN BACK, with the flagship case posting the same MessageID twice and
+// asserting the SECOND attempt creates the ticket and the message. The
+// counterweight is in there too — a re-delivery of a message that already
+// succeeded must still short-circuit to 200 `deduped` and write nothing.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -108,10 +116,19 @@ function makeDb(state = {}) {
     contacts: [CONTACT],
     threadRows: [],   // email_inbox_messages rows a threading header can match
     tickets: {},      // id → email_tickets row
+    // The webhook_events dedupe ledger. recordWebhookEvent is mocked, so this
+    // is only populated when a test opts into bindDedupeLedger() — but the
+    // route's release DELETE always goes through db.from('webhook_events'),
+    // which is what clears an entry here.
+    claims: new Set(),
+    // `${table}:${op}` → the error that query answers with, so a test can
+    // break ONE query the way a real DB fault would. Mutable between requests
+    // so a fault can be transient (fail the first attempt, not the retry).
+    fail: {},
     ...state,
   }
 
-  const db = { inserts: [], updates: [], rpcs: [], _state: s }
+  const db = { inserts: [], updates: [], deletes: [], rpcs: [], _state: s }
 
   function rowsFor(b) {
     switch (b._table) {
@@ -128,6 +145,9 @@ function makeDb(state = {}) {
   }
 
   function settle(b, shape) {
+    const fault = s.fail[`${b._table}:${b._op}`]
+    if (fault) return { data: null, error: fault }
+
     if (b._op === 'insert') {
       db.inserts.push({ table: b._table, payload: b._payload })
       const id = b._table === 'email_tickets' ? 'new-ticket' : 'new-row'
@@ -135,6 +155,17 @@ function makeDb(state = {}) {
     }
     if (b._op === 'update') {
       db.updates.push({ table: b._table, payload: b._payload, filters: b._filters })
+      return { data: null, error: null }
+    }
+    if (b._op === 'delete') {
+      db.deletes.push({ table: b._table, filters: b._filters })
+      // Model the real effect of the dedupe release: the claim is gone, so
+      // the next POST of the same MessageID is processed rather than deduped.
+      if (b._table === 'webhook_events') {
+        for (const f of b._filters) {
+          if (f[0] === 'eq' && f[1] === 'event_id') s.claims.delete(f[2])
+        }
+      }
       return { data: null, error: null }
     }
     const list = rowsFor(b)
@@ -147,6 +178,7 @@ function makeDb(state = {}) {
     b.select = () => b
     b.insert = (p) => { b._op = 'insert'; b._payload = p; return b }
     b.update = (p) => { b._op = 'update'; b._payload = p; return b }
+    b.delete = () => { b._op = 'delete'; return b }
     b.eq = filter('eq')
     b.is = filter('is')
     b.not = filter('not')
@@ -170,6 +202,21 @@ function makeDb(state = {}) {
 
 const insertsInto = (db, table) => db.inserts.filter(i => i.table === table)
 const updatesTo = (db, table) => db.updates.filter(u => u.table === table)
+
+/**
+ * Wire recordWebhookEvent to the fake DB's ledger instead of a fixed answer,
+ * so the claim/release cycle is modelled end-to-end: attempt 1 claims, the
+ * route's DELETE clears the claim, and attempt 2 with the SAME MessageID is
+ * genuinely re-processed rather than short-circuiting. Without this the
+ * regression below could not tell a released claim from a held one.
+ */
+function bindDedupeLedger(target) {
+  recordWebhookEvent.mockImplementation(async ({ eventId }) => {
+    if (target._state.claims.has(eventId)) return { seen: true }
+    target._state.claims.add(eventId)
+    return { seen: false }
+  })
+}
 
 function post(body, token = 'inbound-secret') {
   return POST({ json: async () => body }, { params: Promise.resolve({ token }) })
@@ -485,7 +532,177 @@ describe('idempotency', () => {
     expect(db.inserts).toHaveLength(0)
     expect(db.updates).toHaveLength(0)
     expect(db.rpcs).toHaveLength(0)
+    // …and the short-circuit must not release anyone's claim either.
+    expect(db.deletes).toHaveLength(0)
     expect(deadLetterWebhook).not.toHaveBeenCalled()
+  })
+})
+
+// ── EMAIL-DEDUPE-RELEASE.1 ──────────────────────────────────────────
+// The bug this whole file kept describing but never caught:
+//   any 5xx → Postmark retries the same MessageID → recordWebhookEvent wrote
+//   the dedupe row on attempt 1 → the retry short-circuits to 200 `deduped`
+//   → the email is filed NOWHERE. No ticket, no message, no dead letter, no
+//   error. The route now DELETEs its own webhook_events row on the way out of
+//   any 5xx, so the retry re-processes for real.
+describe('a 5xx releases the dedupe claim', () => {
+  const CLAIM = 'inbound-email:pm-inbound-1'          // inbound()
+  const REPLY_CLAIM = 'inbound-email:pm-inbound-2'    // reply()
+
+  // A reply that threads to an existing open ticket, so the two lookups after
+  // the thread scan are actually reached.
+  const THREADED = {
+    threadRows: [{ ticket_id: 'T-open', created_at: '2026-08-06T08:00:00Z', location_id: 'loc-hatch', rfc_message_id: 'ours-1@mtasv.net' }],
+    tickets: { 'T-open': { id: 'T-open', location_id: 'loc-hatch', status: 'open', subject: 'Billing question', first_response_at: null } },
+  }
+
+  const boom = { message: 'connection reset by peer' }
+
+  // EVERY 5xx return path in the route, and the query that produces it.
+  // If a new one is added without a release, add it here — that is the point.
+  const FAILURE_PATHS = [
+    { what: 'the email_sends thread lookup', error: 'thread_lookup_failed', fail: { 'email_sends:select': boom }, payload: reply, claim: REPLY_CLAIM },
+    { what: 'the email_mailboxes lookup', error: 'mailbox_lookup_failed', fail: { 'email_mailboxes:select': boom }, payload: inbound, claim: CLAIM },
+    { what: 'the contacts lookup', error: 'contact_lookup_failed', fail: { 'contacts:select': boom }, payload: inbound, claim: CLAIM },
+    { what: 'the email_inbox_messages thread scan', error: 'ticket_lookup_failed', fail: { 'email_inbox_messages:select': boom }, payload: reply, claim: REPLY_CLAIM, state: THREADED },
+    { what: 'the email_tickets fetch', error: 'ticket_lookup_failed', fail: { 'email_tickets:select': boom }, payload: reply, claim: REPLY_CLAIM, state: THREADED },
+    { what: 'the email_tickets insert', error: 'ticket_insert_failed', fail: { 'email_tickets:insert': boom }, payload: inbound, claim: CLAIM },
+    { what: 'the email_inbox_messages insert', error: 'message_insert_failed', fail: { 'email_inbox_messages:insert': boom }, payload: inbound, claim: CLAIM },
+  ]
+
+  let errSpy
+  beforeEach(() => { errSpy = vi.spyOn(console, 'error').mockImplementation(() => {}) })
+  afterEach(() => { errSpy.mockRestore() })
+
+  function withDb(state) {
+    db = makeDb(state)
+    createServerClient.mockImplementation(() => db)
+    bindDedupeLedger(db)
+    return db
+  }
+
+  for (const { what, error, fail, payload, claim, state } of FAILURE_PATHS) {
+    it(`releases it when ${what} fails (${error})`, async () => {
+      withDb({ ...(state || {}), fail })
+
+      const res = await post(payload())
+
+      expect(res.status).toBe(500)
+      expect((await res.json()).error).toBe(error)
+
+      // Exactly one DELETE, naming THIS route's own (provider, event_id) pair
+      // — nothing that could reach another webhook's claim.
+      expect(db.deletes).toHaveLength(1)
+      expect(db.deletes[0].table).toBe('webhook_events')
+      expect(db.deletes[0].filters).toContainEqual(['eq', 'provider', 'postmark'])
+      expect(db.deletes[0].filters).toContainEqual(['eq', 'event_id', claim])
+      expect(db._state.claims.has(claim)).toBe(false)
+    })
+  }
+
+  // THE regression test for the whole bug.
+  it('the retry after a failed query files the email properly instead of `deduped`', async () => {
+    withDb({ fail: { 'email_mailboxes:select': boom } })
+
+    // Attempt 1 — a transient DB fault. Nothing is written.
+    const first = await post(inbound())
+    expect(first.status).toBe(500)
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(0)
+
+    // The fault clears (that is what transient means) and Postmark retries the
+    // SAME MessageID. Before this fix that answered 200 { deduped: true } and
+    // wrote nothing — the email was gone, with no error anywhere.
+    db._state.fail = {}
+    const second = await post(inbound())
+    const json = await second.json()
+
+    expect(second.status).toBe(200)
+    expect(json.deduped).toBeUndefined()
+    expect(json).toMatchObject({ success: true, ticket_id: 'new-ticket', mailbox_id: 'mb-hatch' })
+
+    // The mail is really filed — ticket AND message, on the second attempt.
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+    expect(insertsInto(db, 'email_tickets')[0].payload.location_id).toBe('loc-hatch')
+    const [message] = insertsInto(db, 'email_inbox_messages')
+    expect(message.payload.ticket_id).toBe('new-ticket')
+    expect(message.payload.postmark_message_id).toBe('pm-inbound-1')
+    expect(message.payload.text_body).toBe('My direct debit bounced.')
+  })
+
+  it('a re-delivery of a SUCCESSFUL message still short-circuits to 200 deduped', async () => {
+    withDb()
+
+    const first = await post(inbound())
+    expect(first.status).toBe(200)
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+    // A 2xx KEEPS the claim — this is the half of dedupe that must not change.
+    expect(db.deletes).toHaveLength(0)
+    expect(db._state.claims.has(CLAIM)).toBe(true)
+
+    const writes = db.inserts.length
+    const rpcs = db.rpcs.length
+    const second = await post(inbound())
+
+    expect(second.status).toBe(200)
+    expect(await second.json()).toEqual({ success: true, deduped: true })
+    expect(db.inserts).toHaveLength(writes)   // nothing new
+    expect(db.rpcs).toHaveLength(rpcs)
+    expect(db.deletes).toHaveLength(0)
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+  })
+
+  it('a release that FAILS does not mask the original error, and is escalated', async () => {
+    withDb({ fail: {
+      'email_inbox_messages:insert': { message: 'insert exploded' },
+      'webhook_events:delete': { message: 'delete refused' },
+    } })
+
+    const res = await post(inbound())
+
+    // The caller still learns what actually broke — not a release error.
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe('message_insert_failed')
+
+    // Loud: the retry WILL be swallowed as `deduped` now, so it is logged and
+    // the payload is captured where an operator can find it.
+    expect(errSpy.mock.calls.some(c => String(c[0]).includes('DEDUPE RELEASE FAILED'))).toBe(true)
+    expect(deadLetterWebhook).toHaveBeenCalledTimes(1)
+    expect(deadLetterWebhook.mock.calls[0][1]).toMatchObject({
+      provider: 'postmark_inbound',   // NOT the auto-replayable 'postmark' key
+      eventType: 'inbound_email',
+      error: 'dedupe_release_failed',
+    })
+    expect(deadLetterWebhook.mock.calls[0][1].payload.MessageID).toBe('pm-inbound-1')
+    // Honest about the state: the claim really is still held.
+    expect(db._state.claims.has(CLAIM)).toBe(true)
+  })
+
+  it('releases the claim when the route THROWS rather than returning 500', async () => {
+    // A malformed Date header: `new Date('not-a-date').toISOString()` raises a
+    // RangeError, and Date is attacker-supplied. Next would answer 500 with
+    // the claim still held, which is the same silent loss by another door.
+    withDb()
+
+    const res = await post(inbound({ Date: 'not-a-date' }))
+
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe('unhandled_error')
+    expect(db.deletes).toHaveLength(1)
+    expect(db._state.claims.has(CLAIM)).toBe(false)
+  })
+
+  it('does not release on a 200 dead-letter (unmatched recipient)', async () => {
+    // dead_lettered is a 2xx: the payload is already captured and a retry
+    // would not conjure a mailbox, so the claim stays.
+    withDb()
+
+    const res = await post(inbound({ ToFull: [{ Email: 'nobody@inbound.postmarkapp.com' }] }))
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).dead_lettered).toBe('no_matching_mailbox')
+    expect(db.deletes).toHaveLength(0)
+    expect(db._state.claims.has(CLAIM)).toBe(true)
   })
 })
 

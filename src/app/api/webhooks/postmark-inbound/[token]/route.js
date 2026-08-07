@@ -71,14 +71,62 @@
 // before this deployed would have fired exactly that chain on the very next
 // inbound email, deterministically.
 //
-// BE PRECISE ABOUT WHAT IS AND IS NOT FIXED. The chain is a property of the
-// dedupe-before-work ordering, not of email_conversations: EVERY 500 below
-// (email_sends, email_mailboxes, contacts, the two ticket lookups, the ticket
-// and message inserts) is lost the same way on Postmark's retry. What this
-// change removes is the one link that was about to be made to fail ON PURPOSE
-// by a migration. The general ordering problem — a dedupe row claimed before
-// the work succeeds — is still here and still worth fixing separately (claim
-// on success, or release the dedupe row on a 5xx).
+// THE ORDERING PROBLEM ITSELF IS NOW FIXED HERE (EMAIL-DEDUPE-RELEASE.1,
+// 2026-08-07). The chain was never about email_conversations — it is a
+// property of claiming the dedupe row BEFORE the work succeeds, so EVERY 5xx
+// in this route was lost the same way on Postmark's retry:
+//   thread_lookup_failed (email_sends) · mailbox_lookup_failed
+//   (email_mailboxes) · contact_lookup_failed (contacts) ·
+//   ticket_lookup_failed (both the email_inbox_messages thread scan and the
+//   email_tickets fetch) · ticket_insert_failed · message_insert_failed.
+// So the claim is RELEASED on the way out: POST records it, hands the work to
+// processInboundEmail(), and DELETEs the webhook_events row again whenever
+// that returns >= 500 — or throws, which `new Date(body.Date).toISOString()`
+// on a malformed Date header will do on attacker-supplied input. Postmark's
+// retry then finds no claim and genuinely re-processes. A 2xx KEEPS the
+// claim, so a real re-delivery of an already-processed message still
+// short-circuits to 200 `deduped`, exactly as before.
+//
+// DELIBERATELY LOCAL TO THIS ROUTE. src/lib/webhook-events.js is shared with
+// nine other webhooks including three Revolut payment receivers, where
+// releasing a claim could process a payment twice — worse than losing one.
+// Nothing here touches that helper: the DELETE is written inline and names
+// this route's own pair (provider 'postmark', event_id
+// `inbound-email:<MessageID>`), so it cannot reach another route's rows.
+// The other nine still claim-before-work and still lose an event on a 5xx
+// retry; that is a separate, supervised review.
+//
+// CONCURRENCY, PLAINLY. An attempt releases only AFTER it has stopped writing
+// (it releases and returns), so the release never puts two attempts in the
+// write phase together. A duplicate that arrives while attempt 1 is still
+// running still gets 200 `deduped` and writes nothing — safe only because
+// attempt 1's own 500 keeps Postmark's retry chain alive. RESIDUAL WINDOW: if
+// that concurrent duplicate IS Postmark's retry and it 200s before attempt 1
+// fails, Postmark treats the message as delivered and the mail is still lost.
+// The window is this request's own runtime (sub-second) against Postmark's
+// minutes-long retry backoff. Closing it needs claim-on-success or a claim
+// with a state column — i.e. changing the shared table's semantics, which is
+// not being done unattended. The unique index on
+// email_inbox_messages.postmark_message_id (23505 → treated as success below)
+// makes a genuine double-write of the MESSAGE harmless, but it does not cover
+// email_tickets: a 500 from the message insert after the ticket insert
+// succeeded now leaves an empty ticket behind, because the retry re-processes
+// and opens its own. An orphan ticket someone can see beats mail that
+// vanished, so that cost is accepted.
+//
+// A FAILED RELEASE is logged loudly, dead-lettered (provider
+// 'postmark_inbound', error 'dedupe_release_failed') and still answers 500
+// with the ORIGINAL error: a client-side error is not proof the DELETE did
+// not commit, so a retry may still land, and the payload is captured for
+// triage either way.
+//
+// SECOND ACCEPTED COST: a payload that fails DETERMINISTICALLY (not
+// transiently) now 5xxs on every Postmark retry instead of being swallowed as
+// `deduped` after the first. It burns that message's retry schedule and shows
+// up in Postmark's activity log — which is the point, since the alternative
+// is the failure being invisible. The route already answered 500 on attempt
+// one either way, so this adds retries of an already-failing message, not a
+// new class of non-2xx.
 //
 // email_inbox_messages.conversation_id still exists as a column and is now
 // simply never written (deprecated-columns-stay-on-disk, CLAUDE.md). A
@@ -90,9 +138,9 @@
 // creates rows regardless — deferring would just add a hop. Same
 // reasoning as invoices-inbound.
 //
-// Idempotency: recordWebhookEvent on Postmark's MessageID, plus the
-// unique index on email_inbox_messages.postmark_message_id as the
-// belt-and-braces layer.
+// Idempotency: recordWebhookEvent on Postmark's MessageID (released again
+// on any 5xx — see above), plus the unique index on
+// email_inbox_messages.postmark_message_id as the belt-and-braces layer.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -138,6 +186,50 @@ export function verifyEmailInboundRequest({ urlToken, primarySecret, previousSec
 // Chunk .in() candidate lists defensively (header chains can be long).
 const MAX_THREAD_CANDIDATES = 40
 
+/** The dedupe key this route claims. One place, so the DELETE can't drift. */
+const dedupeEventId = (messageId) => `inbound-email:${messageId}`
+
+/**
+ * Give back the dedupe claim so Postmark's retry re-processes the message
+ * instead of short-circuiting to 200 `deduped` and losing it.
+ *
+ * Written inline rather than added to src/lib/webhook-events.js on purpose:
+ * that helper is shared with nine other webhooks (three of them Revolut
+ * payment receivers) where releasing a claim risks a double payment. This
+ * DELETE names one (provider, event_id) pair — this route's own — so it
+ * cannot affect any other webhook.
+ *
+ * Failure-tolerant: supabase-js builders are thenables with NO `.catch`
+ * (a `.catch()` here would throw, not catch), hence try/catch. Returns
+ * whether the claim is provably gone, so the caller can escalate.
+ *
+ * @returns {Promise<boolean>}
+ */
+async function releaseDedupeClaim(db, eventId) {
+  try {
+    const { error } = await db.from('webhook_events')
+      .delete()
+      .eq('provider', WEBHOOK_PROVIDERS.POSTMARK)
+      .eq('event_id', eventId)
+    if (error) {
+      console.error(
+        '[postmark-inbound] DEDUPE RELEASE FAILED — Postmark will retry this ' +
+        'MessageID and the retry will short-circuit as `deduped`, losing the ' +
+        `email. event_id=${eventId}:`, error.message,
+      )
+      return false
+    }
+    return true
+  } catch (err) {
+    console.error(
+      '[postmark-inbound] DEDUPE RELEASE THREW — the retry will short-circuit ' +
+      `as \`deduped\` and the email will be lost. event_id=${eventId}:`,
+      err?.message,
+    )
+    return false
+  }
+}
+
 export async function POST(request, { params }) {
   const { token } = await params
   const auth = verifyEmailInboundRequest({
@@ -175,14 +267,65 @@ export async function POST(request, { params }) {
   const db = createServerClient()
 
   // Idempotency — Postmark retries on 5xx; don't double-thread.
+  const eventId = dedupeEventId(messageId)
   const dedup = await recordWebhookEvent({
-    db, provider: WEBHOOK_PROVIDERS.POSTMARK,
-    eventId: `inbound-email:${messageId}`,
+    db, provider: WEBHOOK_PROVIDERS.POSTMARK, eventId,
   })
   if (dedup.seen) {
+    // A genuine re-delivery of a message a previous attempt processed to a
+    // 2xx. Unchanged: short-circuit, write nothing.
     return NextResponse.json({ success: true, deduped: true })
   }
 
+  // ── From here the claim is HELD ───────────────────────────────────
+  // Single exit point so no 5xx can escape still holding it. NOT a plain
+  // try/finally: a finally would also release on success, which would undo
+  // dedupe entirely and let a real re-delivery be processed twice. And not
+  // per-return-site either — that misses the throws (a malformed `Date`
+  // header makes `new Date(...).toISOString()` raise, and Next would answer
+  // 500 with the claim still held). Status-gated release + a catch-all
+  // covers both, and every non-5xx response passes through untouched.
+  let res
+  try {
+    res = await processInboundEmail(db, body, messageId)
+  } catch (err) {
+    console.error('[postmark-inbound] unhandled error:', err?.message)
+    res = NextResponse.json({ success: false, error: 'unhandled_error' }, { status: 500 })
+  }
+
+  if (res.status >= 500) {
+    // Released unconditionally. `dedup.error` (the insert reported a failure)
+    // is NOT proof the row failed to commit, and a DELETE matching nothing
+    // costs one round trip on a path that is already failing.
+    const released = await releaseDedupeClaim(db, eventId)
+    if (!released) {
+      // We know the retry will now be swallowed as `deduped`, so capture the
+      // payload somewhere an operator can see it. deadLetterWebhook never
+      // throws and never blocks. provider 'postmark_inbound', NOT
+      // WEBHOOK_PROVIDERS.POSTMARK — same reason as the no_matching_mailbox
+      // dead-letter below: that key is auto-replayable into the OUTBOUND
+      // queue, which is the wrong pipeline for an inbound email.
+      await deadLetterWebhook(db, {
+        provider: 'postmark_inbound',
+        eventType: 'inbound_email',
+        payload: body,
+        error: 'dedupe_release_failed',
+      })
+    }
+    // Still 500, with the ORIGINAL error untouched: the failure is real, a
+    // 200 would tell Postmark to stop retrying, and a client-side error on
+    // the DELETE does not prove it failed to commit — the retry may yet land.
+  }
+
+  return res
+}
+
+/**
+ * The actual work. Split out of POST ONLY so there is one place to release
+ * the dedupe claim on the way out; every `return` below is the response POST
+ * answers with, unchanged.
+ */
+async function processInboundEmail(db, body, messageId) {
   const fromEmail = normalizeEmail(body.FromFull?.Email || body.From)
   if (!fromEmail) {
     // A real email always has a sender; without one there is nothing to
