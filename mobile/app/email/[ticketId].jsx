@@ -20,6 +20,15 @@
 // React Native has no equivalent of. Raw email HTML is hostile input from an
 // unauthenticated stranger — on mobile it simply is not rendered.
 //
+// ATTACHMENTS (EMAIL-ATTACH-PREVIEW.1)
+// A message's files render as tappable chips. Tapping one asks the server for
+// a short-lived signed URL: an allow-listed image opens in the in-app viewer,
+// and EVERY other type — PDF, Office, HEIC, SVG, unknown — is handed to the OS
+// as a DOWNLOAD, which is both the safe disposition and the better phone
+// experience. Which types may be previewed is the server's decision
+// (`preview_kind` on the row); this file never forms that judgement, so the
+// allow-list cannot drift between the two platforms.
+//
 // Reads no longer clear the badge as a side effect (the GET is a GET), so the
 // screen posts …/read itself once the thread loads.
 // Replies ride Postmark's transactional stream with threading headers and the
@@ -28,7 +37,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import {
   View, Text, ScrollView, Pressable, TextInput, ActivityIndicator,
-  Alert, KeyboardAvoidingView, Platform,
+  Alert, KeyboardAvoidingView, Platform, Modal, Image, Linking,
 } from 'react-native'
 import { useLocalSearchParams, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
@@ -37,10 +46,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth-context'
 import {
   getTicket, replyToTicket, setTicketStatus, markTicketRead, emailDisplayName,
+  previewTicketAttachment, downloadTicketAttachment,
 } from '../../lib/email-api'
 import {
   ticketMessageKind, ticketStatusMeta, mailboxLabel, ticketDeliveryMeta,
   isArchivedStatus, TICKET_STATUS_ORDER,
+  formatAttachmentSize, ticketAttachmentSkippedLabel, ticketAttachmentIcon,
 } from '../../lib/email-tickets'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 
@@ -57,7 +68,155 @@ function formatTime(iso) {
   })
 }
 
-function MessageBubble({ msg }) {
+/**
+ * A message's files, as chips (EMAIL-ATTACH-PREVIEW.1).
+ *
+ * MOBILE USED TO SHOW NOTHING HERE — a member's photo email rendered as an
+ * empty bubble, which is the same "the operator saw nothing" bug the web thread
+ * had, one platform over.
+ *
+ * Tapping a chip asks the server for a preview URL. `preview_kind: 'image'`
+ * opens the viewer below; ANYTHING ELSE — a PDF, a Word document, a HEIC photo,
+ * an SVG — is handed to the OS via Linking with a DOWNLOAD url, which on a
+ * phone is the better answer anyway: iOS and Android both have real viewers for
+ * those, and an in-app frame for a stranger's document would need a WebView
+ * this app deliberately does not carry.
+ *
+ * A not-stored attachment shows its reason and is not tappable. There are no
+ * bytes, and a spinner that ended in an error would bury the one sentence staff
+ * act on.
+ */
+function Attachments({ ticketId, locationId, attachments, onAccent = false, onViewImage }) {
+  const [busy, setBusy] = useState(null)
+  if (!attachments || attachments.length === 0) return null
+
+  async function open(att) {
+    if (busy) return
+    setBusy(att.id)
+    try {
+      if (att.preview_kind === 'image') {
+        const res = await previewTicketAttachment(ticketId, att.id, locationId)
+        if (res.success) {
+          onViewImage({ url: res.url, filename: att.filename })
+          return
+        }
+        // Fall through to the download path rather than dead-ending: the file
+        // is still reachable, which is the guarantee that holds for every type.
+      }
+      const dl = await downloadTicketAttachment(ticketId, att.id, locationId)
+      if (!dl.success) {
+        Alert.alert('Couldn’t open file', dl.error)
+        return
+      }
+      const opened = await Linking.canOpenURL(dl.url).catch(() => false)
+      if (!opened) {
+        Alert.alert('Couldn’t open file', 'This device could not open that link.')
+        return
+      }
+      await Linking.openURL(dl.url)
+    } catch {
+      Alert.alert('Couldn’t open file', 'Something went wrong opening that file.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <View className="mt-2">
+      {attachments.map(att => (
+        att.stored ? (
+          <Pressable
+            key={att.id}
+            onPress={() => open(att)}
+            disabled={busy === att.id}
+            className={`flex-row items-center rounded-lg border px-2 py-1.5 mt-1 ${
+              onAccent ? 'border-white/30 bg-white/10' : 'border-un1t-border bg-un1t-bg'
+            } ${busy === att.id ? 'opacity-60' : ''}`}
+          >
+            <Ionicons
+              name={ticketAttachmentIcon(att.mime_type, att.filename)}
+              size={14}
+              color={onAccent ? 'rgba(255,255,255,0.9)' : '#64748B'}
+              style={{ marginRight: 6 }}
+            />
+            <Text
+              className={`text-xs flex-1 ${onAccent ? 'text-white' : 'text-un1t-text'}`}
+              numberOfLines={1}
+            >
+              {att.filename}
+            </Text>
+            <Text className={`text-[11px] ml-2 ${onAccent ? 'text-white/70' : 'text-un1t-subtle'}`}>
+              {formatAttachmentSize(att.size_bytes)}
+            </Text>
+          </Pressable>
+        ) : (
+          <View
+            key={att.id}
+            className={`flex-row items-center rounded-lg border border-dashed px-2 py-1.5 mt-1 ${
+              onAccent ? 'border-white/30' : 'border-amber-500/60'
+            }`}
+          >
+            <Ionicons
+              name="alert-circle-outline"
+              size={14}
+              color={onAccent ? 'rgba(255,255,255,0.8)' : '#B45309'}
+              style={{ marginRight: 6 }}
+            />
+            <View className="flex-1">
+              <Text
+                className={`text-xs ${onAccent ? 'text-white/80' : 'text-un1t-text'}`}
+                numberOfLines={1}
+              >
+                {att.filename}
+              </Text>
+              {/* Kept in words, on the chip. Staff ACT on this text — it is the
+                  difference between "ask them to resend" and "we lost it". */}
+              <Text className={`text-[11px] ${onAccent ? 'text-white/70' : 'text-amber-700'}`}>
+                {ticketAttachmentSkippedLabel(att.skipped_reason)} · {formatAttachmentSize(att.size_bytes)}
+              </Text>
+            </View>
+          </View>
+        )
+      ))}
+    </View>
+  )
+}
+
+/**
+ * The image viewer. An <Image> is a decode-only container — it renders pixels
+ * and runs nothing — and the only URLs that reach it are the ones the server
+ * allow-listed as images, so no scriptable file can arrive here.
+ */
+function ImageViewer({ image, onClose }) {
+  return (
+    <Modal visible={!!image} transparent animationType="fade" onRequestClose={onClose}>
+      <View className="flex-1 bg-black/90">
+        <Pressable
+          onPress={onClose}
+          accessibilityLabel="Close image"
+          className="flex-row items-center px-4 pt-14 pb-2"
+        >
+          <Ionicons name="close" size={22} color="#FFFFFF" />
+          <Text className="text-white text-sm ml-2 flex-1" numberOfLines={1}>
+            {image?.filename}
+          </Text>
+        </Pressable>
+        <Pressable className="flex-1" onPress={onClose}>
+          {image?.url ? (
+            <Image
+              source={{ uri: image.url }}
+              resizeMode="contain"
+              className="flex-1 w-full"
+              accessibilityLabel={image.filename}
+            />
+          ) : null}
+        </Pressable>
+      </View>
+    </Modal>
+  )
+}
+
+function MessageBubble({ msg, ticketId, locationId, onViewImage }) {
   const kind = ticketMessageKind(msg)
   const stamp = formatTime(msg.sent_at || msg.created_at)
   const body = msg.text_body || '(no text content)'
@@ -103,6 +262,13 @@ function MessageBubble({ msg }) {
               </Text>
             </View>
             <Text className="text-base text-white">{body}</Text>
+            <Attachments
+              ticketId={ticketId}
+              locationId={locationId}
+              attachments={msg.attachments}
+              onViewImage={onViewImage}
+              onAccent
+            />
             <Text className="text-[10px] text-white/60 mt-1 text-right">
               {msg.author_name ? `${msg.author_name} · ` : ''}{stamp}
               {/* The QUIET half: one word, in the line that is already there.
@@ -148,6 +314,12 @@ function MessageBubble({ msg }) {
           From {msg.from_email || 'the member'}
         </Text>
         <Text className="text-base text-un1t-text">{body}</Text>
+        <Attachments
+          ticketId={ticketId}
+          locationId={locationId}
+          attachments={msg.attachments}
+          onViewImage={onViewImage}
+        />
         <Text className="text-[10px] text-un1t-subtle mt-1 text-right">{stamp}</Text>
       </View>
     </View>
@@ -167,6 +339,11 @@ export default function EmailTicket() {
   const [isNote, setIsNote] = useState(false)
   const [sending, setSending] = useState(false)
   const [savingStatus, setSavingStatus] = useState(false)
+  // EMAIL-ATTACH-PREVIEW.1 — the one image being looked at, if any. Held here
+  // rather than in a bubble so the viewer covers the screen, and so switching
+  // tickets cannot leave a stale one open. The signed URL lives only as long as
+  // this state does.
+  const [viewingImage, setViewingImage] = useState(null)
   const scrollRef = useRef(null)
   const readMarked = useRef(false)
 
@@ -324,7 +501,15 @@ export default function EmailTicket() {
                 No messages on this ticket yet.
               </Text>
             ) : (
-              messages.map(m => <MessageBubble key={m.id} msg={m} />)
+              messages.map(m => (
+                <MessageBubble
+                  key={m.id}
+                  msg={m}
+                  ticketId={ticketId}
+                  locationId={activeLocation?.id}
+                  onViewImage={setViewingImage}
+                />
+              ))
             )}
           </ScrollView>
 
@@ -418,6 +603,7 @@ export default function EmailTicket() {
           </View>
         </>
       )}
+      <ImageViewer image={viewingImage} onClose={() => setViewingImage(null)} />
     </KeyboardAvoidingView>
   )
 }

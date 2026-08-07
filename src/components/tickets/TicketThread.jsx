@@ -24,15 +24,24 @@
 // show-images swap) are asserted against this file's source in
 // src/lib/email-html.test.js, because a quiet edit to either removes a whole
 // layer of protection without breaking anything visible.
+//
+// ATTACHMENTS (EMAIL-ATTACH-PREVIEW.1)
+// A message's files render as CHIPS — icon, name, size — and nothing else. No
+// attachment's bytes are ever rendered inside the thread: clicking a chip opens
+// ./AttachmentPreview, which is where the one open file lives, and the chip's
+// own download button is the path that has to work for every type. Which types
+// may be previewed at all is the SERVER's answer (`preview_kind` on the
+// attachment row); this file never forms that judgement.
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft, Lock, Mail, AlertCircle, MailCheck, ImageOff, Maximize2, Minimize2,
-  ShieldAlert, Paperclip, Download, FileWarning, Check, MailX, ShieldX,
+  ShieldAlert, Download, FileWarning, Check, MailX, ShieldX,
 } from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
 import { formatBytes, SKIPPED_REASON_LABEL } from '@/lib/email-attachment-quota'
+import AttachmentPreview, { AttachmentIcon } from './AttachmentPreview'
 import {
   requesterLabel,
   initialsOf,
@@ -66,6 +75,15 @@ export default function TicketThread({
 }) {
   const endRef = useRef(null)
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }) }, [messages])
+
+  // EMAIL-ATTACH-PREVIEW.1 — the attachment overlay is owned HERE, not by the
+  // message that holds the file: exactly one may be open at a time, it must
+  // cover the whole pane rather than a bubble, and switching tickets has to
+  // close it. Only the row is held; the signed URL is minted by the overlay
+  // when it opens and lives no longer than it does.
+  const [openAttachment, setOpenAttachment] = useState(null)
+  const ticketId = ticket?.id
+  useEffect(() => { setOpenAttachment(null) }, [ticketId])
 
   if (!hasSelection) {
     return (
@@ -188,10 +206,23 @@ export default function TicketThread({
             </p>
           )
         ) : (
-          messages.map(m => <ThreadMessage key={m.id} message={m} ticketId={ticket?.id} />)
+          messages.map(m => (
+            <ThreadMessage
+              key={m.id}
+              message={m}
+              ticketId={ticketId}
+              onOpenAttachment={setOpenAttachment}
+            />
+          ))
         )}
         <div ref={endRef} />
       </div>
+
+      <AttachmentPreview
+        ticketId={ticketId}
+        attachment={openAttachment}
+        onClose={() => setOpenAttachment(null)}
+      />
 
       {attachmentsUnavailable && <AttachmentsUnavailableNotice />}
 
@@ -316,28 +347,40 @@ function HtmlOmittedNotice() {
 }
 
 /**
- * The files that came with a message (EMAIL-ATTACH.1).
+ * The files that came with a message (EMAIL-ATTACH.1, restyled as chips in
+ * EMAIL-ATTACH-PREVIEW.1).
+ *
+ * ONE CHIP PER FILE — icon, name, size — which is the resting state every mail
+ * client uses and the one Richard asked for. Clicking the chip OPENS it
+ * (AttachmentPreview); the small button on the right DOWNLOADS it without
+ * opening anything, so the one-click download this row used to be is still one
+ * click. Nothing is rendered inline in the thread: a member sending four 2 MB
+ * photos must not turn the correspondence into something you scroll past.
  *
  * A NOT-STORED ATTACHMENT IS SHOWN, NOT HIDDEN. That is the whole reason
  * email_ticket_attachments allows a row with no bytes: an oversized or
  * over-quota file that simply vanished from the thread would have staff telling
  * a member "you never sent it". The row keeps the name and the size, so the
  * honest answer — "we have a record of it but not the file, please resend" — is
- * the one on screen.
+ * the one on screen. Its reason stays ON THE CHIP, in words, rather than behind
+ * a click: there are no bytes, so its chip opens nothing, and an operator must
+ * never have to click a file to discover it is not there.
  *
- * The bytes themselves are never in this payload. Clicking asks the server for
- * a short-lived signed URL, which is also where the access check lives.
+ * The bytes themselves are never in this payload. Both actions ask the server
+ * for a short-lived signed URL, which is also where the access check lives.
  */
-function Attachments({ ticketId, attachments, onAccent = false }) {
+function Attachments({ ticketId, attachments, onAccent = false, onOpen }) {
   const [busy, setBusy] = useState(null)
   const [failed, setFailed] = useState(null)
 
   if (!attachments || attachments.length === 0) return null
 
-  const link = onAccent ? 'text-white hover:underline' : 'text-un1t-accent hover:underline'
+  const chip = onAccent
+    ? 'border-white/25 bg-white/10 text-white hover:bg-white/20'
+    : 'border-un1t-border bg-un1t-surface text-un1t-text hover:border-un1t-accent'
   const quiet = onAccent ? 'text-white/70' : 'text-un1t-muted'
 
-  async function open(att) {
+  async function download(att) {
     setBusy(att.id)
     setFailed(null)
     try {
@@ -349,7 +392,9 @@ function Attachments({ ticketId, attachments, onAccent = false }) {
       }
       // noopener/noreferrer: the signed URL points at Supabase Storage, which
       // is a different origin, and the opened tab must not hold a handle back
-      // to the CRM.
+      // to the CRM. It carries Content-Disposition: attachment, so this saves
+      // the file rather than rendering it — which is what makes it the safe
+      // fallback for every type that is not previewable.
       window.open(j.data.url, '_blank', 'noopener,noreferrer')
     } catch {
       setFailed('That file could not be opened.')
@@ -359,37 +404,61 @@ function Attachments({ ticketId, attachments, onAccent = false }) {
   }
 
   return (
-    <div className="mt-2 space-y-1">
-      {attachments.map(att => (
-        <div key={att.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
-          {att.stored ? (
-            <>
-              <Paperclip size={11} className="shrink-0" aria-hidden="true" />
-              <button
-                type="button"
-                onClick={() => open(att)}
-                disabled={busy === att.id}
-                className={`inline-flex items-center gap-1 ${link} disabled:opacity-60`}
-              >
-                {att.filename}
-                <Download size={10} className="shrink-0" aria-hidden="true" />
-              </button>
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {attachments.map(att => {
+        if (!att.stored) {
+          return (
+            <span
+              key={att.id}
+              className={`flex max-w-full items-center gap-1.5 rounded-lg border border-dashed px-2 py-1 text-[11px] ${
+                onAccent ? 'border-white/30 text-white/80' : 'border-amber-500/60 text-amber-700'
+              }`}
+            >
+              <FileWarning size={12} className="shrink-0" aria-hidden="true" />
+              <span className="truncate">{att.filename}</span>
               <span className={quiet}>{formatBytes(att.size_bytes)}</span>
-            </>
-          ) : (
-            <>
-              <FileWarning size={11} className="shrink-0 text-amber-700" aria-hidden="true" />
-              <span className={onAccent ? 'text-white/80' : 'text-un1t-subtle'}>{att.filename}</span>
-              <span className={quiet}>{formatBytes(att.size_bytes)}</span>
-              <span className={`${onAccent ? 'text-white/70' : 'text-amber-700'}`}>
+              <span className="shrink-0">
                 {SKIPPED_REASON_LABEL[att.skipped_reason] || 'Not stored'}
               </span>
-            </>
-          )}
-        </div>
-      ))}
+            </span>
+          )
+        }
+        return (
+          <span
+            key={att.id}
+            className={`flex max-w-[15rem] items-center gap-1 rounded-lg border pl-2 pr-1 text-[11px] transition-colors ${chip}`}
+          >
+            <button
+              type="button"
+              onClick={() => onOpen?.(att)}
+              title={`${att.filename} · ${formatBytes(att.size_bytes)}`}
+              className="flex min-w-0 items-center gap-1.5 py-1 text-left"
+            >
+              <AttachmentIcon
+                mimeType={att.mime_type}
+                filename={att.filename}
+                size={12}
+                className="shrink-0"
+                aria-hidden="true"
+              />
+              <span className="truncate">{att.filename}</span>
+              <span className={`shrink-0 ${quiet}`}>{formatBytes(att.size_bytes)}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => download(att)}
+              disabled={busy === att.id}
+              aria-label={`Download ${att.filename}`}
+              title="Download"
+              className={`shrink-0 rounded p-1 disabled:opacity-60 ${onAccent ? 'hover:bg-white/20' : 'hover:bg-un1t-bg'}`}
+            >
+              <Download size={11} aria-hidden="true" />
+            </button>
+          </span>
+        )
+      })}
       {failed && (
-        <p className={`text-[11px] ${onAccent ? 'text-white/80' : 'text-red-700'}`} role="alert">
+        <p className={`w-full text-[11px] ${onAccent ? 'text-white/80' : 'text-red-700'}`} role="alert">
           {failed}
         </p>
       )}
@@ -465,7 +534,7 @@ function AttachmentsUnavailableNotice() {
   )
 }
 
-function ThreadMessage({ message, ticketId }) {
+function ThreadMessage({ message, ticketId, onOpenAttachment }) {
   const kind = messageKind(message)
   const stamp = messageTimestamp(message.sent_at || message.created_at)
   const body = message.text_body || '(no text content)'
@@ -521,7 +590,7 @@ function ThreadMessage({ message, ticketId }) {
             )}
             {message.html_unsafe && <UnsafeHtmlNotice />}
             {message.html_omitted && <HtmlOmittedNotice />}
-            <Attachments ticketId={ticketId} attachments={message.attachments} onAccent />
+            <Attachments ticketId={ticketId} attachments={message.attachments} onOpen={onOpenAttachment} onAccent />
           </div>
         </div>
         {delivery && delivery.tone !== 'quiet' && (
@@ -549,7 +618,7 @@ function ThreadMessage({ message, ticketId }) {
         )}
         {message.html_unsafe && <UnsafeHtmlNotice />}
         {message.html_omitted && <HtmlOmittedNotice />}
-        <Attachments ticketId={ticketId} attachments={message.attachments} />
+        <Attachments ticketId={ticketId} attachments={message.attachments} onOpen={onOpenAttachment} />
       </div>
     </div>
   )
