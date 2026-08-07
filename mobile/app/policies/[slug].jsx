@@ -8,7 +8,7 @@
 //     centre-most-visible section's dwell
 //   - endPolicyView() on blur / unmount / AppState background
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useState, useCallback, useRef, useMemo } from 'react'
 import {
   View, Text, ScrollView, Pressable, ActivityIndicator, Platform, AppState,
 } from 'react-native'

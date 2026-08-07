@@ -7,7 +7,7 @@
     "start": "expo start",
     "ios": "expo start --ios",
     "android": "expo start --android",
-    "lint": "expo lint",
+    "lint": "npm --prefix .. run check:mobile-lint",
     "prebuild": "expo prebuild --clean",
     "version:patch": "node scripts/bump-version.mjs patch",
     "version:minor": "node scripts/bump-version.mjs minor",

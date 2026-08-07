@@ -7,7 +7,7 @@
 // and a tap-through to the drill-in.
 
 import { useEffect, useState, useCallback } from 'react'
-import { View, Text, Pressable, ActivityIndicator } from 'react-native'
+import { View, Text, Pressable } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter, useFocusEffect } from 'expo-router'
 import {

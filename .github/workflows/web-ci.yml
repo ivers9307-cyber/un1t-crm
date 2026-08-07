@@ -27,6 +27,7 @@ on:
       - '.eslintrc.json'
       - 'eslint.config.mjs'
       - 'eslint.mobile-imports.config.mjs'
+      - 'eslint.mobile.config.mjs'
       - 'eslint.guardrails.config.mjs'
       - 'eslint-rules/**'
       - 'vitest.config.js'
@@ -60,6 +61,7 @@ on:
       - '.eslintrc.json'
       - 'eslint.config.mjs'
       - 'eslint.mobile-imports.config.mjs'
+      - 'eslint.mobile.config.mjs'
       - 'eslint.guardrails.config.mjs'
       - 'eslint-rules/**'
       - 'vitest.config.js'
@@ -102,6 +104,18 @@ jobs:
       # invisible to vitest/eslint/expo-export). See the 2026-06 schedule crash.
       - name: Mobile import resolution
         run: npm run check:mobile-imports
+
+      # MOBILE-LINT.1 — until this step existed NO linter ran against mobile/**
+      # at all: the root eslint.config.mjs ignores it, deferring to `expo lint`,
+      # which has never worked here (mobile/package.json carries no eslint
+      # dependency, so it dies with "Cannot find module 'eslint'"). `npm run
+      # lint` therefore reported clean on mobile-only changes — three of them
+      # shipped that way, each needing a throwaway manual no-unused-vars /
+      # no-undef pass. Its very first run caught a live crash: expenses/[id].jsx
+      # still called setOcrState/setOcrConfidence/setOcrError after
+      # INVOICES-QUEUE.1 PR 3 deleted them. See eslint.mobile.config.mjs.
+      - name: Mobile lint
+        run: npm run check:mobile-lint
 
       # Catches the #408 class of bug — an /api route shipping with NO auth
       # guard at all (middleware only proves a valid JWT exists; champ-app

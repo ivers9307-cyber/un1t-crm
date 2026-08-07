@@ -11,7 +11,6 @@ import {
 } from 'react-native'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
-import { useAuth } from '../../lib/auth-context'
 import { listInvoices, periodLabel } from '../../lib/invoices-api'
 import TabletConstrained from '../../components/TabletConstrained'
 
@@ -26,7 +25,6 @@ const STATUS_STYLE = {
 
 export default function InvoicesScreen() {
   const router = useRouter()
-  const { profile } = useAuth()
   const [invoices, setInvoices] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)

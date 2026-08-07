@@ -433,7 +433,6 @@ function AddItemForm({ claimId, busy, setBusy, onCancel, onSaved }) {
             <Pressable
               onPress={() => {
                 setForm({ ...form, receipt: null })
-                setOcrState('idle'); setOcrConfidence(null); setOcrError(null)
               }}
               className="p-1"
             >
