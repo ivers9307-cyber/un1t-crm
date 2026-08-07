@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
 import { loadTicketForUser } from '../../_helpers'
 
 // POST /api/email/tickets/[id]/read — zero the unread badge
@@ -13,14 +12,16 @@ import { loadTicketForUser } from '../../_helpers'
 //
 // updated_at is deliberately NOT bumped: reading a ticket is not a change to
 // it, and bumping it would reorder any queue sorted on it.
+//
+// BOTH GATES LIVE IN loadTicketForUser (EMAIL-TICKET-CLEANUP.1) — the
+// `email_inbox` surface permission resolved at the TICKET'S location, and the
+// per-mailbox grant. The permission check used to sit here, above the load,
+// where it could only ever resolve at the caller's ACTIVE location and so
+// answered a different question than this route asks.
 export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  if (!hasPermission(user, 'email_inbox')) {
-    return NextResponse.json({ success: false, error: 'Forbidden — email inbox permission required' }, { status: 403 })
-  }
 
   const db = createServerClient()
   const loaded = await loadTicketForUser(db, user, params.id)

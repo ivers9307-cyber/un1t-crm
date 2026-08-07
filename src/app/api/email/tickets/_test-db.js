@@ -197,15 +197,41 @@ export function makeDb(state = {}) {
       for (const r of removed) rows.splice(rows.indexOf(r), 1)
       return { data: removed, error: null }
     }
-    db.selects.push({ table: b._table, columns: b._select ?? '*' })
+    db.selects.push({ table: b._table, columns: b._select ?? '*', options: b._selectOptions })
     const rows = rowsFor(b)
+
+    // EMAIL-TICKET-CLEANUP.3 — count-only selects are MODELLED, not ignored.
+    // `.select('*', { count: 'exact', head: true })` returns a number and NO
+    // rows; a fake that dropped the options would have answered `{ data: rows }`
+    // with `count` undefined, so the nav-badge route's `count || 0` would read
+    // 0 for every input and every assertion about the badge — including "a
+    // coach must not be counted accounts@ tickets" — would pass with the
+    // mailbox scope deleted. Exactly the permissive-fake trap this file's
+    // header warns about.
+    const wantsCount = !!b._selectOptions?.count
+    const headOnly = b._selectOptions?.head === true
+    if (wantsCount) {
+      // `count` is the number of rows MATCHING THE FILTERS, before .limit() —
+      // which is what PostgREST returns and the whole reason a badge can be
+      // cheap. rowsFor applies the limit, so count off the unlimited set.
+      const total = rowsFor({ ...b, _limit: null }).length
+      return { data: headOnly ? null : rows, count: total, error: null }
+    }
+
     return shape === 'list' ? { data: rows, error: null } : { data: rows[0] ?? null, error: null }
   }
 
   db.from = (table) => {
     const b = { _table: table, _op: 'select', _payload: null, _filters: [], _order: null, _limit: null }
     const filter = (kind) => (...args) => { b._filters.push([kind, ...args]); return b }
-    b.select = (columns) => { b._select = columns ?? '*'; return b }
+    // supabase-js reads head/count from the FIRST .select() after .from() only
+    // (CLAUDE.md) — a .select() chained after a filter silently ignores them.
+    // Modelled, so a route that chains them late fails here rather than in prod.
+    b.select = (columns, options) => {
+      b._select = columns ?? '*'
+      if (b._selectOptions === undefined) b._selectOptions = options ?? null
+      return b
+    }
     b.insert = (p) => { b._op = 'insert'; b._payload = p; return b }
     b.update = (p) => { b._op = 'update'; b._payload = p; return b }
     b.delete = () => { b._op = 'delete'; return b }

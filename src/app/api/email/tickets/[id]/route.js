@@ -1,16 +1,21 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
 import { emailHtmlDocument } from '@/lib/email-html'
 import { loadTicketForUser } from '../_helpers'
 
 // GET /api/email/tickets/[id] — one ticket and its thread (EMAIL-TICKET.4).
 //
 // 404 — never 403 — for a ticket that does not exist, sits at a location the
-// caller cannot reach, OR sits on a mailbox they cannot see. All three are
-// the same answer from outside, so an id can't be probed and the set of
-// addresses a studio runs can't be enumerated.
+// caller cannot reach, sits at a location where they do not hold `email_inbox`,
+// OR sits on a mailbox they cannot see. All four are the same answer from
+// outside, so an id can't be probed and the set of addresses a studio runs
+// can't be enumerated.
+//
+// All four live in loadTicketForUser (EMAIL-TICKET-CLEANUP.1). The permission
+// one used to sit at the top of this route, where it could only ever resolve at
+// the caller's ACTIVE location — a different question from the one a route
+// keyed on a ticket id is asked.
 //
 // Unlike the conversations route this does NOT reset unread_count as a side
 // effect of reading: marking read is its own POST (…/read), so opening a
@@ -61,10 +66,6 @@ export async function GET(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  if (!hasPermission(user, 'email_inbox')) {
-    return NextResponse.json({ success: false, error: 'Forbidden — email inbox permission required' }, { status: 403 })
-  }
 
   const db = createServerClient()
   const loaded = await loadTicketForUser(db, user, params.id)

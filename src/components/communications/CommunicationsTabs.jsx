@@ -20,6 +20,14 @@ export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp, canE
     url: '/api/whatsapp/unread-count',
   })
 
+  // EMAIL-TICKET-CLEANUP.3 — same endpoint + poller as the sidebar Email badge,
+  // for the same reason: two numbers for one queue that could disagree is worse
+  // than one number.
+  const emailNeedsReplyCount = usePolledCount({
+    enabled: !!canEmailInbox,
+    url: '/api/email/tickets/count',
+  })
+
   const canSend = canSms || canEmail || canWhatsapp
   const tabs = [
     // PILLAR2: the unified audience-first send + its history replace the old
@@ -28,7 +36,7 @@ export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp, canE
     canSend     && { id: 'sent',       label: 'Sends',      href: '/communications/sent' },
     // UIX-P1b: one unified WhatsApp + Instagram queue — the separate
     // Instagram tab retired (/communications/instagram redirects here).
-    canWhatsapp && { id: 'inbox',      label: 'Inbox',      href: '/communications/inbox' },
+    canWhatsapp && { id: 'inbox',      label: 'Inbox',      href: '/communications/inbox', badge: inboxActionCount },
     // EMAIL-TICKET.4 — the studio email queue. Its own key (`email_inbox`),
     // not the marketing `email` one, so it appears for the people who
     // actually answer accounts@/sales@ and for nobody else.
@@ -38,7 +46,7 @@ export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp, canE
     // Inbox is WhatsApp + Instagram only). "Ticket" stays the name of the
     // DATA MODEL — the route, the API and the `email_tickets` table are all
     // deliberately unchanged.
-    canEmailInbox && { id: 'tickets',  label: 'Email',      href: '/communications/tickets' },
+    canEmailInbox && { id: 'tickets',  label: 'Email',      href: '/communications/tickets', badge: emailNeedsReplyCount },
     (canEmail || canWhatsapp) && { id: 'templates', label: 'Templates', href: '/communications/templates' },
     // Segments tab (mig 085, moved from top-level /segments).
     (canEmail || canWhatsapp) && { id: 'segments',  label: 'Segments',  href: '/communications/segments' },
@@ -60,9 +68,11 @@ export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp, canE
             )}
           >
             {t.label}
-            {t.id === 'inbox' && inboxActionCount > 0 && (
+            {/* Driven off the tab's own `badge` rather than an id check, so a
+                third badged tab is one property, not another special case. */}
+            {t.badge > 0 && (
               <span className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold align-middle">
-                {inboxActionCount > 99 ? '99+' : inboxActionCount}
+                {t.badge > 99 ? '99+' : t.badge}
               </span>
             )}
           </Link>

@@ -20,18 +20,13 @@ vi.mock('@/lib/auth', async () => {
   const actual = await vi.importActual('@/lib/auth')
   return { ...actual, getCurrentUser: vi.fn() }
 })
-vi.mock('@/lib/permissions', async () => {
-  const actual = await vi.importActual('@/lib/permissions')
-  return { ...actual, hasPermission: vi.fn(() => true) }
-})
 
 import { GET } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
 import { makeDb } from '../../../_test-db'
 import {
-  LOC_A, T_STUDIO, T_ACCOUNTS, COACH, OWNER, GRANT_STUDIO, baseState,
+  LOC_A, T_STUDIO, T_ACCOUNTS, COACH, COACH_NO_INBOX, OWNER, GRANT_STUDIO, baseState,
 } from '../../../_test-fixtures'
 
 const STUDIO_MSG = { id: 'm-studio', ticket_id: T_STUDIO.id, location_id: LOC_A }
@@ -76,7 +71,6 @@ function state(extra = {}) {
 let db
 beforeEach(() => {
   vi.clearAllMocks()
-  hasPermission.mockReturnValue(true)
   getCurrentUser.mockResolvedValue(COACH)
   db = makeDb(state())
   createServerClient.mockImplementation(() => db)
@@ -97,10 +91,18 @@ describe('the gate', () => {
     expect(res.status).toBe(401)
   })
 
-  it('403s without the email_inbox permission', async () => {
-    hasPermission.mockReturnValue(false)
+  // EMAIL-TICKET-CLEANUP.1 — 404, not the 403 this used to be. The gate moved
+  // into loadTicketForUser so it can resolve at the TICKET'S location, which
+  // means it now runs AFTER the row is read — and a 403 there would say "this
+  // id exists, at a studio where you lack the key" while a bad id says 404.
+  // Every other way to be refused on this surface is already indistinguishable;
+  // a fourth reason has to be too.
+  // The caller holds the studio@ GRANT and is assigned to the location. Only
+  // the surface key is missing, so this is the one test that isolates it.
+  it('404s without the email_inbox permission AT THE TICKET\u2019S location', async () => {
+    getCurrentUser.mockResolvedValue(COACH_NO_INBOX)
     const { res } = await get(T_STUDIO.id, STUDIO_ATT.id)
-    expect(res.status).toBe(403)
+    expect(res.status).toBe(404)
   })
 
   it('signs an attachment on a mailbox the caller CAN see', async () => {

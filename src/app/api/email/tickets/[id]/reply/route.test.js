@@ -27,20 +27,17 @@ vi.mock('@/lib/auth', async () => {
   const actual = await vi.importActual('@/lib/auth')
   return { ...actual, getCurrentUser: vi.fn() }
 })
-vi.mock('@/lib/permissions', async () => {
-  const actual = await vi.importActual('@/lib/permissions')
-  return { ...actual, hasPermission: vi.fn(() => true) }
-})
 vi.mock('@/lib/postmark', () => ({ sendEmail: vi.fn() }))
 
 import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
 import { sendEmail } from '@/lib/postmark'
-import { makeDb, insertsInto, updatesTo } from '../../_test-db'
+import { makeDb, insertsInto, updatesTo, writesTo } from '../../_test-db'
 import {
-  MB_STUDIO, T_STUDIO, T_ACCOUNTS, COACH, GRANT_STUDIO, baseState,
+  MB_STUDIO, T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION,
+  COACH, COACH_NO_INBOX, MULTI_LOCATION,
+  GRANT_STUDIO, GRANT_MULTI_STUDIO, GRANT_MULTI_OTHER_LOCATION, baseState,
 } from '../../_test-fixtures'
 
 function post(id, body) {
@@ -79,7 +76,6 @@ function setupDb(state) {
 beforeEach(() => {
   vi.clearAllMocks()
   process.env.POSTMARK_FROM_EMAIL = 'UN1T <hello@un1t.ie>'
-  hasPermission.mockReturnValue(true)
   getCurrentUser.mockResolvedValue(COACH)
   sendEmail.mockResolvedValue({ messageId: 'pm-out-1' })
   setupDb(baseState({ grants: [GRANT_STUDIO], messages: [LAST_INBOUND] }))
@@ -91,10 +87,19 @@ describe('POST …/reply — gates', () => {
     expect((await post(T_STUDIO.id, { text: 'hi' })).status).toBe(401)
   })
 
-  it('403s without the email_inbox permission', async () => {
-    hasPermission.mockReturnValue(false)
-    expect((await post(T_STUDIO.id, { text: 'hi' })).status).toBe(403)
+  // EMAIL-TICKET-CLEANUP.1 — 404, not the 403 this used to be. The gate moved
+  // into loadTicketForUser so it can resolve at the TICKET'S location, which
+  // means it now runs AFTER the row is read — and a 403 there would say "this
+  // id exists, at a studio where you lack the key" while a bad id says 404.
+  // Every other way to be refused on this surface is already indistinguishable;
+  // a fourth reason has to be too.
+  // The caller holds the studio@ GRANT and is assigned to the location. Only
+  // the surface key is missing, so this is the one test that isolates it.
+  it('404s without the email_inbox permission AT THE TICKET\u2019S location, sending nothing', async () => {
+    getCurrentUser.mockResolvedValue(COACH_NO_INBOX)
+    expect((await post(T_STUDIO.id, { text: 'hi' })).status).toBe(404)
     expect(sendEmail).not.toHaveBeenCalled()
+    expect(writesTo(db)).toEqual([])
   })
 
   it('404s on a ticket whose mailbox the caller cannot see, and sends nothing', async () => {
@@ -395,5 +400,68 @@ describe('POST …/reply — query failures are loud', () => {
     expect(sendEmail).not.toHaveBeenCalled()
     expect(errors).toHaveBeenCalled()
     errors.mockRestore()
+  })
+})
+
+// EMAIL-TICKET-CLEANUP.1 — the permission follows the TICKET'S location.
+//
+// Of the routes that carried the active-location gate, this is the one where
+// getting it wrong wrote to the OUTSIDE WORLD: a manager at one studio who is
+// merely staff at another could send real mail, from the second studio's
+// correspondence, over a key they hold somewhere else entirely. Reading the
+// wrong ticket is a leak; answering it as the business is a forgery.
+//
+// ONE user, TWO studios, opposite answers, real resolver. They are assigned to
+// both and hold a mailbox grant at both, so the location and per-account gates
+// pass either way — only the surface key separates these two cases.
+describe('POST …/reply — the permission follows the TICKET’S location', () => {
+  beforeEach(() => {
+    getCurrentUser.mockResolvedValue(MULTI_LOCATION)
+    setupDb(baseState({
+      tickets: [{ ...T_STUDIO }, { ...T_ACCOUNTS }, { ...T_OTHER_LOCATION }],
+      grants: [GRANT_MULTI_STUDIO, GRANT_MULTI_OTHER_LOCATION],
+      messages: [LAST_INBOUND],
+    }))
+  })
+
+  it('ALLOWS a reply at the studio where they hold the key', async () => {
+    // The wrongly-DENIED direction: the old gate read an active location this
+    // user does not have and refused their own studio's queue outright.
+    expect((await post(T_STUDIO.id, { text: 'hi' })).status).toBe(200)
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+  })
+
+  it('DENIES a reply at the studio where they do not — nothing sent, nothing written', async () => {
+    // The direction that forges mail. 404 like every other refusal here, and
+    // the assertion that matters is sendEmail: a 404 that had already put a
+    // message on the wire would be worse than no gate at all.
+    expect((await post(T_OTHER_LOCATION.id, { text: 'hi' })).status).toBe(404)
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(writesTo(db)).toEqual([])
+  })
+
+  it('DENIES an INTERNAL NOTE there too — the note branch is not a side door', async () => {
+    // The internal-note branch returns long before the send, so it would have
+    // been easy to leave ungated. A note is staff-to-staff correspondence on
+    // another studio's ticket; it is not less private for never being emailed.
+    expect((await post(T_OTHER_LOCATION.id, { text: 'fyi', internal: true })).status).toBe(404)
+    expect(writesTo(db)).toEqual([])
+  })
+})
+
+// EMAIL-TICKET-CLEANUP.2 — a FAILED visibility lookup is not "no mailboxes".
+describe('POST …/reply — a failed mailbox lookup is not an empty one', () => {
+  it('500s instead of 404ing, and sends nothing', async () => {
+    // NOTHING HAS BEEN SENT at this point, so refusing costs a retry and can
+    // never produce a wrong outcome — the same ordering argument that makes 500
+    // safe for the threading lookup below.
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [LAST_INBOUND],
+      errors: { email_mailboxes: { code: '42703', message: 'column does not exist' } },
+    }))
+    expect((await post(T_STUDIO.id, { text: 'hi' })).status).toBe(500)
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(writesTo(db)).toEqual([])
   })
 })

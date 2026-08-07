@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
-import { loadVisibleMailboxes } from './_helpers'
+import { loadVisibleMailboxes, scopeToVisibleMailboxes, scopeToNeedsReply } from './_helpers'
 
 // GET /api/email/tickets — the studio's ticket queue (EMAIL-TICKET.4).
 // Spec: docs/superpowers/specs/2026-08-05-email-ticketing-design.md
@@ -35,15 +35,14 @@ export const VIEWS = Object.freeze(['unassigned', 'mine', 'needs_reply', 'closed
 // narrows with a view or a mailbox tab rather than paging past this.
 const TICKET_LIMIT = 200
 
-const UUID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
-
 function applyView(query, view, user) {
   switch (view) {
     // Nobody has picked this up yet — the queue's real backlog.
     case 'unassigned': return query.is('assigned_to', null).eq('status', 'open')
     case 'mine': return query.eq('assigned_to', user.id).in('status', ['open', 'pending'])
-    // Open AND the last word was theirs, not ours.
-    case 'needs_reply': return query.eq('status', 'open').eq('last_message_direction', 'inbound')
+    // Open AND the last word was theirs, not ours. Shared with the nav badge
+    // so the number and the tab it links to can never mean different things.
+    case 'needs_reply': return scopeToNeedsReply(query)
     case 'closed': return query.in('status', ['solved', 'closed'])
     // Default = the live queue. Solved/closed are deliberately out of it —
     // nothing auto-closes in this design, so the open set is the work list.
@@ -83,7 +82,16 @@ export async function GET(request) {
   }
 
   const db = createServerClient()
-  const { elevated, mailboxes } = await loadVisibleMailboxes(db, user, locationId)
+  const visibility = await loadVisibleMailboxes(db, user, locationId)
+  // A FAILED visibility lookup is NOT an empty visible set
+  // (EMAIL-TICKET-CLEANUP.2). Collapsed into one, the branch below served it as
+  // 200 `{ mailboxes: [], tickets: [] }` — which the inbox renders as the calm
+  // "no email accounts here yet" empty state. An operator reads that as "no
+  // mail" and stops looking. The 500 lands in TicketInbox's own error state
+  // ("Could not load the ticket inbox" + Try again), which is the whole point:
+  // the two outcomes now look different to the person reading them.
+  if (visibility.response) return visibility.response
+  const { elevated, mailboxes } = visibility
 
   // Nothing visible → nothing to show. Not an error.
   if (mailboxes.length === 0) {
@@ -104,23 +112,12 @@ export async function GET(request) {
     .order('last_message_at', { ascending: false, nullsFirst: false })
     .limit(TICKET_LIMIT)
 
-  const visibleIds = mailboxes.map(m => m.id)
-  if (mailboxId) {
-    query = query.eq('mailbox_id', mailboxId)
-  } else if (elevated && visibleIds.every(id => UUID_SHAPE.test(id))) {
-    // Elevated only: also surface tickets with NO mailbox — mig 484's backfill
-    // predates the column, and mailbox_id is ON DELETE SET NULL, so deleting
-    // an address would otherwise erase its correspondence from every queue.
-    // .in() never matches NULL, hence the or().
-    //
-    // .or() takes a RAW PostgREST filter string, so the ids are shape-checked
-    // above and the whole branch falls through to the escaped .in() if any id
-    // is not a plain uuid. (Same hazard the inbound webhook avoids by using
-    // two .in() queries instead of one .or().)
-    query = query.or(`mailbox_id.in.(${visibleIds.join(',')}),mailbox_id.is.null`)
-  } else {
-    query = query.in('mailbox_id', visibleIds)
-  }
+  // One tab = that mailbox (already proved visible above). No tab = the whole
+  // visible set, via the shared scope the count endpoint also uses, so the
+  // badge and this list can never disagree about what a person can see.
+  query = mailboxId
+    ? query.eq('mailbox_id', mailboxId)
+    : scopeToVisibleMailboxes(query, { mailboxes, elevated })
 
   query = applyView(query, view, user)
 

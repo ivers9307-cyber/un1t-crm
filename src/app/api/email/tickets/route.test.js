@@ -257,3 +257,49 @@ describe('GET /api/email/tickets — views', () => {
     expect(ids(body.data.tickets).sort()).toEqual([T_STUDIO.id, T_ACCOUNTS.id].sort())
   })
 })
+
+// EMAIL-TICKET-CLEANUP.2 — a FAILED visibility lookup is not an empty one.
+//
+// `mailboxRes.data` is null on a PostgREST error, so `|| []` turned "we could
+// not find out what you may read" into "you may read nothing" — served as a
+// cheerful 200 `{ mailboxes: [], tickets: [] }`. TicketInbox renders that as
+// the calm "no email accounts here yet" empty state, so the operator reads it
+// as "no mail", stops looking, and nobody ever learns the query failed.
+//
+// The 500 is what routes them to TicketInbox's OTHER branch — "Could not load
+// the ticket inbox" with a Try again button — which is the whole point: the two
+// outcomes have to look different to the person reading them. Revert the error
+// branch in loadVisibleMailboxes and every test here goes back to 200 and fails.
+describe('GET /api/email/tickets — a failed mailbox lookup is not an empty inbox', () => {
+  it('500s when the mailbox query errors, rather than 200 with an empty list', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      errors: { email_mailboxes: { code: '42703', message: 'column does not exist' } },
+    }))
+    const { res, body } = await list()
+    expect(res.status).toBe(500)
+    expect(body.success).toBe(false)
+    // …and it must NOT hand back the empty shape the UI reads as "no accounts".
+    expect(body.data).toBeUndefined()
+  })
+
+  it('500s when the GRANT query errors — the half that silently demotes a granted coach', async () => {
+    // The more dangerous of the two: the mailbox list itself loads fine, so the
+    // surface looks healthy and simply shows a granted person nothing.
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      errors: { email_mailbox_access: { code: '42501', message: 'permission denied' } },
+    }))
+    expect((await list()).res.status).toBe(500)
+  })
+
+  it('still returns a NORMAL empty list when the caller genuinely has no grants', async () => {
+    // The case the 500 must not swallow. A coach with no grants and a studio
+    // with no addresses are both ordinary states, and a 403/500 there would
+    // look like a bug to whoever hit it.
+    setupDb(baseState({ grants: [] }))
+    const { res, body } = await list()
+    expect(res.status).toBe(200)
+    expect(body.data).toEqual({ mailboxes: [], tickets: [] })
+  })
+})

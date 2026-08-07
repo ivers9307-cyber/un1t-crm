@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { sendEmail } from '@/lib/postmark'
 import { replySubject, buildReplyHeaders, inboundPreview } from '@/lib/email-inbox'
@@ -57,14 +56,18 @@ function textToHtml(text) {
 // longer writes a conversation for it to find. The mirror was already
 // non-fatal, so nothing about the reply path's behaviour changes — only the
 // response's now-always-null `conversation_id` field is gone with it.
+//
+// EMAIL-TICKET-CLEANUP.1 moved the `email_inbox` gate OUT of this route and
+// into loadTicketForUser, where it resolves at the TICKET'S location. Sitting
+// here it could only ever resolve at the caller's ACTIVE location, so a manager
+// at one studio who is merely staff at another could REPLY AS the second studio
+// — real mail, on the wire, on correspondence they hold no key for. Of the
+// routes that carried the same mistake this is the one where it wrote to the
+// outside world rather than only reading.
 export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  if (!hasPermission(user, 'email_inbox')) {
-    return NextResponse.json({ success: false, error: 'Forbidden — email inbox permission required' }, { status: 403 })
-  }
 
   const validation = await validateBody(request, ReplySchema)
   if (!validation.ok) return validation.response

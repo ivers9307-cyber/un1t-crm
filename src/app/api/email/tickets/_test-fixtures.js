@@ -47,24 +47,107 @@ export const T_ACCOUNTS = {
   solved_at: null, closed_at: null,
 }
 
+// EMAIL-TICKET-CLEANUP.1 — every user below now carries assignmentsByLocation
+// as well as rolesByLocation, because the surface gate moved into
+// loadTicketForUser and resolves through the REAL hasPermissionForLocation,
+// which reads assignments (guardMasterOrOwner, the elevation check, reads
+// rolesByLocation — two different shapes, and getCurrentUser populates both).
+// Thin fixtures would have made the real resolver answer false for everyone and
+// every test pass a 404 for the wrong reason.
+
+/**
+ * A ticket at the OTHER studio (LOC_B), on LOC_B's own mailbox.
+ *
+ * The whole point of it: a caller can be legitimately assigned to LOC_B and
+ * hold a grant on that mailbox, so assertLocationAccess AND the per-account
+ * gate both pass — and they must still be refused if they do not hold
+ * `email_inbox` at LOC_B. It is the only fixture that can tell the
+ * location-scoped permission check apart from the two checks around it.
+ */
+export const T_OTHER_LOCATION = {
+  id: 'aaaaaaa3-0000-4000-8000-000000000003',
+  location_id: LOC_B, mailbox_id: MB_OTHER_LOCATION.id, contact_id: null,
+  requester_email: 'hatch@example.com', requester_name: 'Cara Hatch',
+  subject: 'Hatch enquiry', status: 'open', priority: 'normal',
+  assigned_to: null, first_response_at: null,
+  last_message_at: '2026-08-06T11:00:00Z', last_message_direction: 'inbound',
+  last_message_preview: 'Do you open Saturdays?', unread_count: 1,
+  solved_at: null, closed_at: null,
+}
+
 export const COACH = {
   id: 'profile-coach', email: 'coach@un1tdublin.com',
   role: 'staff', profileRole: 'staff',
   locations: [{ id: LOC_A }], rolesByLocation: { [LOC_A]: 'staff' },
+  // `staff` gets email_inbox: false by role default, so a coach who works the
+  // inbox holds it as a per-user override (mig 058) — which is exactly how one
+  // is granted in real life. Their SINGLE studio@ grant is what keeps them out
+  // of accounts@; the key and the grant are independent, and both fixtures
+  // exist so a test can flip either one alone.
+  assignmentsByLocation: { [LOC_A]: { role: 'staff', permissions: { email_inbox: true } } },
 }
+
+/**
+ * The same coach WITHOUT the surface key — assigned to the studio, holding the
+ * studio@ mailbox grant, and still refused. Proves the permission is doing work
+ * that the location and mailbox checks do not: it is the one caller who passes
+ * both of those and must still be turned away.
+ */
+export const COACH_NO_INBOX = {
+  ...COACH,
+  assignmentsByLocation: { [LOC_A]: { role: 'staff', permissions: { email_inbox: false } } },
+}
+
 export const OWNER = {
   id: 'profile-owner', email: 'owner@un1tdublin.com',
   role: 'owner', profileRole: 'owner',
   locations: [{ id: LOC_A }], rolesByLocation: { [LOC_A]: 'owner' },
+  // No override needed — owner holds email_inbox by role default, and is
+  // elevated past mailbox grants besides.
+  assignmentsByLocation: { [LOC_A]: { role: 'owner', permissions: {} } },
 }
 export const MASTER = {
   id: 'profile-master', email: 'master@un1t.ie',
   role: 'master', profileRole: 'master',
   locations: [{ id: LOC_A }, { id: LOC_B }], rolesByLocation: {},
+  // Master is global: hasPermissionForLocation takes user.role unchanged and
+  // resolvePermission short-circuits it past every tier, so no assignment row.
+  assignmentsByLocation: {},
+}
+
+/**
+ * ONE person, TWO studios, opposite answers — the shape the old active-location
+ * gate got wrong in both directions (EMAIL-TICKET-CLEANUP.1).
+ *
+ * Manager at LOC_A (email_inbox true by role default), plain staff at LOC_B
+ * (false). Their session pointing at one studio must not decide what they may
+ * do at the other, and a mailbox grant at LOC_B must not become readable just
+ * because LOC_A says manager.
+ */
+export const MULTI_LOCATION = {
+  id: 'profile-multi', email: 'multi@un1tdublin.com',
+  role: 'staff', profileRole: 'manager',
+  locations: [{ id: LOC_A }, { id: LOC_B }],
+  rolesByLocation: { [LOC_A]: 'manager', [LOC_B]: 'staff' },
+  assignmentsByLocation: {
+    [LOC_A]: { role: 'manager', permissions: {} },
+    [LOC_B]: { role: 'staff', permissions: {} },
+  },
 }
 
 /** The one grant row that makes the coach a studio@ user and nothing more. */
 export const GRANT_STUDIO = { mailbox_id: MB_STUDIO.id, profile_id: COACH.id }
+
+/**
+ * The multi-location user's grant on the OTHER studio's mailbox — the row that
+ * makes the cross-location tests mean something. With it they pass the
+ * per-account gate at LOC_B, so a refusal there can only be the surface key.
+ */
+export const GRANT_MULTI_OTHER_LOCATION = {
+  mailbox_id: MB_OTHER_LOCATION.id, profile_id: MULTI_LOCATION.id,
+}
+/** …and their grant at LOC_A, where they DO hold the key. */
+export const GRANT_MULTI_STUDIO = { mailbox_id: MB_STUDIO.id, profile_id: MULTI_LOCATION.id }
 
 /** Both mailboxes + both tickets at LOC_A — the standard world. */
 export function baseState(extra = {}) {
