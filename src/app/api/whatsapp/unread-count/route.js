@@ -3,7 +3,8 @@
 // SIDEBAR-BADGES.2 — the Communications badge (sidebar nav item AND the
 // Communications tab-strip Inbox tab both poll this one endpoint). It counts
 // conversations that NEED A HUMAN TO ACT — unresolved threads awaiting a reply
-// or handed off by the agent — across BOTH channels (WhatsApp + Instagram) at
+// or handed off by the agent — across the inbox's two channels (WhatsApp +
+// Instagram; email left the inbox in INBOX-SPLIT.1, see below) at
 // the active location. This mirrors the UnifiedInbox's own needs-reply/handoff
 // queues via the shared `needsAction` predicate, so the badge and the inbox can
 // never disagree.
@@ -44,24 +45,22 @@ export async function GET() {
   const cols = 'resolved_at, last_message_at, last_message_direction, agent_handed_off_at'
   const countActionable = rows => (rows || []).filter(needsAction).length
   try {
-    // EMAIL-INBOX.1 — email_conversations joins the badge (third
-    // channel). It has no agent_handed_off_at column; the select list
-    // is per-channel so the shared needsAction predicate still works
-    // (missing column ≡ never handed off).
-    const emailCols = 'resolved_at, last_message_at, last_message_direction'
-    const [wa, ig, em] = await Promise.all([
+    // INBOX-SPLIT.1 — email_conversations LEFT this count (Richard,
+    // 2026-08-07). EMAIL-INBOX.1 had added it as a third channel, but the
+    // Inbox is WhatsApp + Instagram only now, so a badge counting email
+    // pointed at work that isn't reachable from the surface it badges —
+    // which is exactly why it sat on 1 with an empty-looking queue. Email
+    // is worked at /communications/tickets and counts itself there.
+    const [wa, ig] = await Promise.all([
       db.from('whatsapp_conversations').select(cols)
         .eq('location_id', locationId).is('resolved_at', null),
       db.from('instagram_conversations').select(cols)
-        .eq('location_id', locationId).is('resolved_at', null),
-      db.from('email_conversations').select(emailCols)
         .eq('location_id', locationId).is('resolved_at', null),
     ])
     // A failure on any channel degrades to that channel counting 0
     // rather than erroring the badge.
     const count = countActionable(wa.error ? [] : wa.data)
       + countActionable(ig.error ? [] : ig.data)
-      + countActionable(em.error ? [] : em.data)
     return NextResponse.json({ success: true, data: { count } })
   } catch {
     return NextResponse.json({ success: true, data: { count: 0 } })

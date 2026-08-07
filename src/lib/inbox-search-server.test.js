@@ -18,10 +18,16 @@ import {
 } from './inbox-search-server.js'
 
 describe('INBOX_SEARCH_FIELDS', () => {
-  it('covers the three conversation tables with their real denormalised columns', () => {
+  it('covers the two conversation tables with their real denormalised columns', () => {
     expect(INBOX_SEARCH_FIELDS.whatsapp_conversations).toEqual(['wa_phone', 'wa_profile_name', 'last_message_preview'])
     expect(INBOX_SEARCH_FIELDS.instagram_conversations).toEqual(['ig_username', 'customer_name', 'last_message_preview'])
-    expect(INBOX_SEARCH_FIELDS.email_conversations).toEqual(['counterpart_email', 'counterpart_name', 'subject', 'last_message_preview'])
+  })
+
+  // INBOX-SPLIT.1 — the inbox is WhatsApp + Instagram only; email moved to
+  // /communications/tickets, which searches email_tickets on its own path.
+  it('no longer covers email_conversations', () => {
+    expect(INBOX_SEARCH_FIELDS.email_conversations).toBeUndefined()
+    expect(() => buildInboxSearchOr('email_conversations', 'x', [])).toThrow(/unknown/i)
   })
 })
 
@@ -48,9 +54,9 @@ describe('buildInboxSearchOr', () => {
   })
 
   it('omits the contact_id clause when no contacts matched', () => {
-    const s = buildInboxSearchOr('email_conversations', 'ankit', [])
+    const s = buildInboxSearchOr('instagram_conversations', 'ankit', [])
     expect(s).toBe(
-      'counterpart_email.ilike.%ankit%,counterpart_name.ilike.%ankit%,subject.ilike.%ankit%,last_message_preview.ilike.%ankit%'
+      'ig_username.ilike.%ankit%,customer_name.ilike.%ankit%,last_message_preview.ilike.%ankit%'
     )
   })
 
