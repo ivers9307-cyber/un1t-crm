@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   TICKET_STATUS_ORDER,
+  TICKET_VIEW_TABS,
+  DEFAULT_TICKET_VIEW,
   ticketStatusMeta,
+  ticketViewTab,
+  ticketViewWire,
   isArchivedStatus,
   ticketMessageKind,
   requesterLabel,
@@ -60,6 +64,44 @@ describe('status', () => {
     expect(isArchivedStatus('closed')).toBe(true)
     expect(isArchivedStatus('open')).toBe(false)
     expect(isArchivedStatus('pending')).toBe(false)
+  })
+})
+
+describe('views', () => {
+  // The route 400s on anything outside this set, and an absent param is the
+  // live queue — so the default view MUST send no param at all.
+  const WIRE_WHITELIST = ['unassigned', 'mine', 'needs_reply', 'closed']
+
+  it('only ever puts a route-whitelisted value on the wire', () => {
+    for (const v of TICKET_VIEW_TABS) {
+      if (v.wire === null) continue
+      expect(WIRE_WHITELIST).toContain(v.wire)
+    }
+  })
+
+  it('sends no view param for the default (live) queue', () => {
+    expect(DEFAULT_TICKET_VIEW).toBe('open')
+    expect(ticketViewWire(DEFAULT_TICKET_VIEW)).toBeNull()
+    expect(TICKET_VIEW_TABS.filter(v => v.wire === null)).toHaveLength(1)
+  })
+
+  it('gives every view its own empty copy — an empty queue must say which one', () => {
+    const titles = TICKET_VIEW_TABS.map(v => v.emptyTitle)
+    expect(new Set(titles).size).toBe(titles.length)
+    for (const v of TICKET_VIEW_TABS) {
+      expect(v.label.length).toBeGreaterThan(0)
+      expect(v.emptyBody.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('falls back to the live queue rather than undefined on a junk id', () => {
+    expect(ticketViewTab('nonsense').id).toBe('open')
+    expect(ticketViewWire(undefined)).toBeNull()
+  })
+
+  it('labels the archive "Closed" while the wire word covers solved too', () => {
+    expect(ticketViewTab('closed').wire).toBe('closed')
+    expect(ticketViewTab('closed').label).toBe('Closed')
   })
 })
 
