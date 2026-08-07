@@ -10,9 +10,19 @@
 // oldest-location fallback, the routing tests fail rather than quietly
 // misfiling one studio's mail into another's.
 //
-// The other property under test is the dual-write. Nine files still read
-// email_conversations (EmailInbox.jsx, UnifiedInbox.jsx, …), so every inbound
-// must produce BOTH a ticket and a conversation until Plan 7's UI lands.
+// The other property under test used to be the DUAL-WRITE — every inbound had
+// to produce a mig 394 email_conversations row as well as a ticket. It is now
+// the exact opposite (EMAIL-CONV-STOP.1, 2026-08-07): the route must NEVER
+// touch that table, and an inbound must still be filed correctly when the table
+// is unavailable.
+//
+// That second half is not defensive padding. The conversation lookup and insert
+// answered 500 on failure and both ran BEFORE the ticket insert, so:
+//   500 → Postmark retries the same MessageID → recordWebhookEvent already
+//   wrote the dedupe row → the retry short-circuits to 200 `deduped` → the
+//   email is filed NOWHERE, with no error anywhere.
+// One test below makes every email_conversations access throw and asserts the
+// mail still lands. It is what says the table can now be dropped safely.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -98,7 +108,6 @@ function makeDb(state = {}) {
     contacts: [CONTACT],
     threadRows: [],   // email_inbox_messages rows a threading header can match
     tickets: {},      // id → email_tickets row
-    conversation: null, // the existing email_conversations row, if any
     ...state,
   }
 
@@ -111,7 +120,9 @@ function makeDb(state = {}) {
       case 'contacts': return applyFilters(s.contacts, b._filters)
       case 'email_inbox_messages': return applyFilters(s.threadRows, b._filters)
       case 'email_tickets': return applyFilters(Object.values(s.tickets), b._filters)
-      case 'email_conversations': return applyFilters(s.conversation ? [s.conversation] : [], b._filters)
+      // email_conversations has NO case on purpose: a read falls through to []
+      // and a write is still recorded on db.inserts/db.updates, so the negative
+      // assertions below can catch a reintroduced dual-write.
       default: return []
     }
   }
@@ -119,9 +130,7 @@ function makeDb(state = {}) {
   function settle(b, shape) {
     if (b._op === 'insert') {
       db.inserts.push({ table: b._table, payload: b._payload })
-      const id = b._table === 'email_tickets' ? 'new-ticket'
-        : b._table === 'email_conversations' ? 'new-conversation'
-        : 'new-row'
+      const id = b._table === 'email_tickets' ? 'new-ticket' : 'new-row'
       return { data: { id }, error: null }
     }
     if (b._op === 'update') {
@@ -294,25 +303,41 @@ describe('sender → contact matching resists LIKE wildcards', () => {
   })
 })
 
-describe('dual-write', () => {
-  it('writes a ticket AND a conversation, and stamps both ids on the message', async () => {
+describe('ticket write (the dual-write is GONE — EMAIL-CONV-STOP.1)', () => {
+  it('writes a ticket and a message, and NOTHING into email_conversations', async () => {
     const res = await post(inbound())
     const json = await res.json()
 
     expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
-    expect(insertsInto(db, 'email_conversations')).toHaveLength(1)
+    expect(insertsInto(db, 'email_conversations')).toHaveLength(0)
+    expect(updatesTo(db, 'email_conversations')).toHaveLength(0)
 
     const [message] = insertsInto(db, 'email_inbox_messages')
     expect(message.payload.ticket_id).toBe('new-ticket')
-    expect(message.payload.conversation_id).toBe('new-conversation')
     expect(message.payload.location_id).toBe('loc-hatch')
+    // The column still exists (a later migration drops it) — the route just
+    // never names it, so the row is written with conversation_id NULL.
+    expect(message.payload).not.toHaveProperty('conversation_id')
 
     expect(json).toMatchObject({
       success: true,
       ticket_id: 'new-ticket',
-      conversation_id: 'new-conversation',
       mailbox_id: 'mb-hatch',
     })
+    expect(json).not.toHaveProperty('conversation_id')
+  })
+
+  it('never reads email_conversations either', async () => {
+    // The lookup that used to run here answered 500 on failure, before the
+    // ticket insert — the first link in the silent-mail-loss chain.
+    const reads = []
+    const realFrom = db.from
+    db.from = (table) => { reads.push(table); return realFrom(table) }
+
+    await post(inbound())
+
+    expect(reads).not.toContain('email_conversations')
+    expect(reads).toContain('email_tickets')
   })
 
   it('opens the ticket with the requester, subject and contact linkage', async () => {
@@ -329,10 +354,53 @@ describe('dual-write', () => {
     expect(db.rpcs).toContainEqual({
       fn: 'increment_email_ticket_unread', args: { p_ticket_id: 'new-ticket' },
     })
-    // The legacy unread bump still runs — the live inbox reads it.
-    expect(db.rpcs).toContainEqual({
-      fn: 'increment_email_conversation_unread', args: { p_conversation_id: 'new-conversation' },
+    // The legacy unread bump is gone with the conversation row. The RPC itself
+    // survives in the database until the migration PR — nothing calls it.
+    expect(db.rpcs.map(r => r.fn)).not.toContain('increment_email_conversation_unread')
+  })
+})
+
+// The reason this change ships BEFORE any DDL.
+describe('survives email_conversations being unavailable', () => {
+  function breakConversations(target) {
+    const realFrom = target.from
+    target.from = (table) => {
+      if (table === 'email_conversations') {
+        throw new Error('relation "public.email_conversations" does not exist')
+      }
+      return realFrom(table)
+    }
+  }
+
+  it('files the mail correctly when every access to the table would throw', async () => {
+    breakConversations(db)
+
+    const res = await post(inbound())
+
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json).toMatchObject({ success: true, ticket_id: 'new-ticket', mailbox_id: 'mb-hatch' })
+    // The email is FILED — not 500'd into a Postmark retry that the dedupe row
+    // would then swallow as a 200 `deduped`, losing it permanently.
+    expect(json.deduped).toBeUndefined()
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    expect(insertsInto(db, 'email_inbox_messages')[0].payload.ticket_id).toBe('new-ticket')
+  })
+
+  it('appends a threaded reply to its ticket with the table unavailable', async () => {
+    db = makeDb({
+      threadRows: [{ ticket_id: 'T-open', created_at: '2026-08-06T08:00:00Z', location_id: 'loc-hatch', rfc_message_id: 'ours-1@mtasv.net' }],
+      tickets: { 'T-open': { id: 'T-open', location_id: 'loc-hatch', status: 'open', subject: 'Billing question', first_response_at: null } },
     })
+    createServerClient.mockImplementation(() => db)
+    breakConversations(db)
+
+    const res = await post(reply())
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).ticket_id).toBe('T-open')
+    expect(insertsInto(db, 'email_inbox_messages')[0].payload.ticket_id).toBe('T-open')
   })
 })
 
@@ -341,7 +409,6 @@ describe('threading', () => {
     db = makeDb({
       threadRows: [{ ticket_id: 'T-open', created_at: '2026-08-06T08:00:00Z', location_id: 'loc-hatch', rfc_message_id: 'ours-1@mtasv.net' }],
       tickets: { 'T-open': { id: 'T-open', location_id: 'loc-hatch', status: 'open', subject: 'Billing question', first_response_at: null } },
-      conversation: { id: 'conv-1', location_id: 'loc-hatch', counterpart_email: 'member@example.com', contact_id: 'c-1' },
     })
     createServerClient.mockImplementation(() => db)
 

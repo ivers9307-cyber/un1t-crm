@@ -1,10 +1,14 @@
-// INBOX-PERM.2 — GET /api/email/conversations (the legacy list route).
+// EMAIL-CONV-STOP.1 — GET /api/email/conversations is RETIRED.
 //
-// THE LOAD-BEARING ASSERTION is the second test: a user with the WhatsApp
-// inbox switched ON and the email inbox switched OFF gets 403. This route runs
-// on the service-role client, so RLS does nothing and requireInboxPermission
-// IS the gate — and until INBOX-PERM.2 it resolved the `em` channel against
-// the `whatsapp` key, so exactly that user could read the studio's email.
+// It used to list the mig 394 email conversations. It now answers 410 Gone and
+// performs NO database work at all: createServerClient is never called, which
+// is the assertion that actually proves the table is untouched (a status-code
+// check alone would still pass if the handler queried and then discarded).
+//
+// The 401/403 tests are not leftovers. The guard stays in front of the 410 on
+// purpose — so an unauthenticated caller cannot use the retirement to
+// enumerate which routes exist — and `check:route-guards` requires every route
+// under src/app/api/email/conversations to carry the channel-permission check.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -18,49 +22,44 @@ vi.mock('@/lib/auth', async () => {
 import { GET } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { makeDb } from '../tickets/_test-db'
-import { LOC_A, LOC_B, WA_ONLY, EMAIL_ONLY, CONV, baseState } from './_test-fixtures'
+import { WA_ONLY, EMAIL_ONLY, LOC_A } from './_test-fixtures'
 
 function get(query = '') {
   return GET(new Request(`http://x/api/email/conversations${query}`))
 }
 
-let db
 beforeEach(() => {
   vi.clearAllMocks()
-  db = makeDb(baseState())
-  createServerClient.mockImplementation(() => db)
   getCurrentUser.mockResolvedValue(EMAIL_ONLY)
 })
 
-describe('GET /api/email/conversations', () => {
-  it('401s when unauthenticated', async () => {
+describe('GET /api/email/conversations — retired', () => {
+  it('401s when unauthenticated, before saying anything about the route', async () => {
     getCurrentUser.mockResolvedValue(null)
     expect((await get()).status).toBe(401)
+    expect(createServerClient).not.toHaveBeenCalled()
   })
 
   it('403s a user holding `whatsapp` but NOT `email_inbox`', async () => {
     getCurrentUser.mockResolvedValue(WA_ONLY)
-    const res = await get()
-    expect(res.status).toBe(403)
-    // Nothing was read: the gate runs before any DB work.
+    expect((await get()).status).toBe(403)
     expect(createServerClient).not.toHaveBeenCalled()
   })
 
-  it('allows a user holding `email_inbox` (and no whatsapp at all)', async () => {
+  it('410s the caller who DOES hold `email_inbox`', async () => {
     const res = await get()
-    expect(res.status).toBe(200)
-    expect((await res.json()).conversations.map(c => c.id)).toEqual([CONV.id])
+    expect(res.status).toBe(410)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    // A sentence a human can act on — the app cannot distinguish a 404 from a
+    // network error, which is why the route was stubbed rather than deleted.
+    expect(body.error).toMatch(/retired/i)
+    expect(body.error).toMatch(/ticket/i)
   })
 
-  it('scopes to the caller’s locations', async () => {
-    getCurrentUser.mockResolvedValue({ ...EMAIL_ONLY, locations: [{ id: LOC_B }] })
-    const res = await get()
-    expect((await res.json()).conversations).toEqual([])
-  })
-
-  it('403s an explicit ?location_id the caller has no access to', async () => {
-    expect((await get(`?location_id=${LOC_B}`)).status).toBe(403)
-    expect((await get(`?location_id=${LOC_A}`)).status).toBe(200)
+  it('never touches the database — not even with a location filter', async () => {
+    await get()
+    await get(`?location_id=${LOC_A}`)
+    expect(createServerClient).not.toHaveBeenCalled()
   })
 })

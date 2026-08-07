@@ -1,15 +1,20 @@
-// Shared fixtures for the LEGACY email conversation route tests
-// (INBOX-PERM.2).
+// Shared fixtures for the RETIRED /api/email/conversations* route tests.
 //
-// THE PROPERTY UNDER TEST is which permission key these routes gate on. Every
-// fixture user therefore carries an EXPLICIT per-user permission bag, so the
-// real resolver (tier 2 wins over role defaults) answers the question and no
-// test here mocks hasPermission. A mocked permission check would pass with the
-// gate pointed at any key at all — which is exactly how `em` sat on the
-// `whatsapp` key unnoticed.
+// Originally INBOX-PERM.2's fixtures, when the property under test was which
+// permission key these routes gate on. EMAIL-CONV-STOP.1 (2026-08-07) retired
+// the routes to 410 Gone, so the conversation/message/location rows are gone
+// with them — there is no query left to feed. What survives is the pair of
+// users, because the gate order is still under test: an unauthenticated caller
+// gets 401 and a caller without `email_inbox` gets 403, both BEFORE the 410, so
+// the retirement cannot be used to enumerate routes.
+//
+// Each user carries an EXPLICIT per-user permission bag so the real resolver
+// (tier 2 wins over role defaults) answers the question and no test here mocks
+// hasPermission. A mocked permission check would pass with the gate pointed at
+// any key at all — which is exactly how `em` sat on the `whatsapp` key
+// unnoticed.
 
 export const LOC_A = 'a0000000-0000-0000-0000-000000000001'
-export const LOC_B = 'b0000000-0000-0000-0000-000000000002'
 
 /**
  * A staff user at LOC_A with an explicit permission bag.
@@ -35,42 +40,8 @@ export function staffWith(permissions, { locationId = LOC_A } = {}) {
  */
 export const WA_ONLY = staffWith({ whatsapp: true, email_inbox: false })
 
-/** Holds the email key and nothing else — the person these routes are for. */
+/** Holds the email key and nothing else — the person these routes were for. */
 export const EMAIL_ONLY = staffWith({ whatsapp: false, email_inbox: true })
 
-export const CONV = {
-  id: 'ccccccc1-0000-4000-8000-000000000001',
-  location_id: LOC_A,
-  contact_id: 'contact-1',
-  counterpart_email: 'member@example.com',
-  subject: 'Class times',
-  unread_count: 3,
-  resolved_at: null,
-  last_message_at: '2026-08-06T09:00:00Z',
-  last_message_direction: 'inbound',
-  last_message_preview: 'What time is the 6am?',
-}
-
-export const CONV_MESSAGES = [
-  {
-    id: 'm-1', conversation_id: CONV.id, location_id: LOC_A,
-    direction: 'inbound', subject: 'Class times', text_body: 'What time is the 6am?',
-    rfc_message_id: '<inbound-1@mail.example.com>', references_header: null,
-    created_at: '2026-08-06T09:00:00Z',
-  },
-  {
-    id: 'm-2', conversation_id: CONV.id, location_id: LOC_A,
-    direction: 'outbound', subject: 'Re: Class times', text_body: 'Six sharp.',
-    created_at: '2026-08-06T09:30:00Z',
-  },
-]
-
-/** The standard world: one conversation at LOC_A with a two-message thread. */
-export function baseState(extra = {}) {
-  return {
-    conversations: [{ ...CONV }],
-    messages: CONV_MESSAGES.map(m => ({ ...m })),
-    locations: [{ id: LOC_A, email_inbox_reply_to: 'studio@un1tdublin.com' }],
-    ...extra,
-  }
-}
+/** Any id at all — these routes no longer look one up. */
+export const CONV_ID = 'ccccccc1-0000-4000-8000-000000000001'

@@ -18,8 +18,9 @@ const ReplySchema = z.object({
   internal: z.boolean().optional().default(false),
 })
 
-// Minimal text → HTML, same as the conversations send route this replaces: a
-// 1:1 human reply is escaped text with line breaks, not designed mail.
+// Minimal text → HTML, same as the legacy conversations send route this
+// replaced: a 1:1 human reply is escaped text with line breaks, not designed
+// mail.
 //
 // EMAIL-TICKET.5: this runs over the body WITH the signature already appended
 // (see appendSignature), so the sign-off is escaped by exactly the same three
@@ -34,63 +35,6 @@ function textToHtml(text) {
   return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;white-space:pre-wrap;">${escaped}</div>`
 }
 
-// EMAIL-TICKET.5 — the legacy dual-write.
-//
-// The inbound webhook writes BOTH a ticket and a mig 394 email_conversations
-// row, and stamps both ids onto the one message, so the old unified inbox
-// keeps working through the transition. A reply sent from the tickets UI used
-// to appear only in the ticket, which read as "the member was never answered"
-// to anyone still working the old surface. This mirrors the webhook: one
-// message row carrying both ids, plus the conversation's summary refreshed
-// exactly as /api/email/conversations/[id]/send does it.
-//
-// IT MUST NEVER FAIL THE REPLY. The email is already on the wire and the
-// ticket message row is already committed by the time this runs — a legacy
-// bookkeeping failure is not a reason to tell the operator their answer
-// didn't send. Everything is inside one try/catch, and note that supabase-js
-// builders are thenables with no .catch(), so try/catch is the only form that
-// works here (CLAUDE.md).
-//
-// @returns {Promise<string|null>} the conversation id it mirrored to, or null
-async function mirrorReplyToConversation(db, { ticketId, messageId, preview, now }) {
-  try {
-    // The conversation id lives on the ticket's own earlier messages (the
-    // webhook stamps it on every inbound). A ticket created after the
-    // conversation write is dropped — or one that never had a legacy row —
-    // simply has nothing to mirror to, which is a normal state, not an error.
-    const { data: linked } = await db.from('email_inbox_messages')
-      .select('conversation_id')
-      .eq('ticket_id', ticketId)
-      .not('conversation_id', 'is', null)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    const conversationId = linked?.conversation_id || null
-    if (!conversationId) return null
-
-    // One row, both ids — same as the webhook. Writing a SECOND message row
-    // instead would double the reply in the ticket thread.
-    if (messageId) {
-      await db.from('email_inbox_messages')
-        .update({ conversation_id: conversationId })
-        .eq('id', messageId)
-    }
-
-    await db.from('email_conversations').update({
-      last_message_at: now,
-      last_message_direction: 'outbound',
-      last_message_preview: preview,
-      updated_at: now,
-    }).eq('id', conversationId)
-
-    return conversationId
-  } catch (err) {
-    console.error('[ticket-reply] legacy email_conversations mirror failed:', err?.message)
-    return null
-  }
-}
-
 // POST /api/email/tickets/[id]/reply — answer a ticket, or add an internal
 // note (EMAIL-TICKET.4).
 //
@@ -98,12 +42,21 @@ async function mirrorReplyToConversation(db, { ticketId, messageId, preview, now
 // and carry NO marketing-consent gate: the member wrote to us first, and a
 // suppression flag silently swallowing the answer to their own question is
 // worse than the consent risk it avoids (spec, "Postmark topology"). This is
-// the same posture as the conversations send route — preserved deliberately.
+// the same posture as the legacy conversations send route — preserved
+// deliberately.
 //
-// EMAIL-TICKET.5 adds three things (mig 493):
+// EMAIL-TICKET.5 adds two things (mig 493):
 //   • the sender's plain-text signature on real replies, never on notes
 //   • author_profile_id on BOTH replies and notes (inbound has no author)
-//   • a non-fatal mirror into the legacy email_conversations row
+//
+// EMAIL-CONV-STOP.1 (2026-08-07) removed the third: a non-fatal mirror that
+// stamped conversation_id onto the outbound message row and refreshed the mig
+// 394 email_conversations summary, so a reply also showed on the old unified
+// inbox. That surface is gone (INBOX-SPLIT.1 dropped email from the web
+// inbox; EMAIL-TICKET-M.1 moved mobile onto tickets), and the webhook no
+// longer writes a conversation for it to find. The mirror was already
+// non-fatal, so nothing about the reply path's behaviour changes — only the
+// response's now-always-null `conversation_id` field is gone with it.
 export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
@@ -299,17 +252,8 @@ export async function POST(request, props) {
   }
   await db.from('email_tickets').update(patch).eq('id', ticket.id)
 
-  // Legacy mirror, LAST and non-fatal — everything the operator asked for has
-  // already happened by this point.
-  const conversationId = await mirrorReplyToConversation(db, {
-    ticketId: ticket.id,
-    messageId: message?.id,
-    preview,
-    now,
-  })
-
   return NextResponse.json({
     success: true,
-    data: { message, status: 'pending', message_id: result.messageId, conversation_id: conversationId },
+    data: { message, status: 'pending', message_id: result.messageId },
   })
 }
