@@ -1,13 +1,20 @@
 // Test double for the service-role client, shared by the ticket route tests.
 //
-// It honours eq / in / is / not / or / order / limit rather than no-opping
-// them, because the property under test IS a filter: "a coach granted studio@
-// must not see accounts@ tickets" is only proven if the route's own
-// .in('mailbox_id', …) actually excludes rows. A permissive fake would pass
-// those tests with the gate deleted.
+// It honours eq / in / is / not / or / ilike / order / limit rather than
+// no-opping them, because the property under test IS a filter: "a coach
+// granted studio@ must not see accounts@ tickets" is only proven if the
+// route's own .in('mailbox_id', …) actually excludes rows. A permissive fake
+// would pass those tests with the gate deleted.
+//
+// `ilike` was the exception until ILIKE-WILDCARD.1 — it fell through to
+// `default: true`, so the compose route's contact lookup returned every
+// contact regardless of the pattern. Exactly the hole this header warns
+// about, in the one filter nobody had written a case for.
 //
 // Writes are recorded AND applied to the in-memory rows, so a test can assert
 // both "the route wrote this" and "the row now looks like this".
+
+import { ilikeMatches } from '@/lib/like-escape.test-helpers'
 
 function splitTopLevel(expr) {
   const parts = []
@@ -48,6 +55,11 @@ function matches(row, f) {
     case 'is': return a === null ? value === null : value === a
     case 'not': return a === 'is' && b === null ? value !== null : true
     case 'or': return orMatches(row, col)
+    // ilike used to fall through to `default: true` — a NO-OP, so the compose
+    // route's contact lookup returned every contact whatever the pattern and
+    // the fake could not tell an escaped query from an unescaped one. Model
+    // the real thing (ILIKE-WILDCARD.1); see src/lib/like-escape.test-helpers.js.
+    case 'ilike': return ilikeMatches(a, value)
     default: return true
   }
 }

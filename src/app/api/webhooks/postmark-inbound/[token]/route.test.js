@@ -27,6 +27,7 @@ import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { recordWebhookEvent } from '@/lib/webhook-events'
+import { ilikeMatches } from '@/lib/like-escape.test-helpers'
 
 // ── Fixtures ────────────────────────────────────────────────────────
 // STILLORGAN is deliberately FIRST (and older): it is what an oldest-active
@@ -81,7 +82,11 @@ function applyFilters(list, filters) {
   return list.filter(row => filters.every(f => {
     if (f[0] === 'eq') return row[f[1]] === f[2]
     if (f[0] === 'in') return f[2].includes(row[f[1]])
-    if (f[0] === 'ilike') return String(row[f[1]] ?? '').toLowerCase() === String(f[2]).toLowerCase()
+    // ilike applies REAL LIKE semantics (wildcards live). This used to be
+    // `lower(a) === lower(b)`, which is what the call site means but not what
+    // Postgres does — and that gap is exactly how the wildcard bug below
+    // survived a green suite. See src/lib/like-escape.test-helpers.js.
+    if (f[0] === 'ilike') return ilikeMatches(f[2], row[f[1]])
     return true // order/limit/not/or are not modelled
   }))
 }
@@ -211,6 +216,81 @@ describe('mailbox routing', () => {
     expect((await res.json()).dead_lettered).toBe('no_matching_mailbox')
     expect(deadLetterWebhook).toHaveBeenCalledTimes(1)
     expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+  })
+})
+
+// ── Sender → contact matching (the 2026-08-07 wildcard bug) ─────────
+// The From address arrives on an UNAUTHENTICATED webhook, so it is
+// attacker-controlled, and normalizeEmail's regex (/^[^@\s]+@[^@\s]+\.[^@\s]+$/)
+// admits both LIKE wildcards: `_` and `%` are legal email characters. Resolving
+// it with a bare .ilike() therefore matched on a PATTERN, not an address.
+// See src/lib/like-escape.js.
+describe('sender → contact matching resists LIKE wildcards', () => {
+  // Two lookalikes: the `_` in the first is a single-character wildcard, so an
+  // unescaped pattern also matches the second.
+  const UNDERSCORE = { id: 'c-underscore', location_id: 'loc-hatch', email: 'a_b@example.com', created_at: '2025-01-01T00:00:00Z' }
+  const LOOKALIKE = { id: 'c-lookalike', location_id: 'loc-hatch', email: 'axb@example.com', created_at: '2024-01-01T00:00:00Z' }
+
+  it('an address containing "_" does not match a DIFFERENT contact', async () => {
+    // LOOKALIKE is older, so pickContact prefers it over the real sender —
+    // the mismatch is silent and deterministic, never an error.
+    db = makeDb({ contacts: [LOOKALIKE, UNDERSCORE] })
+    createServerClient.mockImplementation(() => db)
+
+    await post(inbound({ From: 'a_b@example.com', FromFull: { Email: 'a_b@example.com', Name: 'Ada' } }))
+
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload.requester_email).toBe('a_b@example.com')
+    expect(ticket.payload.contact_id).toBe('c-underscore')
+    expect(ticket.payload.contact_id).not.toBe('c-lookalike')
+  })
+
+  it('"%@domain" does not match every contact at that domain', async () => {
+    const many = [
+      { id: 'c-alice', location_id: 'loc-hatch', email: 'alice@example.com', created_at: '2024-01-01T00:00:00Z' },
+      { id: 'c-bob', location_id: 'loc-hatch', email: 'bob@example.com', created_at: '2024-06-01T00:00:00Z' },
+      { id: 'c-carol', location_id: 'loc-hatch', email: 'carol@example.com', created_at: '2025-01-01T00:00:00Z' },
+    ]
+    db = makeDb({ contacts: many })
+    createServerClient.mockImplementation(() => db)
+
+    const res = await post(inbound({ From: '%@example.com', FromFull: { Email: '%@example.com', Name: 'Nobody' } }))
+
+    // The mail is still filed (the mailbox matched) — it just carries NO
+    // contact identity, rather than a stranger's.
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload.contact_id).toBeNull()
+    expect(ticket.payload.requester_email).toBe('%@example.com')
+    // …and the route must not claim it identified the sender.
+    expect((await res.json()).matched_via).toBe('recipient_address')
+  })
+
+  it('"%@%.%" does not match essentially every contact in the table', async () => {
+    db = makeDb({ contacts: [CONTACT, { id: 'c-other', location_id: 'loc-hatch', email: 'someone@elsewhere.org', created_at: '2024-01-01T00:00:00Z' }] })
+    createServerClient.mockImplementation(() => db)
+
+    await post(inbound({ From: '%@%.%', FromFull: { Email: '%@%.%', Name: 'Nobody' } }))
+
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBeNull()
+  })
+
+  it('still matches an ordinary address (the escaping is behaviour-preserving)', async () => {
+    // Guards the other direction: over-escaping would break every lookup.
+    db = makeDb({ contacts: [{ ...CONTACT, email: 'Member@Example.COM' }] })
+    createServerClient.mockImplementation(() => db)
+
+    await post(inbound())
+
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBe('c-1')
+  })
+
+  it('matches an address that genuinely contains an underscore', async () => {
+    db = makeDb({ contacts: [UNDERSCORE] })
+    createServerClient.mockImplementation(() => db)
+
+    await post(inbound({ From: 'a_b@example.com', FromFull: { Email: 'a_b@example.com', Name: 'Ada' } }))
+
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBe('c-underscore')
   })
 })
 

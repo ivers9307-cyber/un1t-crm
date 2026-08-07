@@ -254,6 +254,71 @@ const noLowContrastChip = {
   },
 }
 
+// .ilike(col, <bare value>) — a case-insensitive EQUALITY check written as a
+// LIKE pattern. `_` and `%` are wildcards AND legal email/name characters, so
+// an unescaped value matches a pattern rather than the value: `a_b@x.com` also
+// matches `axb@x.com`, and `%@x.com` matches every address at the domain.
+// Found 2026-08-07 in the inbound-email webhook (attacker-controlled From) plus
+// five other lookups, after being hand-fixed twice before that. See
+// src/lib/like-escape.js.
+//
+// A DELIBERATE substring search is not flagged: those spell the wildcards in
+// the source (`'%hyrox%'`, `` `%${term}%` ``), which is the visible difference
+// between "I meant a pattern" and "I meant equality".
+const ESCAPE_HELPER = 'escapeLikePattern'
+
+// Does the argument spell a wildcard in the SOURCE? Literal or template — for
+// templates only the static parts count, since an interpolated value is
+// exactly what we cannot vouch for.
+function spellsWildcard(node) {
+  if (!node) return false
+  if (node.type === 'Literal') return typeof node.value === 'string' && /[%_]/.test(node.value)
+  if (node.type === 'TemplateLiteral') {
+    return (node.quasis || []).some((q) => /[%_]/.test((q.value && q.value.cooked) || ''))
+  }
+  return false
+}
+
+// escapeLikePattern(x) — including a namespaced form (like.escapeLikePattern).
+function isEscaped(node) {
+  if (!node || node.type !== 'CallExpression') return false
+  const c = node.callee
+  if (!c) return false
+  if (c.type === 'Identifier') return c.name === ESCAPE_HELPER
+  if (c.type === 'MemberExpression') return c.property && c.property.name === ESCAPE_HELPER
+  return false
+}
+
+const noUnescapedIlikePattern = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description:
+        'Disallow .ilike()/.like() whose pattern is an unescaped runtime value. Wrap it in escapeLikePattern() for an equality check, or spell the wildcards in the source for a deliberate substring search.',
+    },
+    schema: [],
+    messages: {
+      unescaped:
+        ".ilike()/.like() takes a LIKE PATTERN, not a value — `_` and `%` are wildcards and both are legal in emails and names, so this matches more (or other) rows than intended. If this is a case-insensitive EQUALITY check, wrap the argument in escapeLikePattern() from @/lib/like-escape. If it is a deliberate substring search over trusted/sanitised input, spell the wildcards in the source (`%${term}%`) or annotate with an eslint-disable + reason.",
+    },
+  },
+  create(context) {
+    return {
+      'CallExpression[callee.type="MemberExpression"]'(node) {
+        const prop = node.callee.property && node.callee.property.name
+        if (prop !== 'ilike' && prop !== 'like') return
+        // PostgREST form is .ilike(column, pattern); anything else isn't ours.
+        if (!node.arguments || node.arguments.length !== 2) return
+        const pattern = node.arguments[1]
+        if (spellsWildcard(pattern) || isEscaped(pattern)) return
+        // A plain string literal with no wildcard is already an exact match.
+        if (pattern.type === 'Literal' && typeof pattern.value === 'string') return
+        context.report({ node: pattern, messageId: 'unescaped' })
+      },
+    }
+  },
+}
+
 export default {
   rules: {
     'no-catch-on-supabase-builder': noCatchOnSupabaseBuilder,
@@ -261,5 +326,6 @@ export default {
     'no-zulu-template-date': noZuluTemplateDate,
     'no-utc-today': noUtcToday,
     'no-low-contrast-chip': noLowContrastChip,
+    'no-unescaped-ilike-pattern': noUnescapedIlikePattern,
   },
 }

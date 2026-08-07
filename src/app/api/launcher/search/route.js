@@ -78,6 +78,11 @@ export async function GET(request) {
         .from('race_events')
         .select('id, name, race_date')
         .eq('location_id', locationId)
+        // Deliberate substring search: `like` is `%${term}%` and
+        // sanitizeSearchTerm() has already stripped , ( ) % * _ — so the term
+        // carries neither LIKE wildcards nor the PostgREST filter separators
+        // that the .or() forms above interpolate raw.
+        // eslint-disable-next-line guardrails/no-unescaped-ilike-pattern -- pre-sanitised substring search, see above
         .ilike('name', like)
         .order('race_date', { ascending: false })
         .limit(LAUNCHER_RESULT_CAP)

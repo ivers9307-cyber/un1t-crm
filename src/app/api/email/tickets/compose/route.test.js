@@ -266,4 +266,34 @@ describe('POST /api/email/tickets/compose — contact linkage', () => {
     await post({ ...VALID, to: 'a_b@example.com' })
     expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBeNull()
   })
+
+  // ILIKE-WILDCARD.1 — three independent defences now, and they cover
+  // different payloads. Unlike the inbound webhook (which parses the sender
+  // with the permissive normalizeEmail regex and so DOES see `%@domain`), this
+  // route validates `to` with the strict Zod `email` schema, which rejects a
+  // `%` local part outright — so the `%` half never reaches the query here.
+  // `_` IS a legal email character, passes Zod, and is the case above.
+  it('rejects a "%@domain" recipient at validation, before any query', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      contacts: [
+        { id: 'contact-a', location_id: LOC_A, email: 'alice@example.com', created_at: '2026-01-01T00:00:00Z' },
+        { id: 'contact-b', location_id: LOC_A, email: 'bob@example.com', created_at: '2026-02-01T00:00:00Z' },
+      ],
+    }))
+    const res = await post({ ...VALID, to: '%@example.com' })
+    expect(res.status).toBe(400)
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(0)
+  })
+
+  it('still links an address that genuinely contains an underscore', async () => {
+    // The other direction: over-escaping would break a legitimate recipient.
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      contacts: [{ id: 'contact-u', location_id: LOC_A, email: 'a_b@example.com', created_at: '2026-01-01T00:00:00Z' }],
+    }))
+    await post({ ...VALID, to: 'a_b@example.com' })
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBe('contact-u')
+  })
 })

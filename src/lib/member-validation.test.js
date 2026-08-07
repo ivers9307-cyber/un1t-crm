@@ -2,6 +2,7 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import { validateMemberByEmail, validateTeamRoster, computeTeamPricing } from './member-validation'
+import { ilikeMatches } from './like-escape.test-helpers'
 
 // ─── computeTeamPricing — pure pricing logic ─────────────────────
 
@@ -195,6 +196,79 @@ describe('validateMemberByEmail', () => {
     const r = await validateMemberByEmail({ db, email: 'x@y.com', locationId: 'loc-1' })
     expect(r.is_member).toBe(false)
     expect(r.status).toBe('failed')
+  })
+})
+
+// ─── LIKE wildcards in the public member check (2026-08-07) ──────
+// validateMemberByEmail backs the PUBLIC check-member and register routes, so
+// `email` is untrusted. The lookup used a bare .ilike(), which matched a
+// PATTERN — turning the "is this address a member?" question into "is ANY
+// address matching this pattern a member?", and handing back that member's
+// contact_id and first_name. See src/lib/like-escape.js.
+//
+// Unlike mockDb above (which returns a fixed row whatever the query), this one
+// holds real rows and applies eq/ilike the way Postgres does, so the pattern
+// actually decides what comes back.
+function mockContactsDb(rows) {
+  const q = {
+    _rows: rows,
+    from() { return q },
+    select() { return q },
+    eq(col, val) { q._rows = q._rows.filter((r) => r[col] === val); return q },
+    ilike(col, val) { q._rows = q._rows.filter((r) => ilikeMatches(val, r[col])); return q },
+    // PostgREST .maybeSingle() errors when the filter matched more than one row.
+    maybeSingle: async () => (q._rows.length > 1
+      ? { data: null, error: { code: 'PGRST116' } }
+      : { data: q._rows[0] || null, error: null }),
+  }
+  return q
+}
+
+const MEMBERS = [
+  { id: 'c-axb', location_id: 'loc-1', email: 'axb@example.com', first_name: 'Alex', name: 'Alex B', pipeline_stage_slug: 'member' },
+  { id: 'c-underscore', location_id: 'loc-1', email: 'a_b@example.com', first_name: 'Ada', name: 'Ada B', pipeline_stage_slug: 'member' },
+  { id: 'c-solo', location_id: 'loc-1', email: 'solo@example.com', first_name: 'Sol', name: 'Sol O', pipeline_stage_slug: 'member' },
+]
+
+describe('validateMemberByEmail — LIKE wildcards cannot impersonate a member', () => {
+  it('an address containing "_" does not verify against a DIFFERENT member', async () => {
+    // Only the lookalike is on file. 'a_b@example.com' must NOT verify as Alex.
+    const db = mockContactsDb([MEMBERS[0]])
+    const r = await validateMemberByEmail({ db, email: 'a_b@example.com', locationId: 'loc-1' })
+    expect(r.is_member).toBe(false)
+    expect(r.contact_id).toBeNull()
+    expect(r.first_name).toBeNull()
+  })
+
+  it('"%@domain" does not verify as the one member at that domain', async () => {
+    // The enumeration oracle: exactly one member at the domain means
+    // .maybeSingle() returns a row rather than erroring, so an unescaped
+    // pattern answers is_member: true and leaks their first name.
+    const db = mockContactsDb([MEMBERS[2]])
+    const r = await validateMemberByEmail({ db, email: '%@example.com', locationId: 'loc-1' })
+    expect(r.is_member).toBe(false)
+    expect(r.first_name).toBeNull()
+  })
+
+  it('"%@%.%" does not verify against the whole table', async () => {
+    const db = mockContactsDb([MEMBERS[2]])
+    const r = await validateMemberByEmail({ db, email: '%@%.%', locationId: 'loc-1' })
+    expect(r.is_member).toBe(false)
+  })
+
+  it('still verifies the real owner of an underscored address', async () => {
+    const db = mockContactsDb(MEMBERS)
+    const r = await validateMemberByEmail({ db, email: 'a_b@example.com', locationId: 'loc-1' })
+    expect(r.is_member).toBe(true)
+    expect(r.contact_id).toBe('c-underscore')
+    expect(r.first_name).toBe('Ada')
+  })
+
+  it('still verifies a mixed-case address (escaping is behaviour-preserving)', async () => {
+    const db = mockContactsDb([{ ...MEMBERS[2], email: 'Solo@Example.COM' }])
+    const r = await validateMemberByEmail({ db, email: 'solo@example.com', locationId: 'loc-1' })
+    expect(r.is_member).toBe(true)
+    expect(r.contact_id).toBe('c-solo')
   })
 })
 

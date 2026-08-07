@@ -47,6 +47,7 @@ const config = [
       'guardrails/no-zulu-template-date': 'error',
       'guardrails/no-utc-today': 'error',
       'guardrails/no-low-contrast-chip': 'error',
+      'guardrails/no-unescaped-ilike-pattern': 'error',
     },
   },
   {

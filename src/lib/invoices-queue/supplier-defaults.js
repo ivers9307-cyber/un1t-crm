@@ -20,6 +20,8 @@
 // Every function is best-effort by contract — callers wrap them so a
 // memory miss never blocks an extraction or an approval.
 
+import { escapeLikePattern } from '../like-escape'
+
 /**
  * Resolve an extracted supplier name to a cached Xero contact for
  * this location. Returns the contact only on an unambiguous single
@@ -37,7 +39,13 @@ export async function matchSupplier(db, locationId, supplierName) {
     .eq('location_id', locationId)
     .eq('status', 'ACTIVE')
     .eq('is_supplier', true)
-    .ilike('name', name) // no % wildcards → exact, case-insensitive
+    // Escaped, so this really is the exact case-insensitive match the header
+    // promises. The pattern is an OCR/AI-extracted supplier name off a PDF a
+    // third party sent us — "no % wildcards" was never something we could
+    // assert about it, and an unescaped `_` silently matched a DIFFERENT
+    // supplier, which .limit(2)'s ambiguity guard cannot see (one wrong row is
+    // still one row). See src/lib/like-escape.js.
+    .ilike('name', escapeLikePattern(name))
     .limit(2)
 
   if (error || !data || data.length !== 1) return null
