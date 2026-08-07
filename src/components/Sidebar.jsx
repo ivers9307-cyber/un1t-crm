@@ -106,6 +106,15 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
     enabled: hasPerm('whatsapp'),
     url: '/api/whatsapp/unread-count',
   })
+  // EMAIL-TICKET-CLEANUP.3 — Email badge: tickets somebody sent us that nobody
+  // has answered yet, at the active location and only on mailboxes this person
+  // can actually open. NOT the whole live queue — nothing in that feature
+  // auto-closes, so counting tickets already waiting on the member would give a
+  // number that never comes down. Full reasoning in the count endpoint.
+  const emailNeedsReplyCount = usePolledCount({
+    enabled: hasPerm('email_inbox'),
+    url: '/api/email/tickets/count',
+  })
   // HOST-PORTAL.6 — host events awaiting review (pending_review). Admin-only
   // (the API short-circuits to 0 for everyone else); surfaces on Settings,
   // where the hosts review queue lives (/settings/hosts).
@@ -121,6 +130,10 @@ export default function Sidebar({ user, isLinkedHost = false, mobileOpen = false
     '/approvals': approvalsPendingCount,
     '/issues': issuesPendingCount,
     '/communications': communicationsActionCount,
+    // Top-level 'work' item, NOT a child of /communications — SidebarGroup
+    // renders children without a badge prop, so a badge on a child would
+    // silently do nothing.
+    '/communications/tickets': emailNeedsReplyCount,
     '/settings': hostEventsPendingCount,
   }
 

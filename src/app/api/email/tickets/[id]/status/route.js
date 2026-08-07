@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { EMAIL_TICKET_STATUS_VALUES } from '@/lib/enums'
 import { loadTicketForUser, statusTimestamps } from '../../_helpers'
@@ -25,14 +24,16 @@ const StatusSchema = z.object({
 // this feature (Richard, 2026-08-06): a ticket ageing out is indistinguishable
 // from a ticket being handled, and a queue that silently shrinks is how
 // enquiries get lost. This route is the only way a ticket leaves the queue.
+//
+// BOTH GATES LIVE IN loadTicketForUser (EMAIL-TICKET-CLEANUP.1) — the
+// `email_inbox` surface permission resolved at the TICKET'S location, and the
+// per-mailbox grant. The permission check used to sit here, above the load,
+// where it could only ever resolve at the caller's ACTIVE location and so
+// answered a different question than this route asks.
 export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  if (!hasPermission(user, 'email_inbox')) {
-    return NextResponse.json({ success: false, error: 'Forbidden — email inbox permission required' }, { status: 403 })
-  }
 
   const validation = await validateBody(request, StatusSchema)
   if (!validation.ok) return validation.response

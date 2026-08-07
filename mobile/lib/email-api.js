@@ -12,7 +12,15 @@
 // permission plus a per-account email_mailbox_access grant — the SAME two
 // levels the web inbox is behind. Screens must gate on `email_inbox` too
 // (canMobile routes it through CROSS_PLATFORM_KEYS to the top-level key), or
-// the UI offers something every call will 403.
+// the UI offers something every call refuses.
+//
+// EMAIL-TICKET-CLEANUP.1 — that permission now resolves AT the location the
+// call is about (the ticket's own, or the one the list route was handed) rather
+// than the caller's active one, which matters more on mobile than on web: the
+// app carries x-active-location per request, so a staffer switching studios
+// used to change what they could read at BOTH. The list route still answers 403
+// when the key is missing; the per-ticket routes answer 404, since there the
+// refusal has to be indistinguishable from "no such ticket".
 //
 // TWO DIFFERENCES FROM THE OLD CONVERSATIONS API, both deliberate:
 //   • the list route returns { mailboxes, tickets }, NOT a flat list — the

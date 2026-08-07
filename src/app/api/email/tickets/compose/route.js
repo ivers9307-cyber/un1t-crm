@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email as emailAddress } from '@/lib/schemas'
 import { sendEmail } from '@/lib/postmark'
@@ -34,6 +34,18 @@ import { loadVisibleMailboxes, ticketNotFound } from '../_helpers'
 // A mailbox the caller cannot use is a 404, never a 403 — same as the detail
 // routes, so mailbox ids can't be probed and the set of addresses a studio
 // runs can't be enumerated.
+//
+// EMAIL-TICKET-CLEANUP.1 — BOTH gates now resolve at the MAILBOX'S location.
+// The surface gate used to be hasPermission(), evaluated against the caller's
+// ACTIVE location, which is not where the mail would have gone: this route
+// never takes a location, it reads one off the mailbox. So a manager at
+// Stillorgan whose session pointed there could compose FROM a Hatch address
+// they hold no key for, and the same person with their session on Hatch was
+// refused their own studio's composer. It cannot sit above the mailbox read
+// (there is no location to resolve against yet), so it sits below it, and
+// refuses with the same 404 as an unusable mailbox — a 403 here would separate
+// "that mailbox exists, elsewhere" from "no such mailbox" and hand back the
+// enumeration this route is careful not to give.
 
 const ComposeSchema = z.object({
   mailbox_id: uuidLike,
@@ -69,10 +81,6 @@ export async function POST(request) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  if (!hasPermission(user, 'email_inbox')) {
-    return NextResponse.json({ success: false, error: 'Forbidden — email inbox permission required' }, { status: 403 })
-  }
-
   const validation = await validateBody(request, ComposeSchema)
   if (!validation.ok) return validation.response
   const { mailbox_id: mailboxId, to, subject, text } = validation.data
@@ -94,12 +102,24 @@ export async function POST(request) {
   const guard = assertLocationAccessOr404(user, named.location_id)
   if (guard) return guard
 
-  // THE PERMISSIONS GATE. `mailboxes` is the caller's own visible set — active
+  // THE SURFACE GATE, at the mailbox's location — see the header. It runs after
+  // assertLocationAccessOr404 so the broader refusal wins first, and before the
+  // visible-set query so a caller with no key does no further work.
+  if (!hasPermissionForLocation(user, named.location_id, 'email_inbox')) {
+    return ticketNotFound()
+  }
+
+  // THE PER-ACCOUNT GATE. `mailboxes` is the caller's own visible set — active
   // mailboxes at this location that they are elevated over or hold a grant on.
   // Everything downstream uses THIS row, so an inactive or ungranted address
   // cannot be sent from even though it exists.
-  const { mailboxes } = await loadVisibleMailboxes(db, user, named.location_id)
-  const mailbox = mailboxes.find(m => m.id === mailboxId) || null
+  const visibility = await loadVisibleMailboxes(db, user, named.location_id)
+  // A FAILED visibility lookup is not "no mailboxes" (EMAIL-TICKET-CLEANUP.2).
+  // Left as an empty set it 404'd — telling the operator the address they just
+  // picked does not exist. Nothing has been sent at this point, so refusing
+  // costs a retry and can never produce a wrong outcome.
+  if (visibility.response) return visibility.response
+  const mailbox = visibility.mailboxes.find(m => m.id === mailboxId) || null
   if (!mailbox) return ticketNotFound()
 
   const locationId = mailbox.location_id

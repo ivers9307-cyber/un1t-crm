@@ -17,21 +17,17 @@ vi.mock('@/lib/auth', async () => {
   const actual = await vi.importActual('@/lib/auth')
   return { ...actual, getCurrentUser: vi.fn() }
 })
-vi.mock('@/lib/permissions', async () => {
-  const actual = await vi.importActual('@/lib/permissions')
-  return { ...actual, hasPermission: vi.fn(() => true) }
-})
 vi.mock('@/lib/postmark', () => ({ sendEmail: vi.fn() }))
 
 import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
 import { sendEmail } from '@/lib/postmark'
-import { makeDb, insertsInto } from '../_test-db'
+import { makeDb, insertsInto, writesTo } from '../_test-db'
 import {
   LOC_A, MB_STUDIO, MB_ACCOUNTS, MB_OTHER_LOCATION,
-  COACH, OWNER, GRANT_STUDIO, baseState,
+  COACH, COACH_NO_INBOX, OWNER, MULTI_LOCATION,
+  GRANT_STUDIO, GRANT_MULTI_STUDIO, GRANT_MULTI_OTHER_LOCATION, baseState,
 } from '../_test-fixtures'
 
 const UNKNOWN_MAILBOX = '99999999-9999-4999-8999-999999999999'
@@ -70,7 +66,6 @@ function setupDb(state) {
 beforeEach(() => {
   vi.clearAllMocks()
   process.env.POSTMARK_FROM_EMAIL = 'UN1T <hello@un1t.ie>'
-  hasPermission.mockReturnValue(true)
   getCurrentUser.mockResolvedValue(COACH)
   sendEmail.mockResolvedValue({ messageId: 'pm-compose-1' })
   // The coach holds studio@ and nothing else — the whole point of the fixture.
@@ -84,9 +79,15 @@ describe('POST /api/email/tickets/compose — gates', () => {
     expect(sendEmail).not.toHaveBeenCalled()
   })
 
-  it('403s without the email_inbox permission', async () => {
-    hasPermission.mockReturnValue(false)
-    expect((await post(VALID)).status).toBe(403)
+  // EMAIL-TICKET-CLEANUP.1 — 404, not the 403 this used to be, and resolved at
+  // the MAILBOX'S location rather than the caller's active one. This route
+  // never takes a location; it reads one off the mailbox, so the old gate was
+  // answering about a studio the mail was not going to. 404 because a 403 would
+  // separate \u201Cthat mailbox exists, elsewhere\u201D from \u201Cno such mailbox\u201D and hand back
+  // the enumeration the rest of the route is careful not to give.
+  it('404s without the email_inbox permission AT THE MAILBOX\u2019S location, sending nothing', async () => {
+    getCurrentUser.mockResolvedValue(COACH_NO_INBOX)
+    expect((await post(VALID)).status).toBe(404)
     expect(sendEmail).not.toHaveBeenCalled()
   })
 
@@ -318,5 +319,56 @@ describe('POST /api/email/tickets/compose — query failures are loud', () => {
     expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
     expect(errors).toHaveBeenCalled()
     errors.mockRestore()
+  })
+})
+
+// EMAIL-TICKET-CLEANUP.1 — the permission follows the MAILBOX'S location.
+//
+// This route never takes a location: it reads one off the mailbox, precisely so
+// a ticket can only land at the studio that owns the sending address. The old
+// hasPermission() gate therefore asked about a studio the mail was NOT going
+// to. Composing FROM an address is the strongest thing this surface does — the
+// recipient sees that studio's name — so a key held elsewhere must not buy it.
+describe('POST /api/email/tickets/compose — the permission follows the MAILBOX’S location', () => {
+  beforeEach(() => {
+    getCurrentUser.mockResolvedValue(MULTI_LOCATION)
+    setupDb(baseState({
+      grants: [GRANT_MULTI_STUDIO, GRANT_MULTI_OTHER_LOCATION],
+      contacts: [],
+    }))
+  })
+
+  it('ALLOWS composing from the studio where they hold the key', async () => {
+    // The wrongly-DENIED direction: the old gate read an active location this
+    // user does not have and refused their own composer outright.
+    expect((await post(VALID)).status).toBe(200)
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+  })
+
+  it('DENIES composing from the studio where they do not, despite a grant there', async () => {
+    // The direction that sends mail as a business you hold no key for. 404, not
+    // 403 — a 403 would separate "that mailbox exists, elsewhere" from "no such
+    // mailbox" and hand back the enumeration this route avoids everywhere else.
+    const res = await post({ ...VALID, mailbox_id: MB_OTHER_LOCATION.id })
+    expect(res.status).toBe(404)
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(writesTo(db)).toEqual([])
+  })
+})
+
+// EMAIL-TICKET-CLEANUP.2 — a FAILED visibility lookup is not "no mailboxes".
+describe('POST /api/email/tickets/compose — a failed mailbox lookup is not an empty one', () => {
+  it('500s instead of 404ing, and sends nothing', async () => {
+    // As an empty set this 404'd — telling the operator the address they just
+    // picked out of the composer's own dropdown does not exist. Nothing has
+    // been sent at this point, so refusing costs a retry and nothing else.
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      contacts: [],
+      errors: { email_mailbox_access: { code: '42501', message: 'permission denied' } },
+    }))
+    expect((await post(VALID)).status).toBe(500)
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(writesTo(db)).toEqual([])
   })
 })

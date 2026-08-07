@@ -1114,6 +1114,24 @@ registry.registerPath({
     200: { description: '{ mailboxes, tickets }' },
     400: { description: 'Missing location_id / unknown view', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Missing email_inbox permission or foreign location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Mailbox visibility lookup failed — NOT an empty inbox', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// EMAIL-TICKET-CLEANUP.3 — the Email nav badge. Deliberately parameterless
+// (location comes off the session), like every other badge count endpoint.
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/tickets/count',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Count email tickets awaiting a reply (nav badge)',
+  description:
+    'Tickets at the caller’s ACTIVE location, on a mailbox they may see, that are `open` with an inbound last message — i.e. mail nobody has answered yet. The same predicate as the list route’s `needs_reply` view, so the badge and that tab always agree. Not the whole live queue: nothing in this feature auto-closes, so counting tickets already waiting on the member would never come down. Returns count 0 (not an error) for a session without the permission or without an active location.',
+  responses: {
+    200: { description: '{ count }', content: { 'application/json': { schema: SuccessResponse(z.object({ count: z.number() })) } } },
+    401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Mailbox visibility or count query failed — NOT a zero', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

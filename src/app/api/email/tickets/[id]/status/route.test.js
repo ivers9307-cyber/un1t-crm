@@ -12,17 +12,12 @@ vi.mock('@/lib/auth', async () => {
   const actual = await vi.importActual('@/lib/auth')
   return { ...actual, getCurrentUser: vi.fn() }
 })
-vi.mock('@/lib/permissions', async () => {
-  const actual = await vi.importActual('@/lib/permissions')
-  return { ...actual, hasPermission: vi.fn(() => true) }
-})
 
 import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
-import { makeDb } from '../../_test-db'
-import { T_STUDIO, T_ACCOUNTS, COACH, GRANT_STUDIO, baseState } from '../../_test-fixtures'
+import { makeDb, writesTo } from '../../_test-db'
+import { T_STUDIO, T_ACCOUNTS, COACH, COACH_NO_INBOX, GRANT_STUDIO, baseState } from '../../_test-fixtures'
 
 function post(id, body) {
   return POST(
@@ -49,7 +44,6 @@ async function move(status) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  hasPermission.mockReturnValue(true)
   getCurrentUser.mockResolvedValue(COACH)
   setupDb({})
 })
@@ -60,9 +54,18 @@ describe('POST …/status — gates', () => {
     expect((await post(T_STUDIO.id, { status: 'solved' })).status).toBe(401)
   })
 
-  it('403s without the email_inbox permission', async () => {
-    hasPermission.mockReturnValue(false)
-    expect((await post(T_STUDIO.id, { status: 'solved' })).status).toBe(403)
+  // EMAIL-TICKET-CLEANUP.1 — 404, not the 403 this used to be. The gate moved
+  // into loadTicketForUser so it can resolve at the TICKET'S location, which
+  // means it now runs AFTER the row is read — and a 403 there would say "this
+  // id exists, at a studio where you lack the key" while a bad id says 404.
+  // Every other way to be refused on this surface is already indistinguishable;
+  // a fourth reason has to be too.
+  // The caller holds the studio@ GRANT and is assigned to the location. Only
+  // the surface key is missing, so this is the one test that isolates it.
+  it('404s without the email_inbox permission AT THE TICKET\u2019S location, writing nothing', async () => {
+    getCurrentUser.mockResolvedValue(COACH_NO_INBOX)
+    expect((await post(T_STUDIO.id, { status: 'solved' })).status).toBe(404)
+    expect(writesTo(db)).toEqual([])
   })
 
   it('404s on a ticket whose mailbox the caller cannot see', async () => {

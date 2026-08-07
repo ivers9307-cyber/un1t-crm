@@ -6,11 +6,16 @@
 //
 // ACCESS IS THE TICKET'S ACCESS, DELIBERATELY REUSED.
 // loadTicketForUser() is the two-level gate the rest of the ticket surface runs
-// on: the caller must reach the ticket's LOCATION and must be able to see the
-// MAILBOX it arrived at (or be elevated, for a ticket whose mailbox is gone).
-// Re-deriving that here would be a second definition of who may read
-// `accounts@`, and the two would drift. This route adds exactly one check on
-// top: the attachment must belong to THIS ticket.
+// on: the caller must reach the ticket's LOCATION, must hold `email_inbox`
+// THERE, and must be able to see the MAILBOX it arrived at (or be elevated, for
+// a ticket whose mailbox is gone). Re-deriving that here would be a second
+// definition of who may read `accounts@`, and the two would drift. This route
+// adds exactly one check on top: the attachment must belong to THIS ticket.
+//
+// The `email_inbox` half moved into that helper in EMAIL-TICKET-CLEANUP.1. It
+// used to sit below, resolved against the caller's ACTIVE location — so this
+// route would hand out a signed URL for another studio's billing PDF on the
+// strength of a permission held somewhere else entirely.
 //
 // THAT ONE EXTRA CHECK IS THE WHOLE IDOR. Without it a coach with a grant on
 // `sales@` could pass any ticket they can open as `[id]` and any attachment id
@@ -26,7 +31,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
 import { signedAttachmentUrl } from '@/lib/email-attachments-server'
 import { SKIPPED_REASON_LABEL } from '@/lib/email-attachment-quota'
 import { loadTicketForUser, ticketNotFound } from '../../../_helpers'
@@ -43,13 +47,6 @@ export async function GET(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-
-  if (!hasPermission(user, 'email_inbox')) {
-    return NextResponse.json(
-      { success: false, error: 'Forbidden — email inbox permission required' },
-      { status: 403 }
-    )
-  }
 
   const db = createServerClient()
 
