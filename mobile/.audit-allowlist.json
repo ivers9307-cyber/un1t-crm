@@ -1,0 +1,18 @@
+{
+  "_readme": [
+    "Accepted HIGH/CRITICAL advisories for `npm run check:dependency-audit:mobile` (run from the repo root).",
+    "Same contract as the web /.audit-allowlist.json — see its _readme for the field shapes and the rules.",
+    "",
+    "Separate from the web allowlist ON PURPOSE: the two trees share almost nothing, and an accept reasoned",
+    "about a server code path means nothing inside an Expo bundle. Never paste an id between the two files",
+    "without re-arguing the reason for THAT tree.",
+    "",
+    "Note the mobile gate covers the WHOLE tree, not just runtime deps: `--omit=dev` is inert under",
+    "`--package-lock-only` (verified 2026-08-07 — identical reports with and without it). That is the honest",
+    "posture for this tree anyway, since mobile's only devDependency is @babel/core.",
+    "",
+    "Empty is the healthy state, and it IS empty — the two linkify-it advisories that were briefly accepted",
+    "here are fixed instead, by the `linkify-it: ^5.0.2` override in mobile/package.json. See CHANGELOG 479."
+  ],
+  "accepted": []
+}

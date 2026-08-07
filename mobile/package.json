@@ -58,5 +58,8 @@
   },
   "devDependencies": {
     "@babel/core": "^7.25.2"
+  },
+  "overrides": {
+    "linkify-it": "^5.0.2"
   }
 }

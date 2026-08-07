@@ -35,17 +35,33 @@
 // allowlist without expiry is just a way to turn the check off slowly.
 //
 // Deliberately NOT handled here:
-//   - devDependencies. `--omit=dev` is the existing posture: build-time
-//     packages are not reachable by an attacker at runtime, and the
-//     Next-via-postcss moderate would otherwise be permanent noise.
-//   - `mobile/`. Its lockfile has no overlap with the web tree today
-//     (verified 2026-08-07: no ip-address / socks / imapflow), and the
-//     workflow has never audited it. Out of scope for this script.
+//   - devDependencies of the WEB tree. `--omit=dev` is the existing
+//     posture: build-time packages are not reachable by an attacker at
+//     runtime, and the Next-via-postcss moderate would otherwise be
+//     permanent noise. (As of DEPAUDIT.2 the web dev tree is clean
+//     anyway — `npm audit` with no --omit reports 0.)
+//
+// DEPAUDIT.2 — this script is now tree-agnostic. It reads a report on
+// stdin and takes the allowlist path + a human label as argv, so the same
+// gate runs over BOTH trees:
+//
+//   npm run check:dependency-audit         → web,    .audit-allowlist.json
+//   npm run check:dependency-audit:mobile  → mobile, mobile/.audit-allowlist.json
+//
+// The trees need separate allowlists because they share almost nothing:
+// an accept reasoned about "imapflow's proxy path" is meaningless in an
+// Expo bundle, and one combined file would invite pasting an id into the
+// wrong tree's context.
 
 import fs from 'node:fs'
 import { collectAdvisories, validateAllowlist, classifyAdvisories } from './audit-allowlist.mjs'
 
-const ALLOWLIST_PATH = '.audit-allowlist.json'
+// argv[2] = allowlist path (relative to CWD — the mobile script cds into
+// mobile/ first so npm audit reads the right lockfile, which makes a bare
+// filename resolve to mobile's own allowlist).
+// argv[3] = label for the human-readable summary line.
+const ALLOWLIST_PATH = process.argv[2] || '.audit-allowlist.json'
+const TREE_LABEL = process.argv[3] || 'runtime deps'
 
 function readStdin() {
   try {
@@ -60,8 +76,8 @@ function readStdin() {
 // the exact hole this job exists to close.
 const raw = readStdin()
 if (!raw.trim()) {
-  console.error('✗ AUDIT DID NOT RUN — no report on stdin.')
-  console.error('\n  Expected: npm audit --omit=dev --audit-level=high --json | node scripts/check-dependency-audit.mjs')
+  console.error(`✗ AUDIT DID NOT RUN (${TREE_LABEL}) — no report on stdin.`)
+  console.error('\n  Expected: npm audit … --json | node scripts/check-dependency-audit.mjs [allowlist] [label]')
   console.error('  This is NOT a pass. Fix the audit invocation before merging.\n')
   process.exit(1)
 }
@@ -118,7 +134,7 @@ if (informational.length) {
 if (!unlisted.length && !expired.length) {
   const meta = report.metadata?.vulnerabilities || {}
   console.log(
-    `\nDependency audit clean: 0 unaccepted high/critical advisories in runtime deps ` +
+    `\nDependency audit clean: 0 unaccepted high/critical advisories in ${TREE_LABEL} ` +
       `(${accepted.length} accepted, ${meta.moderate || 0} moderate / ${meta.low || 0} low ignored).`
   )
   process.exit(0)
