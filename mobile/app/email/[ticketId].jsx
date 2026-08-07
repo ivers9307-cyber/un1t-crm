@@ -33,6 +33,15 @@
 // screen posts …/read itself once the thread loads.
 // Replies ride Postmark's transactional stream with threading headers and the
 // sender's signature — all server-side in the reply route.
+//
+// RECIPIENTS (EMAIL-CC.1) ARE SHOWN HERE BUT NOT EDITED. To/Cc/Bcc render
+// under each message; Bcc is marked staff-only in words as well as an icon.
+// The composer sends `{ text, internal }` and nothing else, which is not a
+// gap: the reply route derives everybody on the thread server-side and always
+// includes them, so a mobile reply on a multi-party thread IS a reply-all,
+// identically to web. What mobile does not get is the ADD side — a chip input
+// with a Cc/Bcc toggle is a confidentiality control that wants real device QA,
+// and this is the quick-answer surface. Scoped out deliberately, not missed.
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import {
@@ -50,7 +59,7 @@ import {
 } from '../../lib/email-api'
 import {
   ticketMessageKind, ticketStatusMeta, mailboxLabel, ticketDeliveryMeta,
-  isArchivedStatus, TICKET_STATUS_ORDER,
+  ticketMessageRecipients, isArchivedStatus, TICKET_STATUS_ORDER,
   formatAttachmentSize, ticketAttachmentSkippedLabel, ticketAttachmentIcon,
 } from '../../lib/email-tickets'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
@@ -66,6 +75,42 @@ function formatTime(iso) {
     hour: 'numeric', minute: '2-digit',
     ...(sameDay ? {} : { month: 'short', day: 'numeric' }),
   })
+}
+
+/**
+ * The To / Cc / Bcc lines under a message (EMAIL-CC.1).
+ *
+ * BCC CARRIES A LOCK AND A SENTENCE, not just a label. The whole risk of
+ * showing it is somebody reading the line as though the other recipients could
+ * see it too; they could not, and never will. `onAccent` because the muted
+ * ramp is unreadable on the blue outbound bubble.
+ */
+function RecipientLines({ msg, onAccent = false }) {
+  const lines = ticketMessageRecipients(msg)
+  if (lines.length === 0) return null
+  const label = onAccent ? 'text-white/60' : 'text-un1t-subtle'
+  const body = onAccent ? 'text-white/85' : 'text-un1t-text'
+  return (
+    <View className="mb-1">
+      {lines.map(line => (
+        <View key={line.key} className="flex-row items-start">
+          {line.staffOnly ? (
+            <Ionicons
+              name="lock-closed"
+              size={9}
+              color={onAccent ? 'rgba(255,255,255,0.6)' : '#64748B'}
+              style={{ marginRight: 3, marginTop: 3 }}
+            />
+          ) : null}
+          <Text className={`text-[11px] ${label}`}>{line.label} </Text>
+          <Text className={`text-[11px] flex-1 ${body}`}>
+            {line.addresses.join(', ')}
+            {line.staffOnly ? ' — staff only; no recipient of the email can see this' : ''}
+          </Text>
+        </View>
+      ))}
+    </View>
+  )
 }
 
 /**
@@ -261,6 +306,7 @@ function MessageBubble({ msg, ticketId, locationId, onViewImage }) {
                 Sent to {msg.to_email || 'the member'}
               </Text>
             </View>
+            <RecipientLines msg={msg} onAccent />
             <Text className="text-base text-white">{body}</Text>
             <Attachments
               ticketId={ticketId}
@@ -313,6 +359,11 @@ function MessageBubble({ msg, ticketId, locationId, onViewImage }) {
         <Text className="text-[11px] text-un1t-subtle mb-1" numberOfLines={1}>
           From {msg.from_email || 'the member'}
         </Text>
+        {/* THE MEMBER'S OWN Cc. Captured inbound since EMAIL-CC.1 — without
+            it a staffer cannot tell that two colleagues are on the thread,
+            and a reply from this screen reaches them without anyone knowing
+            why. */}
+        <RecipientLines msg={msg} />
         <Text className="text-base text-un1t-text">{body}</Text>
         <Attachments
           ticketId={ticketId}

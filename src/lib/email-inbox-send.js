@@ -258,10 +258,30 @@ function markUnverified(address) {
  * 'outbound' means TrackOpens:false / TrackLinks:'None' (EMAIL-NOTRACK.1 —
  * one-to-one mail is not instrumented). Passing the flags again from here
  * would fork that rule into two places.
+ *
+ * ─────────────────────────────────────────────────────────────────────
+ * RECIPIENTS ARE NOT DECIDED HERE EITHER (EMAIL-CC.1).
+ *
+ * `to`/`cc`/`bcc` arrive already resolved, as the comma-separated wire strings
+ * `toPostmarkFields()` produces in src/lib/email-recipients.js. That file owns
+ * recipient POLICY — validation, case-insensitive dedupe across all three
+ * lists, exclusion of our own addresses, the 25-address cap — and this file
+ * owns TRANSPORT. Keeping the split means there is exactly one site where a
+ * resolved set becomes wire values, which is what makes the Bcc guarantee
+ * auditable; re-deriving or re-joining anything here would quietly become a
+ * second one.
+ *
+ * So all three are passed STRAIGHT THROUGH, untouched. In particular `bcc`
+ * goes to sendEmail's `bcc` parameter and nowhere else — it is never folded
+ * into `to`/`cc` and never written into `headers` (which carries threading
+ * anchors only). sendEmail sets it on Postmark's own `Bcc` API field, and
+ * Postmark does not put a Bcc header on the delivered message.
  */
 export async function sendTicketEmail({
   mailboxAddress = null,
-  to, subject, htmlBody, textBody, tag, metadata, headers,
+  // EMAIL-CC.1 — cc/bcc default to undefined, so a caller that passes neither
+  // (and every caller before this) produces a byte-identical sendEmail call.
+  to, cc, bcc, subject, htmlBody, textBody, tag, metadata, headers,
 }) {
   const serverToken = resolveInboxServerToken()
   if (!serverToken) {
@@ -286,6 +306,10 @@ export async function sendTicketEmail({
     try {
       const result = await sendEmail({
         to,
+        // EMAIL-CC.1 — pass-through, in the same shape they arrived. `bcc`
+        // reaches Postmark's `Bcc` field and nothing else; see the docblock.
+        cc,
+        bcc,
         subject,
         htmlBody,
         textBody,

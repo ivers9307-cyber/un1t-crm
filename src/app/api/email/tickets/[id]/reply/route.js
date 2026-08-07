@@ -7,7 +7,36 @@ import { sendTicketEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { replySubject, buildReplyHeaders, inboundPreview } from '@/lib/email-inbox'
 import { shouldStampFirstResponse } from '@/lib/email-tickets'
 import { appendSignature } from '@/lib/email-signature'
-import { loadTicketForUser, statusTimestamps } from '../../_helpers'
+import { logAuditEvent } from '@/lib/audit'
+import { email as emailAddress } from '@/lib/schemas'
+import {
+  MAX_RECIPIENTS,
+  resolveRecipients,
+  toPostmarkFields,
+  threadParticipants,
+  latestCorrespondence,
+  replyMode,
+  newRecipients,
+} from '@/lib/email-recipients'
+import { loadTicketForUser, loadOwnAddresses, statusTimestamps } from '../../_helpers'
+
+// EMAIL-CC.1 — an ADDITIONAL address list, on top of the thread's own
+// participants. Bounded at parse time so a 10,000-element array is refused
+// before any of it is normalised; resolveRecipients then enforces the real cap
+// across all three lists combined.
+const extraRecipients = z.array(z.string().trim().toLowerCase().pipe(emailAddress))
+  .max(MAX_RECIPIENTS)
+  .optional()
+  .default([])
+
+// How far back the recipient scan reads. Only the LATEST non-note message
+// decides who a reply reaches, so one row would nearly always do — but a
+// ticket can end in a run of internal notes, and a scan that stopped at the
+// first of them would find no correspondence and silently narrow the reply to
+// the requester. Ten covers any realistic run of notes and still costs one
+// small query. Every .select() caps at 1,000 rows regardless, so the bound is
+// stated rather than left implicit.
+const RECIPIENT_SCAN_LIMIT = 10
 
 const ReplySchema = z.object({
   text: z.string().trim().min(1).max(10000),
@@ -15,6 +44,11 @@ const ReplySchema = z.object({
   // thread and NOTHING is sent — the member never sees it, so it also never
   // stamps first_response_at and never advances the ticket.
   internal: z.boolean().optional().default(false),
+  // EMAIL-CC.1 — people the operator ADDED. The thread's own participants are
+  // derived server-side and are not in here; see THE RECIPIENT RULE below.
+  to: extraRecipients,
+  cc: extraRecipients,
+  bcc: extraRecipients,
 })
 
 // Minimal text → HTML, same as the legacy conversations send route this
@@ -57,6 +91,44 @@ function textToHtml(text) {
 // non-fatal, so nothing about the reply path's behaviour changes — only the
 // response's now-always-null `conversation_id` field is gone with it.
 //
+// ── THE RECIPIENT RULE (EMAIL-CC.1, Richard 2026-08-07) ──────────────────
+// THE MODE IS DERIVED, NEVER CHOSEN. This route computes who a reply reaches;
+// the client cannot pick "reply" over "reply all", because that choice is
+// exactly the affordance that lets someone silently drop a participant by
+// clicking the wrong button.
+//
+//   REPLY      — one recipient. A thread with one other participant.
+//   REPLY ALL  — everybody on the thread. Anything wider.
+//
+// They are the same code path. The set is `threadParticipants()` of the LATEST
+// NON-NOTE message — its From + To + Cc — minus our own addresses; whether
+// that comes back as one person or four is what makes it a reply or a
+// reply-all, and the UI's button says which ("Reply All (4 people)"). Only the
+// latest message counts: mail clients follow the latest message and so do the
+// people in the conversation, so someone a member deliberately dropped from a
+// later reply stays dropped. Resurrecting them would re-copy a person the
+// member chose to exclude, over their head.
+//
+// bcc_emails IS NOT PART OF "EVERYBODY ON THE THREAD", under any reading.
+// threadParticipants() does not name the column. A ticket whose last outbound
+// carried a Bcc reply-alls to exactly the people it would have reached had
+// that Bcc never been typed. That is the confidentiality guarantee the whole
+// feature exists to keep, and email-recipients.test.js mutation-checks it.
+//
+// THE PARTICIPANTS ARE ALWAYS INCLUDED. `to`/`cc`/`bcc` in the body ADD
+// people; there is no wire format for removing one. Dropping someone from a
+// conversation therefore cannot happen by accident, only by starting a fresh
+// email to a narrower set — which is a deliberate act with its own button.
+//
+// ADDING A STRANGER is a different act from replying to someone who wrote to
+// us, and is treated as one: reply-all reaches only people the MEMBER put on
+// the thread, while a hand-typed Cc/Bcc is capped (MAX_RECIPIENTS across all
+// three lists), validated, stored on the message where every colleague can see
+// it, and written to audit_events with the sender's name on it. There is
+// deliberately no marketing-consent gate — ticket mail is transactional
+// (Richard) — and Postmark's own inactive-recipient rejection is the
+// deliverability gate, so a second one here would be redundant.
+//
 // EMAIL-TICKET-CLEANUP.1 moved the `email_inbox` gate OUT of this route and
 // into loadTicketForUser, where it resolves at the TICKET'S location. Sitting
 // here it could only ever resolve at the caller's ACTIVE location, so a manager
@@ -71,7 +143,7 @@ export async function POST(request, props) {
 
   const validation = await validateBody(request, ReplySchema)
   if (!validation.ok) return validation.response
-  const { text, internal } = validation.data
+  const { text, internal, to: extraTo, cc: extraCc, bcc: extraBcc } = validation.data
 
   const db = createServerClient()
   const loaded = await loadTicketForUser(db, user, params.id)
@@ -82,6 +154,17 @@ export async function POST(request, props) {
 
   // ── Internal note — write it, send nothing ────────────────────────
   if (internal) {
+    // REFUSED, not silently dropped (mig 482: a note "never carries cc/bcc").
+    // An operator who typed three addresses and then switched to note mode has
+    // to be told the addresses are going nowhere — swallowing them would let
+    // them believe those people were copied on something that was never sent
+    // to anybody at all.
+    if (extraTo.length || extraCc.length || extraBcc.length) {
+      return NextResponse.json({
+        success: false,
+        error: 'An internal note is sent to nobody, so it cannot carry recipients. Remove them, or switch to a reply.',
+      }, { status: 400 })
+    }
     const { data: note, error: noteErr } = await db.from('email_inbox_messages').insert({
       ticket_id: ticket.id,
       contact_id: ticket.contact_id || null,
@@ -125,17 +208,70 @@ export async function POST(request, props) {
   // member's client while the operator saw a normal send. NOTHING HAS BEEN SENT
   // YET at this point, so refusing costs a retry and can never produce a wrong
   // outcome — the ordering is what makes 500 the safe answer here.
-  const { data: lastInbound, error: lastInboundErr } = await db.from('email_inbox_messages')
-    .select('rfc_message_id, references_header, subject')
-    .eq('ticket_id', ticket.id)
-    .eq('direction', 'inbound')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  //
+  // EMAIL-CC.1 runs a SECOND, separate lookup beside it for the recipient set.
+  // Deliberately not merged into one query: threading must keep keying on the
+  // last INBOUND message (changing that would change which mail-client thread
+  // a reply lands in, and threading is explicitly out of scope), while
+  // "everybody on the thread" is a property of the latest message in EITHER
+  // direction — otherwise a ticket we composed and nobody has answered yet has
+  // no participants at all and reply-all silently degrades to the requester.
+  const [
+    { data: lastInbound, error: lastInboundErr },
+    { data: recentMessages, error: recentErr },
+  ] = await Promise.all([
+    db.from('email_inbox_messages')
+      .select('rfc_message_id, references_header, subject')
+      .eq('ticket_id', ticket.id)
+      .eq('direction', 'inbound')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    // NOTE the columns: from_email, to_email(s) and cc_emails. `bcc_emails` is
+    // NOT SELECTED, so this route could not leak it into a recipient list even
+    // if threadParticipants() were changed to look for it.
+    db.from('email_inbox_messages')
+      .select('from_email, to_email, to_emails, cc_emails, is_internal_note, created_at, sent_at')
+      .eq('ticket_id', ticket.id)
+      .order('created_at', { ascending: false })
+      .limit(RECIPIENT_SCAN_LIMIT),
+  ])
   if (lastInboundErr) {
     console.error('[tickets/reply] threading lookup failed BEFORE sending:', lastInboundErr.message)
     return NextResponse.json({ success: false, error: lastInboundErr.message }, { status: 500 })
   }
+  if (recentErr) {
+    // Same ordering argument as the threading lookup: nothing has been sent, so
+    // refusing costs a retry. Falling back to "just the requester" would look
+    // like a successful reply while quietly dropping everyone else on the
+    // thread — the exact failure the derived-mode rule exists to prevent.
+    console.error('[tickets/reply] recipient lookup failed BEFORE sending:', recentErr.message)
+    return NextResponse.json({ success: false, error: recentErr.message }, { status: 500 })
+  }
+
+  // Our own addresses, so a reply-all cannot mail the studio and loop back
+  // through the inbound webhook onto this same ticket. See loadOwnAddresses.
+  const own = await loadOwnAddresses(db, ticket.location_id)
+  if (own.response) return own.response
+
+  // ── Who this reaches ──────────────────────────────────────────────
+  const latest = latestCorrespondence(recentMessages || [])
+  const participants = threadParticipants(latest, { exclude: own.addresses })
+  // A ticket with no usable correspondence (every message an internal note, or
+  // a backfilled row with no addresses on it) still has a requester.
+  const derivedTo = participants.length ? participants : [ticket.requester_email]
+
+  const recipients = resolveRecipients({
+    to: [...derivedTo, ...extraTo],
+    cc: extraCc,
+    bcc: extraBcc,
+    exclude: own.addresses,
+  })
+  if (!recipients.ok) {
+    return NextResponse.json({ success: false, error: recipients.error }, { status: 400 })
+  }
+  const wire = toPostmarkFields(recipients)
+  const mode = replyMode(recipients.to)
 
   const subject = replySubject(lastInbound?.subject || ticket.subject)
   const headers = buildReplyHeaders({
@@ -155,8 +291,15 @@ export async function POST(request, props) {
   // in one pass — see the note on textToHtml.
   const outboundText = appendSignature(text, user.email_signature)
 
-  // EMAIL-OUTBOUND-SERVER.1 — the reply leaves on the SUPPORT INBOX'S OWN
-  // Postmark server, from the ticket's own mailbox address, on Postmark's
+  // WHO it reaches vs HOW it leaves — two decisions, two seams, one call.
+  //
+  // EMAIL-CC.1 owns WHO: `wire` is toPostmarkFields() of the resolved set, the
+  // single site where a recipient set becomes wire values. All three lists are
+  // handed over as-is; `bcc` reaches Postmark's own Bcc field and nothing else,
+  // and `headers` carries threading anchors only.
+  //
+  // EMAIL-OUTBOUND-SERVER.1 owns HOW: the reply leaves on the SUPPORT INBOX'S
+  // OWN Postmark server, from the ticket's own mailbox address, on Postmark's
   // `email-send` stream. All three live in sendTicketEmail; see that file's
   // header for the topology and for why a Postmark stream id must never be
   // confused with our internal 'outbound'.
@@ -167,7 +310,9 @@ export async function POST(request, props) {
   // deleted) still sends, from a domain we own.
   const send = await sendTicketEmail({
     mailboxAddress: mailbox?.address || null,
-    to: ticket.requester_email,
+    to: wire.to,
+    cc: wire.cc,
+    bcc: wire.bcc,
     subject,
     htmlBody: textToHtml(outboundText),
     textBody: outboundText,
@@ -202,7 +347,17 @@ export async function POST(request, props) {
     // rather than assumed from POSTMARK_FROM_EMAIL, which would be a lie.
     author_profile_id: user.id,
     from_email: send.fromEmail || null,
-    to_email: ticket.requester_email,
+    // to_email stays the PRIMARY recipient and to_emails carries the rest
+    // (mig 499) — the scalar is what email_sends logs and what every reader
+    // written before EMAIL-CC.1 understands, so the two are kept consistent
+    // rather than one deprecated.
+    to_email: recipients.to[0],
+    to_emails: recipients.to,
+    cc_emails: recipients.cc,
+    // Stored for the staff thread and for audit. NOTHING reads this back as a
+    // recipient — not this route on the next reply, not the forward that
+    // reuses this model. See the RECIPIENT RULE header.
+    bcc_emails: recipients.bcc,
     subject,
     // The SIGNED body — the message row is the record of what the member
     // received, so it must not show a shorter message than was sent.
@@ -222,6 +377,13 @@ export async function POST(request, props) {
   // there, so an unlinked requester skips the log — the message row above is
   // still the operator-facing record.
   //
+  // EMAIL-CC.1 — ONE row, for the ticket's own contact, whatever the reply's
+  // recipient count. email_sends.contact_id is NOT NULL and the table is the
+  // per-contact email history; a Cc'd colleague is not this ticket's contact
+  // and inventing rows for them would put mail in strangers' histories and
+  // skew every campaign metric that reads the table. to_email logs the primary
+  // recipient, matching the message row above.
+  //
   // EMAIL-OUTBOUND-SERVER.1 — the row still describes the send correctly now
   // that a DIFFERENT Postmark server sent it. postmark_message_id is an
   // account-wide GUID, so the delivery webhook still correlates on it whichever
@@ -238,10 +400,34 @@ export async function POST(request, props) {
       source_type: 'inbox_reply',
       subject,
       from_email: send.fromEmail,
-      to_email: ticket.requester_email,
+      to_email: recipients.to[0],
       postmark_message_id: result.messageId,
       postmark_stream: TICKET_INTERNAL_STREAM,
       status: 'sent',
+    })
+  }
+
+  // ── Attribution for anyone the operator ADDED (EMAIL-CC.1) ────────
+  // Reply-all reaches people the MEMBER put on the thread and needs no
+  // attribution beyond the message row. A hand-typed address is a different
+  // act: nobody involved them, so it carries the sender's name at the moment
+  // they did it. Fire-and-forget by construction — logAuditEvent never throws
+  // and never blocks; the mail has already gone either way.
+  //
+  // `known` is the derived participant set plus the requester, so a person who
+  // appeared on an EARLIER message but not the latest is logged as added.
+  // That over-reports rather than under-reports, which is the right direction
+  // for an audit trail.
+  const added = newRecipients(recipients, [...derivedTo, ticket.requester_email])
+  if (added.length) {
+    await logAuditEvent({
+      category: 'business',
+      action: 'email_ticket.recipients_added',
+      actor: { id: user.id, full_name: user.full_name, email: user.email },
+      target: { resource: `email_ticket/${ticket.id}`, label: ticket.subject || null },
+      locationId: ticket.location_id,
+      details: { added, mode, recipient_count: recipients.count },
+      request,
     })
   }
 
@@ -275,6 +461,17 @@ export async function POST(request, props) {
 
   return NextResponse.json({
     success: true,
-    data: { message, status: 'pending', message_id: result.messageId },
+    data: {
+      message,
+      status: 'pending',
+      message_id: result.messageId,
+      // What actually went out, so the surface can confirm it rather than
+      // re-deriving it. `bcc` is here because the SENDER is staff on this
+      // ticket and seeing their own Bcc list is correct — it is the same
+      // audience as the thread itself, and the same audience mig 482's own
+      // COMMENT names. It never travels any further than this response.
+      recipients: { to: recipients.to, cc: recipients.cc, bcc: recipients.bcc },
+      mode,
+    },
   })
 }

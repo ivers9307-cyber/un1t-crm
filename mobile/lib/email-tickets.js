@@ -134,6 +134,46 @@ export function ticketMessageKind(message) {
   return message.direction === 'outbound' ? 'outbound' : 'inbound'
 }
 
+// ── Recipients (EMAIL-CC.1) ──────────────────────────────────────────
+//
+// A re-statement of src/lib/ticket-display.js's messageRecipients, for the
+// reason in this file's header. MOBILE SHOWS RECIPIENTS BUT DOES NOT EDIT
+// THEM: the reply box here posts `{ text, internal }` and nothing else, so the
+// server derives everybody on the thread and includes them — a mobile reply is
+// automatically a reply-all on a multi-party thread, which is the safe default
+// and the same one web gets. A recipient EDITOR (chip input, Cc/Bcc toggle) is
+// deliberately not on this screen: it is the quick-answer surface, it needs
+// real device QA before it carries a confidentiality control, and a half-built
+// one that silently dropped a Cc would be worse than none.
+//
+// THE BCC RULE IS THE SAME ONE AND IT IS WHY BCC IS RENDERED AT ALL. This
+// screen is behind the identical gate as the web thread (location + the
+// email_inbox key + a grant on the ticket's mailbox), so the sender seeing
+// their own blind-copy list is correct. `staffOnly` exists so the screen can
+// say, in words, that no recipient of the email could see it.
+/**
+ * The To / Cc / Bcc lines under a message, in header order. Empty lists are
+ * omitted — "Cc:" with nothing after it reads as a Cc that failed.
+ *
+ * @returns {{ key: string, label: string, addresses: string[], staffOnly: boolean }[]}
+ */
+export function ticketMessageRecipients(message) {
+  if (!message) return []
+  const list = (v) => (Array.isArray(v) ? v.filter(Boolean) : [])
+  // Rows written before mig 499 carry only the scalar to_email.
+  const to = list(message.to_emails).length
+    ? list(message.to_emails)
+    : (message.to_email ? [message.to_email] : [])
+  const out = []
+  // A single To is already stated by the bubble's own "Sent to …" line.
+  if (to.length > 1) out.push({ key: 'to', label: 'To', addresses: to, staffOnly: false })
+  const cc = list(message.cc_emails)
+  if (cc.length) out.push({ key: 'cc', label: 'Cc', addresses: cc, staffOnly: false })
+  const bcc = list(message.bcc_emails)
+  if (bcc.length) out.push({ key: 'bcc', label: 'Bcc', addresses: bcc, staffOnly: true })
+  return out
+}
+
 // ── Delivery status (EMAIL-DELIVERY.1) ───────────────────────────────
 //
 // A re-statement of src/lib/ticket-display.js's deliveryMeta, for the reason

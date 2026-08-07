@@ -890,3 +890,82 @@ describe('preserved gates', () => {
     expect(res.status).toBe(400)
   })
 })
+
+// ── EMAIL-CC.1 — the member's own Cc ─────────────────────────────────
+//
+// The columns landed inert with mig 482 and nothing ever wrote them, so a
+// member who cc'd two colleagues arrived looking like a solo enquiry — and a
+// staff reply then reached only the sender, dropping those colleagues out of
+// their own conversation. Capturing the header is what makes reply-all mean
+// anything.
+//
+// ROUTING MUST NOT MOVE. `recipients` (which merges To and Cc) still decides
+// the mailbox, and the threading queries are untouched; these assertions pin
+// that the new columns rode along beside that behaviour rather than through it.
+describe('inbound Cc capture', () => {
+  it('records the member’s Cc list on the message', async () => {
+    await post(inbound({
+      CcFull: [{ Email: 'Colleague@Example.com' }, { Email: 'boss@example.com' }],
+    }))
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.cc_emails).toEqual(['colleague@example.com', 'boss@example.com'])
+  })
+
+  it('reads the raw Cc header when Postmark sends no CcFull', async () => {
+    await post(inbound({ Cc: 'Colleague <colleague@example.com>, boss@example.com' }))
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.cc_emails).toEqual(['colleague@example.com', 'boss@example.com'])
+  })
+
+  it('records the To list separately from the Cc list', async () => {
+    await post(inbound({
+      ToFull: [{ Email: HATCH.address }, { Email: 'someone@example.com' }],
+      CcFull: [{ Email: 'colleague@example.com' }],
+    }))
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.to_emails).toEqual([HATCH.address, 'someone@example.com'])
+    expect(msg.payload.cc_emails).toEqual(['colleague@example.com'])
+    // The scalar is UNCHANGED — still the first entry of the merged recipient
+    // list mailbox routing already used.
+    expect(msg.payload.to_email).toBe(HATCH.address)
+  })
+
+  it('leaves both arrays empty rather than null when there is no Cc', async () => {
+    await post(inbound())
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.cc_emails).toEqual([])
+    expect(msg.payload.to_emails).toEqual([HATCH.address])
+  })
+
+  // A Bcc is invisible to the receiving server, so any value here would be a
+  // fabrication — and a fabricated bcc is one a reply-all could act on.
+  it('NEVER writes bcc_emails on an inbound message', async () => {
+    await post(inbound({ Bcc: 'someone@example.com', CcFull: [{ Email: 'c@example.com' }] }))
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.bcc_emails).toBeUndefined()
+    expect(JSON.stringify(msg.payload)).not.toContain('someone@example.com')
+  })
+
+  // A stranger can put 500 addresses in a Cc header, and an unbounded text[]
+  // would then be pulled back on every read of this ticket forever.
+  it('caps a hostile Cc header at 50 addresses', async () => {
+    await post(inbound({
+      CcFull: Array.from({ length: 300 }, (_, i) => ({ Email: `a${i}@example.com` })),
+    }))
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.cc_emails).toHaveLength(50)
+  })
+
+  // The property that must NOT have changed. A Cc'd address is still part of
+  // the merged recipient list that resolves the mailbox — capturing the header
+  // separately is additive, not a re-route.
+  it('still routes on the Cc when our mailbox was only cc’d', async () => {
+    const res = await post(inbound({
+      ToFull: [{ Email: 'someone-else@example.com' }],
+      CcFull: [{ Email: HATCH.address }],
+    }))
+    expect((await res.json()).mailbox_id).toBe('mb-hatch')
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload.location_id).toBe('loc-hatch')
+  })
+})

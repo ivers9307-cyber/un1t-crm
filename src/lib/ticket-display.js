@@ -171,6 +171,74 @@ export function messageKind(message) {
   return message.direction === 'outbound' ? 'outbound' : 'inbound'
 }
 
+// ── Recipients (EMAIL-CC.1) ──────────────────────────────────────────
+//
+// THE BUTTON LABEL IS THE SAFETY FEATURE. Reply and Reply All are not two
+// buttons here — the mode is derived from who is actually on the thread
+// (src/lib/email-recipients.js), so there is exactly one control and its job
+// is to say who it reaches BEFORE it is pressed. A bare "Reply" on a
+// four-person thread is what causes the mistake; "Reply All (4 people)" is
+// what stops it.
+//
+// `replyRecipients` is null when the server could not work the set out (an
+// own-address lookup blip). The honest label is then the plain one: the reply
+// route recomputes the truth at send time either way, and inventing a count we
+// do not have would be worse than not showing one.
+
+/**
+ * @param {{ to: string[], mode: 'reply'|'reply_all' } | null} replyRecipients
+ * @param {number} [added]  extra recipients the operator typed into To
+ * @returns {string}
+ */
+export function replyActionLabel(replyRecipients, added = 0) {
+  const count = (replyRecipients?.to?.length || 0) + added
+  if (count > 1) return `Reply All (${count} people)`
+  return 'Reply'
+}
+
+/**
+ * The recipient lines to render under a message, in header order.
+ *
+ * BCC IS MARKED `staffOnly` AND MUST BE RENDERED AS SUCH. The list is real —
+ * the sender is staff on this ticket and seeing who they blind-copied is the
+ * point of recording it — but it never went on the delivered message, so a
+ * surface that shows it beside To and Cc with no distinction implies the other
+ * recipients saw it. They did not, and never will.
+ *
+ * Empty lists are omitted rather than rendered blank: "Cc:" with nothing after
+ * it reads as a Cc that failed.
+ *
+ * @param {object|null} message
+ * @returns {{ key: string, label: string, addresses: string[], staffOnly: boolean, note?: string }[]}
+ */
+export function messageRecipients(message) {
+  if (!message) return []
+  const list = (v) => (Array.isArray(v) ? v.filter(Boolean) : [])
+  // Pre-EMAIL-CC.1 rows carry only the scalar to_email.
+  const to = list(message.to_emails).length
+    ? list(message.to_emails)
+    : (message.to_email ? [message.to_email] : [])
+  const out = []
+  if (to.length > 1) {
+    // A single To is already stated by the bubble's own "Sent to …" line;
+    // repeating it is noise. Two or more is information.
+    out.push({ key: 'to', label: 'To', addresses: to, staffOnly: false })
+  }
+  const cc = list(message.cc_emails)
+  if (cc.length) out.push({ key: 'cc', label: 'Cc', addresses: cc, staffOnly: false })
+  const bcc = list(message.bcc_emails)
+  if (bcc.length) {
+    out.push({
+      key: 'bcc',
+      label: 'Bcc',
+      addresses: bcc,
+      staffOnly: true,
+      note: 'Only staff on this ticket can see this — no recipient of the email could.',
+    })
+  }
+  return out
+}
+
 // ── Delivery status (EMAIL-DELIVERY.1) ───────────────────────────────
 //
 // THREE OUTCOMES AND A SILENCE, AND THE SILENCE IS THE SUBTLE ONE.

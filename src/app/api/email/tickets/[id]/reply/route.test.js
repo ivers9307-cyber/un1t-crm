@@ -34,7 +34,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { sendEmail } from '@/lib/postmark'
 import { _resetInboxSenderCache, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
-import { makeDb, insertsInto, updatesTo, writesTo } from '../../_test-db'
+import { makeDb, insertsInto, updatesTo, writesTo, selectsFrom } from '../../_test-db'
 import {
   MB_STUDIO, T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION,
   COACH, COACH_NO_INBOX, MULTI_LOCATION,
@@ -535,5 +535,318 @@ describe('POST …/reply — a failed mailbox lookup is not an empty one', () =>
     expect((await post(T_STUDIO.id, { text: 'hi' })).status).toBe(500)
     expect(sendEmail).not.toHaveBeenCalled()
     expect(writesTo(db)).toEqual([])
+  })
+})
+
+// ── EMAIL-CC.1 — WHO A REPLY REACHES ─────────────────────────────────
+//
+// The rule under test (Richard, 2026-08-07): the recipient set is DERIVED, not
+// chosen. Reply = one person, Reply All = everybody on the thread, and there is
+// no wire format for the difference — a caller cannot ask to drop a
+// participant, which is the whole point.
+//
+// `sendEmail` is mocked, so every assertion here is on the exact payload that
+// would have gone to Postmark. That is the only place a leak would be visible
+// from outside this route.
+const CC_INBOUND = {
+  ...LAST_INBOUND,
+  id: 'm-cc-1',
+  from_email: 'member@example.com',
+  to_email: MB_STUDIO.address,
+  to_emails: [MB_STUDIO.address],
+  cc_emails: ['colleague@example.com', 'boss@example.com'],
+  bcc_emails: [],
+}
+
+describe('POST …/reply — the derived recipient set', () => {
+  it('replies to ONE person when one person is on the thread', async () => {
+    const res = await post(T_STUDIO.id, { text: 'hi' })
+    expect(res.status).toBe(200)
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+    expect(sendEmail.mock.calls[0][0]).toMatchObject({ to: 'member@example.com' })
+    expect((await res.json()).data.mode).toBe('reply')
+  })
+
+  // The behaviour the feature exists for: a member cc'd two colleagues, and a
+  // reply that reached only the sender would drop them out of their own
+  // conversation.
+  it('replies to EVERYBODY on the thread when the member cc’d colleagues', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [CC_INBOUND] }))
+    const res = await post(T_STUDIO.id, { text: 'hi' })
+    expect(res.status).toBe(200)
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.to).toBe('member@example.com, colleague@example.com, boss@example.com')
+    expect((await res.json()).data.mode).toBe('reply_all')
+  })
+
+  // Our own mailbox is necessarily in the inbound To — the member wrote to it.
+  // Mailing it delivers our own reply back to our own inbound webhook, which
+  // files it on THIS ticket as an inbound message: the ticket reopens and the
+  // needs-reply badge lights up for mail nobody sent us.
+  it('never writes to the studio’s own mailbox, which the inbound To always contains', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [CC_INBOUND] }))
+    await post(T_STUDIO.id, { text: 'hi' })
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.to).not.toContain(MB_STUDIO.address)
+    expect(sent.cc || '').not.toContain(MB_STUDIO.address)
+  })
+
+  it('never writes to the Postmark From either', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [{ ...CC_INBOUND, cc_emails: ['hello@un1t.ie', 'colleague@example.com'] }],
+    }))
+    await post(T_STUDIO.id, { text: 'hi' })
+    expect(sendEmail.mock.calls[0][0].to).toBe('member@example.com, colleague@example.com')
+  })
+
+  // Mail clients follow the latest message; someone a member deliberately
+  // dropped from a later reply stays dropped. Resurrecting them would re-copy
+  // a person the member chose to exclude, over their head.
+  it('follows the LATEST message — a participant dropped later is not resurrected', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [
+        { ...CC_INBOUND, id: 'm-old', created_at: '2026-08-06T09:00:00Z' },
+        {
+          ...CC_INBOUND, id: 'm-new', created_at: '2026-08-06T12:00:00Z',
+          cc_emails: ['colleague@example.com'],
+        },
+      ],
+    }))
+    await post(T_STUDIO.id, { text: 'hi' })
+    expect(sendEmail.mock.calls[0][0].to).toBe('member@example.com, colleague@example.com')
+  })
+
+  // A thread that ends in a run of staff notes still has correspondence behind
+  // it; a scan that stopped at the first note would silently narrow the reply.
+  it('looks past trailing internal notes to find the real correspondence', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [
+        CC_INBOUND,
+        {
+          id: 'm-note', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+          direction: 'outbound', is_internal_note: true, from_email: 'coach@un1tdublin.com',
+          to_email: null, to_emails: [], cc_emails: [], created_at: '2026-08-06T13:00:00Z',
+        },
+      ],
+    }))
+    await post(T_STUDIO.id, { text: 'hi' })
+    expect(sendEmail.mock.calls[0][0].to)
+      .toBe('member@example.com, colleague@example.com, boss@example.com')
+  })
+
+  // A composed ticket nobody has answered yet has no inbound at all. One rule
+  // has to cover both directions or this is a special case nobody tested.
+  it('derives the set from our OWN last outbound when nobody has replied yet', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [{
+        id: 'm-out', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+        direction: 'outbound', is_internal_note: false,
+        from_email: 'hello@un1t.ie', to_email: 'member@example.com',
+        to_emails: ['member@example.com'], cc_emails: ['colleague@example.com'],
+        bcc_emails: [], created_at: '2026-08-06T09:00:00Z',
+      }],
+    }))
+    await post(T_STUDIO.id, { text: 'hi' })
+    expect(sendEmail.mock.calls[0][0].to).toBe('member@example.com, colleague@example.com')
+  })
+
+  it('falls back to the requester when a ticket has no usable correspondence', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [] }))
+    await post(T_STUDIO.id, { text: 'hi' })
+    expect(sendEmail.mock.calls[0][0].to).toBe('member@example.com')
+  })
+
+  // Nothing has been sent at this point, so refusing costs a retry. Quietly
+  // narrowing to the requester would look like a successful reply while
+  // dropping everyone else on the thread.
+  it('500s rather than narrowing the reply when the recipient lookup fails', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [CC_INBOUND],
+      errors: { email_inbox_messages: { code: '42703', message: 'column does not exist' } },
+    }))
+    expect((await post(T_STUDIO.id, { text: 'hi' })).status).toBe(500)
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+})
+
+// ── THE BCC GUARANTEE, AT THE ROUTE ──────────────────────────────────
+//
+// email-recipients.test.js mutation-checks the pure function. These prove the
+// ROUTE wires it up: a bcc stored on this ticket's own history must not appear
+// anywhere in the next reply's payload, and a bcc the operator types must
+// reach Postmark's Bcc field and nothing else.
+describe('POST …/reply — bcc never leaks', () => {
+  const OUTBOUND_WITH_BCC = {
+    id: 'm-bcc', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+    direction: 'outbound', is_internal_note: false,
+    from_email: 'hello@un1t.ie', to_email: 'member@example.com',
+    to_emails: ['member@example.com'], cc_emails: ['colleague@example.com'],
+    bcc_emails: ['secret@example.com'], created_at: '2026-08-06T10:00:00Z',
+  }
+
+  it('does NOT re-copy an address this ticket was previously blind-copied to', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [OUTBOUND_WITH_BCC] }))
+    await post(T_STUDIO.id, { text: 'follow up' })
+    const sent = sendEmail.mock.calls[0][0]
+    expect(JSON.stringify(sent)).not.toContain('secret@example.com')
+    expect(sent.to).toBe('member@example.com, colleague@example.com')
+    expect(sent.bcc).toBeUndefined()
+  })
+
+  it('puts a hand-typed bcc in Postmark’s Bcc field and NOWHERE else', async () => {
+    await post(T_STUDIO.id, { text: 'hi', bcc: ['boss@example.com'] })
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.bcc).toBe('boss@example.com')
+    expect(sent.to).not.toContain('boss@example.com')
+    expect(sent.cc || '').not.toContain('boss@example.com')
+    // Threading headers are the only extra headers this route sets, and a bcc
+    // address must never ride in one.
+    expect(JSON.stringify(sent.headers || [])).not.toContain('boss@example.com')
+  })
+
+  // BELT AND BRACES, and worth its own test: the route does not even ASK for
+  // bcc_emails when it works out who to write to. A future edit to
+  // threadParticipants() that started reading the column would find it absent
+  // rather than populated — the leak is unreachable from two directions, not
+  // one.
+  it('never SELECTS bcc_emails on the recipient lookup', async () => {
+    await post(T_STUDIO.id, { text: 'hi' })
+    const scans = selectsFrom(db, 'email_inbox_messages')
+    for (const scan of scans) expect(scan.columns).not.toContain('bcc_emails')
+    // …while still asking for everything a participant set is built from.
+    const recipientScan = scans.find(sc => sc.columns.includes('cc_emails'))
+    expect(recipientScan.columns).toContain('from_email')
+    expect(recipientScan.columns).toContain('to_emails')
+  })
+
+  it('stores the bcc on the message row for the staff thread', async () => {
+    await post(T_STUDIO.id, { text: 'hi', bcc: ['boss@example.com'] })
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.bcc_emails).toEqual(['boss@example.com'])
+    expect(msg.payload.cc_emails).toEqual([])
+  })
+})
+
+describe('POST …/reply — added recipients', () => {
+  it('adds a Cc on top of the thread’s own participants', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [CC_INBOUND] }))
+    await post(T_STUDIO.id, { text: 'hi', cc: ['newperson@example.com'] })
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.to).toBe('member@example.com, colleague@example.com, boss@example.com')
+    expect(sent.cc).toBe('newperson@example.com')
+  })
+
+  // THE SECOND ENFORCEMENT SITE. threadParticipants() already drops our own
+  // addresses out of the DERIVED set, so the tests above pass with or without
+  // the `exclude` on resolveRecipients — the one thing only resolveRecipients
+  // can catch is an operator TYPING one of our mailboxes into Cc/Bcc. Same
+  // consequence as a derived one: Postmark delivers the copy to our own
+  // inbound webhook, whose In-Reply-To still names this thread, so our own
+  // reply is filed on this ticket as INBOUND and lights the needs-reply badge.
+  // Mutation-checked — deleting `exclude: own.addresses` turns this red and
+  // nothing else on the route.
+  it('strips a HAND-TYPED address of ours from every list', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [CC_INBOUND] }))
+    await post(T_STUDIO.id, {
+      text: 'hi',
+      cc: [MB_STUDIO.address, 'newperson@example.com'],
+      bcc: ['hello@un1t.ie'],
+    })
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.cc).toBe('newperson@example.com')
+    expect(sent.bcc).toBeUndefined()
+    // Reply-To is deliberately still the mailbox — that is the address the
+    // member answers to, not somewhere we WRITE to.
+    expect(sent.to).not.toContain(MB_STUDIO.address)
+    expect(sent.replyTo).toBe(MB_STUDIO.address)
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.cc_emails).toEqual(['newperson@example.com'])
+    expect(msg.payload.bcc_emails).toEqual([])
+  })
+
+  // The dedupe the brief names: the member's own address must not end up in Cc
+  // as well as To.
+  it('drops a Cc that is already a thread participant, case-insensitively', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [CC_INBOUND] }))
+    await post(T_STUDIO.id, { text: 'hi', cc: ['MEMBER@example.com', 'Colleague@Example.com'] })
+    expect(sendEmail.mock.calls[0][0].cc).toBeUndefined()
+  })
+
+  it('writes to_emails, cc_emails and to_email consistently', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [CC_INBOUND] }))
+    await post(T_STUDIO.id, { text: 'hi', cc: ['newperson@example.com'] })
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.to_emails)
+      .toEqual(['member@example.com', 'colleague@example.com', 'boss@example.com'])
+    expect(msg.payload.to_email).toBe('member@example.com')
+    expect(msg.payload.cc_emails).toEqual(['newperson@example.com'])
+  })
+
+  // email_sends is the per-contact email history and contact_id is NOT NULL —
+  // inventing rows for cc'd colleagues would put mail in strangers' histories.
+  it('logs ONE email_sends row, for the ticket’s own contact', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [CC_INBOUND] }))
+    await post(T_STUDIO.id, { text: 'hi', cc: ['newperson@example.com'] })
+    const sends = insertsInto(db, 'email_sends')
+    expect(sends).toHaveLength(1)
+    expect(sends[0].payload.to_email).toBe('member@example.com')
+  })
+
+  // THE "ADDING A STRANGER" ANSWER. There is no consent gate on ticket mail by
+  // design, so instead the act is attributable: an address nobody on the
+  // thread involved carries the sender's name at the moment they added it.
+  it('audit-logs an address the operator added that nobody on the thread involved', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [CC_INBOUND] }))
+    await post(T_STUDIO.id, { text: 'hi', cc: ['stranger@example.com'] })
+    const [audit] = insertsInto(db, 'audit_events')
+    expect(audit.payload).toMatchObject({
+      action: 'email_ticket.recipients_added',
+      actor_id: COACH.id,
+      location_id: T_STUDIO.location_id,
+    })
+    expect(audit.payload.details.added).toEqual(['stranger@example.com'])
+  })
+
+  // Reply-all reaches only people the MEMBER put on the thread. That is not
+  // someone being added, and logging it would bury the entries that matter.
+  it('does NOT audit-log a plain reply-all — nobody was added', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [CC_INBOUND] }))
+    await post(T_STUDIO.id, { text: 'hi' })
+    expect(insertsInto(db, 'audit_events')).toEqual([])
+  })
+
+  it('400s on an invalid address, sending nothing', async () => {
+    const res = await post(T_STUDIO.id, { text: 'hi', cc: ['not-an-address'] })
+    expect(res.status).toBe(400)
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  // The cap is enforced SERVER-SIDE, past the composer's own limit.
+  it('400s past the recipient cap, sending nothing', async () => {
+    const many = Array.from({ length: 25 }, (_, i) => `c${i}@example.com`)
+    const res = await post(T_STUDIO.id, { text: 'hi', cc: many })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/limit is 25/)
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('rejects an absurd array at parse time rather than normalising it', async () => {
+    const absurd = Array.from({ length: 5000 }, (_, i) => `c${i}@example.com`)
+    expect((await post(T_STUDIO.id, { text: 'hi', cc: absurd })).status).toBe(400)
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  // A note is sent to nobody. Swallowing the addresses would let an operator
+  // believe those people were copied on something never sent at all.
+  it('REFUSES an internal note that carries recipients, writing nothing', async () => {
+    const res = await post(T_STUDIO.id, { text: 'fyi', internal: true, cc: ['boss@example.com'] })
+    expect(res.status).toBe(400)
+    expect(writesTo(db)).toEqual([])
+    expect(sendEmail).not.toHaveBeenCalled()
   })
 })
