@@ -403,3 +403,50 @@ export function ticketAttachmentIcon(mimeType, filename) {
   if (mime.includes('word') || mime === 'application/msword' || ['doc', 'docx', 'rtf', 'odt'].includes(ext)) return 'document-outline'
   return 'attach-outline'
 }
+
+// ── How often an OPEN thread re-reads itself (EMAIL-ATTACH-RACE.1) ───
+//
+// The web statement of this is threadRefreshMs in src/lib/ticket-display.js,
+// with the full account of the race. The short version: the inbound webhook
+// files the message row FIRST and writes email_ticket_attachments AFTER it —
+// the attachment rows carry a foreign key to the message, and attachment work
+// is never allowed to delay filing the mail. So a thread opened inside that
+// window is a correct read of an incomplete moment, and until this existed it
+// was also the LAST read, so a member's photo stayed invisible until the
+// screen was left and re-entered.
+//
+// Mobile had it worse than web: the screen loaded once on mount and had no
+// poll and no focus refresh at all, so the thread was frozen for as long as it
+// stayed open.
+//
+// Two speeds — fast while the newest message is young enough that rows may
+// still be arriving, slow otherwise. The numbers match web on purpose: an
+// operator watching the same ticket on a phone and a laptop should not see one
+// of them catch up first for reasons neither of them can see.
+
+export const THREAD_SETTLE_MS = 5_000
+export const THREAD_STEADY_MS = 60_000
+export const THREAD_SETTLE_WINDOW_MS = 120_000
+
+/** The newest `created_at` in a thread, as epoch ms, or null. */
+export function newestMessageAt(messages = []) {
+  let newest = null
+  for (const m of messages || []) {
+    const t = Date.parse(m?.created_at)
+    if (Number.isFinite(t) && (newest === null || t > newest)) newest = t
+  }
+  return newest
+}
+
+/**
+ * Milliseconds until an open thread should re-read itself. An empty thread
+ * gets the steady cadence; a future timestamp (clock skew) counts as brand
+ * new, erring towards reading again rather than missing the attachment.
+ */
+export function threadRefreshMs(messages = [], now = Date.now()) {
+  const newest = newestMessageAt(messages)
+  if (newest === null) return THREAD_STEADY_MS
+  const age = now - newest
+  if (age < 0) return THREAD_SETTLE_MS
+  return age < THREAD_SETTLE_WINDOW_MS ? THREAD_SETTLE_MS : THREAD_STEADY_MS
+}

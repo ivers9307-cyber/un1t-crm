@@ -61,6 +61,7 @@ import {
   ticketMessageKind, ticketStatusMeta, mailboxLabel, ticketDeliveryMeta,
   ticketMessageRecipients, isArchivedStatus, TICKET_STATUS_ORDER,
   formatAttachmentSize, ticketAttachmentSkippedLabel, ticketAttachmentIcon,
+  threadRefreshMs,
 } from '../../lib/email-tickets'
 import BackHeaderLeft from '../../components/BackHeaderLeft'
 
@@ -398,10 +399,14 @@ export default function EmailTicket() {
   const scrollRef = useRef(null)
   const readMarked = useRef(false)
 
-  const refresh = useCallback(async () => {
+  // `quiet` is a background re-read of a thread already on screen (the poll
+  // below), as opposed to opening one. It never paints an error: a blip on a
+  // background read must not replace correspondence the operator is reading
+  // with a failure message. What is on screen is still true, just seconds old.
+  const refresh = useCallback(async ({ quiet = false } = {}) => {
     const res = await getTicket(ticketId, activeLocation?.id)
     if (!res.success) {
-      setError(res.error || 'Failed to load ticket')
+      if (!quiet) setError(res.error || 'Failed to load ticket')
       return
     }
     setError(null)
@@ -421,6 +426,27 @@ export default function EmailTicket() {
     setLoading(true)
     refresh().finally(() => setLoading(false))
   }, [refresh])
+
+  // EMAIL-ATTACH-RACE.1 — the thread re-reads itself while it is open.
+  //
+  // It used to load once on mount and never again, so anything written after
+  // that first read stayed invisible for the life of the screen. The inbound
+  // webhook writes email_ticket_attachments AFTER the message row they hang
+  // off, so a ticket opened inside that window showed a member's photo as no
+  // attachment at all, and a file that could not be stored showed neither the
+  // file nor the reason.
+  //
+  // Cadence comes from the thread itself (threadRefreshMs): fast while its
+  // newest message is young enough that rows may still be arriving, 60s
+  // otherwise. It is a primitive, so a poll that changes nothing does not
+  // restart the interval — and the interval is torn down with the screen, so
+  // a backgrounded thread costs nothing.
+  const threadPollMs = threadRefreshMs(messages)
+  useEffect(() => {
+    if (!ticketId) return undefined
+    const timer = setInterval(() => { refresh({ quiet: true }) }, threadPollMs)
+    return () => clearInterval(timer)
+  }, [ticketId, threadPollMs, refresh])
 
   useEffect(() => {
     if (messages.length && scrollRef.current) {

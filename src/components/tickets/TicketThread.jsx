@@ -55,6 +55,7 @@ import {
   assigneeLabel,
   mailboxLabel,
   messageRecipients,
+  threadSignature,
 } from '@/lib/ticket-display'
 import TicketReplyBox from './TicketReplyBox'
 
@@ -79,7 +80,13 @@ export default function TicketThread({
   sending = false,
 }) {
   const endRef = useRef(null)
-  useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }) }, [messages])
+  // EMAIL-ATTACH-RACE.1 — scroll on a NEW message, not on every re-read.
+  // The thread now re-reads itself every few seconds while it is settling, so
+  // keying this on `messages` (a fresh array each time) would yank an operator
+  // back to the bottom mid-read. An attachment row landing on a message that
+  // is already on screen is precisely the case where nothing should move.
+  const threadKey = threadSignature(messages)
+  useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }) }, [threadKey])
 
   // EMAIL-ATTACH-PREVIEW.1 — the attachment overlay is owned HERE, not by the
   // message that holds the file: exactly one may be open at a time, it must

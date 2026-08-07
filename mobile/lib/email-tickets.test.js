@@ -17,6 +17,11 @@ import {
   formatAttachmentSize,
   ticketAttachmentSkippedLabel,
   ticketAttachmentIcon,
+  threadRefreshMs,
+  newestMessageAt,
+  THREAD_SETTLE_MS,
+  THREAD_STEADY_MS,
+  THREAD_SETTLE_WINDOW_MS,
 } from './email-tickets'
 
 describe('ticketMessageKind', () => {
@@ -380,5 +385,53 @@ describe('ticketAttachmentIcon', () => {
     expect(ticketAttachmentIcon(null, null)).toBe('attach-outline')
     expect(ticketAttachmentIcon('', 'noextension')).toBe('attach-outline')
     expect(ticketAttachmentIcon(undefined, undefined)).toBe('attach-outline')
+  })
+})
+
+// EMAIL-ATTACH-RACE.1 — mobile's copy of the thread re-read cadence. The
+// numbers must match web (src/lib/ticket-display.js): an operator watching one
+// ticket on a phone and a laptop should not see one of them catch up first.
+describe('threadRefreshMs', () => {
+  const NOW = Date.parse('2026-08-07T21:00:00.000Z')
+  const at = (iso) => [{ id: 'm1', created_at: iso }]
+
+  it('polls fast while the newest message is still settling', () => {
+    expect(threadRefreshMs(at('2026-08-07T20:59:58.000Z'), NOW)).toBe(THREAD_SETTLE_MS)
+  })
+
+  it('drops to the steady cadence once nothing is recent', () => {
+    expect(threadRefreshMs(at('2026-08-07T20:00:00.000Z'), NOW)).toBe(THREAD_STEADY_MS)
+  })
+
+  it('treats the settle window as exclusive at its far edge', () => {
+    const justInside = new Date(NOW - THREAD_SETTLE_WINDOW_MS + 1).toISOString()
+    const exactlyOut = new Date(NOW - THREAD_SETTLE_WINDOW_MS).toISOString()
+    expect(threadRefreshMs(at(justInside), NOW)).toBe(THREAD_SETTLE_MS)
+    expect(threadRefreshMs(at(exactlyOut), NOW)).toBe(THREAD_STEADY_MS)
+  })
+
+  it('treats a future timestamp as brand new rather than ancient', () => {
+    expect(threadRefreshMs(at('2026-08-07T21:00:30.000Z'), NOW)).toBe(THREAD_SETTLE_MS)
+  })
+
+  it('uses the steady cadence for an empty or unparseable thread', () => {
+    expect(threadRefreshMs([], NOW)).toBe(THREAD_STEADY_MS)
+    expect(threadRefreshMs(at('not a date'), NOW)).toBe(THREAD_STEADY_MS)
+  })
+
+  it('finds the newest message wherever it sits in the array', () => {
+    const rows = [
+      { id: 'b', created_at: '2026-08-07T20:59:59.000Z' },
+      { id: 'a', created_at: '2026-08-07T18:00:00.000Z' },
+    ]
+    expect(newestMessageAt(rows)).toBe(Date.parse('2026-08-07T20:59:59.000Z'))
+    expect(threadRefreshMs(rows, NOW)).toBe(THREAD_SETTLE_MS)
+  })
+
+  // The two platforms are separate statements of one rule (mobile cannot
+  // import src/lib). Drift is the failure mode, so it is asserted here.
+  it('agrees with the web constants', () => {
+    expect([THREAD_SETTLE_MS, THREAD_STEADY_MS, THREAD_SETTLE_WINDOW_MS])
+      .toEqual([5_000, 60_000, 120_000])
   })
 })

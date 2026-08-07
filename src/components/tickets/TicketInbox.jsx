@@ -29,6 +29,7 @@ import {
   buildTicketsUrl,
   mailboxLabel,
   NO_MAILBOX_EMPTY,
+  threadRefreshMs,
 } from '@/lib/ticket-display'
 import TicketList from './TicketList'
 import TicketThread from './TicketThread'
@@ -110,15 +111,22 @@ export default function TicketInbox({ locationId, locationName, userId }) {
   }, [loadQueue])
 
   // ── Thread ─────────────────────────────────────────────────────────
-  const loadThread = useCallback(async (id) => {
+  // `quiet` is a re-read of a thread already on screen (the poll below), as
+  // opposed to opening one. It shows no spinner and, crucially, PAINTS NO
+  // ERROR: a blip on a background read must not replace correspondence the
+  // operator is in the middle of with a failure message. The thread they have
+  // is still true — it is just a few seconds old — and the next read fixes it.
+  const loadThread = useCallback(async (id, { quiet = false } = {}) => {
     if (!id) return
-    setThreadLoading(true)
-    setThreadError(null)
+    if (!quiet) {
+      setThreadLoading(true)
+      setThreadError(null)
+    }
     try {
       const res = await fetch(`/api/email/tickets/${id}`, { cache: 'no-store' })
       const body = await res.json()
       if (!body?.success) {
-        setThreadError(body?.error || 'Could not load this ticket')
+        if (!quiet) setThreadError(body?.error || 'Could not load this ticket')
         return
       }
       setTicket(body.data?.ticket || null)
@@ -126,13 +134,47 @@ export default function TicketInbox({ locationId, locationName, userId }) {
       setAttachmentsUnavailable(!!body.data?.attachments_unavailable)
       setReplyRecipients(body.data?.reply_recipients || null)
     } catch {
-      setThreadError('Could not load this ticket')
+      if (!quiet) setThreadError('Could not load this ticket')
     } finally {
-      setThreadLoading(false)
+      if (!quiet) setThreadLoading(false)
     }
   }, [])
 
   useEffect(() => { if (selectedId) loadThread(selectedId) }, [selectedId, loadThread])
+
+  // EMAIL-ATTACH-RACE.1 — an open thread re-reads itself.
+  //
+  // Until now it was fetched once per selection and never again, so anything
+  // written after that read stayed invisible until the operator reloaded the
+  // page. The inbound webhook writes email_ticket_attachments AFTER the message
+  // row it hangs off (FK, and attachment work must never delay filing the
+  // mail), so a ticket opened inside that window rendered a member's photo as
+  // no attachment at all — live, 2026-08-07. A skipped file is written in the
+  // same place and was equally invisible, which is worse: it has a reason to
+  // show and showed nothing.
+  //
+  // Deliberately a re-read rather than a realtime subscription. Nothing on this
+  // surface subscribes today (see POLL_MS above — mig 485's silently-dead
+  // listeners are why), and a push-based fix would have to survive the webhook
+  // successfully poking it AFTER the attachments land; if that step failed, the
+  // operator would be back to a frozen thread with no way out but a reload.
+  // This has no such step.
+  //
+  // The cadence is computed from the thread itself: fast while its newest
+  // message is young enough that rows may still be arriving, the queue's own
+  // 60s otherwise. It is a primitive, so a poll that changes nothing does not
+  // restart the interval.
+  const threadPollMs = threadRefreshMs(messages)
+  useEffect(() => {
+    if (!selectedId) return undefined
+    const timer = setInterval(() => loadThread(selectedId, { quiet: true }), threadPollMs)
+    const onFocus = () => loadThread(selectedId, { quiet: true })
+    window.addEventListener('focus', onFocus)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [selectedId, threadPollMs, loadThread])
 
   // Marking read is its own endpoint, not a side effect of the GET — so it is
   // explicit and idempotent. Failure is harmless: the badge just stays.
