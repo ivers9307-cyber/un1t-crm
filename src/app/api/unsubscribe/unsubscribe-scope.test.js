@@ -81,8 +81,10 @@ describe('LOCCOMMS.4 — per-location unsubscribe', () => {
 
     expect(writes.contact_preferences).toHaveLength(1)
     expect(writes.contact_location_preferences).toHaveLength(0)
-    // Global opt-out DOES stamp email_status, as it always has.
-    expect(writes.contacts).toHaveLength(1)
+    // LOCCOMMS.5 — the global email_status stamp is retired. email_status now
+    // carries reputation only; the opt-out lives in contact_preferences (and
+    // the mig 489 trigger fans it to every location row).
+    expect(writes.contacts).toHaveLength(0)
   })
 
   it('scoped opt-out reads the LOCATION row, not the global one', async () => {

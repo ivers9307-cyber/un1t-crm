@@ -384,7 +384,7 @@ export default async function ContactDetailPage(props) {
               hasPhone={!!contact.phone}
               hasEmail={!!contact.email}
               smsBlocked={!!(contact.sms_status && contact.sms_status !== 'active')}
-              emailBlocked={['bounced', 'complained', 'unsubscribed'].includes(contact.email_status)}
+              emailBlocked={['bounced', 'complained'].includes(contact.email_status)}
               whatsappWindowOpen={whatsappWindowOpen}
               whatsappWindowExpiresAt={latestWaConversation?.window_expires_at || null}
               templates={composerTemplates}
