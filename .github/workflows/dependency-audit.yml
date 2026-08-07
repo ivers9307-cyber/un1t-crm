@@ -12,6 +12,17 @@
 #
 # --audit-level=high ignores moderates (the build-time postcss-via-Next
 # moderate stays below the threshold and does not fail CI).
+#
+# The audit runs through `npm run check:dependency-audit`, not bare
+# `npm audit`, so a known-and-accepted advisory can be recorded in
+# `.audit-allowlist.json` (with a reason and an EXPIRY) while a genuinely
+# new one still fails. Motivation: the ip-address advisories left this
+# job red on every branch 2026-08-04 → 08-07 and, because it is not a
+# required check (main has no branch protection at all), PRs merged
+# straight past it. A permanently-red check is the worst of both worlds —
+# the noise of a gate with none of the protection — and a bare `npm audit`
+# gives no way to tell "the known one is still open" from "something new
+# just landed". See scripts/check-dependency-audit.mjs.
 name: Dependency audit
 
 on:
@@ -33,6 +44,13 @@ jobs:
   audit:
     name: npm audit (runtime, high+)
     runs-on: ubuntu-latest
+    # Least privilege: read the tree, and open the tracking issue the
+    # scheduled-failure step needs. Explicit because a repo default of
+    # read-only would otherwise make that step fail silently-ish, at the
+    # one moment we most need it to work.
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v7
       - name: Set up Node
@@ -42,4 +60,41 @@ jobs:
       - name: Install dependencies (web)
         run: npm ci
       - name: Audit runtime dependencies (web)
-        run: npm audit --omit=dev --audit-level=high
+        run: npm run check:dependency-audit
+
+      # The scheduled run is the only trigger that catches a NEW advisory
+      # against frozen deps — and it is precisely the one nobody sees: it
+      # runs on main with no PR to hang a red X on. That is how the
+      # ip-address advisories sat unnoticed from Monday to Thursday. So on
+      # a scheduled failure, open (or refresh) a single tracking issue.
+      #
+      # Fixed title => `gh issue list --search` finds the existing one and
+      # we comment instead of opening a duplicate every Monday.
+      #
+      # No untrusted event input is interpolated anywhere here (workflow
+      # injection): the only expressions used are github.repository,
+      # github.run_id and github.server_url, all runner-controlled, and
+      # they are passed via env: rather than substituted into run:.
+      - name: Open a tracking issue on scheduled failure
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: 'Dependency audit: unaccepted high/critical advisory in runtime deps'
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --repo "$REPO" --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          body=$(printf '%s\n' \
+            "The scheduled runtime dependency audit failed on \`main\`." \
+            "" \
+            "Run: $RUN_URL" \
+            "" \
+            "This job is **not** a required check, so nothing blocks merges while it is red." \
+            "Resolve it by upgrading, removing the dependency, or recording a dated accept in \`.audit-allowlist.json\`." \
+            "See \`scripts/check-dependency-audit.mjs\` for the three options in full.")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --body "$body"
+          fi
