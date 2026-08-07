@@ -878,3 +878,70 @@ describe('tickCampaignSend — marketing frequency cap (FREQ-CAP.1)', () => {
     expect(touchStamps(statements)).toHaveLength(0)
   })
 })
+
+// ── EMAIL-NOTRACK.1 — marketing tracking must not move ────────────
+//
+// The split lives in postmark.js resolveTracking(), but the thing that
+// actually has to hold is end-to-end: a Marketing campaign's real
+// emailBatch, fed through the REAL sendBatch, must still produce
+// TrackOpens:true + TrackLinks:'HtmlOnly'. Asserting only on the pure
+// helper would miss campaign-sender silently dropping `stream` from the
+// email object — which is exactly what would turn every campaign
+// untracked. So this reaches for vi.importActual and closes the loop.
+describe('EMAIL-NOTRACK.1 — campaign-sender output is unchanged', () => {
+  const realBatchPayload = async (emails) => {
+    const { sendBatch: realSendBatch } = await vi.importActual('./postmark.js')
+    process.env.POSTMARK_API_KEY = 'test-token'
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => emails.map((_, i) => ({ ErrorCode: 0, MessageID: `pm-${i}` })),
+    })
+    await realSendBatch(emails)
+    const payload = JSON.parse(spy.mock.calls[0][1].body)
+    spy.mockRestore()
+    return payload
+  }
+
+  it('a MARKETING campaign still hands sendBatch an explicit broadcast stream', async () => {
+    // If this regresses to an omitted stream, tracking silently turns off
+    // for every campaign — the pure helper's tests would still pass.
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, campaign) // postmark_stream: null → broadcast
+
+    const batch = sendBatch.mock.calls[0][0]
+    expect(batch[0].stream).toBe('broadcast')
+    expect(batch[0].trackEngagement).toBeUndefined()
+  })
+
+  it('that batch, through the REAL sendBatch, still tracks opens and clicks', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, campaign)
+
+    const payload = await realBatchPayload(sendBatch.mock.calls[0][0])
+    expect(payload[0].MessageStream).toBe('broadcast')
+    expect(payload[0].TrackOpens).toBe(true)
+    expect(payload[0].TrackLinks).toBe('HtmlOnly')
+  })
+
+  it('a UTILITY (outbound-stream) campaign is the one path that loses tracking', async () => {
+    // Documented, not accidental: a Utility campaign is gated on
+    // email_administrative consent, not marketing consent, so it is
+    // transactional mail wearing campaign machinery. Its open/click
+    // stats will read zero from here on. `trackEngagement: true` on the
+    // email object is the one-line restore if that is ever wanted.
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, { ...campaign, postmark_stream: 'outbound' })
+
+    const payload = await realBatchPayload(sendBatch.mock.calls[0][0])
+    expect(payload[0].MessageStream).toBe('outbound')
+    expect(payload[0].TrackOpens).toBe(false)
+    expect(payload[0].TrackLinks).toBe('None')
+  })
+})
