@@ -255,12 +255,59 @@ describe('the shipped allowlist files', () => {
     })
   }
 
-  it('mobile accepts exactly the two unfixable linkify-it advisories', () => {
-    const ids = load('../mobile/.audit-allowlist.json').accepted.map((e) => e.id).sort()
-    expect(ids).toEqual(['GHSA-22p9-wv53-3rq4', 'GHSA-v245-v573-v5vm'])
+  // Both trees accept NOTHING. Empty is the healthy state, and it is worth
+  // asserting rather than assuming: an accept that creeps in without a
+  // reviewer noticing is exactly how a gate stops being a gate.
+  //
+  // Mobile briefly carried the two linkify-it advisories
+  // (GHSA-22p9-wv53-3rq4, GHSA-v245-v573-v5vm) on the belief that no fix
+  // existed — npm reports fixAvailable:false for them. That reading was
+  // wrong: fixAvailable:false means "no fix reachable within the CURRENT
+  // constraints", not "no patched version published". linkify-it 5.0.2 is
+  // patched, and an `overrides` entry in mobile/package.json changes the
+  // constraint. They are fixed, not accepted. See CHANGELOG 478.
+  it.each([
+    ['web', '../.audit-allowlist.json'],
+    ['mobile', '../mobile/.audit-allowlist.json'],
+  ])('%s accepts nothing — empty is the healthy state', (_label, path) => {
+    expect(load(path).accepted).toEqual([])
+  })
+})
+
+// The override is the whole reason mobile's allowlist is empty, and it lives in
+// a file nobody reads during a feature change. The audit gate would catch its
+// removal, but only on a dep-touching PR (that is the workflow's `paths:`
+// trigger) — so assert it here too, where `npm test` sees it on every change.
+describe('mobile linkify-it override', () => {
+  const pkg = JSON.parse(
+    readFileSync(new URL('../mobile/package.json', import.meta.url), 'utf8'),
+  )
+
+  it('pins linkify-it above the vulnerable <=5.0.1 range', () => {
+    expect(pkg.overrides?.['linkify-it']).toBe('^5.0.2')
   })
 
-  it('web accepts nothing — empty is the healthy state', () => {
-    expect(load('../.audit-allowlist.json').accepted).toEqual([])
+  it('does NOT reach for 6.x, which would break markdown-it@10 at runtime', () => {
+    // linkify-it 6 switched to named exports (`exports.LinkifyIt = …`).
+    // markdown-it@10 does `var LinkifyIt = require('linkify-it'); new LinkifyIt()`,
+    // so 6.x throws "LinkifyIt is not a constructor" when MarkdownIt is
+    // constructed — i.e. the contracts screen white-screens on mount.
+    // 5.0.2 still does `module.exports = LinkifyIt`, which is why it is safe.
+    expect(pkg.overrides['linkify-it']).not.toMatch(/\^?6\./)
+  })
+
+  it('resolves to a single pinned version in the lockfile', () => {
+    const lock = JSON.parse(
+      readFileSync(new URL('../mobile/package-lock.json', import.meta.url), 'utf8'),
+    )
+    const versions = Object.entries(lock.packages || {})
+      .filter(([path]) => path.endsWith('node_modules/linkify-it'))
+      .map(([, v]) => v.version)
+    expect(versions.length).toBeGreaterThan(0)
+    for (const v of versions) {
+      expect(v, 'a linkify-it in the vulnerable range survived the override').not.toMatch(
+        /^([0-4]\.|5\.0\.[01]$)/,
+      )
+    }
   })
 })

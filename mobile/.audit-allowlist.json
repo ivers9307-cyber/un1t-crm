@@ -9,20 +9,10 @@
     "",
     "Note the mobile gate covers the WHOLE tree, not just runtime deps: `--omit=dev` is inert under",
     "`--package-lock-only` (verified 2026-08-07 — identical reports with and without it). That is the honest",
-    "posture for this tree anyway, since mobile's only devDependency is @babel/core."
+    "posture for this tree anyway, since mobile's only devDependency is @babel/core.",
+    "",
+    "Empty is the healthy state, and it IS empty — the two linkify-it advisories that were briefly accepted",
+    "here are fixed instead, by the `linkify-it: ^5.0.2` override in mobile/package.json. See CHANGELOG 478."
   ],
-  "accepted": [
-    {
-      "id": "GHSA-22p9-wv53-3rq4",
-      "package": "linkify-it",
-      "reason": "Quadratic-complexity DoS in LinkifyIt#match's scan loop. NO FIX EXISTS — the advisory range is <=5.0.1, i.e. every published version, and npm reports fixAvailable:false. Reached only via react-native-markdown-display@7.0.2 -> markdown-it@10.0.0, whose sole consumer is mobile/app/contracts/[id].jsx rendering a contract body. That text is authored by an operator in the CRM, not by an outside party, and the worst case is that the signing staff member's OWN phone stalls — there is no server, no shared process and no other tenant to affect. Re-decide if markdown rendering is ever pointed at member- or public-authored text.",
-      "expires": "2026-11-07"
-    },
-    {
-      "id": "GHSA-v245-v573-v5vm",
-      "package": "linkify-it",
-      "reason": "Second quadratic-complexity DoS in the same package, via the mailto: validator scan loop. Identical reasoning, reachability and re-decide trigger as GHSA-22p9-wv53-3rq4 above: no fix published for any version, and the only call path is operator-authored contract text rendered on the staff device in mobile/app/contracts/[id].jsx.",
-      "expires": "2026-11-07"
-    }
-  ]
+  "accepted": []
 }
