@@ -222,6 +222,27 @@ async function uploadObject(
       {
         method: 'POST',
         headers: {
+          // BOTH HEADERS, AND `apikey` IS THE LOAD-BEARING ONE.
+          //
+          // This project issues NEW-FORMAT API keys, and the Edge runtime
+          // injects SUPABASE_SERVICE_ROLE_KEY as an `sb_secret_...` value, not
+          // a legacy JWT. Storage treats an Authorization: Bearer value as a
+          // JWT, so a bearer-only request answers
+          //   400 {"statusCode":"403","message":"Invalid Compact JWS"}
+          // and then resolves the caller as anon — at which point RLS refuses
+          // the write, because email-attachments has no permissive INSERT
+          // policy for anon/authenticated (by design; it is service-role only).
+          //
+          // That failure is silent in the worst way: the shim's own rule is
+          // that a failed upload still forwards the mail, so every message
+          // arrived correctly with its attachment marked `rehost_failed`, and
+          // nothing about inbound looked broken. Caught on the first real
+          // delivery after cutover, 2026-08-07.
+          //
+          // Measured against this project rather than assumed: bearer-only
+          // 400, apikey-only 200, apikey+bearer 200. Both are sent so a legacy
+          // JWT key keeps working if the project is ever rolled back to one.
+          apikey: serviceKey,
           authorization: `Bearer ${serviceKey}`,
           'content-type': contentType,
           'cache-control': 'max-age=3600',
