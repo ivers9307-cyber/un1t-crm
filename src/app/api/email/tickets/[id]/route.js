@@ -44,6 +44,11 @@ const MESSAGE_COLUMNS = [
 // 1,000 rows whatever the caller asks for, so the bound is stated.
 const AUTHOR_LIMIT = 200
 
+// Same reasoning for attachments: 200 messages × a few files each still has to
+// sit under the 1,000-row cap, and an unstated bound is a silently truncated
+// list rather than an error.
+const ATTACHMENT_LIMIT = 500
+
 // A ticket may hold 200 messages and each html_body may be 300k, so an
 // unbudgeted response is 60 MB of quoted marketing chain. Sanitised documents
 // are produced newest-first (the fetch is already descending) until this much
@@ -98,7 +103,7 @@ export async function GET(request, props) {
     return NextResponse.json({ success: false, error: contactErr.message }, { status: 500 })
   }
 
-  const messages = await shapeMessages(db, messagesDesc || [])
+  const { messages, attachmentsUnavailable } = await shapeMessages(db, messagesDesc || [])
 
   return NextResponse.json({
     success: true,
@@ -108,20 +113,71 @@ export async function GET(request, props) {
       // reply goes back out from.
       ticket: { ...ticket, mailbox, contact: contact || null },
       messages,
+      // True when the attachment query failed. The thread is complete; the
+      // FILE list is not, and the UI must say so rather than imply there were
+      // none.
+      attachments_unavailable: attachmentsUnavailable,
     },
   })
 }
 
 /**
+ * The files that came with a thread, grouped by message.
+ *
+ * Returns `{ byMessage, unavailable }`. `unavailable` is deliberate: an
+ * attachment lookup that fails must not render as "this email had no
+ * attachments". That is the same silent-wrong-answer shape EMAIL-TICKET.6
+ * fixed for the thread itself — an operator reading "no attachments" when the
+ * member did send one will tell them so. It is NOT a 500, though: the
+ * correspondence is complete and readable either way, and refusing to open a
+ * support ticket over an attachment query is the disproportionate answer.
+ *
+ * storage_path never leaves this function. The client gets `stored` and, when
+ * it wants the bytes, hits …/attachments/[attachmentId] for a signed URL.
+ */
+async function loadAttachments(db, messageIds) {
+  if (messageIds.length === 0) return { byMessage: new Map(), unavailable: false }
+
+  const { data, error } = await db.from('email_ticket_attachments')
+    .select('id, message_id, filename, mime_type, size_bytes, storage_path, skipped_reason, attachment_index')
+    .in('message_id', messageIds)
+    .order('attachment_index', { ascending: true })
+    .limit(ATTACHMENT_LIMIT)
+  if (error) {
+    console.error('[tickets/:id] attachment lookup failed:', error.message)
+    return { byMessage: new Map(), unavailable: true }
+  }
+
+  const byMessage = new Map()
+  for (const row of data || []) {
+    const list = byMessage.get(row.message_id) || []
+    list.push({
+      id: row.id,
+      filename: row.filename,
+      mime_type: row.mime_type,
+      size_bytes: row.size_bytes,
+      stored: !!row.storage_path,
+      skipped_reason: row.skipped_reason,
+    })
+    byMessage.set(row.message_id, list)
+  }
+  return { byMessage, unavailable: false }
+}
+
+/**
  * Turn stored rows into what the thread may render: authors resolved, HTML
- * sanitised, raw html_body dropped.
+ * sanitised, raw html_body dropped, attachments attached.
  *
  * @param {object} db  service-role client
  * @param {object[]} rows  messages, NEWEST FIRST — the HTML budget spends
  *   itself on the most recent correspondence, which is the part anyone reads.
- * @returns {Promise<object[]>} the same messages, oldest first
+ * @returns {Promise<{messages: object[], attachmentsUnavailable: boolean}>}
+ *   messages oldest first
  */
 async function shapeMessages(db, rows) {
+  const { byMessage: attachmentsByMessage, unavailable: attachmentsUnavailable } =
+    await loadAttachments(db, rows.map(m => m.id).filter(Boolean))
+
   // WHO WROTE IT. Resolving names needs a read of `profiles`, which the
   // `authenticated` role has no grant on — a client-side embed would 500 the
   // whole select (CLAUDE.md). This is a service-role route, so the lookup
@@ -153,6 +209,7 @@ async function shapeMessages(db, rows) {
     const base = {
       ...rest,
       author_name: authorNames.get(row.author_profile_id) || null,
+      attachments: attachmentsByMessage.get(row.id) || [],
       html_document: null,
       html_blocked_images: 0,
       html_unsafe: false,
@@ -178,5 +235,5 @@ async function shapeMessages(db, rows) {
     }
   })
 
-  return shaped.reverse()
+  return { messages: shaped.reverse(), attachmentsUnavailable }
 }

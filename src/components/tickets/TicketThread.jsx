@@ -27,8 +27,12 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Lock, Mail, AlertCircle, MailCheck, ImageOff, Maximize2, Minimize2, ShieldAlert } from 'lucide-react'
+import {
+  ArrowLeft, Lock, Mail, AlertCircle, MailCheck, ImageOff, Maximize2, Minimize2,
+  ShieldAlert, Paperclip, Download, FileWarning,
+} from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
+import { formatBytes, SKIPPED_REASON_LABEL } from '@/lib/email-attachment-quota'
 import {
   requesterLabel,
   initialsOf,
@@ -46,6 +50,9 @@ export default function TicketThread({
   hasSelection,
   ticket,
   messages = [],
+  // EMAIL-ATTACH.1 — the attachment query failed. The thread below is complete;
+  // the FILE lists on it are not, and saying nothing would render as "no files".
+  attachmentsUnavailable = false,
   loading = false,
   error,
   currentUserId,
@@ -179,10 +186,12 @@ export default function TicketThread({
             </p>
           )
         ) : (
-          messages.map(m => <ThreadMessage key={m.id} message={m} />)
+          messages.map(m => <ThreadMessage key={m.id} message={m} ticketId={ticket?.id} />)
         )}
         <div ref={endRef} />
       </div>
+
+      {attachmentsUnavailable && <AttachmentsUnavailableNotice />}
 
       {error && (
         <p
@@ -304,7 +313,100 @@ function HtmlOmittedNotice() {
   )
 }
 
-function ThreadMessage({ message }) {
+/**
+ * The files that came with a message (EMAIL-ATTACH.1).
+ *
+ * A NOT-STORED ATTACHMENT IS SHOWN, NOT HIDDEN. That is the whole reason
+ * email_ticket_attachments allows a row with no bytes: an oversized or
+ * over-quota file that simply vanished from the thread would have staff telling
+ * a member "you never sent it". The row keeps the name and the size, so the
+ * honest answer — "we have a record of it but not the file, please resend" — is
+ * the one on screen.
+ *
+ * The bytes themselves are never in this payload. Clicking asks the server for
+ * a short-lived signed URL, which is also where the access check lives.
+ */
+function Attachments({ ticketId, attachments, onAccent = false }) {
+  const [busy, setBusy] = useState(null)
+  const [failed, setFailed] = useState(null)
+
+  if (!attachments || attachments.length === 0) return null
+
+  const link = onAccent ? 'text-white hover:underline' : 'text-un1t-accent hover:underline'
+  const quiet = onAccent ? 'text-white/70' : 'text-un1t-muted'
+
+  async function open(att) {
+    setBusy(att.id)
+    setFailed(null)
+    try {
+      const res = await fetch(`/api/email/tickets/${ticketId}/attachments/${att.id}`)
+      const j = await res.json()
+      if (!res.ok || !j.success || !j.data?.url) {
+        setFailed(j.error || 'That file could not be opened.')
+        return
+      }
+      // noopener/noreferrer: the signed URL points at Supabase Storage, which
+      // is a different origin, and the opened tab must not hold a handle back
+      // to the CRM.
+      window.open(j.data.url, '_blank', 'noopener,noreferrer')
+    } catch {
+      setFailed('That file could not be opened.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="mt-2 space-y-1">
+      {attachments.map(att => (
+        <div key={att.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
+          {att.stored ? (
+            <>
+              <Paperclip size={11} className="shrink-0" aria-hidden="true" />
+              <button
+                type="button"
+                onClick={() => open(att)}
+                disabled={busy === att.id}
+                className={`inline-flex items-center gap-1 ${link} disabled:opacity-60`}
+              >
+                {att.filename}
+                <Download size={10} className="shrink-0" aria-hidden="true" />
+              </button>
+              <span className={quiet}>{formatBytes(att.size_bytes)}</span>
+            </>
+          ) : (
+            <>
+              <FileWarning size={11} className="shrink-0 text-amber-700" aria-hidden="true" />
+              <span className={onAccent ? 'text-white/80' : 'text-un1t-subtle'}>{att.filename}</span>
+              <span className={quiet}>{formatBytes(att.size_bytes)}</span>
+              <span className={`${onAccent ? 'text-white/70' : 'text-amber-700'}`}>
+                {SKIPPED_REASON_LABEL[att.skipped_reason] || 'Not stored'}
+              </span>
+            </>
+          )}
+        </div>
+      ))}
+      {failed && (
+        <p className={`text-[11px] ${onAccent ? 'text-white/80' : 'text-red-700'}`} role="alert">
+          {failed}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** The attachment list itself could not be loaded — say so, don't imply none. */
+function AttachmentsUnavailableNotice() {
+  return (
+    <p className="flex items-center gap-1.5 border-t border-un1t-border bg-amber-500/10 px-4 py-2 text-xs text-amber-700">
+      <FileWarning size={12} className="shrink-0" aria-hidden="true" />
+      Attachments could not be loaded for this ticket. Messages sent with files may look as though
+      they had none.
+    </p>
+  )
+}
+
+function ThreadMessage({ message, ticketId }) {
   const kind = messageKind(message)
   const stamp = messageTimestamp(message.sent_at || message.created_at)
   const body = message.text_body || '(no text content)'
@@ -355,6 +457,7 @@ function ThreadMessage({ message }) {
           )}
           {message.html_unsafe && <UnsafeHtmlNotice />}
           {message.html_omitted && <HtmlOmittedNotice />}
+          <Attachments ticketId={ticketId} attachments={message.attachments} onAccent />
         </div>
       </div>
     )
@@ -378,6 +481,7 @@ function ThreadMessage({ message }) {
         )}
         {message.html_unsafe && <UnsafeHtmlNotice />}
         {message.html_omitted && <HtmlOmittedNotice />}
+        <Attachments ticketId={ticketId} attachments={message.attachments} />
       </div>
     </div>
   )

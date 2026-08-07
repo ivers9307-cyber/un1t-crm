@@ -66,6 +66,12 @@ function matches(row, f) {
     case 'is': return a === null ? value === null : value === a
     case 'not': return a === 'is' && b === null ? value !== null : true
     case 'or': return orMatches(row, col)
+    // Range filters — the prune path selects attachments older than a cutoff,
+    // and a no-op here would let it prune rows it must not touch.
+    case 'lt': return value !== null && value < a
+    case 'lte': return value !== null && value <= a
+    case 'gt': return value !== null && value > a
+    case 'gte': return value !== null && value >= a
     // ilike used to fall through to `default: true` — a NO-OP, so the compose
     // route's contact lookup returned every contact whatever the pattern and
     // the fake could not tell an escaped query from an unescaped one. Model
@@ -91,15 +97,33 @@ const TABLE_KEYS = {
   // so its tests need the roster the routes actually read.
   profile_locations: 'profileLocations',
   profiles: 'profiles',
+  // EMAIL-ATTACH.1 — attachments and the per-mailbox storage counter.
+  email_ticket_attachments: 'attachments',
+  email_storage_usage: 'storageUsage',
   // audit_events is DELIBERATELY ABSENT, same reasoning as email_conversations:
   // logAuditEvent() builds its own client (which the tests point at this fake),
   // so its inserts land on db.inserts — assertable — without polluting a read.
 }
 
+// Unique indexes the fake enforces, as a 23505 on insert.
+//
+// THIS ONE IS LOAD-BEARING, NOT DECORATION. email_ticket_attachments'
+// UNIQUE (message_id, attachment_index) is the entire reason storage
+// accounting is idempotent across a re-processed inbound email (mig 496). A
+// fake that let the second insert through would let a double-counting bug pass
+// the very test written to catch it.
+const UNIQUE_KEYS = {
+  email_ticket_attachments: ['message_id', 'attachment_index'],
+  email_storage_usage: ['location_id', 'mailbox_id'],
+}
+
 export function makeDb(state = {}) {
   const s = {
     mailboxes: [], grants: [], tickets: [], messages: [], sends: [], contacts: [],
-    locations: [], profileLocations: [], profiles: [], errors: {},
+    locations: [], profileLocations: [], profiles: [],
+    // EMAIL-ATTACH.1
+    attachments: [], storageUsage: [], objects: new Map(), storageErrors: {},
+    errors: {},
     ...state,
   }
   // `selects` records the COLUMN STRING each read asked for. The fake itself
@@ -133,6 +157,20 @@ export function makeDb(state = {}) {
     if (injected) return { data: null, error: injected }
     if (b._op === 'insert') {
       db.inserts.push({ table: b._table, payload: b._payload })
+      const unique = UNIQUE_KEYS[b._table]
+      if (unique && key) {
+        const clash = s[key].some(r => unique.every(col => (r[col] ?? null) === (b._payload[col] ?? null)))
+        // The real 23505, shape and all — routes branch on `.code`.
+        if (clash) {
+          return {
+            data: null,
+            error: {
+              code: '23505',
+              message: `duplicate key value violates unique constraint on ${b._table}`,
+            },
+          }
+        }
+      }
       const row = { id: `new-${b._table}-${++seq}`, created_at: `2026-08-06T12:00:0${seq}Z`, ...b._payload }
       if (key) s[key].push(row)
       return { data: row, error: null }
@@ -141,7 +179,11 @@ export function makeDb(state = {}) {
       db.updates.push({ table: b._table, payload: b._payload, filters: b._filters })
       const hit = (key ? s[key] : []).filter(r => b._filters.every(f => matches(r, f)))
       for (const r of hit) Object.assign(r, b._payload)
-      return { data: hit[0] ?? null, error: null }
+      // PostgREST returns the changed ROWS; the single shape takes the first.
+      // The list shape matters for the prune path, which decrements the counter
+      // by exactly what its UPDATE actually changed — that is what stops two
+      // concurrent prunes double-counting the same rows.
+      return shape === 'list' ? { data: hit, error: null } : { data: hit[0] ?? null, error: null }
     }
     // EMAIL-MAILBOX-ADMIN.1 — revoking a mailbox grant DELETES the row, and
     // "the person can no longer see it" is only proven if the fake actually
@@ -173,6 +215,10 @@ export function makeDb(state = {}) {
     b.not = filter('not')
     b.or = filter('or')
     b.ilike = filter('ilike')
+    b.lt = filter('lt')
+    b.lte = filter('lte')
+    b.gt = filter('gt')
+    b.gte = filter('gte')
     b.order = (column, opts = {}) => { b._order = { column, ascending: opts.ascending !== false }; return b }
     b.limit = (n) => { b._limit = n; return b }
     b.single = () => Promise.resolve(settle(b, 'single'))
@@ -181,9 +227,117 @@ export function makeDb(state = {}) {
     b.then = (res, rej) => Promise.resolve(settle(b, 'list')).then(res, rej)
     return b
   }
-  db.rpc = () => Promise.resolve({ data: null, error: null })
+  // ── RPCs ────────────────────────────────────────────────────────────
+  // The two storage functions are MODELLED, not stubbed. `add_email_storage_bytes`
+  // is what decides whether an attachment fits, and it returns the total AFTER
+  // its own increment — a stub returning null would make every quota test pass
+  // for the wrong reason, and the reserve-then-roll-back dance would be
+  // untestable. Everything else still answers the old empty success.
+  db.rpcs = []
+  db.rpc = (fn, args = {}) => {
+    db.rpcs.push({ fn, args })
+
+    if (fn === 'add_email_storage_bytes') {
+      if (s.errors?.add_email_storage_bytes) {
+        return Promise.resolve({ data: null, error: s.errors.add_email_storage_bytes })
+      }
+      const locationId = args.p_location_id
+      const mailboxId = args.p_mailbox_id ?? null
+      let row = s.storageUsage.find(
+        u => u.location_id === locationId && (u.mailbox_id ?? null) === mailboxId
+      )
+      if (!row) {
+        row = {
+          id: `new-usage-${++seq}`,
+          location_id: locationId,
+          mailbox_id: mailboxId,
+          bytes_used: 0,
+          quota_bytes: 5368709120,
+        }
+        s.storageUsage.push(row)
+      }
+      // greatest(…, 0) — the counter never goes negative, or freed space that
+      // does not exist starts showing up as headroom.
+      row.bytes_used = Math.max(0, row.bytes_used + (Number(args.p_delta) || 0))
+      return Promise.resolve({ data: row.bytes_used, error: null })
+    }
+
+    if (fn === 'recalc_email_storage_usage') {
+      const locationId = args.p_location_id
+      const truth = new Map()
+      for (const a of s.attachments) {
+        if (a.location_id !== locationId || !a.storage_path) continue
+        const k = a.mailbox_id ?? null
+        truth.set(k, (truth.get(k) || 0) + (Number(a.size_bytes) || 0))
+      }
+      for (const u of s.storageUsage) {
+        if (u.location_id !== locationId) continue
+        u.bytes_used = truth.get(u.mailbox_id ?? null) || 0
+      }
+      for (const [mailboxId, bytes] of truth) {
+        const existing = s.storageUsage.find(
+          u => u.location_id === locationId && (u.mailbox_id ?? null) === mailboxId
+        )
+        if (!existing) {
+          s.storageUsage.push({
+            id: `new-usage-${++seq}`,
+            location_id: locationId,
+            mailbox_id: mailboxId,
+            bytes_used: bytes,
+            quota_bytes: 5368709120,
+          })
+        }
+      }
+      return Promise.resolve({ data: null, error: null })
+    }
+
+    return Promise.resolve({ data: null, error: null })
+  }
+
+  // ── Storage ─────────────────────────────────────────────────────────
+  // Objects are kept in a Map so a test can assert what actually landed in the
+  // bucket — "the row says stored" and "the bytes are there" are different
+  // claims, and the prune path is only correct if it settles both.
+  db.storage = {
+    from: (bucket) => ({
+      upload: (path, bytes, opts) => {
+        const err = s.storageErrors?.upload
+        if (err) return Promise.resolve({ data: null, error: err })
+        s.objects.set(`${bucket}/${path}`, { bytes, opts })
+        return Promise.resolve({ data: { path }, error: null })
+      },
+      remove: (paths) => {
+        const err = s.storageErrors?.remove
+        if (err) return Promise.resolve({ data: null, error: err })
+        for (const p of paths) s.objects.delete(`${bucket}/${p}`)
+        return Promise.resolve({ data: paths.map(p => ({ name: p })), error: null })
+      },
+      createSignedUrl: (path, ttl, opts) => {
+        const err = s.storageErrors?.sign
+        if (err) return Promise.resolve({ data: null, error: err })
+        if (!s.objects.has(`${bucket}/${path}`) && !s.signAnything) {
+          return Promise.resolve({ data: null, error: { message: 'Object not found' } })
+        }
+        const download = opts?.download ? `&download=${encodeURIComponent(opts.download)}` : ''
+        return Promise.resolve({
+          data: { signedUrl: `https://storage.test/${bucket}/${path}?token=signed&ttl=${ttl}${download}` },
+          error: null,
+        })
+      },
+    }),
+  }
+
   return db
 }
+
+/** Every object currently in the fake bucket, as `bucket/path` keys. */
+export const objectKeys = (db) => [...db._state.objects.keys()]
+
+/** The counter for one bucket — `null` mailboxId is the unfiled bucket. */
+export const usageFor = (db, locationId, mailboxId = null) =>
+  db._state.storageUsage.find(
+    u => u.location_id === locationId && (u.mailbox_id ?? null) === mailboxId
+  ) || null
 
 export const insertsInto = (db, table) => db.inserts.filter(i => i.table === table)
 export const updatesTo = (db, table) => db.updates.filter(u => u.table === table)

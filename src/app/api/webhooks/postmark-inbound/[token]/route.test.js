@@ -121,6 +121,14 @@ function makeDb(state = {}) {
     // route's release DELETE always goes through db.from('webhook_events'),
     // which is what clears an entry here.
     claims: new Set(),
+    // EMAIL-ATTACH.1 — attachments, the bucket, and the per-mailbox counter.
+    // The counter is MODELLED rather than stubbed: `add_email_storage_bytes`
+    // returns the total AFTER its own increment, and that returned value is
+    // what decides whether an attachment fits. A stub answering null would make
+    // the quota tests pass with the quota check deleted.
+    attachments: [],
+    objects: new Map(),
+    usage: [],
     // `${table}:${op}` → the error that query answers with, so a test can
     // break ONE query the way a real DB fault would. Mutable between requests
     // so a fault can be transient (fail the first attempt, not the retry).
@@ -137,6 +145,7 @@ function makeDb(state = {}) {
       case 'contacts': return applyFilters(s.contacts, b._filters)
       case 'email_inbox_messages': return applyFilters(s.threadRows, b._filters)
       case 'email_tickets': return applyFilters(Object.values(s.tickets), b._filters)
+      case 'email_ticket_attachments': return applyFilters(s.attachments, b._filters)
       // email_conversations has NO case on purpose: a read falls through to []
       // and a write is still recorded on db.inserts/db.updates, so the negative
       // assertions below can catch a reintroduced dual-write.
@@ -150,6 +159,21 @@ function makeDb(state = {}) {
 
     if (b._op === 'insert') {
       db.inserts.push({ table: b._table, payload: b._payload })
+      if (b._table === 'email_ticket_attachments') {
+        // UNIQUE (message_id, attachment_index) — mig 496. This is the index
+        // that makes storage accounting idempotent across a re-processed
+        // inbound email, so the fake has to enforce it or the regression below
+        // proves nothing.
+        const clash = s.attachments.some(a =>
+          a.message_id === b._payload.message_id &&
+          a.attachment_index === b._payload.attachment_index)
+        if (clash) {
+          return { data: null, error: { code: '23505', message: 'duplicate key value' } }
+        }
+        const row = { id: `att-${s.attachments.length}`, ...b._payload }
+        s.attachments.push(row)
+        return { data: row, error: null }
+      }
       const id = b._table === 'email_tickets' ? 'new-ticket' : 'new-row'
       return { data: { id }, error: null }
     }
@@ -195,8 +219,37 @@ function makeDb(state = {}) {
   }
   db.rpc = (fn, args) => {
     db.rpcs.push({ fn, args })
+    if (fn === 'add_email_storage_bytes') {
+      if (s.fail['add_email_storage_bytes']) {
+        return Promise.resolve({ data: null, error: s.fail['add_email_storage_bytes'] })
+      }
+      const mailboxId = args.p_mailbox_id ?? null
+      let row = s.usage.find(u => u.location_id === args.p_location_id && (u.mailbox_id ?? null) === mailboxId)
+      if (!row) {
+        row = { location_id: args.p_location_id, mailbox_id: mailboxId, bytes_used: 0, quota_bytes: 5368709120 }
+        s.usage.push(row)
+      }
+      row.bytes_used = Math.max(0, row.bytes_used + (Number(args.p_delta) || 0))
+      return Promise.resolve({ data: row.bytes_used, error: null })
+    }
     return Promise.resolve({ data: null, error: null })
   }
+
+  db.storage = {
+    from: (bucket) => ({
+      upload: (path, bytes, opts) => {
+        if (s.fail['storage:upload']) return Promise.resolve({ data: null, error: s.fail['storage:upload'] })
+        s.objects.set(`${bucket}/${path}`, { size: bytes?.length ?? 0, opts })
+        return Promise.resolve({ data: { path }, error: null })
+      },
+      remove: (paths) => {
+        for (const p of paths) s.objects.delete(`${bucket}/${p}`)
+        return Promise.resolve({ data: [], error: null })
+      },
+      createSignedUrl: (path) => Promise.resolve({ data: { signedUrl: `https://storage.test/${path}` }, error: null }),
+    }),
+  }
+
   return db
 }
 
@@ -535,6 +588,117 @@ describe('idempotency', () => {
     // …and the short-circuit must not release anyone's claim either.
     expect(db.deletes).toHaveLength(0)
     expect(deadLetterWebhook).not.toHaveBeenCalled()
+  })
+})
+
+// ── EMAIL-ATTACH.1 ──────────────────────────────────────────────────
+// Attachments were the one part of Postmark's payload this route never looked
+// at: `Attachments` was ignored outright, so every file a member ever sent was
+// discarded on arrival with nothing written anywhere. These tests pin the two
+// halves of the fix — the files land AND the bytes are metered — and, more
+// importantly, that neither half can ever cost us the email.
+describe('attachments (EMAIL-ATTACH.1)', () => {
+  const withAttachments = (files) => inbound({ Attachments: files })
+  const file = (over = {}) => ({
+    Name: 'invoice.pdf',
+    ContentType: 'application/pdf',
+    Content: Buffer.from('x'.repeat(512)).toString('base64'),
+    ContentLength: 987654, // sender-supplied and WRONG on purpose
+    ...over,
+  })
+
+  const attachmentRows = (d) => insertsInto(d, 'email_ticket_attachments').map(i => i.payload)
+  const usageFor = (d, mailboxId) =>
+    d._state.usage.find(u => (u.mailbox_id ?? null) === mailboxId) || null
+
+  it('stores the file, records it, and meters the DECODED length', async () => {
+    const res = await post(withAttachments([file()]))
+
+    expect(res.status).toBe(200)
+    const rows = attachmentRows(db)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      message_id: 'new-row',
+      location_id: 'loc-hatch',
+      mailbox_id: 'mb-hatch',   // the mailbox the mail was DELIVERED to
+      attachment_index: 0,
+      filename: 'invoice.pdf',
+      skipped_reason: null,
+      size_bytes: 512,           // not 987654, not the base64 length
+    })
+    expect([...db._state.objects.keys()]).toHaveLength(1)
+    expect(usageFor(db, 'mb-hatch').bytes_used).toBe(512)
+  })
+
+  it('builds the object key from IDS — an attacker-controlled filename never reaches it', async () => {
+    await post(withAttachments([file({ Name: '../../../../etc/passwd .pdf' })]))
+
+    const [row] = attachmentRows(db)
+    expect(row.storage_path).toBe('loc-hatch/new-row/0.pdf')
+    expect(row.storage_path).not.toContain('..')
+    // Kept as data, sanitised: staff still see what the member called it.
+    expect(row.filename).not.toContain('/')
+    expect(row.filename).not.toContain(' ')
+  })
+
+  // THE FLAGSHIP. The dedupe claim is RELEASED on any 5xx precisely so Postmark
+  // re-processes, which makes "the same payload twice" a designed-in path.
+  // Bytes counted twice would shrink the mailbox's quota permanently with
+  // nothing on any screen to explain it.
+  it('processes the SAME payload twice and counts the bytes ONCE', async () => {
+    bindDedupeLedger(db)
+    const payload = withAttachments([file({ Content: Buffer.alloc(2048).toString('base64') })])
+
+    const first = await post(payload)
+    expect(first.status).toBe(200)
+    expect(usageFor(db, 'mb-hatch').bytes_used).toBe(2048)
+
+    // Give the claim back exactly as a 5xx would, then let Postmark retry.
+    db._state.claims.clear()
+    const second = await post(payload)
+    expect(second.status).toBe(200)
+
+    expect(usageFor(db, 'mb-hatch').bytes_used).toBe(2048) // NOT 4096
+    expect(db._state.attachments).toHaveLength(1)
+    expect([...db._state.objects.keys()]).toHaveLength(1)
+  })
+
+  // THE GOVERNING RULE. Attachments are subordinate to filing the message.
+  it('files the message in full when the attachment CANNOT be stored', async () => {
+    db._state.fail['storage:upload'] = { message: 'bucket unavailable' }
+
+    const res = await post(withAttachments([file()]))
+
+    // 200, ticket created, message written — exactly as if there were no file.
+    expect(res.status).toBe(200)
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+
+    // …and the file is VISIBLY not stored rather than silently gone.
+    const [row] = attachmentRows(db)
+    expect(row.storage_path).toBeNull()
+    expect(row.skipped_reason).toBe('rehost_failed')
+    expect(row.filename).toBe('invoice.pdf')
+    expect(row.size_bytes).toBe(512)
+    // The reservation was handed back — a failed upload must not eat quota.
+    expect(usageFor(db, 'mb-hatch').bytes_used).toBe(0)
+  })
+
+  it('files the message even when the whole attachment table is unavailable', async () => {
+    db._state.fail['email_ticket_attachments:insert'] = { message: 'table gone' }
+    db._state.fail['email_ticket_attachments:select'] = { message: 'table gone' }
+
+    const res = await post(withAttachments([file()]))
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).ticket_id).toBe('new-ticket')
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+  })
+
+  it('writes no attachment rows for a mail that carries none', async () => {
+    await post(inbound())
+    expect(attachmentRows(db)).toEqual([])
+    expect(db.rpcs.filter(r => r.fn === 'add_email_storage_bytes')).toEqual([])
   })
 })
 
