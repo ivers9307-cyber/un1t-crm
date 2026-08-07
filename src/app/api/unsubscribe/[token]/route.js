@@ -157,9 +157,11 @@ export async function POST(request, props) {
   // On a scoped opt-out it would be a lie: the person still receives mail from
   // their other locations, and this flag blocks manual staff sends everywhere.
   // Retiring the column entirely is PR 5, with the five readers that use it.
-  if (updates.email_marketing === false && !scopeLocationId) {
-    await db.from('contacts').update({ email_status: 'unsubscribed' }).eq('id', pref.contact_id)
-  }
+  // LOCCOMMS.5 — the global email_status stamp is GONE. The opt-out is recorded
+  // in contact_location_preferences (globally, the mig 489 trigger fans it to
+  // every location), and email_status now carries reputation only.
+  //   PR 4 note retained: on a SCOPED opt-out this stamp was already skipped,
+  //   because it would have blocked manual sends from every other location too.
 
   return NextResponse.json({
     success: true,

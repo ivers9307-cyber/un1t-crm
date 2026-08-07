@@ -179,7 +179,10 @@ export async function PUT(request, props) {
 
   // Update contact email_status if email_marketing was changed
   if (typeof updates.email_marketing === 'boolean') {
-    const contactUpdate = { email_status: updates.email_marketing ? 'active' : 'unsubscribed' }
+    // LOCCOMMS.5 — no longer stamps 'unsubscribed'. email_status carries
+    // reputation only (active | bounced | complained); the opt-out itself lives
+    // in contact_location_preferences.
+    const contactUpdate = updates.email_marketing ? { email_status: 'active' } : null
     // EMAIL-HYGIENE.1 — explicit re-consent also clears the engagement-
     // hygiene suppression stamp (contacts.email_suppressed_at, mig 395):
     // a contact actively saying "send me marketing" outranks our

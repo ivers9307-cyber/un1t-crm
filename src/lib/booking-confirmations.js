@@ -151,7 +151,11 @@ async function sendEmailConfirmation(db, booking, ctx) {
   }
 
   const c = booking.contacts
-  if (c?.email_status && ['bounced', 'complained', 'unsubscribed'].includes(c.email_status)) {
+  // LOCCOMMS.5 — 'unsubscribed' removed deliberately. This is a TRANSACTIONAL
+  // send: someone who booked a class must get the confirmation regardless of
+  // whether they left a marketing list. Blocking it was always wrong; the
+  // email_administrative gate below is the correct control.
+  if (c?.email_status && ['bounced', 'complained'].includes(c.email_status)) {
     return { status: 'skipped', reason: `email_status=${c.email_status}` }
   }
   const prefs = c?.contact_preferences

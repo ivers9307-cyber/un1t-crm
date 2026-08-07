@@ -177,7 +177,7 @@ export async function PATCH(request, props) {
   if (typeof updates.email_marketing === 'boolean') {
     await db
       .from('contacts')
-      .update({ email_status: updates.email_marketing ? 'active' : 'unsubscribed' })
+      .update({ email_status: 'active' })   // LOCCOMMS.5 — reputation only; never stamp 'unsubscribed'
       .eq('id', params.id)
   }
 

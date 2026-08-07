@@ -49,9 +49,19 @@ import { hasPermission, hasMobilePermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { sendTransactionalEmail } from '@/lib/postmark'
 
-function mockDb({ contact, contactError = null } = {}) {
+function mockDb({ contact, contactError = null, locPref = { email_marketing: true } } = {}) {
   const calls = { activityInsert: [] }
   function from(table) {
+    // LOCCOMMS.5 — the consent gate moved off email_status onto the contact's
+    // row for its own location. Defaults to opted-in so existing tests keep
+    // exercising their original subject.
+    if (table === 'contact_location_preferences') {
+      const maybeSingle = vi.fn(() => Promise.resolve({ data: locPref, error: null }))
+      const eq2 = vi.fn(() => ({ maybeSingle }))
+      const eq1 = vi.fn(() => ({ eq: eq2 }))
+      const select = vi.fn(() => ({ eq: eq1 }))
+      return { select }
+    }
     if (table === 'contacts') {
       const single = vi.fn(() => Promise.resolve(contactError ? { data: null, error: contactError } : { data: contact, error: null }))
       const eq = vi.fn(() => ({ single }))
@@ -122,9 +132,27 @@ describe('POST /api/contacts/[id]/email', () => {
     expect(res.status).toBe(400)
   })
 
-  it('returns 400 when the email_status is blocked', async () => {
+  it('returns 400 when the email_status is a REPUTATION block', async () => {
+    // LOCCOMMS.5 — 'unsubscribed' is no longer an email_status. Reputation
+    // states (bounced/complained) are what this gate is for now.
     getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
-    createServerClient.mockReturnValue(mockDb({ contact: { ...CONTACT, email_status: 'unsubscribed' } }))
+    createServerClient.mockReturnValue(mockDb({ contact: { ...CONTACT, email_status: 'bounced' } }))
+    const res = await POST(req(), { params: { id: 'c1' } })
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 when the contact has opted out at THIS location', async () => {
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
+    createServerClient.mockReturnValue(mockDb({ contact: CONTACT, locPref: { email_marketing: false } }))
+    const res = await POST(req(), { params: { id: 'c1' } })
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 when the contact is not on this location\u2019s list at all', async () => {
+    // Row absent = that location may never send, matching the INNER join in
+    // contact_location_audience.
+    getCurrentUser.mockResolvedValue({ id: 'u1', role: 'manager', locations: [{ id: 'loc-A' }] })
+    createServerClient.mockReturnValue(mockDb({ contact: CONTACT, locPref: null }))
     const res = await POST(req(), { params: { id: 'c1' } })
     expect(res.status).toBe(400)
   })

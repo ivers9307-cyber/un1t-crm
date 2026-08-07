@@ -40,7 +40,16 @@ const EmailBodySchema = z.object({
 
 // Hard email statuses that block any send (same family the broadcast
 // + reminder gates use).
-const BLOCKED_EMAIL_STATUSES = ['bounced', 'complained', 'unsubscribed']
+// LOCCOMMS.5 — 'unsubscribed' is GONE from this list. email_status now carries
+// reputation only (active | bounced | complained); "unsubscribed" became a
+// per-location consent state in PR 1-4 and a single global flag can no longer
+// answer "unsubscribed from WHICH business?".
+//
+// The consent check is NOT dropped, it MOVED — see the per-location gate below.
+// This route never fetched email_marketing, so email_status was its only
+// consent gate; removing it without a replacement would have un-blocked manual
+// staff sends to everyone who unsubscribed.
+const BLOCKED_EMAIL_STATUSES = ['bounced', 'complained']
 
 function escapeHtml(s) {
   return String(s)
@@ -94,7 +103,26 @@ export async function POST(request, props) {
   if (contact.email_status && BLOCKED_EMAIL_STATUSES.includes(contact.email_status)) {
     return NextResponse.json({
       success: false,
-      error: `Cannot send — contact's email status is '${contact.email_status}'. They've bounced, complained, or unsubscribed.`,
+      error: `Cannot send — contact's email status is '${contact.email_status}'. They've bounced or complained.`,
+    }, { status: 400 })
+  }
+
+  // LOCCOMMS.5 — the consent gate, now per-location. A staff member sends from
+  // the contact's own location, so that is the list whose consent applies. No
+  // row means they are not on that location's list at all: row absent = never
+  // send, matching the INNER join in contact_location_audience.
+  const { data: locPref } = await db
+    .from('contact_location_preferences')
+    .select('email_marketing')
+    .eq('contact_id', contact.id)
+    .eq('location_id', contact.location_id)
+    .maybeSingle()
+  if (locPref?.email_marketing !== true) {
+    return NextResponse.json({
+      success: false,
+      error: locPref
+        ? 'Cannot send — this contact has unsubscribed from marketing email at this location.'
+        : 'Cannot send — this contact is not on this location’s email list.',
     }, { status: 400 })
   }
 
