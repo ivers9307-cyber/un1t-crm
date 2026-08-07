@@ -271,7 +271,13 @@ export async function runSequences({ now = new Date() } = {}) {
       // Reload the parent sequence + the contact in one go.
       const [{ data: sequence }, { data: contact }] = await Promise.all([
         db.from('email_sequences').select('*').eq('id', enrollment.sequence_id).single(),
-        db.from('contacts').select('*, contact_preferences(unsubscribe_token)').eq('id', enrollment.contact_id).single(),
+        db.from('contacts')
+          // LOCCOMMS.5 — contact_location_preferences is REQUIRED here: the step
+          // gates resolve the row for sequence.location_id and treat a missing row
+          // as "do not send". Drop this embed and every sequence step silently
+          // skips.
+          .select('*, contact_preferences(unsubscribe_token), contact_location_preferences(location_id, email_marketing, sms_marketing, whatsapp_marketing)')
+          .eq('id', enrollment.contact_id).single(),
       ])
       if (!sequence || !contact) {
         await db.from('sequence_enrollments').update({

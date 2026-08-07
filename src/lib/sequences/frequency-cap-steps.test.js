@@ -90,6 +90,12 @@ const emailContact = (overrides = {}) => ({
   email_status: 'active',
   email_suppressed_at: null,
   contact_preferences: [{ unsubscribe_token: 'tok-1' }],
+  // LOCCOMMS.5 — steps gate on the row for sequence.location_id ('loc-1').
+  // Without it the gate correctly refuses to send, which is what made these
+  // tests fail when the per-location gate landed.
+  contact_location_preferences: [{
+    location_id: 'loc-1', email_marketing: true, sms_marketing: true, whatsapp_marketing: true,
+  }],
   ...overrides,
 })
 const waContact = (overrides = {}) => ({
@@ -97,6 +103,9 @@ const waContact = (overrides = {}) => ({
   wa_phone: '+353871234567',
   whatsapp_marketing: true,
   wa_status: 'active',
+  contact_location_preferences: [{
+    location_id: 'loc-1', email_marketing: true, sms_marketing: true, whatsapp_marketing: true,
+  }],
   ...overrides,
 })
 const sequence = { id: 'seq-1', name: 'Nudge', location_id: 'loc-1' }
@@ -142,7 +151,7 @@ describe('sendEmailStep — frequency cap', () => {
 
   it('consent gate wins over the cap: unconsented + capped = recorded SKIP, not deferral', async () => {
     const { db, statements } = makeDb(route)
-    const contact = emailContact({ email_marketing: false, last_marketing_touch_at: hoursAgo(2) })
+    const contact = emailContact({ email_marketing: false, contact_location_preferences: [{ location_id: 'loc-1', email_marketing: false, sms_marketing: false, whatsapp_marketing: false }], last_marketing_touch_at: hoursAgo(2) })
 
     const result = await sendEmailStep(db, { enrollment: {}, step: emailStep, sequence, contact, frequencyCap: CAP_ON })
 
