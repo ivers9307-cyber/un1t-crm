@@ -23,6 +23,7 @@
 
 import { logWarn } from './log'
 import { splitName } from './name-utils'
+import { escapeLikePattern } from './like-escape'
 
 /**
  * Find an existing contact at the location with the given email,
@@ -82,7 +83,7 @@ async function findContactInOrg(db, locationId, normalisedEmail) {
   const { data: match } = await db
     .from('contacts')
     .select('id')
-    .ilike('email', normalisedEmail)
+    .ilike('email', escapeLikePattern(normalisedEmail))
     .in('location_id', ids)
     .maybeSingle()
   return match?.id || null
@@ -96,11 +97,18 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
 
   try {
     // Match at this location first.
+    //
+    // escapeLikePattern on all three lookups here: `email` arrives from PUBLIC
+    // forms (leads, class-booking, host-list subscribe, event/race register).
+    // Unescaped, a wildcard address resolves to somebody else's contact and the
+    // caller then links a team_member / lead / booking to that stranger — the
+    // same IDOR the restrictToLocation flag below exists to prevent, reached by
+    // a different route. See src/lib/like-escape.js.
     const { data: existing } = await db
       .from('contacts')
       .select('id')
       .eq('location_id', locationId)
-      .ilike('email', normalised)
+      .ilike('email', escapeLikePattern(normalised))
       .maybeSingle()
     if (existing?.id) return existing.id
 
@@ -120,7 +128,7 @@ export async function findOrCreateRaceContact({ db, locationId, email, name = nu
       const { data: anywhere } = await db
         .from('contacts')
         .select('id')
-        .ilike('email', normalised)
+        .ilike('email', escapeLikePattern(normalised))
         .maybeSingle()
       if (anywhere?.id) return anywhere.id
     }

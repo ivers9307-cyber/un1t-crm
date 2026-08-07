@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { findOrCreateRaceContact } from './race-contact-linking'
+import { ilikeMatches } from './like-escape.test-helpers'
 
 // Minimal chainable db mock. The helper issues two distinct contacts SELECTs:
 //   location-scoped: .eq('location_id', X).ilike('email', Y).maybeSingle()
@@ -65,9 +66,12 @@ function makeConstrainedDb({ contacts = [], locations = [] }) {
       select() { return q },
       eq(col, val) { q._rows = q._rows.filter((r) => r[col] === val); return q },
       in(col, vals) { q._rows = q._rows.filter((r) => vals.includes(r[col])); return q },
+      // Real LIKE semantics, not lower(a) === lower(b): the equality form is
+      // what the call site MEANS but not what Postgres does, and modelling it
+      // as equality is what let the 2026-08-07 wildcard bug through a green
+      // suite. See src/lib/like-escape.test-helpers.js.
       ilike(col, val) {
-        const want = String(val).toLowerCase()
-        q._rows = q._rows.filter((r) => String(r[col] ?? '').toLowerCase() === want)
+        q._rows = q._rows.filter((r) => ilikeMatches(val, r[col]))
         return q
       },
       maybeSingle: async () =>
@@ -229,5 +233,89 @@ describe('findOrCreateRaceContact — insertFields', () => {
     })
     expect(id2).toBe('existing-contact')
     expect(matched.calls.inserted).toBeNull()
+  })
+})
+
+// ── LIKE wildcards in a public-form email (2026-08-07) ──────────────
+// Every caller of findOrCreateRaceContact on a public route (leads,
+// class-booking, host-list subscribe, event/race register) passes an
+// operator-untrusted email. The lookups used a bare .ilike(), so the pattern —
+// not the address — decided which contact got linked. See src/lib/like-escape.js.
+describe('findOrCreateRaceContact — LIKE wildcards cannot select a contact', () => {
+  it('an address containing "_" does not link a DIFFERENT contact', async () => {
+    const { db, state } = makeConstrainedDb({
+      contacts: [{ id: 'lookalike', location_id: STILLORGAN, email: 'axb@example.com' }],
+      locations: LOCATIONS,
+    })
+
+    const id = await findOrCreateRaceContact({
+      db, locationId: STILLORGAN, email: 'a_b@example.com', name: 'Ada B', restrictToOrg: true,
+    })
+
+    expect(id).not.toBe('lookalike')
+    // No match → a new contact is created for the real address.
+    expect(state.insertAttempts).toHaveLength(1)
+    expect(state.insertAttempts[0]).toMatchObject({ email: 'a_b@example.com' })
+  })
+
+  it('"%@domain" does not link every contact at that domain', async () => {
+    const { db, state } = makeConstrainedDb({
+      contacts: [
+        { id: 'alice', location_id: STILLORGAN, email: 'alice@example.com' },
+        { id: 'bob', location_id: STILLORGAN, email: 'bob@example.com' },
+      ],
+      locations: LOCATIONS,
+    })
+
+    const id = await findOrCreateRaceContact({
+      db, locationId: STILLORGAN, email: '%@example.com', name: 'Nobody', restrictToOrg: true,
+    })
+
+    expect(id).not.toBe('alice')
+    expect(id).not.toBe('bob')
+    expect(state.insertAttempts[0]).toMatchObject({ email: '%@example.com' })
+  })
+
+  it('"%@%.%" does not reach across locations on the global fallback', async () => {
+    // The unrestricted path queries contacts with NO location filter, so an
+    // unescaped wildcard there could link any contact in the estate.
+    const { db } = makeConstrainedDb({
+      contacts: [{ id: 'ccf-contact', location_id: CCF, email: 'buyer@ccfautos.com' }],
+      locations: LOCATIONS,
+    })
+
+    const id = await findOrCreateRaceContact({
+      db, locationId: STILLORGAN, email: '%@%.%', name: 'Nobody',
+    })
+
+    expect(id).not.toBe('ccf-contact')
+  })
+
+  it('still links a genuine mixed-case match (escaping is behaviour-preserving)', async () => {
+    const { db, state } = makeConstrainedDb({
+      contacts: [{ id: 'real', location_id: STILLORGAN, email: 'Garrett07@Hotmail.com' }],
+      locations: LOCATIONS,
+    })
+
+    const id = await findOrCreateRaceContact({
+      db, locationId: STILLORGAN, email: 'garrett07@hotmail.com', name: 'Garrett', restrictToOrg: true,
+    })
+
+    expect(id).toBe('real')
+    expect(state.insertAttempts).toHaveLength(0)
+  })
+
+  it('still links an address that genuinely contains an underscore', async () => {
+    const { db, state } = makeConstrainedDb({
+      contacts: [{ id: 'underscored', location_id: STILLORGAN, email: 'a_b@example.com' }],
+      locations: LOCATIONS,
+    })
+
+    const id = await findOrCreateRaceContact({
+      db, locationId: STILLORGAN, email: 'a_b@example.com', name: 'Ada B', restrictToOrg: true,
+    })
+
+    expect(id).toBe('underscored')
+    expect(state.insertAttempts).toHaveLength(0)
   })
 })

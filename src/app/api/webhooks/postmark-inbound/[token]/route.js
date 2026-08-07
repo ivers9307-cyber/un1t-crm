@@ -80,6 +80,7 @@ import {
 } from '@/lib/email-inbox'
 import { resolveMailboxByRecipient } from '@/lib/email-mailboxes'
 import { resolveTicketAction, ticketSubject, pickThreadedTicket } from '@/lib/email-tickets'
+import { escapeLikePattern } from '@/lib/like-escape'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -227,9 +228,14 @@ export async function POST(request, { params }) {
   // location). Runs even when (a) matched but the send had no contact — and
   // fills contact linkage for recipient-only matches.
   if (!contactId) {
+    // escapeLikePattern: fromEmail comes off an UNAUTHENTICATED webhook and
+    // normalizeEmail admits both LIKE wildcards, so a bare .ilike() matched a
+    // PATTERN — `%@example.com` picked up every contact at the domain and
+    // `a_b@` also matched `axb@`. pickContact then chose one deterministically,
+    // linking a stranger's mail to a real contact's identity, silently.
     const { data: contacts, error: cErr } = await db.from('contacts')
       .select('id, location_id, created_at')
-      .ilike('email', fromEmail)
+      .ilike('email', escapeLikePattern(fromEmail))
       .limit(50)
     if (cErr) {
       console.error('[postmark-inbound] contacts lookup failed:', cErr.message)
