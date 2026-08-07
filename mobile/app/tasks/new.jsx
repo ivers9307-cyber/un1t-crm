@@ -5,7 +5,7 @@
 // path the web TasksPage uses). On save it lands on the assignee's "Your
 // tasks" list; a self-assigned task shows up on yours immediately.
 import { useState, useEffect, useCallback } from 'react'
-import { View, Text, ScrollView, Pressable, TextInput, ActivityIndicator } from 'react-native'
+import { View, Text, ScrollView, Pressable, TextInput } from 'react-native'
 import { Stack, useRouter } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { sdk } from '../../lib/sdk'

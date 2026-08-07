@@ -92,7 +92,7 @@ function Bubble({ msg, onNavigate }) {
 export default function AssistantChat() {
   const router = useRouter()
   const pathname = usePathname()
-  const { profile, activeLocation } = useAuth()
+  const { profile } = useAuth()
   const headerHeight = useHeaderHeight()
   const insets = useSafeAreaInsets()
 

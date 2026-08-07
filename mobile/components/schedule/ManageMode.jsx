@@ -4,7 +4,7 @@
 // and refetches on success. Time edits are delegated to the screen's existing
 // AdjustSheet via the onAdjust(shiftLike) callback.
 import { useState, useEffect, useCallback } from 'react'
-import { View, Text, Pressable, ActivityIndicator, Alert } from 'react-native'
+import { View, Text, ActivityIndicator, Alert } from 'react-native'
 import { useFocusEffect } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import {

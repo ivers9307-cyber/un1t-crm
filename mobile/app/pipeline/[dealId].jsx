@@ -105,7 +105,12 @@ export default function DealDetail() {
       setActivities(actRes.success ? actRes.data || [] : [])
       setNotes(noteRes.success ? noteRes.data || [] : [])
     }
-  }, [dealId, activeLocation])
+    // activeLocation is deliberately NOT a dependency: unlike the other detail
+    // screens (whatsapp/instagram/email), none of these three fetchers take a
+    // location — getDeal(dealId) resolves a deal by primary key, so a location
+    // switch cannot change the result. Keeping it here only re-ran the effect
+    // for nothing.
+  }, [dealId])
 
   useEffect(() => {
     setLoading(true)

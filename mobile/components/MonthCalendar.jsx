@@ -129,7 +129,7 @@ export default function MonthCalendar({ startDate, endDate, minDate, onChange })
         {weeks.map((week, wIdx) => (
           <View key={wIdx} className="flex-row">
             {week.map(day => {
-              const { disabled, isStart, isEnd, inRange, selected } =
+              const { disabled, inRange, selected } =
                 cellState(day.iso, day.inMonth)
               return (
                 <Pressable

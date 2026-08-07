@@ -219,14 +219,6 @@ function weekContainsToday(days) {
 // Agenda-style month view: groups weeks, skips days with no shifts,
 // shows a week header and per-day rows for days that have shifts.
 function MonthAgenda({ matrix, showLocation, onShiftPress }) {
-  const todayIso = (() => {
-    const now = new Date()
-    const y = now.getFullYear()
-    const m = String(now.getMonth() + 1).padStart(2, '0')
-    const day = String(now.getDate()).padStart(2, '0')
-    return `${y}-${m}-${day}`
-  })()
-
   // Build week groups that have at least one shift day
   const weekGroups = matrix
     .map(days => {
