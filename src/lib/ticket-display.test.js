@@ -15,12 +15,20 @@ import {
   isArchivedStatus,
   priorityMeta,
   messageKind,
+  messageRecipients,
+  replyActionLabel,
   deliveryMeta,
   deliveryTimestamp,
   requesterLabel,
   initialsOf,
   assigneeLabel,
   mailboxLabel,
+  threadRefreshMs,
+  threadSignature,
+  newestMessageAt,
+  THREAD_SETTLE_MS,
+  THREAD_STEADY_MS,
+  THREAD_SETTLE_WINDOW_MS,
   NO_MAILBOX_EMPTY,
   relativeTime,
   messageTimestamp,
@@ -260,5 +268,151 @@ describe('deliveryMeta (EMAIL-DELIVERY.1)', () => {
     expect(deliveryTimestamp({})).toBe('')
     expect(deliveryTimestamp(null)).toBe('')
     expect(deliveryTimestamp({ delivery_status_at: '2026-08-07T09:15:00Z' })).toBeTruthy()
+  })
+})
+
+// ── EMAIL-CC.1 — recipient lines and the button label ────────────────
+describe('messageRecipients', () => {
+  it('omits a single To — the bubble already says "Sent to …"', () => {
+    expect(messageRecipients({ to_emails: ['ada@example.com'] })).toEqual([])
+  })
+
+  it('shows a To line once there is more than one recipient', () => {
+    const [line] = messageRecipients({ to_emails: ['ada@example.com', 'bob@example.com'] })
+    expect(line).toMatchObject({ key: 'to', label: 'To', staffOnly: false })
+    expect(line.addresses).toEqual(['ada@example.com', 'bob@example.com'])
+  })
+
+  it('shows Cc, which every recipient of the email could see', () => {
+    const lines = messageRecipients({ to_emails: ['ada@x.com'], cc_emails: ['bob@x.com'] })
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatchObject({ key: 'cc', staffOnly: false })
+  })
+
+  // BCC MUST BE MARKED. Rendered beside To and Cc with no distinction it
+  // implies the other recipients saw it. They did not, and never will.
+  it('marks Bcc staffOnly and explains why', () => {
+    const [line] = messageRecipients({ to_emails: ['a@x.com'], bcc_emails: ['secret@x.com'] })
+    expect(line).toMatchObject({ key: 'bcc', staffOnly: true })
+    expect(line.note).toMatch(/only staff/i)
+  })
+
+  it('reads the scalar to_email on a row written before mig 499', () => {
+    expect(messageRecipients({ to_email: 'ada@x.com' })).toEqual([])
+    const [line] = messageRecipients({ to_email: 'ada@x.com', cc_emails: ['bob@x.com'] })
+    expect(line.key).toBe('cc')
+  })
+
+  it('omits empty lists rather than rendering a blank Cc', () => {
+    expect(messageRecipients({ to_emails: ['a@x.com'], cc_emails: [], bcc_emails: [] })).toEqual([])
+    expect(messageRecipients(null)).toEqual([])
+  })
+})
+
+describe('replyActionLabel', () => {
+  // A bare "Reply" on a four-person thread is what causes the mistake the
+  // derived-mode rule exists to prevent.
+  it('names the count on a multi-party thread', () => {
+    expect(replyActionLabel({ to: ['a@x.com', 'b@x.com', 'c@x.com', 'd@x.com'], mode: 'reply_all' }))
+      .toBe('Reply All (4 people)')
+  })
+
+  it('is a plain Reply for one person', () => {
+    expect(replyActionLabel({ to: ['a@x.com'], mode: 'reply' })).toBe('Reply')
+  })
+
+  it('counts addresses the operator added on top', () => {
+    expect(replyActionLabel({ to: ['a@x.com'], mode: 'reply' }, 2)).toBe('Reply All (3 people)')
+  })
+
+  // Null means the server could not work the set out. Inventing a count we do
+  // not have would be worse than not showing one.
+  it('degrades to the plain label when the set is unknown', () => {
+    expect(replyActionLabel(null)).toBe('Reply')
+  })
+})
+
+// EMAIL-ATTACH-RACE.1 — the cadence an open thread re-reads itself at.
+//
+// WHAT THESE TESTS PROVE: the schedule, and only the schedule. That a young
+// thread asks to be read again in seconds and a quiet one in a minute is the
+// decision that closes the attachment race, and it is the part that can be
+// pinned down without a browser. What they do NOT prove is that the component
+// honours it, that the request goes out, or that the row is there when it
+// arrives — that is a live check (see the PR notes).
+describe('threadRefreshMs', () => {
+  const NOW = Date.parse('2026-08-07T21:00:00.000Z')
+  const at = (iso) => [{ id: 'm1', created_at: iso }]
+
+  // The whole point. A message that just landed may still be growing
+  // attachment rows, so the next read has to be soon enough that a member's
+  // photo appears while the operator is still looking at the message.
+  it('polls fast while the newest message is still settling', () => {
+    expect(threadRefreshMs(at('2026-08-07T20:59:58.000Z'), NOW)).toBe(THREAD_SETTLE_MS)
+  })
+
+  it('drops to the steady cadence once nothing is recent', () => {
+    expect(threadRefreshMs(at('2026-08-07T20:00:00.000Z'), NOW)).toBe(THREAD_STEADY_MS)
+  })
+
+  // The boundary itself, both sides — an off-by-one here is a thread that
+  // stops looking exactly when it should still be looking.
+  it('treats the settle window as exclusive at its far edge', () => {
+    const justInside = new Date(NOW - THREAD_SETTLE_WINDOW_MS + 1).toISOString()
+    const exactlyOut = new Date(NOW - THREAD_SETTLE_WINDOW_MS).toISOString()
+    expect(threadRefreshMs(at(justInside), NOW)).toBe(THREAD_SETTLE_MS)
+    expect(threadRefreshMs(at(exactlyOut), NOW)).toBe(THREAD_STEADY_MS)
+  })
+
+  // Clock skew between the browser and the database is real and small. Reading
+  // again costs one request; not reading again is the bug back.
+  it('treats a future timestamp as brand new rather than ancient', () => {
+    expect(threadRefreshMs(at('2026-08-07T21:00:30.000Z'), NOW)).toBe(THREAD_SETTLE_MS)
+  })
+
+  it('uses the steady cadence for an empty or unparseable thread', () => {
+    expect(threadRefreshMs([], NOW)).toBe(THREAD_STEADY_MS)
+    expect(threadRefreshMs(at('not a date'), NOW)).toBe(THREAD_STEADY_MS)
+    expect(threadRefreshMs(undefined, NOW)).toBe(THREAD_STEADY_MS)
+  })
+
+  // The route returns messages oldest first. If that ever changes, a cadence
+  // derived from the last element would silently go slow — which is exactly
+  // the failure this feature exists to remove, so it scans instead.
+  it('finds the newest message wherever it sits in the array', () => {
+    const rows = [
+      { id: 'b', created_at: '2026-08-07T20:59:59.000Z' },
+      { id: 'a', created_at: '2026-08-07T18:00:00.000Z' },
+    ]
+    expect(newestMessageAt(rows)).toBe(Date.parse('2026-08-07T20:59:59.000Z'))
+    expect(threadRefreshMs(rows, NOW)).toBe(THREAD_SETTLE_MS)
+  })
+})
+
+describe('threadSignature', () => {
+  // An attachment row landing on a message already on screen is the whole
+  // point of the poll — and the one case where the view must NOT scroll.
+  it('is unchanged when a re-read only fills in an attachment', () => {
+    const before = [{ id: 'm1', attachments: [] }]
+    const after = [{ id: 'm1', attachments: [{ id: 'a1' }] }]
+    expect(threadSignature(after)).toBe(threadSignature(before))
+  })
+
+  it('changes when a message is actually added', () => {
+    const before = [{ id: 'm1' }]
+    const after = [{ id: 'm1' }, { id: 'm2' }]
+    expect(threadSignature(after)).not.toBe(threadSignature(before))
+  })
+
+  // Same length, different newest message — a poll that raced a send could
+  // land on this, and treating it as "no change" would strand the operator
+  // above their own reply.
+  it('changes when the newest message is replaced', () => {
+    expect(threadSignature([{ id: 'm2' }])).not.toBe(threadSignature([{ id: 'm1' }]))
+  })
+
+  it('survives an empty thread', () => {
+    expect(threadSignature([])).toBe(threadSignature([]))
+    expect(threadSignature(undefined)).toBe(threadSignature([]))
   })
 })

@@ -134,6 +134,46 @@ export function ticketMessageKind(message) {
   return message.direction === 'outbound' ? 'outbound' : 'inbound'
 }
 
+// ── Recipients (EMAIL-CC.1) ──────────────────────────────────────────
+//
+// A re-statement of src/lib/ticket-display.js's messageRecipients, for the
+// reason in this file's header. MOBILE SHOWS RECIPIENTS BUT DOES NOT EDIT
+// THEM: the reply box here posts `{ text, internal }` and nothing else, so the
+// server derives everybody on the thread and includes them — a mobile reply is
+// automatically a reply-all on a multi-party thread, which is the safe default
+// and the same one web gets. A recipient EDITOR (chip input, Cc/Bcc toggle) is
+// deliberately not on this screen: it is the quick-answer surface, it needs
+// real device QA before it carries a confidentiality control, and a half-built
+// one that silently dropped a Cc would be worse than none.
+//
+// THE BCC RULE IS THE SAME ONE AND IT IS WHY BCC IS RENDERED AT ALL. This
+// screen is behind the identical gate as the web thread (location + the
+// email_inbox key + a grant on the ticket's mailbox), so the sender seeing
+// their own blind-copy list is correct. `staffOnly` exists so the screen can
+// say, in words, that no recipient of the email could see it.
+/**
+ * The To / Cc / Bcc lines under a message, in header order. Empty lists are
+ * omitted — "Cc:" with nothing after it reads as a Cc that failed.
+ *
+ * @returns {{ key: string, label: string, addresses: string[], staffOnly: boolean }[]}
+ */
+export function ticketMessageRecipients(message) {
+  if (!message) return []
+  const list = (v) => (Array.isArray(v) ? v.filter(Boolean) : [])
+  // Rows written before mig 499 carry only the scalar to_email.
+  const to = list(message.to_emails).length
+    ? list(message.to_emails)
+    : (message.to_email ? [message.to_email] : [])
+  const out = []
+  // A single To is already stated by the bubble's own "Sent to …" line.
+  if (to.length > 1) out.push({ key: 'to', label: 'To', addresses: to, staffOnly: false })
+  const cc = list(message.cc_emails)
+  if (cc.length) out.push({ key: 'cc', label: 'Cc', addresses: cc, staffOnly: false })
+  const bcc = list(message.bcc_emails)
+  if (bcc.length) out.push({ key: 'bcc', label: 'Bcc', addresses: bcc, staffOnly: true })
+  return out
+}
+
 // ── Delivery status (EMAIL-DELIVERY.1) ───────────────────────────────
 //
 // A re-statement of src/lib/ticket-display.js's deliveryMeta, for the reason
@@ -362,4 +402,51 @@ export function ticketAttachmentIcon(mimeType, filename) {
   if (mime.includes('zip') || mime.includes('compressed') || ['zip', 'rar', '7z', 'gz'].includes(ext)) return 'archive-outline'
   if (mime.includes('word') || mime === 'application/msword' || ['doc', 'docx', 'rtf', 'odt'].includes(ext)) return 'document-outline'
   return 'attach-outline'
+}
+
+// ── How often an OPEN thread re-reads itself (EMAIL-ATTACH-RACE.1) ───
+//
+// The web statement of this is threadRefreshMs in src/lib/ticket-display.js,
+// with the full account of the race. The short version: the inbound webhook
+// files the message row FIRST and writes email_ticket_attachments AFTER it —
+// the attachment rows carry a foreign key to the message, and attachment work
+// is never allowed to delay filing the mail. So a thread opened inside that
+// window is a correct read of an incomplete moment, and until this existed it
+// was also the LAST read, so a member's photo stayed invisible until the
+// screen was left and re-entered.
+//
+// Mobile had it worse than web: the screen loaded once on mount and had no
+// poll and no focus refresh at all, so the thread was frozen for as long as it
+// stayed open.
+//
+// Two speeds — fast while the newest message is young enough that rows may
+// still be arriving, slow otherwise. The numbers match web on purpose: an
+// operator watching the same ticket on a phone and a laptop should not see one
+// of them catch up first for reasons neither of them can see.
+
+export const THREAD_SETTLE_MS = 5_000
+export const THREAD_STEADY_MS = 60_000
+export const THREAD_SETTLE_WINDOW_MS = 120_000
+
+/** The newest `created_at` in a thread, as epoch ms, or null. */
+export function newestMessageAt(messages = []) {
+  let newest = null
+  for (const m of messages || []) {
+    const t = Date.parse(m?.created_at)
+    if (Number.isFinite(t) && (newest === null || t > newest)) newest = t
+  }
+  return newest
+}
+
+/**
+ * Milliseconds until an open thread should re-read itself. An empty thread
+ * gets the steady cadence; a future timestamp (clock skew) counts as brand
+ * new, erring towards reading again rather than missing the attachment.
+ */
+export function threadRefreshMs(messages = [], now = Date.now()) {
+  const newest = newestMessageAt(messages)
+  if (newest === null) return THREAD_STEADY_MS
+  const age = now - newest
+  if (age < 0) return THREAD_SETTLE_MS
+  return age < THREAD_SETTLE_WINDOW_MS ? THREAD_SETTLE_MS : THREAD_STEADY_MS
 }

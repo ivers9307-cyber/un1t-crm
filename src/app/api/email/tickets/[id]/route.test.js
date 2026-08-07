@@ -217,3 +217,94 @@ describe('GET /api/email/tickets/[id] — delivery status reaches the thread', (
     })
   })
 })
+
+// ── EMAIL-CC.1 — recipients on the thread, and who a reply would reach ──
+//
+// TWO SEPARATE CLAIMS, and conflating them is the whole risk of this route.
+//   1. bcc_emails IS returned. The only caller is a staff member who already
+//      passed the ticket gate, and a colleague who cannot see whether
+//      accounts@ was blind-copied on a refund reply is working blind.
+//   2. bcc_emails is STILL never a recipient. reply_recipients is derived from
+//      From/To/Cc only, so the set this route hands the composer is the set
+//      the reply route will send to — computed by the same functions, so the
+//      two cannot disagree.
+describe('GET …/[id] — recipients (EMAIL-CC.1)', () => {
+  const CC_INBOUND = {
+    id: 'm-cc', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+    direction: 'inbound', is_internal_note: false, text_body: 'Question',
+    from_email: 'member@example.com',
+    to_email: MB_STUDIO.address, to_emails: [MB_STUDIO.address],
+    cc_emails: ['colleague@example.com'], bcc_emails: [],
+    created_at: '2026-08-06T09:00:00Z',
+  }
+  const OUTBOUND_WITH_BCC = {
+    id: 'm-bcc', ticket_id: T_STUDIO.id, location_id: T_STUDIO.location_id,
+    direction: 'outbound', is_internal_note: false, text_body: 'Answered',
+    from_email: 'hello@un1t.ie',
+    to_email: 'member@example.com', to_emails: ['member@example.com'],
+    cc_emails: ['colleague@example.com'], bcc_emails: ['secret@example.com'],
+    created_at: '2026-08-06T10:00:00Z',
+  }
+
+  beforeEach(() => {
+    process.env.POSTMARK_FROM_EMAIL = 'UN1T <hello@un1t.ie>'
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [CC_INBOUND] }))
+  })
+
+  it('asks for the three recipient columns', async () => {
+    await get(T_STUDIO.id)
+    const [thread] = selectsFrom(db, 'email_inbox_messages')
+    for (const col of ['to_emails', 'cc_emails', 'bcc_emails']) {
+      expect(thread.columns).toContain(col)
+    }
+  })
+
+  it('returns the member’s Cc so the thread can show who is on it', async () => {
+    const res = await get(T_STUDIO.id)
+    const [msg] = (await res.json()).data.messages
+    expect(msg.cc_emails).toEqual(['colleague@example.com'])
+  })
+
+  // Claim 1: staff on the ticket see their own blind-copy list.
+  it('returns bcc_emails to the staff member on the ticket', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [OUTBOUND_WITH_BCC] }))
+    const res = await get(T_STUDIO.id)
+    const [msg] = (await res.json()).data.messages
+    expect(msg.bcc_emails).toEqual(['secret@example.com'])
+  })
+
+  // Claim 2: and it is still not a recipient of anything.
+  it('NEVER puts a bcc address into reply_recipients', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [OUTBOUND_WITH_BCC] }))
+    const res = await get(T_STUDIO.id)
+    const { reply_recipients: reply } = (await res.json()).data
+    expect(reply.to).toEqual(['member@example.com', 'colleague@example.com'])
+    expect(reply.to).not.toContain('secret@example.com')
+  })
+
+  it('derives reply_recipients from the latest message, minus our own addresses', async () => {
+    const res = await get(T_STUDIO.id)
+    const { reply_recipients: reply } = (await res.json()).data
+    expect(reply).toEqual({
+      to: ['member@example.com', 'colleague@example.com'],
+      mode: 'reply_all',
+    })
+  })
+
+  it('reports a one-person thread as a plain reply', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [{ ...CC_INBOUND, cc_emails: [] }],
+    }))
+    const res = await get(T_STUDIO.id)
+    expect((await res.json()).data.reply_recipients)
+      .toEqual({ to: ['member@example.com'], mode: 'reply' })
+  })
+
+  it('falls back to the requester on a ticket with no messages', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [] }))
+    const res = await get(T_STUDIO.id)
+    expect((await res.json()).data.reply_recipients)
+      .toEqual({ to: [T_STUDIO.requester_email], mode: 'reply' })
+  })
+})

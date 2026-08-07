@@ -8,6 +8,7 @@ import {
   ticketViewWire,
   isArchivedStatus,
   ticketMessageKind,
+  ticketMessageRecipients,
   ticketDeliveryMeta,
   requesterLabel,
   mailboxLabel,
@@ -16,6 +17,11 @@ import {
   formatAttachmentSize,
   ticketAttachmentSkippedLabel,
   ticketAttachmentIcon,
+  threadRefreshMs,
+  newestMessageAt,
+  THREAD_SETTLE_MS,
+  THREAD_STEADY_MS,
+  THREAD_SETTLE_WINDOW_MS,
 } from './email-tickets'
 
 describe('ticketMessageKind', () => {
@@ -278,6 +284,44 @@ describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
   })
 })
 
+// ── EMAIL-CC.1 — recipient lines on mobile ───────────────────────────
+//
+// Mobile SHOWS recipients and does not edit them: the reply box posts
+// `{ text, internal }`, so the server derives everybody on the thread and a
+// mobile reply on a multi-party thread is automatically a reply-all. What this
+// screen must get right is the RENDERING, and specifically that a Bcc line is
+// never mistaken for something the other recipients could see.
+describe('ticketMessageRecipients', () => {
+  it('omits a single To — the bubble already says "Sent to …"', () => {
+    expect(ticketMessageRecipients({ to_emails: ['ada@example.com'] })).toEqual([])
+  })
+
+  it('shows a To line once there is more than one recipient', () => {
+    const [line] = ticketMessageRecipients({ to_emails: ['ada@x.com', 'bob@x.com'] })
+    expect(line).toMatchObject({ key: 'to', label: 'To', staffOnly: false })
+  })
+
+  it('shows the member’s Cc — the reason inbound capture exists', () => {
+    const [line] = ticketMessageRecipients({ to_emails: ['a@x.com'], cc_emails: ['bob@x.com'] })
+    expect(line).toMatchObject({ key: 'cc', staffOnly: false })
+    expect(line.addresses).toEqual(['bob@x.com'])
+  })
+
+  it('marks Bcc staffOnly so the screen can say no recipient could see it', () => {
+    const [line] = ticketMessageRecipients({ to_emails: ['a@x.com'], bcc_emails: ['secret@x.com'] })
+    expect(line).toMatchObject({ key: 'bcc', staffOnly: true })
+  })
+
+  it('reads the scalar to_email on a row written before mig 499', () => {
+    const [line] = ticketMessageRecipients({ to_email: 'a@x.com', cc_emails: ['b@x.com'] })
+    expect(line.key).toBe('cc')
+  })
+
+  it('omits empty lists rather than rendering a blank Cc', () => {
+    expect(ticketMessageRecipients({ to_emails: ['a@x.com'], cc_emails: [], bcc_emails: [] })).toEqual([])
+    expect(ticketMessageRecipients(null)).toEqual([])
+  })
+})
 
 // ── Attachments (EMAIL-ATTACH-PREVIEW.1) ────────────────────────────
 //
@@ -341,5 +385,53 @@ describe('ticketAttachmentIcon', () => {
     expect(ticketAttachmentIcon(null, null)).toBe('attach-outline')
     expect(ticketAttachmentIcon('', 'noextension')).toBe('attach-outline')
     expect(ticketAttachmentIcon(undefined, undefined)).toBe('attach-outline')
+  })
+})
+
+// EMAIL-ATTACH-RACE.1 — mobile's copy of the thread re-read cadence. The
+// numbers must match web (src/lib/ticket-display.js): an operator watching one
+// ticket on a phone and a laptop should not see one of them catch up first.
+describe('threadRefreshMs', () => {
+  const NOW = Date.parse('2026-08-07T21:00:00.000Z')
+  const at = (iso) => [{ id: 'm1', created_at: iso }]
+
+  it('polls fast while the newest message is still settling', () => {
+    expect(threadRefreshMs(at('2026-08-07T20:59:58.000Z'), NOW)).toBe(THREAD_SETTLE_MS)
+  })
+
+  it('drops to the steady cadence once nothing is recent', () => {
+    expect(threadRefreshMs(at('2026-08-07T20:00:00.000Z'), NOW)).toBe(THREAD_STEADY_MS)
+  })
+
+  it('treats the settle window as exclusive at its far edge', () => {
+    const justInside = new Date(NOW - THREAD_SETTLE_WINDOW_MS + 1).toISOString()
+    const exactlyOut = new Date(NOW - THREAD_SETTLE_WINDOW_MS).toISOString()
+    expect(threadRefreshMs(at(justInside), NOW)).toBe(THREAD_SETTLE_MS)
+    expect(threadRefreshMs(at(exactlyOut), NOW)).toBe(THREAD_STEADY_MS)
+  })
+
+  it('treats a future timestamp as brand new rather than ancient', () => {
+    expect(threadRefreshMs(at('2026-08-07T21:00:30.000Z'), NOW)).toBe(THREAD_SETTLE_MS)
+  })
+
+  it('uses the steady cadence for an empty or unparseable thread', () => {
+    expect(threadRefreshMs([], NOW)).toBe(THREAD_STEADY_MS)
+    expect(threadRefreshMs(at('not a date'), NOW)).toBe(THREAD_STEADY_MS)
+  })
+
+  it('finds the newest message wherever it sits in the array', () => {
+    const rows = [
+      { id: 'b', created_at: '2026-08-07T20:59:59.000Z' },
+      { id: 'a', created_at: '2026-08-07T18:00:00.000Z' },
+    ]
+    expect(newestMessageAt(rows)).toBe(Date.parse('2026-08-07T20:59:59.000Z'))
+    expect(threadRefreshMs(rows, NOW)).toBe(THREAD_SETTLE_MS)
+  })
+
+  // The two platforms are separate statements of one rule (mobile cannot
+  // import src/lib). Drift is the failure mode, so it is asserted here.
+  it('agrees with the web constants', () => {
+    expect([THREAD_SETTLE_MS, THREAD_STEADY_MS, THREAD_SETTLE_WINDOW_MS])
+      .toEqual([5_000, 60_000, 120_000])
   })
 })

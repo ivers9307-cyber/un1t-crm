@@ -259,7 +259,28 @@ function markUnverified(address) {
  * one-to-one mail is not instrumented). Passing the flags again from here
  * would fork that rule into two places.
  *
- * EMAIL-OUTBOUND-ATTACH.1 — `attachments` is Postmark's own array shape
+ * ─────────────────────────────────────────────────────────────────────
+ * RECIPIENTS ARE NOT DECIDED HERE EITHER (EMAIL-CC.1).
+ *
+ * `to`/`cc`/`bcc` arrive already resolved, as the comma-separated wire strings
+ * `toPostmarkFields()` produces in src/lib/email-recipients.js. That file owns
+ * recipient POLICY — validation, case-insensitive dedupe across all three
+ * lists, exclusion of our own addresses, the 25-address cap — and this file
+ * owns TRANSPORT. Keeping the split means there is exactly one site where a
+ * resolved set becomes wire values, which is what makes the Bcc guarantee
+ * auditable; re-deriving or re-joining anything here would quietly become a
+ * second one.
+ *
+ * So all three are passed STRAIGHT THROUGH, untouched. In particular `bcc`
+ * goes to sendEmail's `bcc` parameter and nowhere else — it is never folded
+ * into `to`/`cc` and never written into `headers` (which carries threading
+ * anchors only). sendEmail sets it on Postmark's own `Bcc` API field, and
+ * Postmark does not put a Bcc header on the delivered message.
+ *
+ * ─────────────────────────────────────────────────────────────────────
+ * ATTACHMENTS ARE NOT DECIDED HERE EITHER (EMAIL-OUTBOUND-ATTACH.1).
+ *
+ * `attachments` is Postmark's own array shape
  * ({ Name, Content: base64, ContentType }), passed straight through to
  * sendEmail, which only adds the key when there is something to add. PURELY
  * ADDITIVE: omitting it (every pre-existing caller, and every send without
@@ -280,7 +301,10 @@ function markUnverified(address) {
  */
 export async function sendTicketEmail({
   mailboxAddress = null,
-  to, subject, htmlBody, textBody, tag, metadata, headers, attachments,
+  // EMAIL-CC.1 / EMAIL-OUTBOUND-ATTACH.1 — cc, bcc and attachments all default
+  // to undefined, so a caller that passes none of them (and every caller
+  // before those two tasks) produces a byte-identical sendEmail call.
+  to, cc, bcc, subject, htmlBody, textBody, tag, metadata, headers, attachments,
 }) {
   const serverToken = resolveInboxServerToken()
   if (!serverToken) {
@@ -305,6 +329,10 @@ export async function sendTicketEmail({
     try {
       const result = await sendEmail({
         to,
+        // EMAIL-CC.1 — pass-through, in the same shape they arrived. `bcc`
+        // reaches Postmark's `Bcc` field and nothing else; see the docblock.
+        cc,
+        bcc,
         subject,
         htmlBody,
         textBody,

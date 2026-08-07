@@ -171,6 +171,74 @@ export function messageKind(message) {
   return message.direction === 'outbound' ? 'outbound' : 'inbound'
 }
 
+// ── Recipients (EMAIL-CC.1) ──────────────────────────────────────────
+//
+// THE BUTTON LABEL IS THE SAFETY FEATURE. Reply and Reply All are not two
+// buttons here — the mode is derived from who is actually on the thread
+// (src/lib/email-recipients.js), so there is exactly one control and its job
+// is to say who it reaches BEFORE it is pressed. A bare "Reply" on a
+// four-person thread is what causes the mistake; "Reply All (4 people)" is
+// what stops it.
+//
+// `replyRecipients` is null when the server could not work the set out (an
+// own-address lookup blip). The honest label is then the plain one: the reply
+// route recomputes the truth at send time either way, and inventing a count we
+// do not have would be worse than not showing one.
+
+/**
+ * @param {{ to: string[], mode: 'reply'|'reply_all' } | null} replyRecipients
+ * @param {number} [added]  extra recipients the operator typed into To
+ * @returns {string}
+ */
+export function replyActionLabel(replyRecipients, added = 0) {
+  const count = (replyRecipients?.to?.length || 0) + added
+  if (count > 1) return `Reply All (${count} people)`
+  return 'Reply'
+}
+
+/**
+ * The recipient lines to render under a message, in header order.
+ *
+ * BCC IS MARKED `staffOnly` AND MUST BE RENDERED AS SUCH. The list is real —
+ * the sender is staff on this ticket and seeing who they blind-copied is the
+ * point of recording it — but it never went on the delivered message, so a
+ * surface that shows it beside To and Cc with no distinction implies the other
+ * recipients saw it. They did not, and never will.
+ *
+ * Empty lists are omitted rather than rendered blank: "Cc:" with nothing after
+ * it reads as a Cc that failed.
+ *
+ * @param {object|null} message
+ * @returns {{ key: string, label: string, addresses: string[], staffOnly: boolean, note?: string }[]}
+ */
+export function messageRecipients(message) {
+  if (!message) return []
+  const list = (v) => (Array.isArray(v) ? v.filter(Boolean) : [])
+  // Pre-EMAIL-CC.1 rows carry only the scalar to_email.
+  const to = list(message.to_emails).length
+    ? list(message.to_emails)
+    : (message.to_email ? [message.to_email] : [])
+  const out = []
+  if (to.length > 1) {
+    // A single To is already stated by the bubble's own "Sent to …" line;
+    // repeating it is noise. Two or more is information.
+    out.push({ key: 'to', label: 'To', addresses: to, staffOnly: false })
+  }
+  const cc = list(message.cc_emails)
+  if (cc.length) out.push({ key: 'cc', label: 'Cc', addresses: cc, staffOnly: false })
+  const bcc = list(message.bcc_emails)
+  if (bcc.length) {
+    out.push({
+      key: 'bcc',
+      label: 'Bcc',
+      addresses: bcc,
+      staffOnly: true,
+      note: 'Only staff on this ticket can see this — no recipient of the email could.',
+    })
+  }
+  return out
+}
+
 // ── Delivery status (EMAIL-DELIVERY.1) ───────────────────────────────
 //
 // THREE OUTCOMES AND A SILENCE, AND THE SILENCE IS THE SUBTLE ONE.
@@ -342,4 +410,98 @@ export function messageTimestamp(value) {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+// ── How often an OPEN thread re-reads itself (EMAIL-ATTACH-RACE.1) ───
+//
+// THE RACE THIS EXISTS TO CLOSE
+// The inbound webhook files the message row FIRST and writes
+// email_ticket_attachments AFTER it, deliberately: the attachment rows carry a
+// foreign key to the message, and the governing rule of that path is that
+// attachment work may never fail, delay or complicate the filing of the mail
+// (src/lib/email-attachments-server.js). So for as long as the Storage upload
+// takes, the thread is READABLE AND INCOMPLETE — a message whose photo has no
+// row yet.
+//
+// On the `create` path the ticket row is inserted before either, so the queue
+// can surface a brand-new ticket inside that window; an operator who clicks it
+// there gets a thread rendered from a correct read of an incomplete moment.
+// Nothing was wrong with the read. The bug was that it was the LAST one: the
+// thread was fetched once per selection and never again, so the photo stayed
+// invisible until the operator reloaded the page (live, 2026-08-07).
+//
+// WHY A CADENCE AND NOT A NOTIFICATION
+// The obvious alternative — have the webhook poke something after the
+// attachments land and have the client listen — puts the fix behind a step
+// that can fail. If that poke fails, the operator is back to a frozen thread
+// with no reload-free recovery. A thread that re-reads itself has no such
+// step: a slow upload, a retried webhook or a Storage blip is picked up by the
+// next read whenever it lands.
+//
+// TWO SPEEDS, because the two situations are not alike:
+//   • SETTLING — the newest message is minutes old, so rows belonging to it may
+//     still be arriving. Read often; this is the window the bug lives in, and
+//     it is bounded by how long a message stays young.
+//   • STEADY — nothing recent. Read at the same 60s cadence as the queue,
+//     purely so a colleague's reply or a status change is not stale forever.
+//
+// Pure and clock-injected like everything else here, so the schedule is a
+// tested decision rather than a number buried in a useEffect.
+
+/** Settling cadence: fast enough that a photo appears while it is still news. */
+export const THREAD_SETTLE_MS = 5_000
+/** Steady cadence — matches the queue's own poll. */
+export const THREAD_STEADY_MS = 60_000
+/**
+ * How long a message counts as "still settling". Generous on purpose: an
+ * attachment write normally completes in well under a second, and the cost of
+ * being wrong in this direction is a handful of extra reads of one ticket that
+ * somebody is actively looking at.
+ */
+export const THREAD_SETTLE_WINDOW_MS = 120_000
+
+/**
+ * The newest `created_at` in a thread, as epoch ms, or null.
+ *
+ * Scans rather than trusting order: the route hands messages back oldest
+ * first, but a cadence that silently degrades to "steady" because that
+ * changed would re-open the bug this file closes.
+ */
+export function newestMessageAt(messages = []) {
+  let newest = null
+  for (const m of messages || []) {
+    const t = Date.parse(m?.created_at)
+    if (Number.isFinite(t) && (newest === null || t > newest)) newest = t
+  }
+  return newest
+}
+
+/**
+ * Milliseconds until an open thread should re-read itself.
+ *
+ * An empty or unparseable thread gets the steady cadence — there is no reason
+ * to believe anything is in flight. A future timestamp (clock skew between the
+ * browser and the database) is treated as brand new, which errs towards
+ * reading again rather than towards missing the attachment.
+ */
+export function threadRefreshMs(messages = [], now = Date.now()) {
+  const newest = newestMessageAt(messages)
+  if (newest === null) return THREAD_STEADY_MS
+  const age = now - newest
+  if (age < 0) return THREAD_SETTLE_MS
+  return age < THREAD_SETTLE_WINDOW_MS ? THREAD_SETTLE_MS : THREAD_STEADY_MS
+}
+
+/**
+ * A value that changes only when the SET of messages changes — not when their
+ * contents do.
+ *
+ * The thread auto-scrolls to the newest message. Once it re-reads itself every
+ * few seconds, keying that scroll on the messages array would drag an operator
+ * back to the bottom mid-read on every poll, and an attachment row landing on
+ * an existing message is exactly the case where nothing should move.
+ */
+export function threadSignature(messages = []) {
+  const list = messages || []
+  return `${list.length}:${list[list.length - 1]?.id || ''}`
 }

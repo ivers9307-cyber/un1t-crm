@@ -22,6 +22,18 @@
 // route reads it fresh at send time). It never appears in note mode, because
 // notes are never signed.
 //
+// RECIPIENTS (EMAIL-CC.1). THERE IS NO REPLY / REPLY-ALL CHOICE, deliberately
+// (Richard, 2026-08-07). The server derives everybody on the thread and always
+// includes them; this box shows them as locked chips and its button says which
+// one is about to happen — "Reply" on a one-person thread, "Reply All (4
+// people)" on a wider one. Offering both buttons is precisely the affordance
+// that lets someone drop a participant by clicking the wrong one, so neither
+// this component nor the route has a way to express it.
+//
+// Cc and Bcc ADD people and live behind the editor's own toggle. An internal
+// note has no recipients at all — the editor is not rendered in note mode, and
+// the route refuses a note that carries any.
+//
 // ATTACHMENTS (EMAIL-OUTBOUND-ATTACH.1) follow the same two-modes rule as
 // everything else here: a reply can carry files, an internal note cannot,
 // because a note is sent to nobody and there is nothing for a file to ride on.
@@ -31,17 +43,25 @@
 // too, so the rule is stated in both places.
 
 import { useEffect, useState } from 'react'
-import { Send, Lock, PenLine, AlertCircle } from 'lucide-react'
+import { Send, Lock, PenLine, Users, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui'
-import { isArchivedStatus, statusMeta } from '@/lib/ticket-display'
+import { isArchivedStatus, statusMeta, replyActionLabel } from '@/lib/ticket-display'
 import { SIGNATURE_SEPARATOR, normalizeSignature } from '@/lib/email-signature'
+import RecipientEditor, { EMPTY_RECIPIENTS } from './RecipientEditor'
 import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPicker'
 
 const MAX_LENGTH = 10000
 
-export default function TicketReplyBox({ ticket, onSend, sending = false, signature }) {
+export default function TicketReplyBox({
+  ticket,
+  replyRecipients = null,
+  onSend,
+  sending = false,
+  signature,
+}) {
   const [mode, setMode] = useState('reply')
   const [text, setText] = useState('')
+  const [recipients, setRecipients] = useState(EMPTY_RECIPIENTS)
   const [files, setFiles] = useState([])
   // Only fetched when the parent didn't supply one. The composer is nested two
   // components deep inside the inbox, and the signature belongs to the VIEWER
@@ -71,6 +91,13 @@ export default function TicketReplyBox({ ticket, onSend, sending = false, signat
   const canReply = !!ticket?.requester_email
   const archived = isArchivedStatus(ticket?.status)
 
+  // Everybody the server will include whether or not this box asks it to.
+  // Falls back to the requester when the server could not derive the set.
+  const lockedTo = replyRecipients?.to?.length
+    ? replyRecipients.to
+    : [ticket?.requester_email].filter(Boolean)
+  const sendLabel = replyActionLabel(replyRecipients, recipients.to.length)
+
   // A note can never carry files, so files present + note mode is a state the
   // operator has to resolve rather than one we resolve for them by dropping
   // their uploads.
@@ -85,9 +112,16 @@ export default function TicketReplyBox({ ticket, onSend, sending = false, signat
     // Never send a partial set: a chip on screen that did not go with the email
     // is the same lie as a file the thread claims was sent.
     if (uploading || filesBlockNote) return
-    const result = await onSend(body, isNote, isNote ? [] : readyDrafts(files))
+    // A note is sent to nobody, so it carries NEITHER recipients NOR files —
+    // the route refuses one that does, and this is the client half of the same
+    // rule for both. One `extras` object rather than two positional arguments,
+    // so adding a third thing a send can carry does not renumber the callers.
+    const result = await onSend(body, isNote, isNote
+      ? { recipients: EMPTY_RECIPIENTS, attachments: [] }
+      : { recipients, attachments: readyDrafts(files) })
     if (result?.ok) {
       setText('')
+      setRecipients(EMPTY_RECIPIENTS)
       // The drafts were consumed by the send (their objects moved to the
       // message's own keys), so clearing is not just tidying — holding them
       // would offer the operator references that no longer resolve.
@@ -117,6 +151,25 @@ export default function TicketReplyBox({ ticket, onSend, sending = false, signat
           tone="note"
         />
       </div>
+
+      {/* Recipients. Never in note mode — a note has none, and a Cc box on a
+          staff-only line is an invitation to believe one was sent. */}
+      {!isNote && canReply && (
+        <div className="mb-2">
+          <RecipientEditor
+            idPrefix="ticket-reply-recipients"
+            value={recipients}
+            onChange={setRecipients}
+            lockedTo={lockedTo}
+            lockedHint={
+              lockedTo.length > 1
+                ? 'Everybody on this thread is included. To write to fewer people, start a new email instead.'
+                : undefined
+            }
+            disabled={sending}
+          />
+        </div>
+      )}
 
       <label className="sr-only" htmlFor="ticket-composer">
         {isNote ? 'Internal note (staff only)' : 'Reply to the member'}
@@ -199,7 +252,14 @@ export default function TicketReplyBox({ ticket, onSend, sending = false, signat
             </>
           ) : canReply ? (
             <>
-              Sends an email to <strong>{ticket.requester_email}</strong>
+              Sends an email to <strong>{lockedTo.join(', ')}</strong>
+              {recipients.cc.length > 0 && <> · cc {recipients.cc.join(', ')}</>}
+              {/* Named, and named as private. Someone about to press send has
+                  to be able to see that they blind-copied three people — and
+                  that the other recipients cannot. */}
+              {recipients.bcc.length > 0 && (
+                <> · bcc {recipients.bcc.join(', ')} (hidden from everyone else)</>
+              )}
               {ticket?.mailbox?.address && <> · replies come back to {ticket.mailbox.address}</>}
             </>
           ) : (
@@ -213,9 +273,13 @@ export default function TicketReplyBox({ ticket, onSend, sending = false, signat
           variant={isNote ? 'secondary' : 'primary'}
           loading={sending}
           disabled={!text.trim() || (!isNote && !canReply) || uploading || filesBlockNote}
-          icon={isNote ? Lock : Send}
+          icon={isNote ? Lock : (sendLabel === 'Reply' ? Send : Users)}
         >
-          {isNote ? 'Add internal note' : uploading ? 'Waiting for files…' : 'Send reply'}
+          {/* The label IS the guard rail — see the header. It states the
+              number of people before the click, never after; a file still on
+              its way up displaces it only because pressing send then would be
+              the one click that cannot do what the label says. */}
+          {isNote ? 'Add internal note' : uploading ? 'Waiting for files…' : sendLabel}
         </Button>
       </div>
 

@@ -506,3 +506,129 @@ describe('POST /api/email/tickets/compose — attachments', () => {
     expect(writesTo(db)).toEqual([])
   })
 })
+
+// ── EMAIL-CC.1 — several recipients, Cc and Bcc ──────────────────────
+//
+// Unlike a reply, NOTHING here is derived: every address on a composed email
+// is one a person typed, because nobody wrote to us first. That is the one
+// place ticket mail can reach an address the member never involved, so the
+// bounds under test are the cap, the validation and the attribution.
+describe('POST /api/email/tickets/compose — recipients', () => {
+  it('still accepts the SCALAR `to` that shipped before EMAIL-CC.1', async () => {
+    expect((await post(VALID)).status).toBe(200)
+    expect(sendEmail.mock.calls[0][0].to).toBe('lead@example.com')
+  })
+
+  it('sends to several To recipients', async () => {
+    const res = await post({ ...VALID, to: ['lead@example.com', 'partner@example.com'] })
+    expect(res.status).toBe(200)
+    expect(sendEmail.mock.calls[0][0].to).toBe('lead@example.com, partner@example.com')
+  })
+
+  it('carries Cc and Bcc on the wire, each in its own Postmark field', async () => {
+    await post({ ...VALID, cc: ['colleague@example.com'], bcc: ['boss@example.com'] })
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.cc).toBe('colleague@example.com')
+    expect(sent.bcc).toBe('boss@example.com')
+    expect(sent.to).not.toContain('boss@example.com')
+    expect(sent.cc).not.toContain('boss@example.com')
+  })
+
+  // ONE ticket has ONE counterpart. to[0] is who requester_email names, who
+  // the contact link resolves against, and who a later reply threads from.
+  it('files the ticket against the PRIMARY recipient, not a cc’d colleague', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], contacts: [MEMBER_CONTACT, OTHER_CONTACT] }))
+    await post({ ...VALID, to: ['lead@example.com', 'partner@example.com'], cc: ['someone.else@example.com'] })
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload.requester_email).toBe('lead@example.com')
+    expect(ticket.payload.contact_id).toBe(MEMBER_CONTACT.id)
+  })
+
+  it('stores all three lists on the message row', async () => {
+    await post({
+      ...VALID,
+      to: ['lead@example.com', 'partner@example.com'],
+      cc: ['colleague@example.com'],
+      bcc: ['boss@example.com'],
+    })
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.to_email).toBe('lead@example.com')
+    expect(msg.payload.to_emails).toEqual(['lead@example.com', 'partner@example.com'])
+    expect(msg.payload.cc_emails).toEqual(['colleague@example.com'])
+    expect(msg.payload.bcc_emails).toEqual(['boss@example.com'])
+  })
+
+  it('dedupes across To, Cc and Bcc case-insensitively, To winning', async () => {
+    await post({
+      ...VALID,
+      to: ['Lead@Example.com'],
+      cc: ['LEAD@example.com', 'colleague@example.com'],
+      bcc: ['Colleague@example.com', 'boss@example.com'],
+    })
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.to).toBe('lead@example.com')
+    expect(sent.cc).toBe('colleague@example.com')
+    expect(sent.bcc).toBe('boss@example.com')
+  })
+
+  // Cc'ing one of our own mailboxes delivers a copy to our own inbound
+  // webhook, which — with no threading header to match — files a brand-new
+  // ticket at the same studio. A phantom enquiry, from us, on every send.
+  it('strips the studio’s own addresses from every list', async () => {
+    await post({ ...VALID, cc: [MB_STUDIO.address], bcc: [MB_ACCOUNTS.address] })
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.cc).toBeUndefined()
+    expect(sent.bcc).toBeUndefined()
+  })
+
+  it('400s on an invalid address without sending or writing anything', async () => {
+    const res = await post({ ...VALID, cc: ['not-an-address'] })
+    expect(res.status).toBe(400)
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(writesTo(db)).toEqual([])
+  })
+
+  it('400s past the recipient cap, server-side', async () => {
+    const many = Array.from({ length: 25 }, (_, i) => `c${i}@example.com`)
+    const res = await post({ ...VALID, cc: many })
+    expect(res.status).toBe(400)
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('400s on a Cc with no To — that is not an email anyone can reply to', async () => {
+    const res = await post({ ...VALID, to: [], cc: ['colleague@example.com'] })
+    expect(res.status).toBe(400)
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  // Every address here was typed by a person, so the WHOLE set is logged —
+  // this is the deliberate half of the "adding a stranger" answer.
+  it('audit-logs the whole recipient set under the sender’s name', async () => {
+    await post({ ...VALID, cc: ['colleague@example.com'], bcc: ['boss@example.com'] })
+    const [audit] = insertsInto(db, 'audit_events')
+    expect(audit.payload).toMatchObject({
+      action: 'email_ticket.composed',
+      actor_id: COACH.id,
+      location_id: LOC_A,
+    })
+    expect(audit.payload.details.added)
+      .toEqual(['lead@example.com', 'colleague@example.com', 'boss@example.com'])
+    expect(audit.payload.details.recipient_count).toBe(3)
+  })
+
+  // Without the own-address list a cc'd own-address would go out. On THIS
+  // route that branch is unreachable in practice — the mailbox the sender
+  // picked is read from the same table and refuses first, with the 404 that
+  // keeps mailbox ids unprobeable. The property the test pins is the one that
+  // matters either way: an email_mailboxes fault never reaches Postmark.
+  it('refuses and sends nothing when email_mailboxes is unreadable', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      contacts: [],
+      errors: { email_mailboxes: { code: '42703', message: 'column does not exist' } },
+    }))
+    expect((await post(VALID)).status).toBe(404)
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(writesTo(db)).toEqual([])
+  })
+})

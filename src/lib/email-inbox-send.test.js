@@ -227,6 +227,84 @@ describe('From — the mailbox address', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────
+// EMAIL-CC.1 × EMAIL-OUTBOUND-SERVER.1 — the two seams meet here.
+//
+// Recipient POLICY lives in email-recipients.js (validation, dedupe, our own
+// addresses, the cap) and TRANSPORT lives here. This block pins the join: all
+// three lists arrive already resolved as wire strings and go out untouched.
+// Asserted on the real HTTP body for the same reason as everything else in
+// this file — "bcc reaches Postmark's Bcc field and NOWHERE else" is a claim
+// about the request, and a mocked sendEmail could not falsify it.
+describe('recipients pass straight through', () => {
+  it('carries Cc and Bcc in their own Postmark fields', async () => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
+    await sendTicketEmail({
+      ...SEND,
+      mailboxAddress: HATCH,
+      to: 'member@example.com, colleague@example.com',
+      cc: 'manager@example.com',
+      bcc: 'boss@example.com',
+    })
+
+    const body = bodyOf(fetchSpy.mock.calls[0])
+    expect(body.To).toBe('member@example.com, colleague@example.com')
+    expect(body.Cc).toBe('manager@example.com')
+    expect(body.Bcc).toBe('boss@example.com')
+  })
+
+  // THE CONFIDENTIALITY GUARANTEE, at the wire. A bcc address that appeared in
+  // To, in Cc or in Headers would be visible to every other recipient.
+  it('puts a bcc address in `Bcc` and NOWHERE else in the request', async () => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
+    await sendTicketEmail({
+      ...SEND,
+      mailboxAddress: HATCH,
+      to: 'member@example.com',
+      bcc: 'boss@example.com',
+      headers: [{ Name: 'In-Reply-To', Value: '<inbound-1@mail.example.com>' }],
+    })
+
+    const body = bodyOf(fetchSpy.mock.calls[0])
+    const { Bcc, ...everythingElse } = body
+    expect(Bcc).toBe('boss@example.com')
+    expect(JSON.stringify(everythingElse)).not.toContain('boss@example.com')
+  })
+
+  it('omitting them leaves the body exactly as it was before EMAIL-CC.1', async () => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse())
+    await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+
+    const body = bodyOf(fetchSpy.mock.calls[0])
+    expect(body.Cc).toBeUndefined()
+    expect(body.Bcc).toBeUndefined()
+  })
+
+  // The From degrades; the audience must not. A retry that quietly dropped the
+  // Cc would reach fewer people than the first attempt did — and nothing in
+  // the response says so.
+  it('the sender-signature retry carries the SAME recipients', async () => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(signatureRejection())
+      .mockResolvedValueOnce(okResponse('pm-fallback'))
+
+    const res = await sendTicketEmail({
+      ...SEND,
+      mailboxAddress: STILLORGAN,
+      to: 'member@example.com, colleague@example.com',
+      cc: 'manager@example.com',
+      bcc: 'boss@example.com',
+    })
+
+    expect(res.ok).toBe(true)
+    const retry = bodyOf(fetchSpy.mock.calls[1])
+    expect(retry.From).toBe(GLOBAL_FROM)
+    expect(retry.To).toBe('member@example.com, colleague@example.com')
+    expect(retry.Cc).toBe('manager@example.com')
+    expect(retry.Bcc).toBe('boss@example.com')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────
 describe('From — an unverifiable domain degrades, it does not break', () => {
   it('retries from a domain we own, Reply-To the real mailbox', async () => {
     fetchSpy = vi.spyOn(globalThis, 'fetch')

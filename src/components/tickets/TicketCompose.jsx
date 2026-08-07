@@ -11,6 +11,13 @@
 // mail" concept: POST /compose creates the ticket, the parent selects it, and
 // from that moment it is an ordinary ticket in the ordinary queue.
 //
+// RECIPIENTS (EMAIL-CC.1). Several To addresses, plus Cc and Bcc behind the
+// editor's own toggle. Unlike a reply, NOTHING here is derived: every address
+// on a composed email is one a person typed, because nobody wrote to us first.
+// That is why the route logs the whole set to audit_events rather than only
+// the additions — a composed email is the one place ticket mail can reach an
+// address the member never involved, so the act carries the sender's name.
+//
 // TWO THINGS THIS FILE IS CAREFUL ABOUT
 //   • THE MAILBOX LIST IS THE PERMISSION MODEL. `mailboxes` is the caller's
 //     visible set as the queue route resolved it, so the picker can only ever
@@ -27,6 +34,7 @@ import { useState } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { Modal, Button, Field } from '@/components/ui'
 import { mailboxLabel } from '@/lib/ticket-display'
+import RecipientEditor, { EMPTY_RECIPIENTS } from './RecipientEditor'
 import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPicker'
 
 // The submit button lives in the Modal's footer, which is a SIBLING of the
@@ -46,7 +54,7 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
     || mailboxes[0]?.id
     || ''
   ))
-  const [to, setTo] = useState('')
+  const [recipients, setRecipients] = useState(EMPTY_RECIPIENTS)
   const [subject, setSubject] = useState('')
   const [text, setText] = useState('')
   const [files, setFiles] = useState([])
@@ -54,8 +62,15 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
   const [error, setError] = useState(null)
 
   const mailbox = mailboxes.find(m => m.id === mailboxId) || null
+  // At least one To. A Cc with no To is not an email anyone can reply to, and
+  // the route refuses it — say so by leaving the button off.
+  //
+  // …and no file still on its way up: sending references to objects that are
+  // not in the bucket yet is the one way the route's before-the-send refusal
+  // could be reached by a healthy operator.
   const uploading = hasPendingUploads(files)
-  const canSend = Boolean(mailboxId && to.trim() && subject.trim() && text.trim()) && !uploading
+  const canSend =
+    Boolean(mailboxId && recipients.to.length && subject.trim() && text.trim()) && !uploading
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -72,7 +87,9 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           mailbox_id: mailboxId,
-          to: to.trim(),
+          to: recipients.to,
+          cc: recipients.cc,
+          bcc: recipients.bcc,
           subject: subject.trim(),
           text,
           ...(attachments.length ? { attachments } : {}),
@@ -142,19 +159,12 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
           </p>
         )}
 
-        <Field id="ticket-compose-to" label="To" required>
-          {(p) => (
-            <input
-              {...p}
-              type="email"
-              value={to}
-              onChange={(e) => setTo(e.target.value)}
-              placeholder="member@example.com"
-              autoComplete="off"
-              className={INPUT_CLASSES}
-            />
-          )}
-        </Field>
+        <RecipientEditor
+          idPrefix="ticket-compose"
+          value={recipients}
+          onChange={setRecipients}
+          disabled={sending}
+        />
 
         <Field id="ticket-compose-subject" label="Subject" required>
           {(p) => (

@@ -42,6 +42,7 @@ import { NextResponse } from 'next/server'
 import { assertLocationAccessOr404, guardMasterOrOwner } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { visibleMailboxes, orderMailboxTabs } from '@/lib/email-mailboxes'
+import { normalizeAddressList } from '@/lib/email-recipients'
 
 const MAILBOX_COLUMNS = 'id, location_id, address, label, is_default, active'
 
@@ -145,6 +146,57 @@ export async function loadVisibleMailboxes(db, user, locationId) {
   }))
 
   return { elevated, mailboxes }
+}
+
+/**
+ * EMAIL-CC.1 — every address that belongs to US at this location, so no send
+ * path can write to one.
+ *
+ * WHY THIS IS A 500 AND NOT A BEST-EFFORT `|| []`
+ * A reply-all is derived from a thread that necessarily contains the address
+ * the member wrote TO — one of ours. Without this list we would put it on the
+ * wire, Postmark would deliver our own reply back to our own inbound webhook,
+ * and the webhook would file it on the SAME ticket as an inbound message
+ * (its In-Reply-To still names the thread): the ticket flips back to `open`,
+ * unread_count increments, and the needs-reply badge lights up for mail nobody
+ * sent us. Once per reply, forever. Nothing has been sent at the point this is
+ * called, so refusing costs a retry and can never produce a wrong outcome —
+ * the same ordering argument the reply and compose routes already make about
+ * their pre-send lookups.
+ *
+ * DELIBERATELY NOT FILTERED TO ACTIVE, and deliberately not scoped to the
+ * caller's visible set. A deactivated mailbox still owns its address as far as
+ * DNS and Postmark's inbound routing are concerned, and "which addresses are
+ * ours" is not a question about who is asking. The list is used ONLY as an
+ * exclusion set — it is never returned to a client, so it leaks nothing about
+ * what addresses a studio runs.
+ *
+ * @param {object} db  service-role client
+ * @param {string} locationId
+ * @returns {Promise<{ response: NextResponse } | { addresses: string[] }>}
+ */
+export async function loadOwnAddresses(db, locationId) {
+  const { data, error } = await db.from('email_mailboxes')
+    .select('address')
+    .eq('location_id', locationId)
+    .limit(MAILBOX_LIMIT)
+  if (error) {
+    console.error('[email/tickets] own-address lookup failed BEFORE sending:', error.message)
+    return {
+      response: NextResponse.json({
+        success: false,
+        error: 'Could not check which addresses are yours. Nothing was sent — try again.',
+      }, { status: 500 }),
+    }
+  }
+  const { valid } = normalizeAddressList([
+    ...(data || []).map(m => m?.address),
+    // The From every ticket send actually goes out as. Excluded for the same
+    // reason as a mailbox address: a reply-all derived from one of our own
+    // outbound messages would otherwise carry it.
+    process.env.POSTMARK_FROM_EMAIL,
+  ])
+  return { addresses: valid }
 }
 
 const UUID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/

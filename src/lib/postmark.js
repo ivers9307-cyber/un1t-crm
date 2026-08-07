@@ -171,7 +171,16 @@ export function toListUnsubscribeUrl(pageUrl) {
 /**
  * Send a single email via Postmark
  * @param {Object} options
- * @param {string} options.to - recipient email
+ * @param {string} options.to - recipient email (comma-separated for several)
+ * @param {string} options.cc - EMAIL-CC.1 — Cc recipients, comma-separated.
+ *   Visible to every recipient, which is the whole point of a Cc.
+ * @param {string} options.bcc - EMAIL-CC.1 — Bcc recipients, comma-separated.
+ *   THIS IS THE ONLY PLACE A BCC ADDRESS MAY GO. It is set on Postmark's own
+ *   `Bcc` API field and is never folded into To/Cc and never written into
+ *   `Headers` — Postmark does not put a Bcc header on the delivered message,
+ *   so no recipient ever sees the list. Callers build both fields through
+ *   toPostmarkFields() in src/lib/email-recipients.js, which is the single
+ *   site where a resolved recipient set becomes wire values.
  * @param {string} options.subject - email subject
  * @param {string} options.htmlBody - HTML content
  * @param {string} options.from - sender (e.g. "UN1T <hello@un1t.ie>")
@@ -211,6 +220,10 @@ export function toListUnsubscribeUrl(pageUrl) {
  */
 export async function sendEmail({
   to,
+  // EMAIL-CC.1 — both default to undefined, so the request body below is
+  // byte-identical to a pre-EMAIL-CC.1 send for every caller that omits them.
+  cc,
+  bcc,
   subject,
   htmlBody,
   textBody,
@@ -260,6 +273,13 @@ export async function sendEmail({
   const body = {
     From: tenant.from || from || process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>',
     To: to,
+    // EMAIL-CC.1 — `|| undefined` so an empty string never becomes a key with
+    // no value, and so the serialised body keeps its old shape when omitted.
+    // Bcc is set HERE and nowhere else in this function: nothing below adds it
+    // to `body.Headers`, which is what keeps the address off the delivered
+    // message. See the sendEmail docblock.
+    Cc: cc || undefined,
+    Bcc: bcc || undefined,
     Subject: subject,
     HtmlBody: htmlBody,
     // CAMPAIGN-REL.4 — always ship a plain-text alternative. HTML-only
