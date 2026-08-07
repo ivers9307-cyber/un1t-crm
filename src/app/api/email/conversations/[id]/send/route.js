@@ -37,7 +37,10 @@ export async function POST(request, props) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
+  // Channel permission — service-role client, so this IS the gate. The `em`
+  // channel resolves to the `email_inbox` key (INBOX-PERM.2); it used to
+  // resolve to `whatsapp`, which opened this route to anyone with the WhatsApp
+  // inbox and no email access at all.
   const perm = requireInboxPermission(user, 'em')
   if (perm) return perm
 

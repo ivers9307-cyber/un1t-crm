@@ -297,3 +297,26 @@ describe('POST /api/email/tickets/compose — contact linkage', () => {
     expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBe('contact-u')
   })
 })
+
+// EMAIL-TICKET.6 — the contact lookup no longer swallows its error.
+describe('POST /api/email/tickets/compose — query failures are loud', () => {
+  it('500s BEFORE sending when the contact lookup errors', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      contacts: [MEMBER_CONTACT],
+      errors: { contacts: { code: '42P01', message: 'relation "contacts" does not exist' } },
+    }))
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const res = await post(VALID)
+
+    expect(res.status).toBe(500)
+    expect((await res.json()).success).toBe(false)
+    // Swallowing this used to file the ticket against NOBODY. Failing before
+    // the send means there is no unlinked ticket and no unsent-but-filed state.
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+    expect(errors).toHaveBeenCalled()
+    errors.mockRestore()
+  })
+})
