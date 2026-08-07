@@ -3967,6 +3967,51 @@ registry.registerPath({
   },
 })
 
+// ZOOMOPS.1 — Zoom contact sync operator surface: /settings/integrations/zoom-contacts
+registry.registerPath({
+  method: 'post',
+  path: '/api/integrations/zoom-contacts/run',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Trigger the Zoom Phone contact sync — preview, a real run, or a guard override',
+  description:
+    'Calls the same runZoomContactSync() the nightly cron does, recorded to zoom_sync_runs with trigger=manual. ' +
+    'Three permission tiers on one route: a PREVIEW (`dry:true`, `force` absent/false) writes nothing to Zoom and ' +
+    'is open to any member of the synced organisation (ZOOM_SYNC_ORGANIZATION_ID) — manager and up; a REAL run ' +
+    '(`dry:false`) and the deletion-guard OVERRIDE (`force:true`, which can ride alongside either dry value) both ' +
+    'require the integrations_zoom_manage permission (owner/master by default). Membership in the synced org is ' +
+    "checked via assertOrganizationAccess (the caller's location/org-admin assignments) — deliberately NOT the " +
+    "caller's currently-active location, so switching the location dropdown can't flip access. `limit` caps how " +
+    'many pending writes get enqueued to QStash this run (creates first); omitted, a real run enqueues everything ' +
+    '— the settings-page UI defaults this control to 200 rather than blank so the unlimited path is chosen, never ' +
+    "defaulted into. The guard's suppressed-delete sample is redacted to a bare count in the response for a caller " +
+    'without integrations_zoom_manage; the confirmation UI reads the real numbers from the stored zoom_sync_runs ' +
+    'row instead. The cron route is unchanged and keeps its own CRON_SECRET guard — this is an addition, not a ' +
+    'replacement, so an authenticated browser session can never become a way around cron auth.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            dry: z.boolean().optional().openapi({ description: 'Preview only — computes the diff, enqueues nothing. Open to any org member.' }),
+            limit: z.number().positive().optional().openapi({ description: 'Cap on jobs enqueued this run (creates first). Omitted = unbounded.' }),
+            force: z.boolean().optional().openapi({ description: 'Bypass the deletion guard for this run. Requires integrations_zoom_manage regardless of dry.' }),
+          }).openapi('ZoomContactsRunRequest'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Sync outcome — counts, enqueued, guard verdict (sample redacted without integrations_zoom_manage), and stats',
+      content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('ZoomContactsRunResponse') } },
+    },
+    400: { description: 'Malformed JSON body, or limit not a positive number', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Outside the synced organisation, or a real run/guard override attempted without integrations_zoom_manage', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // INTEG hub inline #4 Phase 2 — in-hub Manage (write-only) for the
 // credential-bearing `locations` providers.
 registry.registerPath({
