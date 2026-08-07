@@ -664,8 +664,11 @@ export async function editTemplate(metaTemplateId, { category, components }, opt
  * opted into WA marketing, has a normalized WA number, not blocked/opted-out.
  */
 export function applyWhatsAppReachability(query) {
+  // LOCCOMMS.3 — gates on the VIEW's per-location consent column. Both call
+  // sites below build on contact_location_audience (mig 491), so this is
+  // always applied to the view, never to `contacts`.
   return query
-    .eq('whatsapp_marketing', true)
+    .eq('loc_whatsapp_marketing', true)
     .not('wa_phone', 'is', null)
     .neq('wa_status', 'blocked')
     .neq('wa_status', 'opted_out')
@@ -685,7 +688,9 @@ export function applyWhatsAppReachability(query) {
  */
 export async function computeWhatsAppReachabilitySummary(db, filter, locationId) {
   const countOf = async (extra) => {
-    const base = db.from('contacts').select('id', { count: 'exact', head: true }).eq('location_id', locationId)
+    // LOCCOMMS.3 — per-location audience via the view (mig 491). Still a
+    // single-table head:true count, which is what mig 422 made safe.
+    const base = db.from('contact_location_audience').select('id', { count: 'exact', head: true }).eq('audience_location_id', locationId)
     const { query } = await applyAudienceFilterAsync({ db, query: base, filter, locationId })
     const { count } = await (extra ? extra(query) : query)
     return count || 0
@@ -694,7 +699,7 @@ export async function computeWhatsAppReachabilitySummary(db, filter, locationId)
   const matched = await countOf(null)
   const reachable = await countOf((q) => applyWhatsAppReachability(q))
   const no_number = await countOf((q) => q.is('wa_phone', null))
-  const no_consent = await countOf((q) => q.eq('whatsapp_marketing', false))
+  const no_consent = await countOf((q) => q.eq('loc_whatsapp_marketing', false))
   const opted_out = await countOf((q) => q.in('wa_status', ['blocked', 'opted_out']))
   const undeliverable = await countOf((q) => q.eq('wa_status', 'undeliverable'))
   return { matched, reachable, excluded: { no_number, no_consent, opted_out, undeliverable } }
@@ -831,7 +836,8 @@ export async function markUndeliverableIfPermanent(db, contactId, { code, messag
  */
 function whatsAppAudienceBase(db, locationId) {
   return applyWhatsAppReachability(
-    db.from('contacts').select('*').eq('location_id', locationId)
+    // LOCCOMMS.3 — per-location audience via the view (mig 491).
+    db.from('contact_location_audience').select('*').eq('audience_location_id', locationId)
   )
 }
 

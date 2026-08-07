@@ -442,6 +442,25 @@ function assertConsentField(consentField) {
   return consentField
 }
 
+// LOCCOMMS.3 — map a consent field to its column on contact_location_audience.
+//
+// The three MARKETING channels are per-location and live on the view as
+// loc_*; `email_administrative` deliberately stays GLOBAL (it comes through
+// `c.*` unchanged) because transactional mail follows the transaction, not a
+// marketing list — you cannot unsubscribe from a booking confirmation.
+//
+// One place for the mapping so a caller can never half-migrate and gate a
+// per-location send on the stale denormalised global column.
+const LOCATION_CONSENT_COLUMNS = {
+  email_marketing:    'loc_email_marketing',
+  sms_marketing:      'loc_sms_marketing',
+  whatsapp_marketing: 'loc_whatsapp_marketing',
+}
+
+export function consentColumnFor(consentField) {
+  return LOCATION_CONSENT_COLUMNS[consentField] || consentField
+}
+
 export function buildAudienceQuery(db, filter, locationId, { columns = '*', selectOpts, consentField = 'email_marketing' } = {}) {
   // CLASSIFY.1 — uses denormalised contacts.email_marketing instead of
   // an inner-join on contact_preferences. Single-table filtering kills
@@ -461,11 +480,21 @@ export function buildAudienceQuery(db, filter, locationId, { columns = '*', sele
   // hits the TransformBuilder overload — the head/count options vanish.
   // Callers that need a count must therefore request it on the FIRST
   // select(), which is what this helper does for them.
+  // LOCCOMMS.3 — reads contact_location_audience (mig 491), NOT contacts.
+  // Per-location consent is the authority: a Hatch campaign previously reached
+  // only contacts whose ROW sat at Hatch (58 of 81; the other 23 silently
+  // unreachable since June). The view INNER-joins contact_location_preferences,
+  // so "row absent = that location may never send" is enforced structurally.
+  //
+  // Still a VIEW and still single-table filtering, deliberately. CLASSIFY.1
+  // (below) moved this off an inner-join on contact_preferences because
+  // PostgREST embedded-resource filters silently break head:true counts — a
+  // wrong count here is a campaign that under- or over-sends with no error.
   let query = db
-    .from('contacts')
+    .from('contact_location_audience')
     .select(columns, selectOpts)
-    .eq('location_id', locationId)
-    .eq(assertConsentField(consentField), true)
+    .eq('audience_location_id', locationId)
+    .eq(consentColumnFor(assertConsentField(consentField)), true)
     .not('email_status', 'in', '("bounced","complained")')
 
   // EMAIL-HYGIENE.1 — the MARKETING path additionally excludes contacts
@@ -495,11 +524,13 @@ export function buildAudienceQuery(db, filter, locationId, { columns = '*', sele
  * select-overload gotcha.
  */
 export async function buildAudienceQueryAsync(db, filter, locationId, { columns = '*', selectOpts, consentField = 'email_marketing' } = {}) {
+  // LOCCOMMS.3 — same per-location cutover as buildAudienceQuery above. This is
+  // the builder the LIVE send path (campaign-sender.js) actually calls.
   let query = db
-    .from('contacts')
+    .from('contact_location_audience')
     .select(columns, selectOpts)
-    .eq('location_id', locationId)
-    .eq(assertConsentField(consentField), true)
+    .eq('audience_location_id', locationId)
+    .eq(consentColumnFor(assertConsentField(consentField)), true)
     .not('email_status', 'in', '("bounced","complained")')
   // EMAIL-HYGIENE.1 — same marketing-only inactivity-suppression gate as
   // buildAudienceQuery above (email_suppressed_at, mig 395).

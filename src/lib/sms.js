@@ -56,12 +56,23 @@ function smsAudienceBase(db, locationId) {
   // semantics as the WA broadcast path; the trigger from mig 005
   // creates a row on every new contact so this only excludes legacy
   // rows that pre-date the preferences table.
+  // LOCCOMMS.3 — per-location consent via contact_location_audience (mig 491).
+  //
+  // This also RETIRES the contact_preferences!inner embed that used to gate
+  // this path. That embed is the shape email abandoned under CLASSIFY.1:
+  // PostgREST embedded-resource filters silently break head:true counts, so
+  // any future count over this audience would have been quietly wrong. The
+  // view is single-table, so it is safe to count.
+  //
+  // The view INNER-joins contact_location_preferences, so the old comment's
+  // caveat still holds and is now structural: a contact with no row for this
+  // location cannot appear at all — row absent = that location may never send.
   return db
-    .from('contacts')
-    .select('id, name, first_name, last_name, email, phone, pipeline_stage_slug, sms_status, location_id, contact_preferences!inner(sms_marketing)')
-    .eq('location_id', locationId)
+    .from('contact_location_audience')
+    .select('id, name, first_name, last_name, email, phone, pipeline_stage_slug, sms_status, location_id, audience_location_id, loc_sms_marketing')
+    .eq('audience_location_id', locationId)
     .eq('sms_status', 'active')
-    .eq('contact_preferences.sms_marketing', true)
+    .eq('loc_sms_marketing', true)
     .not('phone', 'is', null)
 }
 

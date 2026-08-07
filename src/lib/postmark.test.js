@@ -337,11 +337,15 @@ describe('consentFieldForStream', () => {
 })
 
 describe('buildAudienceQuery — consent gate', () => {
-  it('defaults to gating on email_marketing', () => {
+  it('defaults to gating on the PER-LOCATION email consent column', () => {
+    // LOCCOMMS.3 — marketing consent moved to contact_location_audience
+    // (mig 491). email_administrative stays GLOBAL — see the next test, which
+    // is the guard that the mapping did not over-apply.
     const { builder, calls } = makeFakeQuery()
     const db = { from: () => builder }
     buildAudienceQuery(db, { logic: 'and', filters: [] }, 'loc-uuid')
-    expect(calls).toContainEqual({ method: 'eq', args: ['email_marketing', true] })
+    expect(calls).toContainEqual({ method: 'eq', args: ['loc_email_marketing', true] })
+    expect(calls).not.toContainEqual({ method: 'eq', args: ['email_marketing', true] })
     expect(calls).toContainEqual({ method: 'not', args: ['email_status', 'in', '("bounced","complained")'] })
   })
 
