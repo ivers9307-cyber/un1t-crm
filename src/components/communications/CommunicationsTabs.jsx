@@ -32,7 +32,13 @@ export default function CommunicationsTabs({ canSms, canEmail, canWhatsapp, canE
     // EMAIL-TICKET.4 — the studio email queue. Its own key (`email_inbox`),
     // not the marketing `email` one, so it appears for the people who
     // actually answer accounts@/sales@ and for nobody else.
-    canEmailInbox && { id: 'tickets',  label: 'Tickets',    href: '/communications/tickets' },
+    //
+    // INBOX-SPLIT.1 — labelled "Email", not "Tickets": operators think in
+    // channels, and this is now the ONLY place email is worked (the unified
+    // Inbox is WhatsApp + Instagram only). "Ticket" stays the name of the
+    // DATA MODEL — the route, the API and the `email_tickets` table are all
+    // deliberately unchanged.
+    canEmailInbox && { id: 'tickets',  label: 'Email',      href: '/communications/tickets' },
     (canEmail || canWhatsapp) && { id: 'templates', label: 'Templates', href: '/communications/templates' },
     // Segments tab (mig 085, moved from top-level /segments).
     (canEmail || canWhatsapp) && { id: 'segments',  label: 'Segments',  href: '/communications/segments' },

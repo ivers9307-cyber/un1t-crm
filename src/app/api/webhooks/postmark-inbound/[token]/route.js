@@ -53,12 +53,19 @@
 // genuinely new enquiry carries no In-Reply-To/References match,
 // resolves to no ticket, and starts a fresh one.
 //
-// DUAL-WRITE, deliberately. Nine files still read email_conversations
-// (EmailInbox.jsx, UnifiedInbox.jsx, the conversations + send routes,
-// …), so every inbound also maintains its mig 394 conversation row and
-// the message carries BOTH ids. Dropping the conversation write before
-// the tickets UI ships would blank the live inbox. email_conversations
-// goes only after that UI is live.
+// DUAL-WRITE, deliberately — every inbound also maintains its mig 394
+// email_conversations row and the message carries BOTH ids.
+//
+// COMMENT-ONLY UPDATE, INBOX-SPLIT.1 (2026-08-07): the original reason —
+// "nine files still read email_conversations, dropping the write would
+// blank the live inbox" — has EXPIRED. EmailInbox.jsx is deleted and
+// UnifiedInbox.jsx no longer merges email, so NO WEB SURFACE reads the
+// table. The remaining readers are the MOBILE app (mobile/lib/email-api.js
+// → /api/email/conversations*, still its only email surface) and the
+// tickets reply route's own legacy mirror. The dual-write is dead weight
+// for the web but NOT yet safe to delete — retiring it is a webhook change
+// plus a mobile cutover plus eventually dropping the table, and that is
+// deliberately a separate step. Behaviour below is unchanged.
 //
 // Why no queue table (unlike the outbound Postmark webhook): inbound
 // human replies are low-volume (no 5k-in-20s bursts) and each event

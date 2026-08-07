@@ -317,7 +317,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
           <div className="flex items-center gap-2 text-sm min-w-0">
             <Mail size={15} className="shrink-0 text-channel-em" />
             <span className="font-medium text-un1t-text truncate">
-              {mailboxes[0] ? mailboxLabel(mailboxes[0]) : 'Email tickets'}
+              {mailboxes[0] ? mailboxLabel(mailboxes[0]) : 'Email'}
             </span>
             {mailboxes[0]?.address && (
               <span className="text-xs text-un1t-muted truncate hidden sm:inline">

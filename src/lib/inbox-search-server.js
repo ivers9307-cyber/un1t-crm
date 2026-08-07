@@ -3,7 +3,7 @@
 // Why this exists: each channel list route returns only the latest 50
 // conversations, and the inbox's "Search people & messages" box filtered
 // those client-side — so with ~1,178 prod WhatsApp threads, ~96% were
-// unreachable from search. The three conversation list routes now accept
+// unreachable from search. The conversation list routes now accept
 // ?q= (2+ chars) and OR together:
 //   (a) conversations linked to contacts whose name / phone / email
 //       matches — found via a scoped id-lookup first, because PostgREST
@@ -16,10 +16,15 @@
 
 // Real columns per table (verified against live information_schema,
 // 2026-07-25). Keep in sync with what the queue rows actually display.
+//
+// INBOX-SPLIT.1 (2026-08-07) — `email_conversations` dropped: the inbox is
+// WhatsApp + Instagram only, so there is no email fan-out left to build an
+// OR-filter for. Email search belongs to /communications/tickets, which has
+// its own query path over `email_tickets`. `buildInboxSearchOr` throws on an
+// unknown table by design, so re-adding a caller here has to be deliberate.
 export const INBOX_SEARCH_FIELDS = Object.freeze({
   whatsapp_conversations: Object.freeze(['wa_phone', 'wa_profile_name', 'last_message_preview']),
   instagram_conversations: Object.freeze(['ig_username', 'customer_name', 'last_message_preview']),
-  email_conversations: Object.freeze(['counterpart_email', 'counterpart_name', 'subject', 'last_message_preview']),
 })
 
 // Minimum query length before the server search kicks in — mirrors the

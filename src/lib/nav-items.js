@@ -80,7 +80,10 @@ export const ALL_NAV = [
   // surface, while the neighbouring Communications entry ORs the marketing
   // `email` / `whatsapp` / `sms` keys. Someone who answers accounts@ all day
   // need not hold any of those.
-  { href: '/communications/tickets', label: 'Email tickets', icon: Mail,
+  // INBOX-SPLIT.1 — labelled "Email": it is the only place email is worked
+  // now (the unified Inbox is WhatsApp + Instagram only). "Ticket" remains
+  // the data model's name — href, API and table are unchanged on purpose.
+  { href: '/communications/tickets', label: 'Email', icon: Mail,
     permission: 'email_inbox', section: 'work' },
   // Single entry replacing the old Events + Bookings ("Calendly").
   // The hub lands on /bookings (the high-frequency operational view —

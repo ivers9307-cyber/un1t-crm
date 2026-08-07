@@ -2,9 +2,16 @@
 'use client';
 import { CHANNELS, channelOf } from '../../../shared/channels';
 
+// INBOX-SPLIT.1 — the `em` variant is gone with EmailInbox.jsx: email is not
+// an inbox channel any more (its surface is /communications/tickets, which
+// draws its own lucide Mail icon). Leaving the maps keyed for a channel
+// CHANNELS no longer describes would be a trap — `CHANNELS['em'].name` below
+// would throw. The `channel-em` Tailwind colour token itself stays; the
+// tickets UI uses it.
+
 // --- static class maps (literal strings for the Tailwind JIT) ---
-const TEXT = { wa: 'text-channel-wa', ig: 'text-channel-ig', em: 'text-channel-em' };
-const RING = { wa: 'ring-channel-wa', ig: 'ring-channel-ig', em: 'ring-channel-em' };
+const TEXT = { wa: 'text-channel-wa', ig: 'text-channel-ig' };
+const RING = { wa: 'ring-channel-wa', ig: 'ring-channel-ig' };
 
 // --- brand-recognisable logos, drawn to currentColor ---
 function Logo({ channel, className }) {
@@ -14,14 +21,6 @@ function Logo({ channel, className }) {
         <rect x="3.2" y="3.2" width="17.6" height="17.6" rx="5.2" />
         <circle cx="12" cy="12" r="4.1" />
         <circle cx="17.3" cy="6.7" r="1.15" fill="currentColor" stroke="none" />
-      </svg>
-    );
-  }
-  if (channel === 'em') {
-    return (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" className={className} aria-hidden="true">
-        <rect x="3" y="5" width="18" height="14" rx="2.5" />
-        <path d="M4 7l8 6 8-6" />
       </svg>
     );
   }
