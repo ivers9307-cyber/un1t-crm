@@ -34,9 +34,21 @@ describe('resolveTicketAction', () => {
       .toEqual({ action: 'append', ticketId: 't3', reopen: true })
   })
 
-  it('mints a NEW ticket when the thread resolves to a closed one', () => {
+  it('REOPENS a closed ticket rather than forking a new one', () => {
+    // Richard, 2026-08-07. Closing is internal bookkeeping — the member is never
+    // told, so replying to their own old email is just continuing the
+    // conversation. Forking here would make our record disagree with the thread
+    // in their mail client. A genuinely new enquiry threads to nothing and takes
+    // the create branch above, which is what actually separates issues.
     expect(resolveTicketAction({ id: 't4', status: 'closed' }))
-      .toEqual({ action: 'create', reopenedFrom: 't4' })
+      .toEqual({ action: 'append', ticketId: 't4', reopen: true })
+  })
+
+  it('only ever creates when nothing threaded — never from a status', () => {
+    for (const status of ['open', 'pending', 'solved', 'closed']) {
+      expect(resolveTicketAction({ id: 't9', status }).action).toBe('append')
+    }
+    expect(resolveTicketAction(null).action).toBe('create')
   })
 })
 

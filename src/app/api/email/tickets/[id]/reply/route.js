@@ -7,6 +7,7 @@ import { validateBody } from '@/lib/validate'
 import { sendEmail } from '@/lib/postmark'
 import { replySubject, buildReplyHeaders, inboundPreview } from '@/lib/email-inbox'
 import { shouldStampFirstResponse } from '@/lib/email-tickets'
+import { appendSignature } from '@/lib/email-signature'
 import { loadTicketForUser, statusTimestamps } from '../../_helpers'
 
 const ReplySchema = z.object({
@@ -19,12 +20,75 @@ const ReplySchema = z.object({
 
 // Minimal text → HTML, same as the conversations send route this replaces: a
 // 1:1 human reply is escaped text with line breaks, not designed mail.
+//
+// EMAIL-TICKET.5: this runs over the body WITH the signature already appended
+// (see appendSignature), so the sign-off is escaped by exactly the same three
+// replacements as the operator's own words. That ordering is the whole safety
+// story for signatures — escape-then-concatenate would hand an operator a raw
+// HTML injection point into outbound mail.
 function textToHtml(text) {
   const escaped = text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
   return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.5;white-space:pre-wrap;">${escaped}</div>`
+}
+
+// EMAIL-TICKET.5 — the legacy dual-write.
+//
+// The inbound webhook writes BOTH a ticket and a mig 394 email_conversations
+// row, and stamps both ids onto the one message, so the old unified inbox
+// keeps working through the transition. A reply sent from the tickets UI used
+// to appear only in the ticket, which read as "the member was never answered"
+// to anyone still working the old surface. This mirrors the webhook: one
+// message row carrying both ids, plus the conversation's summary refreshed
+// exactly as /api/email/conversations/[id]/send does it.
+//
+// IT MUST NEVER FAIL THE REPLY. The email is already on the wire and the
+// ticket message row is already committed by the time this runs — a legacy
+// bookkeeping failure is not a reason to tell the operator their answer
+// didn't send. Everything is inside one try/catch, and note that supabase-js
+// builders are thenables with no .catch(), so try/catch is the only form that
+// works here (CLAUDE.md).
+//
+// @returns {Promise<string|null>} the conversation id it mirrored to, or null
+async function mirrorReplyToConversation(db, { ticketId, messageId, preview, now }) {
+  try {
+    // The conversation id lives on the ticket's own earlier messages (the
+    // webhook stamps it on every inbound). A ticket created after the
+    // conversation write is dropped — or one that never had a legacy row —
+    // simply has nothing to mirror to, which is a normal state, not an error.
+    const { data: linked } = await db.from('email_inbox_messages')
+      .select('conversation_id')
+      .eq('ticket_id', ticketId)
+      .not('conversation_id', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    const conversationId = linked?.conversation_id || null
+    if (!conversationId) return null
+
+    // One row, both ids — same as the webhook. Writing a SECOND message row
+    // instead would double the reply in the ticket thread.
+    if (messageId) {
+      await db.from('email_inbox_messages')
+        .update({ conversation_id: conversationId })
+        .eq('id', messageId)
+    }
+
+    await db.from('email_conversations').update({
+      last_message_at: now,
+      last_message_direction: 'outbound',
+      last_message_preview: preview,
+      updated_at: now,
+    }).eq('id', conversationId)
+
+    return conversationId
+  } catch (err) {
+    console.error('[ticket-reply] legacy email_conversations mirror failed:', err?.message)
+    return null
+  }
 }
 
 // POST /api/email/tickets/[id]/reply — answer a ticket, or add an internal
@@ -35,6 +99,11 @@ function textToHtml(text) {
 // suppression flag silently swallowing the answer to their own question is
 // worse than the consent risk it avoids (spec, "Postmark topology"). This is
 // the same posture as the conversations send route — preserved deliberately.
+//
+// EMAIL-TICKET.5 adds three things (mig 493):
+//   • the sender's plain-text signature on real replies, never on notes
+//   • author_profile_id on BOTH replies and notes (inbound has no author)
+//   • a non-fatal mirror into the legacy email_conversations row
 export async function POST(request, props) {
   const params = await props.params
   const user = await getCurrentUser()
@@ -62,12 +131,18 @@ export async function POST(request, props) {
       contact_id: ticket.contact_id || null,
       location_id: ticket.location_id,
       direction: 'outbound',
-      // No author column exists on this table, so from_email records WHO
-      // wrote the note. On a real reply it stays the Postmark From, which is
-      // what actually went on the wire.
+      // WHO wrote it (mig 493). Set on notes as well as replies — on a shared
+      // queue "who left this note" is the whole point of a note.
+      author_profile_id: user.id,
+      // from_email still records the author's address for anything reading
+      // rows written before mig 493. On a real reply it stays the Postmark
+      // From, which is what actually went on the wire.
       from_email: user.email || null,
       to_email: null,
       subject: ticket.subject || null,
+      // NOT signed (EMAIL-TICKET.5). A note is sent to nobody, so a sign-off
+      // on it is noise on a staff-only line — appendSignature is deliberately
+      // absent from this branch.
       text_body: text,
       is_internal_note: true,
       source: 'operator',
@@ -102,13 +177,25 @@ export async function POST(request, props) {
     referencesHeader: lastInbound?.references_header || null,
   })
 
+  // EMAIL-TICKET.5 — sign off as whoever is sending.
+  //
+  // getCurrentUser() spreads the whole profiles row, so email_signature is the
+  // SENDER'S own (and, under impersonation, the impersonated profile's — the
+  // same identity that goes into author_profile_id below, so the two can't
+  // disagree). A NULL/empty signature appends nothing at all, which is every
+  // reply the system has sent so far.
+  //
+  // Built BEFORE the HTML conversion so textToHtml escapes body and signature
+  // in one pass — see the note on textToHtml.
+  const outboundText = appendSignature(text, user.email_signature)
+
   let result
   try {
     result = await sendEmail({
       to: ticket.requester_email,
       subject,
-      htmlBody: textToHtml(text),
-      textBody: text,
+      htmlBody: textToHtml(outboundText),
+      textBody: outboundText,
       // Reply-To is the ticket's OWN mailbox, so the member's next reply comes
       // back to the address they wrote to and threads onto this ticket. A
       // ticket with no mailbox (an elevated caller answering correspondence
@@ -137,10 +224,15 @@ export async function POST(request, props) {
     contact_id: ticket.contact_id || null,
     location_id: ticket.location_id,
     direction: 'outbound',
+    // WHO sent it (mig 493). from_email stays the Postmark From, which is what
+    // actually went on the wire — it is not an author field.
+    author_profile_id: user.id,
     from_email: process.env.POSTMARK_FROM_EMAIL || null,
     to_email: ticket.requester_email,
     subject,
-    text_body: text,
+    // The SIGNED body — the message row is the record of what the member
+    // received, so it must not show a shorter message than was sent.
+    text_body: outboundText,
     postmark_message_id: result.messageId,
     in_reply_to: lastInbound?.rfc_message_id || null,
     is_internal_note: false,
@@ -169,6 +261,11 @@ export async function POST(request, props) {
     })
   }
 
+  // Preview is the operator's OWN words, unsigned — a queue row that reads
+  // "-- Sarah, UN1T Stillorgan" instead of what was actually said would make
+  // every short reply look identical in the list.
+  const preview = inboundPreview(text)
+
   // We answered → the ball is with the member. Nothing auto-closes from here
   // (Richard, 2026-08-06): a ticket ages in `pending` until someone replies or
   // an operator closes it.
@@ -176,10 +273,13 @@ export async function POST(request, props) {
     status: 'pending',
     last_message_at: now,
     last_message_direction: 'outbound',
-    last_message_preview: inboundPreview(text),
+    last_message_preview: preview,
     updated_at: now,
     ...statusTimestamps('pending', ticket, now),
   }
+  // Only ever on a real outbound send: the internal-note branch above returns
+  // long before this and never touches email_tickets at all, so a note can
+  // neither stamp a first response nor move the ticket.
   if (shouldStampFirstResponse({
     firstResponseAt: ticket.first_response_at,
     direction: 'outbound',
@@ -189,8 +289,17 @@ export async function POST(request, props) {
   }
   await db.from('email_tickets').update(patch).eq('id', ticket.id)
 
+  // Legacy mirror, LAST and non-fatal — everything the operator asked for has
+  // already happened by this point.
+  const conversationId = await mirrorReplyToConversation(db, {
+    ticketId: ticket.id,
+    messageId: message?.id,
+    preview,
+    now,
+  })
+
   return NextResponse.json({
     success: true,
-    data: { message, status: 'pending', message_id: result.messageId },
+    data: { message, status: 'pending', message_id: result.messageId, conversation_id: conversationId },
   })
 }

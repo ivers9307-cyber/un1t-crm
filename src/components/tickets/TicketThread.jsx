@@ -9,13 +9,25 @@
 // "Internal note — not sent to the member" on it, so it can never be mistaken
 // for correspondence the member received, and a real reply can never be
 // mistaken for a private note. messageKind() (lib/ticket-display.js) makes the
-// call; this file only paints it.
+// call; this file only paints it. Notes are PLAIN TEXT — they never go
+// through the HTML path below, whatever the payload says.
 //
-// text_body ONLY — html_body is never fetched and never injected.
+// HTML RENDERING (EMAIL-TICKET.5)
+// This file receives `html_document`: a COMPLETE document, already sanitised
+// server-side by src/lib/email-html.js and ready to be handed to an iframe's
+// srcdoc. It never sees raw html_body, never sanitises anything, and never
+// imports the sanitiser — that would ship sanitize-html and its postcss tree
+// to the browser and invite someone to sanitise client-side, where it proves
+// nothing. React's raw-HTML escape hatch is not used here or anywhere in src/.
+//
+// The two security-critical literals below (the sandbox attribute and the
+// show-images swap) are asserted against this file's source in
+// src/lib/email-html.test.js, because a quiet edit to either removes a whole
+// layer of protection without breaking anything visible.
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Lock, Mail, AlertCircle, MailCheck } from 'lucide-react'
+import { ArrowLeft, Lock, Mail, AlertCircle, MailCheck, ImageOff, Maximize2, Minimize2, ShieldAlert } from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
 import {
   requesterLabel,
@@ -187,12 +199,118 @@ export default function TicketThread({
   )
 }
 
+// The show-images swap, and the ONLY thing this file does to the sanitised
+// document. Both halves are renames of values the server already proved to be
+// absolute http(s) URLs and already HTML-escaped:
+//   ` data-original-src="` → ` src="`   (a blocked <img>)
+//   `x-un1t-blocked:`      → ``         (a blocked CSS url())
+// See src/lib/email-html.js. Anything cleverer than a rename here — a parse, a
+// regex over the whole document — is a change to the security model.
+const UNBLOCK_IMG_FROM = ' data-original-src="'
+const UNBLOCK_IMG_TO = ' src="'
+const UNBLOCK_CSS_PREFIX = 'x-un1t-blocked:'
+
+function showImagesIn(doc) {
+  return String(doc)
+    .split(UNBLOCK_IMG_FROM).join(UNBLOCK_IMG_TO)
+    .split(UNBLOCK_CSS_PREFIX).join('')
+}
+
+/**
+ * A stranger's HTML, in a box it cannot get out of.
+ *
+ * THE SANDBOX ATTRIBUTE IS LAYER 1 AND IT IS WRITTEN OUT LITERALLY BELOW so a
+ * reviewer sees it at the point of use. It grants NEITHER `allow-scripts` (so
+ * nothing executes, even if the sanitiser were bypassed) NOR
+ * `allow-same-origin` (so the frame is an opaque origin that cannot touch this
+ * page's DOM, its cookies or the Supabase session). `allow-popups` and its
+ * escape are the entire remaining grant, and only so a link an operator clicks
+ * actually opens — with no scripts in the frame, nothing can open one by
+ * itself.
+ *
+ * A consequence worth knowing: with no scripts the frame cannot report its own
+ * height, so it gets a fixed box that scrolls — vertically, and horizontally
+ * for the 600px-wide tables marketing email is built from. The email scrolls
+ * inside its box; it never widens the CRM.
+ */
+function EmailFrame({ html, blockedImages = 0, label, onAccent = false }) {
+  const [showImages, setShowImages] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+
+  // An outbound message's controls sit on the accent bubble, where the
+  // subtle-grey idiom is unreadable.
+  const actionClass = onAccent ? 'text-white/90 hover:text-white' : 'text-un1t-accent hover:underline'
+  const quietClass = onAccent ? 'text-white/80 hover:text-white' : 'text-un1t-subtle hover:text-un1t-text'
+  const noteClass = onAccent ? 'text-white/70' : 'text-un1t-muted'
+
+  return (
+    <div className="mt-1.5">
+      <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+        {blockedImages > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowImages(v => !v)}
+            className={`flex items-center gap-1 text-[11px] ${actionClass}`}
+          >
+            <ImageOff size={11} className="shrink-0" aria-hidden="true" />
+            {showImages ? 'Hide images' : `Show images (${blockedImages})`}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => setExpanded(v => !v)}
+          className={`flex items-center gap-1 text-[11px] ${quietClass}`}
+        >
+          {expanded
+            ? <><Minimize2 size={11} className="shrink-0" aria-hidden="true" />Collapse</>
+            : <><Maximize2 size={11} className="shrink-0" aria-hidden="true" />Expand</>}
+        </button>
+        {blockedImages > 0 && !showImages && (
+          // Said plainly, because it is a privacy decision made on the
+          // member's behalf: a remote image in an email is usually a tracking
+          // pixel, and loading it reports the read to a stranger.
+          <span className={`text-[11px] ${noteClass}`}>
+            Remote images blocked — loading them tells the sender you read this
+          </span>
+        )}
+      </div>
+      <iframe
+        srcDoc={showImages ? showImagesIn(html) : html}
+        sandbox="allow-popups allow-popups-to-escape-sandbox"
+        loading="lazy"
+        title={label}
+        className={`w-full rounded-lg border border-un1t-border bg-white ${expanded ? 'h-[70vh]' : 'h-[420px]'}`}
+      />
+    </div>
+  )
+}
+
+/** "HTML could not be displayed safely" — shown INSTEAD of the HTML, never beside it. */
+function UnsafeHtmlNotice() {
+  return (
+    <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-amber-700">
+      <ShieldAlert size={11} className="shrink-0" aria-hidden="true" />
+      HTML could not be displayed safely — showing the plain-text version.
+    </p>
+  )
+}
+
+/** The formatted version was skipped to keep a pathologically long thread openable. */
+function HtmlOmittedNotice() {
+  return (
+    <p className="mt-1.5 text-[11px] text-un1t-muted">
+      Formatted version not loaded — this thread is unusually long.
+    </p>
+  )
+}
+
 function ThreadMessage({ message }) {
   const kind = messageKind(message)
   const stamp = messageTimestamp(message.sent_at || message.created_at)
-  // text_body only. html_body is not fetched by the API and must never be
-  // injected here — sanitised HTML rendering is a separate, later plan.
   const body = message.text_body || '(no text content)'
+  // Notes never take the HTML path, whatever the payload contains: the route
+  // does not emit a document for them, and this guard says so twice.
+  const html = kind === 'note' ? null : message.html_document || null
 
   if (kind === 'note') {
     return (
@@ -203,7 +321,12 @@ function ThreadMessage({ message }) {
         </p>
         <p className="whitespace-pre-wrap break-words text-sm text-un1t-text">{body}</p>
         <p className="mt-1.5 text-[11px] text-un1t-subtle">
-          {message.from_email || 'Staff'}
+          {/* Who left it. On a shared queue an anonymous note is a note you
+              cannot ask anyone about. author_name is NULL for anything written
+              before mig 493, so the address is still the fallback. */}
+          {message.author_name
+            ? `Note by ${message.author_name}`
+            : (message.from_email || 'Staff')}
           {stamp && ` · ${stamp}`}
         </p>
       </div>
@@ -213,13 +336,25 @@ function ThreadMessage({ message }) {
   if (kind === 'outbound') {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-un1t-accent px-4 py-3 text-white">
+        <div className={`rounded-2xl rounded-tr-sm bg-un1t-accent px-4 py-3 text-white ${html ? 'w-full' : 'max-w-[85%]'}`}>
           <p className="mb-1 flex items-center gap-1.5 text-[11px] text-white/75">
             <MailCheck size={12} className="shrink-0" aria-hidden="true" />
             Sent to {message.to_email || 'the member'}
+            {message.author_name && ` · Replied by ${message.author_name}`}
             {stamp && ` · ${stamp}`}
           </p>
-          <p className="whitespace-pre-wrap break-words text-sm">{body}</p>
+          {html ? (
+            <EmailFrame
+              html={html}
+              blockedImages={message.html_blocked_images}
+              label={`Reply sent to ${message.to_email || 'the member'}`}
+              onAccent
+            />
+          ) : (
+            <p className="whitespace-pre-wrap break-words text-sm">{body}</p>
+          )}
+          {message.html_unsafe && <UnsafeHtmlNotice />}
+          {message.html_omitted && <HtmlOmittedNotice />}
         </div>
       </div>
     )
@@ -227,12 +362,22 @@ function ThreadMessage({ message }) {
 
   return (
     <div className="flex justify-start">
-      <div className="max-w-[85%] rounded-2xl rounded-tl-sm border border-un1t-border bg-un1t-surface px-4 py-3">
+      <div className={`rounded-2xl rounded-tl-sm border border-un1t-border bg-un1t-surface px-4 py-3 ${html ? 'w-full' : 'max-w-[85%]'}`}>
         <p className="mb-1 text-[11px] text-un1t-subtle">
           From {message.from_email || 'the member'}
           {stamp && ` · ${stamp}`}
         </p>
-        <p className="whitespace-pre-wrap break-words text-sm text-un1t-text">{body}</p>
+        {html ? (
+          <EmailFrame
+            html={html}
+            blockedImages={message.html_blocked_images}
+            label={`Email from ${message.from_email || 'the member'}`}
+          />
+        ) : (
+          <p className="whitespace-pre-wrap break-words text-sm text-un1t-text">{body}</p>
+        )}
+        {message.html_unsafe && <UnsafeHtmlNotice />}
+        {message.html_omitted && <HtmlOmittedNotice />}
       </div>
     </div>
   )

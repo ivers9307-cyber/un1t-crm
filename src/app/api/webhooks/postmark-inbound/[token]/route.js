@@ -42,9 +42,16 @@
 // WHICH ticket it joins: threading ids are matched against this
 // location's own email_inbox_messages, most recent wins
 // (pickThreadedTicket), and resolveTicketAction decides append vs
-// create. A reply to a CLOSED ticket mints a NEW one carrying
-// reopened_from — that single rule is what stops a ticket decaying
-// back into mig 394's immortal per-person thread.
+// create. A reply to a CLOSED ticket REOPENS it — it does not fork
+// (Richard, 2026-08-07). Closing is internal bookkeeping; the status
+// route sends the member nothing, so replying to their own old email
+// is just continuing the conversation, and a fork would make our
+// record disagree with the thread in their mail client.
+//
+// What stops a ticket decaying back into mig 394's immortal
+// per-person thread is the THREADING itself, not the closed state: a
+// genuinely new enquiry carries no In-Reply-To/References match,
+// resolves to no ticket, and starts a fresh one.
 //
 // DUAL-WRITE, deliberately. Nine files still read email_conversations
 // (EmailInbox.jsx, UnifiedInbox.jsx, the conversations + send routes,

@@ -7,6 +7,11 @@
 //   • a reply rides the TRANSACTIONAL stream with no marketing-consent gate.
 //     The member wrote to us first; a suppression flag swallowing the answer
 //     to their own question is worse than the consent risk it avoids.
+//
+// EMAIL-TICKET.5 adds three more (mig 493): the signature is appended to
+// replies and NEVER to notes and NEVER when it is empty; author_profile_id is
+// written on both kinds of message; and the legacy email_conversations mirror
+// can fail without taking the member's answer down with it.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -47,6 +52,14 @@ const LAST_INBOUND = {
   references_header: '<older@mail.example.com>',
   is_internal_note: false, created_at: '2026-08-06T09:00:00Z',
 }
+
+// The same inbound message as the webhook actually writes it: carrying BOTH
+// ids for the length of the mig 394 transition. That conversation_id is the
+// only thing that makes the legacy mirror reachable from a ticket.
+const CONVERSATION_ID = 'ccccccc1-0000-4000-8000-000000000001'
+const LAST_INBOUND_DUAL = { ...LAST_INBOUND, conversation_id: CONVERSATION_ID }
+
+const SIGNED_COACH = { ...COACH, email_signature: 'Sarah\nUN1T Stillorgan' }
 
 let db
 function setupDb(state) {
@@ -114,6 +127,28 @@ describe('POST …/reply — internal note', () => {
   it('never logs a note to email_sends', async () => {
     await post(T_STUDIO.id, { text: 'internal', internal: true })
     expect(insertsInto(db, 'email_sends')).toHaveLength(0)
+  })
+
+  it('is NEVER signed, even when the author has a signature', async () => {
+    getCurrentUser.mockResolvedValue(SIGNED_COACH)
+    await post(T_STUDIO.id, { text: 'Checked with accounts.', internal: true })
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    // A note goes to nobody, so a sign-off on it is noise on a staff line.
+    expect(msg.payload.text_body).toBe('Checked with accounts.')
+    expect(msg.payload.text_body).not.toContain('--')
+    expect(msg.payload.text_body).not.toContain('Sarah')
+  })
+
+  it('records WHO left it', async () => {
+    await post(T_STUDIO.id, { text: 'internal', internal: true })
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.author_profile_id).toBe(COACH.id)
+  })
+
+  it('never mirrors to email_conversations — nothing was sent', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [LAST_INBOUND_DUAL] }))
+    await post(T_STUDIO.id, { text: 'internal', internal: true })
+    expect(updatesTo(db, 'email_conversations')).toHaveLength(0)
   })
 })
 
@@ -205,5 +240,125 @@ describe('POST …/reply — real reply', () => {
     expect(updatesTo(db, 'email_tickets')).toHaveLength(0)
     expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(0)
     expect(db._state.tickets.find(t => t.id === T_STUDIO.id).status).toBe('open')
+  })
+
+  it('records WHO sent it', async () => {
+    await post(T_STUDIO.id, { text: 'We open at 6.' })
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    // from_email stays the Postmark From — that is what went on the wire, not
+    // an author field.
+    expect(msg.payload.author_profile_id).toBe(COACH.id)
+    expect(msg.payload.from_email).toBe('UN1T <hello@un1t.ie>')
+  })
+})
+
+describe('POST …/reply — signature (EMAIL-TICKET.5)', () => {
+  it('appends it after a blank line and the "-- " separator, on BOTH bodies', async () => {
+    getCurrentUser.mockResolvedValue(SIGNED_COACH)
+    await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.textBody).toBe('We open at 6.\n\n-- \nSarah\nUN1T Stillorgan')
+    // The HTML body is the SAME string through the route's escaper, so the
+    // signature can never take a different (un-escaped) path to the member.
+    expect(sent.htmlBody).toContain('We open at 6.\n\n-- \nSarah\nUN1T Stillorgan')
+  })
+
+  it('escapes the signature exactly as it escapes the body', async () => {
+    // The column is plain text precisely so this can never be an HTML hole.
+    getCurrentUser.mockResolvedValue({ ...COACH, email_signature: 'R&D <team@un1t.ie>' })
+    await post(T_STUDIO.id, { text: 'a > b & c' })
+
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.htmlBody).toContain('a &gt; b &amp; c')
+    expect(sent.htmlBody).toContain('R&amp;D &lt;team@un1t.ie&gt;')
+    expect(sent.htmlBody).not.toContain('<team@un1t.ie>')
+    // …and the text body keeps the literal characters.
+    expect(sent.textBody).toContain('R&D <team@un1t.ie>')
+  })
+
+  it.each([
+    ['NULL', null],
+    ['unset', undefined],
+    ['empty', ''],
+    ['whitespace only', '   \n  '],
+  ])('a %s signature appends NOTHING — no stray "--"', async (_label, signature) => {
+    getCurrentUser.mockResolvedValue({ ...COACH, email_signature: signature })
+    await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.textBody).toBe('We open at 6.')
+    expect(sent.textBody).not.toContain('--')
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.text_body).toBe('We open at 6.')
+  })
+
+  it('stores the SIGNED body on the message row — the record of what was sent', async () => {
+    getCurrentUser.mockResolvedValue(SIGNED_COACH)
+    await post(T_STUDIO.id, { text: 'We open at 6.' })
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.text_body).toBe('We open at 6.\n\n-- \nSarah\nUN1T Stillorgan')
+  })
+
+  it('keeps the queue preview unsigned', async () => {
+    getCurrentUser.mockResolvedValue(SIGNED_COACH)
+    await post(T_STUDIO.id, { text: 'We open at 6.' })
+    // Otherwise every short reply looks identical in the ticket list.
+    const [update] = updatesTo(db, 'email_tickets')
+    expect(update.payload.last_message_preview).toBe('We open at 6.')
+  })
+})
+
+describe('POST …/reply — legacy email_conversations mirror (EMAIL-TICKET.5)', () => {
+  it('stamps the conversation onto the message and refreshes its summary', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [LAST_INBOUND_DUAL] }))
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.conversation_id).toBe(CONVERSATION_ID)
+
+    // One row carrying BOTH ids — same shape the inbound webhook writes.
+    // A second message row would double the reply in the ticket thread.
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    const [stamp] = updatesTo(db, 'email_inbox_messages')
+    expect(stamp.payload).toEqual({ conversation_id: CONVERSATION_ID })
+
+    const [conv] = updatesTo(db, 'email_conversations')
+    expect(conv.payload).toMatchObject({
+      last_message_direction: 'outbound',
+      last_message_preview: 'We open at 6.',
+    })
+    expect(conv.payload.last_message_at).toBeTruthy()
+  })
+
+  it('does nothing when the ticket has no legacy conversation', async () => {
+    // Tickets minted after email_conversations is retired are the normal case,
+    // not an error.
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [LAST_INBOUND] }))
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.conversation_id).toBeNull()
+    expect(updatesTo(db, 'email_conversations')).toHaveLength(0)
+    expect(updatesTo(db, 'email_inbox_messages')).toHaveLength(0)
+  })
+
+  it('a mirror that BLOWS UP still returns success — the member was answered', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [LAST_INBOUND_DUAL] }))
+    const realFrom = db.from
+    db.from = (table) => {
+      if (table === 'email_conversations') throw new Error('legacy table is gone')
+      return realFrom(table)
+    }
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).success).toBe(true)
+    // The things that actually matter all happened.
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    expect(updatesTo(db, 'email_tickets')).toHaveLength(1)
+    expect(errors).toHaveBeenCalled()
+    errors.mockRestore()
   })
 })

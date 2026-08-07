@@ -1,0 +1,127 @@
+'use client'
+
+// EMAIL-TICKET.5 — the per-user email signature editor, on /account.
+//
+// It lives here rather than in a ticket-inbox setting because a signature is a
+// person's name and role, not a studio's configuration: someone working two
+// studios signs off the same way in both (mig 493 stores it on profiles, not
+// per location). /account is where every other self-service preference lives.
+//
+// Saves via PATCH /api/me/preferences — the same route AccountForm uses, and
+// the same authorisation model: there is no `id` parameter, so the server
+// writes profiles.id = getCurrentUser().id and nothing else. A user cannot
+// rewrite what a colleague's replies go out signed as.
+//
+// PLAIN TEXT. The textarea is plain, the column is plain, and the reply route
+// escapes it with the same three replacements it uses on the reply body.
+// Anything HTML-shaped typed in here goes out as literal characters, which is
+// the point: it is the one path where an operator's own text reaches outbound
+// mail, so it must not be a markup path.
+
+import { useState } from 'react'
+import { Check, AlertCircle, Loader2 } from 'lucide-react'
+import { MAX_SIGNATURE_LENGTH, SIGNATURE_SEPARATOR, normalizeSignature } from '@/lib/email-signature'
+
+export default function EmailSignatureForm({ initialSignature = '' }) {
+  const [signature, setSignature] = useState(initialSignature || '')
+  const [saved, setSaved] = useState(normalizeSignature(initialSignature))
+  const [saving, setSaving] = useState(false)
+  const [status, setStatus] = useState(null) // 'saved' | 'error'
+  const [error, setError] = useState(null)
+
+  const normalized = normalizeSignature(signature)
+  const dirty = normalized !== saved
+
+  async function handleSave() {
+    setSaving(true); setStatus(null); setError(null)
+    try {
+      const res = await fetch('/api/me/preferences', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email_signature: normalized }),
+      })
+      const j = await res.json()
+      if (!j.success) throw new Error(j.error || 'Failed to save')
+      setSaved(normalized)
+      setStatus('saved')
+      setTimeout(() => setStatus(null), 2500)
+    } catch (e) {
+      setStatus('error')
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="bg-un1t-surface border border-un1t-border rounded-2xl overflow-hidden">
+      <div className="px-5 pt-5 pb-3">
+        <h2 className="text-base font-semibold text-un1t-text">Email signature</h2>
+        <p className="text-xs text-un1t-subtle mt-1">
+          Added to the end of every email reply you send from the ticket inbox. Not added to internal
+          notes — those are never sent to anyone. Leave it empty and nothing is added.
+        </p>
+      </div>
+
+      <div className="border-t border-un1t-border px-5 py-4">
+        <label className="sr-only" htmlFor="email-signature">Email signature</label>
+        <textarea
+          id="email-signature"
+          value={signature}
+          onChange={(e) => setSignature(e.target.value)}
+          rows={4}
+          maxLength={MAX_SIGNATURE_LENGTH}
+          disabled={saving}
+          placeholder={'Sarah Doyle\nUN1T Stillorgan\n01 234 5678'}
+          className="w-full resize-none rounded-lg border border-un1t-border bg-un1t-bg px-3 py-2 text-sm text-un1t-text focus:border-un1t-accent focus:outline-none disabled:opacity-60"
+        />
+        <p className="mt-1.5 text-[11px] text-un1t-muted">
+          Plain text only — {normalized.length}/{MAX_SIGNATURE_LENGTH} characters.
+        </p>
+
+        {normalized && (
+          <div className="mt-3 rounded-lg border border-dashed border-un1t-border bg-un1t-bg px-3 py-2">
+            <div className="text-[10px] font-medium uppercase tracking-wider text-un1t-muted">
+              How it lands
+            </div>
+            <pre className="mt-1 whitespace-pre-wrap break-words font-sans text-xs text-un1t-subtle">
+              {`…your reply\n\n${SIGNATURE_SEPARATOR}\n${normalized}`}
+            </pre>
+          </div>
+        )}
+      </div>
+
+      <div className="px-5 py-4 border-t border-un1t-border flex items-center justify-between gap-3">
+        <div className="min-h-5 text-xs">
+          {status === 'saved' && (
+            <span className="flex items-center gap-1.5 text-emerald-500">
+              <Check size={14} /> Saved
+            </span>
+          )}
+          {status === 'error' && (
+            <span className="flex items-center gap-1.5 text-red-500">
+              <AlertCircle size={14} /> {error}
+            </span>
+          )}
+        </div>
+
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={!dirty || saving}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            dirty && !saving
+              ? 'bg-un1t-text text-un1t-bg hover:bg-un1t-text/90'
+              : 'bg-un1t-border text-un1t-subtle cursor-not-allowed'
+          }`}
+        >
+          {saving ? (
+            <span className="flex items-center gap-1.5">
+              <Loader2 size={14} className="animate-spin" /> Saving…
+            </span>
+          ) : 'Save'}
+        </button>
+      </div>
+    </div>
+  )
+}

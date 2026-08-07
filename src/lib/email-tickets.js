@@ -32,9 +32,19 @@ export function resolveTicketAction(threadedTicket) {
   if (!threadedTicket || !threadedTicket.id) {
     return { action: 'create', reopenedFrom: null }
   }
-  if (threadedTicket.status === 'closed') {
-    return { action: 'create', reopenedFrom: threadedTicket.id }
-  }
+  // A CLOSED ticket reopens on reply — it does NOT fork into a new one
+  // (Richard, 2026-08-07). Closing is internal bookkeeping: the member is never
+  // told a ticket closed, so from their side they are simply continuing the
+  // conversation, and splitting their reply into a second ticket would make the
+  // studio's own record disagree with the thread sitting in their mail client.
+  //
+  // An earlier draft forked here, to stop a ticket decaying into mig 394's
+  // immortal per-person thread. That worry was already covered elsewhere and
+  // better: RFC threading headers are what separate one issue from the next, so
+  // a genuinely new enquiry has no In-Reply-To/References match, resolves to no
+  // ticket at all, and starts a fresh one via the branch above. Closing was a
+  // second, redundant boundary — and the only one a member could trip by
+  // replying to their own old email.
   return {
     action: 'append',
     ticketId: threadedTicket.id,
