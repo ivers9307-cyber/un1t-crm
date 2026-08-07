@@ -7,6 +7,7 @@ import {
   publishQueuePush, ensureQueue,
   ZOOM_CONTACTS_WORKER_PATH, ZOOM_CONTACTS_QUEUE_NAME, ZOOM_CONTACTS_QUEUE_PARALLELISM,
 } from '@/lib/qstash'
+import { startRun, finishRun, pruneRuns } from './sync-runs'
 
 export const GUARD_FLOOR = 20
 export const GUARD_FRACTION = 0.05
@@ -93,15 +94,41 @@ export const PUBLISH_CONCURRENCY = 25
  * Builds the diff and enqueues one QStash job per write. Performs no Zoom
  * writes itself — the worker route does those, one per delivery.
  *
+ * Wraps runZoomContactSyncBody() with run-history recording: startRun()
+ * before the work, finishRun() after, so every trigger is recorded exactly
+ * once regardless of who invoked it (see sync-runs.js).
+ *
  * @param {object} opts
  * @param {object} [opts.db] — Supabase server client
  * @param {boolean} [opts.dry] — compute and return the diff, enqueue nothing
  * @param {number} [opts.limit] — enqueue at most N jobs (creates first)
  * @param {boolean} [opts.force] — bypass the deletion guard for this run
+ * @param {string} [opts.trigger] — 'cron' or 'manual', recorded on the run row
+ * @param {string} [opts.triggeredBy] — operator profile id, when manual
  */
-export async function runZoomContactSync({ db, dry = false, limit = null, force = false } = {}) {
+export async function runZoomContactSync({
+  db, dry = false, limit = null, force = false,
+  trigger = 'cron', triggeredBy = null,
+} = {}) {
+  // Deliberately before startRun: an unconfigured tenant did not run, so
+  // recording a row would put a permanent stream of no-ops in the history of
+  // every tenant that never connects Zoom.
   if (!zoomConfigured()) return { skipped: 'unconfigured' }
 
+  const runId = await startRun(db, {
+    organizationId: process.env.ZOOM_SYNC_ORGANIZATION_ID || null,
+    trigger, triggeredBy, dry, forced: force, limit,
+  })
+
+  const out = await runZoomContactSyncBody({ db, dry, limit, force })
+
+  await finishRun(db, runId, out)
+  // A dry run changed nothing; leave pruning to runs that actually did work.
+  if (!dry) await pruneRuns(db)
+  return out
+}
+
+async function runZoomContactSyncBody({ db, dry, limit, force }) {
   const desiredRes = await buildDesiredContacts(db)
   if (!desiredRes.ok) return { ok: false, error: desiredRes.error }
 

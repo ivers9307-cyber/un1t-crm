@@ -38,7 +38,7 @@ export async function GET(request) {
   const force = url.searchParams.get('force') === '1'
 
   const db = createServerClient()
-  const out = await runZoomContactSync({ db, dry, limit, force })
+  const out = await runZoomContactSync({ db, dry, limit, force, trigger: 'cron' })
 
   // Pass the outcome, don't just stamp the time. Without it the only record of
   // what a night's run did is this HTTP response, which nobody reads at 04:30 —

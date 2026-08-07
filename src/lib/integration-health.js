@@ -94,6 +94,50 @@ export function emailSendStatus({ total = 0, bounced = 0, complained = 0 } = {})
   return { status: 'ok', detail: `${t} sent, ${bad} bounced/complained (24h)` }
 }
 
+// Both zoom-contacts routes cap execution at maxDuration=300s (Vercel's hard
+// limit on the function), so a run that is genuinely still executing is never
+// older than that. The margin above it absorbs clock skew between this
+// process and the DB, not uncertainty about the deadline itself.
+export const ZOOM_RUN_GRACE_MS = 15 * 60 * 1000
+
+/**
+ * ZOOMOPS.1 — status from the most recent non-dry zoom_sync_runs row.
+ *
+ * A null finished_at OLDER than ZOOM_RUN_GRACE_MS is 'down': the run started
+ * and never closed out, which means it crashed, and that is otherwise
+ * invisible. A null finished_at YOUNGER than that is a run still in flight —
+ * reporting that as 'down' would flag every currently-executing sync as
+ * crashed, which is exactly the false alarm this pane must not raise. The
+ * query that feeds this always hands over the newest non-dry row, so a
+ * running trigger IS that row for the whole time it executes — this is the
+ * ordinary shape of "checked the pane right after clicking Run now", not a
+ * rare edge case.
+ */
+export function zoomSyncStatus(lastRun, nowMs = Date.now()) {
+  if (!lastRun) return { status: 'unknown', detail: 'Never run' }
+  if (lastRun.error) return { status: 'down', detail: `Last run failed: ${lastRun.error}` }
+  if (!lastRun.finished_at) {
+    const startedMs = lastRun.started_at ? new Date(lastRun.started_at).getTime() : NaN
+    if (Number.isFinite(startedMs) && nowMs - startedMs < ZOOM_RUN_GRACE_MS) {
+      return { status: 'unknown', detail: 'Run in progress' }
+    }
+    return { status: 'down', detail: 'Last run started but never finished' }
+  }
+  if (lastRun.guard_tripped) {
+    return {
+      status: 'warn',
+      detail: `Deletion guard tripped — ${lastRun.guard_attempted} deletions refused (threshold ${lastRun.guard_threshold})`,
+    }
+  }
+  const c = lastRun.creates ?? 0
+  const u = lastRun.updates ?? 0
+  const d = lastRun.deletes ?? 0
+  return {
+    status: 'ok',
+    detail: `${lastRun.owned_in_zoom ?? 0} in directory · last run +${c} ~${u} -${d}`,
+  }
+}
+
 // Worst status across a set of rows (for a roll-up badge).
 const RANK = { down: 3, warn: 2, unknown: 1, ok: 0 }
 export function worstStatus(rows) {
@@ -237,6 +281,55 @@ export async function getIntegrationHealth(db, locationId) {
     const s = paymentStatus({ total, failed })
     rows.push({ key: 'payments', name: 'Payments', status: s.status, detail: s.detail })
   } catch { rows.push({ key: 'payments', name: 'Payments', status: 'unknown', detail: 'Unavailable' }) }
+
+  // 8. Zoom contact sync — organisation-level, not per location. One directory
+  // serves every handset on the account, so the row is equally true at every
+  // location in the synced org, and absent everywhere else. Unlike Glofox/
+  // Xero/WhatsApp there is no per-org self-serve "connect" flow for Zoom (it
+  // ships dark behind ZOOM_SYNC_ORGANIZATION_ID — see zoom/client.js) so an
+  // unconfigured tenant renders nothing here rather than a "not connected"
+  // row nobody at that org can act on; the dedicated settings page still
+  // explains itself to a visitor who lands there directly.
+  try {
+    const syncOrgId = process.env.ZOOM_SYNC_ORGANIZATION_ID || null
+    if (syncOrgId) {
+      const { data: loc } = await db
+        .from('locations').select('organization_id').eq('id', locationId).maybeSingle()
+      if (loc?.organization_id === syncOrgId) {
+        const { data: runs } = await db
+          .from('zoom_sync_runs')
+          .select('started_at, finished_at, creates, updates, deletes, owned_in_zoom, guard_tripped, guard_attempted, guard_threshold, error')
+          .eq('organization_id', syncOrgId)
+          // A preview is not a run. Without this filter any manager can turn
+          // this row green by clicking Preview — the exact falsely-reassuring
+          // signal this pane exists to prevent.
+          .eq('dry', false)
+          .order('started_at', { ascending: false })
+          .limit(1)
+        const lastRun = (runs || [])[0] || null
+        const s = zoomSyncStatus(lastRun)
+        rows.push({
+          key: 'zoom-contacts',
+          name: 'Zoom phone directory',
+          status: s.status,
+          lastSuccess: lastRun?.finished_at || null,
+          detail: s.detail,
+          remedy: s.status === 'warn'
+            ? 'Preview the run, read the numbers it wants to remove, then override the guard if they are genuinely gone.'
+            : s.status === 'down'
+              ? 'Open the sync page and preview a run to see the current error.'
+              : undefined,
+          href: '/settings/integrations/zoom-contacts',
+        })
+      }
+    }
+  } catch {
+    // Match every other block: a broken check degrades to 'unknown' rather
+    // than silently dropping the row (an omitted row is indistinguishable
+    // from "not applicable to this org" — exactly the ambiguity this pane
+    // exists to remove).
+    rows.push({ key: 'zoom-contacts', name: 'Zoom phone directory', status: 'unknown', detail: 'Unavailable', href: '/settings/integrations/zoom-contacts' })
+  }
 
   // Attach a runbook (remedy + fix link) to every degraded/down row so the pane
   // is actionable. Keyed by the row-key prefix; only surfaced when there's

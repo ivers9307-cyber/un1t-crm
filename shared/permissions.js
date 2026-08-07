@@ -244,6 +244,18 @@ export const WEB_PERMISSIONS = Object.freeze([
   // it off per location via Location Settings if they don't run
   // marketing for that studio (e.g. CCF Autos).
   { key: 'landing_page', label: 'Landing page editor',          hint: 'Edit the public marketing page at /welcome. Includes WYSIWYG editor + sidebar settings form.' },
+  // ZOOMOPS.1 — operator controls for the Zoom Phone contact sync at
+  // /settings/integrations/zoom-contacts (run history, the report of
+  // contacts the sync can't use, and preview / run / guard-override
+  // buttons). Deliberately NOT checked for a preview (dry: true) — a
+  // preview writes nothing to Zoom, so it's open to anyone who can reach
+  // the settings page. Running the sync for real, and especially
+  // overriding its deletion guard, can add or remove thousands of
+  // entries from the shared company phone directory, so both of those
+  // are gated on this key. Owner + master by default. Web-only (see
+  // WEB_ONLY_OK in scripts/check-mobile-parity.mjs) — the destructive
+  // controls need a confirmation dialog the mobile app has no home for.
+  { key: 'integrations_zoom_manage', label: 'Manage the Zoom phone directory sync', hint: 'Run the Zoom Phone contact sync for real, and override its deletion guard. Preview is open to anyone who can reach the settings page; running and the guard override are owner + master only.' },
 ])
 
 // APPROVALS-PERCAT.1 — provider key → per-category permission key. The
@@ -306,6 +318,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     consultations: true,
     settings: true,
     landing_page: true,
+    integrations_zoom_manage: true,
   },
   staff: {
     dashboard_personal: true, dashboard_studio: false, dashboard_business: false, dashboard_ads: false,
@@ -337,6 +350,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     consultations: false,                            // coach/web surface — off for staff
     settings: false,
     landing_page: false,                          // marketing copy isn't a staff concern
+    integrations_zoom_manage: false,               // owner + master only — destructive directory writes
   },
   // Reception (2026-07) — front-of-house desk role. Staff-level
   // access plus the WhatsApp inbox (answering member messages is a
@@ -372,6 +386,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     consultations: false,
     settings: false,
     landing_page: false,
+    integrations_zoom_manage: false,               // owner + master only — destructive directory writes
   },
   head_coach: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: false, dashboard_ads: false,
@@ -405,6 +420,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     consultations: true,
     settings: false,
     landing_page: false,
+    integrations_zoom_manage: false,               // owner + master only — destructive directory writes
   },
   manager: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: false, dashboard_ads: true,
@@ -438,6 +454,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     consultations: true,
     settings: true,
     landing_page: false,                          // owner/master decision; per-user override available
+    integrations_zoom_manage: false,               // owner + master only — destructive directory writes
   },
   owner: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: true, dashboard_ads: true,
@@ -471,6 +488,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     consultations: true,
     settings: true,
     landing_page: true,
+    integrations_zoom_manage: true,
   },
 })
 
