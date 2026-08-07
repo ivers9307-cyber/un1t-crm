@@ -10,7 +10,7 @@
 //   • a failed send leaves NOTHING behind. A ticket in the queue for an email
 //     that never went out is the worst lie a support tool can tell.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/auth', async () => {
@@ -23,6 +23,7 @@ import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { sendEmail } from '@/lib/postmark'
+import { _resetInboxSenderCache, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { makeDb, insertsInto, writesTo } from '../_test-db'
 import {
   LOC_A, MB_STUDIO, MB_ACCOUNTS, MB_OTHER_LOCATION,
@@ -65,11 +66,18 @@ function setupDb(state) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  _resetInboxSenderCache()
   process.env.POSTMARK_FROM_EMAIL = 'UN1T <hello@un1t.ie>'
+  // EMAIL-OUTBOUND-SERVER.1 — the support inbox's OWN Postmark server.
+  process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN = 'ticketing-server-token'
   getCurrentUser.mockResolvedValue(COACH)
   sendEmail.mockResolvedValue({ messageId: 'pm-compose-1' })
   // The coach holds studio@ and nothing else — the whole point of the fixture.
   setupDb(baseState({ grants: [GRANT_STUDIO], contacts: [] }))
+})
+
+afterEach(() => {
+  delete process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN
 })
 
 describe('POST /api/email/tickets/compose — gates', () => {
@@ -150,7 +158,7 @@ describe('POST /api/email/tickets/compose — validation', () => {
 })
 
 describe('POST /api/email/tickets/compose — the send', () => {
-  it('sends on the transactional stream, Reply-To the chosen mailbox', async () => {
+  it('sends on the transactional stream, FROM and Reply-To the chosen mailbox', async () => {
     const res = await post(VALID)
     expect(res.status).toBe(200)
 
@@ -160,11 +168,60 @@ describe('POST /api/email/tickets/compose — the send', () => {
       to: VALID.to,
       subject: VALID.subject,
       textBody: VALID.text,
+      // THIS APP'S stream — transactional.
       stream: 'outbound',
       replyTo: MB_STUDIO.address,
     })
-    // From is NOT the mailbox address — that needs per-domain DKIM (later plan).
-    expect(sent.from).toBeUndefined()
+    // EMAIL-OUTBOUND-SERVER.1 — the ticketing server's token + the mailbox as
+    // the From, both carried on the sender override.
+    expect(sent.sender).toEqual({
+      serverToken: 'ticketing-server-token',
+      fromEmail: MB_STUDIO.address,
+      fromName: null,
+    })
+  })
+
+  it('rides POSTMARK’s email-send stream while staying internally `outbound`', async () => {
+    await post(VALID)
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.postmarkStream).toBe('email-send')
+    expect(sent.stream).toBe(TICKET_INTERNAL_STREAM)
+  })
+
+  it('logs the INTERNAL stream and the real From to email_sends', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], contacts: [
+      { id: 'contact-9', location_id: LOC_A, email: VALID.to, created_at: '2026-01-01T00:00:00Z' },
+    ] }))
+    await post(VALID)
+    const [send] = insertsInto(db, 'email_sends')
+    expect(send.payload.postmark_stream).toBe('outbound')
+    expect(send.payload.postmark_stream).not.toBe('email-send')
+    expect(send.payload.from_email).toBe(MB_STUDIO.address)
+  })
+
+  it('503s without sending — and without filing a ticket — when unconfigured', async () => {
+    delete process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN
+    const res = await post(VALID)
+
+    expect(res.status).toBe(503)
+    expect((await res.json()).error).toContain('POSTMARK_EMAIL_INBOX_SERVER_TOKEN')
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(0)
+  })
+
+  it('falls back to a domain we own when the mailbox cannot be sent from', async () => {
+    const rejection = Object.assign(new Error('no Sender Signature'), { errorCode: 400, httpStatus: 422 })
+    sendEmail.mockRejectedValueOnce(rejection).mockResolvedValue({ messageId: 'pm-fallback' })
+
+    const res = await post(VALID)
+
+    expect(res.status).toBe(200)
+    expect(sendEmail).toHaveBeenCalledTimes(2)
+    expect(sendEmail.mock.calls[1][0].sender.fromEmail).toBe('UN1T <hello@un1t.ie>')
+    expect(sendEmail.mock.calls[1][0].replyTo).toBe(MB_STUDIO.address)
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.from_email).toBe('UN1T <hello@un1t.ie>')
   })
 
   it('a failed send leaves NO ticket and NO message behind', async () => {

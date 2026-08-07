@@ -5,7 +5,7 @@ import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermissionForLocation } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email as emailAddress } from '@/lib/schemas'
-import { sendEmail } from '@/lib/postmark'
+import { sendTicketEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { normalizeEmail, pickContact, inboundPreview } from '@/lib/email-inbox'
 import { ticketSubject } from '@/lib/email-tickets'
 import { escapeLikePattern } from '@/lib/like-escape'
@@ -215,32 +215,36 @@ export async function POST(request) {
   // TODO(EMAIL-TICKET.5): append the sender's signature here once the reply
   // route's per-profile signature helper exists — one call, both paths, no
   // second copy of the rule.
-  let result
-  try {
-    result = await sendEmail({
-      // EMAIL-CC.1 — all three via toPostmarkFields(), the single site where a
-      // resolved set becomes wire values. Bcc reaches Postmark's own Bcc field
-      // and nothing else.
-      to: wire.to,
-      cc: wire.cc,
-      bcc: wire.bcc,
-      subject,
-      htmlBody: textToHtml(text),
-      textBody: text,
-      // Reply-To is the mailbox they were written from, so the answer comes
-      // back to that address and threads onto this ticket. From stays
-      // POSTMARK_FROM_EMAIL (sendEmail's default) — sending FROM the mailbox
-      // address needs per-domain DKIM that is not universally in place, and
-      // un-aligned SPF/DKIM lands support mail in spam. Same call as the reply
-      // route; changing it is one change for both.
-      replyTo: mailbox.address,
-      stream: 'outbound',
-      tag: 'ticket-compose',
-      metadata: { mailbox_id: mailbox.id, contact_id: contact?.id || '' },
-    })
-  } catch (err) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 400 })
+  //
+  // EMAIL-CC.1 — all three lists via toPostmarkFields(), the single site where
+  // a resolved set becomes wire values. Bcc reaches Postmark's own Bcc field
+  // and nothing else. Note the WIRE strings go out while the ticket below is
+  // filed against `to` (= recipients.to[0]), the primary recipient.
+  //
+  // EMAIL-OUTBOUND-SERVER.1 — sent FROM the chosen mailbox, on the support
+  // inbox's own Postmark server and stream, with Reply-To that same mailbox so
+  // the answer threads back onto this ticket. Same call as the reply route;
+  // changing it is one change for both.
+  const send = await sendTicketEmail({
+    mailboxAddress: mailbox.address,
+    to: wire.to,
+    cc: wire.cc,
+    bcc: wire.bcc,
+    subject,
+    htmlBody: textToHtml(text),
+    textBody: text,
+    tag: 'ticket-compose',
+    metadata: { mailbox_id: mailbox.id, contact_id: contact?.id || '' },
+  })
+  if (!send.ok) {
+    // 503 = our ticketing server is unconfigured (retry unchanged once it is);
+    // 400 = Postmark refused this message. Either way nothing was written.
+    return NextResponse.json(
+      { success: false, error: send.error },
+      { status: send.reason === 'not_configured' ? 503 : 400 }
+    )
   }
+  const result = send.result
 
   const now = new Date().toISOString()
 
@@ -277,7 +281,9 @@ export async function POST(request) {
     contact_id: contact?.id || null,
     location_id: locationId,
     direction: 'outbound',
-    from_email: process.env.POSTMARK_FROM_EMAIL || null,
+    // The From that actually went on the wire — the mailbox's own address, or
+    // a domain we own when that mailbox has no verified sender signature.
+    from_email: send.fromEmail || null,
     // to_email stays the PRIMARY recipient; to_emails carries the rest (mig
     // 499). bcc_emails is written here and read back by nothing — not the
     // reply route, not the forward that reuses this recipient model.
@@ -312,16 +318,20 @@ export async function POST(request) {
   // delivery webhooks can track it, and a reply matches back to this contact
   // via postmark_message_id. contact_id is NOT NULL there, so an unlinked
   // recipient skips the log — the message row above is still the record.
+  //
+  // postmark_stream is THIS APP'S 'outbound' (the shared constant), never the
+  // Postmark message stream id the message rode — see the reply route for the
+  // full reasoning.
   if (contact?.id) {
     await db.from('email_sends').insert({
       contact_id: contact.id,
       location_id: locationId,
       source_type: 'inbox_compose',
       subject,
-      from_email: process.env.POSTMARK_FROM_EMAIL,
+      from_email: send.fromEmail,
       to_email: to,
       postmark_message_id: result.messageId,
-      postmark_stream: 'outbound',
+      postmark_stream: TICKET_INTERNAL_STREAM,
       status: 'sent',
     })
   }

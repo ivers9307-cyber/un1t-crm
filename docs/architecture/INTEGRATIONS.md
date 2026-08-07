@@ -10,8 +10,11 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 POSTMARK_API_KEY=
 POSTMARK_FROM_EMAIL=hello@un1t.ie
-POSTMARK_WEBHOOK_TOKEN=          # shared secret sent in X-Webhook-Token by Postmark (required — route 500s if unset)
+POSTMARK_WEBHOOK_TOKEN=          # shared secret sent in X-Webhook-Token by Postmark (required — route 500s if unset). Set it on EVERY server that posts to us (marketing + support inbox)
 POSTMARK_WEBHOOK_TOKEN_PREVIOUS= # optional — old token kept live during rotation; unset after every Postmark webhook config has been flipped to the new value
+POSTMARK_EMAIL_INBOX_SERVER_TOKEN= # server token for the SUPPORT INBOX's own Postmark server. Ticket reply/compose only; no fallback — unset = those two routes 503 (EMAIL-OUTBOUND-SERVER.1)
+POSTMARK_EMAIL_INBOX_STREAM=     # Postmark message stream id on that server. Defaults to 'email-send'. Postmark's vocabulary, NOT this app's broadcast/outbound
+POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN= # token-in-URL secret for the support inbox's INBOUND webhook (/api/webhooks/postmark-inbound/<token>)
 WHATSAPP_ACCESS_TOKEN=
 WHATSAPP_PHONE_NUMBER_ID=
 WHATSAPP_BUSINESS_ACCOUNT_ID=    # optional
@@ -136,6 +139,15 @@ The earlier Files API path (`src/lib/xero/files.js`) has been deleted — nothin
 `src/lib/webhook-auth.js` provides `verifyMetaSignature()` (HMAC-SHA256 over the raw body, used by `/api/webhooks/whatsapp`) and `verifySharedSecret()` (constant-time token compare, used by `/api/webhooks/postmark`). Both routes set `export const runtime = 'nodejs'` so `node:crypto` is available.
 
 **Postmark.** Auth is enforced — `POSTMARK_WEBHOOK_TOKEN` is required, and a missing env var returns 500 (not 200-with-warning). The 5xx is deliberate: Postmark retries 5xx responses for ~24h, so a config drift gets recovered as soon as the env var is set, instead of silently dropping events. A bad/missing `X-Webhook-Token` returns 403 (Postmark won't retry 4xx — correct behaviour for a deliberately-rogue caller). The auth predicate is exported from the route as `verifyPostmarkRequest({ headerValue, primarySecret, previousSecret })` and unit-tested in `src/lib/postmark-webhook-auth.test.js`. **Token rotation:** set `POSTMARK_WEBHOOK_TOKEN_PREVIOUS` to the old token while you flip every webhook custom-header config in Postmark over to the new one — both are accepted in the meantime, with a `[security]` warning when the previous one matches so you remember to finish the rotation. Unset PREVIOUS after.
+
+**Postmark — TWO SERVERS, ONE ENDPOINT (EMAIL-OUTBOUND-SERVER.1).** Marketing and the support inbox are separate Postmark servers, and since EMAIL-OUTBOUND-SERVER.1 the ticket reply/compose routes *send* on the support one (`POSTMARK_EMAIL_INBOX_SERVER_TOKEN`, stream `email-send`). Their Delivery/Bounce/SpamComplaint events therefore arrive from a second server. **`/api/webhooks/postmark` is server-agnostic and needs no change to accept them:** it authenticates on a shared secret (not on server identity), dedupes on `RecordType:MessageID`, and every downstream correlation — `email_sends`, `campaign_recipients`, `email_inbox_messages.postmark_message_id` (EMAIL-DELIVERY.1) — keys purely off Postmark's `MessageID`, which is an **account-wide** GUID. Configure the same URL and the same `X-Webhook-Token` custom header on the support server:
+
+```
+https://crm.un1tdublin.com/api/webhooks/postmark
+X-Webhook-Token: <POSTMARK_WEBHOOK_TOKEN>
+```
+
+Until that is configured, ticket replies simply produce **no** delivery events: the thread shows no delivered/bounced marker, `email_sends.status` stays `sent`, and a hard bounce on a support reply does not reach the marketing suppression path (which is otherwise unchanged — see `postmark-webhook-processor.js`). Nothing errors; the events are never sent.
 
 **Meta WhatsApp.** Strict HMAC verification via `verifyMetaSignature()` against `WHATSAPP_APP_SECRET`. Missing env var or bad signature → 403.
 
