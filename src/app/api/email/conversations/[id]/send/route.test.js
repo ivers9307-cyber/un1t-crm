@@ -1,9 +1,11 @@
-// INBOX-PERM.2 — POST /api/email/conversations/[id]/send (legacy reply).
+// EMAIL-CONV-STOP.1 — POST /api/email/conversations/[id]/send is RETIRED.
 //
-// The worst of the three. This route puts real mail on the wire from the
-// company address, and until INBOX-PERM.2 it asked whether the caller held the
-// WHATSAPP permission before doing so. The assertion that matters is not the
-// status code — it is that sendEmail is never reached.
+// The most consequential of the three: it put real mail on the wire from the
+// company address. It now answers 410 Gone, and the assertion that matters is
+// not the status code — it is that sendEmail is NEVER reached and no database
+// client is ever created. Replies live at POST /api/email/tickets/[id]/reply,
+// which also carries the per-mailbox email_mailbox_access grant this route
+// never had.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -18,10 +20,9 @@ import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { sendEmail } from '@/lib/postmark'
-import { makeDb, insertsInto } from '../../../tickets/_test-db'
-import { WA_ONLY, EMAIL_ONLY, CONV, baseState } from '../../_test-fixtures'
+import { WA_ONLY, EMAIL_ONLY, CONV_ID } from '../../_test-fixtures'
 
-function post(body, id = CONV.id) {
+function post(body, id = CONV_ID) {
   return POST(
     new Request(`http://x/api/email/conversations/${id}/send`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
@@ -30,16 +31,13 @@ function post(body, id = CONV.id) {
   )
 }
 
-let db
 beforeEach(() => {
   vi.clearAllMocks()
-  db = makeDb(baseState())
-  createServerClient.mockImplementation(() => db)
   getCurrentUser.mockResolvedValue(EMAIL_ONLY)
   sendEmail.mockResolvedValue({ messageId: 'pm-1' })
 })
 
-describe('POST /api/email/conversations/[id]/send', () => {
+describe('POST /api/email/conversations/[id]/send — retired', () => {
   it('401s when unauthenticated — and sends nothing', async () => {
     getCurrentUser.mockResolvedValue(null)
     expect((await post({ text: 'hello' })).status).toBe(401)
@@ -48,18 +46,19 @@ describe('POST /api/email/conversations/[id]/send', () => {
 
   it('403s a user holding `whatsapp` but NOT `email_inbox` — AND NEVER SENDS', async () => {
     getCurrentUser.mockResolvedValue(WA_ONLY)
-    const res = await post({ text: 'hello from a coach' })
-    expect(res.status).toBe(403)
+    expect((await post({ text: 'hello from a coach' })).status).toBe(403)
     expect(sendEmail).not.toHaveBeenCalled()
     expect(createServerClient).not.toHaveBeenCalled()
-    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(0)
   })
 
-  it('allows a user holding `email_inbox` to send', async () => {
+  it('410s the permitted caller, sends nothing and reads nothing', async () => {
     const res = await post({ text: 'Six sharp.' })
-    expect(res.status).toBe(200)
-    expect(sendEmail).toHaveBeenCalledTimes(1)
-    expect(sendEmail.mock.calls[0][0].to).toBe(CONV.counterpart_email)
-    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    expect(res.status).toBe(410)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/retired/i)
+    expect(body.error).toMatch(/ticket/i)
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(createServerClient).not.toHaveBeenCalled()
   })
 })

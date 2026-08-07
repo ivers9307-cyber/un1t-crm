@@ -1,9 +1,13 @@
-// INBOX-PERM.2 — GET/PATCH /api/email/conversations/[id] (legacy detail).
+// EMAIL-CONV-STOP.1 — GET/PATCH /api/email/conversations/[id] are RETIRED.
 //
-// This route both READS message bodies and WRITES (it zeroes unread_count on a
-// GET, and PATCH stamps resolved_at), so the wrong permission key here was not
-// only a disclosure — a user who should never have seen the queue could clear
-// its unread badges and resolve threads out of it.
+// Both used to touch the mig 394 tables — GET read the thread AND zeroed
+// unread_count, PATCH stamped resolved_at. Both now answer 410 Gone with no
+// database work at all, which `createServerClient` never being called is what
+// proves.
+//
+// The 401/403 tests stay: the guard is deliberately in FRONT of the 410 so the
+// retirement cannot be used to enumerate routes, and `check:route-guards`
+// requires the channel-permission check on everything under this directory.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -16,13 +20,12 @@ vi.mock('@/lib/auth', async () => {
 import { GET, PATCH } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
-import { makeDb, updatesTo } from '../../tickets/_test-db'
-import { LOC_B, WA_ONLY, EMAIL_ONLY, CONV, baseState } from '../_test-fixtures'
+import { WA_ONLY, EMAIL_ONLY, CONV_ID } from '../_test-fixtures'
 
-function get(id = CONV.id) {
+function get(id = CONV_ID) {
   return GET(new Request(`http://x/api/email/conversations/${id}`), { params: Promise.resolve({ id }) })
 }
-function patch(id, body) {
+function patch(id = CONV_ID, body = { resolved: true }) {
   return PATCH(
     new Request(`http://x/api/email/conversations/${id}`, {
       method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
@@ -31,58 +34,52 @@ function patch(id, body) {
   )
 }
 
-let db
-function setupDb(state) {
-  db = makeDb(state)
-  createServerClient.mockImplementation(() => db)
-  return db
-}
-
 beforeEach(() => {
   vi.clearAllMocks()
-  setupDb(baseState())
   getCurrentUser.mockResolvedValue(EMAIL_ONLY)
 })
 
-describe('GET /api/email/conversations/[id]', () => {
+describe('GET /api/email/conversations/[id] — retired', () => {
   it('401s when unauthenticated', async () => {
     getCurrentUser.mockResolvedValue(null)
     expect((await get()).status).toBe(401)
+    expect(createServerClient).not.toHaveBeenCalled()
   })
 
   it('403s a user holding `whatsapp` but NOT `email_inbox`', async () => {
     getCurrentUser.mockResolvedValue(WA_ONLY)
-    const res = await get()
-    expect(res.status).toBe(403)
-    // No read of the thread AND no write of unread_count.
+    expect((await get()).status).toBe(403)
     expect(createServerClient).not.toHaveBeenCalled()
   })
 
-  it('allows a user holding `email_inbox` and returns the thread oldest-first', async () => {
+  it('410s with an actionable message and reads NOTHING', async () => {
     const res = await get()
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(410)
     const body = await res.json()
-    expect(body.conversation.id).toBe(CONV.id)
-    expect(body.messages.map(m => m.id)).toEqual(['m-1', 'm-2'])
-  })
-
-  it('404s a conversation at another location', async () => {
-    setupDb(baseState({ conversations: [{ ...CONV, location_id: LOC_B }] }))
-    expect((await get()).status).toBe(404)
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/retired/i)
+    expect(body.error).toMatch(/ticket/i)
+    // The old handler zeroed unread_count as a side effect of a GET.
+    expect(createServerClient).not.toHaveBeenCalled()
   })
 })
 
-describe('PATCH /api/email/conversations/[id]', () => {
+describe('PATCH /api/email/conversations/[id] — retired', () => {
   it('403s a user holding `whatsapp` but NOT `email_inbox`', async () => {
     getCurrentUser.mockResolvedValue(WA_ONLY)
-    const res = await patch(CONV.id, { resolved: true })
-    expect(res.status).toBe(403)
+    expect((await patch()).status).toBe(403)
     expect(createServerClient).not.toHaveBeenCalled()
   })
 
-  it('allows a user holding `email_inbox` to resolve', async () => {
-    const res = await patch(CONV.id, { resolved: true })
-    expect(res.status).toBe(200)
-    expect(updatesTo(db, 'email_conversations')[0].payload.resolved_at).toBeTruthy()
+  it('410s and resolves nothing', async () => {
+    const res = await patch()
+    expect(res.status).toBe(410)
+    expect((await res.json()).success).toBe(false)
+    expect(createServerClient).not.toHaveBeenCalled()
+  })
+
+  it('410s even on a well-formed body — the schema is gone too', async () => {
+    expect((await patch(CONV_ID, { resolved: false })).status).toBe(410)
+    expect(createServerClient).not.toHaveBeenCalled()
   })
 })

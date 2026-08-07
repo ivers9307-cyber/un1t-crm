@@ -1009,7 +1009,7 @@ registry.registerPath({
   tags: ['Webhooks (Inbound)'],
   security: [],
   summary: 'Tokenised Postmark inbound email (unified inbox)',
-  description: 'Postmark inbound stream → CRM. Threads customer email replies into email_conversations for the unified inbox. Authenticated by the unguessable `{token}` path segment (POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN), not a header.',
+  description: 'Postmark inbound stream → CRM. Threads customer email replies into email_tickets (mig 482) — as of EMAIL-CONV-STOP.1 it no longer writes the deprecated email_conversations table. Authenticated by the unguessable `{token}` path segment (POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN), not a header.',
   request: {
     params: z.object({ token: z.string() }),
     body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('PostmarkInboundEmailEvent') } } },
@@ -1020,27 +1020,34 @@ registry.registerPath({
   },
 })
 
-// Email inbox conversations (cookie auth) — EMAIL-INBOX.1.
-// LEGACY: superseded by /api/email/tickets*, kept for frozen mobile lanes.
-// INBOX-PERM.2 — every route below gates on the `email_inbox` permission (it
-// used to resolve the `em` channel against `whatsapp`, which let a WhatsApp-only
-// staffer read and send the studio's email). Unlike the ticket routes there is
-// no per-mailbox grant check here — these routes predate email_mailbox_access.
+// Email inbox conversations (cookie auth) — EMAIL-INBOX.1, now RETIRED.
+//
+// EMAIL-CONV-STOP.1 (2026-08-07): all four operations answer **410 Gone** and
+// touch no data. Superseded by /api/email/tickets* (mig 482). The routes still
+// exist only so installed mobile builds on frozen OTA lanes get an actionable
+// error rather than a 404 they cannot tell apart from a network failure.
+//
+// The `email_inbox` gate from INBOX-PERM.2 is still in front of the 410 (it
+// used to resolve the `em` channel against `whatsapp`, which let a
+// WhatsApp-only staffer read and send the studio's email), so 401 and 403 are
+// still reachable and an unauthenticated caller cannot enumerate.
+const GoneOnly = {
+  401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  403: { description: 'Missing the email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
+  410: { description: 'Gone — retired, use /api/email/tickets*', content: { 'application/json': { schema: ErrorResponse } } },
+}
+
 registry.registerPath({
   method: 'get',
   path: '/api/email/conversations',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'List email inbox conversations',
-  description: "Operator inbox list for the email channel. Location-scoped: ?location_id (access-checked) or the union of the caller's locations. Requires the `email_inbox` permission.",
+  summary: 'RETIRED — list email inbox conversations (410 Gone)',
+  description: 'Retired by EMAIL-CONV-STOP.1. Was the operator inbox list for the email channel; now returns 410 Gone and reads nothing. Use GET /api/email/tickets.',
   request: {
     query: z.object({ location_id: uuidLike.optional() }),
   },
-  responses: {
-    200: { description: 'Conversation list' },
-    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing the email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
-  },
+  responses: { ...GoneOnly },
 })
 
 registry.registerPath({
@@ -1048,16 +1055,12 @@ registry.registerPath({
   path: '/api/email/conversations/{id}',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Email conversation + message thread',
-  description: 'Returns the conversation and its most recent messages (text bodies only) and resets unread_count. 404 for foreign-location ids. Requires the `email_inbox` permission.',
+  summary: 'RETIRED — email conversation + message thread (410 Gone)',
+  description: 'Retired by EMAIL-CONV-STOP.1. Was the conversation and its recent messages (and reset unread_count); now returns 410 Gone and reads nothing. Use GET /api/email/tickets/{id}.',
   request: {
     params: z.object({ id: uuidLike }),
   },
-  responses: {
-    200: { description: 'Conversation + messages' },
-    403: { description: 'Missing the email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
-  },
+  responses: { ...GoneOnly },
 })
 
 registry.registerPath({
@@ -1065,17 +1068,13 @@ registry.registerPath({
   path: '/api/email/conversations/{id}',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Resolve / reopen an email conversation',
-  description: 'Stamps or clears resolved_at (UIX-P1 queue semantics). A new inbound email auto-clears it in the webhook. Requires the `email_inbox` permission.',
+  summary: 'RETIRED — resolve / reopen an email conversation (410 Gone)',
+  description: 'Retired by EMAIL-CONV-STOP.1. Was the resolved_at stamp (UIX-P1 queue semantics); now returns 410 Gone and writes nothing. Use PATCH /api/email/tickets/{id}/status.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ resolved: z.boolean() }).openapi('EmailConversationPatch') } } },
   },
-  responses: {
-    200: { description: 'Updated' },
-    403: { description: 'Missing the email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
-  },
+  responses: { ...GoneOnly },
 })
 
 registry.registerPath({
@@ -1083,18 +1082,13 @@ registry.registerPath({
   path: '/api/email/conversations/{id}/send',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Reply to an email conversation',
-  description: "Sends a plain-text operator reply via Postmark's transactional stream with In-Reply-To/References threading headers, logs it to the thread (and email_sends when a contact is linked). Requires the `email_inbox` permission.",
+  summary: 'RETIRED — reply to an email conversation (410 Gone)',
+  description: 'Retired by EMAIL-CONV-STOP.1. Was a plain-text operator reply on Postmark’s transactional stream; now returns 410 Gone and never reaches Postmark. Use POST /api/email/tickets/{id}/reply.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ text: z.string().min(1).max(10000), subject: z.string().max(500).optional() }).openapi('EmailInboxReply') } } },
   },
-  responses: {
-    200: { description: 'Reply sent' },
-    400: { description: 'Send failed / no recipient', content: { 'application/json': { schema: ErrorResponse } } },
-    403: { description: 'Missing the email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
-    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
-  },
+  responses: { ...GoneOnly },
 })
 
 // Email tickets (cookie auth) — EMAIL-TICKET.4.

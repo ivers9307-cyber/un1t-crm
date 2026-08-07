@@ -1,5 +1,7 @@
-// Test double for the service-role client, shared by the ticket route tests
-// and the legacy /api/email/conversations tests next door.
+// Test double for the service-role client, shared by the ticket route tests.
+// (The legacy /api/email/conversations tests next door no longer need it —
+// EMAIL-CONV-STOP.1 retired those routes to 410 Gone, and their tests now
+// assert that no client is ever created.)
 //
 // It honours eq / in / is / not / or / ilike / order / limit rather than
 // no-opping them, because the property under test IS a filter: "a coach
@@ -80,15 +82,17 @@ const TABLE_KEYS = {
   email_inbox_messages: 'messages',
   email_sends: 'sends',
   contacts: 'contacts',
-  // The mig 394 legacy surface — same message table, its own conversation row.
-  email_conversations: 'conversations',
+  // email_conversations is DELIBERATELY ABSENT (EMAIL-CONV-STOP.1): nothing may
+  // read it any more, so a read falls through to []. Writes are still recorded
+  // on db.inserts/db.updates before the key is consulted, which is what lets
+  // `updatesTo(db, 'email_conversations')` prove a reintroduced write.
   locations: 'locations',
 }
 
 export function makeDb(state = {}) {
   const s = {
     mailboxes: [], grants: [], tickets: [], messages: [], sends: [], contacts: [],
-    conversations: [], locations: [], errors: {},
+    locations: [], errors: {},
     ...state,
   }
   // `selects` records the COLUMN STRING each read asked for. The fake itself

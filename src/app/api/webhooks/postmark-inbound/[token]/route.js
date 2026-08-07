@@ -53,19 +53,37 @@
 // genuinely new enquiry carries no In-Reply-To/References match,
 // resolves to no ticket, and starts a fresh one.
 //
-// DUAL-WRITE, deliberately — every inbound also maintains its mig 394
-// email_conversations row and the message carries BOTH ids.
+// NO DUAL-WRITE ANY MORE (EMAIL-CONV-STOP.1, 2026-08-07). This route used
+// to maintain a mig 394 email_conversations row beside the ticket and stamp
+// BOTH ids onto the message. It now neither reads nor writes that table.
 //
-// COMMENT-ONLY UPDATE, INBOX-SPLIT.1 (2026-08-07): the original reason —
-// "nine files still read email_conversations, dropping the write would
-// blank the live inbox" — has EXPIRED. EmailInbox.jsx is deleted and
-// UnifiedInbox.jsx no longer merges email, so NO WEB SURFACE reads the
-// table. The remaining readers are the MOBILE app (mobile/lib/email-api.js
-// → /api/email/conversations*, still its only email surface) and the
-// tickets reply route's own legacy mirror. The dual-write is dead weight
-// for the web but NOT yet safe to delete — retiring it is a webhook change
-// plus a mobile cutover plus eventually dropping the table, and that is
-// deliberately a separate step. Behaviour below is unchanged.
+// THAT REMOVAL IS THE POINT OF THE CHANGE, not tidying. The conversation
+// lookup and the conversation insert each answered 500 on failure, and both
+// ran BEFORE the ticket insert — so a fault in a table no surface reads any
+// more could lose real mail, permanently and silently:
+//
+//   conversation query fails → 500 → Postmark retries the same MessageID →
+//   recordWebhookEvent already wrote the dedupe row on the first attempt →
+//   the retry short-circuits to 200 `deduped` → the email is filed NOWHERE.
+//   No ticket, no message, no error, no dead letter. First retry, gone.
+//
+// That is why this change is CODE-ONLY and ships FIRST: dropping the table
+// before this deployed would have fired exactly that chain on the very next
+// inbound email, deterministically.
+//
+// BE PRECISE ABOUT WHAT IS AND IS NOT FIXED. The chain is a property of the
+// dedupe-before-work ordering, not of email_conversations: EVERY 500 below
+// (email_sends, email_mailboxes, contacts, the two ticket lookups, the ticket
+// and message inserts) is lost the same way on Postmark's retry. What this
+// change removes is the one link that was about to be made to fail ON PURPOSE
+// by a migration. The general ordering problem — a dedupe row claimed before
+// the work succeeds — is still here and still worth fixing separately (claim
+// on success, or release the dedupe row on a 5xx).
+//
+// email_inbox_messages.conversation_id still exists as a column and is now
+// simply never written (deprecated-columns-stay-on-disk, CLAUDE.md). A
+// later migration retires the column, the table, the
+// increment_email_conversation_unread RPC and its realtime/RLS entries.
 //
 // Why no queue table (unlike the outbound Postmark webhook): inbound
 // human replies are low-volume (no 5k-in-20s bursts) and each event
@@ -312,65 +330,16 @@ export async function POST(request, { params }) {
   }
   const action = resolveTicketAction(threadedTicket)
 
-  // ── Upsert conversation (one per location + counterpart email) ────
-  const { data: existing, error: convErr } = await db.from('email_conversations')
-    .select('id, contact_id')
-    .eq('location_id', locationId)
-    .eq('counterpart_email', fromEmail)
-    .maybeSingle()
-  if (convErr) {
-    console.error('[postmark-inbound] conversation lookup failed:', convErr.message)
-    return NextResponse.json({ success: false, error: 'conversation_lookup_failed' }, { status: 500 })
-  }
-
   const subject = body.Subject || null
   const counterpartName = body.FromFull?.Name || null
-  let conversationId = existing?.id
-  if (!conversationId) {
-    const { data: created, error: insErr } = await db.from('email_conversations')
-      .insert({
-        location_id: locationId,
-        contact_id: contactId,
-        counterpart_email: fromEmail,
-        counterpart_name: counterpartName,
-        subject,
-        status: 'active',
-      })
-      .select('id')
-      .single()
-    if (insErr || !created) {
-      // Unique-violation race (Postmark parallel retry): re-read once.
-      const { data: raced } = await db.from('email_conversations')
-        .select('id, contact_id')
-        .eq('location_id', locationId)
-        .eq('counterpart_email', fromEmail)
-        .maybeSingle()
-      if (!raced) {
-        console.error('[postmark-inbound] conversation insert failed:', insErr?.message)
-        return NextResponse.json({ success: false, error: 'conversation_insert_failed' }, { status: 500 })
-      }
-      conversationId = raced.id
-    } else {
-      conversationId = created.id
-    }
-  } else if (!existing.contact_id && contactId) {
-    // A previously-anonymous thread just resolved to a contact — link it.
-    await db.from('email_conversations')
-      .update({ contact_id: contactId })
-      .eq('id', conversationId)
-      .is('contact_id', null)
-  } else if (existing.contact_id) {
-    // The thread's earlier linkage wins (non-destructive).
-    contactId = existing.contact_id
-  }
-
   const textBody = (body.TextBody || '').trim() || htmlToPlainText(body.HtmlBody) || ''
   const now = new Date().toISOString()
   const preview = inboundPreview(textBody) || (subject ? inboundPreview(subject) : '')
 
   // ── Create or append the ticket ───────────────────────────────────
   // `append` writes nothing yet — its summary update runs after the message
-  // lands, mirroring the conversation bump. `create` has to insert first:
+  // lands, so a failed message insert can't leave a ticket claiming activity
+  // that isn't in the thread. `create` has to insert first:
   // email_inbox_messages.ticket_id is a foreign key.
   let ticketId = null
   if (action.action === 'append') {
@@ -402,10 +371,10 @@ export async function POST(request, { params }) {
   }
 
   // ── Insert the message ────────────────────────────────────────────
-  // Carries BOTH ids for the length of the transition.
+  // ticket_id ONLY. conversation_id is left NULL — the column survives this
+  // change (a later migration drops it) but nothing writes it any more.
   const { error: msgErr } = await db.from('email_inbox_messages').insert({
     ticket_id: ticketId,
-    conversation_id: conversationId,
     contact_id: contactId,
     location_id: locationId,
     direction: 'inbound',
@@ -448,22 +417,9 @@ export async function POST(request, { params }) {
   // .catch(), or the rpc never fires.
   try { await db.rpc('increment_email_ticket_unread', { p_ticket_id: ticketId }) } catch {}
 
-  // ── Bump conversation summary + unread (mirrors the IG ingest) ────
-  await db.from('email_conversations').update({
-    subject: subject || undefined,
-    counterpart_name: counterpartName || undefined,
-    last_message_at: now,
-    last_message_direction: 'inbound',
-    last_message_preview: preview,
-    resolved_at: null,
-    updated_at: now,
-  }).eq('id', conversationId)
-  try { await db.rpc('increment_email_conversation_unread', { p_conversation_id: conversationId }) } catch {}
-
   return NextResponse.json({
     success: true,
     ticket_id: ticketId,
-    conversation_id: conversationId,
     mailbox_id: mailbox.id,
     matched_via: matchedVia,
   })
