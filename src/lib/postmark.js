@@ -81,6 +81,73 @@ async function resolveTenantOverride({ locationId, sender }) {
   return { token, from }
 }
 
+// ── Engagement tracking (EMAIL-NOTRACK.1) ─────────────────────────
+//
+// Richard's call (2026-08-07): delivery status yes; open and click
+// tracking NO on one-to-one mail. Marketing keeps both — there the
+// recipient sits in a consented bulk audience and the open rate
+// informs a real decision.
+//
+// Until now sendEmail/sendBatch set TrackOpens + TrackLinks
+// UNCONDITIONALLY, so a ticket reply, a contract, a password reset and
+// a receipt were instrumented exactly like a marketing blast:
+//   • TrackOpens embeds a 1x1 pixel — it leaks open time and IP, and
+//     these are Irish members, so GDPR applies. We already block
+//     INBOUND remote images by default for precisely this reason
+//     (EMAIL-INBOX): blocking theirs while shipping our own is
+//     indefensible.
+//   • TrackLinks rewrites every href through Postmark's click domain.
+//     Beyond privacy that is a FUNCTIONAL hazard on transactional
+//     mail: a rewritten link reads as phishing in a support reply,
+//     and a rewritten password-reset or contract-signing link is a
+//     live failure mode, not a cosmetic one.
+//
+// THE SPLIT IS ON THE MESSAGE STREAM: 'broadcast' (marketing) tracks,
+// everything else does not.
+//
+// WHY WE KEY ON THE CALLER'S *EXPLICIT* STREAM, NOT THE RESOLVED ONE:
+// sendEmail's `stream` has historically defaulted to 'broadcast', so
+// keying on the resolved value would make TRACKING THE DEFAULT — a new
+// call site that forgot to say anything would silently ship a pixel.
+// The safe outcome has to be the one you get by omission, so an
+// omitted stream reads as "unstated", not as "marketing", and gets no
+// tracking. The resolved default stays 'broadcast' on the wire because
+// the List-Unsubscribe one-click headers hang off it (UNSUB.3) and
+// changing that would be an unsubscribe-compliance change, which this
+// work deliberately does not touch. Every one of the ~20 production
+// call sites passes `stream` explicitly today, so the two readings
+// differ for no live caller — the distinction exists to make the NEXT
+// call site safe by default.
+//
+// The off-values match the house precedent already used by the direct
+// -fetch transactional senders (contractor-invoice-email.js,
+// xero/bills-email.js, xero/contractor-bills.js,
+// xero/fte-expense-claims.js): explicit false/'None' rather than
+// omitted keys, so the send never inherits a server- or stream-level
+// tracking default from the Postmark dashboard.
+export const MARKETING_STREAM = 'broadcast'
+
+const TRACKING_ON = Object.freeze({ TrackOpens: true, TrackLinks: 'HtmlOnly' })
+const TRACKING_OFF = Object.freeze({ TrackOpens: false, TrackLinks: 'None' })
+
+/**
+ * Resolve the Postmark tracking fields for one message.
+ *
+ * @param {Object} opts
+ * @param {string} [opts.stream] - the stream the CALLER passed, raw.
+ *   `undefined` deliberately does NOT mean marketing (see above).
+ * @param {boolean} [opts.trackEngagement] - explicit per-call override.
+ *   `true` forces tracking on (a genuinely consented send that happens
+ *   not to ride the broadcast stream), `false` forces it off even for
+ *   marketing. Anything else (the normal case) defers to the stream.
+ * @returns {{TrackOpens: boolean, TrackLinks: string}}
+ */
+export function resolveTracking({ stream, trackEngagement } = {}) {
+  if (trackEngagement === true) return { ...TRACKING_ON }
+  if (trackEngagement === false) return { ...TRACKING_OFF }
+  return stream === MARKETING_STREAM ? { ...TRACKING_ON } : { ...TRACKING_OFF }
+}
+
 // ============================================================
 // CORE SENDING
 // ============================================================
@@ -118,7 +185,12 @@ export function toListUnsubscribeUrl(pageUrl) {
  * @param {string} options.htmlBody - HTML content
  * @param {string} options.from - sender (e.g. "UN1T <hello@un1t.ie>")
  * @param {string} options.replyTo - reply-to address
- * @param {string} options.stream - 'broadcast' or 'outbound' (transactional)
+ * @param {string} options.stream - 'broadcast' or 'outbound' (transactional).
+ *   Resolves to 'broadcast' on the wire when omitted (unchanged), but an
+ *   OMITTED stream never enables open/click tracking — see resolveTracking.
+ * @param {boolean} options.trackEngagement - EMAIL-NOTRACK.1 explicit
+ *   override for open/click tracking. Omit it (every caller today) and the
+ *   stream decides: marketing tracks, transactional does not.
  * @param {string} options.tag - tracking tag
  * @param {Object} options.metadata - custom metadata
  * @param {string} options.unsubscribeUrl - List-Unsubscribe URL for GDPR
@@ -143,7 +215,11 @@ export async function sendEmail({
   textBody,
   from,
   replyTo,
-  stream = 'broadcast',
+  // EMAIL-NOTRACK.1 — NO destructuring default. The wire default is applied
+  // below as `messageStream`; `stream` stays raw so resolveTracking can tell
+  // "the caller said broadcast" from "the caller said nothing".
+  stream,
+  trackEngagement,
   tag,
   metadata = {},
   unsubscribeUrl,
@@ -157,6 +233,11 @@ export async function sendEmail({
   sender,
 }) {
   const tenant = await resolveTenantOverride({ locationId, sender })
+
+  // The stream as it goes on the wire. Preserves the historical default so
+  // MessageStream and the List-Unsubscribe gate below are byte-identical for
+  // a caller that omits `stream`; only tracking reads the raw value.
+  const messageStream = stream || 'broadcast'
 
   const headers = {
     'Accept': 'application/json',
@@ -181,11 +262,12 @@ export async function sendEmail({
     // the HTML when the caller didn't supply one.
     TextBody: textBody || htmlToPlainText(htmlBody) || undefined,
     ReplyTo: replyTo || undefined,
-    MessageStream: stream,
+    MessageStream: messageStream,
     Tag: tag || undefined,
     Metadata: metadata,
-    TrackOpens: true,
-    TrackLinks: 'HtmlOnly',
+    // EMAIL-NOTRACK.1 — spread in the same key position the two literals
+    // occupied, so a marketing payload serialises byte-for-byte as before.
+    ...resolveTracking({ stream, trackEngagement }),
   }
 
   // Add List-Unsubscribe header for GDPR compliance (required for
@@ -198,7 +280,10 @@ export async function sendEmail({
   // nothing changed on our side, contact stays opted-in).
   // /api/unsubscribe/[token] does accept POST and writes
   // contact_preferences + consent_log correctly.
-  if (stream === 'broadcast' && unsubscribeUrl) {
+  // Reads the RESOLVED stream on purpose: unsubscribe compliance is out of
+  // scope for EMAIL-NOTRACK.1, so an omitted stream keeps attaching the
+  // one-click headers exactly as it did before.
+  if (messageStream === 'broadcast' && unsubscribeUrl) {
     body.Headers = [
       { Name: 'List-Unsubscribe', Value: `<${toListUnsubscribeUrl(unsubscribeUrl)}>` },
       { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' },
@@ -245,6 +330,9 @@ export async function sendEmail({
  * batch: `{ locationId }` (resolved once) or a pre-resolved `{ sender }`.
  * With neither (every caller today) the resolver returns the global default
  * and the token + per-email From are byte-identical to before.
+ *
+ * EMAIL-NOTRACK.1 — each email may carry `trackEngagement` (boolean) to
+ * override the stream-derived open/click tracking for that message only.
  */
 export async function sendBatch(emails, { locationId, sender } = {}) {
   const tenant = await resolveTenantOverride({ locationId, sender })
@@ -275,8 +363,12 @@ export async function sendBatch(emails, { locationId, sender } = {}) {
       MessageStream: email.stream || 'broadcast',
       Tag: email.tag || undefined,
       Metadata: email.metadata || {},
-      TrackOpens: true,
-      TrackLinks: 'HtmlOnly',
+      // EMAIL-NOTRACK.1 — per-email, and keyed on the RAW email.stream for
+      // the same reason as sendEmail: an unstated stream must not opt the
+      // recipient into a tracking pixel. campaign-sender always sets
+      // `stream` explicitly ('broadcast' for Marketing campaigns), so the
+      // marketing payload is unchanged.
+      ...resolveTracking({ stream: email.stream, trackEngagement: email.trackEngagement }),
       ...(email.stream !== 'outbound' && email.unsubscribeUrl ? {
         Headers: [
           // UNSUB.3 — POST endpoint, not the friendly page (see

@@ -336,3 +336,70 @@ export function ticketsToInboxRows({ tickets = [], mailboxes = [] } = {}) {
   const showMailbox = mailboxes.length > 1
   return tickets.map(t => ticketToInboxRow(t, { mailboxById, showMailbox }))
 }
+
+// ── Attachments (EMAIL-ATTACH-PREVIEW.1) ────────────────────────────
+//
+// Mobile showed NOTHING for a message's files until this — not the names, not
+// the sizes, and not the sentence explaining that an over-quota one was never
+// stored. A coach reading a ticket on their phone saw a member's photo email as
+// an empty message, which is the same operator-facing bug the web thread had.
+//
+// The two display helpers below are DELIBERATE COPIES of the web ones in
+// src/lib/email-attachment-quota.js rather than shared code: mobile cannot
+// import src/lib (CLAUDE.md — `shared/` is the seam), and both are display
+// strings that change roughly never.
+//
+// THE RULE THAT ACTUALLY MATTERS IS NOT COPIED. Which types may be previewed is
+// a security decision (image/svg+xml is scriptable markup from an
+// unauthenticated stranger), and the server answers it — `preview_kind` arrives
+// on the attachment row and the phone reads the verdict. One allow-list, on the
+// server, which a second platform cannot drift from.
+
+const ATTACHMENT_SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB']
+
+/** Human bytes. Base 1024, matching the web helper of the same shape. */
+export function formatAttachmentSize(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) return '0 B'
+  let v = n
+  let i = 0
+  while (v >= 1024 && i < ATTACHMENT_SIZE_UNITS.length - 1) { v /= 1024; i += 1 }
+  const decimals = i === 0 ? 0 : (v < 10 ? 1 : 0)
+  return `${v.toFixed(decimals)} ${ATTACHMENT_SIZE_UNITS[i]}`
+}
+
+/**
+ * What staff see next to an attachment that is not in the bucket.
+ *
+ * A NOT-STORED ATTACHMENT IS SHOWN, NOT HIDDEN — a file that simply vanished
+ * from the thread would have staff telling a member "you never sent it".
+ */
+export function ticketAttachmentSkippedLabel(reason) {
+  switch (reason) {
+    case 'quota': return 'Not stored — mailbox was full'
+    case 'too_large': return 'Not stored — over the size limit'
+    case 'too_many': return 'Not stored — too many files on one email'
+    case 'rehost_failed': return 'Not stored — upload failed'
+    case 'pruned': return 'Removed to free space'
+    default: return 'Not stored'
+  }
+}
+
+/**
+ * The Ionicons glyph for a file — its type first, its filename only when the
+ * type says nothing (a real .pptx arrives as application/octet-stream, because
+ * safeMimeType caps a subtype at 60 characters and that one is 61). Cosmetic:
+ * the filename never influences anything that touches bytes.
+ */
+export function ticketAttachmentIcon(mimeType, filename) {
+  const mime = String(mimeType || '').toLowerCase()
+  const parts = String(filename || '').toLowerCase().split('.')
+  const ext = parts.length > 1 ? parts[parts.length - 1] : ''
+  if (mime.startsWith('image/')) return 'image-outline'
+  if (mime === 'application/pdf' || ext === 'pdf') return 'document-text-outline'
+  if (mime === 'text/csv' || mime.includes('spreadsheet') || ['xls', 'xlsx', 'csv', 'ods'].includes(ext)) return 'grid-outline'
+  if (mime.includes('presentation') || mime.includes('powerpoint') || ['ppt', 'pptx', 'ppsx', 'odp'].includes(ext)) return 'easel-outline'
+  if (mime.includes('zip') || mime.includes('compressed') || ['zip', 'rar', '7z', 'gz'].includes(ext)) return 'archive-outline'
+  if (mime.includes('word') || mime === 'application/msword' || ['doc', 'docx', 'rtf', 'odt'].includes(ext)) return 'document-outline'
+  return 'attach-outline'
+}

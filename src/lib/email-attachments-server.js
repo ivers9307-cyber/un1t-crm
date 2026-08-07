@@ -91,6 +91,7 @@ import {
   safeAttachmentFilename,
   safeMimeType,
 } from './email-attachment-quota'
+import { isPreviewableAttachment } from './email-attachment-preview'
 import { readStagedMarker, stagedPathsIn } from './email-attachment-staging'
 
 const UNIQUE_VIOLATION = '23505'
@@ -549,18 +550,19 @@ async function recordAttachment(db, {
 }
 
 /**
- * A short-lived signed URL for one stored attachment. The bucket is private, so
- * this is the only way any browser sees the bytes, and it expires.
+ * The one place a Storage options object is constructed for a signed URL.
  *
- * `filename` becomes the download name — it is the sanitised value off the row,
- * never the raw header.
+ * NOT EXPORTED, AND THAT IS THE POINT. The two public signers below each pass a
+ * fixed value; no caller anywhere — and therefore no HTTP request — can choose
+ * what goes in here. The difference between a preview URL and a download URL is
+ * this single field and nothing else.
  */
-export async function signedAttachmentUrl(db, storagePath, { filename, ttlSeconds = 300 } = {}) {
+async function sign(db, storagePath, ttlSeconds, options) {
   if (!storagePath) return null
   try {
     const { data, error } = await db.storage
       .from(EMAIL_ATTACHMENT_BUCKET)
-      .createSignedUrl(storagePath, ttlSeconds, filename ? { download: filename } : undefined)
+      .createSignedUrl(storagePath, ttlSeconds, options)
     if (error || !data?.signedUrl) {
       if (error) console.error('[email-attachments] signed url failed:', error.message)
       return null
@@ -570,6 +572,46 @@ export async function signedAttachmentUrl(db, storagePath, { filename, ttlSecond
     console.error('[email-attachments] signed url threw:', err?.message)
     return null
   }
+}
+
+/**
+ * A short-lived signed URL that DOWNLOADS one stored attachment. The bucket is
+ * private, so this is the only way any browser sees the bytes, and it expires.
+ *
+ * `{ download: filename }` is what makes Storage answer with
+ * `Content-Disposition: attachment`, so the browser saves the file instead of
+ * trying to render it. That is the correct — and the safe — outcome for every
+ * type that is not on the preview allow-list: a downloaded SVG is inert, a
+ * downloaded HEIC opens in Photos, a downloaded .pptx opens in PowerPoint.
+ *
+ * `filename` becomes the saved name — it is the sanitised value off the row,
+ * never the raw MIME header.
+ */
+export async function signedAttachmentUrl(db, storagePath, { filename, ttlSeconds = 300 } = {}) {
+  return sign(db, storagePath, ttlSeconds, filename ? { download: filename } : undefined)
+}
+
+/**
+ * A short-lived signed URL that DISPLAYS one stored attachment inline — no
+ * download flag, so Storage serves it with the object's own content type and
+ * the browser renders it.
+ *
+ * REFUSES ANY TYPE THAT IS NOT ON THE ALLOW-LIST, and that refusal is here
+ * rather than only at the route because this function is what turns bytes into
+ * a renderable handle. A route that forgot the check would otherwise mint an
+ * inline URL for `image/svg+xml` — the exact thing the allow-list exists to
+ * prevent — and nothing below this line would notice. See
+ * src/lib/email-attachment-preview.js for why each type is in or out.
+ *
+ * Returns null for a non-previewable type, which every caller must render as
+ * "download only", never as a failure.
+ */
+export async function signedAttachmentPreviewUrl(db, storagePath, { mimeType, ttlSeconds = 300 } = {}) {
+  if (!isPreviewableAttachment(mimeType)) return null
+  // `undefined`, deliberately spelled out: no download name, no transform, no
+  // caller-supplied bag. An inline URL differs from a download URL by exactly
+  // the absence of this option.
+  return sign(db, storagePath, ttlSeconds, undefined)
 }
 
 // A prune is a destructive operator action, so it is bounded: one call clears at

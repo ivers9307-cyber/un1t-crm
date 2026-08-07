@@ -144,11 +144,25 @@ const INBOX_ROUTE_PREFIXES = [
 //                              knowable until the row is read, so the check
 //                              CANNOT sit at the top of the route the way this
 //                              list's other entries do.
+//
+// EMAIL-ATTACH-PREVIEW.1 —
+//   loadAttachmentForTicket(   src/app/api/email/tickets/[id]/attachments/_helpers.js.
+//                              VERIFIED: its FIRST statement is
+//                              `await loadTicketForUser(db, user, ticketId)` and
+//                              it returns that helper's refusal response
+//                              unchanged before touching the attachment row —
+//                              so it is the entry above, one call deeper, plus
+//                              the attachment-belongs-to-this-ticket pairing
+//                              check. It exists because the download route and
+//                              its /preview sibling must be gated IDENTICALLY,
+//                              and two copies of that resolution would be two
+//                              definitions of who may read `accounts@`.
 const INBOX_PERMISSION_GUARDS = [
   'requireInboxPermission(',
   'hasPermission(',
   'hasPermissionForLocation(',
   'loadTicketForUser(',
+  'loadAttachmentForTicket(',
 ]
 
 function checkInboxPermission(file) {

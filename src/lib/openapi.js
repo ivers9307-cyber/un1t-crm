@@ -1252,6 +1252,21 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/api/email/tickets/{id}/attachments/{attachmentId}/preview',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Short-lived signed INLINE URL for one stored attachment',
+  description: "EMAIL-ATTACH-PREVIEW.1 — the same object as the route above, signed WITHOUT the download flag so the browser renders it instead of saving it. Two routes rather than one route with a ?disposition= parameter, deliberately: the disposition must never be something a request asserts, and neither route accepts a Storage option of any kind. Identical gate (the ticket's access plus the attachment-belongs-to-this-ticket pairing check) and identical 5-minute TTL. Mints a URL ONLY for an allow-list of types that are safe AND universally renderable — image/jpeg, image/png, image/gif, image/webp, application/pdf — enforced here and again in the signer. Everything else is 404 with preview_kind null, which the UI renders as 'download instead', never as an error: image/svg+xml is scriptable markup from an unauthenticated stranger and never gets an inline handle; image/heic and image/heif are what iPhones send and no mainstream browser can decode them; Word/Excel/PowerPoint have no native renderer and are NOT sent to any third-party viewer. storage_path is never returned.",
+  request: { params: z.object({ id: uuidLike, attachmentId: uuidLike }) },
+  responses: {
+    200: { description: '{ url, preview_kind, filename, mime_type, size_bytes, expires_in }' },
+    404: { description: 'Not found / not accessible / not stored / no preview for this type', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Recorded as stored but Storage would not sign it', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/locations/{id}/email/storage',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],

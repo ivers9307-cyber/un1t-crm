@@ -7,6 +7,7 @@ import {
   latestCorrespondence,
   replyMode,
 } from '@/lib/email-recipients'
+import { attachmentPreviewKind } from '@/lib/email-attachment-preview'
 import { loadTicketForUser, loadOwnAddresses } from '../_helpers'
 
 // GET /api/email/tickets/[id] — one ticket and its thread (EMAIL-TICKET.4).
@@ -205,6 +206,18 @@ async function loadAttachments(db, messageIds) {
       size_bytes: row.size_bytes,
       stored: !!row.storage_path,
       skipped_reason: row.skipped_reason,
+      // EMAIL-ATTACH-PREVIEW.1 — 'image' | 'pdf' | null. THE SERVER DECIDES
+      // WHAT MAY BE PREVIEWED, and says so here, so the thread can draw a
+      // chip that already knows whether clicking it opens a picture or a
+      // download prompt — without a speculative request per file.
+      //
+      // It is not merely a hint the browser could have computed: the allow-list
+      // is a security decision (image/svg+xml is scriptable markup from an
+      // unauthenticated stranger), and a copy of it living in the client is a
+      // copy that can drift from the one the …/preview route enforces. One
+      // home, and the browser is not it. A never-stored row is never
+      // previewable whatever its type — there are no bytes.
+      preview_kind: row.storage_path ? attachmentPreviewKind(row.mime_type) : null,
     })
     byMessage.set(row.message_id, list)
   }
