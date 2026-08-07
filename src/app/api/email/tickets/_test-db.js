@@ -338,6 +338,41 @@ export function makeDb(state = {}) {
         for (const p of paths) s.objects.delete(`${bucket}/${p}`)
         return Promise.resolve({ data: paths.map(p => ({ name: p })), error: null })
       },
+      // EMAIL-OUTBOUND-ATTACH.1 — the outbound path READS objects back (to
+      // base64 them for Postmark) and MOVES them (draft key → canonical key).
+      // Both are modelled against the same Map the upload path writes, so a
+      // test can prove "the bytes that went on the wire are the bytes that were
+      // uploaded" and "the object ended up at the key the row names".
+      download: (path) => {
+        const err = s.storageErrors?.download
+        if (err) return Promise.resolve({ data: null, error: err })
+        const object = s.objects.get(`${bucket}/${path}`)
+        if (!object) return Promise.resolve({ data: null, error: { message: 'Object not found' } })
+        const bytes = Buffer.isBuffer(object.bytes) ? object.bytes : Buffer.from(String(object.bytes))
+        // supabase-js hands back a Blob; the reader accepts either, so the fake
+        // returns the Blob-alike shape to keep that branch honest.
+        return Promise.resolve({
+          data: { arrayBuffer: () => Promise.resolve(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)) },
+          error: null,
+        })
+      },
+      move: (from, to) => {
+        const err = s.storageErrors?.move
+        if (err) return Promise.resolve({ data: null, error: err })
+        const object = s.objects.get(`${bucket}/${from}`)
+        if (!object) return Promise.resolve({ data: null, error: { message: 'Object not found' } })
+        s.objects.delete(`${bucket}/${from}`)
+        s.objects.set(`${bucket}/${to}`, object)
+        return Promise.resolve({ data: { message: 'Successfully moved' }, error: null })
+      },
+      createSignedUploadUrl: (path) => {
+        const err = s.storageErrors?.signUpload
+        if (err) return Promise.resolve({ data: null, error: err })
+        return Promise.resolve({
+          data: { path, token: `upload-token-for-${path}`, signedUrl: `https://storage.test/${bucket}/${path}?upload=1` },
+          error: null,
+        })
+      },
       createSignedUrl: (path, ttl, opts) => {
         const err = s.storageErrors?.sign
         if (err) return Promise.resolve({ data: null, error: err })
@@ -358,6 +393,18 @@ export function makeDb(state = {}) {
 
 /** Every object currently in the fake bucket, as `bucket/path` keys. */
 export const objectKeys = (db) => [...db._state.objects.keys()]
+
+/**
+ * Put bytes in the fake bucket without going through a route — how an outbound
+ * test stands in for "the browser already uploaded this draft straight to
+ * Storage", which is the whole point of the signed-upload hop.
+ */
+export const seedObject = (db, bucket, path, bytes) => {
+  db._state.objects.set(`${bucket}/${path}`, {
+    bytes: Buffer.isBuffer(bytes) ? bytes : Buffer.from(String(bytes)),
+    opts: {},
+  })
+}
 
 /** The counter for one bucket — `null` mailboxId is the unfiled bucket. */
 export const usageFor = (db, locationId, mailboxId = null) =>

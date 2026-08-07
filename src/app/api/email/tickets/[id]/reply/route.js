@@ -7,6 +7,11 @@ import { sendTicketEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { replySubject, buildReplyHeaders, inboundPreview } from '@/lib/email-inbox'
 import { shouldStampFirstResponse } from '@/lib/email-tickets'
 import { appendSignature } from '@/lib/email-signature'
+import {
+  collectOutboundAttachments,
+  fileOutboundAttachments,
+  outboundAttachmentsField,
+} from '@/lib/email-outbound-attachments-server'
 import { loadTicketForUser, statusTimestamps } from '../../_helpers'
 
 const ReplySchema = z.object({
@@ -15,6 +20,10 @@ const ReplySchema = z.object({
   // thread and NOTHING is sent — the member never sees it, so it also never
   // stamps first_response_at and never advances the ticket.
   internal: z.boolean().optional().default(false),
+  // EMAIL-OUTBOUND-ATTACH.1 — references to files the browser already uploaded
+  // straight to Storage. NEVER the bytes: Vercel 413s a body over ~4.5 MB
+  // before this handler runs. See src/lib/email-outbound-attachments-server.js.
+  attachments: outboundAttachmentsField,
 })
 
 // Minimal text → HTML, same as the legacy conversations send route this
@@ -71,7 +80,20 @@ export async function POST(request, props) {
 
   const validation = await validateBody(request, ReplySchema)
   if (!validation.ok) return validation.response
-  const { text, internal } = validation.data
+  const { text, internal, attachments: drafts } = validation.data
+
+  // An internal note is sent to nobody, so there is nothing for a file to ride
+  // on and nothing that would make a stored copy honest. Refused rather than
+  // ignored: silently dropping them would leave the operator believing the
+  // files are on the ticket, and leave their draft objects with nothing to
+  // consume them. (The composer hides the picker in note mode; this is the
+  // belt.)
+  if (internal && Array.isArray(drafts) && drafts.length > 0) {
+    return NextResponse.json({
+      success: false,
+      error: 'An internal note is not sent to anyone, so it cannot carry files. Remove them, or switch to Reply.',
+    }, { status: 400 })
+  }
 
   const db = createServerClient()
   const loaded = await loadTicketForUser(db, user, params.id)
@@ -155,6 +177,18 @@ export async function POST(request, props) {
   // in one pass — see the note on textToHtml.
   const outboundText = appendSignature(text, user.email_signature)
 
+  // EMAIL-OUTBOUND-ATTACH.1 — read the draft objects back out of Storage and
+  // turn them into Postmark's array. BEFORE THE SEND, deliberately: every way
+  // an attachment can be refused (unreadable draft, past Postmark's ceiling, a
+  // duplicate slot) has to be a refusal to send AT ALL, or the thread would end
+  // up showing a reply that claims files the member never received. Nothing has
+  // been written or sent at this point, so a 400 here costs a retry and can
+  // produce no wrong outcome.
+  const collected = await collectOutboundAttachments(db, { drafts, profileId: user.id })
+  if (!collected.ok) {
+    return NextResponse.json({ success: false, error: collected.error }, { status: 400 })
+  }
+
   // EMAIL-OUTBOUND-SERVER.1 — the reply leaves on the SUPPORT INBOX'S OWN
   // Postmark server, from the ticket's own mailbox address, on Postmark's
   // `email-send` stream. All three live in sendTicketEmail; see that file's
@@ -174,6 +208,9 @@ export async function POST(request, props) {
     tag: 'ticket-reply',
     metadata: { ticket_id: ticket.id, contact_id: ticket.contact_id || '' },
     headers,
+    // undefined when there are none, so the Postmark payload is byte-identical
+    // to every reply this route has ever sent.
+    attachments: collected.postmark,
   })
   if (!send.ok) {
     // Send failed → the ticket does NOT advance to pending. A queue that says
@@ -215,6 +252,21 @@ export async function POST(request, props) {
     sent_at: now,
   }).select('*').single()
   if (msgErr) return NextResponse.json({ success: false, error: msgErr.message }, { status: 500 })
+
+  // EMAIL-OUTBOUND-ATTACH.1 — the files are already with the member; this is
+  // only the studio's own copy and the bytes it is billed for. It never throws
+  // and never fails the response: answering 500 for mail that genuinely went
+  // out would have an operator resend it.
+  //
+  // Every file becomes a ROW either way — stored, or with a skipped_reason the
+  // thread renders in words — so a sent attachment appears in the thread with
+  // exactly the same chip, preview and download as a received one.
+  await fileOutboundAttachments(db, {
+    files: collected.files,
+    messageId: message.id,
+    locationId: ticket.location_id,
+    mailboxId: ticket.mailbox_id || null,
+  })
 
   // Log to email_sends so the reply shows in the contact's email history, the
   // delivery webhooks can track it, and a later reply from the member matches

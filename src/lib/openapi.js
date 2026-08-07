@@ -1155,10 +1155,19 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'Reply to a ticket, or add an internal note',
-  description: "internal:true writes a staff-only note to the thread and sends NOTHING (no first_response_at, no status change). Otherwise the reply goes out on Postmark's transactional stream ('outbound', no marketing-consent gate — the member wrote to us first), threaded off the last inbound message, Reply-To the ticket's own mailbox; the ticket then moves to pending and stamps first_response_at if unset. A failed send leaves the ticket untouched.",
+  description: "internal:true writes a staff-only note to the thread and sends NOTHING (no first_response_at, no status change). Otherwise the reply goes out on Postmark's transactional stream ('outbound', no marketing-consent gate — the member wrote to us first), threaded off the last inbound message, Reply-To the ticket's own mailbox; the ticket then moves to pending and stamps first_response_at if unset. A failed send leaves the ticket untouched. EMAIL-OUTBOUND-ATTACH.1: `attachments` carries REFERENCES to files already uploaded via /api/email/attachments/upload-sign, never bytes — the platform rejects a body over ~4.5 MB before this handler runs. They are read back out of Storage and size-checked BEFORE the send (7 MB of raw file bytes per email, from Postmark's 10 MB post-base64 ceiling), so an oversized or unreadable set is a 400 with nothing sent and nothing written — the thread never shows a reply claiming files that did not go. An internal note cannot carry files and is refused rather than silently stripped.",
   request: {
     params: z.object({ id: uuidLike }),
-    body: { content: { 'application/json': { schema: z.object({ text: z.string().min(1).max(10000), internal: z.boolean().optional() }).openapi('EmailTicketReply') } } },
+    body: { content: { 'application/json': { schema: z.object({
+      text: z.string().min(1).max(10000),
+      internal: z.boolean().optional(),
+      attachments: z.array(z.object({
+        draft_id: uuidLike,
+        index: z.number().int().min(0).max(9),
+        filename: z.string().min(1).max(255),
+        mime: z.string().min(1).max(255),
+      })).max(10).optional(),
+    }).openapi('EmailTicketReply') } } },
   },
   responses: {
     200: { description: 'Note written / reply sent' },
@@ -1198,6 +1207,14 @@ registry.registerPath({
       to: z.string().email(),
       subject: z.string().min(1).max(200),
       text: z.string().min(1).max(10000),
+      // EMAIL-OUTBOUND-ATTACH.1 — references to already-uploaded drafts, never
+      // bytes. Same field and same rules as the reply route.
+      attachments: z.array(z.object({
+        draft_id: uuidLike,
+        index: z.number().int().min(0).max(9),
+        filename: z.string().min(1).max(255),
+        mime: z.string().min(1).max(255),
+      })).max(10).optional(),
     }).openapi('EmailTicketCompose') } } },
   },
   responses: {
@@ -1288,6 +1305,54 @@ registry.registerPath({
     400: { description: 'Unknown action or invalid body', content: { 'application/json': { schema: ErrorResponse } } },
     403: { description: 'Not master/owner at this location', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'No such mailbox at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ── Outbound attachments — EMAIL-OUTBOUND-ATTACH.1 ──────────────────────────
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/attachments/upload-sign',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Authorise a browser upload for a file staff want to attach',
+  description: "Step 1 of attaching a file to a ticket reply or a new email. The bytes NEVER travel through this API: Vercel rejects a request body over ~4.5 MB before a handler runs, so the browser uploads straight to the private email-attachments bucket with the one-shot token this returns, and the send request carries only { draft_id, index, filename, mime }. THE CLIENT NEVER NAMES A PATH — the key is built here as outbound/<caller's profile id>/<draft_id>/<index>.<ext>, so a session can only ever address its own drafts and can never reach the canonical <location_id>/… or the shim's inbound/… half of the bucket. Pass EXACTLY ONE of ticket_id (gated exactly as the reply route is: the ticket's location, email_inbox there, and the mailbox it arrived at must be visible) or mailbox_id (gated exactly as compose is: the mailbox's location, email_inbox there, and it must be a mailbox the caller may send as). 404 — never 403 — for every refusal. Charges no quota and writes no row: a draft becomes an attachment only when a message carrying it actually goes out.",
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      ticket_id: uuidLike.optional(),
+      mailbox_id: uuidLike.optional(),
+      draft_id: uuidLike,
+      index: z.number().int().min(0).max(9),
+      filename: z.string().min(1).max(255),
+      mime: z.string().min(1).max(255),
+      size: z.number().int().positive(),
+    }).openapi('EmailAttachmentUploadSign') } } },
+  },
+  responses: {
+    200: { description: '{ path, token } for supabase.storage.uploadToSignedUrl' },
+    400: { description: 'Invalid body, both/neither target, or the file is over the 7 MB per-email ceiling', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Ticket or mailbox missing, or not usable by the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Storage would not mint an upload token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/attachments/discard',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Throw away an uploaded draft the operator removed before sending',
+  description: "The × on a chip, and the cancelled composer. Needs no ticket or mailbox: the object key is rebuilt from the CALLER'S OWN profile id, so this can only ever remove one of their own drafts and there is nothing to enumerate — another person's draft uuid simply derives a key under the caller's prefix that does not exist. Always 200, deliberately: the client calls it while tidying its own state and a storage failure is not something an operator can act on (it is logged server-side). A draft that is never discarded is never metered — quota is charged only when a message row is filed — so an abandoned one costs storage, not a mailbox's ceiling.",
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      draft_id: uuidLike,
+      index: z.number().int().min(0).max(9),
+      filename: z.string().min(1).max(255),
+      mime: z.string().min(1).max(255),
+    }).openapi('EmailAttachmentDiscard') } } },
+  },
+  responses: {
+    200: { description: '{ discarded: true }' },
+    400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

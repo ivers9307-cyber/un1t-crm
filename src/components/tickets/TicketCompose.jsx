@@ -27,6 +27,7 @@ import { useState } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { Modal, Button, Field } from '@/components/ui'
 import { mailboxLabel } from '@/lib/ticket-display'
+import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPicker'
 
 // The submit button lives in the Modal's footer, which is a SIBLING of the
 // form, not a descendant — so it is wired to the form by id. Only one compose
@@ -48,11 +49,13 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
   const [to, setTo] = useState('')
   const [subject, setSubject] = useState('')
   const [text, setText] = useState('')
+  const [files, setFiles] = useState([])
   const [sending, setSending] = useState(false)
   const [error, setError] = useState(null)
 
   const mailbox = mailboxes.find(m => m.id === mailboxId) || null
-  const canSend = Boolean(mailboxId && to.trim() && subject.trim() && text.trim())
+  const uploading = hasPendingUploads(files)
+  const canSend = Boolean(mailboxId && to.trim() && subject.trim() && text.trim()) && !uploading
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -60,6 +63,10 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
     setSending(true)
     setError(null)
     try {
+      // EMAIL-OUTBOUND-ATTACH.1 — references only. The bytes went straight to
+      // Storage from the picker; a multipart body this size would be rejected
+      // by the platform before the route ran.
+      const attachments = readyDrafts(files)
       const res = await fetch('/api/email/tickets/compose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -68,6 +75,7 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
           to: to.trim(),
           subject: subject.trim(),
           text,
+          ...(attachments.length ? { attachments } : {}),
         }),
       })
       const body = await res.json()
@@ -102,7 +110,7 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
             Cancel
           </Button>
           <Button type="submit" form={FORM_ID} variant="primary" loading={sending} disabled={!canSend}>
-            Send
+            {uploading ? 'Waiting for files…' : 'Send'}
           </Button>
         </>
       }
@@ -175,6 +183,19 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
             />
           )}
         </Field>
+
+        {/* Files survive a change of From address, and that is safe rather than
+            merely convenient: the draft key is derived from the SENDER'S profile
+            id, not the mailbox, and the send re-runs the full send-as gate at
+            the mailbox finally chosen. Signing under one visible mailbox and
+            sending from another therefore grants nothing — the caller had to
+            pass both gates to do it. */}
+        <AttachmentPicker
+          scope={{ mailbox_id: mailboxId }}
+          files={files}
+          onChange={setFiles}
+          disabled={sending || !mailboxId}
+        />
 
         {error && (
           <p

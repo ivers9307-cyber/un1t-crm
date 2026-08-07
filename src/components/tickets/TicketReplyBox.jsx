@@ -21,18 +21,28 @@
 // one-off edit the design does not support (the column is per person, and the
 // route reads it fresh at send time). It never appears in note mode, because
 // notes are never signed.
+//
+// ATTACHMENTS (EMAIL-OUTBOUND-ATTACH.1) follow the same two-modes rule as
+// everything else here: a reply can carry files, an internal note cannot,
+// because a note is sent to nobody and there is nothing for a file to ride on.
+// The picker is therefore hidden in note mode — and if files are already
+// attached, switching to note mode does NOT silently drop them: it says so and
+// blocks the note until they are removed. The route refuses the combination
+// too, so the rule is stated in both places.
 
 import { useEffect, useState } from 'react'
-import { Send, Lock, PenLine } from 'lucide-react'
+import { Send, Lock, PenLine, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { isArchivedStatus, statusMeta } from '@/lib/ticket-display'
 import { SIGNATURE_SEPARATOR, normalizeSignature } from '@/lib/email-signature'
+import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPicker'
 
 const MAX_LENGTH = 10000
 
 export default function TicketReplyBox({ ticket, onSend, sending = false, signature }) {
   const [mode, setMode] = useState('reply')
   const [text, setText] = useState('')
+  const [files, setFiles] = useState([])
   // Only fetched when the parent didn't supply one. The composer is nested two
   // components deep inside the inbox, and the signature belongs to the VIEWER
   // rather than to the ticket, so it is fetched here rather than threaded
@@ -61,13 +71,28 @@ export default function TicketReplyBox({ ticket, onSend, sending = false, signat
   const canReply = !!ticket?.requester_email
   const archived = isArchivedStatus(ticket?.status)
 
+  // A note can never carry files, so files present + note mode is a state the
+  // operator has to resolve rather than one we resolve for them by dropping
+  // their uploads.
+  const filesBlockNote = isNote && files.length > 0
+  const uploading = hasPendingUploads(files)
+
   async function handleSubmit(e) {
     e.preventDefault()
     const body = text.trim()
     if (!body || sending) return
     if (!isNote && !canReply) return
-    const result = await onSend(body, isNote)
-    if (result?.ok) setText('')
+    // Never send a partial set: a chip on screen that did not go with the email
+    // is the same lie as a file the thread claims was sent.
+    if (uploading || filesBlockNote) return
+    const result = await onSend(body, isNote, isNote ? [] : readyDrafts(files))
+    if (result?.ok) {
+      setText('')
+      // The drafts were consumed by the send (their objects moved to the
+      // message's own keys), so clearing is not just tidying — holding them
+      // would offer the operator references that no longer resolve.
+      setFiles([])
+    }
   }
 
   return (
@@ -142,6 +167,28 @@ export default function TicketReplyBox({ ticket, onSend, sending = false, signat
         </div>
       )}
 
+      {/* Files ride on a reply only. In note mode the picker is gone but any
+          already-attached files stay visible in the notice below — dropping
+          them silently would be the thing this composer is most careful about
+          everywhere else. */}
+      {!isNote && canReply && (
+        <AttachmentPicker
+          scope={{ ticket_id: ticket?.id }}
+          files={files}
+          onChange={setFiles}
+          disabled={sending}
+        />
+      )}
+
+      {filesBlockNote && (
+        <p className="mt-2 flex items-start gap-1.5 text-[11px] text-amber-700" role="alert">
+          <AlertCircle size={11} className="mt-0.5 shrink-0" aria-hidden="true" />
+          {files.length === 1 ? 'A file is' : `${files.length} files are`} attached, and an internal
+          note is not sent to anyone. Switch back to Reply to send {files.length === 1 ? 'it' : 'them'},
+          or remove {files.length === 1 ? 'it' : 'them'} there first.
+        </p>
+      )}
+
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
         <p className={`text-[11px] ${isNote ? 'text-amber-700' : 'text-un1t-subtle'}`}>
           {isNote ? (
@@ -165,10 +212,10 @@ export default function TicketReplyBox({ ticket, onSend, sending = false, signat
           size="sm"
           variant={isNote ? 'secondary' : 'primary'}
           loading={sending}
-          disabled={!text.trim() || (!isNote && !canReply)}
+          disabled={!text.trim() || (!isNote && !canReply) || uploading || filesBlockNote}
           icon={isNote ? Lock : Send}
         >
-          {isNote ? 'Add internal note' : 'Send reply'}
+          {isNote ? 'Add internal note' : uploading ? 'Waiting for files…' : 'Send reply'}
         </Button>
       </div>
 

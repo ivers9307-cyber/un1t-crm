@@ -258,10 +258,29 @@ function markUnverified(address) {
  * 'outbound' means TrackOpens:false / TrackLinks:'None' (EMAIL-NOTRACK.1 —
  * one-to-one mail is not instrumented). Passing the flags again from here
  * would fork that rule into two places.
+ *
+ * EMAIL-OUTBOUND-ATTACH.1 — `attachments` is Postmark's own array shape
+ * ({ Name, Content: base64, ContentType }), passed straight through to
+ * sendEmail, which only adds the key when there is something to add. PURELY
+ * ADDITIVE: omitting it (every pre-existing caller, and every send without
+ * files) leaves the request body byte-identical. It is threaded through here
+ * rather than around this module because this is the seam that decides the
+ * server, the stream and the From — an attachment path that called sendEmail
+ * directly would send support mail on marketing reputation, which is the exact
+ * bug this file exists to have fixed.
+ *
+ * THE SIZE CEILING IS NOT ENFORCED HERE. Postmark caps a message at 10 MB
+ * measured AFTER base64, and the caller has to answer for that in words an
+ * operator can act on — see collectOutboundAttachments() in
+ * src/lib/email-outbound-attachments-server.js. A check here could only throw.
+ * Note that a sender-signature retry re-sends the SAME attachments on the
+ * second attempt; that is correct (the first attempt was refused at submit
+ * time, so nothing was transmitted) and it is why the array is built once,
+ * outside the loop.
  */
 export async function sendTicketEmail({
   mailboxAddress = null,
-  to, subject, htmlBody, textBody, tag, metadata, headers,
+  to, subject, htmlBody, textBody, tag, metadata, headers, attachments,
 }) {
   const serverToken = resolveInboxServerToken()
   if (!serverToken) {
@@ -301,6 +320,10 @@ export async function sendTicketEmail({
         tag,
         metadata,
         headers,
+        // EMAIL-OUTBOUND-ATTACH.1 — undefined for every send without files, so
+        // sendEmail never adds the `Attachments` key and the payload is
+        // unchanged.
+        attachments,
         // The tenant-override seam carries BOTH the server token and the From
         // (src/lib/postmark.js resolveTenantOverride). Passing `sender`
         // explicitly also stops it looking up a per-tenant sender by location.

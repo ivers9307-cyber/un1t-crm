@@ -402,3 +402,57 @@ describe('fallbackFromAddress', () => {
     process.env.POSTMARK_FROM_EMAIL = GLOBAL_FROM
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────
+// EMAIL-OUTBOUND-ATTACH.1 — attachments flow THROUGH this seam, not around it.
+// Asserted at the wire for the same reason as everything else here: an
+// attachment path that reached Postmark by calling sendEmail() directly would
+// send support mail on the MARKETING server, which is the bug this module
+// exists to have fixed, and a mocked sendEmail could never show it.
+describe('attachments ride the ticketing server, not the marketing one', () => {
+  const FILE = { Name: 'invoice.pdf', Content: 'aGVsbG8=', ContentType: 'application/pdf' }
+
+  it('adds NO Attachments key when the caller passes none', async () => {
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(okResponse())
+    await sendTicketEmail({ ...SEND, mailboxAddress: HATCH })
+    expect(bodyOf(fetchSpy.mock.calls[0])).not.toHaveProperty('Attachments')
+  })
+
+  it('puts them on the wire, on the ticketing server and its own stream', async () => {
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(okResponse())
+    const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH, attachments: [FILE] })
+    expect(res.ok).toBe(true)
+
+    const call = fetchSpy.mock.calls[0]
+    expect(bodyOf(call).Attachments).toEqual([FILE])
+    // The three things this module decides are unchanged by carrying a file.
+    expect(tokenOf(call)).toBe(INBOX_TOKEN)
+    expect(tokenOf(call)).not.toBe(MARKETING_TOKEN)
+    expect(bodyOf(call).MessageStream).toBe(DEFAULT_INBOX_MESSAGE_STREAM)
+    expect(bodyOf(call).From).toBe(HATCH)
+  })
+
+  it('re-sends the SAME files on the sender-signature fallback attempt', async () => {
+    // A 422 is a refusal at SUBMIT time — nothing was transmitted — so the
+    // second attempt cannot duplicate the attachment any more than it can
+    // duplicate the message.
+    fetchSpy = vi.spyOn(global, 'fetch')
+      .mockResolvedValueOnce(signatureRejection())
+      .mockResolvedValueOnce(okResponse())
+
+    const res = await sendTicketEmail({ ...SEND, mailboxAddress: STILLORGAN, attachments: [FILE] })
+    expect(res.ok).toBe(true)
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(bodyOf(fetchSpy.mock.calls[0]).Attachments).toEqual([FILE])
+    expect(bodyOf(fetchSpy.mock.calls[1]).Attachments).toEqual([FILE])
+    expect(bodyOf(fetchSpy.mock.calls[1]).From).toBe(GLOBAL_FROM)
+  })
+
+  it('an unconfigured ticketing server refuses the send, files and all', async () => {
+    delete process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(okResponse())
+    const res = await sendTicketEmail({ ...SEND, mailboxAddress: HATCH, attachments: [FILE] })
+    expect(res).toMatchObject({ ok: false, reason: 'not_configured' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})

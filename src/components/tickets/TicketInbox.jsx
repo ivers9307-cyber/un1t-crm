@@ -169,7 +169,12 @@ export default function TicketInbox({ locationId, locationName, userId }) {
   }
 
   // ── Actions ────────────────────────────────────────────────────────
-  async function handleSend(text, internal) {
+  // EMAIL-OUTBOUND-ATTACH.1 — `attachments` is a list of REFERENCES to files the
+  // composer already uploaded straight to Storage, never bytes: a multipart body
+  // over ~4.5 MB is rejected by the platform before the route runs. Absent (not
+  // an empty array) when there are none, so the request is byte-identical to
+  // every reply sent before this shipped.
+  async function handleSend(text, internal, attachments = []) {
     if (!selectedId || sending) return { ok: false }
     setSending(true)
     setThreadError(null)
@@ -177,7 +182,11 @@ export default function TicketInbox({ locationId, locationName, userId }) {
       const res = await fetch(`/api/email/tickets/${selectedId}/reply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(internal ? { text, internal: true } : { text }),
+        body: JSON.stringify(
+          internal
+            ? { text, internal: true }
+            : (attachments.length ? { text, attachments } : { text })
+        ),
       })
       const body = await res.json()
       if (!body?.success) {

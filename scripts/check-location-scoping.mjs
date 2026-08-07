@@ -97,6 +97,15 @@ const SCOPING_HELPERS = [
   // scoping, which is why the handlers look unscoped in isolation.
   'loadTicketForUser(',
   'loadVisibleMailboxes(',
+  // src/app/api/email/tickets/_helpers.js — the SEND-AS gate (EMAIL-OUTBOUND
+  // -ATTACH.1), extracted verbatim from the compose route. Reads the named
+  // mailbox row, then runs assertLocationAccessOr404 at THAT mailbox's
+  // location, then hasPermissionForLocation('email_inbox') there, then requires
+  // the mailbox to come back from loadVisibleMailboxes — and returns THAT row,
+  // never the caller's id. The location a caller may write to is the one it
+  // hands back, which is why the handlers that use it look unscoped in
+  // isolation.
+  'loadSendingMailbox(',
   // src/lib/audience-filter.js — every send audience goes through the
   // whitelist filter, which applies the location scope with the audience.
   'applyAudienceFilter(',
