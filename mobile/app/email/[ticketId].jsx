@@ -1,6 +1,7 @@
 // Email ticket thread — message list, lifecycle control, and a composer
 // that can either reply to the member or leave a staff-only note
 // (EMAIL-TICKET-M.1; replaces the INBOX-EMAIL-M.1 conversation screen).
+// Pushed from the Email tab (app/(tabs)/email.jsx) since INBOX-SPLIT.M1.
 //
 // THE ONE THING THIS FILE MUST NEVER GET WRONG
 // An internal note is stored with direction='outbound' — same as a real sent
@@ -215,7 +216,10 @@ export default function EmailTicket() {
       <Stack.Screen
         options={{
           title: name,
-          headerLeft: () => <BackHeaderLeft label="Messages" fallbackHref="/(tabs)/whatsapp" />,
+          // INBOX-SPLIT.M1 — back goes to the Email tab, not Messages: email
+          // is its own surface now (and a cold-start deep link from a push
+          // must not land someone in the chat inbox).
+          headerLeft: () => <BackHeaderLeft label="Email" fallbackHref="/(tabs)/email" />,
         }}
       />
 

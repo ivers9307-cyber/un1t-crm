@@ -30,13 +30,13 @@ import { ticketsToInboxRows } from './email-tickets'
 export { requesterLabel as emailDisplayName } from './email-tickets'
 
 // The four the route whitelists. Anything else is a 400, and omitting the
-// param entirely is the live queue (open + pending) — which is what the
-// Messages tab wants, so nothing here sends one by default.
+// param entirely is the live queue (open + pending) — which is what the Email
+// tab lands on, so nothing here sends one by default. The screen's chips map
+// their id onto these via ticketViewWire() in ./email-tickets.
 export const TICKET_VIEWS = Object.freeze(['unassigned', 'mine', 'needs_reply', 'closed'])
 
 /**
- * The studio's live ticket queue, shaped into rows the merged Messages list
- * can hold beside WhatsApp and Instagram.
+ * The studio's ticket queue, shaped into rows for the Email tab's list.
  *
  * A caller with no visible mailboxes gets an empty list, not an error — a
  * studio that does not do email and a coach with no account grants are both

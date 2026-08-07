@@ -25,12 +25,22 @@ import PendingContractsBanner from '../../components/PendingContractsBanner'
 export default function TabsLayout() {
   const { session, profile, activeLocation, loading } = useAuth()
   const pushRegistered = useRef(false)
-  // INBOX-EMAIL-M.1 — Messages tab badge. Same endpoint as the web
-  // sidebar badge (SIDEBAR-BADGES.2): conversations needing a human
-  // (needs-reply or agent handoff) across WhatsApp + Instagram at the
-  // active location. Email left this count when it became a ticket
-  // system (INBOX-SPLIT.1). 60s poll, mirroring the web's cadence;
+  // Messages tab badge. Same endpoint as the web sidebar badge
+  // (SIDEBAR-BADGES.2): conversations needing a human (needs-reply or agent
+  // handoff) across WhatsApp + Instagram at the active location. Email left
+  // this count server-side when it became a ticket system (INBOX-SPLIT.1) —
+  // /api/whatsapp/unread-count reads whatsapp_conversations +
+  // instagram_conversations only — so splitting email out of the Messages
+  // screen (INBOX-SPLIT.M1) needed no change here: the badge already counted
+  // exactly what the tab shows. 60s poll, mirroring the web's cadence;
   // failures leave the last-known count rather than flashing it away.
+  //
+  // The Email tab is deliberately UNBADGED. There is no ticket count
+  // endpoint — the only source is GET /api/email/tickets, which returns up
+  // to 200 full ticket rows — so badging it would mean polling the whole
+  // queue from this layout on every device that holds `email_inbox`. The web
+  // sidebar's own "Email" entry carries no badge for the same reason. If a
+  // count is wanted later, add a cheap count route first and badge from that.
   const [needsActionCount, setNeedsActionCount] = useState(0)
 
   useEffect(() => {
@@ -80,13 +90,17 @@ export default function TabsLayout() {
     // Route stays /whatsapp (and gates on the whatsapp permission key)
     // but the screen is the unified WhatsApp + Instagram inbox (M2/M3).
     whatsapp: { title: 'Messages', icon: 'chatbubbles-outline' },
+    // INBOX-SPLIT.M1 — email is its own surface, not a channel inside
+    // Messages, matching web (sidebar entry "Email", Mail icon). Gated on
+    // `email_inbox` via shared/mobile-nav → resolveLayoutForUser.
+    email:    { title: 'Email',    icon: 'mail-outline' },
     studio:   { title: 'Studio',   icon: 'business-outline' },
     pipeline: { title: 'Pipeline', icon: 'trending-up-outline' },
     bookings: { title: 'Bookings', icon: 'calendar-clear-outline' },
     invoices: { title: 'Invoices', icon: 'receipt-outline' },
     expenses: { title: 'Expenses', icon: 'wallet-outline' },
   }
-  const FEATURE_KEYS = ['schedule', 'whatsapp', 'studio', 'pipeline', 'bookings', 'invoices', 'expenses']
+  const FEATURE_KEYS = ['schedule', 'whatsapp', 'email', 'studio', 'pipeline', 'bookings', 'invoices', 'expenses']
   const hiddenKeys = FEATURE_KEYS.filter(k => !barSet.has(k))
 
   function featureHref(key) {

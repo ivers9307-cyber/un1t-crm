@@ -16,7 +16,7 @@ describe('mobile-nav registry', () => {
 
   it('BAR_ELIGIBLE is exactly the bar-eligible keys', () => {
     expect([...BAR_ELIGIBLE].sort()).toEqual(
-      ['bookings', 'expenses', 'invoices', 'pipeline', 'schedule', 'studio', 'whatsapp'].sort()
+      ['bookings', 'email', 'expenses', 'invoices', 'pipeline', 'schedule', 'studio', 'whatsapp'].sort()
     )
   })
 
@@ -38,7 +38,7 @@ describe('mobile-nav registry', () => {
   })
 })
 
-const ALL = ['schedule', 'whatsapp', 'studio', 'pipeline', 'bookings', 'expenses', 'tasks', 'radar', 'issues', 'contracts', 'policies']
+const ALL = ['schedule', 'whatsapp', 'email', 'studio', 'pipeline', 'bookings', 'expenses', 'tasks', 'radar', 'issues', 'contracts', 'policies']
 
 describe('resolveMobileLayout', () => {
   it('manager default reproduces today\'s bar', () => {
@@ -120,6 +120,49 @@ describe('resolveMobileLayout', () => {
     const r = resolveMobileLayout({ role: 'master', employmentType: 'fte', enabledKeys: ['schedule', 'studio', 'whatsapp'], override: null })
     expect(r.bar).toEqual(['schedule', 'studio'])
     expect(r.more).toContain('whatsapp')
+  })
+})
+
+// INBOX-SPLIT.M1 — email is a surface of its own, so it resolves like any
+// other nav feature rather than riding on `whatsapp`.
+describe('email as its own nav feature', () => {
+  it('is separate from whatsapp — a whatsapp-only user gets no email surface', () => {
+    const r = resolveMobileLayout({
+      role: 'manager', employmentType: 'fte',
+      enabledKeys: ['schedule', 'whatsapp', 'studio'], override: null,
+    })
+    expect(r.more).not.toContain('email')
+    expect(r.allowed).not.toContain('email')
+    expect(r.bar).toContain('whatsapp')
+  })
+
+  it('an email-only user gets email and no Messages surface', () => {
+    const r = resolveMobileLayout({
+      role: 'manager', employmentType: 'fte',
+      enabledKeys: ['schedule', 'email'], override: null,
+    })
+    expect(r.more).toContain('email')
+    expect(r.more).not.toContain('whatsapp')
+    expect(r.allowed).toContain('email')
+  })
+
+  it('is bar-placeable for the roles that hold email_inbox by default', () => {
+    for (const role of ['owner', 'manager', 'master']) {
+      const r = resolveMobileLayout({ role, employmentType: 'fte', enabledKeys: ALL, override: null })
+      expect(r.allowed).toContain('email')
+    }
+    const r = resolveMobileLayout({ ...{ role: 'manager', employmentType: 'fte' }, enabledKeys: ALL, override: null, staffBar: ['email', 'schedule'] })
+    expect(r.bar).toEqual(['email', 'schedule'])
+  })
+
+  it('a granted head_coach reaches it via More but cannot bar-place it', () => {
+    const r = resolveMobileLayout({
+      role: 'head_coach', employmentType: 'fte', enabledKeys: ALL,
+      override: null, staffBar: ['email', 'schedule'],
+    })
+    expect(r.more).toContain('email')
+    expect(r.allowed).not.toContain('email')
+    expect(r.bar).toEqual(['schedule'])
   })
 })
 

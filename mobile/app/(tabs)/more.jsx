@@ -168,6 +168,10 @@ export default function More() {
   const tiles = []
   if (inMore.has('schedule'))  tiles.push({ key: 'schedule', icon: 'calendar-outline', label: 'Schedule', onPress: () => router.push('/schedule') })
   if (inMore.has('whatsapp'))  tiles.push({ key: 'whatsapp', icon: 'chatbubble-outline', label: 'WhatsApp', onPress: () => router.push('/whatsapp') })
+  // INBOX-SPLIT.M1 — the studio email queue is its own surface now, so it
+  // gets its own tile rather than hiding inside Messages. /email resolves to
+  // the (tabs) screen; /email/[ticketId] is the thread stack.
+  if (inMore.has('email'))     tiles.push({ key: 'email', icon: 'mail-outline', label: 'Email', onPress: () => router.push('/email') })
   if (inMore.has('studio'))    tiles.push({ key: 'studio', icon: 'business-outline', label: 'Studio', onPress: () => router.push('/studio') })
   if (inMore.has('tasks'))     tiles.push({ key: 'tasks', icon: 'checkbox-outline', label: 'Tasks', onPress: () => router.push('/tasks') })
   if (inMore.has('bookings'))  tiles.push({ key: 'bookings', icon: 'calendar-clear-outline', label: 'Bookings', onPress: () => router.push('/bookings') })
