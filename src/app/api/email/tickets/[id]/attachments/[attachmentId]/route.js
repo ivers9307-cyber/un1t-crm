@@ -1,39 +1,29 @@
 // EMAIL-ATTACH.1 — GET /api/email/tickets/[id]/attachments/[attachmentId]
 //
-// Mints a short-lived signed URL for ONE stored attachment. The
-// `email-attachments` bucket is private, so this route is the only way a
-// browser ever sees the bytes, and the URL expires.
+// Mints a short-lived signed DOWNLOAD URL for ONE stored attachment. The
+// `email-attachments` bucket is private, so this route and its `/preview`
+// sibling are the only ways a browser ever sees the bytes, and the URL expires.
 //
-// ACCESS IS THE TICKET'S ACCESS, DELIBERATELY REUSED.
-// loadTicketForUser() is the two-level gate the rest of the ticket surface runs
-// on: the caller must reach the ticket's LOCATION, must hold `email_inbox`
-// THERE, and must be able to see the MAILBOX it arrived at (or be elevated, for
-// a ticket whose mailbox is gone). Re-deriving that here would be a second
-// definition of who may read `accounts@`, and the two would drift. This route
-// adds exactly one check on top: the attachment must belong to THIS ticket.
+// THIS ROUTE ALWAYS DOWNLOADS. It takes no parameters beyond the two path ids —
+// no disposition, no transform, no options bag — so there is no request that
+// turns it into an inline URL. The inline case is a separate route with a
+// separate allow-list (EMAIL-ATTACH-PREVIEW.1), which is what keeps
+// "previewable" from being something a caller can assert about a file.
 //
-// The `email_inbox` half moved into that helper in EMAIL-TICKET-CLEANUP.1. It
-// used to sit below, resolved against the caller's ACTIVE location — so this
-// route would hand out a signed URL for another studio's billing PDF on the
-// strength of a permission held somewhere else entirely.
+// It is therefore the fallback for EVERY type: an SVG, a HEIC photo, a
+// PowerPoint deck and an unknown blob all arrive here and all save correctly,
+// under the sanitised filename off the row.
 //
-// THAT ONE EXTRA CHECK IS THE WHOLE IDOR. Without it a coach with a grant on
-// `sales@` could pass any ticket they can open as `[id]` and any attachment id
-// in the estate as `[attachmentId]`, and be handed a signed URL for the billing
-// correspondence the per-mailbox model exists to keep from them. The attachment
-// is resolved by id, then its message is resolved and its ticket_id compared to
-// the ticket the caller proved access to.
-//
-// 404, NEVER 403, for every refusal — no such attachment, an attachment on
-// another ticket, and an attachment whose bytes were never stored are all the
-// same answer from outside, so ids cannot be probed.
+// ACCESS IS THE TICKET'S ACCESS, DELIBERATELY REUSED — resolved by
+// loadAttachmentForTicket (../_helpers), shared with the preview route so the
+// two can never disagree about who may read `accounts@`. Every refusal is a
+// 404, never a 403.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { signedAttachmentUrl } from '@/lib/email-attachments-server'
-import { SKIPPED_REASON_LABEL } from '@/lib/email-attachment-quota'
-import { loadTicketForUser, ticketNotFound } from '../../../_helpers'
+import { loadAttachmentForTicket } from '../_helpers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -50,41 +40,9 @@ export async function GET(request, props) {
 
   const db = createServerClient()
 
-  // The gate. Everything below inherits the location + mailbox scoping it
-  // applied; nothing here re-derives access.
-  const loaded = await loadTicketForUser(db, user, params.id)
+  const loaded = await loadAttachmentForTicket(db, user, params.id, params.attachmentId)
   if (loaded.response) return loaded.response
-  const { ticket } = loaded
-
-  const { data: attachment, error } = await db.from('email_ticket_attachments')
-    .select('id, message_id, location_id, filename, mime_type, size_bytes, storage_path, skipped_reason')
-    .eq('id', params.attachmentId)
-    .maybeSingle()
-  // A malformed id is a Postgres cast error (22P02), not a row — same 404.
-  if (error || !attachment) return ticketNotFound()
-
-  // Belt: the attachment's own location must match the ticket's. Braces: the
-  // message it hangs off must belong to THIS ticket. The second is the real
-  // check — the first would pass for every ticket at the same studio.
-  if (attachment.location_id !== ticket.location_id) return ticketNotFound()
-
-  const { data: message, error: msgErr } = await db.from('email_inbox_messages')
-    .select('id, ticket_id')
-    .eq('id', attachment.message_id)
-    .maybeSingle()
-  if (msgErr || !message || message.ticket_id !== ticket.id) return ticketNotFound()
-
-  if (!attachment.storage_path) {
-    // Not an error state — mig 482's XOR guarantees a reason, and staff are
-    // entitled to know which one so they can ask for a resend. Still a 404:
-    // there is nothing to serve, and the caller already holds the ticket, so
-    // naming the reason discloses nothing they cannot already read.
-    return NextResponse.json({
-      success: false,
-      error: SKIPPED_REASON_LABEL[attachment.skipped_reason] || 'Not stored',
-      data: { skipped_reason: attachment.skipped_reason },
-    }, { status: 404 })
-  }
+  const { attachment } = loaded
 
   const url = await signedAttachmentUrl(db, attachment.storage_path, {
     filename: attachment.filename,
@@ -109,6 +67,9 @@ export async function GET(request, props) {
       filename: attachment.filename,
       mime_type: attachment.mime_type,
       size_bytes: attachment.size_bytes,
+      // No preview hint here on purpose: the thread payload already carries
+      // `preview_kind` per attachment, so the UI knows what a chip does before
+      // anyone clicks anything. This response stays exactly the shape it was.
       expires_in: SIGNED_URL_TTL_SECONDS,
     },
   })

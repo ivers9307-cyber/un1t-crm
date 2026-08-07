@@ -28,6 +28,7 @@ import {
   getMailboxQuota,
   pruneMailboxAttachments,
   recalcStorageUsage,
+  signedAttachmentPreviewUrl,
   signedAttachmentUrl,
   storeInboundAttachments,
 } from './email-attachments-server'
@@ -360,6 +361,79 @@ describe('signedAttachmentUrl', () => {
     db._state.storageErrors.sign = { message: 'nope' }
     expect(await signedAttachmentUrl(db, 'a/b/0.pdf')).toBeNull()
     expect(await signedAttachmentUrl(db, null)).toBeNull()
+  })
+})
+
+// EMAIL-ATTACH-PREVIEW.1 —
+//
+// THE SIGNER IS THE SECOND ENFORCEMENT POINT FOR THE ALLOW-LIST, and it is not
+// redundant with the route's. The route is the only caller today; the reason
+// the rule also lives here is the caller that gets added later, in a hurry, by
+// someone who has read the route and not this file. `image/svg+xml` must never
+// acquire an INLINE handle to its bytes — not even one nothing renders yet —
+// because "previewable" is a property a UI acts on, and a UI changes.
+describe('signedAttachmentPreviewUrl', () => {
+  it('signs an INLINE url for an allow-listed image — no download flag', async () => {
+    await store(db, [attachment({ ContentType: 'image/jpeg' })])
+    const url = await signedAttachmentPreviewUrl(db, `${LOC}/${MESSAGE}/0.jpg`, {
+      mimeType: 'image/jpeg',
+    })
+    expect(url).toContain('token=signed')
+    expect(url).not.toContain('download=')
+  })
+
+  it('signs a PDF inline too', async () => {
+    await store(db, [attachment()])
+    const url = await signedAttachmentPreviewUrl(db, `${LOC}/${MESSAGE}/0.pdf`, {
+      mimeType: 'application/pdf',
+    })
+    expect(url).toContain('token=signed')
+    expect(url).not.toContain('download=')
+  })
+
+  it('REFUSES image/svg+xml even though the object exists and would sign', async () => {
+    // The object is genuinely there — signedAttachmentUrl below proves it — so
+    // this is the allow-list refusing, not Storage failing.
+    await store(db, [attachment({ ContentType: 'image/svg+xml' })])
+    // attachmentExtension() strips the non-alphanumerics out of the subtype, so
+    // `image/svg+xml` lands at `.svgxml`. Named exactly rather than guessed:
+    // the assertion below is only meaningful if the object is really there.
+    const path = `${LOC}/${MESSAGE}/0.svgxml`
+    expect(await signedAttachmentPreviewUrl(db, path, { mimeType: 'image/svg+xml' })).toBeNull()
+    expect(await signedAttachmentUrl(db, path, { filename: 'logo.svg' })).toContain('token=signed')
+  })
+
+  it('refuses every other download-only type, and an absent one', async () => {
+    await store(db, [attachment()])
+    const path = `${LOC}/${MESSAGE}/0.pdf`
+    for (const mime of [
+      'image/heic', 'image/heif', 'image/tiff', 'image/avif',
+      'text/html', 'application/xhtml+xml', 'application/octet-stream',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/zip', '', null, undefined, 'nonsense',
+    ]) {
+      expect(await signedAttachmentPreviewUrl(db, path, { mimeType: mime }), String(mime)).toBeNull()
+    }
+    // …and with no options at all, which is the same "no type" answer.
+    expect(await signedAttachmentPreviewUrl(db, path)).toBeNull()
+  })
+
+  it('returns null rather than throwing when Storage will not sign', async () => {
+    db._state.storageErrors.sign = { message: 'nope' }
+    expect(await signedAttachmentPreviewUrl(db, 'a/b/0.png', { mimeType: 'image/png' })).toBeNull()
+    expect(await signedAttachmentPreviewUrl(db, null, { mimeType: 'image/png' })).toBeNull()
+  })
+
+  it('differs from the download signer by the download option and NOTHING else', async () => {
+    await store(db, [attachment({ ContentType: 'image/png' })])
+    const path = `${LOC}/${MESSAGE}/0.png`
+    const inline = await signedAttachmentPreviewUrl(db, path, { mimeType: 'image/png' })
+    const saved = await signedAttachmentUrl(db, path, { filename: 'photo.png' })
+    // Same object, same TTL; one query parameter apart.
+    expect(inline.split('?')[0]).toBe(saved.split('?')[0])
+    expect(inline).toContain('ttl=300')
+    expect(saved).toContain('ttl=300')
+    expect(saved.replace(/&download=[^&]*/, '')).toBe(inline)
   })
 })
 

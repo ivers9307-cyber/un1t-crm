@@ -121,3 +121,49 @@ export function setTicketStatus(ticketId, status, locationId) {
 export function markTicketRead(ticketId, locationId) {
   return api(`/api/email/tickets/${ticketId}/read`, { method: 'POST', locationId })
 }
+
+// ── Attachments (EMAIL-ATTACH-PREVIEW.1) ────────────────────────────
+//
+// The `email-attachments` bucket is PRIVATE and mobile holds no service-role
+// key, so these two routes are the only way the phone ever reaches the bytes,
+// and each URL expires in five minutes. They are minted on demand — when the
+// operator taps a file — never at thread load, so a screen left open holds no
+// live handles to anything.
+//
+// TWO ROUTES, TWO FIXED BEHAVIOURS, NO PARAMETERS. …/preview is always inline
+// and only for the server's allow-list; the bare route always downloads and
+// works for every type. Neither takes a disposition or any other Storage
+// option, which is what stops a client asserting how a stranger's file should
+// be served.
+
+/**
+ * An inline URL for a file the server says is previewable.
+ *
+ * A 404 here is NORMAL, not a fault: it is how the server says "no preview for
+ * this type" (a Word document, a HEIC photo, an SVG). Callers fall back to
+ * downloadTicketAttachment(), which is the path that works for everything.
+ */
+export async function previewTicketAttachment(ticketId, attachmentId, locationId) {
+  const res = await api(
+    `/api/email/tickets/${ticketId}/attachments/${attachmentId}/preview`,
+    { locationId },
+  )
+  if (!res.success || !res.data?.url) {
+    return { success: false, error: res.error || 'No preview is available for this file.' }
+  }
+  return { success: true, url: res.data.url, previewKind: res.data.preview_kind }
+}
+
+/**
+ * A download URL for ANY stored file. The response carries
+ * Content-Disposition: attachment, so handing it to Linking.openURL() lets the
+ * OS save it rather than render it — which is what makes it the safe fallback
+ * for the types no preview will ever cover.
+ */
+export async function downloadTicketAttachment(ticketId, attachmentId, locationId) {
+  const res = await api(`/api/email/tickets/${ticketId}/attachments/${attachmentId}`, { locationId })
+  if (!res.success || !res.data?.url) {
+    return { success: false, error: res.error || 'That file could not be opened.' }
+  }
+  return { success: true, url: res.data.url }
+}

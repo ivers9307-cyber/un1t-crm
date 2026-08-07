@@ -13,6 +13,9 @@ import {
   mailboxLabel,
   ticketToInboxRow,
   ticketsToInboxRows,
+  formatAttachmentSize,
+  ticketAttachmentSkippedLabel,
+  ticketAttachmentIcon,
 } from './email-tickets'
 
 describe('ticketMessageKind', () => {
@@ -272,5 +275,71 @@ describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
 
   it('says nothing about an unrecognised status', () => {
     expect(ticketDeliveryMeta(outbound({ delivery_status: 'opened' }))).toBeNull()
+  })
+})
+
+
+// ── Attachments (EMAIL-ATTACH-PREVIEW.1) ────────────────────────────
+//
+// These are the two strings mobile duplicates from the web helpers, plus the
+// icon picker. Tested here because a phone showing "0 B" or a blank reason for
+// a file a member definitely sent is exactly the "we never got it" conversation
+// the whole not-stored ROW exists to prevent.
+
+describe('formatAttachmentSize', () => {
+  it('matches the web helper on the sizes that actually turn up', () => {
+    expect(formatAttachmentSize(0)).toBe('0 B')
+    expect(formatAttachmentSize(512)).toBe('512 B')
+    expect(formatAttachmentSize(1024)).toBe('1.0 KB')
+    expect(formatAttachmentSize(2_100_000)).toBe('2.0 MB')
+    expect(formatAttachmentSize(26_214_400)).toBe('25 MB')
+  })
+
+  it('never renders a negative, absent or nonsense size as a number', () => {
+    for (const bad of [null, undefined, -1, NaN, Infinity, 'x', {}]) {
+      expect(formatAttachmentSize(bad)).toBe('0 B')
+    }
+  })
+})
+
+describe('ticketAttachmentSkippedLabel', () => {
+  it('names every reason the DB allows, in words staff can act on', () => {
+    expect(ticketAttachmentSkippedLabel('quota')).toMatch(/full/i)
+    expect(ticketAttachmentSkippedLabel('too_large')).toMatch(/size limit/i)
+    // Its own sentence rather than folded into too_large: staff ACT on this,
+    // and "over the size limit" would send them asking a member to compress a
+    // file that was never oversized.
+    expect(ticketAttachmentSkippedLabel('too_many')).toMatch(/too many files/i)
+    expect(ticketAttachmentSkippedLabel('rehost_failed')).toMatch(/upload failed/i)
+    expect(ticketAttachmentSkippedLabel('pruned')).toMatch(/free space/i)
+  })
+
+  it('still says SOMETHING for an unknown reason — never an empty chip', () => {
+    expect(ticketAttachmentSkippedLabel('invented')).toBe('Not stored')
+    expect(ticketAttachmentSkippedLabel(null)).toBe('Not stored')
+  })
+})
+
+describe('ticketAttachmentIcon', () => {
+  it('reads the type first', () => {
+    expect(ticketAttachmentIcon('image/jpeg', 'x.jpg')).toBe('image-outline')
+    expect(ticketAttachmentIcon('application/pdf', 'x.pdf')).toBe('document-text-outline')
+    expect(ticketAttachmentIcon('text/csv', 'members.csv')).toBe('grid-outline')
+    // A .png name on a PDF must not turn it into a photo.
+    expect(ticketAttachmentIcon('application/pdf', 'invoice.png')).toBe('document-text-outline')
+  })
+
+  it('falls back to the filename when the type says nothing', () => {
+    // The real .pptx MIME subtype is 61 characters and safeMimeType caps a
+    // subtype at 60, so every PowerPoint deck is stored as octet-stream.
+    expect(ticketAttachmentIcon('application/octet-stream', 'Q3 deck.pptx')).toBe('easel-outline')
+    expect(ticketAttachmentIcon('application/octet-stream', 'photos.zip')).toBe('archive-outline')
+    expect(ticketAttachmentIcon('application/octet-stream', 'letter.docx')).toBe('document-outline')
+  })
+
+  it('always returns a glyph, never undefined', () => {
+    expect(ticketAttachmentIcon(null, null)).toBe('attach-outline')
+    expect(ticketAttachmentIcon('', 'noextension')).toBe('attach-outline')
+    expect(ticketAttachmentIcon(undefined, undefined)).toBe('attach-outline')
   })
 })
