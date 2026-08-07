@@ -149,7 +149,7 @@
 // answers nothing, and records a row with a skipped_reason for any file it
 // could not keep. See src/lib/email-attachments-server.js.
 //
-// ⚠️ THE REAL CEILING IS VERCEL'S REQUEST-BODY CAP, NOT OUR SIZE CHECK.
+// ⚠️ VERCEL'S REQUEST-BODY CAP, AND THE SHIM THAT NOW FRONTS THIS ROUTE.
 // Nothing in this route, next.config.mjs or vercel.json limits the body — App
 // Router route handlers have no bodyParser.sizeLimit (that was Pages Router)
 // and `await request.json()` reads whatever arrives. What DOES cap it is the
@@ -157,14 +157,28 @@
 // 413 before this handler is ever invoked (the same cap that forced
 // direct-to-storage uploads in WA-PIPELINE #450 and the contractor-invoice
 // path #453). Because Postmark base64-encodes inline attachments (~4/3
-// expansion), that puts the practical inbound ceiling at roughly 3.3 MB of
-// attachment bytes per EMAIL — well under Postmark's own 25 MB inbound limit
-// and under our per-file MAX_ATTACHMENT_BYTES. A larger mail therefore does
-// not reach the `too_large` branch at all: Postmark sees a 413, retries, and
-// the message is never filed. That is a pre-existing property of every inbound
-// email on this route (bodies too), not something attachments introduced, and
-// fixing it needs Postmark's inbound "strip attachments + fetch by URL" mode
-// rather than a code change here. Flagged rather than papered over.
+// expansion), that put the practical inbound ceiling at roughly 3.3 MB of
+// attachment bytes per EMAIL — well under Postmark's own limit and under our
+// per-file MAX_ATTACHMENT_BYTES. A larger mail did not reach the `too_large`
+// branch at all: Postmark saw a 413, retried, and the message was never filed.
+//
+// EMAIL-INBOUND-SHIM.1 moves that ceiling by putting a Supabase Edge Function
+// (supabase/functions/postmark-inbound-shim) in front. Postmark now POSTs the
+// fat payload there; it uploads each attachment's bytes into the
+// `email-attachments` bucket, replaces each `Content` with a `_un1t_staged`
+// reference, forwards the small JSON HERE, and returns whatever this route
+// returned — so Postmark's retry semantics are unchanged.
+//
+// THIS ROUTE STILL ACCEPTS THE ORIGINAL INLINE-BASE64 SHAPE, unchanged, and
+// must keep doing so: it is the fallback if the shim is bypassed, mis-deployed
+// or rolled back. storeInboundAttachments() handles both. See
+// src/lib/email-attachment-staging.js for the wire contract.
+//
+// AND IT OWNS THE STAGED BYTES. Every exit below that means "this message is
+// not being filed" — no parseable sender, an unmatched recipient heading for
+// the dead-letter table, or any 5xx answered before the attachment step —
+// discards what the shim staged. Nothing else ever will: the rows that would
+// have named those objects are the rows this route decided not to write.
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
@@ -185,7 +199,7 @@ import {
 import { resolveMailboxByRecipient } from '@/lib/email-mailboxes'
 import { resolveTicketAction, ticketSubject, pickThreadedTicket } from '@/lib/email-tickets'
 import { escapeLikePattern } from '@/lib/like-escape'
-import { storeInboundAttachments } from '@/lib/email-attachments-server'
+import { storeInboundAttachments, discardStagedAttachments } from '@/lib/email-attachments-server'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -351,12 +365,27 @@ export async function POST(request, { params }) {
  * answers with, unchanged.
  */
 async function processInboundEmail(db, body, messageId) {
+  // ── The staged-bytes contract (EMAIL-INBOUND-SHIM.1) ──────────────
+  // Wrap every exit that means "nothing here will ever reference the bytes the
+  // shim put in the bucket". Written as a wrapper rather than a call at each
+  // site so a new early return cannot quietly forget it — and applied ONLY to
+  // exits taken BEFORE storeInboundAttachments runs.
+  //
+  // Deliberately NOT applied to the two `deduped` returns: an earlier attempt
+  // already filed this message, and its rows point at these same deterministic
+  // keys. Discarding there would delete a stored attachment out from under a
+  // live ticket.
+  const unfiled = async (res) => {
+    await discardStagedAttachments(db, body.Attachments, { postmarkMessageId: messageId })
+    return res
+  }
+
   const fromEmail = normalizeEmail(body.FromFull?.Email || body.From)
   if (!fromEmail) {
     // A real email always has a sender; without one there is nothing to
     // thread. 200 so Postmark doesn't retry an unfixable payload.
     console.warn('[postmark-inbound] no parseable From address', { messageId })
-    return NextResponse.json({ success: true, ignored: 'no_sender' })
+    return unfiled(NextResponse.json({ success: true, ignored: 'no_sender' }))
   }
 
   // ── Threading resolution ──────────────────────────────────────────
@@ -378,7 +407,7 @@ async function processInboundEmail(db, body, messageId) {
       .limit(1)
     if (sendsErr) {
       console.error('[postmark-inbound] email_sends lookup failed:', sendsErr.message)
-      return NextResponse.json({ success: false, error: 'thread_lookup_failed' }, { status: 500 })
+      return unfiled(NextResponse.json({ success: false, error: 'thread_lookup_failed' }, { status: 500 }))
     }
     const send = sends?.[0]
     if (send) {
@@ -397,7 +426,7 @@ async function processInboundEmail(db, body, messageId) {
     .eq('active', true)
   if (mbErr) {
     console.error('[postmark-inbound] email_mailboxes lookup failed:', mbErr.message)
-    return NextResponse.json({ success: false, error: 'mailbox_lookup_failed' }, { status: 500 })
+    return unfiled(NextResponse.json({ success: false, error: 'mailbox_lookup_failed' }, { status: 500 }))
   }
   const mailbox = resolveMailboxByRecipient(mailboxes || [], recipients)
   if (!mailbox) {
@@ -420,7 +449,7 @@ async function processInboundEmail(db, body, messageId) {
     console.warn('[postmark-inbound] no active mailbox matched — dead-lettered', {
       messageId, recipients,
     })
-    return NextResponse.json({ success: true, dead_lettered: 'no_matching_mailbox' })
+    return unfiled(NextResponse.json({ success: true, dead_lettered: 'no_matching_mailbox' }))
   }
   const locationId = mailbox.location_id
 
@@ -439,7 +468,7 @@ async function processInboundEmail(db, body, messageId) {
       .limit(50)
     if (cErr) {
       console.error('[postmark-inbound] contacts lookup failed:', cErr.message)
-      return NextResponse.json({ success: false, error: 'contact_lookup_failed' }, { status: 500 })
+      return unfiled(NextResponse.json({ success: false, error: 'contact_lookup_failed' }, { status: 500 }))
     }
     const picked = pickContact(contacts || [], locationId)
     if (picked) {
@@ -480,7 +509,7 @@ async function processInboundEmail(db, body, messageId) {
     const threadErr = byRfc.error || byPostmark.error
     if (threadErr) {
       console.error('[postmark-inbound] ticket thread lookup failed:', threadErr.message)
-      return NextResponse.json({ success: false, error: 'ticket_lookup_failed' }, { status: 500 })
+      return unfiled(NextResponse.json({ success: false, error: 'ticket_lookup_failed' }, { status: 500 }))
     }
     const threadedTicketId = pickThreadedTicket([...(byRfc.data || []), ...(byPostmark.data || [])])
     if (threadedTicketId) {
@@ -491,7 +520,7 @@ async function processInboundEmail(db, body, messageId) {
         .maybeSingle()
       if (tErr) {
         console.error('[postmark-inbound] ticket lookup failed:', tErr.message)
-        return NextResponse.json({ success: false, error: 'ticket_lookup_failed' }, { status: 500 })
+        return unfiled(NextResponse.json({ success: false, error: 'ticket_lookup_failed' }, { status: 500 }))
       }
       threadedTicket = found || null
     }
@@ -533,7 +562,7 @@ async function processInboundEmail(db, body, messageId) {
       .single()
     if (ticketErr || !createdTicket) {
       console.error('[postmark-inbound] ticket insert failed:', ticketErr?.message)
-      return NextResponse.json({ success: false, error: 'ticket_insert_failed' }, { status: 500 })
+      return unfiled(NextResponse.json({ success: false, error: 'ticket_insert_failed' }, { status: 500 }))
     }
     ticketId = createdTicket.id
   }
@@ -572,7 +601,7 @@ async function processInboundEmail(db, body, messageId) {
       return NextResponse.json({ success: true, deduped: true })
     }
     console.error('[postmark-inbound] message insert failed:', msgErr.message)
-    return NextResponse.json({ success: false, error: 'message_insert_failed' }, { status: 500 })
+    return unfiled(NextResponse.json({ success: false, error: 'message_insert_failed' }, { status: 500 }))
   }
 
   // ── Attachments (EMAIL-ATTACH.1) ──────────────────────────────────
@@ -597,6 +626,11 @@ async function processInboundEmail(db, body, messageId) {
         messageId: insertedMessage.id,
         locationId,
         mailboxId: mailbox.id,
+        // Postmark's own MessageID, NOT the row id above. It is what the shim
+        // keyed its objects on, so it is what re-derives and validates a
+        // `_un1t_staged` path. Without it every marker reads as rehost_failed —
+        // fail-safe, never fail-open.
+        postmarkMessageId: messageId,
       })
       if (stored.skipped > 0) {
         console.warn('[postmark-inbound] attachments not stored', {

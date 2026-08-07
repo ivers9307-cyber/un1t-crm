@@ -24,6 +24,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { makeDb, insertsInto, objectKeys, usageFor } from '@/app/api/email/tickets/_test-db'
 import {
   decodeAttachmentContent,
+  discardStagedAttachments,
   getMailboxQuota,
   pruneMailboxAttachments,
   recalcStorageUsage,
@@ -31,6 +32,15 @@ import {
   storeInboundAttachments,
 } from './email-attachments-server'
 import { EMAIL_MAILBOX_QUOTA_BYTES, MAX_ATTACHMENT_BYTES } from './email-attachment-quota'
+// EMAIL-INBOUND-SHIM.1 — the staged fixtures are built with the REAL writer,
+// so a test can never pass against a marker the Edge Function would not
+// actually produce.
+import {
+  STAGED_MARKER_KEY,
+  failedAttachment,
+  stagedAttachment,
+  stagedAttachmentPath,
+} from './email-attachment-staging'
 
 const LOC = 'a0000000-0000-4000-8000-000000000001'
 const MAILBOX = 'b0000000-0000-4000-8000-000000000002'
@@ -503,5 +513,275 @@ describe('recalcStorageUsage — the drift repair', () => {
     })
     await recalcStorageUsage(db, LOC)
     expect(usageFor(db, LOC, MAILBOX).bytes_used).toBe(0)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════
+// EMAIL-INBOUND-SHIM.1 — the SECOND payload shape.
+//
+// Everything above this line is the inline-base64 shape and it is UNCHANGED:
+// that path is the fallback whenever the Edge Function is bypassed,
+// mis-deployed or rolled back, so those tests are the regression suite for it,
+// not legacy.
+//
+// What follows is the shape where the bytes are ALREADY in the bucket, put
+// there by supabase/functions/postmark-inbound-shim before this process ever
+// saw the message. The three properties that matter:
+//
+//   1. NOTHING IS DECODED AND NOTHING IS UPLOADED. If either happened the shim
+//      would have moved the bytes for nothing and the 4.5 MB ceiling would be
+//      right back.
+//   2. THE ACCOUNTING IS THE SAME ACCOUNTING. Same reserve-then-check dance,
+//      same UNIQUE (message_id, attachment_index) idempotency, same counter.
+//   3. EVERY REFUSAL TAKES THE BYTES WITH IT. The inline path had nothing to
+//      clean up at these points because it had not uploaded yet; the staged
+//      path HAS, and an object no row names is a bill nobody can explain.
+// ════════════════════════════════════════════════════════════════════
+
+const PM_MID = 'pm-1a2b3c4d-0000-4000-8000-000000000009'
+
+/**
+ * Put an object in the fake bucket at the key the shim would have used, and
+ * return the attachment as it arrives on the wire. Built through the REAL
+ * writer so these tests cannot pass against a marker the shim never produces.
+ */
+function staged(index, { sizeBytes = 1000, ext = 'pdf', mid = PM_MID, ...overrides } = {}) {
+  const path = stagedAttachmentPath({ postmarkMessageId: mid, index, extension: ext })
+  db._state.objects.set(`email-attachments/${path}`, { bytes: null, opts: {} })
+  return stagedAttachment(attachment(overrides), { path, sizeBytes })
+}
+
+const storeStaged = (attachments, extra = {}) =>
+  store(db, attachments, { postmarkMessageId: PM_MID, ...extra })
+
+const stagedKey = (index, ext = 'pdf') => `email-attachments/inbound/${PM_MID}/${index}.${ext}`
+
+describe('the staged shape — the bytes are already in the bucket', () => {
+  it('records the SHIM’S key and never uploads anything', async () => {
+    const summary = await storeStaged([staged(0)])
+
+    expect(summary).toMatchObject({ stored: 1, skipped: 0, deduped: 0, bytesStored: 1000 })
+    const [row] = insertsInto(db, 'email_ticket_attachments')
+    expect(row.payload.storage_path).toBe(`inbound/${PM_MID}/0.pdf`)
+    // NOT copied to the canonical <location_id>/<message_id>/… key: nothing in
+    // this system derives an object's address from a prefix, so a copy would
+    // buy uniformity at the price of two more Storage calls and a failure
+    // branch with no good answer.
+    expect(objectKeys(db)).toEqual([stagedKey(0)])
+    expect(objectKeys(db)).not.toContain(`email-attachments/${LOC}/${MESSAGE}/0.pdf`)
+    // The metadata is still Postmark's, sanitised exactly as before.
+    expect(row.payload).toMatchObject({
+      filename: 'invoice.pdf', mime_type: 'application/pdf', size_bytes: 1000, skipped_reason: null,
+    })
+  })
+
+  it('meters the shim’s DECODED count, not ContentLength and not base64 length', async () => {
+    // The fixture's ContentLength is deliberately 999,999 and its Content is a
+    // base64 string; neither may reach the counter.
+    await storeStaged([staged(0, { sizeBytes: 4096 })])
+    expect(usageFor(db, LOC, MAILBOX).bytes_used).toBe(4096)
+  })
+
+  it('handles a MIXED payload — one inline, one staged, on the same message', async () => {
+    // Not exotic: it is exactly what a rollback mid-flight looks like.
+    const summary = await storeStaged([
+      attachment({ Content: b64(700) }),
+      staged(1, { sizeBytes: 300 }),
+    ])
+    expect(summary).toMatchObject({ stored: 2, bytesStored: 1000 })
+    expect(insertsInto(db, 'email_ticket_attachments').map(i => i.payload.storage_path))
+      .toEqual([`${LOC}/${MESSAGE}/0.pdf`, `inbound/${PM_MID}/1.pdf`])
+    expect(usageFor(db, LOC, MAILBOX).bytes_used).toBe(1000)
+  })
+})
+
+describe('the staged shape — IDEMPOTENT ACROSS A POSTMARK RETRY', () => {
+  it('runs the same payload twice and counts the bytes ONCE', async () => {
+    // The webhook releases its dedupe claim on any 5xx, so re-processing is
+    // DESIGNED. The shim re-uploads to the same deterministic key on the
+    // retry, so this is the run that must not double-count.
+    await storeStaged([staged(0, { sizeBytes: 1000 })])
+    const second = await storeStaged([staged(0, { sizeBytes: 1000 })])
+
+    expect(second).toMatchObject({ stored: 0, deduped: 1, bytesStored: 0 })
+    expect(usageFor(db, LOC, MAILBOX).bytes_used).toBe(1000)
+    expect(db._state.attachments).toHaveLength(1)
+  })
+
+  it('LEAVES THE OBJECT when it loses the insert race (23505)', async () => {
+    // The winning row points at this exact key — the path is deterministic in
+    // both shapes — so deleting it here would break a live ticket's
+    // attachment. The reservation is what gets handed back, not the bytes.
+    db._state.attachments.push({
+      id: 'a-existing', message_id: MESSAGE, attachment_index: 0,
+      location_id: LOC, mailbox_id: MAILBOX, size_bytes: 1000,
+      storage_path: `inbound/${PM_MID}/0.pdf`, skipped_reason: null,
+    })
+    // Make the pre-check miss so the 23505 backstop is what fires.
+    const realFrom = db.from
+    db.from = (table) => {
+      const b = realFrom(table)
+      if (table === 'email_ticket_attachments' && !b._select) {
+        const original = b.maybeSingle
+        b.maybeSingle = () => (b._op === 'select' ? Promise.resolve({ data: null, error: null }) : original())
+      }
+      return b
+    }
+
+    const summary = await storeStaged([staged(0)])
+    expect(summary).toMatchObject({ stored: 0, deduped: 1 })
+    expect(objectKeys(db)).toEqual([stagedKey(0)])
+    expect(usageFor(db, LOC, MAILBOX).bytes_used).toBe(0)
+  })
+})
+
+describe('the staged shape — every refusal takes the bytes with it', () => {
+  it('discards the object when the mailbox is FULL', async () => {
+    db._state.storageUsage.push({
+      id: 'u1', location_id: LOC, mailbox_id: MAILBOX,
+      bytes_used: EMAIL_MAILBOX_QUOTA_BYTES, quota_bytes: EMAIL_MAILBOX_QUOTA_BYTES,
+    })
+    const summary = await storeStaged([staged(0)])
+
+    expect(summary.reasons).toEqual({ quota: 1 })
+    expect(insertsInto(db, 'email_ticket_attachments')[0].payload.skipped_reason).toBe('quota')
+    expect(objectKeys(db)).toEqual([])
+    // Reservation handed back — the mailbox is full, not fuller.
+    expect(usageFor(db, LOC, MAILBOX).bytes_used).toBe(EMAIL_MAILBOX_QUOTA_BYTES)
+  })
+
+  it('discards the object when the shim’s own size is over the per-file ceiling', async () => {
+    const summary = await storeStaged([staged(0, { sizeBytes: MAX_ATTACHMENT_BYTES + 1 })])
+    expect(summary.reasons).toEqual({ too_large: 1 })
+    expect(objectKeys(db)).toEqual([])
+    expect(usageFor(db, LOC, MAILBOX)).toBeNull() // never reserved
+  })
+
+  it('discards the object when the counter RPC is down', async () => {
+    db._state.errors.add_email_storage_bytes = { message: 'rpc down' }
+    const summary = await storeStaged([staged(0)])
+    expect(summary.reasons).toEqual({ rehost_failed: 1 })
+    expect(objectKeys(db)).toEqual([])
+  })
+
+  it('removes the object when the row insert fails for a REAL reason', async () => {
+    db._state.errors.email_ticket_attachments = { code: '42703', message: 'column gone' }
+    const summary = await storeStaged([staged(0)])
+    expect(summary.reasons).toEqual({ rehost_failed: 1 })
+    expect(objectKeys(db)).toEqual([])
+    expect(usageFor(db, LOC, MAILBOX).bytes_used).toBe(0)
+  })
+
+  it('discards a staged object that arrived past the per-message cap', async () => {
+    const many = Array.from({ length: 27 }, (_, i) => staged(i, { sizeBytes: 10 }))
+    const summary = await storeStaged(many)
+
+    expect(summary.stored).toBe(25)
+    expect(summary.reasons.too_many).toBe(2)
+    // The two past the cap left no bytes behind.
+    expect(objectKeys(db)).toHaveLength(25)
+    expect(objectKeys(db)).not.toContain(stagedKey(25))
+    expect(objectKeys(db)).not.toContain(stagedKey(26))
+  })
+
+  it('never lets a discard failure take the email with it', async () => {
+    db._state.storageErrors.remove = { message: 'storage down' }
+    db._state.storageUsage.push({
+      id: 'u1', location_id: LOC, mailbox_id: MAILBOX,
+      bytes_used: EMAIL_MAILBOX_QUOTA_BYTES, quota_bytes: EMAIL_MAILBOX_QUOTA_BYTES,
+    })
+    const summary = await storeStaged([staged(0)])
+    // The row is still written, loudly, and nothing throws. The leak is a cost
+    // line, not a correctness one.
+    expect(summary.reasons).toEqual({ quota: 1 })
+    expect(error).toHaveBeenCalled()
+  })
+})
+
+describe('the staged shape — a marker the shim could not honour', () => {
+  it('records too_large without reserving or uploading', async () => {
+    // The shim refuses an oversized file on its base64 LENGTH, so it never
+    // allocates the buffer — there is nothing in the bucket to clean up.
+    const summary = await storeStaged([failedAttachment(attachment(), { reason: 'too_large' })])
+    expect(summary.reasons).toEqual({ too_large: 1 })
+    expect(insertsInto(db, 'email_ticket_attachments')[0].payload.skipped_reason).toBe('too_large')
+    expect(objectKeys(db)).toEqual([])
+    expect(usageFor(db, LOC, MAILBOX)).toBeNull()
+  })
+
+  it('records rehost_failed when the shim’s upload failed', async () => {
+    const summary = await storeStaged([failedAttachment(attachment(), { reason: 'upload_failed' })])
+    expect(summary.reasons).toEqual({ rehost_failed: 1 })
+    const [row] = insertsInto(db, 'email_ticket_attachments')
+    expect(row.payload.skipped_reason).toBe('rehost_failed')
+    // The file is still VISIBLE to staff, with its real name, so they can ask
+    // for a resend. That is the whole reason a failed move forwards anyway.
+    expect(row.payload.filename).toBe('invoice.pdf')
+  })
+})
+
+describe('the staged shape — a marker is VALIDATED, never trusted', () => {
+  it('refuses a path staged under another message id, and leaves it alone', async () => {
+    const forged = staged(0, { mid: 'pm-someone-elses-message' })
+    const summary = await storeStaged([forged])
+
+    expect(summary.reasons).toEqual({ rehost_failed: 1 })
+    // NOT deleted: a delete driven by an unvalidated string off a webhook
+    // payload would be a delete-anything primitive.
+    expect(objectKeys(db)).toEqual(['email-attachments/inbound/pm-someone-elses-message/0.pdf'])
+  })
+
+  it('refuses a marker pointing at the canonically-keyed half of the bucket', async () => {
+    const forged = {
+      ...attachment(), Content: '',
+      [STAGED_MARKER_KEY]: { v: 1, path: `${LOC}/${MESSAGE}/0.pdf`, bytes: 1000 },
+    }
+    const summary = await storeStaged([forged])
+    expect(summary.reasons).toEqual({ rehost_failed: 1 })
+    expect(insertsInto(db, 'email_ticket_attachments')[0].payload.storage_path).toBeNull()
+  })
+
+  it('refuses every marker when no Postmark MessageID was passed — fail-safe', async () => {
+    // A caller that forgets the id gets rehost_failed rows, never rows
+    // pointing at unvalidated paths.
+    const wire = staged(0)
+    const summary = await store(db, [wire])
+    expect(summary.reasons).toEqual({ rehost_failed: 1 })
+    expect(objectKeys(db)).toEqual([stagedKey(0)])
+  })
+})
+
+describe('discardStagedAttachments — the message is not being filed', () => {
+  it('removes exactly the staged objects and reports how many', async () => {
+    const wire = [staged(0), staged(1, { ext: 'png', ContentType: 'image/png' })]
+    expect(objectKeys(db)).toHaveLength(2)
+
+    expect(await discardStagedAttachments(db, wire, { postmarkMessageId: PM_MID })).toBe(2)
+    expect(objectKeys(db)).toEqual([])
+  })
+
+  it('does nothing for the inline shape — there is nothing staged to discard', async () => {
+    expect(await discardStagedAttachments(db, [attachment()], { postmarkMessageId: PM_MID })).toBe(0)
+  })
+
+  it('will not delete a path it cannot re-derive', async () => {
+    const forged = {
+      ...attachment(), Content: '',
+      [STAGED_MARKER_KEY]: { v: 1, path: `${LOC}/${MESSAGE}/0.pdf`, bytes: 10 },
+    }
+    db._state.objects.set(`email-attachments/${LOC}/${MESSAGE}/0.pdf`, {})
+    expect(await discardStagedAttachments(db, [forged], { postmarkMessageId: PM_MID })).toBe(0)
+    expect(objectKeys(db)).toHaveLength(1)
+  })
+
+  it('never throws, and says so loudly when Storage refuses', async () => {
+    db._state.storageErrors.remove = { message: 'storage down' }
+    await expect(discardStagedAttachments(db, [staged(0)], { postmarkMessageId: PM_MID }))
+      .resolves.toBe(0)
+    expect(error).toHaveBeenCalled()
+
+    await expect(discardStagedAttachments(db, null, {})).resolves.toBe(0)
+    await expect(discardStagedAttachments({}, [staged(1)], { postmarkMessageId: PM_MID }))
+      .resolves.toBe(0)
   })
 })
