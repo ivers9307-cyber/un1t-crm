@@ -40,6 +40,46 @@
 //     as far as uploading overwrites the identical key rather than leaving a
 //     second copy nothing is accounting for. That is why the 23505 path leaves
 //     the object alone: it is the FIRST run's object, at the same key.
+//
+// ══ TWO PAYLOAD SHAPES, ONE FILING PATH (EMAIL-INBOUND-SHIM.1) ══════
+// storeInboundAttachments accepts BOTH:
+//
+//   inline  Postmark's original base64 `Content`. Decoded and uploaded here.
+//           STILL FULLY SUPPORTED — it is what runs if the Edge Function is
+//           bypassed, mis-deployed or rolled back, and it is the shape every
+//           attachment test written before the shim exercises.
+//   staged  a `_un1t_staged` marker saying the bytes are ALREADY in the bucket,
+//           put there by supabase/functions/postmark-inbound-shim. The row is
+//           recorded against the object the shim wrote; nothing is decoded and
+//           nothing is uploaded.
+//
+// THE SHIM'S KEY IS RECORDED, NOT COPIED TO THE CANONICAL ONE. The shim knows
+// neither id the canonical key uses (`location_id` comes from resolving the
+// recipient, `message_id` is our own row id — both decided after forwarding),
+// so it keys on Postmark's MessageID under an `inbound/` prefix. That key is
+// then written to storage_path verbatim, because NOTHING IN THIS SYSTEM
+// DERIVES AN OBJECT'S ADDRESS FROM A PREFIX:
+//   • pruneMailboxAttachments reads storage_path off the ROW and removes
+//     exactly those keys (below);
+//   • recalc_email_storage_usage sums size_bytes from ROWS and never lists the
+//     bucket (mig 496);
+//   • the download route signs storage_path off the ROW (mig 482's bucket is
+//     private with no path-prefix storage policy — access is service-role only).
+// So a differently-shaped key escapes no cleanup and no access control. A copy
+// would buy uniformity at the price of two more Storage calls per attachment
+// on the one path whose governing rule is that mail is never lost, and its
+// failure branch has no good answer.
+//
+// ORPHANS — bytes in the bucket with no row pointing at them — are bounded
+// deliberately, not hoped away:
+//   1. the shim's key is a function of the payload alone, so N retries of one
+//      message overwrite one object set rather than leaving N;
+//   2. every branch below that REFUSES a staged attachment (too_large, quota,
+//      too_many, a failed insert) removes the object the shim left;
+//   3. every path in the webhook that decides the message will not be filed at
+//      all (no sender, unmatched recipient → dead letter, and every 5xx that
+//      returns before this module runs) calls discardStagedAttachments().
+// What is left is the residue named in that function's comment.
 
 import {
   EMAIL_ATTACHMENT_BUCKET,
@@ -51,6 +91,7 @@ import {
   safeAttachmentFilename,
   safeMimeType,
 } from './email-attachment-quota'
+import { readStagedMarker, stagedPathsIn } from './email-attachment-staging'
 
 const UNIQUE_VIOLATION = '23505'
 
@@ -157,10 +198,15 @@ async function alreadyRecorded(db, messageId, index) {
  * @param {string} args.messageId   email_inbox_messages.id (NOT Postmark's MessageID)
  * @param {string} args.locationId
  * @param {string|null} args.mailboxId
+ * @param {string|null} args.postmarkMessageId Postmark's own MessageID. Required
+ *   to believe a `_un1t_staged` marker: the staged key is re-derived from it, so
+ *   a marker can only ever name the object the shim wrote for THIS message. Its
+ *   absence is fail-safe — every marker then reads as `rehost_failed` and
+ *   nothing is deleted — never fail-open.
  * @returns {Promise<{stored: number, skipped: number, deduped: number, bytesStored: number, reasons: object}>}
  */
 export async function storeInboundAttachments(db, {
-  attachments, messageId, locationId, mailboxId = null,
+  attachments, messageId, locationId, mailboxId = null, postmarkMessageId = null,
 } = {}) {
   const summary = { stored: 0, skipped: 0, deduped: 0, bytesStored: 0, reasons: {} }
   const note = (reason) => {
@@ -182,6 +228,10 @@ export async function storeInboundAttachments(db, {
       // seeing "12 files not stored" can go and ask for them; a silently
       // truncated list looks like the member never sent them.
       if (index >= MAX_ATTACHMENTS_PER_MESSAGE) {
+        // The shim does not stage past the cap either, so there is normally
+        // nothing here — but a marker at this index would be bytes no row will
+        // ever name, so it is thrown away rather than left to bill.
+        await discardOne(db, attachments[index], { postmarkMessageId, index })
         const recorded = await recordAttachment(db, {
           messageId, locationId, mailboxId, index,
           attachment: attachments[index],
@@ -195,7 +245,7 @@ export async function storeInboundAttachments(db, {
 
       const outcome = await storeOne(db, {
         attachment: attachments[index],
-        index, messageId, locationId, mailboxId, quotaBytes,
+        index, messageId, locationId, mailboxId, quotaBytes, postmarkMessageId,
       })
       if (outcome.kind === 'stored') {
         summary.stored += 1
@@ -229,25 +279,90 @@ function attachmentSizeHint(attachment) {
   return 1 // size_bytes > 0 is a CHECK; "unknown" still has to be a legal row
 }
 
+/** Take bytes back out of the bucket. Never throws; a leak is not a failure. */
+async function removeObject(db, path) {
+  if (!path) return
+  try {
+    const { error } = await db.storage.from(EMAIL_ATTACHMENT_BUCKET).remove([path])
+    if (error) {
+      console.error('[email-attachments] could not remove unreferenced object', path, '—', error.message)
+    }
+  } catch (err) {
+    console.error('[email-attachments] object removal threw for', path, '—', err?.message)
+  }
+}
+
 /**
- * One attachment, end to end.
+ * Throw away the bytes the shim staged for ONE attachment, if it staged any.
+ *
+ * The path is re-derived and validated by readStagedMarker before it is used,
+ * so this can only ever delete the object the shim would have written for this
+ * (message, index) — never an arbitrary string off a webhook payload.
+ */
+async function discardOne(db, attachment, { postmarkMessageId, index }) {
+  const marker = readStagedMarker(attachment, { postmarkMessageId, index })
+  if (marker.kind !== 'staged') return
+  await removeObject(db, marker.path)
+}
+
+/**
+ * One attachment, end to end — in EITHER payload shape.
  *
  * @returns {Promise<{kind: 'stored'|'skipped'|'duplicate'|'empty', reason?: string, sizeBytes?: number}>}
  */
-async function storeOne(db, { attachment, index, messageId, locationId, mailboxId, quotaBytes }) {
-  const bytes = decodeAttachmentContent(attachment?.Content)
-  if (!bytes) {
-    console.warn('[email-attachments] undecodable or empty attachment', { messageId, index })
-    return { kind: 'empty' }
+async function storeOne(db, {
+  attachment, index, messageId, locationId, mailboxId, quotaBytes, postmarkMessageId,
+}) {
+  const marker = readStagedMarker(attachment, { postmarkMessageId, index })
+
+  // The shim looked at this file and could not move it (too big to be worth
+  // decoding, or Storage refused). There are no bytes anywhere; record the row
+  // so staff can ask for a resend and move on.
+  if (marker.kind === 'skip') {
+    const recorded = await recordAttachment(db, {
+      messageId, locationId, mailboxId, index, attachment,
+      sizeBytes: attachmentSizeHint(attachment),
+      skippedReason: marker.reason,
+    })
+    return recorded === 'duplicate'
+      ? { kind: 'duplicate' }
+      : { kind: 'skipped', reason: marker.reason }
   }
-  const sizeBytes = bytes.length // the ONLY size this module trusts
+
+  const staged = marker.kind === 'staged'
+
+  // The decoded buffer, and the size. INLINE decodes here as it always has;
+  // STAGED takes the length the shim measured off ITS decoded buffer. In both
+  // shapes the number is a decoded length — never base64 length and never the
+  // sender's `ContentLength`.
+  let bytes = null
+  let sizeBytes
+  if (staged) {
+    sizeBytes = marker.sizeBytes
+  } else {
+    bytes = decodeAttachmentContent(attachment?.Content)
+    if (!bytes) {
+      console.warn('[email-attachments] undecodable or empty attachment', { messageId, index })
+      return { kind: 'empty' }
+    }
+    sizeBytes = bytes.length // the ONLY size this module trusts
+  }
+
+  // Anything that ends without a row must take the staged bytes with it — the
+  // inline path simply has not uploaded anything yet at these points.
+  const discard = () => (staged ? removeObject(db, marker.path) : Promise.resolve())
 
   // Fast path for a re-processed delivery: don't upload bytes we are about to
   // discard. The 23505 handling below is what makes it correct under a race;
   // this only makes it cheap.
+  //
+  // NOTHING IS DELETED HERE, in either shape. The winning row points at the
+  // same deterministic key this run would have written, so the object is the
+  // one that row needs.
   if (await alreadyRecorded(db, messageId, index)) return { kind: 'duplicate' }
 
   if (sizeBytes > MAX_ATTACHMENT_BYTES) {
+    await discard()
     const recorded = await recordAttachment(db, {
       messageId, locationId, mailboxId, index, attachment, sizeBytes: MAX_ATTACHMENT_BYTES,
       skippedReason: 'too_large',
@@ -262,6 +377,7 @@ async function storeOne(db, { attachment, index, messageId, locationId, mailboxI
   if (!reserved.ok) {
     // The counter is the thing that says whether there is room. With it
     // unavailable, storing would be storing unmetered — record and move on.
+    await discard()
     const recorded = await recordAttachment(db, {
       messageId, locationId, mailboxId, index, attachment, sizeBytes,
       skippedReason: 'rehost_failed',
@@ -275,6 +391,7 @@ async function storeOne(db, { attachment, index, messageId, locationId, mailboxI
 
   if (exceedsQuota(reserved.total, quotaBytes)) {
     await release()
+    await discard()
     const recorded = await recordAttachment(db, {
       messageId, locationId, mailboxId, index, attachment, sizeBytes,
       skippedReason: 'quota',
@@ -285,37 +402,43 @@ async function storeOne(db, { attachment, index, messageId, locationId, mailboxI
   }
 
   // ── Upload ────────────────────────────────────────────────────────
+  // Skipped entirely in the staged shape: the bytes are already in the bucket
+  // at a key this module validated, and re-uploading would mean the shim had
+  // moved them for nothing.
   const mime = safeMimeType(attachment?.ContentType)
-  let path
-  try {
-    path = attachmentObjectPath({ locationId, messageId, index, mime })
-  } catch (err) {
-    await release()
-    console.error('[email-attachments] refusing to build a storage path:', err?.message)
-    const recorded = await recordAttachment(db, {
-      messageId, locationId, mailboxId, index, attachment, sizeBytes,
-      skippedReason: 'rehost_failed',
-    })
-    return recorded === 'duplicate'
-      ? { kind: 'duplicate' }
-      : { kind: 'skipped', reason: 'rehost_failed' }
-  }
+  let path = staged ? marker.path : null
 
-  // upsert:true because the key is deterministic — a retry rewrites the same
-  // object with the same bytes rather than erroring on an existing key.
-  const { error: upErr } = await db.storage
-    .from(EMAIL_ATTACHMENT_BUCKET)
-    .upload(path, bytes, { contentType: mime, upsert: true })
-  if (upErr) {
-    await release()
-    console.error('[email-attachments] upload failed:', upErr.message)
-    const recorded = await recordAttachment(db, {
-      messageId, locationId, mailboxId, index, attachment, sizeBytes,
-      skippedReason: 'rehost_failed',
-    })
-    return recorded === 'duplicate'
-      ? { kind: 'duplicate' }
-      : { kind: 'skipped', reason: 'rehost_failed' }
+  if (!staged) {
+    try {
+      path = attachmentObjectPath({ locationId, messageId, index, mime })
+    } catch (err) {
+      await release()
+      console.error('[email-attachments] refusing to build a storage path:', err?.message)
+      const recorded = await recordAttachment(db, {
+        messageId, locationId, mailboxId, index, attachment, sizeBytes,
+        skippedReason: 'rehost_failed',
+      })
+      return recorded === 'duplicate'
+        ? { kind: 'duplicate' }
+        : { kind: 'skipped', reason: 'rehost_failed' }
+    }
+
+    // upsert:true because the key is deterministic — a retry rewrites the same
+    // object with the same bytes rather than erroring on an existing key.
+    const { error: upErr } = await db.storage
+      .from(EMAIL_ATTACHMENT_BUCKET)
+      .upload(path, bytes, { contentType: mime, upsert: true })
+    if (upErr) {
+      await release()
+      console.error('[email-attachments] upload failed:', upErr.message)
+      const recorded = await recordAttachment(db, {
+        messageId, locationId, mailboxId, index, attachment, sizeBytes,
+        skippedReason: 'rehost_failed',
+      })
+      return recorded === 'duplicate'
+        ? { kind: 'duplicate' }
+        : { kind: 'skipped', reason: 'rehost_failed' }
+    }
   }
 
   // ── Record ────────────────────────────────────────────────────────
@@ -324,20 +447,69 @@ async function storeOne(db, { attachment, index, messageId, locationId, mailboxI
   })
   if (recorded === 'duplicate') {
     // Another run already accounted for this (message, index). Give the
-    // reservation back — but LEAVE THE OBJECT: the path is deterministic, so
-    // what we just wrote is byte-identical to what the winning row points at.
-    // Deleting it here would break their row.
+    // reservation back — but LEAVE THE OBJECT: the path is deterministic in
+    // BOTH shapes, so what is at that key is byte-identical to what the winning
+    // row points at. Deleting it here would break their row.
     await release()
     return { kind: 'duplicate' }
   }
   if (recorded === 'failed') {
     await release()
-    // No row means nothing will ever find these bytes, so take them back out.
-    try { await db.storage.from(EMAIL_ATTACHMENT_BUCKET).remove([path]) } catch { /* logged below */ }
-    console.error('[email-attachments] row insert failed after upload; object removed', { messageId, index })
+    // No row means nothing will ever find these bytes, so take them back out —
+    // whether this run uploaded them or the shim did.
+    await removeObject(db, path)
+    console.error('[email-attachments] row insert failed; object removed', { messageId, index })
     return { kind: 'skipped', reason: 'rehost_failed' }
   }
   return { kind: 'stored', sizeBytes }
+}
+
+/**
+ * Throw away every object the shim staged for a message THAT IS NOT GOING TO BE
+ * FILED — an unmatched recipient heading for the dead-letter table, a payload
+ * with no parseable sender, or any 5xx the webhook answers before this module
+ * ever runs.
+ *
+ * WITHOUT THIS THE BUCKET LEAKS. With inbound-domain forwarding, every address
+ * at a configured domain reaches the webhook, so `anything@` that is not a
+ * mailbox dead-letters — and spam with attachments is exactly the traffic that
+ * produces. Those bytes would otherwise sit in a metered bucket forever with
+ * no row, no counter entry and nothing on any screen to say they exist.
+ *
+ * NEVER THROWS, NEVER BLOCKS A RESPONSE. Losing the cleanup costs money;
+ * failing the request would cost mail, and mail wins every time.
+ *
+ * Called only where the webhook KNOWS nothing will reference the bytes. It is
+ * deliberately NOT called from the `deduped` paths — an earlier run's rows
+ * point at these same deterministic keys — nor from the unhandled-error catch,
+ * where the state is by definition unknown.
+ *
+ * THE RESIDUE, STATED: bytes staged for a message whose forward never produced
+ * a decision here — a shim→Vercel network failure, or a 5xx the webhook throws
+ * out of its catch-all — are not swept. Each is an incident in its own right
+ * (the retry chain is running, or an email is failing), the key is
+ * deterministic so retries overwrite rather than accumulate, and the objects
+ * are confined to the `inbound/` prefix so a sweep can be added later with an
+ * exact search space. That is the accepted cost, not an oversight.
+ */
+export async function discardStagedAttachments(db, attachments, { postmarkMessageId } = {}) {
+  try {
+    const paths = stagedPathsIn(attachments, { postmarkMessageId })
+    if (paths.length === 0) return 0
+    const { error } = await db.storage.from(EMAIL_ATTACHMENT_BUCKET).remove(paths)
+    if (error) {
+      console.error(
+        '[email-attachments] STAGED BYTES LEFT BEHIND — the message is not being filed, so ' +
+        `nothing will ever point at these and they are still billable: ${paths.join(', ')} —`,
+        error.message,
+      )
+      return 0
+    }
+    return paths.length
+  } catch (err) {
+    console.error('[email-attachments] discarding staged attachments threw:', err?.message)
+    return 0
+  }
 }
 
 /**
