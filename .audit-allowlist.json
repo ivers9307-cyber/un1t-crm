@@ -1,0 +1,16 @@
+{
+  "_readme": [
+    "Accepted HIGH/CRITICAL runtime advisories for `npm run check:dependency-audit`.",
+    "An entry here means: we know about this, we have decided it is not worth acting on YET, and here is when we will re-decide.",
+    "Empty is the healthy state. Reach for an upgrade or a removal first — accepting is the last resort.",
+    "",
+    "Entry shape (all four fields required):",
+    "  id       GHSA id, e.g. \"GHSA-mwp4-54f8-5fhr\" (from the advisory url npm prints)",
+    "  package  the vulnerable package name",
+    "  reason   why it is not exploitable HERE. Name the code path. A generic 'low risk' is not a reason.",
+    "  expires  YYYY-MM-DD. Past this date the build FAILS until someone re-decides. Keep it short — a quarter at most.",
+    "",
+    "Entries cannot rot: an expired entry fails the build exactly like an unlisted advisory."
+  ],
+  "accepted": []
+}
