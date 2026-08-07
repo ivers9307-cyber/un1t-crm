@@ -176,9 +176,23 @@ export function toListUnsubscribeUrl(pageUrl) {
  * @param {string} options.htmlBody - HTML content
  * @param {string} options.from - sender (e.g. "UN1T <hello@un1t.ie>")
  * @param {string} options.replyTo - reply-to address
- * @param {string} options.stream - 'broadcast' or 'outbound' (transactional).
- *   Resolves to 'broadcast' on the wire when omitted (unchanged), but an
- *   OMITTED stream never enables open/click tracking — see resolveTracking.
+ * @param {string} options.stream - THIS APP'S INTERNAL stream vocabulary:
+ *   'broadcast' (marketing) or 'outbound' (transactional). It drives
+ *   open/click tracking, the List-Unsubscribe gate, consentFieldForStream()
+ *   and what gets written to email_sends.postmark_stream. Resolves to
+ *   'broadcast' when omitted (unchanged), but an OMITTED stream never enables
+ *   open/click tracking — see resolveTracking.
+ * @param {string} options.postmarkStream - EMAIL-OUTBOUND-SERVER.1 — the
+ *   POSTMARK MESSAGE STREAM ID that goes on the wire as `MessageStream`, when
+ *   it differs from the internal one. A DIFFERENT CONCEPT from `stream` above:
+ *   this is an opaque provider-side slug (e.g. 'email-send' on the ticketing
+ *   server), scoped to whichever Postmark server the token belongs to, and it
+ *   means nothing to this application. Omit it (every pre-existing caller) and
+ *   the internal stream goes on the wire exactly as before.
+ *   NEVER let this value reach consentFieldForStream(), campaigns.postmark_stream
+ *   (CHECK-constrained to broadcast|outbound by mig 302) or
+ *   email_sends.postmark_stream — there it would be silently read as the
+ *   internal vocabulary and misclassify the send's consent family.
  * @param {boolean} options.trackEngagement - EMAIL-NOTRACK.1 explicit
  *   override for open/click tracking. Omit it (every caller today) and the
  *   stream decides: marketing tracks, transactional does not.
@@ -206,6 +220,9 @@ export async function sendEmail({
   // below as `messageStream`; `stream` stays raw so resolveTracking can tell
   // "the caller said broadcast" from "the caller said nothing".
   stream,
+  // EMAIL-OUTBOUND-SERVER.1 — Postmark's own stream id, wire-only. See the
+  // docstring: this is NOT `stream` and must never be treated as it.
+  postmarkStream,
   trackEngagement,
   tag,
   metadata = {},
@@ -221,10 +238,18 @@ export async function sendEmail({
 }) {
   const tenant = await resolveTenantOverride({ locationId, sender })
 
-  // The stream as it goes on the wire. Preserves the historical default so
-  // MessageStream and the List-Unsubscribe gate below are byte-identical for
-  // a caller that omits `stream`; only tracking reads the raw value.
-  const messageStream = stream || 'broadcast'
+  // THE INTERNAL stream, resolved. Preserves the historical default so the
+  // List-Unsubscribe gate below is byte-identical for a caller that omits
+  // `stream`; only tracking reads the raw value.
+  const internalStream = stream || 'broadcast'
+
+  // WHAT GOES ON THE WIRE. EMAIL-OUTBOUND-SERVER.1 split these two: a send on
+  // a non-default Postmark server rides a stream id that exists only on THAT
+  // server ('email-send' on the ticketing server), while the message is still
+  // internally transactional. With postmarkStream omitted — every caller but
+  // the ticket routes — the two are the same value and the payload is
+  // byte-identical to before.
+  const messageStream = postmarkStream || internalStream
 
   const headers = {
     'Accept': 'application/json',
@@ -260,10 +285,12 @@ export async function sendEmail({
   // nothing changed on our side, contact stays opted-in).
   // /api/unsubscribe/[token] does accept POST and writes
   // contact_preferences + consent_log correctly.
-  // Reads the RESOLVED stream on purpose: unsubscribe compliance is out of
-  // scope for EMAIL-NOTRACK.1, so an omitted stream keeps attaching the
-  // one-click headers exactly as it did before.
-  if (messageStream === 'broadcast' && unsubscribeUrl) {
+  // Reads the RESOLVED INTERNAL stream on purpose: unsubscribe compliance is
+  // out of scope for EMAIL-NOTRACK.1, so an omitted stream keeps attaching the
+  // one-click headers exactly as it did before. It is deliberately NOT the
+  // wire value — "is this marketing?" is a question about our own vocabulary,
+  // and a provider stream id can never answer it.
+  if (internalStream === 'broadcast' && unsubscribeUrl) {
     body.Headers = [
       { Name: 'List-Unsubscribe', Value: `<${toListUnsubscribeUrl(unsubscribeUrl)}>` },
       { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' },
@@ -293,7 +320,17 @@ export async function sendEmail({
 
   if (!response.ok) {
     console.error('Postmark send error:', result)
-    throw new Error(result.Message || 'Failed to send email')
+    // EMAIL-OUTBOUND-SERVER.1 — carry Postmark's own classification on the
+    // error. `message` is unchanged (every existing caller reads only that),
+    // but a rejection is now machine-readable: the ticket send path has to
+    // tell "this From has no verified sender signature" (ErrorCode 400/401,
+    // recoverable by sending from a domain we own) apart from every other
+    // rejection, which it must NOT retry. sendBatch already had this via its
+    // per-message { ErrorCode, HttpStatus } results; sendEmail threw it away.
+    const err = new Error(result?.Message || 'Failed to send email')
+    err.errorCode = typeof result?.ErrorCode === 'number' ? result.ErrorCode : null
+    err.httpStatus = response.status
+    throw err
   }
 
   return {

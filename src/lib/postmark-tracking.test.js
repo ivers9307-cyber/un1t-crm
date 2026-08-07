@@ -292,3 +292,88 @@ describe('sendTransactionalEmail — the support/contract/receipt path', () => {
     expect(body.TrackLinks).toBe('None')
   })
 })
+
+// ── EMAIL-OUTBOUND-SERVER.1: the wire stream vs OUR stream ───────
+//
+// `postmarkStream` was added so ticket mail can ride the ticketing server's
+// own Postmark stream while staying internally transactional. Everything the
+// app decides — tracking, the RFC 8058 unsubscribe gate — must keep reading
+// OUR value, and every pre-existing caller (who passes no postmarkStream)
+// must serialise exactly as before.
+describe('sendEmail — a Postmark stream id never becomes our stream', () => {
+  it('puts the provider slug on the wire and leaves tracking on OUR stream', async () => {
+    const spy = okSingle()
+    await sendEmail({
+      to: 'a@x.ie', subject: 'S', htmlBody: '<p>x</p>',
+      stream: 'outbound', postmarkStream: 'email-send',
+    })
+    const body = bodyOf(spy)
+    expect(body.MessageStream).toBe('email-send')
+    // Transactional, so still no pixel and no link rewriting.
+    expect(body.TrackOpens).toBe(false)
+    expect(body.TrackLinks).toBe('None')
+  })
+
+  it('does not smuggle the parameter into the payload', async () => {
+    const spy = okSingle()
+    await sendEmail({
+      to: 'a@x.ie', subject: 'S', htmlBody: '<p>x</p>',
+      stream: 'outbound', postmarkStream: 'email-send',
+    })
+    expect(Object.hasOwn(bodyOf(spy), 'postmarkStream')).toBe(false)
+  })
+
+  // MUTATION: gate the unsubscribe headers on `messageStream` (the wire value)
+  // instead of the internal one → red. "Is this marketing?" is a question
+  // about our own vocabulary; a provider slug cannot answer it.
+  it('the unsubscribe gate reads OUR stream, not the wire one', async () => {
+    const spy = okSingle()
+    await sendEmail({
+      to: 'a@x.ie', subject: 'S', htmlBody: '<p>x</p>',
+      stream: 'broadcast', postmarkStream: 'some-other-server-stream',
+      unsubscribeUrl: 'https://crm.test/unsubscribe/tok',
+    })
+    const body = bodyOf(spy)
+    expect(body.MessageStream).toBe('some-other-server-stream')
+    // Still marketing to us: headers attached, tracking on.
+    expect(body.Headers).toHaveLength(2)
+    expect(body.TrackOpens).toBe(true)
+  })
+
+  it('omitting it is byte-identical — the internal stream goes on the wire', async () => {
+    const spy = okSingle()
+    await sendEmail({ to: 'a@x.ie', subject: 'S', htmlBody: '<p>x</p>', stream: 'outbound' })
+    expect(bodyOf(spy).MessageStream).toBe('outbound')
+  })
+})
+
+// ── EMAIL-OUTBOUND-SERVER.1: rejections are machine-readable ─────
+describe('sendEmail — a rejection carries Postmark’s classification', () => {
+  it('attaches ErrorCode + HttpStatus without changing the message', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 422,
+      json: async () => ({ ErrorCode: 400, Message: 'No Sender Signature.' }),
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await expect(
+      sendEmail({ to: 'a@x.ie', subject: 'S', htmlBody: '<p>x</p>' })
+    ).rejects.toMatchObject({
+      message: 'No Sender Signature.',
+      errorCode: 400,
+      httpStatus: 422,
+    })
+  })
+
+  it('leaves errorCode null when Postmark sends no code', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false, status: 500, json: async () => ({}),
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await expect(
+      sendEmail({ to: 'a@x.ie', subject: 'S', htmlBody: '<p>x</p>' })
+    ).rejects.toMatchObject({ message: 'Failed to send email', errorCode: null, httpStatus: 500 })
+  })
+})

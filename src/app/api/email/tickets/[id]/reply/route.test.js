@@ -20,7 +20,7 @@
 // before today does. That is the case that would otherwise keep the write
 // alive, so it is the one the fixture uses.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
 vi.mock('@/lib/auth', async () => {
@@ -33,6 +33,7 @@ import { POST } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { sendEmail } from '@/lib/postmark'
+import { _resetInboxSenderCache, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { makeDb, insertsInto, updatesTo, writesTo } from '../../_test-db'
 import {
   MB_STUDIO, T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION,
@@ -75,10 +76,19 @@ function setupDb(state) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  _resetInboxSenderCache()
   process.env.POSTMARK_FROM_EMAIL = 'UN1T <hello@un1t.ie>'
+  // EMAIL-OUTBOUND-SERVER.1 — the support inbox's OWN Postmark server. Without
+  // it the route refuses to send at all, which is the point (see the
+  // "unconfigured" test below).
+  process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN = 'ticketing-server-token'
   getCurrentUser.mockResolvedValue(COACH)
   sendEmail.mockResolvedValue({ messageId: 'pm-out-1' })
   setupDb(baseState({ grants: [GRANT_STUDIO], messages: [LAST_INBOUND] }))
+})
+
+afterEach(() => {
+  delete process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN
 })
 
 describe('POST …/reply — gates', () => {
@@ -174,16 +184,77 @@ describe('POST …/reply — real reply', () => {
     const sent = sendEmail.mock.calls[0][0]
     expect(sent).toMatchObject({
       to: T_STUDIO.requester_email,
+      // THIS APP'S stream — transactional, gated on email_administrative.
       stream: 'outbound',
       // Reply-To is the address the member wrote to, so their next reply
       // threads back onto this ticket.
       replyTo: MB_STUDIO.address,
       textBody: 'We open at 6.',
     })
-    // From is NOT the mailbox address — that needs per-domain DKIM (later plan).
-    expect(sent.from).toBeUndefined()
+    // EMAIL-OUTBOUND-SERVER.1 — From IS the mailbox address now, carried on the
+    // sender override alongside the ticketing server's own token.
+    expect(sent.sender).toEqual({
+      serverToken: 'ticketing-server-token',
+      fromEmail: MB_STUDIO.address,
+      fromName: null,
+    })
     // Threading anchors come off the last inbound message.
     expect(JSON.stringify(sent.headers)).toContain(LAST_INBOUND.rfc_message_id)
+  })
+
+  // EMAIL-OUTBOUND-SERVER.1 — the trap this feature has to keep clear of.
+  it('rides POSTMARK’s email-send stream while staying internally `outbound`', async () => {
+    await post(T_STUDIO.id, { text: 'We open at 6.' })
+    const sent = sendEmail.mock.calls[0][0]
+    // Two values, two jobs: the provider slug is wire-only, ours decides
+    // consent + tracking + what gets logged.
+    expect(sent.postmarkStream).toBe('email-send')
+    expect(sent.stream).toBe(TICKET_INTERNAL_STREAM)
+    expect(sent.stream).toBe('outbound')
+  })
+
+  it('logs the INTERNAL stream to email_sends, never Postmark’s id', async () => {
+    await post(T_STUDIO.id, { text: 'We open at 6.' })
+    const [send] = insertsInto(db, 'email_sends')
+    expect(send.payload.postmark_stream).toBe('outbound')
+    expect(send.payload.postmark_stream).not.toBe('email-send')
+  })
+
+  it('503s without sending when the ticketing server is not configured', async () => {
+    delete process.env.POSTMARK_EMAIL_INBOX_SERVER_TOKEN
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    expect(res.status).toBe(503)
+    expect((await res.json()).error).toContain('POSTMARK_EMAIL_INBOX_SERVER_TOKEN')
+    // It must NOT quietly leave on the marketing server instead.
+    expect(sendEmail).not.toHaveBeenCalled()
+    // And nothing is written — the ticket does not claim to have been answered.
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(0)
+    expect(updatesTo(db, 'email_tickets')).toHaveLength(0)
+  })
+
+  it('records the mailbox address as the From on both rows', async () => {
+    await post(T_STUDIO.id, { text: 'We open at 6.' })
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    const [send] = insertsInto(db, 'email_sends')
+    expect(msg.payload.from_email).toBe(MB_STUDIO.address)
+    expect(send.payload.from_email).toBe(MB_STUDIO.address)
+  })
+
+  it('falls back to a domain we own when the mailbox cannot be sent from', async () => {
+    const rejection = Object.assign(new Error('no Sender Signature'), { errorCode: 400, httpStatus: 422 })
+    sendEmail.mockRejectedValueOnce(rejection).mockResolvedValue({ messageId: 'pm-fallback' })
+
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    expect(res.status).toBe(200)
+    expect(sendEmail).toHaveBeenCalledTimes(2)
+    // Reply-To still points at the real mailbox, so the thread survives.
+    expect(sendEmail.mock.calls[1][0].replyTo).toBe(MB_STUDIO.address)
+    expect(sendEmail.mock.calls[1][0].sender.fromEmail).toBe('UN1T <hello@un1t.ie>')
+    // The row records what actually went out, not what we hoped would.
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.from_email).toBe('UN1T <hello@un1t.ie>')
   })
 
   it('moves the ticket to pending and refreshes the queue summary', async () => {
@@ -259,9 +330,10 @@ describe('POST …/reply — real reply', () => {
     await post(T_STUDIO.id, { text: 'We open at 6.' })
     const [msg] = insertsInto(db, 'email_inbox_messages')
     // from_email stays the Postmark From — that is what went on the wire, not
-    // an author field.
+    // an author field. Since EMAIL-OUTBOUND-SERVER.1 that is the mailbox's own
+    // address, which makes the distinction visible rather than theoretical.
     expect(msg.payload.author_profile_id).toBe(COACH.id)
-    expect(msg.payload.from_email).toBe('UN1T <hello@un1t.ie>')
+    expect(msg.payload.from_email).toBe(MB_STUDIO.address)
   })
 })
 
