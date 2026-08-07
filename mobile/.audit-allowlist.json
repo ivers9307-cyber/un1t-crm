@@ -12,7 +12,7 @@
     "posture for this tree anyway, since mobile's only devDependency is @babel/core.",
     "",
     "Empty is the healthy state, and it IS empty — the two linkify-it advisories that were briefly accepted",
-    "here are fixed instead, by the `linkify-it: ^5.0.2` override in mobile/package.json. See CHANGELOG 478."
+    "here are fixed instead, by the `linkify-it: ^5.0.2` override in mobile/package.json. See CHANGELOG 479."
   ],
   "accepted": []
 }

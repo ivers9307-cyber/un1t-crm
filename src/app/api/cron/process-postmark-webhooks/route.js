@@ -5,6 +5,12 @@
 // row errors, the error is stashed on the row and attempts++; the
 // cron tries again next tick up to a small retry budget.
 //
+// POSTMARK-DLQ.1: the batch filter below (`attempts < MAX_ATTEMPTS`) is what
+// makes an exhausted row invisible, so the shared helper dead-letters it at
+// the transition — a bounce / spam complaint / unsubscribe that runs out of
+// retries is now captured in webhook_dead_letter instead of vanishing.
+// The count is surfaced in the response AND in the heartbeat's last_outcome.
+//
 // Pattern matches run-sms-broadcasts / run-sequences — uses
 // CRON_SECRET bearer auth, stamps a heartbeat, returns a small
 // JSON summary.
@@ -64,7 +70,7 @@ export async function GET(request) {
     return NextResponse.json({ ok: false, error: fetchErr.message }, { status: 500 })
   }
 
-  const summary = { processed: 0, failed: 0, batch_size: rows?.length || 0 }
+  const summary = { processed: 0, failed: 0, dead_lettered: 0, batch_size: rows?.length || 0 }
 
   for (const row of rows || []) {
     // Claim-before-process CAS, shared with the QStash worker route
@@ -72,7 +78,9 @@ export async function GET(request) {
     // overlapping invocation, and the QStash push consumer races this
     // loop by design — the CAS means exactly one claimant processes
     // each row; everyone else sees `skipped`. On failure the claim is
-    // released with attempts++ so the row retries within MAX_ATTEMPTS.
+    // released with attempts++ so the row retries within MAX_ATTEMPTS —
+    // and the attempt that spends the budget dead-letters the payload
+    // first, since the row is about to stop matching the select above.
     const outcome = await claimAndProcessQueueRow(db, row)
     if (outcome.status === 'skipped') {
       summary.skipped = (summary.skipped || 0) + 1
@@ -80,11 +88,23 @@ export async function GET(request) {
       summary.processed += 1
     } else {
       summary.failed += 1
-      console.warn(`[cron process-postmark-webhooks] event ${row.id} failed (attempt ${(row.attempts || 0) + 1}): ${outcome.error}`)
+      const attempt = outcome.attempts ?? (row.attempts || 0) + 1
+      if (outcome.deadLettered) {
+        summary.dead_lettered += 1
+        console.error(
+          `[cron process-postmark-webhooks] event ${row.id} EXHAUSTED after ${attempt} attempts ` +
+          `— dead-lettered to webhook_dead_letter (provider postmark_queue): ${outcome.error}`
+        )
+      } else {
+        console.warn(`[cron process-postmark-webhooks] event ${row.id} failed (attempt ${attempt}): ${outcome.error}`)
+      }
     }
   }
 
-  await stampHeartbeat('process-postmark-webhooks')
+  // Pass the summary as the heartbeat outcome (mig 315's last_outcome) so a
+  // tick that dead-lettered an unsubscribe is distinguishable from an idle
+  // one without reading Vercel logs.
+  await stampHeartbeat('process-postmark-webhooks', summary)
 
   return NextResponse.json({ ok: true, ...summary })
 }
