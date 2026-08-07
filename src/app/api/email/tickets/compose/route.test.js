@@ -1,0 +1,269 @@
+// EMAIL-TICKET.5 — starting a conversation.
+//
+// Three properties carry the most weight:
+//   • THE SENDER CAN ONLY USE A MAILBOX THEY CAN SEE. Someone granted studio@
+//     sending as accounts@ is not a cosmetic bug — it is billing
+//     correspondence going out under an address they have no claim to, and it
+//     is a 404 so the id cannot even be probed.
+//   • the ticket belongs to the MAILBOX's location, never to anything the
+//     caller named.
+//   • a failed send leaves NOTHING behind. A ticket in the queue for an email
+//     that never went out is the worst lie a support tool can tell.
+
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+vi.mock('@/lib/auth', async () => {
+  const actual = await vi.importActual('@/lib/auth')
+  return { ...actual, getCurrentUser: vi.fn() }
+})
+vi.mock('@/lib/permissions', async () => {
+  const actual = await vi.importActual('@/lib/permissions')
+  return { ...actual, hasPermission: vi.fn(() => true) }
+})
+vi.mock('@/lib/postmark', () => ({ sendEmail: vi.fn() }))
+
+import { POST } from './route'
+import { createServerClient } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
+import { sendEmail } from '@/lib/postmark'
+import { makeDb, insertsInto } from '../_test-db'
+import {
+  LOC_A, MB_STUDIO, MB_ACCOUNTS, MB_OTHER_LOCATION,
+  COACH, OWNER, GRANT_STUDIO, baseState,
+} from '../_test-fixtures'
+
+const UNKNOWN_MAILBOX = '99999999-9999-4999-8999-999999999999'
+
+function post(body) {
+  return POST(new Request('http://x/api/email/tickets/compose', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  }))
+}
+
+const VALID = {
+  mailbox_id: MB_STUDIO.id,
+  to: 'lead@example.com',
+  subject: 'Following up on your enquiry',
+  text: 'Hi — you asked about the 6am class last week. Still interested?',
+}
+
+const MEMBER_CONTACT = {
+  id: 'contact-7', location_id: LOC_A,
+  email: 'Lead@Example.com', created_at: '2026-01-01T00:00:00Z',
+}
+const OTHER_CONTACT = {
+  id: 'contact-8', location_id: LOC_A,
+  email: 'someone.else@example.com', created_at: '2026-01-01T00:00:00Z',
+}
+
+let db
+function setupDb(state) {
+  db = makeDb(state)
+  createServerClient.mockImplementation(() => db)
+  return db
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  process.env.POSTMARK_FROM_EMAIL = 'UN1T <hello@un1t.ie>'
+  hasPermission.mockReturnValue(true)
+  getCurrentUser.mockResolvedValue(COACH)
+  sendEmail.mockResolvedValue({ messageId: 'pm-compose-1' })
+  // The coach holds studio@ and nothing else — the whole point of the fixture.
+  setupDb(baseState({ grants: [GRANT_STUDIO], contacts: [] }))
+})
+
+describe('POST /api/email/tickets/compose — gates', () => {
+  it('401s when unauthenticated', async () => {
+    getCurrentUser.mockResolvedValue(null)
+    expect((await post(VALID)).status).toBe(401)
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('403s without the email_inbox permission', async () => {
+    hasPermission.mockReturnValue(false)
+    expect((await post(VALID)).status).toBe(403)
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('404s — not 403 — on a mailbox the caller cannot see, and sends nothing', async () => {
+    const res = await post({ ...VALID, mailbox_id: MB_ACCOUNTS.id })
+    expect(res.status).toBe(404)
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+  })
+
+  it('404s on a mailbox at a location the caller has no access to', async () => {
+    const res = await post({ ...VALID, mailbox_id: MB_OTHER_LOCATION.id })
+    expect(res.status).toBe(404)
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('404s on a mailbox id that does not exist', async () => {
+    expect((await post({ ...VALID, mailbox_id: UNKNOWN_MAILBOX })).status).toBe(404)
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('404s on an INACTIVE mailbox the caller is otherwise granted', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      mailboxes: [{ ...MB_STUDIO, active: false }, MB_ACCOUNTS],
+    }))
+    expect((await post(VALID)).status).toBe(404)
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('lets an elevated caller send from an account they hold no grant on', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    setupDb(baseState({ grants: [] }))
+    const res = await post({ ...VALID, mailbox_id: MB_ACCOUNTS.id })
+    expect(res.status).toBe(200)
+    expect(sendEmail.mock.calls[0][0].replyTo).toBe(MB_ACCOUNTS.address)
+  })
+})
+
+describe('POST /api/email/tickets/compose — validation', () => {
+  it('400s on a malformed recipient address', async () => {
+    for (const to of ['not-an-email', 'nobody@', '@example.com', '']) {
+      expect((await post({ ...VALID, to })).status).toBe(400)
+    }
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('400s on a malformed mailbox_id', async () => {
+    expect((await post({ ...VALID, mailbox_id: 'not-a-uuid' })).status).toBe(400)
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('400s on an empty or oversized subject/body', async () => {
+    expect((await post({ ...VALID, subject: '   ' })).status).toBe(400)
+    expect((await post({ ...VALID, subject: 'x'.repeat(201) })).status).toBe(400)
+    expect((await post({ ...VALID, text: '' })).status).toBe(400)
+    expect((await post({ ...VALID, text: 'x'.repeat(10001) })).status).toBe(400)
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/email/tickets/compose — the send', () => {
+  it('sends on the transactional stream, Reply-To the chosen mailbox', async () => {
+    const res = await post(VALID)
+    expect(res.status).toBe(200)
+
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent).toMatchObject({
+      to: VALID.to,
+      subject: VALID.subject,
+      textBody: VALID.text,
+      stream: 'outbound',
+      replyTo: MB_STUDIO.address,
+    })
+    // From is NOT the mailbox address — that needs per-domain DKIM (later plan).
+    expect(sent.from).toBeUndefined()
+  })
+
+  it('a failed send leaves NO ticket and NO message behind', async () => {
+    sendEmail.mockRejectedValue(new Error('Postmark rejected the recipient'))
+    const res = await post(VALID)
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({ success: false })
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(0)
+    expect(insertsInto(db, 'email_sends')).toHaveLength(0)
+    expect(db._state.tickets).toHaveLength(2) // the two fixture tickets, untouched
+  })
+})
+
+describe('POST /api/email/tickets/compose — what it creates', () => {
+  it('creates one ticket + one outbound message and returns the ticket id', async () => {
+    const res = await post(VALID)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.data.ticket_id).toBeTruthy()
+    expect(body.data.ticket_id).toBe(body.data.ticket.id)
+
+    const tickets = insertsInto(db, 'email_tickets')
+    expect(tickets).toHaveLength(1)
+    expect(tickets[0].payload).toMatchObject({
+      mailbox_id: MB_STUDIO.id,
+      requester_email: VALID.to,
+      subject: VALID.subject,
+      status: 'open',
+      last_message_direction: 'outbound',
+    })
+    expect(tickets[0].payload.last_message_preview).toContain('you asked about the 6am class')
+
+    const messages = insertsInto(db, 'email_inbox_messages')
+    expect(messages).toHaveLength(1)
+    expect(messages[0].payload).toMatchObject({
+      ticket_id: body.data.ticket_id,
+      direction: 'outbound',
+      to_email: VALID.to,
+      text_body: VALID.text,
+      postmark_message_id: 'pm-compose-1',
+      is_internal_note: false,
+      status: 'sent',
+    })
+  })
+
+  it('takes location_id from the MAILBOX, on the ticket and the message alike', async () => {
+    await post(VALID)
+    expect(insertsInto(db, 'email_tickets')[0].payload.location_id).toBe(MB_STUDIO.location_id)
+    expect(insertsInto(db, 'email_inbox_messages')[0].payload.location_id).toBe(MB_STUDIO.location_id)
+  })
+
+  it('records the author (mig 493) so the thread is not anonymous', async () => {
+    await post(VALID)
+    expect(insertsInto(db, 'email_inbox_messages')[0].payload.author_profile_id).toBe(COACH.id)
+  })
+
+  it('stamps first_response_at — this outbound IS the first response', async () => {
+    await post(VALID)
+    expect(insertsInto(db, 'email_tickets')[0].payload.first_response_at).toBeTruthy()
+  })
+
+  it('normalises the recipient address before storing it', async () => {
+    await post({ ...VALID, to: '  Lead@Example.COM ' })
+    expect(insertsInto(db, 'email_tickets')[0].payload.requester_email).toBe('lead@example.com')
+    expect(sendEmail.mock.calls[0][0].to).toBe('lead@example.com')
+  })
+})
+
+describe('POST /api/email/tickets/compose — contact linkage', () => {
+  it('links a contact whose email matches the recipient, case-insensitively', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], contacts: [MEMBER_CONTACT] }))
+    await post(VALID)
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBe(MEMBER_CONTACT.id)
+    expect(insertsInto(db, 'email_inbox_messages')[0].payload.contact_id).toBe(MEMBER_CONTACT.id)
+    // …and the send is logged to the contact's email history.
+    expect(insertsInto(db, 'email_sends')[0].payload).toMatchObject({
+      contact_id: MEMBER_CONTACT.id, postmark_stream: 'outbound',
+    })
+  })
+
+  it('leaves contact_id NULL for a recipient nobody matches', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], contacts: [OTHER_CONTACT] }))
+    await post(VALID)
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBeNull()
+    expect(insertsInto(db, 'email_inbox_messages')[0].payload.contact_id).toBeNull()
+    // contact_id is NOT NULL on email_sends — an unlinked recipient must not
+    // take the whole send down.
+    expect(insertsInto(db, 'email_sends')).toHaveLength(0)
+  })
+
+  it('does not let an ILIKE wildcard in the address link the wrong person', async () => {
+    // `_` is a legal email character AND a single-character ILIKE wildcard, so
+    // the server-side match alone would file this against axb@example.com.
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      contacts: [{ id: 'contact-9', location_id: LOC_A, email: 'axb@example.com', created_at: '2026-01-01T00:00:00Z' }],
+    }))
+    await post({ ...VALID, to: 'a_b@example.com' })
+    expect(insertsInto(db, 'email_tickets')[0].payload.contact_id).toBeNull()
+  })
+})

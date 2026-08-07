@@ -1166,6 +1166,30 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/email/tickets/compose',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Start a new ticket by emailing someone',
+  description: "A new email IS a ticket whose first message is outbound — one email_tickets row plus one outbound email_inbox_messages row, and thereafter an ordinary ticket (their reply threads back through the normal inbound path). The location comes off the MAILBOX, never the request, and `mailbox_id` must be in the caller's visible set: anything else is a 404, never a 403, so mailbox ids can't be enumerated. Sends on Postmark's transactional stream ('outbound') with Reply-To the chosen mailbox, links a contact when one matches the recipient, and stamps first_response_at. THE SEND HAPPENS FIRST: a failed send writes nothing at all, so there is never a ticket queued for an email that did not go.",
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      mailbox_id: uuidLike,
+      to: z.string().email(),
+      subject: z.string().min(1).max(200),
+      text: z.string().min(1).max(10000),
+    }).openapi('EmailTicketCompose') } } },
+  },
+  responses: {
+    200: { description: '{ ticket_id, ticket, message, message_id }' },
+    400: { description: 'Invalid body, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Mailbox missing, inactive, or not visible to the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Sent, but the ticket/message could not be filed — do NOT resend', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/email/tickets/{id}/read',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],

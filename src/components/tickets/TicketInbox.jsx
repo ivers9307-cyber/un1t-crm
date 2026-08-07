@@ -20,8 +20,8 @@
 //     queue because a person put it there.
 
 import { useCallback, useEffect, useState } from 'react'
-import { Mail, RefreshCw, AlertCircle } from 'lucide-react'
-import { EmptyState } from '@/components/ui'
+import { Mail, RefreshCw, AlertCircle, Plus } from 'lucide-react'
+import { EmptyState, Button } from '@/components/ui'
 import {
   TICKET_VIEWS,
   DEFAULT_VIEW_ID,
@@ -32,6 +32,7 @@ import {
 } from '@/lib/ticket-display'
 import TicketList from './TicketList'
 import TicketThread from './TicketThread'
+import TicketCompose from './TicketCompose'
 
 // Same cadence as the rest of the inbox family. Realtime is deliberately not
 // wired here yet: the email tables' RESTRICTIVE-policy history (mig 485) means
@@ -55,6 +56,9 @@ export default function TicketInbox({ locationId, locationName, userId }) {
   const [threadError, setThreadError] = useState(null)
   const [sending, setSending] = useState(false)
   const [statusSaving, setStatusSaving] = useState(false)
+
+  // EMAIL-TICKET.5 — starting a conversation rather than answering one.
+  const [composeOpen, setComposeOpen] = useState(false)
 
   const view = ticketView(viewId)
   const queueUrl = buildTicketsUrl({ locationId, mailboxId, viewId })
@@ -219,6 +223,16 @@ export default function TicketInbox({ locationId, locationName, userId }) {
     }
   }
 
+  // A composed email IS a ticket, so there is nothing special to do with it:
+  // close, refetch the queue so the new row is really there, and open it the
+  // same way a click on the list would. The server row is what we select from
+  // — it carries the id, the mailbox and the linked contact.
+  function handleComposed(newTicket) {
+    setComposeOpen(false)
+    loadQueue(true)
+    if (newTicket?.id) selectTicket(newTicket)
+  }
+
   // ── Render ─────────────────────────────────────────────────────────
   const shellClasses =
     'flex flex-col h-[calc(100vh-13rem)] min-h-[32rem] rounded-xl border border-un1t-border bg-un1t-bg overflow-hidden'
@@ -313,14 +327,21 @@ export default function TicketInbox({ locationId, locationName, userId }) {
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={() => loadQueue()}
-          className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border px-2 py-1 text-xs text-un1t-subtle hover:text-un1t-text transition-colors"
-        >
-          <RefreshCw size={13} className={loading ? 'animate-spin' : undefined} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Starting a conversation, not answering one — the one action here
+              that does not need a ticket selected first. */}
+          <Button type="button" size="sm" variant="secondary" icon={Plus} onClick={() => setComposeOpen(true)}>
+            New email
+          </Button>
+          <button
+            type="button"
+            onClick={() => loadQueue()}
+            className="inline-flex items-center gap-1.5 rounded-md border border-un1t-border px-2 py-1 text-xs text-un1t-subtle hover:text-un1t-text transition-colors"
+          >
+            <RefreshCw size={13} className={loading ? 'animate-spin' : undefined} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* View filters. `closed` is the wire word for the solved+closed
@@ -379,6 +400,20 @@ export default function TicketInbox({ locationId, locationName, userId }) {
           />
         </div>
       </div>
+
+      {/* Mounted only while open, so a fresh compose never inherits the last
+          one's draft AND the 60s poll re-creating `mailboxes` cannot reset a
+          half-typed email. The Modal renders fixed to the viewport — the
+          shell's overflow-hidden does not clip it, since nothing here creates
+          a containing block for fixed positioning. */}
+      {composeOpen && (
+        <TicketCompose
+          mailboxes={mailboxes}
+          initialMailboxId={mailboxId}
+          onClose={() => setComposeOpen(false)}
+          onSent={handleComposed}
+        />
+      )}
     </div>
   )
 }
