@@ -27,6 +27,7 @@ import {
   buildAudienceQuery,
   consentFieldForStream,
   sendBatch,
+  sendEmail,
   isTransientSendError,
   sendMarketingEmail,
   getLocationInboxReplyTo,
@@ -675,5 +676,71 @@ describe('EMAIL-MAILBOX-ADMIN.1 — where a studio’s replies go', () => {
   it('getDefaultMailboxAddress needs both a client and a location', async () => {
     expect(await getDefaultMailboxAddress(null, LOC)).toBeNull()
     expect(await getDefaultMailboxAddress(makeDb({ mailboxes: [mailbox()] }), null)).toBeNull()
+  })
+})
+
+// ── sendEmail Cc / Bcc (EMAIL-CC.1) ───────────────────────────────
+//
+// THE WIRE IS WHERE THE CONFIDENTIALITY GUARANTEE IS EITHER KEPT OR LOST.
+// Postmark strips the Bcc header from every delivered message, so a Bcc passed
+// in its own API field is genuinely invisible to the other recipients — but
+// that is only true of the `Bcc` FIELD. The same address written into
+// `body.Headers` would ride out on the message itself, visible to everyone.
+// These tests pin the request body, which is the last thing this codebase
+// controls before the provider takes over.
+describe('sendEmail — Cc and Bcc on the wire', () => {
+  beforeEach(() => {
+    process.env.POSTMARK_API_KEY = 'test-token'
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function okFetch() {
+    return vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ MessageID: 'pm-1', To: 'a@x.ie', SubmittedAt: '2026-08-07T10:00:00Z' }),
+    })
+  }
+
+  it('sends Cc and Bcc in their own Postmark fields', async () => {
+    const fetchSpy = okFetch()
+    await sendEmail({
+      to: 'a@x.ie, b@x.ie', cc: 'c@x.ie', bcc: 'secret@x.ie',
+      subject: 'S', htmlBody: '<p>hi</p>', stream: 'outbound',
+    })
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.To).toBe('a@x.ie, b@x.ie')
+    expect(body.Cc).toBe('c@x.ie')
+    expect(body.Bcc).toBe('secret@x.ie')
+  })
+
+  // THE LEAK TEST. A bcc address anywhere but the Bcc field — in To, in Cc, or
+  // in a header — reaches the other recipients.
+  it('never puts a bcc address in To, Cc or any header', async () => {
+    const fetchSpy = okFetch()
+    await sendEmail({
+      to: 'a@x.ie', cc: 'c@x.ie', bcc: 'secret@x.ie',
+      subject: 'S', htmlBody: '<p>hi</p>', stream: 'outbound',
+      headers: [{ Name: 'In-Reply-To', Value: '<x@mail>' }],
+    })
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.To).not.toContain('secret@x.ie')
+    expect(body.Cc).not.toContain('secret@x.ie')
+    expect(JSON.stringify(body.Headers)).not.toContain('secret@x.ie')
+    expect(body.Bcc).toBe('secret@x.ie')
+  })
+
+  // Purely additive: the request body for every pre-EMAIL-CC.1 caller must be
+  // shaped exactly as it was, or a Cc/Bcc key with no value goes out on every
+  // email the estate sends.
+  it('omits Cc and Bcc entirely when the caller passes neither', async () => {
+    const fetchSpy = okFetch()
+    await sendEmail({ to: 'a@x.ie', subject: 'S', htmlBody: '<p>hi</p>' })
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.Cc).toBeUndefined()
+    expect(body.Bcc).toBeUndefined()
+    expect('Cc' in JSON.parse(fetchSpy.mock.calls[0][1].body)).toBe(false)
   })
 })

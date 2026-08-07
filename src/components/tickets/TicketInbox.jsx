@@ -57,6 +57,12 @@ export default function TicketInbox({ locationId, locationName, userId }) {
   // silently as "no attachments" is the one wrong answer a support queue must
   // never give.
   const [attachmentsUnavailable, setAttachmentsUnavailable] = useState(false)
+  // EMAIL-CC.1 — { to, mode } as the SERVER derived it (or null). Held here
+  // rather than worked out from `messages` on purpose: the composer's label
+  // and the reply route's actual recipients must come from one computation,
+  // or a thread whose last message carried a Bcc could be labelled one way
+  // and sent another.
+  const [replyRecipients, setReplyRecipients] = useState(null)
   const [threadLoading, setThreadLoading] = useState(false)
   const [threadError, setThreadError] = useState(null)
   const [sending, setSending] = useState(false)
@@ -118,6 +124,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
       setTicket(body.data?.ticket || null)
       setMessages(body.data?.messages || [])
       setAttachmentsUnavailable(!!body.data?.attachments_unavailable)
+      setReplyRecipients(body.data?.reply_recipients || null)
     } catch {
       setThreadError('Could not load this ticket')
     } finally {
@@ -146,6 +153,10 @@ export default function TicketInbox({ locationId, locationName, userId }) {
     setTicket(row)
     setMessages([])
     setAttachmentsUnavailable(false)
+    // The previous ticket's participants must not survive the switch, even for
+    // the moment before loadThread answers — a Reply button briefly naming
+    // somebody else's colleagues is a click away from being right.
+    setReplyRecipients(null)
     setThreadError(null)
     if (row.unread_count > 0) markRead(row.id)
   }
@@ -165,11 +176,18 @@ export default function TicketInbox({ locationId, locationName, userId }) {
     setTicket(null)
     setMessages([])
     setAttachmentsUnavailable(false)
+    // A stale set from the previous ticket would label the next one's Reply
+    // button with the wrong people. Null degrades to "reply to the requester".
+    setReplyRecipients(null)
     setThreadError(null)
   }
 
   // ── Actions ────────────────────────────────────────────────────────
-  async function handleSend(text, internal) {
+  // `recipients` are the people the operator ADDED — the thread's own
+  // participants are derived server-side and are always included, so there is
+  // nothing to send for them and no wire format for removing one (EMAIL-CC.1).
+  // A note carries none: the route refuses one that does.
+  async function handleSend(text, internal, recipients) {
     if (!selectedId || sending) return { ok: false }
     setSending(true)
     setThreadError(null)
@@ -177,7 +195,12 @@ export default function TicketInbox({ locationId, locationName, userId }) {
       const res = await fetch(`/api/email/tickets/${selectedId}/reply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(internal ? { text, internal: true } : { text }),
+        body: JSON.stringify(internal ? { text, internal: true } : {
+          text,
+          to: recipients?.to || [],
+          cc: recipients?.cc || [],
+          bcc: recipients?.bcc || [],
+        }),
       })
       const body = await res.json()
       if (!body?.success) {
@@ -398,6 +421,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
             ticket={ticket}
             messages={messages}
             attachmentsUnavailable={attachmentsUnavailable}
+            replyRecipients={replyRecipients}
             loading={threadLoading}
             error={threadError}
             currentUserId={userId}

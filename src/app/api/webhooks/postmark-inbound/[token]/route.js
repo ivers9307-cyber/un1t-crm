@@ -196,6 +196,7 @@ import {
   inboundPreview,
   truncateHtmlBody,
 } from '@/lib/email-inbox'
+import { inboundAddresses } from '@/lib/email-recipients'
 import { resolveMailboxByRecipient } from '@/lib/email-mailboxes'
 import { resolveTicketAction, ticketSubject, pickThreadedTicket } from '@/lib/email-tickets'
 import { escapeLikePattern } from '@/lib/like-escape'
@@ -532,6 +533,12 @@ async function processInboundEmail(db, body, messageId) {
   const textBody = (body.TextBody || '').trim() || htmlToPlainText(body.HtmlBody) || ''
   const now = new Date().toISOString()
   const preview = inboundPreview(textBody) || (subject ? inboundPreview(subject) : '')
+  // EMAIL-CC.1 — the To and Cc headers, kept apart. Both capped at
+  // MAX_STORED_RECIPIENTS inside inboundAddresses: a stranger can put 500
+  // addresses in a Cc header and an unbounded text[] would ride along on every
+  // read of this ticket forever.
+  const toEmails = inboundAddresses(body.ToFull, body.To)
+  const ccEmails = inboundAddresses(body.CcFull, body.Cc)
 
   // ── Create or append the ticket ───────────────────────────────────
   // `append` writes nothing yet — its summary update runs after the message
@@ -581,7 +588,29 @@ async function processInboundEmail(db, body, messageId) {
     location_id: locationId,
     direction: 'inbound',
     from_email: fromEmail,
+    // to_email is UNCHANGED — still the first entry of the merged recipient
+    // list that mailbox routing already uses. EMAIL-CC.1 adds the two arrays
+    // beside it and touches nothing that decides where this mail is filed:
+    // `recipients`, resolveMailboxByRecipient() and pickThreadedTicket() are
+    // all exactly as they were.
     to_email: recipients[0] || null,
+    // Split apart properly now (mig 499). `recipients` deliberately MERGES To
+    // and Cc — it answers "was this delivered to one of our mailboxes", where
+    // the distinction does not matter — but the thread has to show WHO the
+    // member copied, and for that it does. Falls back to the merged list's
+    // first entry so a payload with no ToFull/To (envelope-only, rewritten
+    // headers) still records the address the mail actually reached.
+    to_emails: toEmails.length ? toEmails : (recipients[0] ? [recipients[0]] : []),
+    // THE MEMBER'S OWN Cc, captured at last. Stored as sent — including any of
+    // our other mailboxes they happened to copy, because that is the truth of
+    // the header and hiding it would misrepresent the thread. Our addresses are
+    // excluded at SEND time instead (loadOwnAddresses), which is the only place
+    // the distinction can do harm.
+    //
+    // bcc_emails is deliberately absent and stays '{}' forever on inbound: a
+    // Bcc is invisible to the receiving server, so any value here would be a
+    // fabrication.
+    cc_emails: ccEmails,
     subject,
     text_body: textBody,
     html_body: truncateHtmlBody(body.HtmlBody || null),

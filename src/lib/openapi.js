@@ -1141,7 +1141,7 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'Ticket + its message thread',
-  description: 'Returns the ticket (with its mailbox and linked contact) and the thread oldest-first, text bodies only. 404 — never 403 — when the ticket is missing, at a foreign location, or on a mailbox the caller cannot see. Does NOT mark it read; that is POST /read. EMAIL-DELIVERY.1: each OUTBOUND message also carries delivery_status (null | delivered | bounced | complained), delivery_status_at, delivery_detail and delivery_bounce_type (hard | soft | transient). NULL means sent with no provider event yet — it is NOT a failure and must never render as one.',
+  description: 'Returns the ticket (with its mailbox and linked contact) and the thread oldest-first, text bodies only. EMAIL-CC.1: each message also carries to_emails, cc_emails and bcc_emails, and the payload carries reply_recipients = { to, mode: reply | reply_all } — who a reply would reach, derived by the same code the reply route sends with, or null when that could not be worked out. bcc_emails is STAFF-ONLY: this route is behind the ticket gate (location + email_inbox at that location + a grant on the ticket mailbox), it must never be rendered on a member-visible surface, and it is never an input to a later reply or forward. 404 — never 403 — when the ticket is missing, at a foreign location, or on a mailbox the caller cannot see. Does NOT mark it read; that is POST /read. EMAIL-DELIVERY.1: each OUTBOUND message also carries delivery_status (null | delivered | bounced | complained), delivery_status_at, delivery_detail and delivery_bounce_type (hard | soft | transient). NULL means sent with no provider event yet — it is NOT a failure and must never render as one.',
   request: { params: z.object({ id: uuidLike }) },
   responses: {
     200: { description: '{ ticket, messages }' },
@@ -1155,10 +1155,16 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'Reply to a ticket, or add an internal note',
-  description: "internal:true writes a staff-only note to the thread and sends NOTHING (no first_response_at, no status change). Otherwise the reply goes out on Postmark's transactional stream ('outbound', no marketing-consent gate — the member wrote to us first), threaded off the last inbound message, Reply-To the ticket's own mailbox; the ticket then moves to pending and stamps first_response_at if unset. A failed send leaves the ticket untouched.",
+  description: "internal:true writes a staff-only note to the thread and sends NOTHING (no first_response_at, no status change) and MUST carry no recipients — a note with to/cc/bcc is a 400. Otherwise the reply goes out on Postmark's transactional stream ('outbound', no marketing-consent gate — the member wrote to us first), threaded off the last inbound message, Reply-To the ticket's own mailbox; the ticket then moves to pending and stamps first_response_at if unset. A failed send leaves the ticket untouched. EMAIL-CC.1 — THE RECIPIENT SET IS DERIVED, NOT CHOSEN: the server sends to everybody on the thread (the From + To + Cc of the latest non-note message, minus the studio's own addresses), so a one-person thread is a Reply and a wider one is a Reply All with no way to express the difference on the wire. `to`/`cc`/`bcc` in the body ADD people on top of that; there is deliberately no way to remove a participant. bcc_emails of earlier messages is NEVER read back as a recipient. All three lists are deduped case-insensitively across each other (To beats Cc beats Bcc) and capped at 25 addresses COMBINED. Bcc goes out in Postmark's own Bcc field, so no recipient sees it. Response carries { recipients: { to, cc, bcc }, mode }.",
   request: {
     params: z.object({ id: uuidLike }),
-    body: { content: { 'application/json': { schema: z.object({ text: z.string().min(1).max(10000), internal: z.boolean().optional() }).openapi('EmailTicketReply') } } },
+    body: { content: { 'application/json': { schema: z.object({
+      text: z.string().min(1).max(10000),
+      internal: z.boolean().optional(),
+      to: z.array(z.string().email()).max(25).optional(),
+      cc: z.array(z.string().email()).max(25).optional(),
+      bcc: z.array(z.string().email()).max(25).optional(),
+    }).openapi('EmailTicketReply') } } },
   },
   responses: {
     200: { description: 'Note written / reply sent' },
@@ -1191,11 +1197,16 @@ registry.registerPath({
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
   summary: 'Start a new ticket by emailing someone',
-  description: "A new email IS a ticket whose first message is outbound — one email_tickets row plus one outbound email_inbox_messages row, and thereafter an ordinary ticket (their reply threads back through the normal inbound path). The location comes off the MAILBOX, never the request, and `mailbox_id` must be in the caller's visible set: anything else is a 404, never a 403, so mailbox ids can't be enumerated. Sends on Postmark's transactional stream ('outbound') with Reply-To the chosen mailbox, links a contact when one matches the recipient, and stamps first_response_at. THE SEND HAPPENS FIRST: a failed send writes nothing at all, so there is never a ticket queued for an email that did not go.",
+  description: "A new email IS a ticket whose first message is outbound — one email_tickets row plus one outbound email_inbox_messages row, and thereafter an ordinary ticket (their reply threads back through the normal inbound path). The location comes off the MAILBOX, never the request, and `mailbox_id` must be in the caller's visible set: anything else is a 404, never a 403, so mailbox ids can't be enumerated. Sends on Postmark's transactional stream ('outbound') with Reply-To the chosen mailbox, links a contact when one matches the recipient, and stamps first_response_at. THE SEND HAPPENS FIRST: a failed send writes nothing at all, so there is never a ticket queued for an email that did not go. EMAIL-CC.1 — to[0] is the PRIMARY recipient: it is what requester_email records, what the contact link resolves against and what email_sends logs. Cc/Bcc are deduped case-insensitively against To and each other (To beats Cc beats Bcc), the studio's own mailbox addresses are stripped from all three (cc'ing one would file a phantom inbound ticket), and the combined total is capped at 25. Every address on a composed email was typed by a person, so the whole set is written to audit_events under the sender's name.",
   request: {
     body: { content: { 'application/json': { schema: z.object({
       mailbox_id: uuidLike,
-      to: z.string().email(),
+      // EMAIL-CC.1 — several recipients; the SCALAR FORM IS STILL ACCEPTED and
+      // normalised to a one-element array, so nothing that posted here before
+      // has to change.
+      to: z.union([z.string().email(), z.array(z.string().email()).max(25).min(1)]),
+      cc: z.array(z.string().email()).max(25).optional(),
+      bcc: z.array(z.string().email()).max(25).optional(),
       subject: z.string().min(1).max(200),
       text: z.string().min(1).max(10000),
     }).openapi('EmailTicketCompose') } } },

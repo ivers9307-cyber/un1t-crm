@@ -8,6 +8,7 @@ import {
   ticketViewWire,
   isArchivedStatus,
   ticketMessageKind,
+  ticketMessageRecipients,
   ticketDeliveryMeta,
   requesterLabel,
   mailboxLabel,
@@ -272,5 +273,44 @@ describe('ticketDeliveryMeta (EMAIL-DELIVERY.1)', () => {
 
   it('says nothing about an unrecognised status', () => {
     expect(ticketDeliveryMeta(outbound({ delivery_status: 'opened' }))).toBeNull()
+  })
+})
+
+// ── EMAIL-CC.1 — recipient lines on mobile ───────────────────────────
+//
+// Mobile SHOWS recipients and does not edit them: the reply box posts
+// `{ text, internal }`, so the server derives everybody on the thread and a
+// mobile reply on a multi-party thread is automatically a reply-all. What this
+// screen must get right is the RENDERING, and specifically that a Bcc line is
+// never mistaken for something the other recipients could see.
+describe('ticketMessageRecipients', () => {
+  it('omits a single To — the bubble already says "Sent to …"', () => {
+    expect(ticketMessageRecipients({ to_emails: ['ada@example.com'] })).toEqual([])
+  })
+
+  it('shows a To line once there is more than one recipient', () => {
+    const [line] = ticketMessageRecipients({ to_emails: ['ada@x.com', 'bob@x.com'] })
+    expect(line).toMatchObject({ key: 'to', label: 'To', staffOnly: false })
+  })
+
+  it('shows the member’s Cc — the reason inbound capture exists', () => {
+    const [line] = ticketMessageRecipients({ to_emails: ['a@x.com'], cc_emails: ['bob@x.com'] })
+    expect(line).toMatchObject({ key: 'cc', staffOnly: false })
+    expect(line.addresses).toEqual(['bob@x.com'])
+  })
+
+  it('marks Bcc staffOnly so the screen can say no recipient could see it', () => {
+    const [line] = ticketMessageRecipients({ to_emails: ['a@x.com'], bcc_emails: ['secret@x.com'] })
+    expect(line).toMatchObject({ key: 'bcc', staffOnly: true })
+  })
+
+  it('reads the scalar to_email on a row written before mig 499', () => {
+    const [line] = ticketMessageRecipients({ to_email: 'a@x.com', cc_emails: ['b@x.com'] })
+    expect(line.key).toBe('cc')
+  })
+
+  it('omits empty lists rather than rendering a blank Cc', () => {
+    expect(ticketMessageRecipients({ to_emails: ['a@x.com'], cc_emails: [], bcc_emails: [] })).toEqual([])
+    expect(ticketMessageRecipients(null)).toEqual([])
   })
 })

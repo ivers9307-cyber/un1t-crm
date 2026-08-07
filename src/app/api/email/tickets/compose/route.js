@@ -9,7 +9,14 @@ import { sendEmail } from '@/lib/postmark'
 import { normalizeEmail, pickContact, inboundPreview } from '@/lib/email-inbox'
 import { ticketSubject } from '@/lib/email-tickets'
 import { escapeLikePattern } from '@/lib/like-escape'
-import { loadVisibleMailboxes, ticketNotFound } from '../_helpers'
+import { logAuditEvent } from '@/lib/audit'
+import {
+  MAX_RECIPIENTS,
+  resolveRecipients,
+  toPostmarkFields,
+  newRecipients,
+} from '@/lib/email-recipients'
+import { loadVisibleMailboxes, loadOwnAddresses, ticketNotFound } from '../_helpers'
 
 // POST /api/email/tickets/compose — start a conversation (EMAIL-TICKET.5).
 // Spec: docs/superpowers/specs/2026-08-05-email-ticketing-design.md
@@ -47,12 +54,25 @@ import { loadVisibleMailboxes, ticketNotFound } from '../_helpers'
 // "that mailbox exists, elsewhere" from "no such mailbox" and hand back the
 // enumeration this route is careful not to give.
 
+// Trim + lowercase BEFORE validating, so the shared `email` block judges the
+// normalised value and the row we store matches what the webhook will compare
+// against on the way back in.
+const oneAddress = z.string().trim().toLowerCase().pipe(emailAddress)
+
+// EMAIL-CC.1 — bounded at parse time so a 10,000-element array is refused
+// before any of it is normalised. resolveRecipients then enforces the real cap
+// across To + Cc + Bcc combined.
+const addressList = z.array(oneAddress).max(MAX_RECIPIENTS)
+
 const ComposeSchema = z.object({
   mailbox_id: uuidLike,
-  // Trim + lowercase BEFORE validating, so the shared `email` block judges the
-  // normalised value and the row we store matches what the webhook will
-  // compare against on the way back in.
-  to: z.string().trim().toLowerCase().pipe(emailAddress),
+  // EMAIL-CC.1 — several recipients. The SCALAR FORM IS STILL ACCEPTED and
+  // normalised to a one-element array: the composer is not the only thing that
+  // could ever post here, and quietly 400-ing a shape that worked yesterday is
+  // not a change anyone would connect to a Cc feature.
+  to: z.union([oneAddress.transform(a => [a]), addressList.min(1)]),
+  cc: addressList.optional().default([]),
+  bcc: addressList.optional().default([]),
   subject: z.string().trim().min(1).max(200),
   // Same cap as the reply route — one composer, one limit.
   text: z.string().trim().min(1).max(10000),
@@ -83,7 +103,7 @@ export async function POST(request) {
 
   const validation = await validateBody(request, ComposeSchema)
   if (!validation.ok) return validation.response
-  const { mailbox_id: mailboxId, to, subject, text } = validation.data
+  const { mailbox_id: mailboxId, to: rawTo, cc: rawCc, bcc: rawBcc, subject, text } = validation.data
 
   const db = createServerClient()
 
@@ -123,6 +143,27 @@ export async function POST(request) {
   if (!mailbox) return ticketNotFound()
 
   const locationId = mailbox.location_id
+
+  // ── Who this reaches (EMAIL-CC.1) ─────────────────────────────────
+  // Our own addresses are excluded from all three lists. Cc'ing one of our
+  // mailboxes would deliver a copy to our own inbound webhook, which files it
+  // as a brand-new ticket at the same studio — a phantom enquiry, from us, on
+  // every composed email. See loadOwnAddresses.
+  const own = await loadOwnAddresses(db, locationId)
+  if (own.response) return own.response
+
+  const recipients = resolveRecipients({
+    to: rawTo, cc: rawCc, bcc: rawBcc, exclude: own.addresses,
+  })
+  if (!recipients.ok) {
+    return NextResponse.json({ success: false, error: recipients.error }, { status: 400 })
+  }
+  const wire = toPostmarkFields(recipients)
+  // The PRIMARY recipient. One ticket has one counterpart: it is who
+  // requester_email names, who the contact link resolves against and who a
+  // later reply threads back from. Cc'd people are on the correspondence, not
+  // the subject of the ticket.
+  const to = recipients.to[0]
 
   // ── Link a contact if the recipient is one ────────────────────────
   // Same resolution as the inbound webhook (pickContact), deliberately: a
@@ -177,7 +218,12 @@ export async function POST(request) {
   let result
   try {
     result = await sendEmail({
-      to,
+      // EMAIL-CC.1 — all three via toPostmarkFields(), the single site where a
+      // resolved set becomes wire values. Bcc reaches Postmark's own Bcc field
+      // and nothing else.
+      to: wire.to,
+      cc: wire.cc,
+      bcc: wire.bcc,
       subject,
       htmlBody: textToHtml(text),
       textBody: text,
@@ -232,7 +278,13 @@ export async function POST(request) {
     location_id: locationId,
     direction: 'outbound',
     from_email: process.env.POSTMARK_FROM_EMAIL || null,
+    // to_email stays the PRIMARY recipient; to_emails carries the rest (mig
+    // 499). bcc_emails is written here and read back by nothing — not the
+    // reply route, not the forward that reuses this recipient model.
     to_email: to,
+    to_emails: recipients.to,
+    cc_emails: recipients.cc,
+    bcc_emails: recipients.bcc,
     subject,
     text_body: text,
     postmark_message_id: result.messageId,
@@ -274,8 +326,36 @@ export async function POST(request) {
     })
   }
 
+  // ── Attribution (EMAIL-CC.1) ──────────────────────────────────────
+  // EVERY address on a composed email is one a staff member typed — nobody
+  // wrote to us first — so the whole set is logged, not just the extras. This
+  // is the deliberate half of the "adding a stranger" answer: there is no
+  // consent gate on ticket mail (it is transactional, Richard), so instead the
+  // act is capped, validated and attributable. logAuditEvent never throws.
+  await logAuditEvent({
+    category: 'business',
+    action: 'email_ticket.composed',
+    actor: { id: user.id, full_name: user.full_name, email: user.email },
+    target: { resource: `email_ticket/${ticket.id}`, label: subject },
+    locationId,
+    details: {
+      added: newRecipients(recipients, []),
+      recipient_count: recipients.count,
+      mailbox_id: mailbox.id,
+    },
+    request,
+  })
+
   return NextResponse.json({
     success: true,
-    data: { ticket_id: ticket.id, ticket, message, message_id: result.messageId },
+    data: {
+      ticket_id: ticket.id,
+      ticket,
+      message,
+      message_id: result.messageId,
+      // Confirms what went out. bcc is included because the sender is staff on
+      // the ticket they just created; it goes no further than this response.
+      recipients: { to: recipients.to, cc: recipients.cc, bcc: recipients.bcc },
+    },
   })
 }

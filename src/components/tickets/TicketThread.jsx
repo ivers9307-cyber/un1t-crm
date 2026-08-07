@@ -45,6 +45,7 @@ import {
   deliveryTimestamp,
   assigneeLabel,
   mailboxLabel,
+  messageRecipients,
 } from '@/lib/ticket-display'
 import TicketReplyBox from './TicketReplyBox'
 
@@ -52,6 +53,10 @@ export default function TicketThread({
   hasSelection,
   ticket,
   messages = [],
+  // EMAIL-CC.1 — { to, mode } as the server derived it, or null. Handed
+  // straight to the composer, which must never re-derive it from `messages`:
+  // a second implementation is a second chance to include a bcc address.
+  replyRecipients = null,
   // EMAIL-ATTACH.1 — the attachment query failed. The thread below is complete;
   // the FILE lists on it are not, and saying nothing would render as "no files".
   attachmentsUnavailable = false,
@@ -205,7 +210,12 @@ export default function TicketThread({
         </p>
       )}
 
-      <TicketReplyBox ticket={ticket} onSend={onSend} sending={sending} />
+      <TicketReplyBox
+        ticket={ticket}
+        replyRecipients={replyRecipients}
+        onSend={onSend}
+        sending={sending}
+      />
     </>
   )
 }
@@ -454,6 +464,38 @@ function DeliveryFailureNotice({ delivery, stamp }) {
   )
 }
 
+/**
+ * The To / Cc / Bcc lines under a message (EMAIL-CC.1).
+ *
+ * BCC IS VISUALLY SEPARATED, not just labelled. It is rendered with a lock and
+ * the sentence "only staff on this ticket can see this" — because the whole
+ * risk of showing it at all is someone reading a Bcc line as though the other
+ * recipients could see it too. On the accent bubble the muted ramp is
+ * unreadable, hence the two colour sets.
+ */
+function RecipientLines({ message, onAccent = false }) {
+  const lines = messageRecipients(message)
+  if (lines.length === 0) return null
+
+  const label = onAccent ? 'text-white/60' : 'text-un1t-muted'
+  const body = onAccent ? 'text-white/85' : 'text-un1t-subtle'
+
+  return (
+    <div className="mb-1 space-y-0.5">
+      {lines.map(line => (
+        <p key={line.key} className={`flex flex-wrap items-baseline gap-x-1.5 text-[11px] ${body}`}>
+          <span className={`inline-flex items-center gap-1 font-medium uppercase tracking-wide ${label}`}>
+            {line.staffOnly && <Lock size={9} className="shrink-0" aria-hidden="true" />}
+            {line.label}
+          </span>
+          <span className="break-all">{line.addresses.join(', ')}</span>
+          {line.note && <span className={label}>· {line.note}</span>}
+        </p>
+      ))}
+    </div>
+  )
+}
+
 /** The attachment list itself could not be loaded — say so, don't imply none. */
 function AttachmentsUnavailableNotice() {
   return (
@@ -509,6 +551,7 @@ function ThreadMessage({ message, ticketId }) {
               {stamp && ` · ${stamp}`}
               {delivery?.tone === 'quiet' && <>{' · '}<DeliveredMarker message={message} /></>}
             </p>
+            <RecipientLines message={message} onAccent />
             {html ? (
               <EmailFrame
                 html={html}
@@ -538,6 +581,10 @@ function ThreadMessage({ message, ticketId }) {
           From {message.from_email || 'the member'}
           {stamp && ` · ${stamp}`}
         </p>
+        {/* THE MEMBER'S OWN Cc. This is the point of capturing it inbound: a
+            reply that reaches only the sender, when they copied two
+            colleagues, drops those colleagues out of their own conversation. */}
+        <RecipientLines message={message} />
         {html ? (
           <EmailFrame
             html={html}

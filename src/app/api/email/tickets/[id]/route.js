@@ -2,7 +2,12 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { emailHtmlDocument } from '@/lib/email-html'
-import { loadTicketForUser } from '../_helpers'
+import {
+  threadParticipants,
+  latestCorrespondence,
+  replyMode,
+} from '@/lib/email-recipients'
+import { loadTicketForUser, loadOwnAddresses } from '../_helpers'
 
 // GET /api/email/tickets/[id] — one ticket and its thread (EMAIL-TICKET.4).
 //
@@ -30,17 +35,28 @@ const MESSAGE_LIMIT = 200
 // is replaced by `html_document`, the sanitised, iframe-ready version built by
 // src/lib/email-html.js. The raw column stays on disk untouched so the
 // sanitiser can be improved later without having destroyed the evidence.
-// bcc_emails remains absent: it is stored for audit only and the spec pins
-// "bcc_emails never appears in any client-facing payload".
 //
-// conversation_id is absent too (EMAIL-TICKET.6). Nothing downstream read it —
+// bcc_emails IS SELECTED NOW (EMAIL-CC.1), reversing EMAIL-TICKET.5's blanket
+// "never appears in any client-facing payload". THE AUDIENCE IS THE POINT: the
+// only client this route has is a staff member who already passed
+// loadTicketForUser — location access, the email_inbox key AT THAT LOCATION,
+// and a grant on the mailbox this ticket arrived at. That is exactly the
+// population mig 482's own COMMENT names ("thereafter read only by staff on
+// the ticket"), and a colleague who cannot tell whether accounts@ was copied
+// on a refund reply is being asked to work blind. The rule that actually
+// matters is unchanged and stricter for being stated separately: bcc_emails
+// must never reach a MEMBER-VISIBLE surface and must never be read back as a
+// RECIPIENT of a later reply or forward. Neither is this route.
+//
+// conversation_id is absent (EMAIL-TICKET.6). Nothing downstream read it —
 // shapeMessages spread it straight through to the client and no web or mobile
 // surface touched it — while email_conversations is being retired, so naming it
 // here was a live dependency on a column scheduled to be dropped. The reply
 // route's legacy mirror still reads the column, but through its own select.
 const MESSAGE_COLUMNS = [
   'id', 'ticket_id', 'contact_id', 'location_id', 'direction',
-  'from_email', 'to_email', 'cc_emails', 'subject', 'text_body', 'html_body',
+  'from_email', 'to_email', 'to_emails', 'cc_emails', 'bcc_emails',
+  'subject', 'text_body', 'html_body',
   'is_internal_note', 'author_profile_id',
   'postmark_message_id', 'rfc_message_id', 'source', 'status', 'sent_at', 'created_at',
   // EMAIL-DELIVERY.1 (mig 498) — what Postmark told us happened to an outbound
@@ -110,6 +126,28 @@ export async function GET(request, props) {
 
   const { messages, attachmentsUnavailable } = await shapeMessages(db, messagesDesc || [])
 
+  // ── Who a reply would reach (EMAIL-CC.1) ──────────────────────────
+  // Computed HERE, with the SAME functions the reply route uses, so the button
+  // that says "Reply All (4 people)" and the send that actually happens cannot
+  // disagree. The composer must never have to re-derive this from the message
+  // list: a second implementation is a second chance to include a bcc.
+  //
+  // NULL is a real answer, not a failure to handle. Without the own-address
+  // list the set would wrongly contain our own mailbox, and a label naming an
+  // extra recipient who will in fact be excluded is worse than no label — the
+  // UI falls back to "reply to the requester" and the reply route recomputes
+  // the truth at send time regardless.
+  const own = await loadOwnAddresses(db, ticket.location_id)
+  let replyRecipients = null
+  if (!own.response) {
+    const participants = threadParticipants(
+      latestCorrespondence(messagesDesc || []),
+      { exclude: own.addresses },
+    )
+    const to = participants.length ? participants : [ticket.requester_email].filter(Boolean)
+    replyRecipients = { to, mode: replyMode(to) }
+  }
+
   return NextResponse.json({
     success: true,
     data: {
@@ -118,6 +156,10 @@ export async function GET(request, props) {
       // reply goes back out from.
       ticket: { ...ticket, mailbox, contact: contact || null },
       messages,
+      // { to: string[], mode: 'reply' | 'reply_all' }, or null — see above.
+      // `to` is derived from From/To/Cc only; bcc_emails is never a
+      // participant, so it can never appear here.
+      reply_recipients: replyRecipients,
       // True when the attachment query failed. The thread is complete; the
       // FILE list is not, and the UI must say so rather than imply there were
       // none.
