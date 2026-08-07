@@ -34,7 +34,11 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { sendEmail } from '@/lib/postmark'
 import { _resetInboxSenderCache, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
-import { makeDb, insertsInto, updatesTo, writesTo, selectsFrom } from '../../_test-db'
+import { EMAIL_ATTACHMENT_BUCKET } from '@/lib/email-attachment-quota'
+import { outboundDraftPath } from '@/lib/email-outbound-attachments'
+import {
+  makeDb, insertsInto, updatesTo, writesTo, selectsFrom, seedObject, objectKeys,
+} from '../../_test-db'
 import {
   MB_STUDIO, T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION,
   COACH, COACH_NO_INBOX, MULTI_LOCATION,
@@ -535,6 +539,154 @@ describe('POST …/reply — a failed mailbox lookup is not an empty one', () =>
     expect((await post(T_STUDIO.id, { text: 'hi' })).status).toBe(500)
     expect(sendEmail).not.toHaveBeenCalled()
     expect(writesTo(db)).toEqual([])
+  })
+})
+
+// ── EMAIL-OUTBOUND-ATTACH.1 ─────────────────────────────────────────
+// Staff can now attach files to a reply. The property that matters most is the
+// ORDERING: every way an attachment can be refused has to be a refusal to send
+// AT ALL, because a thread showing a reply that claims files the member never
+// received is exactly the lie this feature is built to avoid.
+describe('POST …/reply — attachments', () => {
+  const DRAFT = '22222222-2222-4222-8222-222222222222'
+  const draftRef = (index, mime = 'application/pdf', filename = 'invoice.pdf') =>
+    ({ draft_id: DRAFT, index, filename, mime })
+
+  function seedDraft(index, { mime = 'application/pdf', bytes = 'hello world' } = {}) {
+    const path = outboundDraftPath({ profileId: COACH.id, draftId: DRAFT, index, mime })
+    seedObject(db, EMAIL_ATTACHMENT_BUCKET, path, bytes)
+    return path
+  }
+
+  it('puts the file on the wire in Postmark’s own shape and files it on the thread', async () => {
+    seedDraft(0)
+    const res = await post(T_STUDIO.id, { text: 'Here you go.', attachments: [draftRef(0)] })
+    expect(res.status).toBe(200)
+
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      attachments: [{
+        Name: 'invoice.pdf',
+        Content: Buffer.from('hello world').toString('base64'),
+        ContentType: 'application/pdf',
+      }],
+    }))
+
+    const [att] = insertsInto(db, 'email_ticket_attachments')
+    expect(att.payload).toMatchObject({
+      location_id: T_STUDIO.location_id,
+      mailbox_id: T_STUDIO.mailbox_id,
+      attachment_index: 0,
+      filename: 'invoice.pdf',
+      mime_type: 'application/pdf',
+      size_bytes: 11,
+      skipped_reason: null,
+    })
+    // Recorded against the OUTBOUND MESSAGE ROW that was just written, which is
+    // what makes the thread render it with exactly the chip an inbound
+    // attachment gets — same table, same shape, same download route.
+    const messageId = db._state.messages.find(m => m.direction === 'outbound')?.id
+    expect(messageId).toBeTruthy()
+    expect(att.payload.message_id).toBe(messageId)
+    // …and the bytes now live at the canonical <location>/<message>/<i>.<ext>
+    // key, not the draft one.
+    expect(att.payload.storage_path).toBe(`${T_STUDIO.location_id}/${messageId}/0.pdf`)
+    expect(objectKeys(db)).toEqual([`${EMAIL_ATTACHMENT_BUCKET}/${att.payload.storage_path}`])
+  })
+
+  it('sends NO Attachments key at all when there are none', async () => {
+    await post(T_STUDIO.id, { text: 'no files here' })
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ attachments: undefined }))
+    expect(insertsInto(db, 'email_ticket_attachments')).toEqual([])
+  })
+
+  it('REFUSES 400 when a draft cannot be read — nothing sent, nothing written', async () => {
+    const res = await post(T_STUDIO.id, { text: 'Here you go.', attachments: [draftRef(0)] })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toContain('Nothing was sent')
+    expect(sendEmail).not.toHaveBeenCalled()
+    // THE WHOLE POINT: the ticket does not advance and the thread shows nothing.
+    expect(writesTo(db)).toEqual([])
+  })
+
+  it('REFUSES 400 past the size ceiling — before the send, naming the limit', async () => {
+    seedDraft(0, { bytes: Buffer.alloc(4 * 1024 * 1024, 1) })
+    seedDraft(1, { bytes: Buffer.alloc(4 * 1024 * 1024, 1) })
+    const res = await post(T_STUDIO.id, {
+      text: 'Two big ones.', attachments: [draftRef(0), draftRef(1)],
+    })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toContain('7.0 MB')
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(writesTo(db)).toEqual([])
+  })
+
+  it('cannot reach ANOTHER staff member’s draft', async () => {
+    // Uploaded by someone else; the key is rebuilt under the CALLER'S profile
+    // id, so this addresses a path that has never existed.
+    const foreign = outboundDraftPath({ profileId: 'profile-someone-else', draftId: DRAFT, index: 0, mime: 'application/pdf' })
+    seedObject(db, EMAIL_ATTACHMENT_BUCKET, foreign, 'secret')
+    const res = await post(T_STUDIO.id, { text: 'gimme', attachments: [draftRef(0)] })
+    expect(res.status).toBe(400)
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('a send that FAILS leaves the thread with no attachment row and no ticket move', async () => {
+    seedDraft(0)
+    sendEmail.mockRejectedValue(new Error('Postmark said no'))
+    const res = await post(T_STUDIO.id, { text: 'Here you go.', attachments: [draftRef(0)] })
+    expect(res.status).toBe(400)
+    expect(writesTo(db)).toEqual([])
+    // The draft object survives, deliberately — the operator's retry needs it.
+    expect(objectKeys(db)).toEqual([
+      `${EMAIL_ATTACHMENT_BUCKET}/${outboundDraftPath({ profileId: COACH.id, draftId: DRAFT, index: 0, mime: 'application/pdf' })}`,
+    ])
+  })
+
+  it('REFUSES files on an internal note rather than silently dropping them', async () => {
+    seedDraft(0)
+    const res = await post(T_STUDIO.id, { text: 'fyi', internal: true, attachments: [draftRef(0)] })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toContain('internal note')
+    expect(writesTo(db)).toEqual([])
+  })
+
+  it('400s on more than ten files, before any Storage work', async () => {
+    const many = Array.from({ length: 11 }, (_, i) => draftRef(i % 10))
+    const res = await post(T_STUDIO.id, { text: 'lots', attachments: many })
+    expect(res.status).toBe(400)
+    expect(sendEmail).not.toHaveBeenCalled()
+  })
+
+  it('a FULL mailbox still sends the file, and the thread says the copy was not kept', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [LAST_INBOUND],
+      storageUsage: [{
+        location_id: T_STUDIO.location_id, mailbox_id: T_STUDIO.mailbox_id,
+        bytes_used: 5 * 1024 * 1024 * 1024, quota_bytes: 5 * 1024 * 1024 * 1024,
+      }],
+    }))
+    seedDraft(0)
+
+    const res = await post(T_STUDIO.id, { text: 'Here you go.', attachments: [draftRef(0)] })
+    expect(res.status).toBe(200)
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      attachments: [expect.objectContaining({ Name: 'invoice.pdf' })],
+    }))
+    const [att] = insertsInto(db, 'email_ticket_attachments')
+    expect(att.payload.storage_path).toBeNull()
+    expect(att.payload.skipped_reason).toBe('quota')
+  })
+
+  it('filing that fails NEVER fails the response — the email already went', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [LAST_INBOUND],
+      errors: { email_ticket_attachments: { code: '42703', message: 'no such column' } },
+    }))
+    seedDraft(0)
+    const res = await post(T_STUDIO.id, { text: 'Here you go.', attachments: [draftRef(0)] })
+    expect(res.status).toBe(200)
   })
 })
 

@@ -225,11 +225,19 @@ export default function TicketInbox({ locationId, locationName, userId }) {
   }
 
   // ── Actions ────────────────────────────────────────────────────────
-  // `recipients` are the people the operator ADDED — the thread's own
+  // `extras.recipients` are the people the operator ADDED — the thread's own
   // participants are derived server-side and are always included, so there is
   // nothing to send for them and no wire format for removing one (EMAIL-CC.1).
-  // A note carries none: the route refuses one that does.
-  async function handleSend(text, internal, recipients) {
+  //
+  // `extras.attachments` is a list of REFERENCES to files the composer already
+  // uploaded straight to Storage, never bytes: a multipart body over ~4.5 MB is
+  // rejected by the platform before the route runs (EMAIL-OUTBOUND-ATTACH.1).
+  // The key is OMITTED (not sent empty) when there are none, so a reply without
+  // files is byte-identical to every reply sent before that shipped.
+  //
+  // A note carries neither: the route refuses one that does.
+  async function handleSend(text, internal, extras = {}) {
+    const { recipients, attachments = [] } = extras
     if (!selectedId || sending) return { ok: false }
     setSending(true)
     setThreadError(null)
@@ -242,6 +250,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
           to: recipients?.to || [],
           cc: recipients?.cc || [],
           bcc: recipients?.bcc || [],
+          ...(attachments.length ? { attachments } : {}),
         }),
       })
       const body = await res.json()

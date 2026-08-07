@@ -24,7 +24,9 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { sendEmail } from '@/lib/postmark'
 import { _resetInboxSenderCache, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
-import { makeDb, insertsInto, writesTo } from '../_test-db'
+import { EMAIL_ATTACHMENT_BUCKET } from '@/lib/email-attachment-quota'
+import { outboundDraftPath } from '@/lib/email-outbound-attachments'
+import { makeDb, insertsInto, writesTo, seedObject } from '../_test-db'
 import {
   LOC_A, MB_STUDIO, MB_ACCOUNTS, MB_OTHER_LOCATION,
   COACH, COACH_NO_INBOX, OWNER, MULTI_LOCATION,
@@ -425,6 +427,81 @@ describe('POST /api/email/tickets/compose — a failed mailbox lookup is not an 
       errors: { email_mailbox_access: { code: '42501', message: 'permission denied' } },
     }))
     expect((await post(VALID)).status).toBe(500)
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(writesTo(db)).toEqual([])
+  })
+})
+
+// ── EMAIL-OUTBOUND-ATTACH.1 ─────────────────────────────────────────
+// A new email can carry files. Same rules as the reply route, deliberately —
+// one composer, one set of limits — so these tests cover the compose-specific
+// half: the mailbox (not a ticket) is what the upload was authorised against,
+// and the ticket + message + attachment rows all land together.
+describe('POST /api/email/tickets/compose — attachments', () => {
+  const DRAFT = '22222222-2222-4222-8222-222222222222'
+  const draftRef = (index, mime = 'application/pdf', filename = 'terms.pdf') =>
+    ({ draft_id: DRAFT, index, filename, mime })
+
+  function seedDraft(index, { mime = 'application/pdf', bytes = 'hello world' } = {}) {
+    const path = outboundDraftPath({ profileId: COACH.id, draftId: DRAFT, index, mime })
+    seedObject(db, EMAIL_ATTACHMENT_BUCKET, path, bytes)
+    return path
+  }
+
+  it('sends the file and files it against the new ticket’s first message', async () => {
+    seedDraft(0)
+    const res = await post({ ...VALID, attachments: [draftRef(0)] })
+    expect(res.status).toBe(200)
+
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      attachments: [{
+        Name: 'terms.pdf',
+        Content: Buffer.from('hello world').toString('base64'),
+        ContentType: 'application/pdf',
+      }],
+    }))
+
+    const messageId = db._state.messages.find(m => m.direction === 'outbound')?.id
+    const [att] = insertsInto(db, 'email_ticket_attachments')
+    expect(att.payload).toMatchObject({
+      message_id: messageId,
+      location_id: LOC_A,
+      mailbox_id: MB_STUDIO.id,
+      attachment_index: 0,
+      filename: 'terms.pdf',
+      storage_path: `${LOC_A}/${messageId}/0.pdf`,
+      skipped_reason: null,
+    })
+  })
+
+  it('sends NO Attachments key at all when there are none', async () => {
+    await post(VALID)
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ attachments: undefined }))
+    expect(insertsInto(db, 'email_ticket_attachments')).toEqual([])
+  })
+
+  it('REFUSES 400 before the send when a draft cannot be read, writing NOTHING', async () => {
+    const res = await post({ ...VALID, attachments: [draftRef(0)] })
+    expect(res.status).toBe(400)
+    expect(sendEmail).not.toHaveBeenCalled()
+    // No ticket in the queue for an email that never went — the property this
+    // route's send-first ordering exists to guarantee, now extended to files.
+    expect(writesTo(db)).toEqual([])
+  })
+
+  it('REFUSES 400 past the size ceiling, naming the limit', async () => {
+    seedDraft(0, { bytes: Buffer.alloc(4 * 1024 * 1024, 1) })
+    seedDraft(1, { bytes: Buffer.alloc(4 * 1024 * 1024, 1) })
+    const res = await post({ ...VALID, attachments: [draftRef(0), draftRef(1)] })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toContain('7.0 MB')
+    expect(writesTo(db)).toEqual([])
+  })
+
+  it('a mailbox the caller cannot send as is still a 404, files or not', async () => {
+    seedDraft(0)
+    const res = await post({ ...VALID, mailbox_id: MB_ACCOUNTS.id, attachments: [draftRef(0)] })
+    expect(res.status).toBe(404)
     expect(sendEmail).not.toHaveBeenCalled()
     expect(writesTo(db)).toEqual([])
   })

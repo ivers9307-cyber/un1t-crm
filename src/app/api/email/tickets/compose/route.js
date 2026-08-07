@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
-import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
-import { hasPermissionForLocation } from '@/lib/permissions'
+import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email as emailAddress } from '@/lib/schemas'
 import { sendTicketEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
@@ -16,7 +15,12 @@ import {
   toPostmarkFields,
   newRecipients,
 } from '@/lib/email-recipients'
-import { loadVisibleMailboxes, loadOwnAddresses, ticketNotFound } from '../_helpers'
+import {
+  collectOutboundAttachments,
+  fileOutboundAttachments,
+  outboundAttachmentsField,
+} from '@/lib/email-outbound-attachments-server'
+import { loadSendingMailbox, loadOwnAddresses } from '../_helpers'
 
 // POST /api/email/tickets/compose — start a conversation (EMAIL-TICKET.5).
 // Spec: docs/superpowers/specs/2026-08-05-email-ticketing-design.md
@@ -76,6 +80,10 @@ const ComposeSchema = z.object({
   subject: z.string().trim().min(1).max(200),
   // Same cap as the reply route — one composer, one limit.
   text: z.string().trim().min(1).max(10000),
+  // EMAIL-OUTBOUND-ATTACH.1 — references to files the browser already uploaded
+  // straight to Storage, never the bytes (Vercel 413s a body over ~4.5 MB
+  // before this handler runs). Same field, same rules as the reply route.
+  attachments: outboundAttachmentsField,
 })
 
 // At most this many contacts share one address (in practice one — contacts.email
@@ -103,46 +111,30 @@ export async function POST(request) {
 
   const validation = await validateBody(request, ComposeSchema)
   if (!validation.ok) return validation.response
-  const { mailbox_id: mailboxId, to: rawTo, cc: rawCc, bcc: rawBcc, subject, text } = validation.data
+  const {
+    mailbox_id: mailboxId,
+    to: rawTo, cc: rawCc, bcc: rawBcc,
+    subject, text,
+    attachments: drafts,
+  } = validation.data
 
   const db = createServerClient()
 
   // ── The mailbox decides the location, and the location decides nothing ──
-  // The caller does NOT get to name a location: it is read off the mailbox, so
-  // the ticket can only ever land at the studio that owns the sending address.
-  // Reading the row first is unavoidable (we need its location to resolve the
-  // caller's visible set) — but nothing is trusted from it until both gates
-  // below have passed.
-  const { data: named, error: mailboxErr } = await db.from('email_mailboxes')
-    .select('id, location_id')
-    .eq('id', mailboxId)
-    .maybeSingle()
-  if (mailboxErr || !named) return ticketNotFound()
-
-  const guard = assertLocationAccessOr404(user, named.location_id)
-  if (guard) return guard
-
-  // THE SURFACE GATE, at the mailbox's location — see the header. It runs after
-  // assertLocationAccessOr404 so the broader refusal wins first, and before the
-  // visible-set query so a caller with no key does no further work.
-  if (!hasPermissionForLocation(user, named.location_id, 'email_inbox')) {
-    return ticketNotFound()
-  }
-
-  // THE PER-ACCOUNT GATE. `mailboxes` is the caller's own visible set — active
-  // mailboxes at this location that they are elevated over or hold a grant on.
-  // Everything downstream uses THIS row, so an inactive or ungranted address
-  // cannot be sent from even though it exists.
-  const visibility = await loadVisibleMailboxes(db, user, named.location_id)
-  // A FAILED visibility lookup is not "no mailboxes" (EMAIL-TICKET-CLEANUP.2).
-  // Left as an empty set it 404'd — telling the operator the address they just
-  // picked does not exist. Nothing has been sent at this point, so refusing
-  // costs a retry and can never produce a wrong outcome.
-  if (visibility.response) return visibility.response
-  const mailbox = visibility.mailboxes.find(m => m.id === mailboxId) || null
-  if (!mailbox) return ticketNotFound()
-
-  const locationId = mailbox.location_id
+  // Both gates, in order, in one place: the mailbox row is read first (the
+  // caller does NOT get to name a location — it comes off the mailbox, so the
+  // ticket can only land at the studio that owns the sending address), then
+  // location access, then `email_inbox` AT THAT LOCATION, then the per-account
+  // visible-set check. Everything downstream uses the row loadSendingMailbox
+  // returned, never the id the caller named.
+  //
+  // EMAIL-OUTBOUND-ATTACH.1 moved this block verbatim into _helpers.js because
+  // the attachment upload-sign route has to answer the identical question — an
+  // upload for a new email is authorised against the mailbox it will be sent
+  // from. Two copies would be two definitions of who may send as `accounts@`.
+  const sender = await loadSendingMailbox(db, user, mailboxId)
+  if (sender.response) return sender.response
+  const { mailbox, locationId } = sender
 
   // ── Who this reaches (EMAIL-CC.1) ─────────────────────────────────
   // Our own addresses are excluded from all three lists. Cc'ing one of our
@@ -198,6 +190,16 @@ export async function POST(request) {
   const exact = (candidates || []).filter(c => normalizeEmail(c.email) === to)
   const contact = pickContact(exact, locationId)
 
+  // EMAIL-OUTBOUND-ATTACH.1 — read the draft objects back out of Storage and
+  // turn them into Postmark's array, BEFORE the send. Every way an attachment
+  // can be refused has to be a refusal to send at all: a ticket in the queue
+  // showing files the recipient never got is the same lie as a ticket for an
+  // email that never went. Nothing is written or sent at this point.
+  const collected = await collectOutboundAttachments(db, { drafts, profileId: user.id })
+  if (!collected.ok) {
+    return NextResponse.json({ success: false, error: collected.error }, { status: 400 })
+  }
+
   // ── SEND FIRST, THEN WRITE ────────────────────────────────────────
   // Ordering is deliberate and matches the reply route. A ticket sitting in
   // the queue for an email that never went out is the worst lie this tool can
@@ -235,6 +237,9 @@ export async function POST(request) {
     textBody: text,
     tag: 'ticket-compose',
     metadata: { mailbox_id: mailbox.id, contact_id: contact?.id || '' },
+    // undefined when there are none, so the Postmark payload is byte-identical
+    // to every email this route has ever sent.
+    attachments: collected.postmark,
   })
   if (!send.ok) {
     // 503 = our ticketing server is unconfigured (retry unchanged once it is);
@@ -313,6 +318,16 @@ export async function POST(request) {
       data: { ticket_id: ticket.id },
     }, { status: 500 })
   }
+
+  // EMAIL-OUTBOUND-ATTACH.1 — the studio's own copy of the files that just
+  // went out, and the bytes it is billed for. Never throws, never fails the
+  // response: the email is already with the recipient.
+  await fileOutboundAttachments(db, {
+    files: collected.files,
+    messageId: message.id,
+    locationId,
+    mailboxId: mailbox.id,
+  })
 
   // Log to email_sends so the email shows in the contact's history, the
   // delivery webhooks can track it, and a reply matches back to this contact

@@ -315,6 +315,62 @@ export async function loadTicketForUser(db, user, ticketId) {
 }
 
 /**
+ * Resolve a mailbox a caller is allowed to SEND AS, or the 404 that says they
+ * may not.
+ *
+ * EMAIL-OUTBOUND-ATTACH.1 extracted this from the compose route verbatim,
+ * because a second surface now has to answer the identical question: an
+ * attachment upload for a NEW email is authorised against the mailbox it will
+ * be sent from, exactly as the send itself is. Two copies of that resolution
+ * would be two definitions of who may send as `accounts@`, and the first one to
+ * be forgotten is the leak — the same argument the attachment routes' shared
+ * gate is built on.
+ *
+ * THE ORDER IS LOAD-BEARING and is the compose route's own, unchanged:
+ *   1. read the mailbox row — the caller does NOT get to name a location, it is
+ *      read off the mailbox, so a send can only ever land at the studio that
+ *      owns the sending address. Nothing is trusted from this row until 2 and 3
+ *      have passed.
+ *   2. assertLocationAccessOr404 at THAT location.
+ *   3. `email_inbox` at THAT location — not at the caller's active one. It
+ *      cannot sit above step 1 (there is no location to resolve against yet),
+ *      and it refuses with the same 404 as an unusable mailbox: a 403 would
+ *      separate "that mailbox exists, elsewhere" from "no such mailbox" and
+ *      hand back the enumeration this surface is careful not to give.
+ *   4. the PER-ACCOUNT gate — the mailbox must come back from
+ *      loadVisibleMailboxes, and the row returned is THAT one, never the one
+ *      the caller named. This is what stops someone with sales@ sending as
+ *      accounts@.
+ *
+ * @returns {Promise<{ response: NextResponse } | { mailbox: object, locationId: string }>}
+ */
+export async function loadSendingMailbox(db, user, mailboxId) {
+  const { data: named, error: mailboxErr } = await db.from('email_mailboxes')
+    .select('id, location_id')
+    .eq('id', mailboxId)
+    .maybeSingle()
+  if (mailboxErr || !named) return { response: ticketNotFound() }
+
+  const guard = assertLocationAccessOr404(user, named.location_id)
+  if (guard) return { response: guard }
+
+  if (!hasPermissionForLocation(user, named.location_id, 'email_inbox')) {
+    return { response: ticketNotFound() }
+  }
+
+  const visibility = await loadVisibleMailboxes(db, user, named.location_id)
+  // A FAILED visibility lookup is not "no mailboxes" (EMAIL-TICKET-CLEANUP.2).
+  // Left as an empty set it 404'd — telling the operator the address they just
+  // picked does not exist.
+  if (visibility.response) return { response: visibility.response }
+
+  const mailbox = visibility.mailboxes.find(m => m.id === mailboxId) || null
+  if (!mailbox) return { response: ticketNotFound() }
+
+  return { mailbox, locationId: mailbox.location_id }
+}
+
+/**
  * The solved_at / closed_at stamps that go with a status.
  *
  * Moving INTO solved/closed stamps the timestamp (keeping an existing one, so
