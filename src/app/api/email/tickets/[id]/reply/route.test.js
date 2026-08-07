@@ -8,10 +8,17 @@
 //     The member wrote to us first; a suppression flag swallowing the answer
 //     to their own question is worse than the consent risk it avoids.
 //
-// EMAIL-TICKET.5 adds three more (mig 493): the signature is appended to
-// replies and NEVER to notes and NEVER when it is empty; author_profile_id is
-// written on both kinds of message; and the legacy email_conversations mirror
-// can fail without taking the member's answer down with it.
+// EMAIL-TICKET.5 adds two more (mig 493): the signature is appended to replies
+// and NEVER to notes and NEVER when it is empty; and author_profile_id is
+// written on both kinds of message.
+//
+// EMAIL-CONV-STOP.1 (2026-08-07) removed its third: a non-fatal mirror that
+// stamped conversation_id onto the outbound row and refreshed the mig 394
+// email_conversations summary. The final describe block below inverts those
+// tests — the route must leave that table alone even when a ticket's earlier
+// messages still carry a conversation_id, which every row the webhook wrote
+// before today does. That is the case that would otherwise keep the write
+// alive, so it is the one the fixture uses.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -53,9 +60,10 @@ const LAST_INBOUND = {
   is_internal_note: false, created_at: '2026-08-06T09:00:00Z',
 }
 
-// The same inbound message as the webhook actually writes it: carrying BOTH
-// ids for the length of the mig 394 transition. That conversation_id is the
-// only thing that makes the legacy mirror reachable from a ticket.
+// An inbound message as the webhook USED to write it: carrying both ids. Every
+// row written before EMAIL-CONV-STOP.1 looks like this, and that
+// conversation_id was the only thing that made the legacy mirror reachable from
+// a ticket — so it is the fixture that would expose a surviving mirror.
 const CONVERSATION_ID = 'ccccccc1-0000-4000-8000-000000000001'
 const LAST_INBOUND_DUAL = { ...LAST_INBOUND, conversation_id: CONVERSATION_ID }
 
@@ -309,43 +317,48 @@ describe('POST …/reply — signature (EMAIL-TICKET.5)', () => {
   })
 })
 
-describe('POST …/reply — legacy email_conversations mirror (EMAIL-TICKET.5)', () => {
-  it('stamps the conversation onto the message and refreshes its summary', async () => {
+describe('POST …/reply — the legacy mirror is GONE (EMAIL-CONV-STOP.1)', () => {
+  it('leaves email_conversations alone even when the ticket HAS one', async () => {
     setupDb(baseState({ grants: [GRANT_STUDIO], messages: [LAST_INBOUND_DUAL] }))
     const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
     expect(res.status).toBe(200)
-    expect((await res.json()).data.conversation_id).toBe(CONVERSATION_ID)
 
-    // One row carrying BOTH ids — same shape the inbound webhook writes.
-    // A second message row would double the reply in the ticket thread.
-    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
-    const [stamp] = updatesTo(db, 'email_inbox_messages')
-    expect(stamp.payload).toEqual({ conversation_id: CONVERSATION_ID })
-
-    const [conv] = updatesTo(db, 'email_conversations')
-    expect(conv.payload).toMatchObject({
-      last_message_direction: 'outbound',
-      last_message_preview: 'We open at 6.',
-    })
-    expect(conv.payload.last_message_at).toBeTruthy()
-  })
-
-  it('does nothing when the ticket has no legacy conversation', async () => {
-    // Tickets minted after email_conversations is retired are the normal case,
-    // not an error.
-    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [LAST_INBOUND] }))
-    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
-    expect(res.status).toBe(200)
-    expect((await res.json()).data.conversation_id).toBeNull()
     expect(updatesTo(db, 'email_conversations')).toHaveLength(0)
+    expect(insertsInto(db, 'email_conversations')).toHaveLength(0)
+    // The mirror also back-stamped conversation_id onto the row it had just
+    // inserted. The reply is written once, with ticket_id only.
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+    expect(insertsInto(db, 'email_inbox_messages')[0].payload).not.toHaveProperty('conversation_id')
     expect(updatesTo(db, 'email_inbox_messages')).toHaveLength(0)
   })
 
-  it('a mirror that BLOWS UP still returns success — the member was answered', async () => {
+  it('never reads the table looking for one', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [LAST_INBOUND_DUAL] }))
+    const reads = []
+    const realFrom = db.from
+    db.from = (table) => { reads.push(table); return realFrom(table) }
+
+    await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    expect(reads).not.toContain('email_conversations')
+  })
+
+  it('drops conversation_id from the response payload', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: [LAST_INBOUND_DUAL] }))
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+    const { data } = await res.json()
+    expect(data).not.toHaveProperty('conversation_id')
+    expect(data).toMatchObject({ status: 'pending', message_id: 'pm-out-1' })
+  })
+
+  it('answers the member with the table entirely unavailable', async () => {
+    // What a dropped email_conversations looks like from here. The mirror was
+    // already non-fatal, so this asserts the stronger property: the route does
+    // not go near it at all, so there is nothing to swallow an error from.
     setupDb(baseState({ grants: [GRANT_STUDIO], messages: [LAST_INBOUND_DUAL] }))
     const realFrom = db.from
     db.from = (table) => {
-      if (table === 'email_conversations') throw new Error('legacy table is gone')
+      if (table === 'email_conversations') throw new Error('relation "public.email_conversations" does not exist')
       return realFrom(table)
     }
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -354,10 +367,32 @@ describe('POST …/reply — legacy email_conversations mirror (EMAIL-TICKET.5)'
 
     expect(res.status).toBe(200)
     expect((await res.json()).success).toBe(true)
-    // The things that actually matter all happened.
     expect(sendEmail).toHaveBeenCalledTimes(1)
     expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
     expect(updatesTo(db, 'email_tickets')).toHaveLength(1)
+    // …and nothing had to be logged and swallowed to get there.
+    expect(errors).not.toHaveBeenCalled()
+    errors.mockRestore()
+  })
+})
+
+// EMAIL-TICKET.6 — the threading lookup no longer swallows its error.
+describe('POST …/reply — query failures are loud', () => {
+  it('500s BEFORE sending when the threading lookup errors', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [LAST_INBOUND],
+      errors: { email_inbox_messages: { code: '42703', message: 'column rfc_message_id does not exist' } },
+    }))
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    expect(res.status).toBe(500)
+    expect((await res.json()).success).toBe(false)
+    // The whole point of failing HERE: the ordering means nothing went out, so
+    // there is no half-sent reply to reconcile.
+    expect(sendEmail).not.toHaveBeenCalled()
     expect(errors).toHaveBeenCalled()
     errors.mockRestore()
   })

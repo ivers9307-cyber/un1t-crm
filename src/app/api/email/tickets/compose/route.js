@@ -120,10 +120,20 @@ export async function POST(request) {
   // Zod email schema, which rejects a `%` local part. The inbound webhook has
   // no such gate (it parses the sender with the permissive normalizeEmail
   // regex), which is why the `%@domain` variant was live there and not here.
-  const { data: candidates } = await db.from('contacts')
+  //
+  // EMAIL-TICKET.6 — `.error` is inspected. Swallowing it filed the ticket
+  // against NOBODY: no contact link, no email_sends row, so the member's own
+  // history silently omitted an email we sent them and their reply threaded
+  // back to an unlinked ticket. Same ordering argument as the reply route —
+  // this runs BEFORE the send, so refusing costs a retry and nothing else.
+  const { data: candidates, error: candidatesErr } = await db.from('contacts')
     .select('id, location_id, email, created_at')
     .ilike('email', escapeLikePattern(to))
     .limit(CONTACT_MATCH_LIMIT)
+  if (candidatesErr) {
+    console.error('[tickets/compose] contact lookup failed BEFORE sending:', candidatesErr.message)
+    return NextResponse.json({ success: false, error: candidatesErr.message }, { status: 500 })
+  }
   const exact = (candidates || []).filter(c => normalizeEmail(c.email) === to)
   const contact = pickContact(exact, locationId)
 
