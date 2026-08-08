@@ -111,6 +111,18 @@ export const NOTIFICATION_REGISTRY = Object.freeze([
     fallbackEmail: false,
   },
   {
+    // EMAIL-INBOUND-PUSH.1 — one ping per ticket per unseen burst (gated on
+    // the pre-increment unread count), never one per message, and never for
+    // our own outbound arriving at our own webhook.
+    category: 'email',
+    label: 'Email tickets',
+    description: 'Inbound email filed onto a ticket. Only people who could open the ticket are pushed: the Email inbox permission at its location plus a grant on its mailbox (owners and masters need no grant).',
+    trigger: { kind: 'webhook', source: 'Postmark inbound → /api/webhooks/postmark-inbound' },
+    recipients: { kind: 'roles_at_location', detail: 'Mailbox grant holders + owner/master at the location' },
+    configurable: { leadTimes: false, roles: false },
+    fallbackEmail: false,
+  },
+  {
     category: 'agent_activity',
     label: 'Mia is handling a chat',
     description: 'One quiet ping when the AI agent (Mia) is handling a live customer conversation, debounced to once per active chat. Also requires the WhatsApp Inbox permission. Replaces the per-message inbound ping while the agent is on the thread.',

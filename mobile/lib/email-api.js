@@ -151,6 +151,18 @@ export function markTicketRead(ticketId, locationId) {
   return api(`/api/email/tickets/${ticketId}/read`, { method: 'POST', locationId })
 }
 
+/**
+ * The Email tab badge number (EMAIL-BADGE-M.1): tickets somebody wrote to us
+ * that nobody has answered yet, at the given location, counting ONLY
+ * mailboxes this caller can open — the same predicate and gates as the web
+ * sidebar badge, from the same cheap count route (EMAIL-TICKET-CLEANUP.3).
+ * The response is passed through untouched so a polling caller can keep its
+ * last-known count on failure rather than flashing a confident zero.
+ */
+export function getTicketCount(locationId) {
+  return api('/api/email/tickets/count', { locationId })
+}
+
 // ── Attachments (EMAIL-ATTACH-PREVIEW.1) ────────────────────────────
 //
 // The `email-attachments` bucket is PRIVATE and mobile holds no service-role

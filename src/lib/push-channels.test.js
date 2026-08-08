@@ -23,6 +23,7 @@ const STAFF_TYPES = [
   'contract_issued', 'checklist_overdue', 'checklist_compliance',
   'issue_submitted', 'issue_resolved',
   'wa_quality', 'number_health', 'flow_health', 'template_status',
+  'email_inbound',
 ]
 
 const CUSTOMER_TYPES = [
@@ -56,6 +57,14 @@ describe('staff push channels (shared/push-channels)', () => {
     expect(androidChannelId({ category: 'swap' })).toBe('approvals')
     expect(androidChannelId({ category: 'time_off' })).toBe('approvals')
     expect(androidChannelId({ category: 'expense_submitted' })).toBe('approvals')
+  })
+
+  // EMAIL-INBOUND-PUSH.1 — email rides its own channel, not 'messages':
+  // inbound tickets are asynchronous (heads-up but not max), and a user
+  // muting live-chat noise must not silently mute their mailbox too.
+  it('email gets its own channel', () => {
+    expect(ANDROID_CHANNELS.email).toBeDefined()
+    expect(androidChannelId({ category: 'email' })).toBe('email')
   })
 
   it('type overrides demote FYI outcomes and WA health alerts', () => {

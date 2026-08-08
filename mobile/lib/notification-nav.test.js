@@ -16,6 +16,8 @@ describe('routeForNotification', () => {
     expect(routeForNotification({ type: 'whatsapp_agent_handoff', conversation_id: 'w2' })).toBe('/whatsapp/w2')
     expect(routeForNotification({ type: 'instagram_inbound', conversation_id: 'i1' })).toBe('/instagram/i1')
     expect(routeForNotification({ type: 'instagram_agent_handoff', conversation_id: 'i2' })).toBe('/instagram/i2')
+    // EMAIL-INBOUND-PUSH.1 — inbound ticket mail opens the ticket thread.
+    expect(routeForNotification({ type: 'email_inbound', ticket_id: 'e1' })).toBe('/email/e1')
     // AGENT-ACTIVITY.1 — "X is chatting with Mia" opens the right channel thread.
     expect(routeForNotification({ type: 'agent_activity', conversation_id: 'w3', channel: 'whatsapp' })).toBe('/whatsapp/w3')
     expect(routeForNotification({ type: 'agent_activity', conversation_id: 'i3', channel: 'instagram' })).toBe('/instagram/i3')
@@ -34,6 +36,7 @@ describe('routeForNotification', () => {
     expect(routeForNotification({ type: 'lead_new' })).toBe('/contacts')
     expect(routeForNotification({ type: 'whatsapp_inbound' })).toBe('/(tabs)/whatsapp')
     expect(routeForNotification({ type: 'instagram_inbound' })).toBe('/(tabs)/whatsapp')
+    expect(routeForNotification({ type: 'email_inbound' })).toBe('/(tabs)/email')
     expect(routeForNotification({ type: 'invoice_approved' })).toBe('/(tabs)/invoices')
     expect(routeForNotification({ type: 'expense_declined' })).toBe('/(tabs)/expenses')
     expect(routeForNotification({ type: 'contract_issued' })).toBe('/contracts')
