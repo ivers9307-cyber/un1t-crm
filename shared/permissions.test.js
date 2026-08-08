@@ -492,3 +492,16 @@ describe('mergeTemplates — variant over base', () => {
     expect(out.pipeline).toBe(DEFAULT_WEB_PERMISSIONS_BY_ROLE.staff.pipeline)
   })
 })
+
+// EMAIL-INBOUND-PUSH.1 — the notify_email category behind the inbound-email
+// push. The default mirrors the email_inbox SURFACE default per role: the
+// people who see the queue by default are the people pinged by default, and
+// everyone else opts in alongside their surface grant. (An unregistered
+// category would fail CLOSED for every role but master — the invariant this
+// registration exists to satisfy.)
+describe('notify_email defaults mirror the email_inbox surface', () => {
+  it.each(ROLES)('%s', (role) => {
+    expect(DEFAULT_MOBILE_PERMISSIONS_BY_ROLE[role].notify_email)
+      .toBe(DEFAULT_WEB_PERMISSIONS_BY_ROLE[role].email_inbox)
+  })
+})

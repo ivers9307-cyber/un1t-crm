@@ -647,6 +647,10 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   { key: 'notify_lead',        label: '… New leads assigned',     hint: 'Notify when a new contact is created at your location',         mobileOnly: true, isNotify: true },
   { key: 'notify_whatsapp',    label: '… WhatsApp messages',      hint: 'Notify on inbound WhatsApp (subject to inbox permission)',      mobileOnly: true, isNotify: true },
   { key: 'notify_instagram',   label: '… Instagram messages',     hint: 'Notify on inbound Instagram DMs (subject to inbox permission)', mobileOnly: true, isNotify: true },
+  // EMAIL-INBOUND-PUSH.1 — recipients are already narrowed server-side to
+  // people who could open the ticket (email_inbox at its location + a grant
+  // on its mailbox, or elevated); this key is only the personal opt-out.
+  { key: 'notify_email',       label: '… Email tickets',          hint: 'Notify when new inbound email lands in a mailbox you can open (subject to inbox permission)', mobileOnly: true, isNotify: true },
   { key: 'notify_agent_activity', label: '… Mia is handling a chat', hint: 'One quiet ping per active chat when the AI agent is handling a customer (subject to inbox permission)', mobileOnly: true, isNotify: true },
   // APPROVALS-STUDIO.1 — a customer approval landed in the queue (Mia
   // booking issue, /start funnel review, pause/cancel request). Fans out
@@ -733,7 +737,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: true, lead_radar: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_agent_activity: true,
+    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: true, notify_agent_activity: true,
     notify_agent_requests: true,
     notify_host_event_review: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -769,7 +773,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: false, lead_radar: false,  // retention/acquisition oversight — not a staff surface
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: false, notify_whatsapp: false, notify_instagram: false, notify_agent_activity: false,
+    notify_lead: false, notify_whatsapp: false, notify_instagram: false, notify_email: false, notify_agent_activity: false,
     notify_agent_requests: false,
     notify_host_event_review: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -812,7 +816,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: false, lead_radar: false,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: false, notify_whatsapp: true, notify_instagram: false, notify_agent_activity: true,
+    notify_lead: false, notify_whatsapp: true, notify_instagram: false, notify_email: false, notify_agent_activity: true,
     notify_agent_requests: false,
     notify_host_event_review: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -845,7 +849,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: true, lead_radar: true,    // head coaches own retention + conversion
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_agent_activity: true,
+    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: false, notify_agent_activity: true,
     notify_agent_requests: true,
     notify_host_event_review: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -884,7 +888,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: false, lead_radar: false,  // owner + head_coach by default; grant per-user if needed
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_agent_activity: true,
+    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: true, notify_agent_activity: true,
     notify_agent_requests: true,
     notify_host_event_review: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -925,7 +929,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: true, lead_radar: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_agent_activity: true,
+    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: true, notify_agent_activity: true,
     notify_agent_requests: true,
     notify_host_event_review: true,
     notify_invoice_approved: true, notify_invoice_declined: true,

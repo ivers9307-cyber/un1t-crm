@@ -31,6 +31,16 @@ export const ANDROID_CHANNELS = Object.freeze({
     description: 'Inbound WhatsApp and Instagram messages, and agent handoffs that need a human.',
     importance: 'max',
   }),
+  // EMAIL-INBOUND-PUSH.1 — its own channel, not 'messages': inbound tickets
+  // are asynchronous (heads-up, but not live-chat max), and a user muting
+  // chat noise must not silently mute their mailbox too. Channels are
+  // append-only (see the header) — this id is new, so existing installs
+  // simply gain it at next registration.
+  email: Object.freeze({
+    name: 'Email',
+    description: 'Inbound email on studio mailboxes you can open.',
+    importance: 'high',
+  }),
   reminders: Object.freeze({
     name: 'Reminders',
     description: 'Task, booking and checklist reminders, and new leads to action.',
@@ -69,6 +79,8 @@ const CATEGORY_CHANNELS = Object.freeze({
   // Real-time human conversation — heads-up.
   whatsapp: 'messages',
   instagram: 'messages',
+  // Inbound ticket mail — its own channel (see ANDROID_CHANNELS.email).
+  email: 'email',
   // Time-sensitive nudges (cron lead-time reminders + speed-to-lead).
   tasks: 'reminders',
   bookings: 'reminders',
