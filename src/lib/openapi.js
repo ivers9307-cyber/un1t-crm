@@ -2642,6 +2642,56 @@ const TenantDomainBrandConfig = tenantDomainBrandConfigSchema.extend({}).openapi
 
 registry.registerPath({
   method: 'get',
+  path: '/api/admin/webhook-dead-letter',
+  tags: ['Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List captured webhook dead-letter rows (master/owner only)',
+  description: 'Newest 200 webhook_dead_letter rows (mig 315): events that 200\'d their provider but failed to process — unroutable/unparseable inbound email, exhausted postmark_webhook_queue rows (bounces, complaints, RFC-8058 one-click unsubscribes), sent-but-unfiled ticket mail, and glofox/inbody capture failures. Each row is annotated `replayable` (does the provider have a registered idempotent re-driver — see src/lib/webhook-replay.js). Filter with ?provider= and ?status= (pending|resolved|failed|discarded). Consumed by /admin/webhook-dead-letter.',
+  request: { query: z.object({ provider: z.string().optional(), status: z.enum(['pending', 'resolved', 'failed', 'discarded']).optional() }) },
+  responses: {
+    200: { description: 'Dead-letter rows, newest first' },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master or owner required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/webhook-dead-letter/{id}/replay',
+  tags: ['Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Manually replay one dead-letter row (master/owner only)',
+  description: 'Re-drives the captured payload through the provider\'s registered idempotent re-driver. Only registry providers (inbody, postmark ingest failures) are accepted — postmark_queue, postmark_inbound and email_ticket_* are deliberately NOT replayable (re-queueing an exhausted row resets its retry budget; replaying a sent email double-sends it) and answer 400. Pending/failed rows only.',
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { description: '{ success, status } — resolved on success' },
+    400: { description: 'Provider not auto-replayable, or row discarded', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such row', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Row already resolved', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/webhook-dead-letter/{id}/resolve',
+  tags: ['Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Acknowledge one dead-letter row as handled (master/owner only)',
+  description: 'The human path for the deliberately non-replayable sources (DEADLETTER-UI.1): records that the event was dealt with outside this table (resolved) or needs no action (discarded). Stamps resolved_at either way — that is what removes the row from the integration-health backlog count. Pending/failed rows only; no payload processing of any kind.',
+  request: {
+    params: z.object({ id: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({ status: z.enum(['resolved', 'discarded']).optional().openapi({ description: 'Default resolved' }) }).openapi('DeadLetterResolve') } } },
+  },
+  responses: {
+    200: { description: '{ success, data: { id, status } }' },
+    400: { description: 'Invalid target status', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such row', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Row already resolved/discarded', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/admin/tenant-domains',
   tags: ['Admin'],
   security: [{ CookieAuth: [] }],

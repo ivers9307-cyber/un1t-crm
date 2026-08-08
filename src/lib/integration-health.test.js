@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { cronStatus, emailInboundStatus, waNumberStatus, backlogStatus, worstStatus, registryHealth, emailSendStatus, paymentStatus, zoomSyncStatus, ZOOM_RUN_GRACE_MS } from './integration-health.js'
+import { cronStatus, emailInboundStatus, waNumberStatus, backlogStatus, worstStatus, registryHealth, emailSendStatus, paymentStatus, zoomSyncStatus, ZOOM_RUN_GRACE_MS, getIntegrationHealth } from './integration-health.js'
 
 describe('cronStatus', () => {
   it('ok when nothing is stale', () => {
@@ -223,5 +223,64 @@ describe('emailInboundStatus', () => {
 
   it('tolerates empty input', () => {
     expect(emailInboundStatus({ now: NOW }).status).toBe('unknown')
+  })
+})
+
+// ── getIntegrationHealth — the webhook dead-letter block (DEADLETTER-LOC.1) ──
+//
+// Aggregator-level, with a minimal chainable fake: the property under test is
+// the QUERY SHAPE — NULL-location rows (unroutable inbound mail, events whose
+// send can't be found) must be counted at every location, because a strict
+// .eq() filter made them invisible in the one pane operators check. Every
+// other block degrades to 'unknown' against this fake, which is fine — only
+// the webhooks row is asserted.
+
+function makeHealthDb(results = {}, calls = []) {
+  return {
+    from(table) {
+      const res = results[table] ?? { data: null, count: null, error: null }
+      const b = {}
+      for (const m of ['select', 'eq', 'is', 'or', 'not', 'gte', 'order', 'limit', 'in']) {
+        b[m] = (...args) => { calls.push([table, m, ...args]); return b }
+      }
+      b.maybeSingle = () => Promise.resolve(res)
+      b.single = () => Promise.resolve(res)
+      b.then = (resolve, reject) => Promise.resolve(res).then(resolve, reject)
+      return b
+    },
+  }
+}
+
+describe('getIntegrationHealth — webhook dead-letter count', () => {
+  it('counts NULL-location rows alongside the location’s own, unresolved only', async () => {
+    const calls = []
+    const db = makeHealthDb({ webhook_dead_letter: { count: 3, error: null } }, calls)
+
+    const rows = await getIntegrationHealth(db, 'loc-1')
+    const wh = rows.find((r) => r.key === 'webhooks')
+
+    expect(wh.status).toBe('warn')
+    expect(wh.detail).toBe('3 unresolved')
+    const orCall = calls.find((c) => c[0] === 'webhook_dead_letter' && c[1] === 'or')
+    expect(orCall?.[2]).toBe('location_id.eq.loc-1,location_id.is.null')
+    expect(calls.some((c) => c[0] === 'webhook_dead_letter' && c[1] === 'is' && c[2] === 'resolved_at' && c[3] === null)).toBe(true)
+  })
+
+  it('attaches the dead-letter page as the runbook when degraded', async () => {
+    const db = makeHealthDb({ webhook_dead_letter: { count: 12, error: null } })
+    const rows = await getIntegrationHealth(db, 'loc-1')
+    const wh = rows.find((r) => r.key === 'webhooks')
+    expect(wh.status).toBe('down')
+    expect(wh.href).toBe('/admin/webhook-dead-letter')
+    expect(wh.remedy).toBeTruthy()
+  })
+
+  it('degrades to unknown — never a green lie — when the count query errors', async () => {
+    // A failed count used to read back as `count: null` → 0 → 'ok'.
+    const db = makeHealthDb({ webhook_dead_letter: { count: null, error: { message: 'boom' } } })
+    const rows = await getIntegrationHealth(db, 'loc-1')
+    const wh = rows.find((r) => r.key === 'webhooks')
+    expect(wh.status).toBe('unknown')
+    expect(wh.detail).toBe('Unavailable')
   })
 })

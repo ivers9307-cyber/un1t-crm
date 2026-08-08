@@ -327,6 +327,9 @@ describe('mailbox routing', () => {
     expect(await res.json()).toEqual({ success: true, dead_lettered: 'no_matching_mailbox' })
     expect(deadLetterWebhook).toHaveBeenCalledTimes(1)
     expect(deadLetterWebhook.mock.calls[0][1]).toMatchObject({ error: 'no_matching_mailbox' })
+    // location_id stays NULL by design (DEADLETTER-LOC.1): no mailbox matched,
+    // so claiming a location would repeat the oldest-active-location bug.
+    expect(deadLetterWebhook.mock.calls[0][1].locationId).toBeUndefined()
     // Nothing was written anywhere — not into the oldest location, not anywhere.
     expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
     expect(insertsInto(db, 'email_conversations')).toHaveLength(0)
@@ -901,6 +904,9 @@ describe('a 5xx releases the dedupe claim', () => {
       error: 'dedupe_release_failed',
     })
     expect(deadLetterWebhook.mock.calls[0][1].payload.MessageID).toBe('pm-inbound-1')
+    // DEADLETTER-LOC.1 — the recipient still names the mailbox this landed
+    // on, so the capture is stamped with its location.
+    expect(deadLetterWebhook.mock.calls[0][1].locationId).toBe('loc-hatch')
     // Honest about the state: the claim really is still held.
     expect(db._state.claims.has(CLAIM)).toBe(true)
   })
@@ -1196,6 +1202,26 @@ describe('no parseable sender', () => {
     expect(deadLetterWebhook.mock.calls[0][1].payload.MessageID).toBe('pm-inbound-1')
     expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
     expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(0)
+  })
+
+  it('stamps the recipient mailbox location onto the capture (DEADLETTER-LOC.1)', async () => {
+    // No sender ≠ no route: the To address still names the mailbox this
+    // landed on. Un-stamped rows are invisible to the per-location
+    // integration-health count.
+    await post(inbound({ From: undefined, FromFull: undefined }))
+
+    expect(deadLetterWebhook.mock.calls[0][1].locationId).toBe('loc-hatch')
+  })
+
+  it('leaves the capture location NULL when the recipient matches no mailbox', async () => {
+    await post(inbound({
+      From: undefined, FromFull: undefined,
+      ToFull: [{ Email: 'nobody@unknown-domain.example' }],
+    }))
+
+    expect(deadLetterWebhook).toHaveBeenCalledTimes(1)
+    expect(deadLetterWebhook.mock.calls[0][1]).toMatchObject({ error: 'no_sender' })
+    expect(deadLetterWebhook.mock.calls[0][1].locationId).toBeNull()
   })
 
   it('keeps the claim on a no_sender dead-letter (2xx — the payload is captured)', async () => {
