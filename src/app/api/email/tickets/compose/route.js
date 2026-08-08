@@ -143,7 +143,7 @@ export async function POST(request) {
   // mailboxes would deliver a copy to our own inbound webhook, which files it
   // as a brand-new ticket at the same studio — a phantom enquiry, from us, on
   // every composed email. See loadOwnAddresses.
-  const own = await loadOwnAddresses(db, locationId)
+  const own = await loadOwnAddresses(db)
   if (own.response) return own.response
 
   const recipients = resolveRecipients({

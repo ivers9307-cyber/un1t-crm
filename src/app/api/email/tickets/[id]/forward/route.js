@@ -213,7 +213,7 @@ export async function POST(request, props) {
   }
 
   // ── Who this reaches ──────────────────────────────────────────────
-  const own = await loadOwnAddresses(db, ticket.location_id)
+  const own = await loadOwnAddresses(db)
   if (own.response) return own.response
 
   const recipients = resolveRecipients({

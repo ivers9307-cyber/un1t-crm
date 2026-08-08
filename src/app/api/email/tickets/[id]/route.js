@@ -143,7 +143,7 @@ export async function GET(request, props) {
   // extra recipient who will in fact be excluded is worse than no label — the
   // UI falls back to "reply to the requester" and the reply route recomputes
   // the truth at send time regardless.
-  const own = await loadOwnAddresses(db, ticket.location_id)
+  const own = await loadOwnAddresses(db)
   let replyRecipients = null
   if (!own.response) {
     const participants = threadParticipants(

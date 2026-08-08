@@ -278,7 +278,7 @@ export async function POST(request, props) {
 
   // Our own addresses, so a reply-all cannot mail the studio and loop back
   // through the inbound webhook onto this same ticket. See loadOwnAddresses.
-  const own = await loadOwnAddresses(db, ticket.location_id)
+  const own = await loadOwnAddresses(db)
   if (own.response) return own.response
 
   // ── Who this reaches ──────────────────────────────────────────────
