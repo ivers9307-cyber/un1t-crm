@@ -23,7 +23,7 @@
 // row is still in hand.
 
 import { processPostmarkEvent } from './postmark-webhook-processor.js'
-import { deadLetterWebhook } from './webhook-dead-letter.js'
+import { deadLetterWebhook, resolveEmailSendLocation } from './webhook-dead-letter.js'
 import { logError } from './log.js'
 
 export const MAX_ATTEMPTS = 5 // give up after this many failures per event
@@ -94,6 +94,11 @@ async function captureExhaustedRow(db, row, { attempts, error }) {
       eventType: row?.payload?.RecordType || 'unknown',
       payload: row?.payload ?? {},
       error: `postmark_webhook_queue row ${row?.id} exhausted after ${attempts} attempts: ${error}`,
+      // DEADLETTER-LOC.1 — the send this event belongs to knows its location;
+      // without it the row is invisible to the per-location health count.
+      // Best-effort (never throws): a payload whose send can't be found stays
+      // NULL, which the health pane now counts anyway.
+      locationId: await resolveEmailSendLocation(db, row?.payload?.MessageID),
     })
   } catch (e) {
     // deadLetterWebhook is contractually never-throwing; this holds the line

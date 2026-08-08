@@ -18,7 +18,7 @@ vi.mock('@/lib/webhook-replay', () => ({
   isReplayable: vi.fn((p) => p === 'inbody' || p === 'postmark'),
 }))
 
-import { deadLetterWebhook } from './webhook-dead-letter.js'
+import { deadLetterWebhook, resolveEmailSendLocation } from './webhook-dead-letter.js'
 import { logWarn } from '@/lib/log'
 import { publishQueuePush, WEBHOOK_REPLAY_WORKER_PATH } from '@/lib/qstash'
 
@@ -214,5 +214,38 @@ describe('deadLetterWebhook', () => {
       'webhook-dead-letter', 'capture threw',
       expect.objectContaining({ provider: 'postmark' })
     )
+  })
+})
+
+// ── resolveEmailSendLocation (DEADLETTER-LOC.1) ────────────────────────────────
+
+describe('resolveEmailSendLocation', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  function makeSendsDb(result) {
+    const limit = vi.fn().mockReturnValue(Promise.resolve(result))
+    const eq = vi.fn().mockReturnValue({ limit })
+    const select = vi.fn().mockReturnValue({ eq })
+    return { from: vi.fn().mockReturnValue({ select }), _eq: eq }
+  }
+
+  it('returns the send log row location for a known MessageID', async () => {
+    const db = makeSendsDb({ data: [{ location_id: 'loc-hatch' }], error: null })
+    await expect(resolveEmailSendLocation(db, 'pm-1')).resolves.toBe('loc-hatch')
+    expect(db.from).toHaveBeenCalledWith('email_sends')
+    expect(db._eq).toHaveBeenCalledWith('postmark_message_id', 'pm-1')
+  })
+
+  it('returns null for an unknown MessageID, a null send location, or no id at all', async () => {
+    await expect(resolveEmailSendLocation(makeSendsDb({ data: [], error: null }), 'pm-x')).resolves.toBeNull()
+    await expect(resolveEmailSendLocation(makeSendsDb({ data: [{ location_id: null }], error: null }), 'pm-x')).resolves.toBeNull()
+    const untouched = makeSendsDb({ data: [], error: null })
+    await expect(resolveEmailSendLocation(untouched, null)).resolves.toBeNull()
+    expect(untouched.from).not.toHaveBeenCalled()
+  })
+
+  it('never throws — a broken lookup degrades to null (the capture must still land)', async () => {
+    const db = { from: vi.fn().mockImplementation(() => { throw new Error('db down') }) }
+    await expect(resolveEmailSendLocation(db, 'pm-1')).resolves.toBeNull()
   })
 })

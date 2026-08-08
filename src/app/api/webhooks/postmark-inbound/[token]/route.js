@@ -486,6 +486,10 @@ export async function POST(request, { params }) {
         eventType: 'inbound_email',
         payload: body,
         error: 'dedupe_release_failed',
+        // DEADLETTER-LOC.1 — the recipient usually still names a mailbox even
+        // though processing failed; stamping its location keeps the row inside
+        // that studio's integration-health count. Best-effort, never throws.
+        locationId: await bestEffortInboundLocation(db, body),
       })
     }
     // Still 500, with the ORIGINAL error untouched: the failure is real, a
@@ -494,6 +498,26 @@ export async function POST(request, { params }) {
   }
 
   return res
+}
+
+/**
+ * DEADLETTER-LOC.1 — best-effort location for a dead-lettered inbound email:
+ * the recipient address → active mailbox → location, the same resolution the
+ * happy path uses, minus every other requirement. Lets a captured payload
+ * land in the right studio's integration-health count even when the mail
+ * itself could not be filed. Never throws; null when no mailbox matches
+ * (truly unroutable — exactly the rows that should stay NULL).
+ */
+async function bestEffortInboundLocation(db, body) {
+  try {
+    const { data: mailboxes } = await db.from('email_mailboxes')
+      .select('id, location_id, address, active')
+      .eq('active', true)
+    const mailbox = resolveMailboxByRecipient(mailboxes || [], recipientEmails(body))
+    return mailbox?.location_id ?? null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -539,6 +563,10 @@ async function processInboundEmail(db, body, messageId) {
       eventType: 'inbound_email',
       payload: body,
       error: 'no_sender',
+      // DEADLETTER-LOC.1 — no sender ≠ no route: the recipient address still
+      // names the mailbox this landed on, and stamping its location puts the
+      // row in that studio's integration-health count rather than nowhere.
+      locationId: await bestEffortInboundLocation(db, body),
     })
     console.warn('[postmark-inbound] no parseable From address — dead-lettered', { messageId })
     return unfiled(NextResponse.json({ success: true, dead_lettered: 'no_sender' }))
@@ -605,6 +633,11 @@ async function processInboundEmail(db, body, messageId) {
     // the wrong pipeline AND mark the dead-letter row resolved when nothing
     // was. This failure is not replayable: it needs an operator to configure
     // a mailbox, so the row stays pending and visible for triage.
+    //
+    // location_id stays NULL on purpose (DEADLETTER-LOC.1): no mailbox
+    // matched, so there is no location to claim — inventing one would repeat
+    // the oldest-active-location bug this route exists to prevent. The
+    // integration-health count is NULL-inclusive, so the row still surfaces.
     await deadLetterWebhook(db, {
       provider: 'postmark_inbound',
       eventType: 'inbound_email',

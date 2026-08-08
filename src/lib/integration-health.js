@@ -5,7 +5,8 @@
 // underlying checks — it reads:
 //   - cron_health view (mig 053): per-cron heartbeat staleness (global).
 //   - whatsapp_numbers: Meta quality/tier + token validity (per location).
-//   - webhook_dead_letter (mig 315): un-replayed webhook backlog (per location).
+//   - webhook_dead_letter (mig 315): unresolved captured events (this
+//     location's rows + the NULL-location orphans — see block 3).
 //   - channel_connections (getConnection): Glofox connection state (per loc).
 //   - xero_connections: Xero OAuth binding + last sync error (per location).
 //   - email_sends: Postmark bounce/complaint rate over 24h (per location).
@@ -279,19 +280,29 @@ export async function getIntegrationHealth(db, locationId) {
     }
   } catch { rows.push({ key: 'wa', name: 'WhatsApp', status: 'unknown', detail: 'Unavailable' }) }
 
-  // 3. Webhook processing backlog — un-replayed dead-letter rows (per location).
+  // 3. Webhook processing backlog — unresolved dead-letter rows. This
+  // location's PLUS the NULL-location ones (DEADLETTER-LOC.1): a row with no
+  // location (unroutable inbound mail, an event whose send can't be found)
+  // belongs to nobody, and a strict .eq() filter made those invisible in the
+  // one pane operators actually check — GDPR one-click unsubscribes included.
+  // Counting NULL rows at every location is deliberate over-reporting: a
+  // handful of orphans nagging two studios beats orphans nagging none.
   try {
-    const { count } = await db
+    const { count, error: dlErr } = await db
       .from('webhook_dead_letter')
       .select('id', { count: 'exact', head: true })
-      .eq('location_id', locationId)
+      .or(`location_id.eq.${locationId},location_id.is.null`)
       .is('resolved_at', null)
+    // A failed count reads back as `count: null` → backlogStatus(0) → 'ok'.
+    // Throw instead so the catch degrades to 'unknown' — this pane must not
+    // report green on a query error.
+    if (dlErr) throw dlErr
     const s = backlogStatus(count)
     rows.push({
       key: 'webhooks',
       name: 'Webhook processing',
       status: s.status,
-      detail: (count || 0) === 0 ? 'No backlog' : `${count} un-replayed`,
+      detail: (count || 0) === 0 ? 'No backlog' : `${count} unresolved`,
     })
   } catch { rows.push({ key: 'webhooks', name: 'Webhook processing', status: 'unknown', detail: 'Unavailable' }) }
 
@@ -483,7 +494,7 @@ export async function getIntegrationHealth(db, locationId) {
 const REMEDIES = {
   crons: { text: 'A scheduled job is stale. It usually clears on the next run; if it persists, check that job’s logs.', href: null },
   wa: { text: 'Re-authorise the WhatsApp number, or address the Meta message-quality rating, in Settings → Integrations.', href: '/settings/integrations-hub' },
-  webhooks: { text: 'Replay the failed webhooks from the dead-letter queue.', href: null },
+  webhooks: { text: 'Review the captured events in the dead-letter queue (master/owner) — replay the replayable, resolve the rest by hand.', href: '/admin/webhook-dead-letter' },
   glofox: { text: 'Reconnect Glofox in Settings → Integrations.', href: '/settings/integrations-hub' },
   xero: { text: 'Reconnect Xero in Settings → Integrations if the sync error persists.', href: '/settings/integrations-hub' },
   email: { text: 'A high bounce/complaint rate hurts deliverability — review recipients and your sending domain.', href: '/settings/email-domain' },
