@@ -36,6 +36,8 @@ export const WEBHOOK_PROVIDERS = Object.freeze({
   // Distinct provider key so a (order, state) pair can't collide with the
   // race-payments webhook if a webhook is ever misrouted.
   REVOLUT_CLASS_BOOKING: 'revolut_class_booking',
+  // OFFERS.5: signed Revolut receiver for weekend-sale offer purchases.
+  REVOLUT_OFFER: 'revolut_offer',
   WHATSAPP: 'whatsapp',
   // Instagram DM webhooks (messages field, incl. is_echo reflections).
   // Was missing — the IG webhook route passed `undefined` here, so IG

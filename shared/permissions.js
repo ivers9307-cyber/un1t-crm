@@ -170,6 +170,7 @@ export const WEB_PERMISSIONS = Object.freeze([
   { key: 'approvals_shift_swaps',         group: 'approvals', label: '… Shift swaps',          hint: 'Approve shift-swap requests. Manager + head coach + owner + master by default.' },
   { key: 'approvals_rosters',             group: 'approvals', label: '… Roster approvals',     hint: 'Approve over-budget draft rosters. Owner + master by default.' },
   { key: 'approvals_hyrox_sessions',      group: 'approvals', label: '… Hyrox sessions',       hint: 'Review and approve AI-generated Hyrox Training Club sessions before they publish to the studio TV.' },
+  { key: 'approvals_offer_purchases',     group: 'approvals', label: '… Offer sales',          hint: 'See paid sale-offer purchases and mark them fulfilled once the member is set up in Glofox. Manager + head coach + owner + master by default.' },
   // AUTOMATIONS-HUB.1 — operator surface for toggling per-location
   // automations (e.g. auto-creating new leads in Glofox). Web-only;
   // no mobile counterpart (operator/admin surface only). Master +
@@ -269,6 +270,7 @@ export const APPROVAL_CATEGORY_PERMISSION = Object.freeze({
   shift_swaps: 'approvals_shift_swaps',
   rosters: 'approvals_rosters',
   hyrox_sessions: 'approvals_hyrox_sessions',
+  offer_purchases: 'approvals_offer_purchases',
 })
 
 // Ordered list of the six per-category permission keys (matches
@@ -308,6 +310,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     accounting_hub: true,
     approvals_contractor_invoices: true, approvals_fte_expenses: true, approvals_agent_requests: true,
     approvals_time_off: true, approvals_shift_swaps: true, approvals_rosters: true, approvals_hyrox_sessions: true,
+    approvals_offer_purchases: true,
     automations: true,
     challenges: true,
     issues_inbox: true,
@@ -340,6 +343,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     accounting_hub: false,                         // bookkeeping oversight — master + owner only
     approvals_contractor_invoices: false, approvals_fte_expenses: false, approvals_agent_requests: false,
     approvals_time_off: false, approvals_shift_swaps: false, approvals_rosters: false, approvals_hyrox_sessions: false,  // staff don't approve anything
+    approvals_offer_purchases: false,
     automations: false,                             // operator surface — not a staff concern
     challenges: false,                              // operator challenge admin — not a staff concern
     issues_inbox: false,                            // staff submit; owner + master handle
@@ -376,6 +380,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     accounting_hub: false,                         // bookkeeping oversight — master + owner only
     approvals_contractor_invoices: false, approvals_fte_expenses: false, approvals_agent_requests: false,
     approvals_time_off: false, approvals_shift_swaps: false, approvals_rosters: false, approvals_hyrox_sessions: false,
+    approvals_offer_purchases: false,
     automations: false,
     challenges: false,
     issues_inbox: false,
@@ -410,6 +415,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     accounting_hub: false,                         // bookkeeping oversight — master + owner only
     approvals_contractor_invoices: false, approvals_fte_expenses: false, approvals_agent_requests: true,
     approvals_time_off: true, approvals_shift_swaps: true, approvals_rosters: false, approvals_hyrox_sessions: true,  // head coach approves schedule items only
+    approvals_offer_purchases: true,               // head coach can fulfil a sale from the floor
     automations: false,                             // operator surface — head coach doesn't manage automations
     challenges: false,                              // operator challenge admin — head coach doesn't create challenges
     issues_inbox: false,                            // owner + master only by default
@@ -444,6 +450,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     accounting_hub: false,                         // bookkeeping oversight — master + owner only
     approvals_contractor_invoices: false, approvals_fte_expenses: false, approvals_agent_requests: true,
     approvals_time_off: true, approvals_shift_swaps: true, approvals_rosters: false, approvals_hyrox_sessions: true,  // managers approve schedule items (time-off, swaps)
+    approvals_offer_purchases: true,               // managers fulfil sale purchases in Glofox
     automations: true,                              // managers can toggle per-location automations
     challenges: true,                               // managers can create/edit challenges
     issues_inbox: false,                            // owner + master only by default
@@ -478,6 +485,7 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     accounting_hub: true,                          // owner reviews receipt coverage, same tier as invoices_inbox
     approvals_contractor_invoices: true, approvals_fte_expenses: true, approvals_agent_requests: true,
     approvals_time_off: true, approvals_shift_swaps: true, approvals_rosters: true, approvals_hyrox_sessions: true,  // owner approves invoices, expenses, schedule items
+    approvals_offer_purchases: true,
     automations: true,                              // owner manages per-location automations
     challenges: true,                               // owner manages member challenges
     issues_inbox: true,                             // owner IS the handler per the routing design
