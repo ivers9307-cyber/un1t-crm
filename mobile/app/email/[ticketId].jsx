@@ -391,6 +391,11 @@ export default function EmailTicket() {
   const [isNote, setIsNote] = useState(false)
   const [sending, setSending] = useState(false)
   const [savingStatus, setSavingStatus] = useState(false)
+  // The route sets this when the ATTACHMENT lookup failed (2026-08-08 audit):
+  // the messages below are real, but their files are unknown — which must be
+  // said, or a blipped lookup reads as "the member sent no files". Web renders
+  // the same warning (AttachmentsUnavailableNotice).
+  const [attachmentsUnavailable, setAttachmentsUnavailable] = useState(false)
   // EMAIL-ATTACH-PREVIEW.1 — the one image being looked at, if any. Held here
   // rather than in a bubble so the viewer covers the screen, and so switching
   // tickets cannot leave a stale one open. The signed URL lives only as long as
@@ -412,6 +417,7 @@ export default function EmailTicket() {
     setError(null)
     setTicket(res.ticket)
     setMessages(res.messages || [])
+    setAttachmentsUnavailable(!!res.attachmentsUnavailable)
 
     // Clearing the badge is its own call now. Fire-and-forget and once
     // per screen: it is idempotent, and a failure here must never look
@@ -573,6 +579,14 @@ export default function EmailTicket() {
             contentContainerClassName="p-4"
             onContentSizeChange={() => scrollRef.current?.scrollToEnd?.({ animated: false })}
           >
+            {attachmentsUnavailable && (
+              <View className="mb-3 rounded-xl border border-amber-500/60 bg-amber-500/10 px-3.5 py-2.5">
+                <Text className="text-[11px] text-amber-700">
+                  Attachments could not be loaded for this ticket. Messages sent with files may
+                  look as though they had none.
+                </Text>
+              </View>
+            )}
             {messages.length === 0 ? (
               <Text className="text-xs text-un1t-subtle text-center py-6">
                 No messages on this ticket yet.

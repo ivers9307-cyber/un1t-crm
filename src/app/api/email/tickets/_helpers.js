@@ -164,21 +164,24 @@ export async function loadVisibleMailboxes(db, user, locationId) {
  * the same ordering argument the reply and compose routes already make about
  * their pre-send lookups.
  *
- * DELIBERATELY NOT FILTERED TO ACTIVE, and deliberately not scoped to the
- * caller's visible set. A deactivated mailbox still owns its address as far as
- * DNS and Postmark's inbound routing are concerned, and "which addresses are
- * ours" is not a question about who is asking. The list is used ONLY as an
- * exclusion set — it is never returned to a client, so it leaks nothing about
- * what addresses a studio runs.
+ * DELIBERATELY NOT FILTERED TO ACTIVE, deliberately not scoped to the
+ * caller's visible set, and — since the 2026-08-08 audit — deliberately not
+ * scoped to a LOCATION either. A deactivated mailbox still owns its address as
+ * far as DNS and Postmark's inbound routing are concerned, and "which
+ * addresses are ours" is not a question about who is asking OR about which
+ * studio the ticket sits at: a member who cc'd a SISTER studio's address would
+ * otherwise get our reply-all delivered into that studio's inbound webhook,
+ * where nothing threads (threading is location-scoped), minting a recurring
+ * phantom "inbound" ticket there from our own address. The list is used ONLY
+ * as an exclusion set — it is never returned to a client, so it leaks nothing
+ * about what addresses any studio runs.
  *
  * @param {object} db  service-role client
- * @param {string} locationId
  * @returns {Promise<{ response: NextResponse } | { addresses: string[] }>}
  */
-export async function loadOwnAddresses(db, locationId) {
+export async function loadOwnAddresses(db) {
   const { data, error } = await db.from('email_mailboxes')
     .select('address')
-    .eq('location_id', locationId)
     .limit(MAILBOX_LIMIT)
   if (error) {
     console.error('[email/tickets] own-address lookup failed BEFORE sending:', error.message)

@@ -15,6 +15,32 @@ import { publishQueuePush, WEBHOOK_REPLAY_WORKER_PATH } from '@/lib/qstash'
 import { sanitizeDbText, sanitizeJsonForDb } from '@/lib/db-safe-text'
 
 /**
+ * Best-effort location for an OUTBOUND email event: the send log row already
+ * carries the location the mail belonged to, keyed by Postmark's MessageID.
+ * DEADLETTER-LOC.1 — dead-letter rows with no location_id are invisible to
+ * the per-location integration-health count, so the capture paths stamp one
+ * wherever it is knowable. Never throws; null when unknowable (which the
+ * health pane now counts anyway, via its NULL-inclusive filter).
+ *
+ * @param {object} db service-role supabase client
+ * @param {string|null|undefined} postmarkMessageId
+ * @returns {Promise<string|null>}
+ */
+export async function resolveEmailSendLocation(db, postmarkMessageId) {
+  if (!postmarkMessageId) return null
+  try {
+    const { data } = await db
+      .from('email_sends')
+      .select('location_id')
+      .eq('postmark_message_id', postmarkMessageId)
+      .limit(1)
+    return data?.[0]?.location_id ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
  * Record a webhook event that 200'd the provider but failed to PROCESS, so it
  * is captured (not silently lost) and visible. Best-effort — NEVER throws and
  * NEVER blocks the webhook response (a dead-letter write failure must not turn

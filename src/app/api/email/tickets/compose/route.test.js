@@ -734,3 +734,77 @@ describe('POST /api/email/tickets/compose — filing fails AFTER the send (EMAIL
     warns.mockRestore()
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────
+// Signature (the EMAIL-TICKET.5 TODO, finally honoured). A composed new
+// email is a ticket whose first message is outbound — NOT a second concept —
+// so it signs exactly the way a reply does: appendSignature() before the
+// text→HTML conversion, the SIGNED body on the wire AND on the row, and the
+// queue preview left unsigned. Mirrors the reply route's suite so the two
+// paths cannot drift apart silently again.
+describe('sender signature', () => {
+  const SIGNED = { ...COACH, email_signature: 'Sarah\nUN1T Stillorgan' }
+
+  it('appends the sender’s signature to what leaves', async () => {
+    getCurrentUser.mockResolvedValue(SIGNED)
+    await post(VALID)
+
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.textBody).toBe(`${VALID.text}\n\n-- \nSarah\nUN1T Stillorgan`)
+    // The HTML body is the SAME string through the route's escaper, so the
+    // signature can never take a different (un-escaped) path to the member.
+    expect(sent.htmlBody).toContain(`${VALID.text}\n\n-- \nSarah\nUN1T Stillorgan`)
+  })
+
+  it('escapes the signature exactly as it escapes the body', async () => {
+    getCurrentUser.mockResolvedValue({ ...COACH, email_signature: 'R&D <team@un1t.ie>' })
+    await post({ ...VALID, text: 'a > b & c' })
+
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.htmlBody).toContain('a &gt; b &amp; c')
+    expect(sent.htmlBody).toContain('R&amp;D &lt;team@un1t.ie&gt;')
+    expect(sent.htmlBody).not.toContain('<team@un1t.ie>')
+    expect(sent.textBody).toContain('R&D <team@un1t.ie>')
+  })
+
+  it.each([
+    ['NULL', null],
+    ['unset', undefined],
+    ['empty', ''],
+    ['whitespace only', '   \n  '],
+  ])('a %s signature appends NOTHING — no stray "--"', async (_label, signature) => {
+    getCurrentUser.mockResolvedValue({ ...COACH, email_signature: signature })
+    await post(VALID)
+
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.textBody).toBe(VALID.text)
+    expect(sent.textBody).not.toContain('--')
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.text_body).toBe(VALID.text)
+  })
+
+  it('stores the SIGNED body on the message row — the record of what was sent', async () => {
+    getCurrentUser.mockResolvedValue(SIGNED)
+    await post(VALID)
+    const [msg] = insertsInto(db, 'email_inbox_messages')
+    expect(msg.payload.text_body).toBe(`${VALID.text}\n\n-- \nSarah\nUN1T Stillorgan`)
+  })
+
+  it('keeps the queue preview unsigned', async () => {
+    getCurrentUser.mockResolvedValue(SIGNED)
+    await post(VALID)
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload.last_message_preview).not.toContain('Sarah')
+  })
+
+  it('dead-letters the SIGNED body when the send is unfiled — the re-fileable record', async () => {
+    getCurrentUser.mockResolvedValue(SIGNED)
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    failWrites(db, ['email_tickets'])
+    await post(VALID)
+
+    const [dead] = insertsInto(db, 'webhook_dead_letter')
+    expect(dead.payload.payload.text_body).toBe(`${VALID.text}\n\n-- \nSarah\nUN1T Stillorgan`)
+    errors.mockRestore()
+  })
+})

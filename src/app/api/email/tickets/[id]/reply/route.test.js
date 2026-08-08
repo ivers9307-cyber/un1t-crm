@@ -40,7 +40,7 @@ import {
   makeDb, insertsInto, updatesTo, writesTo, selectsFrom, seedObject, objectKeys, failWrites,
 } from '../../_test-db'
 import {
-  MB_STUDIO, T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION,
+  MB_STUDIO, MB_OTHER_LOCATION, T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION,
   COACH, COACH_NO_INBOX, MULTI_LOCATION,
   GRANT_STUDIO, GRANT_MULTI_STUDIO, GRANT_MULTI_OTHER_LOCATION, baseState,
 } from '../../_test-fixtures'
@@ -750,6 +750,24 @@ describe('POST …/reply — the derived recipient set', () => {
     }))
     await post(T_STUDIO.id, { text: 'hi' })
     expect(sendEmail.mock.calls[0][0].to).toBe('member@example.com, colleague@example.com')
+  })
+
+  // …and never to a SISTER STUDIO's mailbox (2026-08-08 audit). The exclusion
+  // set is estate-wide, not per-location: a member who wrote to accounts@ here
+  // and cc'd another studio's address would otherwise get our reply-all
+  // delivered into THAT studio's inbound webhook, where nothing threads
+  // (threading is location-scoped) — so it mints a brand-new "inbound" ticket
+  // from our own address, once per reply-all, forever.
+  it('never writes to another studio’s mailbox — the exclusion set is estate-wide', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      messages: [{ ...CC_INBOUND, cc_emails: [MB_OTHER_LOCATION.address, 'colleague@example.com'] }],
+    }))
+    await post(T_STUDIO.id, { text: 'hi' })
+    const sent = sendEmail.mock.calls[0][0]
+    expect(sent.to).toBe('member@example.com, colleague@example.com')
+    expect(sent.to).not.toContain(MB_OTHER_LOCATION.address)
+    expect(sent.cc || '').not.toContain(MB_OTHER_LOCATION.address)
   })
 
   // Mail clients follow the latest message; someone a member deliberately

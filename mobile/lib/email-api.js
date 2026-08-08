@@ -81,7 +81,16 @@ export async function listTickets(locationId, { view } = {}) {
 export async function getTicket(ticketId, locationId) {
   const res = await api(`/api/email/tickets/${ticketId}`, { locationId })
   if (!res.success) return { success: false, error: res.error || 'Failed to load ticket' }
-  return { success: true, ticket: res.data?.ticket || null, messages: res.data?.messages || [] }
+  return {
+    success: true,
+    ticket: res.data?.ticket || null,
+    messages: res.data?.messages || [],
+    // The route sets this when the ATTACHMENT LOOKUP failed — the messages are
+    // real but their files are unknown. Dropping it renders a thread with no
+    // attachment chips and no warning, which reads as "the member sent no
+    // files": the silent wrong answer the route exists to prevent.
+    attachmentsUnavailable: !!res.data?.attachments_unavailable,
+  }
 }
 
 /**

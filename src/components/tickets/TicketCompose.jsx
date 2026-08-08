@@ -36,6 +36,7 @@ import { Modal, Button, Field } from '@/components/ui'
 import { mailboxLabel } from '@/lib/ticket-display'
 import RecipientEditor, { EMPTY_RECIPIENTS } from './RecipientEditor'
 import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPicker'
+import SignatureHint from './SignatureHint'
 
 // The submit button lives in the Modal's footer, which is a SIBLING of the
 // form, not a descendant — so it is wired to the form by id. Only one compose
@@ -219,6 +220,11 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
             />
           )}
         </Field>
+
+        {/* The sign-off the route now appends (EMAIL-TICKET.5 follow-up) —
+            same shared hint as the reply box, so the preview cannot disagree
+            with what the member receives. */}
+        <SignatureHint />
 
         {/* Files survive a change of From address, and that is safe rather than
             merely convenient: the draft key is derived from the SENDER'S profile

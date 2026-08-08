@@ -21,6 +21,7 @@ vi.mock('@/lib/postmark-webhook-processor', () => ({
 }))
 vi.mock('@/lib/webhook-dead-letter', () => ({
   deadLetterWebhook: vi.fn().mockResolvedValue(undefined),
+  resolveEmailSendLocation: vi.fn().mockResolvedValue(null),
 }))
 vi.mock('@/lib/log', () => ({
   logWarn: vi.fn(), logInfo: vi.fn(), logError: vi.fn(),
@@ -36,7 +37,7 @@ import {
   STALE_QUEUE_CLAIM_MS,
 } from './postmark-queue.js'
 import { processPostmarkEvent } from '@/lib/postmark-webhook-processor'
-import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
+import { deadLetterWebhook, resolveEmailSendLocation } from '@/lib/webhook-dead-letter'
 import { logError } from '@/lib/log'
 import { isReplayable } from '@/lib/webhook-replay'
 
@@ -224,6 +225,30 @@ describe('claimAndProcessQueueRow — exhaustion dead-letter', () => {
     await claimAndProcessQueueRow(db, { id: 'row-1', payload: unsubPayload, attempts: 4 })
 
     expect(deadLetterWebhook.mock.calls[0][1].provider).toBe(EXHAUSTED_PROVIDER)
+  })
+
+  it('stamps the send log row location onto the capture (DEADLETTER-LOC.1)', async () => {
+    // Un-stamped rows are invisible to the per-location integration-health
+    // count — the mail-loss class this dead-letter exists to surface.
+    resolveEmailSendLocation.mockResolvedValueOnce('loc-hatch')
+    const db = makeDb({ claimData: [{ id: 'row-1', attempts: 4 }] })
+    processPostmarkEvent.mockResolvedValue({ ok: false, error: 'boom' })
+
+    await claimAndProcessQueueRow(db, { id: 'row-1', payload: unsubPayload, attempts: 4 })
+
+    expect(resolveEmailSendLocation).toHaveBeenCalledWith(db, 'm-unsub-1')
+    expect(deadLetterWebhook.mock.calls[0][1].locationId).toBe('loc-hatch')
+  })
+
+  it('an unresolvable send leaves locationId null — the capture still lands', async () => {
+    resolveEmailSendLocation.mockResolvedValueOnce(null)
+    const db = makeDb({ claimData: [{ id: 'row-1', attempts: 4 }] })
+    processPostmarkEvent.mockResolvedValue({ ok: false, error: 'boom' })
+
+    await claimAndProcessQueueRow(db, { id: 'row-1', payload: { RecordType: 'Bounce' }, attempts: 4 })
+
+    expect(deadLetterWebhook).toHaveBeenCalledTimes(1)
+    expect(deadLetterWebhook.mock.calls[0][1].locationId).toBeNull()
   })
 
   it('marks the queue row so an exhausted row is distinguishable from mid-retry', async () => {

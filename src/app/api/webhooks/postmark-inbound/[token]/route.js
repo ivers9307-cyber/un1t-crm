@@ -198,9 +198,12 @@ import {
   parseEmailDate,
 } from '@/lib/email-inbox'
 import { sanitizeDbText } from '@/lib/db-safe-text'
+import { logError } from '@/lib/log'
+import { recordErrorEvent } from '@/lib/error-events'
 import { inboundAddresses } from '@/lib/email-recipients'
 import { resolveMailboxByRecipient } from '@/lib/email-mailboxes'
 import { resolveTicketAction, ticketSubject, pickThreadedTicket } from '@/lib/email-tickets'
+import { statusTimestamps } from '@/app/api/email/tickets/_helpers'
 import { escapeLikePattern } from '@/lib/like-escape'
 import { storeInboundAttachments, discardStagedAttachments } from '@/lib/email-attachments-server'
 
@@ -273,22 +276,46 @@ async function releaseDedupeClaim(db, eventId) {
       .eq('provider', WEBHOOK_PROVIDERS.POSTMARK)
       .eq('event_id', eventId)
     if (error) {
-      console.error(
-        '[postmark-inbound] DEDUPE RELEASE FAILED — Postmark will retry this ' +
-        'MessageID and the retry will short-circuit as `deduped`, losing the ' +
-        `email. event_id=${eventId}:`, error.message,
-      )
+      await recordInboundFailure('dedupe_release_failed', error, {
+        message: 'DEDUPE RELEASE FAILED — Postmark will retry this MessageID ' +
+          'and the retry will short-circuit as `deduped`, losing the email. ' +
+          `event_id=${eventId}`,
+      })
       return false
     }
     return true
   } catch (err) {
-    console.error(
-      '[postmark-inbound] DEDUPE RELEASE THREW — the retry will short-circuit ' +
-      `as \`deduped\` and the email will be lost. event_id=${eventId}:`,
-      err?.message,
-    )
+    await recordInboundFailure('dedupe_release_failed', err, {
+      message: 'DEDUPE RELEASE THREW — the retry will short-circuit as ' +
+        `\`deduped\` and the email will be lost. event_id=${eventId}`,
+    })
     return false
   }
+}
+
+// EMAIL-MONITOR.2 — the structured failure trail (2026-08-08 audit). Every
+// 5xx door lands an error_events row (route_type 'handled') plus a logError
+// line Sentinel can key on — the founding failure of this channel was
+// fourteen months of 500s that recorded themselves nowhere. Deliberately NOT
+// serverErrorResponse(): this route's 5xx bodies carry shim-contract error
+// codes and run through claim-release/unfiled wrappers, so every response
+// stays exactly as built and only observability is added. Neither half may
+// ever throw — observability must not worsen an incident.
+async function recordInboundFailure(code, err, { message } = {}) {
+  try {
+    logError('postmark-inbound', message || code, { err })
+  } catch { /* never */ }
+  try {
+    await recordErrorEvent({
+      runtime: process.env.NEXT_RUNTIME || null,
+      route_path: '/api/webhooks/postmark-inbound',
+      route_type: 'handled',
+      method: 'POST',
+      name: code,
+      message: String(err?.message || err || code).slice(0, 500),
+      digest: null,
+    })
+  } catch { /* recordErrorEvent already swallows; belt and braces */ }
 }
 
 /**
@@ -307,7 +334,7 @@ async function classifySeenClaim(db, messageId, eventId) {
       .eq('postmark_message_id', messageId)
       .limit(1)
     if (filedErr) {
-      console.error('[postmark-inbound] claim classification (message) failed:', filedErr.message)
+      await recordInboundFailure('claim_classification_failed', filedErr)
       return 'in_flight'
     }
     if (filed && filed.length > 0) {
@@ -323,7 +350,7 @@ async function classifySeenClaim(db, messageId, eventId) {
     if (age === null) return 'stale' // claim vanished — a releaser beat us
     return age > STALE_CLAIM_MS ? 'stale' : 'in_flight'
   } catch (err) {
-    console.error('[postmark-inbound] claim classification threw:', err?.message)
+    await recordInboundFailure('claim_classification_failed', err)
     return 'in_flight'
   }
 }
@@ -336,7 +363,7 @@ async function claimAgeMs(db, eventId) {
     .eq('event_id', eventId)
     .limit(1)
   if (error) {
-    console.error('[postmark-inbound] claim age lookup failed:', error.message)
+    await recordInboundFailure('claim_age_lookup_failed', error)
     // Unknowable ≠ absent: treat as brand-new so the caller answers 503 and a
     // later retry classifies again, rather than reprocessing blind.
     return 0
@@ -357,7 +384,9 @@ export async function POST(request, { params }) {
   })
   if (!auth.ok) {
     if (auth.reason === 'missing_secret') {
-      console.error('[security] POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN not set — refusing inbound email webhook.')
+      await recordInboundFailure('missing_secret',
+        'POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN not set — refusing inbound email webhook. ' +
+        'THE historic failure mode: every delivery 500s and the queue just looks quiet.')
     } else {
       console.warn(`[security] Inbound email webhook rejected: ${auth.reason}`)
     }
@@ -436,7 +465,7 @@ export async function POST(request, { params }) {
   try {
     res = await processInboundEmail(db, body, messageId)
   } catch (err) {
-    console.error('[postmark-inbound] unhandled error:', err?.message)
+    await recordInboundFailure('unhandled_error', err)
     res = NextResponse.json({ success: false, error: 'unhandled_error' }, { status: 500 })
   }
 
@@ -457,6 +486,10 @@ export async function POST(request, { params }) {
         eventType: 'inbound_email',
         payload: body,
         error: 'dedupe_release_failed',
+        // DEADLETTER-LOC.1 — the recipient usually still names a mailbox even
+        // though processing failed; stamping its location keeps the row inside
+        // that studio's integration-health count. Best-effort, never throws.
+        locationId: await bestEffortInboundLocation(db, body),
       })
     }
     // Still 500, with the ORIGINAL error untouched: the failure is real, a
@@ -465,6 +498,26 @@ export async function POST(request, { params }) {
   }
 
   return res
+}
+
+/**
+ * DEADLETTER-LOC.1 — best-effort location for a dead-lettered inbound email:
+ * the recipient address → active mailbox → location, the same resolution the
+ * happy path uses, minus every other requirement. Lets a captured payload
+ * land in the right studio's integration-health count even when the mail
+ * itself could not be filed. Never throws; null when no mailbox matches
+ * (truly unroutable — exactly the rows that should stay NULL).
+ */
+async function bestEffortInboundLocation(db, body) {
+  try {
+    const { data: mailboxes } = await db.from('email_mailboxes')
+      .select('id, location_id, address, active')
+      .eq('active', true)
+    const mailbox = resolveMailboxByRecipient(mailboxes || [], recipientEmails(body))
+    return mailbox?.location_id ?? null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -510,6 +563,10 @@ async function processInboundEmail(db, body, messageId) {
       eventType: 'inbound_email',
       payload: body,
       error: 'no_sender',
+      // DEADLETTER-LOC.1 — no sender ≠ no route: the recipient address still
+      // names the mailbox this landed on, and stamping its location puts the
+      // row in that studio's integration-health count rather than nowhere.
+      locationId: await bestEffortInboundLocation(db, body),
     })
     console.warn('[postmark-inbound] no parseable From address — dead-lettered', { messageId })
     return unfiled(NextResponse.json({ success: true, dead_lettered: 'no_sender' }))
@@ -542,7 +599,7 @@ async function processInboundEmail(db, body, messageId) {
       .order('sent_at', { ascending: false })
       .limit(1)
     if (sendsErr) {
-      console.error('[postmark-inbound] email_sends lookup failed:', sendsErr.message)
+      await recordInboundFailure('thread_lookup_failed', sendsErr)
       return unfiled(NextResponse.json({ success: false, error: 'thread_lookup_failed' }, { status: 500 }))
     }
     const send = sends?.[0]
@@ -561,7 +618,7 @@ async function processInboundEmail(db, body, messageId) {
     .select('id, location_id, address, active')
     .eq('active', true)
   if (mbErr) {
-    console.error('[postmark-inbound] email_mailboxes lookup failed:', mbErr.message)
+    await recordInboundFailure('mailbox_lookup_failed', mbErr)
     return unfiled(NextResponse.json({ success: false, error: 'mailbox_lookup_failed' }, { status: 500 }))
   }
   const mailbox = resolveMailboxByRecipient(mailboxes || [], recipients)
@@ -576,6 +633,11 @@ async function processInboundEmail(db, body, messageId) {
     // the wrong pipeline AND mark the dead-letter row resolved when nothing
     // was. This failure is not replayable: it needs an operator to configure
     // a mailbox, so the row stays pending and visible for triage.
+    //
+    // location_id stays NULL on purpose (DEADLETTER-LOC.1): no mailbox
+    // matched, so there is no location to claim — inventing one would repeat
+    // the oldest-active-location bug this route exists to prevent. The
+    // integration-health count is NULL-inclusive, so the row still surfaces.
     await deadLetterWebhook(db, {
       provider: 'postmark_inbound',
       eventType: 'inbound_email',
@@ -603,7 +665,7 @@ async function processInboundEmail(db, body, messageId) {
       .ilike('email', escapeLikePattern(fromEmail))
       .limit(50)
     if (cErr) {
-      console.error('[postmark-inbound] contacts lookup failed:', cErr.message)
+      await recordInboundFailure('contact_lookup_failed', cErr)
       return unfiled(NextResponse.json({ success: false, error: 'contact_lookup_failed' }, { status: 500 }))
     }
     const picked = pickContact(contacts || [], locationId)
@@ -644,7 +706,7 @@ async function processInboundEmail(db, body, messageId) {
     ])
     const threadErr = byRfc.error || byPostmark.error
     if (threadErr) {
-      console.error('[postmark-inbound] ticket thread lookup failed:', threadErr.message)
+      await recordInboundFailure('ticket_lookup_failed', threadErr)
       return unfiled(NextResponse.json({ success: false, error: 'ticket_lookup_failed' }, { status: 500 }))
     }
     const threadedTicketId = pickThreadedTicket([...(byRfc.data || []), ...(byPostmark.data || [])])
@@ -655,7 +717,7 @@ async function processInboundEmail(db, body, messageId) {
         .eq('location_id', locationId)
         .maybeSingle()
       if (tErr) {
-        console.error('[postmark-inbound] ticket lookup failed:', tErr.message)
+        await recordInboundFailure('ticket_lookup_failed', tErr)
         return unfiled(NextResponse.json({ success: false, error: 'ticket_lookup_failed' }, { status: 500 }))
       }
       threadedTicket = found || null
@@ -711,7 +773,7 @@ async function processInboundEmail(db, body, messageId) {
       .select('id')
       .single()
     if (ticketErr || !createdTicket) {
-      console.error('[postmark-inbound] ticket insert failed:', ticketErr?.message)
+      await recordInboundFailure('ticket_insert_failed', ticketErr)
       return unfiled(NextResponse.json({ success: false, error: 'ticket_insert_failed' }, { status: 500 }))
     }
     ticketId = createdTicket.id
@@ -782,7 +844,7 @@ async function processInboundEmail(db, body, messageId) {
         body, messageId, locationId, mailboxId: mailbox.id, now, preview,
       })
     }
-    console.error('[postmark-inbound] message insert failed:', msgErr.message)
+    await recordInboundFailure('message_insert_failed', msgErr)
     return unfiled(NextResponse.json({ success: false, error: 'message_insert_failed' }, { status: 500 }))
   }
 
@@ -820,7 +882,7 @@ async function processInboundEmail(db, body, messageId) {
         })
       }
     } catch (err) {
-      console.error('[postmark-inbound] attachment storage threw (email still filed):', err?.message)
+      logError('postmark-inbound', 'attachment storage threw (email still filed)', { err })
     }
   }
 
@@ -857,13 +919,20 @@ async function processInboundEmail(db, body, messageId) {
 async function bumpTicketForInbound(db, ticketId, { now, preview }) {
   const { error } = await db.from('email_tickets').update({
     status: 'open',
+    // statusTimestamps' invariant (2026-08-08 audit): moving OUT of
+    // solved/closed CLEARS the stamps. The staff status and reply routes
+    // already honoured it; this bump — which is also the reopen path, and is
+    // re-run verbatim by finishDedupedDelivery — did not, so a reopened
+    // ticket kept its old solved_at and a later re-solve preserved the stale
+    // stamp as though the member's reply never happened.
+    ...statusTimestamps('open', null, now),
     last_message_at: now,
     last_message_direction: 'inbound',
     last_message_preview: preview,
     updated_at: now,
   }).eq('id', ticketId)
   if (error) {
-    console.error('[postmark-inbound] ticket bump failed:', error.message)
+    await recordInboundFailure('ticket_bump_failed', error)
     return false
   }
   return true
@@ -895,7 +964,7 @@ async function finishDedupedDelivery(db, { body, messageId, locationId, mailboxI
   if (findErr || !winner) {
     // 23505 said the row exists; not being able to read it back is transient.
     // 5xx → release → retry, rather than a `deduped` that skipped the bump.
-    console.error('[postmark-inbound] dedupe finish-up lookup failed:', findErr?.message || 'row not found')
+    await recordInboundFailure('dedupe_finish_failed', findErr || 'row not found')
     return NextResponse.json({ success: false, error: 'dedupe_finish_failed' }, { status: 500 })
   }
 
@@ -917,7 +986,7 @@ async function finishDedupedDelivery(db, { body, messageId, locationId, mailboxI
         })
       }
     } catch (err) {
-      console.error('[postmark-inbound] finish-up attachment storage threw:', err?.message)
+      logError('postmark-inbound', 'finish-up attachment storage threw', { err })
     }
   }
 
@@ -930,7 +999,7 @@ async function finishDedupedDelivery(db, { body, messageId, locationId, mailboxI
     .eq('id', winner.ticket_id)
     .limit(1)
   if (tErr) {
-    console.error('[postmark-inbound] dedupe finish-up ticket read failed:', tErr.message)
+    await recordInboundFailure('dedupe_finish_failed', tErr)
     return NextResponse.json({ success: false, error: 'dedupe_finish_failed' }, { status: 500 })
   }
   const ticket = tickets?.[0]
