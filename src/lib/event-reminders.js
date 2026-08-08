@@ -247,7 +247,10 @@ async function sendEmailReminder(db, booking, ctx) {
   // to check; fall back to "send" since the booking itself is the
   // implicit consent for reminders about it.
   const c = booking.contacts
-  if (c?.email_status && ['bounced', 'complained', 'unsubscribed'].includes(c.email_status)) {
+  // LOCCOMMS.5 / mig 492 — 'unsubscribed' removed deliberately: this is a
+  // TRANSACTIONAL send, and that retired value was a marketing opt-out. It
+  // was blocking reminders cross-location; same fix as booking-confirmations.
+  if (c?.email_status && ['bounced', 'complained'].includes(c.email_status)) {
     return { status: 'skipped', reason: `email_status=${c.email_status}` }
   }
   const prefs = c?.contact_preferences

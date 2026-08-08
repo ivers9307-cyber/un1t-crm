@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyFormMarketingConsent } from './marketing-consent'
+import { applyFormMarketingConsent, applyMarketingPreferencesBulk } from './marketing-consent'
 
 // LOCCOMMS.2 — applyFormMarketingConsent must record consent at the location
 // the FORM belongs to, which is frequently NOT the location the contact is
@@ -129,5 +129,109 @@ describe('applyFormMarketingConsent — per-location capture (LOCCOMMS.2)', () =
     expect(res.skipped).toBe('classpass')
     expect(calls.locUpserts).toHaveLength(0)
     expect(calls.prefUpserts).toHaveLength(0)
+  })
+})
+
+// Mig 492 retired email_status='unsubscribed': the column carries REPUTATION
+// ONLY (active | bounced | complained), and consent lives per-location in
+// contact_location_preferences. LOCCOMMS.5 swept every sibling path but missed
+// the two writers in this file, which kept re-minting the value — and the
+// hard suppressors reading it recreated the cross-location over-blocking the
+// migration removed. Mig 501 adds a CHECK so the value cannot return; these
+// tests pin the writers so the code never tries.
+describe('email_status mirror — reputation only, opt-out never writes it (mig 492/501)', () => {
+  it('form opt-out leaves contacts.email_status untouched', async () => {
+    const { db, calls } = makeDb({
+      contact: { id: 'c10', location_id: HATCH, email_status: 'active' },
+      prefs: { email_marketing: true, sms_marketing: true, whatsapp_marketing: true },
+    })
+
+    const res = await applyFormMarketingConsent(db, {
+      contactId: 'c10', consent: false, source: 'event_form', locationId: HATCH,
+    })
+
+    expect(res.ok).toBe(true)
+    expect(res.changed).toContain('email_marketing')
+    // The opt-out is recorded in contact_location_preferences + contact_preferences
+    // above; email_status is not consent and must not move.
+    expect(calls.contactUpdates).toHaveLength(0)
+  })
+
+  it('form opt-in normalises a legacy NULL email_status to active', async () => {
+    const { db, calls } = makeDb({
+      contact: { id: 'c11', location_id: HATCH, email_status: null },
+      prefs: { email_marketing: false, sms_marketing: false, whatsapp_marketing: false },
+    })
+
+    await applyFormMarketingConsent(db, {
+      contactId: 'c11', consent: true, source: 'booking_form',
+    })
+
+    expect(calls.contactUpdates).toEqual([{ email_status: 'active' }])
+  })
+
+  it('form opt-in repairs a re-minted unsubscribed row to active (deploy-gap residue)', async () => {
+    const { db, calls } = makeDb({
+      contact: { id: 'c12', location_id: HATCH, email_status: 'unsubscribed' },
+      prefs: { email_marketing: false, sms_marketing: false, whatsapp_marketing: false },
+    })
+
+    await applyFormMarketingConsent(db, {
+      contactId: 'c12', consent: true, source: 'booking_form',
+    })
+
+    expect(calls.contactUpdates).toEqual([{ email_status: 'active' }])
+  })
+
+  it('form opt-in never clears bounced / complained (reputation guard)', async () => {
+    for (const email_status of ['bounced', 'complained']) {
+      const { db, calls } = makeDb({
+        contact: { id: 'c13', location_id: HATCH, email_status },
+        prefs: { email_marketing: false, sms_marketing: false, whatsapp_marketing: false },
+      })
+
+      await applyFormMarketingConsent(db, {
+        contactId: 'c13', consent: true, source: 'booking_form',
+      })
+
+      expect(calls.contactUpdates).toHaveLength(0)
+    }
+  })
+
+  it('bulk opt-out leaves contacts.email_status untouched', async () => {
+    const { db, calls } = makeDb({
+      contact: { id: 'c14', location_id: HATCH, email_status: 'active' },
+      prefs: { email_marketing: true, sms_marketing: true, whatsapp_marketing: true },
+    })
+
+    const res = await applyMarketingPreferencesBulk(db, {
+      contactId: 'c14', prefs: { email_marketing: false }, source: 'bulk_import',
+    })
+
+    expect(res.ok).toBe(true)
+    expect(res.changed).toEqual(['email_marketing'])
+    expect(calls.contactUpdates).toHaveLength(0)
+  })
+
+  it('bulk opt-in repairs unsubscribed to active but never clears bounced', async () => {
+    const optedOutPrefs = { email_marketing: false, sms_marketing: false, whatsapp_marketing: false }
+
+    const remint = makeDb({
+      contact: { id: 'c15', location_id: HATCH, email_status: 'unsubscribed' },
+      prefs: optedOutPrefs,
+    })
+    await applyMarketingPreferencesBulk(remint.db, {
+      contactId: 'c15', prefs: { email_marketing: true }, source: 'bulk_import',
+    })
+    expect(remint.calls.contactUpdates).toEqual([{ email_status: 'active' }])
+
+    const bounced = makeDb({
+      contact: { id: 'c16', location_id: HATCH, email_status: 'bounced' },
+      prefs: optedOutPrefs,
+    })
+    await applyMarketingPreferencesBulk(bounced.db, {
+      contactId: 'c16', prefs: { email_marketing: true }, source: 'bulk_import',
+    })
+    expect(bounced.calls.contactUpdates).toHaveLength(0)
   })
 })
