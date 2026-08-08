@@ -44,6 +44,15 @@
 .ofr-flag { position: absolute; top: 0; right: 0; background: var(--ofr-paper); color: var(--ofr-ink); font-family: var(--font-archivo-black); font-size: 10px; letter-spacing: .22em; text-transform: uppercase; padding: 7px 12px; }
 .ofr-was { font-size: 12px; color: #8a8a8a; letter-spacing: .08em; text-decoration: line-through; }
 
+/* Revolut widget panel — white because the widget ships a light theme with
+   no dark mode (labels vanish on the black page). On narrow phones the
+   widget's iframe is wider than the padded column, so the panel goes
+   near-full-bleed to give it room instead of letting buttons overflow. */
+.ofr-widget-panel { background: #ffffff; padding: 18px 16px; }
+@media (max-width: 480px) {
+  .ofr-widget-panel { margin-left: -24px; margin-right: -24px; padding: 16px 10px; }
+}
+
 /* product page form */
 .ofr-input { width: 100%; background: transparent; border: 1px solid var(--ofr-line); color: var(--ofr-paper); padding: 13px 14px; font-size: 15px; font-family: inherit; }
 .ofr-input:focus { outline: 2px solid var(--ofr-paper); outline-offset: -1px; }
