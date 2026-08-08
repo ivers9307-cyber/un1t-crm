@@ -18,9 +18,12 @@
 //       consent === true  → all three flags set to TRUE
 //       consent === false → all three flags set to FALSE
 //
-//   - Mirrors contacts.email_status to keep broadcast audience
-//     builders aligned (same convention as the preference-centre
-//     and admin-panel paths).
+//   - Opt-IN normalises contacts.email_status to 'active' (clearing a
+//     legacy NULL; bounced/complained are never touched). Opt-OUT never
+//     writes email_status: mig 492 retired 'unsubscribed' — the column is
+//     reputation-only, and the opt-out lives in
+//     contact_location_preferences (same convention as the
+//     preference-centre and admin-panel paths, LOCCOMMS.5).
 //
 //   - Diffs against current values so a no-op submission writes no
 //     consent_log entries, and re-submissions don't spam the audit
@@ -132,9 +135,8 @@ export async function applyFormMarketingConsent(db, args) {
     if (current !== consent) changed.push(ch)
   }
 
-  if (changed.length === 0 && contact.email_status !== (consent ? 'unsubscribed' : 'active')) {
-    // Nothing to do — preferences already match the consent intent
-    // AND email_status is consistent.
+  if (changed.length === 0) {
+    // Nothing to do — preferences already match the consent intent.
     return { ok: true, skipped: null, changed: [] }
   }
 
@@ -161,19 +163,19 @@ export async function applyFormMarketingConsent(db, args) {
     await db.from('consent_log').insert(logRows)
   }
 
-  // 6. Mirror to contacts.email_status when email_marketing was in
-  //    the changed set. Only flip between 'active' and 'unsubscribed'
-  //    — leave 'bounced' / 'complained' alone (those are reputation
-  //    states the operator shouldn't accidentally clear).
+  // 6. Mirror to contacts.email_status ONLY on opt-in, normalising a
+  //    legacy NULL (or deploy-gap 'unsubscribed' residue) to 'active'.
+  //    LOCCOMMS.5 / mig 492 — reputation only; never stamp 'unsubscribed'
+  //    (mig 501's CHECK would reject it). An opt-out is already recorded
+  //    in contact_location_preferences + contact_preferences above.
+  //    'bounced' / 'complained' are never cleared — reputation states a
+  //    form submission must not reset.
   const emailFlipped = changed.includes('email_marketing')
   const flipReputationOk = (
     contact.email_status === 'active' || contact.email_status === 'unsubscribed' || contact.email_status === null
   )
-  if (emailFlipped && flipReputationOk) {
-    const targetStatus = consent ? 'active' : 'unsubscribed'
-    if (contact.email_status !== targetStatus) {
-      await db.from('contacts').update({ email_status: targetStatus }).eq('id', contactId)
-    }
+  if (emailFlipped && consent && flipReputationOk && contact.email_status !== 'active') {
+    await db.from('contacts').update({ email_status: 'active' }).eq('id', contactId)
   }
 
   return { ok: true, skipped: null, changed }
@@ -275,19 +277,18 @@ export async function applyMarketingPreferencesBulk(db, args) {
   }))
   await db.from('consent_log').insert(logRows)
 
-  // 6. Mirror email_status when email_marketing was in the changed
-  //    set. Same reputation-state guard as applyFormMarketingConsent.
-  if (changed.includes('email_marketing')) {
+  // 6. Mirror email_status ONLY on opt-in — same rule as
+  //    applyFormMarketingConsent: LOCCOMMS.5 / mig 492, reputation only;
+  //    never stamp 'unsubscribed'. The opt-out lives in the preference
+  //    rows written above.
+  if (changed.includes('email_marketing') && wantedPrefs.email_marketing) {
     const flipReputationOk = (
       contact.email_status === 'active'
       || contact.email_status === 'unsubscribed'
       || contact.email_status === null
     )
-    if (flipReputationOk) {
-      const targetStatus = wantedPrefs.email_marketing ? 'active' : 'unsubscribed'
-      if (contact.email_status !== targetStatus) {
-        await db.from('contacts').update({ email_status: targetStatus }).eq('id', contactId)
-      }
+    if (flipReputationOk && contact.email_status !== 'active') {
+      await db.from('contacts').update({ email_status: 'active' }).eq('id', contactId)
     }
   }
 

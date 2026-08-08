@@ -125,7 +125,9 @@ export const STATUS_META = Object.freeze({
   closed: {
     label: 'Closed',
     chip: 'bg-slate-500/10 text-slate-700',
-    hint: 'Done — a member reply starts a new ticket',
+    // A reply to a closed ticket REOPENS it — it does not fork (Richard,
+    // 2026-08-07). What separates issues is threading, not the closed state.
+    hint: 'Done — a member reply reopens it',
   },
 })
 

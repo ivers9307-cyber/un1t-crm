@@ -49,8 +49,8 @@ describe('isEmailable', () => {
   //   email_status NOT IN ('bounced','complained'), email_suppressed_at IS NULL
   //   campaign-sender.js consentOk — email_marketing === true &&
   //   !['bounced','complained'].includes(email_status)
-  //   (an unsubscribe stamps email_status='unsubscribed' AND flips
-  //   email_marketing to false — both are blocked here)
+  //   (an unsubscribe flips email_marketing to false — mig 492 retired the
+  //   email_status='unsubscribed' stamp; the column is reputation-only)
   const good = { email: 'a@b.ie', email_marketing: true, email_status: 'active', email_suppressed_at: null }
 
   it('is true for a consented contact with an email and clean flags', () => {
@@ -65,14 +65,14 @@ describe('isEmailable', () => {
     expect(isEmailable({ ...good, email_marketing: null }, false)).toBe(false)
     expect(isEmailable({ ...good, email_marketing: undefined }, false)).toBe(false)
   })
-  it('is false when bounced / complained / unsubscribed', () => {
+  it('is false when bounced / complained', () => {
     expect(isEmailable({ ...good, email_status: 'bounced' }, false)).toBe(false)
     expect(isEmailable({ ...good, email_status: 'complained' }, false)).toBe(false)
-    expect(isEmailable({ ...good, email_status: 'unsubscribed' }, false)).toBe(false)
   })
-  it('tolerates a missing/other email_status', () => {
+  it('tolerates a missing/other email_status — incl. retired unsubscribed (mig 492: real opt-outs carry email_marketing=false)', () => {
     expect(isEmailable({ ...good, email_status: null }, false)).toBe(true)
     expect(isEmailable({ ...good, email_status: undefined }, false)).toBe(true)
+    expect(isEmailable({ ...good, email_status: 'unsubscribed' }, false)).toBe(true)
   })
   it('is false when inactivity-suppressed (email_suppressed_at set, mig 395)', () => {
     expect(isEmailable({ ...good, email_suppressed_at: '2026-01-01T00:00:00Z' }, false)).toBe(false)

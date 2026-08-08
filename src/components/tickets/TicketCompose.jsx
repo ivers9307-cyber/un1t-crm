@@ -62,6 +62,24 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
   const [error, setError] = useState(null)
 
   const mailbox = mailboxes.find(m => m.id === mailboxId) || null
+
+  // TICKET-COMPOSE-DISCARD.1 — Esc, the backdrop, the X and Cancel all come
+  // through here. A DIRTY compose asks before it discards: this modal's own
+  // rule is that a failed send must not cost the operator the draft, and a
+  // stray Esc was costing them the same draft with no failure involved. A
+  // pristine one closes silently — confirming the discard of nothing is
+  // noise. There is deliberately no draft persistence behind this (a fresh
+  // compose must never inherit the last one's text — see the header), so
+  // "keep writing" and "discard" are the only two honest outcomes.
+  const dirty = Boolean(
+    subject.trim() || text.trim()
+    || recipients.to.length || recipients.cc.length || recipients.bcc.length
+    || files.length,
+  )
+  function requestClose() {
+    if (dirty && !confirm('Discard this email? Nothing has been sent, and the draft is not kept.')) return
+    onClose?.()
+  }
   // At least one To. A Cc with no To is not an email anyone can reply to, and
   // the route refuses it — say so by leaving the button off.
   //
@@ -126,12 +144,12 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
   return (
     <Modal
       open
-      onClose={onClose}
+      onClose={requestClose}
       title="New email"
       size="lg"
       footer={
         <>
-          <Button type="button" variant="secondary" onClick={onClose} disabled={sending}>
+          <Button type="button" variant="secondary" onClick={requestClose} disabled={sending}>
             Cancel
           </Button>
           <Button type="submit" form={FORM_ID} variant="primary" loading={sending} disabled={!canSend}>

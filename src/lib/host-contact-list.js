@@ -13,10 +13,11 @@
 //   campaign-sender.js consentOk (post-claim re-check):
 //     email_marketing === true && !['bounced','complained'].includes(email_status)
 //
-// An unsubscribe (api/unsubscribe/[token]) stamps email_status='unsubscribed'
-// AND flips email_marketing to false (denormalised from contact_preferences,
-// mig 155) — both are blocked here. On top of the global gate, PR-B's per-host
-// unsubscribe (host_email_suppressions) is passed in as `suppressed`.
+// An unsubscribe flips email_marketing to false (denormalised from
+// contact_preferences, mig 155) — blocked here. It no longer stamps
+// email_status: mig 492 retired 'unsubscribed' (reputation-only column).
+// On top of the global gate, PR-B's per-host unsubscribe
+// (host_email_suppressions) is passed in as `suppressed`.
 //
 // Tables (mig 400): host_contacts (UNIQUE(host_id, contact_id)),
 // host_email_suppressions (UNIQUE(host_id, contact_id)). Service-role only.
@@ -27,12 +28,11 @@ import { logWarn } from '@/lib/log'
 const PAGE = 1000        // the supabase-js 1k select cap — always .range()-paginate
 const UPSERT_CHUNK = 500 // rows per host_contacts upsert statement
 
-// email_status values that block a marketing send. buildAudienceQuery only
-// filters bounced/complained (unsubscribed is already covered by
-// email_marketing=false), but the unsubscribe route DOES stamp
-// email_status='unsubscribed' — blocking it here too is a belt-and-braces
-// mirror of the full flag family.
-const BLOCKED_EMAIL_STATUSES = ['bounced', 'complained', 'unsubscribed']
+// email_status values that block a marketing send — exactly what
+// buildAudienceQuery filters. 'unsubscribed' is retired (mig 492, CHECK in
+// mig 501): a real opt-out carries email_marketing=false, which the consent
+// gate above already blocks.
+const BLOCKED_EMAIL_STATUSES = ['bounced', 'complained']
 
 // Shared normalisation for both host and event tags: lowercase, collapse
 // any run of non-alphanumerics to a single '-', trim leading/trailing
@@ -75,7 +75,8 @@ export function eventTagFor(raceEvent) {
  *
  * HOST-EMAIL.6 — two consent families (the CRM's own split):
  *   marketing (default)  email_marketing === true; the per-host unsubscribe
- *                        and the global 'unsubscribed' status both block.
+ *                        blocks too ('unsubscribed' email_status is retired,
+ *                        mig 492 — a real opt-out is email_marketing=false).
  *   utility              operational messages to attendees (time change,
  *                        instructions) — email_administrative === true;
  *                        marketing opt-outs do NOT block it, deliverability

@@ -260,7 +260,15 @@ export default function TicketThread({
         </p>
       )}
 
+      {/* Keyed on the ticket so switching tickets REMOUNTS the composer.
+          Its draft text, reply/note mode, added Cc/Bcc and attached files are
+          all local state — carried across a switch, member A's half-written
+          reply (and Bcc chips) would send to member B's requester
+          (TICKET-COMPOSER-LEAK.1, pinned in TicketThread.composer-reset.test.jsx).
+          The inbox already clears the server-derived replyRecipients on
+          switch; this is the same rule for the operator-typed half. */}
       <TicketReplyBox
+        key={ticketId}
         ticket={ticket}
         replyRecipients={replyRecipients}
         onSend={onSend}
