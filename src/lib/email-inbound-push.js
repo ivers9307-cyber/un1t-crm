@@ -15,6 +15,12 @@
 // grant lookup drops the push entirely instead of degrading to "everyone at
 // the location". Fail closed, like the read side.
 //
+// An OWNED ticket (email_tickets.assigned_to, write path since
+// EMAIL-ASSIGN.1-2) narrows the fan-out to its owner alone — provided the
+// owner still passes those same gates; otherwise the ticket is treated as
+// unowned for notification purposes. See the inline comment in
+// maybeNotifyInboundEmail.
+//
 // Deliberately NOT replicated from the read gate: SAAS-4 org admins (the
 // synthetic owner role guardMasterOrOwner grants them). Same trade mig 502's
 // RLS made — they hold no profile_locations row here to fan out from, and a
@@ -146,6 +152,7 @@ export async function maybeNotifyInboundEmail(db, {
   subject,
   preview,
   preUnreadCount,
+  assignedTo,
 }) {
   try {
     if (!shouldPushInboundEmail({ fromEmail, ownAddresses, preUnreadCount })) return
@@ -181,9 +188,19 @@ export async function maybeNotifyInboundEmail(db, {
     })
     if (!ids.length) return
 
+    // EMAIL-PUSH-ASSIGNEE.1 — an owned ticket pings its owner alone (the
+    // WhatsApp webhook's pattern), but ONLY when the owner still passes the
+    // exact gates above: a claim is not a licence to keep receiving subject
+    // lines after the grant, permission or membership behind it is revoked.
+    // An assignee the gates refuse is treated as no assignee at all — the
+    // stale owner gets nothing (the leak) AND the mail is still announced to
+    // whoever can actually open it, rather than sitting unseen behind a
+    // claim its holder cannot even read.
+    const targets = assignedTo && ids.includes(assignedTo) ? [assignedTo] : ids
+
     // Per-user master switch + notify_email opt-out apply inside sendPush,
     // judged at this location (PUSH-LOC.1).
-    await sendPush(ids, inboundEmailPushPayload({ ticketId, requesterName, fromEmail, subject, preview }), { locationId })
+    await sendPush(targets, inboundEmailPushPayload({ ticketId, requesterName, fromEmail, subject, preview }), { locationId })
   } catch (err) {
     console.error('[email-inbound-push] push failed (email still filed)', err?.message)
   }
