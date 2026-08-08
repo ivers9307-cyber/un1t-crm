@@ -1002,3 +1002,141 @@ describe('POST …/reply — added recipients', () => {
     expect(sendEmail).not.toHaveBeenCalled()
   })
 })
+
+// ── EMAIL-REPLY-UNFILED.1 — the message insert fails AFTER the send ──
+//
+// Everything above refuses BEFORE Postmark is called, where a 500 costs a
+// retry and nothing else. This block is the other side of that line: the send
+// succeeded, the filing insert did not. The member HAS the reply, so the one
+// answer the route must not give is the generic DB-error 500 an operator reads
+// as "it failed — send it again": that retry is a real second email in a real
+// inbox. The compose route learned this first and answers with explicit copy;
+// these pin the reply route to the same behaviour, plus breadcrumbs — the
+// delivered send has to be recorded SOMEWHERE a human can find it, because the
+// message row that should have been its record does not exist.
+
+// Fail WRITES on `tables` while leaving reads untouched. `state.errors` cannot
+// express this — it fails every operation on the table, so the route would
+// refuse at the threading lookup and never send; the case under test only
+// exists because the reads succeeded and the insert then failed.
+function failWrites(dbInstance, tables) {
+  const realFrom = dbInstance.from
+  dbInstance.from = (table) => {
+    const b = realFrom(table)
+    if (!tables.includes(table)) return b
+    const failure = { data: null, error: { code: 'XX000', message: `${table} write exploded` } }
+    for (const op of ['insert', 'update']) {
+      const orig = b[op]
+      b[op] = (payload) => {
+        orig(payload)
+        b.single = () => Promise.resolve(failure)
+        b.maybeSingle = () => Promise.resolve(failure)
+        b.then = (res, rej) => Promise.resolve(failure).then(res, rej)
+        return b
+      }
+    }
+    return b
+  }
+}
+
+describe('POST …/reply — filing fails AFTER the send (EMAIL-REPLY-UNFILED.1)', () => {
+  let errors
+  beforeEach(() => {
+    errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+  afterEach(() => errors.mockRestore())
+
+  it('says the mail is ALREADY SENT — never the raw DB error an operator reads as "try again"', async () => {
+    failWrites(db, ['email_inbox_messages'])
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/was sent/i)
+    expect(body.error).toMatch(/do not resend/i)
+    expect(body.error).not.toContain('write exploded')
+    // Machine-readable too, so the composer can tell this 500 from every
+    // other 500 without string-matching the copy.
+    expect(body.data).toMatchObject({ sent: true, message_id: 'pm-out-1' })
+    // Exactly one send — the route must never retry its way into the double
+    // this response exists to prevent.
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+    expect(errors).toHaveBeenCalled()
+  })
+
+  it('records the delivered send as a dead letter, at the ticket’s location', async () => {
+    failWrites(db, ['email_inbox_messages'])
+    getCurrentUser.mockResolvedValue(SIGNED_COACH)
+    await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    const [dead] = insertsInto(db, 'webhook_dead_letter')
+    expect(dead.payload).toMatchObject({
+      // NOT 'postmark' or 'inbody' — a REPLAYABLE_PROVIDERS key here would
+      // have the replay cron "retry" a send that already happened, which IS
+      // the double-send.
+      provider: 'email_ticket_reply',
+      event_type: 'sent_not_filed',
+      // Stamped so integration health counts it (every other email writer
+      // omits it and their dead letters go uncounted).
+      location_id: T_STUDIO.location_id,
+    })
+    // The payload is everything a human (or a later re-file tool) needs to
+    // reconstruct the missing message row — including the SIGNED body, which
+    // at this point exists nowhere else server-side.
+    expect(dead.payload.payload).toMatchObject({
+      ticket_id: T_STUDIO.id,
+      postmark_message_id: 'pm-out-1',
+      text_body: 'We open at 6.\n\n-- \nSarah\nUN1T Stillorgan',
+    })
+    expect(dead.payload.payload.recipients.to).toEqual([T_STUDIO.requester_email])
+  })
+
+  it('still logs email_sends and advances the ticket — the queue must not invite a second send', async () => {
+    failWrites(db, ['email_inbox_messages'])
+    await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    // The contact's history + delivery-webhook correlation survive: both key
+    // on postmark_message_id, which the failed insert never carried.
+    const [send] = insertsInto(db, 'email_sends')
+    expect(send.payload).toMatchObject({
+      contact_id: T_STUDIO.contact_id,
+      postmark_message_id: 'pm-out-1',
+      source_type: 'inbox_reply',
+    })
+    // And the queue stops saying "needs reply" about a member who has one —
+    // same posture as compose, whose ticket row STAYS for exactly this reason.
+    const [update] = updatesTo(db, 'email_tickets')
+    expect(update.payload).toMatchObject({
+      status: 'pending',
+      last_message_direction: 'outbound',
+      last_message_preview: expect.stringContaining('We open at 6.'),
+    })
+  })
+
+  it('keeps the distinct answer when every breadcrumb ALSO fails', async () => {
+    const warns = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    failWrites(db, ['email_inbox_messages', 'email_sends', 'email_tickets', 'webhook_dead_letter'])
+    const res = await post(T_STUDIO.id, { text: 'We open at 6.' })
+
+    // A DB bad enough to fail four writes must still not turn "already sent"
+    // back into a retryable-looking error.
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error).toMatch(/do not resend/i)
+    expect(body.data).toMatchObject({ sent: true })
+    warns.mockRestore()
+  })
+
+  it('a NOTE whose insert fails stays a plain 500 — nothing was sent, so retrying is safe', async () => {
+    failWrites(db, ['email_inbox_messages'])
+    const res = await post(T_STUDIO.id, { text: 'fyi', internal: true })
+
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error).not.toMatch(/do not resend/i)
+    expect(body.data).toBeUndefined()
+    expect(sendEmail).not.toHaveBeenCalled()
+    expect(insertsInto(db, 'webhook_dead_letter')).toHaveLength(0)
+  })
+})

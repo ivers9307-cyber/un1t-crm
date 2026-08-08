@@ -23,6 +23,7 @@ import {
   fileOutboundAttachments,
   outboundAttachmentsField,
 } from '@/lib/email-outbound-attachments-server'
+import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { loadTicketForUser, loadOwnAddresses, statusTimestamps } from '../../_helpers'
 
 // EMAIL-CC.1 — an ADDITIONAL address list, on top of the thread's own
@@ -381,6 +382,73 @@ export async function POST(request, props) {
   }
   const result = send.result
 
+  // ── The record of the send — built HERE, not after the filing insert ──
+  // From this line on the reply is with the member, so everything below is
+  // bookkeeping about a send that already happened. All three pieces are
+  // constructed before the message insert so the filing-failure branch below
+  // can write the same record the happy path would have (EMAIL-REPLY-UNFILED.1).
+  //
+  // Preview is the operator's OWN words, unsigned — a queue row that reads
+  // "-- Sarah, UN1T Stillorgan" instead of what was actually said would make
+  // every short reply look identical in the list.
+  const preview = inboundPreview(text)
+
+  // We answered → the ball is with the member. Nothing auto-closes from here
+  // (Richard, 2026-08-06): a ticket ages in `pending` until someone replies or
+  // an operator closes it.
+  const patch = {
+    status: 'pending',
+    last_message_at: now,
+    last_message_direction: 'outbound',
+    last_message_preview: preview,
+    updated_at: now,
+    ...statusTimestamps('pending', ticket, now),
+  }
+  // Only ever on a real outbound send: the internal-note branch above returns
+  // long before this and never touches email_tickets at all, so a note can
+  // neither stamp a first response nor move the ticket.
+  if (shouldStampFirstResponse({
+    firstResponseAt: ticket.first_response_at,
+    direction: 'outbound',
+    isInternalNote: false,
+  })) {
+    patch.first_response_at = now
+  }
+
+  // The email_sends row — the contact's email history, delivery-webhook
+  // correlation, and how a later reply from the member matches back to this
+  // contact via postmark_message_id. contact_id is NOT NULL there, so an
+  // unlinked requester gets no row (null here) — the message row is still the
+  // operator-facing record.
+  //
+  // EMAIL-CC.1 — ONE row, for the ticket's own contact, whatever the reply's
+  // recipient count. email_sends is the per-contact email history; a Cc'd
+  // colleague is not this ticket's contact and inventing rows for them would
+  // put mail in strangers' histories and skew every campaign metric that
+  // reads the table. to_email logs the primary recipient, matching the
+  // message row.
+  //
+  // EMAIL-OUTBOUND-SERVER.1 — the row still describes the send correctly now
+  // that a DIFFERENT Postmark server sent it. postmark_message_id is an
+  // account-wide GUID, so the delivery webhook still correlates on it whichever
+  // server the event comes from; from_email records the real From; and
+  // postmark_stream is THIS APP'S 'outbound', written from the shared constant,
+  // NEVER the Postmark stream id the message actually rode. That column feeds
+  // consent classification (consentFieldForStream → email_administrative) and
+  // the email-hygiene sweeps' `= 'broadcast'` filters; a provider slug in it
+  // would be read as "not marketing" by accident rather than by rule.
+  const sendLogRow = ticket.contact_id ? {
+    contact_id: ticket.contact_id,
+    location_id: ticket.location_id,
+    source_type: 'inbox_reply',
+    subject,
+    from_email: send.fromEmail,
+    to_email: recipients.to[0],
+    postmark_message_id: result.messageId,
+    postmark_stream: TICKET_INTERNAL_STREAM,
+    status: 'sent',
+  } : null
+
   const { data: message, error: msgErr } = await db.from('email_inbox_messages').insert({
     ticket_id: ticket.id,
     contact_id: ticket.contact_id || null,
@@ -415,7 +483,55 @@ export async function POST(request, props) {
     status: 'sent',
     sent_at: now,
   }).select('*').single()
-  if (msgErr) return NextResponse.json({ success: false, error: msgErr.message }, { status: 500 })
+  if (msgErr) {
+    // THE MEMBER ALREADY HAS THIS REPLY — Postmark accepted it above. The raw
+    // DB error this used to return read as "the send failed, try again", and
+    // that retry is a real second email in a real inbox. Same case, same
+    // answer as the compose route (EMAIL-REPLY-UNFILED.1): record the
+    // delivered send everywhere that can still take it, then say DO NOT
+    // RESEND, with `data.sent` so the composer can tell this 500 from every
+    // other without string-matching the copy.
+    console.error('[tickets/reply] message insert failed AFTER a successful send:', msgErr.message)
+    try {
+      // The full record — recipients, signed body, threading anchor — because
+      // the message row that should have been its record does not exist; this
+      // is what a human re-files from. Location-stamped so integration health
+      // counts it. The provider is deliberately NOT a REPLAYABLE_PROVIDERS key:
+      // a replay of a send that already happened would BE the double-send.
+      await deadLetterWebhook(db, {
+        provider: 'email_ticket_reply',
+        eventType: 'sent_not_filed',
+        payload: {
+          ticket_id: ticket.id,
+          postmark_message_id: result.messageId,
+          from_email: send.fromEmail || null,
+          recipients: { to: recipients.to, cc: recipients.cc, bcc: recipients.bcc },
+          subject,
+          text_body: outboundText,
+          in_reply_to: lastInbound?.rfc_message_id || null,
+          author_profile_id: user.id,
+          sent_at: now,
+        },
+        error: msgErr,
+        locationId: ticket.location_id,
+      })
+      // The halves of the normal path that never needed the message row:
+      // the contact's history + delivery-webhook correlation, and the queue
+      // moving to pending so it stops saying "needs reply" about a member who
+      // has one. Attachment filing is NOT here — its rows hang off message.id.
+      if (sendLogRow) await db.from('email_sends').insert(sendLogRow)
+      await db.from('email_tickets').update(patch).eq('id', ticket.id)
+    } catch (e) {
+      // Best-effort by construction: a DB bad enough to fail four writes must
+      // still not turn "already sent" back into a retryable-looking error.
+      console.error('[tickets/reply] breadcrumbs after the unfiled send also failed:', e?.message)
+    }
+    return NextResponse.json({
+      success: false,
+      error: 'The email was sent, but could not be filed on the ticket — the thread will not show it. Do not resend: the member already has it. Add an internal note if the text needs to be on the record.',
+      data: { sent: true, message_id: result.messageId },
+    }, { status: 500 })
+  }
 
   // EMAIL-OUTBOUND-ATTACH.1 — the files are already with the member; this is
   // only the studio's own copy and the bytes it is billed for. It never throws
@@ -432,40 +548,10 @@ export async function POST(request, props) {
     mailboxId: ticket.mailbox_id || null,
   })
 
-  // Log to email_sends so the reply shows in the contact's email history, the
-  // delivery webhooks can track it, and a later reply from the member matches
-  // back to this contact via postmark_message_id. contact_id is NOT NULL
-  // there, so an unlinked requester skips the log — the message row above is
-  // still the operator-facing record.
-  //
-  // EMAIL-CC.1 — ONE row, for the ticket's own contact, whatever the reply's
-  // recipient count. email_sends.contact_id is NOT NULL and the table is the
-  // per-contact email history; a Cc'd colleague is not this ticket's contact
-  // and inventing rows for them would put mail in strangers' histories and
-  // skew every campaign metric that reads the table. to_email logs the primary
-  // recipient, matching the message row above.
-  //
-  // EMAIL-OUTBOUND-SERVER.1 — the row still describes the send correctly now
-  // that a DIFFERENT Postmark server sent it. postmark_message_id is an
-  // account-wide GUID, so the delivery webhook still correlates on it whichever
-  // server the event comes from; from_email records the real From; and
-  // postmark_stream is THIS APP'S 'outbound', written from the shared constant,
-  // NEVER the Postmark stream id the message actually rode. That column feeds
-  // consent classification (consentFieldForStream → email_administrative) and
-  // the email-hygiene sweeps' `= 'broadcast'` filters; a provider slug in it
-  // would be read as "not marketing" by accident rather than by rule.
-  if (ticket.contact_id) {
-    await db.from('email_sends').insert({
-      contact_id: ticket.contact_id,
-      location_id: ticket.location_id,
-      source_type: 'inbox_reply',
-      subject,
-      from_email: send.fromEmail,
-      to_email: recipients.to[0],
-      postmark_message_id: result.messageId,
-      postmark_stream: TICKET_INTERNAL_STREAM,
-      status: 'sent',
-    })
+  // Log to email_sends — the row was built above, before the filing insert;
+  // see the sendLogRow comment for everything it is and is not.
+  if (sendLogRow) {
+    await db.from('email_sends').insert(sendLogRow)
   }
 
   // ── Attribution for anyone the operator ADDED (EMAIL-CC.1) ────────
@@ -492,32 +578,7 @@ export async function POST(request, props) {
     })
   }
 
-  // Preview is the operator's OWN words, unsigned — a queue row that reads
-  // "-- Sarah, UN1T Stillorgan" instead of what was actually said would make
-  // every short reply look identical in the list.
-  const preview = inboundPreview(text)
-
-  // We answered → the ball is with the member. Nothing auto-closes from here
-  // (Richard, 2026-08-06): a ticket ages in `pending` until someone replies or
-  // an operator closes it.
-  const patch = {
-    status: 'pending',
-    last_message_at: now,
-    last_message_direction: 'outbound',
-    last_message_preview: preview,
-    updated_at: now,
-    ...statusTimestamps('pending', ticket, now),
-  }
-  // Only ever on a real outbound send: the internal-note branch above returns
-  // long before this and never touches email_tickets at all, so a note can
-  // neither stamp a first response nor move the ticket.
-  if (shouldStampFirstResponse({
-    firstResponseAt: ticket.first_response_at,
-    direction: 'outbound',
-    isInternalNote: false,
-  })) {
-    patch.first_response_at = now
-  }
+  // Advance the queue — the patch was built above, before the filing insert.
   await db.from('email_tickets').update(patch).eq('id', ticket.id)
 
   return NextResponse.json({
