@@ -105,10 +105,8 @@ export default function OfferCheckout({ slug, priceLabel }) {
       <div>
         <p className="ofr-label mb-4">Secure checkout · {priceLabel}</p>
         {error && <p className="text-sm mb-3" style={{ color: '#ef4444' }}>{error}</p>}
-        {/* The Revolut widget ships a light theme (dark labels/inputs) and has
-            no documented dark mode — on the black page its text vanishes, so
-            it mounts on a white panel (operator-reported on mobile, 08-08). */}
-        <div style={{ background: '#ffffff', padding: '18px 16px' }}>
+        {/* Styling rationale on .ofr-widget-panel in offers.css. */}
+        <div className="ofr-widget-panel">
           <div ref={targetRef} style={{ minHeight: 320 }} />
         </div>
         <button type="button" onClick={() => setStep('form')} className="mt-4 w-full text-sm" style={{ color: '#8a8a8a' }}>
