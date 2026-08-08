@@ -135,6 +135,16 @@ describe('status + priority chips', () => {
     expect(isArchivedStatus('open')).toBe(false)
     expect(isArchivedStatus('pending')).toBe(false)
   })
+
+  // A reply to a CLOSED ticket REOPENS it — it does not fork (Richard,
+  // 2026-08-07, reversing an earlier draft). The hint predated that call and
+  // still promised a new ticket, which teaches operators the wrong model.
+  it('tells operators a member reply reopens an archived ticket — both statuses', () => {
+    for (const s of ['solved', 'closed']) {
+      expect(STATUS_META[s].hint).toMatch(/reopens/)
+      expect(STATUS_META[s].hint).not.toMatch(/new ticket/i)
+    }
+  })
 })
 
 describe('labels', () => {

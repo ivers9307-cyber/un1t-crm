@@ -19,7 +19,7 @@
 //   • No auto-close, anywhere, ever (Richard, 2026-08-06). A ticket leaves the
 //     queue because a person put it there.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Mail, RefreshCw, AlertCircle, Plus } from 'lucide-react'
 import { EmptyState, Button } from '@/components/ui'
 import {
@@ -75,13 +75,25 @@ export default function TicketInbox({ locationId, locationName, userId }) {
   const view = ticketView(viewId)
   const queueUrl = buildTicketsUrl({ locationId, mailboxId, viewId })
 
+  // TICKET-FETCH-RACE.1 — which request each pane currently belongs to (the
+  // AttachmentPreview requestFor idiom). Fetched responses apply only while
+  // they are still the one the operator is looking at: a slow read for the
+  // previous ticket or the previous view landing late must not overwrite the
+  // pane — the thread would caption the WRONG selectedId, and handleSend posts
+  // to selectedId. Pinned in TicketInbox.race.test.jsx.
+  const queueRequest = useRef(null)
+  const threadFor = useRef(null)
+
   // ── Queue ──────────────────────────────────────────────────────────
   const loadQueue = useCallback(async (quiet = false) => {
     if (!locationId) { setLoading(false); return }
+    const url = queueUrl
+    queueRequest.current = url
     if (!quiet) setLoading(true)
     try {
-      const res = await fetch(queueUrl, { cache: 'no-store' })
+      const res = await fetch(url, { cache: 'no-store' })
       const body = await res.json()
+      if (queueRequest.current !== url) return // superseded — a newer scope owns the list
       if (!body?.success) {
         setQueueError(body?.error || 'Could not load the queue')
         return
@@ -90,11 +102,14 @@ export default function TicketInbox({ locationId, locationName, userId }) {
       setMailboxes(body.data?.mailboxes || [])
       setTickets(body.data?.tickets || [])
     } catch {
+      if (queueRequest.current !== url) return
       // Transient — keep the last good queue on screen rather than blanking
       // it, and say so instead of showing a stale list as if it were fresh.
       setQueueError('Could not reach the server — showing the last loaded queue')
     } finally {
-      setLoading(false)
+      // A superseded request must not clear the spinner either: the newer
+      // request set it, and only that request knows when it is done.
+      if (queueRequest.current === url) setLoading(false)
     }
   }, [locationId, queueUrl])
 
@@ -125,6 +140,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
     try {
       const res = await fetch(`/api/email/tickets/${id}`, { cache: 'no-store' })
       const body = await res.json()
+      if (threadFor.current !== id) return // superseded — the operator switched tickets
       if (!body?.success) {
         if (!quiet) setThreadError(body?.error || 'Could not load this ticket')
         return
@@ -134,9 +150,12 @@ export default function TicketInbox({ locationId, locationName, userId }) {
       setAttachmentsUnavailable(!!body.data?.attachments_unavailable)
       setReplyRecipients(body.data?.reply_recipients || null)
     } catch {
+      if (threadFor.current !== id) return
       if (!quiet) setThreadError('Could not load this ticket')
     } finally {
-      if (!quiet) setThreadLoading(false)
+      // The stale request's spinner-clear is skipped too — the selection that
+      // superseded it set the spinner, and its own read clears it.
+      if (!quiet && threadFor.current === id) setThreadLoading(false)
     }
   }, [])
 
@@ -189,6 +208,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
 
   function selectTicket(row) {
     if (!row?.id) return
+    threadFor.current = row.id
     setSelectedId(row.id)
     // Paint the header from the list row immediately; loadThread replaces it
     // with the full record (mailbox + linked contact) a moment later.
@@ -214,6 +234,9 @@ export default function TicketInbox({ locationId, locationName, userId }) {
     clearSelection()
   }
   function clearSelection() {
+    // Invalidates any in-flight thread read as well — with no selection there
+    // is nothing a late response could honestly be applied to.
+    threadFor.current = null
     setSelectedId(null)
     setTicket(null)
     setMessages([])
