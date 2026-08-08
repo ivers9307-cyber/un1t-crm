@@ -16,6 +16,8 @@ import {
   inboundPreview,
   truncateHtmlBody,
   HTML_BODY_MAX_CHARS,
+  senderEmail,
+  parseEmailDate,
 } from './email-inbox'
 
 describe('normalizeEmail', () => {
@@ -28,6 +30,69 @@ describe('normalizeEmail', () => {
     expect(normalizeEmail(42)).toBe(null)
     expect(normalizeEmail('not-an-email')).toBe(null)
     expect(normalizeEmail('')).toBe(null)
+  })
+  it('rejects addresses carrying bytes Postgres text cannot hold', () => {
+    // EMAIL-INBOUND-POISON.1: a NUL or lone surrogate inside an "address"
+    // passes the shape regex ([^@\s] matches both) and then fails the INSERT
+    // of every column it lands in — deterministically, on every retry.
+    // No real mail server delivers such an address; reject, never strip
+    // (stripping would merge 'a\u0000b@x.com' into the real 'ab@x.com').
+    expect(normalizeEmail('a\u0000b@example.com')).toBe(null)
+    expect(normalizeEmail('a\ud800b@example.com')).toBe(null)
+    expect(normalizeEmail('ab@example.com')).toBe(null)
+  })
+  it('still accepts an address containing a valid astral character', () => {
+    // The u-flag surrogate check must reject LONE halves only, not pairs.
+    expect(normalizeEmail('a\u{1F64F}b@example.com')).toBe('a\u{1F64F}b@example.com')
+  })
+})
+
+describe('senderEmail', () => {
+  it('prefers the typed FromFull.Email', () => {
+    expect(senderEmail({
+      FromFull: { Email: 'Member@Example.com' },
+      From: 'someone-else@example.com',
+    })).toBe('member@example.com')
+  })
+  it('parses the display form of From when FromFull is absent', () => {
+    // Postmark's From is a display string; the bare-address parse used to fail
+    // on it and the mail was dropped as `no_sender` with the address in plain
+    // sight. Same angle-bracket extraction parseAddressList already does.
+    expect(senderEmail({ From: 'Ada Member <member@example.com>' }))
+      .toBe('member@example.com')
+  })
+  it('handles a display name containing a comma', () => {
+    expect(senderEmail({ From: '"Member, Ada" <member@example.com>' }))
+      .toBe('member@example.com')
+  })
+  it('still accepts a bare address in From', () => {
+    expect(senderEmail({ From: 'member@example.com' })).toBe('member@example.com')
+  })
+  it('falls back to From when FromFull.Email is unusable', () => {
+    expect(senderEmail({
+      FromFull: { Email: 'not-an-address' },
+      From: 'Ada <member@example.com>',
+    })).toBe('member@example.com')
+  })
+  it('returns null when nothing parses', () => {
+    expect(senderEmail({})).toBe(null)
+    expect(senderEmail({ From: 'no address here' })).toBe(null)
+    expect(senderEmail(null)).toBe(null)
+  })
+})
+
+describe('parseEmailDate', () => {
+  it('returns the ISO form of a parseable date', () => {
+    expect(parseEmailDate('2026-08-06T09:00:00Z')).toBe('2026-08-06T09:00:00.000Z')
+    expect(parseEmailDate('Thu, 06 Aug 2026 09:00:00 +0000')).toBe('2026-08-06T09:00:00.000Z')
+  })
+  it('returns null instead of throwing on a malformed date', () => {
+    // `new Date('not-a-date').toISOString()` raises a RangeError, and Date is
+    // attacker-supplied — that throw was a deterministic 5xx on every retry.
+    expect(parseEmailDate('not-a-date')).toBe(null)
+    expect(parseEmailDate('')).toBe(null)
+    expect(parseEmailDate(null)).toBe(null)
+    expect(parseEmailDate(undefined)).toBe(null)
   })
 })
 

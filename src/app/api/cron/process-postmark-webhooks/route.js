@@ -32,7 +32,7 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
-import { claimAndProcessQueueRow, MAX_ATTEMPTS } from '@/lib/postmark-queue'
+import { claimAndProcessQueueRow, reclaimStaleQueueClaims, MAX_ATTEMPTS } from '@/lib/postmark-queue'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 
 export const runtime = 'nodejs'
@@ -55,6 +55,14 @@ export async function GET(request) {
 
   const db = createServerClient()
 
+  // POSTMARK-QUEUE-RECLAIM.1 — give back claims whose owners died (consumer
+  // killed mid-processing, or a release UPDATE that failed twice). Runs here,
+  // in the sweeper, not in the QStash worker: this cron is the delivery
+  // guarantee, and once a minute is the right cadence for a 10-minute
+  // staleness window. Never throws; a reclaimed row re-enters the batch below
+  // on a later tick as an ordinary pending event.
+  const reclaim = await reclaimStaleQueueClaims(db)
+
   // Pull a batch of pending events. Oldest first so we don't
   // starve stragglers behind newly-arriving bursts.
   const { data: rows, error: fetchErr } = await db
@@ -70,7 +78,15 @@ export async function GET(request) {
     return NextResponse.json({ ok: false, error: fetchErr.message }, { status: 500 })
   }
 
-  const summary = { processed: 0, failed: 0, dead_lettered: 0, batch_size: rows?.length || 0 }
+  const summary = {
+    processed: 0, failed: 0, dead_lettered: 0, batch_size: rows?.length || 0,
+    // Stranded-claim recoveries, visible in the heartbeat's last_outcome — a
+    // non-zero here means an attempt died holding its claim since last tick.
+    reclaimed: reclaim.reclaimed,
+    // Reclaims that spent the retry budget also dead-letter (counted with the
+    // in-batch ones below so the heartbeat shows one total).
+    dead_lettered_on_reclaim: reclaim.deadLettered,
+  }
 
   for (const row of rows || []) {
     // Claim-before-process CAS, shared with the QStash worker route

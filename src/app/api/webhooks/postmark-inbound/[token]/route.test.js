@@ -41,7 +41,7 @@ vi.mock('@/lib/webhook-events', async () => {
   return { ...actual, recordWebhookEvent: vi.fn() }
 })
 
-import { POST } from './route'
+import { POST, maxDuration } from './route'
 import { createServerClient } from '@/lib/supabase'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { recordWebhookEvent } from '@/lib/webhook-events'
@@ -116,11 +116,13 @@ function makeDb(state = {}) {
     contacts: [CONTACT],
     threadRows: [],   // email_inbox_messages rows a threading header can match
     tickets: {},      // id → email_tickets row
-    // The webhook_events dedupe ledger. recordWebhookEvent is mocked, so this
-    // is only populated when a test opts into bindDedupeLedger() — but the
-    // route's release DELETE always goes through db.from('webhook_events'),
-    // which is what clears an entry here.
-    claims: new Set(),
+    // The webhook_events dedupe ledger: eventId → received_at ISO. record-
+    // WebhookEvent is mocked, so this is only populated when a test opts into
+    // bindDedupeLedger() — but the route's release DELETE always goes through
+    // db.from('webhook_events'), which is what clears an entry here, and the
+    // stale-claim classifier reads received_at back through the same table.
+    claims: new Map(),
+    msgSeq: 0,        // email_inbox_messages ids: msg-1, msg-2, …
     // EMAIL-ATTACH.1 — attachments, the bucket, and the per-mailbox counter.
     // The counter is MODELLED rather than stubbed: `add_email_storage_bytes`
     // returns the total AFTER its own increment, and that returned value is
@@ -146,6 +148,15 @@ function makeDb(state = {}) {
       case 'email_inbox_messages': return applyFilters(s.threadRows, b._filters)
       case 'email_tickets': return applyFilters(Object.values(s.tickets), b._filters)
       case 'email_ticket_attachments': return applyFilters(s.attachments, b._filters)
+      // The claim ledger, readable: the stale-claim classifier selects
+      // received_at for this route's own (provider, event_id) pair.
+      case 'webhook_events':
+        return applyFilters(
+          [...s.claims.entries()].map(([event_id, received_at]) => ({
+            provider: 'postmark', event_id, received_at,
+          })),
+          b._filters,
+        )
       // email_conversations has NO case on purpose: a read falls through to []
       // and a write is still recorded on db.inserts/db.updates, so the negative
       // assertions below can catch a reintroduced dual-write.
@@ -159,6 +170,18 @@ function makeDb(state = {}) {
 
     if (b._op === 'insert') {
       db.inserts.push({ table: b._table, payload: b._payload })
+      if (b._table === 'email_inbox_messages') {
+        // The unique index on postmark_message_id (the belt-and-braces dedupe
+        // layer). Without it modelled, the 23505 finish-up path — the one that
+        // re-runs the bump after a crashed/failed first attempt — is untestable.
+        const pmId = b._payload?.postmark_message_id
+        if (pmId && s.threadRows.some(r => r.postmark_message_id === pmId)) {
+          return { data: null, error: { code: '23505', message: 'duplicate key value' } }
+        }
+        const row = { id: `msg-${++s.msgSeq}`, created_at: new Date().toISOString(), ...b._payload }
+        s.threadRows.push(row)
+        return { data: row, error: null }
+      }
       if (b._table === 'email_ticket_attachments') {
         // UNIQUE (message_id, attachment_index) — mig 496. This is the index
         // that makes storage accounting idempotent across a re-processed
@@ -266,9 +289,14 @@ const updatesTo = (db, table) => db.updates.filter(u => u.table === table)
 function bindDedupeLedger(target) {
   recordWebhookEvent.mockImplementation(async ({ eventId }) => {
     if (target._state.claims.has(eventId)) return { seen: true }
-    target._state.claims.add(eventId)
+    target._state.claims.set(eventId, new Date().toISOString())
     return { seen: false }
   })
+}
+
+/** Plant an already-held claim, aged `ageMs` into the past. */
+function holdClaim(target, eventId, ageMs = 0) {
+  target._state.claims.set(eventId, new Date(Date.now() - ageMs).toISOString())
 }
 
 function post(body, token = 'inbound-secret') {
@@ -575,8 +603,15 @@ describe('threading', () => {
 })
 
 describe('idempotency', () => {
-  it('returns deduped and writes NOTHING for a MessageID already seen', async () => {
+  it('returns deduped and writes NOTHING for a MessageID whose message is FILED', async () => {
+    // EMAIL-DEDUPE-STALE.1: "seen" alone no longer short-circuits — the claim
+    // is only trusted once the message row it promises actually exists.
     recordWebhookEvent.mockResolvedValue({ seen: true })
+    db._state.threadRows.push({
+      id: 'msg-filed', ticket_id: 'T-open', location_id: 'loc-hatch',
+      postmark_message_id: 'pm-inbound-1', created_at: '2026-08-06T09:00:01Z',
+    })
+    holdClaim(db, 'inbound-email:pm-inbound-1', 5_000)
 
     const res = await post(inbound())
 
@@ -618,7 +653,7 @@ describe('attachments (EMAIL-ATTACH.1)', () => {
     const rows = attachmentRows(db)
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({
-      message_id: 'new-row',
+      message_id: 'msg-1',
       location_id: 'loc-hatch',
       mailbox_id: 'mb-hatch',   // the mailbox the mail was DELIVERED to
       attachment_index: 0,
@@ -631,14 +666,14 @@ describe('attachments (EMAIL-ATTACH.1)', () => {
   })
 
   it('builds the object key from IDS — an attacker-controlled filename never reaches it', async () => {
-    await post(withAttachments([file({ Name: '../../../../etc/passwd .pdf' })]))
+    await post(withAttachments([file({ Name: '../../../../etc/passwd\u0000.pdf' })]))
 
     const [row] = attachmentRows(db)
-    expect(row.storage_path).toBe('loc-hatch/new-row/0.pdf')
+    expect(row.storage_path).toBe('loc-hatch/msg-1/0.pdf')
     expect(row.storage_path).not.toContain('..')
     // Kept as data, sanitised: staff still see what the member called it.
     expect(row.filename).not.toContain('/')
-    expect(row.filename).not.toContain(' ')
+    expect(row.filename).not.toContain('\u0000')
   })
 
   // THE FLAGSHIP. The dedupe claim is RELEASED on any 5xx precisely so Postmark
@@ -732,6 +767,10 @@ describe('a 5xx releases the dedupe claim', () => {
     { what: 'the email_tickets fetch', error: 'ticket_lookup_failed', fail: { 'email_tickets:select': boom }, payload: reply, claim: REPLY_CLAIM, state: THREADED },
     { what: 'the email_tickets insert', error: 'ticket_insert_failed', fail: { 'email_tickets:insert': boom }, payload: inbound, claim: CLAIM },
     { what: 'the email_inbox_messages insert', error: 'message_insert_failed', fail: { 'email_inbox_messages:insert': boom }, payload: inbound, claim: CLAIM },
+    // The append-path bump is CHECKED now (it was fire-and-forget): the message
+    // is filed, but a lost bump leaves the ticket closed/stale with an unseen
+    // reply inside — so it 5xxes, releases, and the retry's 23505 path re-runs it.
+    { what: 'the append-path ticket bump', error: 'ticket_bump_failed', fail: { 'email_tickets:update': boom }, payload: reply, claim: REPLY_CLAIM, state: THREADED },
   ]
 
   let errSpy
@@ -843,12 +882,18 @@ describe('a 5xx releases the dedupe claim', () => {
   })
 
   it('releases the claim when the route THROWS rather than returning 500', async () => {
-    // A malformed Date header: `new Date('not-a-date').toISOString()` raises a
-    // RangeError, and Date is attacker-supplied. Next would answer 500 with
-    // the claim still held, which is the same silent loss by another door.
+    // A genuinely unexpected throw (a malformed Date header used to be the
+    // live example; parseEmailDate defused it, so this simulates the next
+    // one). Next would answer 500 with the claim still held, which is the
+    // same silent loss by another door — the catch-all must keep releasing.
     withDb()
+    const realFrom = db.from
+    db.from = (table) => {
+      if (table === 'email_mailboxes') throw new Error('connection pool exhausted')
+      return realFrom(table)
+    }
 
-    const res = await post(inbound({ Date: 'not-a-date' }))
+    const res = await post(inbound())
 
     expect(res.status).toBe(500)
     expect((await res.json()).error).toBe('unhandled_error')
@@ -867,6 +912,378 @@ describe('a 5xx releases the dedupe claim', () => {
     expect((await res.json()).dead_lettered).toBe('no_matching_mailbox')
     expect(db.deletes).toHaveLength(0)
     expect(db._state.claims.has(CLAIM)).toBe(true)
+  })
+})
+
+// ── EMAIL-DEDUPE-STALE.1 — the crash window ─────────────────────────
+// The release-on-5xx above closes the *answered* failure doors, but a claim
+// committed BEFORE processing can also be orphaned by a door that never
+// answers: a platform kill (Vercel timeout, OOM, crash) between the claim
+// insert and the message insert. In-process release never runs, Postmark's
+// retry used to find the claim and 200 `deduped`, and the mail was filed
+// nowhere. The claim is therefore CLASSIFIED on re-delivery: completed
+// (the message row exists — the unique postmark_message_id index is the
+// completion marker), in-flight (young claim, first attempt may still be
+// writing → 503 keeps the retry chain alive), or stale (older than any
+// live request can be → reprocess).
+describe('crash window: a seen claim is classified, not blindly trusted', () => {
+  const CLAIM = 'inbound-email:pm-inbound-1'
+
+  function withLedgerDb(state) {
+    db = makeDb(state)
+    createServerClient.mockImplementation(() => db)
+    bindDedupeLedger(db)
+    return db
+  }
+
+  it('exports a maxDuration comfortably under the shim FORWARD_TIMEOUT_MS (30s)', () => {
+    // Bounds the crash window: a route the platform kills at maxDuration is
+    // dead long before the stale-claim threshold, so "stale ⇒ owner is dead"
+    // holds. Also lets the shim relay a real 5xx instead of aborting.
+    expect(typeof maxDuration).toBe('number')
+    expect(maxDuration).toBeLessThanOrEqual(25)
+    expect(maxDuration).toBeGreaterThanOrEqual(10)
+  })
+
+  it('answers 503 (not `deduped`) for a YOUNG claim with no filed message', async () => {
+    // The first attempt may still be running — a 200 here is exactly the old
+    // bug (Postmark stops retrying, the mail is lost if attempt 1 dies), and
+    // reprocessing would race a live writer. 5xx keeps the retry chain alive.
+    withLedgerDb()
+    holdClaim(db, CLAIM, 5_000)
+
+    const res = await post(inbound())
+
+    expect(res.status).toBe(503)
+    expect((await res.json()).error).toBe('claim_in_flight')
+    expect(db.inserts).toHaveLength(0)
+    // …and it must NOT release the live owner's claim.
+    expect(db.deletes).toHaveLength(0)
+    expect(db._state.claims.has(CLAIM)).toBe(true)
+  })
+
+  it('REPROCESSES a stale claim with no filed message — the platform-kill mail is filed', async () => {
+    // The scenario the audit confirmed: claim committed, process killed before
+    // the message insert, retry arrives minutes later. Formerly 200 `deduped`
+    // → filed nowhere, forever.
+    withLedgerDb()
+    holdClaim(db, CLAIM, 120_000)
+
+    const res = await post(inbound())
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(json.deduped).toBeUndefined()
+    expect(json).toMatchObject({ success: true, ticket_id: 'new-ticket', mailbox_id: 'mb-hatch' })
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(1)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+
+    // And a SECOND re-delivery now short-circuits: the message exists.
+    const again = await post(inbound())
+    expect(await again.json()).toEqual({ success: true, deduped: true })
+    expect(db._state.threadRows.filter(r => r.postmark_message_id === 'pm-inbound-1')).toHaveLength(1)
+  })
+
+  it('finishes a crashed attempt: stale claim + filed message + missing bump → bump re-run', async () => {
+    // Killed between the message insert and the ticket bump: the message
+    // exists, the ticket still claims nothing happened. The retry reprocesses,
+    // hits the unique index (23505), and the finish-up path completes the bump
+    // and the unread increment against the WINNING row's ticket.
+    withLedgerDb({
+      threadRows: [{
+        id: 'msg-crashed', ticket_id: 'T-open', location_id: 'loc-hatch',
+        postmark_message_id: 'pm-inbound-1',
+        created_at: new Date(Date.now() - 5_000).toISOString(),
+      }],
+      tickets: {
+        'T-open': {
+          id: 'T-open', location_id: 'loc-hatch', status: 'open',
+          subject: 'Billing question', first_response_at: null,
+          last_message_at: '2026-08-01T00:00:00Z', // stale — the bump never landed
+        },
+      },
+    })
+    holdClaim(db, CLAIM, 120_000)
+
+    const res = await post(inbound())
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).deduped).toBe(true)
+    // No second message row.
+    expect(db._state.threadRows.filter(r => r.postmark_message_id === 'pm-inbound-1')).toHaveLength(1)
+    // The bump landed on the winner's ticket…
+    const bump = updatesTo(db, 'email_tickets').find(u => u.filters.some(f => f[2] === 'T-open'))
+    expect(bump).toBeTruthy()
+    expect(bump.payload.status).toBe('open')
+    expect(bump.payload.last_message_direction).toBe('inbound')
+    // …and so did the unread increment.
+    expect(db.rpcs).toContainEqual({
+      fn: 'increment_email_ticket_unread', args: { p_ticket_id: 'T-open' },
+    })
+  })
+
+  it('does NOT re-bump when the ticket already reflects the message (late manual re-delivery)', async () => {
+    // An operator re-sending an already-filed message from Postmark's UI must
+    // not reopen a ticket someone closed since: the ticket's last_message_at
+    // already covers the winning message, so the finish-up is a no-op.
+    const msgAt = new Date(Date.now() - 3600_000).toISOString()
+    withLedgerDb({
+      threadRows: [{
+        id: 'msg-done', ticket_id: 'T-closed', location_id: 'loc-hatch',
+        postmark_message_id: 'pm-inbound-1', created_at: msgAt,
+      }],
+      tickets: {
+        'T-closed': {
+          id: 'T-closed', location_id: 'loc-hatch', status: 'closed',
+          subject: 'Billing question', first_response_at: null,
+          last_message_at: msgAt, // the bump landed back then
+        },
+      },
+    })
+    holdClaim(db, CLAIM, 7200_000)
+
+    const res = await post(inbound())
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).deduped).toBe(true)
+    expect(updatesTo(db, 'email_tickets')).toHaveLength(0)
+    expect(db.rpcs.map(r => r.fn)).not.toContain('increment_email_ticket_unread')
+  })
+
+  it('completes CRASHED attachments on the finish-up path', async () => {
+    // Killed between the message insert and the attachment step: the retry's
+    // finish-up re-runs storeInboundAttachments against the winning row —
+    // idempotent by (message_id, attachment_index), so this is safe even when
+    // the crash landed some of the files.
+    withLedgerDb({
+      threadRows: [{
+        id: 'msg-crashed', ticket_id: 'T-open', location_id: 'loc-hatch',
+        postmark_message_id: 'pm-inbound-1',
+        created_at: new Date(Date.now() - 5_000).toISOString(),
+      }],
+      tickets: {
+        'T-open': {
+          id: 'T-open', location_id: 'loc-hatch', status: 'open',
+          subject: 'Billing question', first_response_at: null,
+          last_message_at: '2026-08-01T00:00:00Z',
+        },
+      },
+    })
+    holdClaim(db, CLAIM, 120_000)
+
+    const res = await post(inbound({
+      Attachments: [{
+        Name: 'invoice.pdf', ContentType: 'application/pdf',
+        Content: Buffer.alloc(512).toString('base64'), ContentLength: 987654,
+      }],
+    }))
+
+    expect(res.status).toBe(200)
+    const rows = insertsInto(db, 'email_ticket_attachments').map(i => i.payload)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      message_id: 'msg-crashed', // the WINNING row, not a fresh one
+      attachment_index: 0,
+      skipped_reason: null,
+      size_bytes: 512,
+    })
+  })
+})
+
+// ── EMAIL-INBOUND-POISON.1 — deterministic poison payloads ──────────
+// These payloads used to 5xx on EVERY Postmark retry (the payload is identical
+// each time), burning the message's whole retry schedule while the mail was
+// never filed: a malformed Date header threw out of new Date().toISOString(),
+// and NUL bytes / lone UTF-16 surrogates in the text fields failed the
+// Postgres insert itself. Both are attacker-suppliable. The fix is to file the
+// mail anyway: fall back on the date, strip the unstorable bytes.
+describe('poison payloads file instead of 5xx-looping', () => {
+  it('a malformed Date header files the mail with the receive time', async () => {
+    const res = await post(inbound({ Date: 'not-a-date' }))
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).ticket_id).toBe('new-ticket')
+    const [message] = insertsInto(db, 'email_inbox_messages')
+    expect(Number.isNaN(new Date(message.payload.sent_at).getTime())).toBe(false)
+  })
+
+  it('strips NUL bytes from subject, body and display name before the inserts', async () => {
+    const res = await post(inbound({
+      Subject: 'Bill\u0000ing',
+      TextBody: 'pay\u0000ment bounced',
+      FromFull: { Email: 'member@example.com', Name: 'Ada\u0000 Member' },
+    }))
+
+    expect(res.status).toBe(200)
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload.subject).toBe('Billing')
+    expect(ticket.payload.requester_name).toBe('Ada Member')
+    const [message] = insertsInto(db, 'email_inbox_messages')
+    expect(message.payload.subject).toBe('Billing')
+    expect(message.payload.text_body).toBe('payment bounced')
+  })
+
+  it('strips a lone surrogate from HtmlBody', async () => {
+    await post(inbound({ HtmlBody: '<p>My direct debit bounced\ud800</p>' }))
+    const [message] = insertsInto(db, 'email_inbox_messages')
+    expect(message.payload.html_body).toBe('<p>My direct debit bounced</p>')
+  })
+
+  it('strips NUL from stored threading headers without 5xxing the lookup', async () => {
+    const res = await post(inbound({
+      Headers: [
+        { Name: 'Message-ID', Value: '<inbound-1@mail.example.com>' },
+        { Name: 'In-Reply-To', Value: '<ours\u00001@mtasv.net>' },
+      ],
+    }))
+
+    expect(res.status).toBe(200)
+    const [message] = insertsInto(db, 'email_inbox_messages')
+    expect(message.payload.in_reply_to).not.toContain('\u0000')
+  })
+
+  it('a NUL-bearing From is REJECTED as no sender, never stripped into a real address', async () => {
+    // Stripping would merge `a\u0000b@x.com` into a genuine contact's
+    // `ab@x.com` — the LIKE-wildcard identity-forgery class again.
+    const res = await post(inbound({
+      From: 'a\u0000b@example.com',
+      FromFull: { Email: 'a\u0000b@example.com', Name: 'Nobody' },
+    }))
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).dead_lettered).toBe('no_sender')
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+  })
+})
+
+// ── EMAIL-INBOUND-NOSENDER.1 ────────────────────────────────────────
+describe('no parseable sender', () => {
+  it('DEAD-LETTERS the payload instead of console-warning it into the void', async () => {
+    const res = await post(inbound({ From: undefined, FromFull: undefined }))
+
+    expect(res.status).toBe(200) // retrying will not conjure a sender
+    expect(await res.json()).toEqual({ success: true, dead_lettered: 'no_sender' })
+    expect(deadLetterWebhook).toHaveBeenCalledTimes(1)
+    expect(deadLetterWebhook.mock.calls[0][1]).toMatchObject({
+      provider: 'postmark_inbound', // NOT the auto-replayable 'postmark' key
+      eventType: 'inbound_email',
+      error: 'no_sender',
+    })
+    expect(deadLetterWebhook.mock.calls[0][1].payload.MessageID).toBe('pm-inbound-1')
+    expect(insertsInto(db, 'email_tickets')).toHaveLength(0)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(0)
+  })
+
+  it('keeps the claim on a no_sender dead-letter (2xx — the payload is captured)', async () => {
+    bindDedupeLedger(db)
+
+    await post(inbound({ From: undefined, FromFull: undefined }))
+
+    expect(db.deletes).toHaveLength(0)
+    expect(db._state.claims.has('inbound-email:pm-inbound-1')).toBe(true)
+  })
+
+  it('parses the display form of From before giving up (Name <addr>)', async () => {
+    // Postmark's raw From is a display string. The bare-address parse failed
+    // on it, so a payload with no FromFull dropped mail whose sender was in
+    // plain sight.
+    const res = await post(inbound({
+      FromFull: undefined,
+      From: 'Ada Member <member@example.com>',
+    }))
+
+    expect(res.status).toBe(200)
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+    const [ticket] = insertsInto(db, 'email_tickets')
+    expect(ticket.payload.requester_email).toBe('member@example.com')
+    expect(ticket.payload.contact_id).toBe('c-1')
+  })
+})
+
+// ── The bump is checked, and the retry completes it ─────────────────
+describe('ticket bump failure → retry finishes the job', () => {
+  const THREADED = {
+    threadRows: [{ ticket_id: 'T-open', created_at: '2026-08-06T08:00:00Z', location_id: 'loc-hatch', rfc_message_id: 'ours-1@mtasv.net' }],
+    tickets: { 'T-open': { id: 'T-open', location_id: 'loc-hatch', status: 'open', subject: 'Billing question', first_response_at: null } },
+  }
+  let errSpy
+  beforeEach(() => { errSpy = vi.spyOn(console, 'error').mockImplementation(() => {}) })
+  afterEach(() => { errSpy.mockRestore() })
+
+  it('does not increment unread on the attempt whose bump failed — the retry does, once', async () => {
+    db = makeDb({ ...THREADED, fail: { 'email_tickets:update': { message: 'update refused' } } })
+    createServerClient.mockImplementation(() => db)
+    bindDedupeLedger(db)
+
+    // Attempt 1: message filed, bump refused → 500, claim released, NO rpc
+    // (incrementing before the 500 would double-count on the retry).
+    const first = await post(reply())
+    expect(first.status).toBe(500)
+    expect((await first.json()).error).toBe('ticket_bump_failed')
+    expect(db.rpcs.map(r => r.fn)).not.toContain('increment_email_ticket_unread')
+
+    // The fault clears; Postmark retries. The message insert hits the unique
+    // index and the finish-up completes bump + unread against the winner.
+    db._state.fail = {}
+    const second = await post(reply())
+    expect(second.status).toBe(200)
+    expect((await second.json()).deduped).toBe(true)
+
+    expect(db._state.threadRows.filter(r => r.postmark_message_id === 'pm-inbound-2')).toHaveLength(1)
+    const bumps = updatesTo(db, 'email_tickets').filter(u => u.filters.some(f => f[2] === 'T-open'))
+    expect(bumps.length).toBeGreaterThanOrEqual(1)
+    expect(db.rpcs.filter(r => r.fn === 'increment_email_ticket_unread')).toHaveLength(1)
+  })
+})
+
+// ── EMAIL-INBOUND-SHIM.1 — the staged wiring, route-level ───────────
+// The shim swaps each attachment's base64 `Content` for a `_un1t_staged`
+// marker naming the object it already uploaded. This was the one load-bearing
+// piece of the cutover with no route-level test.
+describe('shim-staged attachments', () => {
+  it('records the staged path and meters the shim-measured bytes, uploading nothing', async () => {
+    const res = await post(inbound({
+      Attachments: [{
+        Name: 'invoice.pdf', ContentType: 'application/pdf',
+        ContentLength: 987654, // sender-supplied and wrong on purpose
+        Content: '',           // the shim emptied it
+        _un1t_staged: { v: 1, path: 'inbound/pm-inbound-1/0.pdf', bytes: 2048 },
+      }],
+    }))
+
+    expect(res.status).toBe(200)
+    const rows = insertsInto(db, 'email_ticket_attachments').map(i => i.payload)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      message_id: 'msg-1',
+      mailbox_id: 'mb-hatch',
+      attachment_index: 0,
+      filename: 'invoice.pdf',
+      storage_path: 'inbound/pm-inbound-1/0.pdf', // the shim's key, verbatim
+      skipped_reason: null,
+      size_bytes: 2048, // the shim's measured DECODED length — never ContentLength
+    })
+    // Nothing was uploaded here: the bytes are already in the bucket.
+    expect([...db._state.objects.keys()]).toHaveLength(0)
+    // …but they ARE metered against the delivering mailbox.
+    const usage = db._state.usage.find(u => u.mailbox_id === 'mb-hatch')
+    expect(usage.bytes_used).toBe(2048)
+  })
+
+  it('records a visible skipped row when the shim reports it could not move the bytes', async () => {
+    await post(inbound({
+      Attachments: [{
+        Name: 'invoice.pdf', ContentType: 'application/pdf',
+        ContentLength: 4096, Content: '',
+        _un1t_staged: { v: 1, error: 'upload_failed' },
+      }],
+    }))
+
+    const [row] = insertsInto(db, 'email_ticket_attachments').map(i => i.payload)
+    expect(row.storage_path).toBeNull()
+    expect(row.skipped_reason).toBe('rehost_failed')
+    // The message itself is still filed — the governing rule.
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
   })
 })
 
