@@ -5,9 +5,10 @@
 // offsets) and never streams the clock; this computes the live tick locally
 // (250ms) and corrects on the 2s /active poll.
 //
-// Gated by studio_management — a CROSS_PLATFORM_KEY, the same toggle as the web
-// Studio Management page + the mobile AC/Doors screens. The server independently
-// enforces MANAGER_ROLES on start/control as defence in depth.
+// Gated by class_timer — a CROSS_PLATFORM_KEY, the same toggle as the web
+// Class timer page (CLASS-TIMER-PERM.1: split off studio_management so coaches
+// on shift can run the timer without holding door unlock). The server
+// independently enforces the same permission on start/control as defence in depth.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, Pressable, ScrollView, ActivityIndicator, Alert } from 'react-native'
@@ -15,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { canMobile } from '../../lib/permissions'
+import { supabase } from '../../lib/supabase'
 import {
   buildTimeline,
   computeEffectiveElapsedMs,
@@ -51,13 +53,24 @@ const PRESETS = [
   { name: 'EMOM — 10 min', structure: [
     { kind: 'round', count: 10, segments: [{ label: 'Minute', type: 'work', seconds: 60 }] },
   ] },
+  { name: '32 min — 2 × 16 (45/15) + water', structure: [
+    { kind: 'round', count: 16, segments: [
+      { label: 'Work', type: 'work', seconds: 45 },
+      { label: 'Rest', type: 'rest', seconds: 15 },
+    ] },
+    { kind: 'segment', label: 'Water break', type: 'rest', seconds: 120 },
+    { kind: 'round', count: 16, segments: [
+      { label: 'Work', type: 'work', seconds: 45 },
+      { label: 'Rest', type: 'rest', seconds: 15 },
+    ] },
+  ] },
 ]
 
 export default function TimerScreen() {
   const { profile, activeLocation } = useAuth()
   const router = useRouter()
   const locationId = activeLocation?.id
-  const allowed = canMobile(profile, 'studio_management', activeLocation)
+  const allowed = canMobile(profile, 'class_timer', activeLocation)
 
   const [templates, setTemplates] = useState([])
   const [run, setRun] = useState(null)
@@ -91,6 +104,18 @@ export default function TimerScreen() {
     pollRef.current = setInterval(loadActive, POLL_MS)
     return () => clearInterval(pollRef.current)
   }, [allowed, loadTemplates, loadActive])
+
+  // TIMER-PUSH.1 — realtime nudge: the timer routes broadcast on
+  // `timer:<locationId>` after every start/pause/resume/skip/stop, so this
+  // screen reflects another device's action immediately instead of waiting
+  // out the 2s poll (which stays as the fallback).
+  useEffect(() => {
+    if (!allowed || !locationId) return undefined
+    const chan = supabase.channel(`timer:${locationId}`)
+    chan.on('broadcast', { event: 'timer' }, () => loadActive())
+    chan.subscribe()
+    return () => { supabase.removeChannel(chan) }
+  }, [allowed, locationId, loadActive])
 
   // Refresh on focus (a master could start/stop a run from web or another
   // device while this screen is backgrounded).

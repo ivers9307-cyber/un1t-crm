@@ -430,11 +430,11 @@ export async function POST(request) {
     const { error: emErr } = await db.from('contacts').update({ email_status: 'active' }).in('id', slice)
     if (emErr && errorSample.length < 10) errorSample.push({ stage: 'email_status_active', error: emErr.message })
   }
-  for (let i = 0; i < emailToUnsub.length; i += PAGE_SIZE) {
-    const slice = emailToUnsub.slice(i, i + PAGE_SIZE)
-    const { error: emErr } = await db.from('contacts').update({ email_status: 'unsubscribed' }).in('id', slice)
-    if (emErr && errorSample.length < 10) errorSample.push({ stage: 'email_status_unsub', error: emErr.message })
-  }
+  // LOCCOMMS.5 — the 'unsubscribed' stamp is retired. email_status carries
+  // reputation only (active | bounced | complained); the opt-out these rows
+  // represent is written to contact_preferences above, and the mig 489 trigger
+  // propagates it to every one of the contact's location rows.
+  // emailToUnsub is still computed so the response counts stay meaningful.
 
   return NextResponse.json({
     success: true,

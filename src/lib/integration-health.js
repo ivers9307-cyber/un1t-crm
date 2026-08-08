@@ -5,7 +5,8 @@
 // underlying checks — it reads:
 //   - cron_health view (mig 053): per-cron heartbeat staleness (global).
 //   - whatsapp_numbers: Meta quality/tier + token validity (per location).
-//   - webhook_dead_letter (mig 315): un-replayed webhook backlog (per location).
+//   - webhook_dead_letter (mig 315): unresolved captured events (this
+//     location's rows + the NULL-location orphans — see block 3).
 //   - channel_connections (getConnection): Glofox connection state (per loc).
 //   - xero_connections: Xero OAuth binding + last sync error (per location).
 //   - email_sends: Postmark bounce/complaint rate over 24h (per location).
@@ -94,6 +95,135 @@ export function emailSendStatus({ total = 0, bounced = 0, complained = 0 } = {})
   return { status: 'ok', detail: `${t} sent, ${bad} bounced/complained (24h)` }
 }
 
+// EMAIL-MONITOR.1 — is mail still ARRIVING? (2026-08-08 audit, P1.)
+//
+// The channel's founding failure: for fourteen months every inbound delivery
+// got a 500 (one unset env var) and NOTHING measured it — the queue simply
+// looked quiet. This grades arrival per MAILBOX, derived from the rows the
+// pipeline files rather than a heartbeat stamp: MAX(created_at) of inbound
+// messages measures exactly "mail made it all the way in", and a stamp the
+// webhook writes is one more thing the broken webhook wouldn't write.
+//
+// Thresholds scale with observed volume so a quiet-by-nature address doesn't
+// cry wolf: a busy mailbox (≥8 arrivals in the window) warns after 7 quiet
+// days and goes down after 14; an occasional one (1–7) after 14/28. A mailbox
+// with NOTHING in the window is 'unknown', not red — it may be new, or
+// Stillorgan's cannot-receive domain — but note a dead webhook passes through
+// warn and down on its way there, so silence is never green.
+//
+// rehost_failed folds in because a spike there is exactly how the shim's
+// Storage-auth bug hid (#1268): mail kept filing, files kept vanishing.
+export const EMAIL_INBOUND_WINDOW_DAYS = 60
+const EMAIL_INBOUND_DAY_MS = 24 * 60 * 60 * 1000
+const BUSY_MAILBOX_MIN_ARRIVALS = 8
+const REHOST_FAILED_DOWN_AT = 10
+
+export function emailInboundStatus({ mailboxes = [], inbound = [], rehostFailed24h = 0, now } = {}) {
+  const nowMs = Number(now) || 0
+  const byMailbox = new Map()
+  for (const row of inbound) {
+    const key = row?.mailboxId
+    if (!key) continue
+    const at = Date.parse(row?.createdAt)
+    if (!Number.isFinite(at)) continue
+    const cur = byMailbox.get(key) || { count: 0, lastAt: 0 }
+    cur.count += 1
+    if (at > cur.lastAt) cur.lastAt = at
+    byMailbox.set(key, cur)
+  }
+
+  let lastInboundMs = 0
+  const graded = []
+  for (const mb of mailboxes) {
+    const seen = byMailbox.get(mb?.id)
+    if (!seen) { graded.push({ status: 'unknown', mb }) ; continue }
+    if (seen.lastAt > lastInboundMs) lastInboundMs = seen.lastAt
+    const quietDays = (nowMs - seen.lastAt) / EMAIL_INBOUND_DAY_MS
+    const busy = seen.count >= BUSY_MAILBOX_MIN_ARRIVALS
+    const warnAt = busy ? 7 : 14
+    const downAt = busy ? 14 : 28
+    const status = quietDays > downAt ? 'down' : quietDays > warnAt ? 'warn' : 'ok'
+    graded.push({ status, mb, quietDays })
+  }
+
+  const known = graded.filter((g) => g.status !== 'unknown')
+  const offenders = graded.filter((g) => g.status === 'warn' || g.status === 'down')
+  const rehost = Number(rehostFailed24h) || 0
+
+  let status
+  if (graded.length === 0 || known.length === 0) status = 'unknown'
+  else status = worstStatus(known)
+  // Escalation, never de-escalation: arrival health cannot hide vanishing files.
+  if (rehost > 0 && (status === 'ok' || status === 'unknown')) status = 'warn'
+  if (rehost >= REHOST_FAILED_DOWN_AT && status !== 'down') status = 'down'
+
+  const parts = []
+  if (offenders.length) {
+    parts.push(offenders
+      .map((g) => `${g.mb?.address || 'mailbox'} quiet ${Math.floor(g.quietDays)}d`)
+      .join(' · '))
+  } else if (known.length === 0) {
+    parts.push(`No inbound email in ${EMAIL_INBOUND_WINDOW_DAYS} days`)
+  } else {
+    const ageMs = nowMs - lastInboundMs
+    const rel = ageMs < EMAIL_INBOUND_DAY_MS
+      ? `${Math.max(1, Math.round(ageMs / (60 * 60 * 1000)))}h ago`
+      : `${Math.floor(ageMs / EMAIL_INBOUND_DAY_MS)}d ago`
+    parts.push(`Last inbound ${rel}`)
+  }
+  if (rehost > 0) parts.push(`${rehost} attachment${rehost === 1 ? '' : 's'} failed re-hosting (24h)`)
+
+  return {
+    status,
+    detail: parts.join(' · '),
+    lastInboundAt: lastInboundMs ? new Date(lastInboundMs).toISOString() : null,
+  }
+}
+
+// Both zoom-contacts routes cap execution at maxDuration=300s (Vercel's hard
+// limit on the function), so a run that is genuinely still executing is never
+// older than that. The margin above it absorbs clock skew between this
+// process and the DB, not uncertainty about the deadline itself.
+export const ZOOM_RUN_GRACE_MS = 15 * 60 * 1000
+
+/**
+ * ZOOMOPS.1 — status from the most recent non-dry zoom_sync_runs row.
+ *
+ * A null finished_at OLDER than ZOOM_RUN_GRACE_MS is 'down': the run started
+ * and never closed out, which means it crashed, and that is otherwise
+ * invisible. A null finished_at YOUNGER than that is a run still in flight —
+ * reporting that as 'down' would flag every currently-executing sync as
+ * crashed, which is exactly the false alarm this pane must not raise. The
+ * query that feeds this always hands over the newest non-dry row, so a
+ * running trigger IS that row for the whole time it executes — this is the
+ * ordinary shape of "checked the pane right after clicking Run now", not a
+ * rare edge case.
+ */
+export function zoomSyncStatus(lastRun, nowMs = Date.now()) {
+  if (!lastRun) return { status: 'unknown', detail: 'Never run' }
+  if (lastRun.error) return { status: 'down', detail: `Last run failed: ${lastRun.error}` }
+  if (!lastRun.finished_at) {
+    const startedMs = lastRun.started_at ? new Date(lastRun.started_at).getTime() : NaN
+    if (Number.isFinite(startedMs) && nowMs - startedMs < ZOOM_RUN_GRACE_MS) {
+      return { status: 'unknown', detail: 'Run in progress' }
+    }
+    return { status: 'down', detail: 'Last run started but never finished' }
+  }
+  if (lastRun.guard_tripped) {
+    return {
+      status: 'warn',
+      detail: `Deletion guard tripped — ${lastRun.guard_attempted} deletions refused (threshold ${lastRun.guard_threshold})`,
+    }
+  }
+  const c = lastRun.creates ?? 0
+  const u = lastRun.updates ?? 0
+  const d = lastRun.deletes ?? 0
+  return {
+    status: 'ok',
+    detail: `${lastRun.owned_in_zoom ?? 0} in directory · last run +${c} ~${u} -${d}`,
+  }
+}
+
 // Worst status across a set of rows (for a roll-up badge).
 const RANK = { down: 3, warn: 2, unknown: 1, ok: 0 }
 export function worstStatus(rows) {
@@ -150,19 +280,29 @@ export async function getIntegrationHealth(db, locationId) {
     }
   } catch { rows.push({ key: 'wa', name: 'WhatsApp', status: 'unknown', detail: 'Unavailable' }) }
 
-  // 3. Webhook processing backlog — un-replayed dead-letter rows (per location).
+  // 3. Webhook processing backlog — unresolved dead-letter rows. This
+  // location's PLUS the NULL-location ones (DEADLETTER-LOC.1): a row with no
+  // location (unroutable inbound mail, an event whose send can't be found)
+  // belongs to nobody, and a strict .eq() filter made those invisible in the
+  // one pane operators actually check — GDPR one-click unsubscribes included.
+  // Counting NULL rows at every location is deliberate over-reporting: a
+  // handful of orphans nagging two studios beats orphans nagging none.
   try {
-    const { count } = await db
+    const { count, error: dlErr } = await db
       .from('webhook_dead_letter')
       .select('id', { count: 'exact', head: true })
-      .eq('location_id', locationId)
+      .or(`location_id.eq.${locationId},location_id.is.null`)
       .is('resolved_at', null)
+    // A failed count reads back as `count: null` → backlogStatus(0) → 'ok'.
+    // Throw instead so the catch degrades to 'unknown' — this pane must not
+    // report green on a query error.
+    if (dlErr) throw dlErr
     const s = backlogStatus(count)
     rows.push({
       key: 'webhooks',
       name: 'Webhook processing',
       status: s.status,
-      detail: (count || 0) === 0 ? 'No backlog' : `${count} un-replayed`,
+      detail: (count || 0) === 0 ? 'No backlog' : `${count} unresolved`,
     })
   } catch { rows.push({ key: 'webhooks', name: 'Webhook processing', status: 'unknown', detail: 'Unavailable' }) }
 
@@ -220,6 +360,55 @@ export async function getIntegrationHealth(db, locationId) {
     rows.push({ key: 'email', name: 'Email (Postmark)', status: s.status, detail: s.detail })
   } catch { rows.push({ key: 'email', name: 'Email (Postmark)', status: 'unknown', detail: 'Unavailable' }) }
 
+  // 6b. Email INBOUND — is mail still arriving? (EMAIL-MONITOR.1; the
+  // 14-months-of-silence failure mode.) Rendered only for locations that run
+  // mailboxes — a studio without email has nothing to monitor. Derived from
+  // filed rows, not a heartbeat stamp: see emailInboundStatus.
+  try {
+    const { data: mailboxes } = await db.from('email_mailboxes')
+      .select('id, address')
+      .eq('location_id', locationId)
+      .eq('active', true)
+      .limit(200)
+    if ((mailboxes || []).length > 0) {
+      const windowIso = new Date(Date.now() - EMAIL_INBOUND_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString()
+      const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      // Newest-first + a DELIBERATE cap at the PostgREST ceiling: pagination
+      // is wrong here — a health grade needs recency, not completeness, and
+      // newest-first means overflow truncates only the OLD end, so "last
+      // arrival" stays exact and 1000+ arrivals in the window is trivially a
+      // healthy volume signal for every mailbox that appears in it.
+      const [{ data: arrivals }, rehostRes] = await Promise.all([
+        // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- deliberate: newest-first health sample; overflow drops only the old end, recency stays exact
+        db.from('email_inbox_messages')
+          .select('created_at, email_tickets!inner(mailbox_id)')
+          .eq('location_id', locationId)
+          .eq('direction', 'inbound')
+          .gte('created_at', windowIso)
+          .order('created_at', { ascending: false })
+          .limit(1000),
+        // No embedded filter here — a count-only (head:true) select with an
+        // embedded-resource filter returns 0 (the known PostgREST trap).
+        db.from('email_ticket_attachments')
+          .select('id', { count: 'exact', head: true })
+          .eq('location_id', locationId)
+          .eq('skipped_reason', 'rehost_failed')
+          .gte('created_at', dayAgoIso),
+      ])
+      const inbound = (arrivals || []).map((r) => ({
+        mailboxId: r?.email_tickets?.mailbox_id || null,
+        createdAt: r?.created_at,
+      }))
+      const s = emailInboundStatus({
+        mailboxes, inbound, rehostFailed24h: rehostRes?.count || 0, now: Date.now(),
+      })
+      rows.push({
+        key: 'email_inbound', name: 'Email (inbound)',
+        status: s.status, detail: s.detail, lastSuccess: s.lastInboundAt,
+      })
+    }
+  } catch { rows.push({ key: 'email_inbound', name: 'Email (inbound)', status: 'unknown', detail: 'Unavailable' }) }
+
   // 7. Payments — hard checkout failures over 7d. race_payments has no
   // location_id; scope via the parent race_event (inner join). NOT head:true —
   // an embedded-resource filter under a count-only select returns 0 (known
@@ -237,6 +426,55 @@ export async function getIntegrationHealth(db, locationId) {
     const s = paymentStatus({ total, failed })
     rows.push({ key: 'payments', name: 'Payments', status: s.status, detail: s.detail })
   } catch { rows.push({ key: 'payments', name: 'Payments', status: 'unknown', detail: 'Unavailable' }) }
+
+  // 8. Zoom contact sync — organisation-level, not per location. One directory
+  // serves every handset on the account, so the row is equally true at every
+  // location in the synced org, and absent everywhere else. Unlike Glofox/
+  // Xero/WhatsApp there is no per-org self-serve "connect" flow for Zoom (it
+  // ships dark behind ZOOM_SYNC_ORGANIZATION_ID — see zoom/client.js) so an
+  // unconfigured tenant renders nothing here rather than a "not connected"
+  // row nobody at that org can act on; the dedicated settings page still
+  // explains itself to a visitor who lands there directly.
+  try {
+    const syncOrgId = process.env.ZOOM_SYNC_ORGANIZATION_ID || null
+    if (syncOrgId) {
+      const { data: loc } = await db
+        .from('locations').select('organization_id').eq('id', locationId).maybeSingle()
+      if (loc?.organization_id === syncOrgId) {
+        const { data: runs } = await db
+          .from('zoom_sync_runs')
+          .select('started_at, finished_at, creates, updates, deletes, owned_in_zoom, guard_tripped, guard_attempted, guard_threshold, error')
+          .eq('organization_id', syncOrgId)
+          // A preview is not a run. Without this filter any manager can turn
+          // this row green by clicking Preview — the exact falsely-reassuring
+          // signal this pane exists to prevent.
+          .eq('dry', false)
+          .order('started_at', { ascending: false })
+          .limit(1)
+        const lastRun = (runs || [])[0] || null
+        const s = zoomSyncStatus(lastRun)
+        rows.push({
+          key: 'zoom-contacts',
+          name: 'Zoom phone directory',
+          status: s.status,
+          lastSuccess: lastRun?.finished_at || null,
+          detail: s.detail,
+          remedy: s.status === 'warn'
+            ? 'Preview the run, read the numbers it wants to remove, then override the guard if they are genuinely gone.'
+            : s.status === 'down'
+              ? 'Open the sync page and preview a run to see the current error.'
+              : undefined,
+          href: '/settings/integrations/zoom-contacts',
+        })
+      }
+    }
+  } catch {
+    // Match every other block: a broken check degrades to 'unknown' rather
+    // than silently dropping the row (an omitted row is indistinguishable
+    // from "not applicable to this org" — exactly the ambiguity this pane
+    // exists to remove).
+    rows.push({ key: 'zoom-contacts', name: 'Zoom phone directory', status: 'unknown', detail: 'Unavailable', href: '/settings/integrations/zoom-contacts' })
+  }
 
   // Attach a runbook (remedy + fix link) to every degraded/down row so the pane
   // is actionable. Keyed by the row-key prefix; only surfaced when there's
@@ -256,9 +494,10 @@ export async function getIntegrationHealth(db, locationId) {
 const REMEDIES = {
   crons: { text: 'A scheduled job is stale. It usually clears on the next run; if it persists, check that job’s logs.', href: null },
   wa: { text: 'Re-authorise the WhatsApp number, or address the Meta message-quality rating, in Settings → Integrations.', href: '/settings/integrations-hub' },
-  webhooks: { text: 'Replay the failed webhooks from the dead-letter queue.', href: null },
+  webhooks: { text: 'Review the captured events in the dead-letter queue (master/owner) — replay the replayable, resolve the rest by hand.', href: '/admin/webhook-dead-letter' },
   glofox: { text: 'Reconnect Glofox in Settings → Integrations.', href: '/settings/integrations-hub' },
   xero: { text: 'Reconnect Xero in Settings → Integrations if the sync error persists.', href: '/settings/integrations-hub' },
   email: { text: 'A high bounce/complaint rate hurts deliverability — review recipients and your sending domain.', href: '/settings/email-domain' },
+  email_inbound: { text: 'Inbound email may have stopped arriving. Probe the webhook: POST a bogus token to the shim URL — 404 = healthy, 500 missing_secret = secrets lost. Full runbook in docs/architecture/INTEGRATIONS.md; check the Postmark Activity page for undelivered inbound.', href: null },
   payments: { text: 'Checkouts are failing — verify the payment provider (Revolut/Stripe) connection and recent transactions.', href: null },
 }

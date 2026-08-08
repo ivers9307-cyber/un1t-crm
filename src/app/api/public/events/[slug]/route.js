@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { loadForMode } from '@/lib/event-signups'
 import { eventIsPublic } from '@/lib/host-events'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 // Force-dynamic so wave / fee edits in the operator UI show up
@@ -15,9 +16,19 @@ export const runtime = 'nodejs'
 // route handlers would otherwise hold stale data for a few minutes.
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
+export async function GET(request, props) {
   const params = await props.params;
   const db = createServerClient()
+
+  // Public-browse abuse limiter (audit H2a) — 60-per-5-min per slug+IP: the
+  // signup page loads this once (plus reloads while a buyer dithers), so a
+  // human never gets near the cap; it only bites scripted scraping of an
+  // endpoint that runs per-wave capacity COUNTs. Slug-keyed per SAAS-6.
+  // Fails open inside checkRateLimit.
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `pubrace:${params.slug}:${ip}`, { max: 60, windowMs: 5 * 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
+
   const { data, error } = await db
     .from('race_events')
     .select(`

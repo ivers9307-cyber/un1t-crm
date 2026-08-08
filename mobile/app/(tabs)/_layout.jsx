@@ -19,18 +19,32 @@ import { canMobile } from '../../lib/permissions'
 import { registerForPushNotifications } from '../../lib/push-register'
 import { resolveLayoutForUser } from '../../lib/mobile-layout'
 import { getNeedsActionCount } from '../../lib/whatsapp-api'
+import { getTicketCount } from '../../lib/email-api'
 import ImpersonateBanner from '../../components/ImpersonateBanner'
 import PendingContractsBanner from '../../components/PendingContractsBanner'
 
 export default function TabsLayout() {
   const { session, profile, activeLocation, loading } = useAuth()
   const pushRegistered = useRef(false)
-  // INBOX-EMAIL-M.1 — Messages tab badge. Same endpoint as the web
-  // sidebar badge (SIDEBAR-BADGES.2): conversations needing a human
-  // (needs-reply or agent handoff) across WhatsApp + Instagram + Email
-  // at the active location. 60s poll, mirroring the web's cadence;
+  // Messages tab badge. Same endpoint as the web sidebar badge
+  // (SIDEBAR-BADGES.2): conversations needing a human (needs-reply or agent
+  // handoff) across WhatsApp + Instagram at the active location. Email left
+  // this count server-side when it became a ticket system (INBOX-SPLIT.1) —
+  // /api/whatsapp/unread-count reads whatsapp_conversations +
+  // instagram_conversations only — so splitting email out of the Messages
+  // screen (INBOX-SPLIT.M1) needed no change here: the badge already counted
+  // exactly what the tab shows. 60s poll, mirroring the web's cadence;
   // failures leave the last-known count rather than flashing it away.
+  //
+  // The Email tab badge (EMAIL-BADGE-M.1) rides the cheap count route that
+  // EMAIL-TICKET-CLEANUP.3 added for the web sidebar — tickets somebody
+  // wrote to us that nobody has answered yet, at the active location,
+  // counting only mailboxes this person can open. Same predicate as the
+  // queue's needs_reply view, so tapping the badge shows the rows it
+  // counted. Same 60s cadence and keep-last-count-on-failure posture as the
+  // Messages badge above it.
   const [needsActionCount, setNeedsActionCount] = useState(0)
+  const [emailNeedsReplyCount, setEmailNeedsReplyCount] = useState(0)
 
   useEffect(() => {
     if (
@@ -63,6 +77,26 @@ export default function TabsLayout() {
     return () => { cancelled = true; clearInterval(t) }
   }, [profile, activeLocation])
 
+  useEffect(() => {
+    if (!profile || !activeLocation) return
+    // Only poll when the Email surface is reachable for this user — the
+    // route itself answers 0 for an ineligible session, but not polling at
+    // all is cheaper than polling to learn nothing.
+    const { bar: barKeys, more: moreKeys } = resolveLayoutForUser(profile, activeLocation)
+    if (!barKeys.includes('email') && !moreKeys.includes('email')) {
+      setEmailNeedsReplyCount(0)
+      return
+    }
+    let cancelled = false
+    async function poll() {
+      const res = await getTicketCount(activeLocation.id)
+      if (!cancelled && res?.success) setEmailNeedsReplyCount(res.data?.count || 0)
+    }
+    poll()
+    const t = setInterval(poll, 60000)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [profile, activeLocation])
+
   if (loading) return null
   if (!session) return <Redirect href="/(auth)/login" />
 
@@ -79,13 +113,17 @@ export default function TabsLayout() {
     // Route stays /whatsapp (and gates on the whatsapp permission key)
     // but the screen is the unified WhatsApp + Instagram inbox (M2/M3).
     whatsapp: { title: 'Messages', icon: 'chatbubbles-outline' },
+    // INBOX-SPLIT.M1 — email is its own surface, not a channel inside
+    // Messages, matching web (sidebar entry "Email", Mail icon). Gated on
+    // `email_inbox` via shared/mobile-nav → resolveLayoutForUser.
+    email:    { title: 'Email',    icon: 'mail-outline' },
     studio:   { title: 'Studio',   icon: 'business-outline' },
     pipeline: { title: 'Pipeline', icon: 'trending-up-outline' },
     bookings: { title: 'Bookings', icon: 'calendar-clear-outline' },
     invoices: { title: 'Invoices', icon: 'receipt-outline' },
     expenses: { title: 'Expenses', icon: 'wallet-outline' },
   }
-  const FEATURE_KEYS = ['schedule', 'whatsapp', 'studio', 'pipeline', 'bookings', 'invoices', 'expenses']
+  const FEATURE_KEYS = ['schedule', 'whatsapp', 'email', 'studio', 'pipeline', 'bookings', 'invoices', 'expenses']
   const hiddenKeys = FEATURE_KEYS.filter(k => !barSet.has(k))
 
   function featureHref(key) {
@@ -131,6 +169,14 @@ export default function TabsLayout() {
               ...(key === 'whatsapp' && needsActionCount > 0
                 ? {
                     tabBarBadge: needsActionCount > 99 ? '99+' : needsActionCount,
+                    tabBarBadgeStyle: { backgroundColor: '#16A34A', color: '#FFFFFF', fontSize: 11 },
+                  }
+                : {}),
+              // Needs-reply tickets on the Email tab (EMAIL-BADGE-M.1) —
+              // same actionable-work semantics, same style.
+              ...(key === 'email' && emailNeedsReplyCount > 0
+                ? {
+                    tabBarBadge: emailNeedsReplyCount > 99 ? '99+' : emailNeedsReplyCount,
                     tabBarBadgeStyle: { backgroundColor: '#16A34A', color: '#FFFFFF', fontSize: 11 },
                   }
                 : {}),

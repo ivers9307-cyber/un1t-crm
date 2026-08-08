@@ -22,6 +22,8 @@ const SUB_KEYS = [
   'approvals_rosters',
   // HYROX-TC.2 — seventh sub-key, added alongside the others.
   'approvals_hyrox_sessions',
+  // OFFERS.6 — weekend-sale purchase fulfilment.
+  'approvals_offer_purchases',
 ]
 
 describe('per-category approval permissions', () => {
@@ -36,6 +38,7 @@ describe('per-category approval permissions', () => {
       shift_swaps: 'approvals_shift_swaps',
       rosters: 'approvals_rosters',
       hyrox_sessions: 'approvals_hyrox_sessions',
+      offer_purchases: 'approvals_offer_purchases',
     })
   })
 

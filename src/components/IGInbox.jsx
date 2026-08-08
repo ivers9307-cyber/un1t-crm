@@ -181,6 +181,13 @@ export default function IGInbox({ locationId, initialConversationId, embedded = 
   // UIX-POLISH.3 — Realtime push (mig 256 published the Instagram
   // tables). New messages in the OPEN thread appear instantly; the
   // poll drops to a 60s safety net.
+  //
+  // RLS-RESTRICTIVE.1: that was only true from mig 485. Mig 231's
+  // `ig_conv_deny_writes` / `ig_msg_deny_writes` were `AS RESTRICTIVE
+  // FOR ALL USING (false)`, and FOR ALL includes SELECT — so the
+  // permissive SELECT policy was folded away and realtime, which
+  // authorises each row through it, delivered nothing. Publishing the
+  // tables in mig 256 could not help. The 60s poll masked it.
   useEffect(() => {
     if (!locationId) return
     const supabase = createBrowserClient()

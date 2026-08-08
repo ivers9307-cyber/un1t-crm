@@ -38,6 +38,14 @@ const config = [
       'public/**',
       'mobile/**',
       'supabase/migrations/**',
+      // Supabase Edge Functions are DENO, not Node/Next: `Deno.serve`,
+      // `Deno.env` and TypeScript syntax all trip this config (no-undef, no
+      // TS parser), and none of the Next rules mean anything there. Same
+      // reasoning as supabase/migrations above — a different runtime with its
+      // own toolchain. The wire contract they implement IS covered by vitest,
+      // via src/lib/email-attachment-staging.contract.test.js, which reads the
+      // .ts source off disk and pins the constants.
+      'supabase/functions/**',
       'out/**',
       'dist/**',
       'build/**',

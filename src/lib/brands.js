@@ -83,6 +83,7 @@ export const BRANDS = [
       '/hatch-street',  // pretty path → next.config rewrites to /welcome/hatch-street
       '/free-class',    // Stillorgan paid-traffic campaign landing page (src/app/free-class)
       '/start',         // Meta-ad booking wizard (src/app/start)
+      '/offers',        // OFFERS.7: weekend "lock in" sale pages (src/app/offers)
       '/privacy',       // GDPR privacy policy (waitlist consent link + App Store URL)
       '/terms',         // Terms of Service (Meta App Review + site footer)
       '/legal/',        // SAAS4-C4: /legal/subprocessors (public subprocessor register)
@@ -123,6 +124,30 @@ export const BRANDS = [
     rootHandler: 'rewrite',
     rootRewriteTo: '/host',
     fallbackHandler: 'reject',
+  },
+
+  // ─── CCF Autos — public marketing site (coming soon) ───────────
+  // Apex + www. "/" rewrites to /ccf (the coming-soon landing page,
+  // src/app/ccf) so the URL bar stays clean. Strays rewrite back to
+  // the landing rather than 404 — public marketing host, the
+  // un1t-marketing pattern, not the buyer-payment 'reject' pattern.
+  // Only the landing + its enquiry API resolve on this hostname, so
+  // nothing hints at the CRM. In-code (not a tenant_domains row)
+  // because it's deployment-critical brand infrastructure like the
+  // pay subdomain above. (CCF-WEB.1)
+  {
+    id: 'ccfautos-web',
+    description: 'CCF Autos public marketing site (apex + www)',
+    hostnames: (process.env.CCF_MARKETING_HOSTNAMES || 'ccfautos.com,www.ccfautos.com')
+      .split(',').map((s) => s.trim()).filter(Boolean),
+    allowedPaths: [
+      '/ccf',                    // coming-soon landing page (src/app/ccf)
+      '/api/public/ccf-enquiry', // contact-form capture
+    ],
+    rootHandler: 'rewrite',
+    rootRewriteTo: '/ccf',
+    fallbackHandler: 'rewrite',
+    fallbackRewriteTo: '/ccf',
   },
 
   // ─── Adding another brand ──────────────────────────────────────
@@ -169,7 +194,13 @@ export function resolveBrand(hostname) {
 // so adding a new asset prefix is one edit, not three.
 // ─────────────────────────────────────────────────────────────────
 
-const FRAMEWORK_ASSET_PATHS = ['/_next/']
+// '/.well-known/' rides the framework passthrough on EVERY brand host:
+// Apple Pay domain verification (APPLEPAY.1) fetches
+// /.well-known/apple-developer-merchantid-domain-association anonymously,
+// and the brand fallback rewrite was swallowing it — so Apple Pay could
+// never verify un1tdublin.com (or pay.ccfautos.com) and the button never
+// appeared in Safari. The file itself lives in public/.well-known/.
+const FRAMEWORK_ASSET_PATHS = ['/_next/', '/.well-known/']
 const FRAMEWORK_ASSET_FILES = new Set([
   '/favicon.ico',
   '/robots.txt',

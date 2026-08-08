@@ -809,15 +809,28 @@ export function assertLocationAccessOr404(user, locationId) {
 // ─── Unified-inbox channel guard (INBOX-PERM.1) ─────────────────────
 // Every /api/{whatsapp,instagram,email}/conversations* route uses the
 // service-role client, so RLS does nothing there — hasPermission in app
-// code is the ONLY channel gate. The /communications/inbox page gates
-// all three channels on the `whatsapp` permission; this map keeps the
-// API contract identical to that page gate so neither can drift. When
-// Instagram / email-inbox get their own WEB_PERMISSIONS keys, changing
-// the mapping here re-gates every conversation route at once.
+// code is the ONLY channel gate. The map exists so one edit re-gates
+// every conversation route on a channel at once.
+//
+// INBOX-PERM.2 (2026-08-07) — `em` was still pointed at `whatsapp`, the
+// placeholder INBOX-PERM.1 left behind for "when email-inbox gets its
+// own key". EMAIL-TICKET.2 shipped that key and nobody came back, so a
+// staffer with WhatsApp ON and `email_inbox` OFF — holding no
+// email_mailbox_access grant at all — could list the studio's email
+// threads, read message bodies, resolve them, and send mail from the
+// company address through the three legacy /api/email/conversations*
+// routes, bypassing the two-level model the ticket surface enforces.
+// It now resolves against `email_inbox`, the same key every
+// /api/email/tickets* route checks.
+//
+// `ig` deliberately still rides `whatsapp`: there is no Instagram
+// WEB_PERMISSIONS key to point it at, and inventing a mapping to a key
+// that does not exist would fail closed for everyone. When one is
+// added, change it here and every IG conversation route follows.
 const INBOX_CHANNEL_PERMISSION_KEYS = Object.freeze({
   wa: 'whatsapp',
   ig: 'whatsapp',
-  em: 'whatsapp',
+  em: 'email_inbox',
 })
 
 /**

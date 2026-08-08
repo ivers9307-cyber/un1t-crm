@@ -13,12 +13,24 @@ describe('estimateCaloriesKcal', () => {
     expect(f).toBeLessThan(m)
     expect(f).toBeCloseTo(646, -1)
   })
+  it('normalises real-world gender variants to the sex-specific curve (C12)', () => {
+    const m = estimateCaloriesKcal({ ...base, gender: 'male' })
+    const f = estimateCaloriesKcal({ ...base, gender: 'female' })
+    for (const v of ['Male', 'MALE', 'M', 'm', ' male ']) {
+      expect(estimateCaloriesKcal({ ...base, gender: v })).toBe(m)
+    }
+    for (const v of ['Female', 'FEMALE', 'F', 'f']) {
+      expect(estimateCaloriesKcal({ ...base, gender: v })).toBe(f)
+    }
+  })
   it('uses the mean of male & female for other/unknown gender', () => {
     const m = estimateCaloriesKcal({ ...base, gender: 'male' })
     const f = estimateCaloriesKcal({ ...base, gender: 'female' })
     expect(estimateCaloriesKcal({ ...base, gender: 'other' })).toBe(Math.round((m + f) / 2))
     expect(estimateCaloriesKcal({ ...base, gender: null })).toBe(Math.round((m + f) / 2))
     expect(estimateCaloriesKcal({ ...base, gender: 'P' })).toBe(Math.round((m + f) / 2))
+    expect(estimateCaloriesKcal({ ...base, gender: 'not_specified' })).toBe(Math.round((m + f) / 2))
+    expect(estimateCaloriesKcal({ ...base, gender: '' })).toBe(Math.round((m + f) / 2))
   })
   it('scales with duration', () => {
     const a = estimateCaloriesKcal({ ...base, gender: 'male', durationMin: 30 })

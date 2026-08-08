@@ -1,9 +1,20 @@
+// BYTE-SYNC: champ-app/shared/customer-notifications.js ↔ un1t-crm/src/lib/customer-notifications.js.
+// The two files are identical except the two import lines below
+// ('./hr-analytics.js' + './dublin-time.js' in champ-app,
+// '@/lib/hr-analytics' + '@/lib/dublin-time' in un1t-crm).
+// champ-app is the canonical copy — edit there first, then mirror the change.
+// Both surfaces push to the SAME member: drift here means the once-per-period
+// idempotency key or the push copy disagree between the CRM crons and the
+// member app. The twin test files are fully byte-identical (they import
+// './customer-notifications.js' relatively) — port tests both ways too.
+//
 // Pure builders for the customer engagement-loop notifications + the
 // streak-at-risk predicate. No IO — callers (endSession, the cron) load
 // data and call sendCustomerPush. Kept pure so the copy + logic are
 // fixture-testable.
 
 import { currentStreak } from '@/lib/hr-analytics'
+import { dublinMonthKey, dublinIsoWeekKey, dublinDayStartMs, dublinDateKey } from '@/lib/dublin-time'
 
 function pointsPhrase(effortPoints) {
   return Number.isFinite(effortPoints) ? `${effortPoints} UN1T Points` : 'Tap to see your stats'
@@ -72,7 +83,9 @@ export function buildStreakAtRiskPush({ streak }) {
   }
 }
 
-/** Pre-class reminder push (P2-7) — a member with a booked class coming up. */
+/** Pre-class reminder push (P2-7) — a member with a booked class coming up.
+ *  Sent by the un1t-crm send-class-booking-reminders cron; champ-app exports
+ *  it unused so the twins stay byte-identical. */
 export function buildClassReminderPush({ className, timeLabel, classBookingId } = {}) {
   const name = className ? String(className) : 'Your class'
   const when = timeLabel ? ` at ${timeLabel}` : ''
@@ -83,19 +96,14 @@ export function buildClassReminderPush({ className, timeLabel, classBookingId } 
   }
 }
 
-/** Idempotency key for a goal/period: YYYY-MM (month) or YYYY-Www (ISO week). */
+/** Idempotency key for a goal/period: YYYY-MM (month) or YYYY-Www (ISO week),
+ *  on the Europe/Dublin calendar. Keying on the Dublin day (not UTC) keeps
+ *  the once-per-period push idempotent right up to Dublin midnight — near a
+ *  year-roll a send at 00:30 IST on 1 Jan belongs to the new year's period,
+ *  not the old one (UTC would still read 31 Dec / prior week). */
 export function periodKey(period, nowMs = Date.now()) {
-  const d = new Date(nowMs)
-  if (period === 'month') {
-    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
-  }
-  const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
-  const dayNum = (date.getUTCDay() + 6) % 7
-  date.setUTCDate(date.getUTCDate() - dayNum + 3) // Thursday of this ISO week
-  const firstThursday = new Date(Date.UTC(date.getUTCFullYear(), 0, 4))
-  const ftDayNum = (firstThursday.getUTCDay() + 6) % 7
-  const week = 1 + Math.round(((date - firstThursday) / 86400000 - 3 + ftDayNum) / 7)
-  return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`
+  if (period === 'month') return dublinMonthKey(nowMs)
+  return dublinIsoWeekKey(nowMs)
 }
 
 export function buildFriendRequestPush({ fromName }) {
@@ -113,11 +121,14 @@ export function buildReactionPush({ fromName, reactionEmoji, context }) {
  * (not today) and the run ending yesterday is >= minStreak; else 0.
  */
 export function streakAtRisk(sessions, nowMs = Date.now(), minStreak = 3) {
-  const DAY = 24 * 3600 * 1000
-  const n = new Date(nowMs)
-  const today = Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate())
+  // currentStreak returns lastDayMs as the Dublin-midnight instant of the
+  // most recent training day. "Yesterday" must be the Dublin-midnight of
+  // the previous Dublin calendar day (not nowMs - 24h), so this stays
+  // correct across an IST/GMT DST-transition night.
+  const yesterdayKey = dublinDateKey(dublinDayStartMs(dublinDateKey(nowMs)) - 12 * 3600 * 1000)
+  const yesterdayMs = dublinDayStartMs(yesterdayKey)
   const st = currentStreak(sessions, nowMs)
-  if (st.lastDayMs === today - DAY && st.current >= minStreak) return st.current
+  if (st.lastDayMs === yesterdayMs && st.current >= minStreak) return st.current
   return 0
 }
 

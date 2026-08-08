@@ -11,6 +11,8 @@ import { logAuditEvent } from '@/lib/audit'
 import { sendPushOnce } from '@/lib/push-dedup'
 import { logWarn } from '@/lib/log'
 import { validateBody } from '@/lib/validate'
+import { getEquipment, updateEquipment } from '@/lib/equipment-db'
+import { shouldReturnToService, EQUIPMENT_STATUS } from '@/lib/equipment'
 
 const ResolveBody = z.object({
   notes: z.string().optional(),
@@ -73,6 +75,27 @@ export const POST = withAuth(
       details: { notes_length: (out.data.resolution_notes || '').length },
       request,
     })
+
+    // EQUIP-MAINT.2 — an equipment fault resolving puts the asset back on
+    // the floor. shouldReturnToService demands an exact issue-id match, so
+    // kit taken off manually (no linked issue) stays off, and resolving an
+    // unrelated issue on the same asset does nothing. Best-effort: a
+    // failure here must not fail the resolve the operator just performed.
+    if (existing.equipment_id) {
+      try {
+        const asset = await getEquipment(db, existing.equipment_id)
+        if (shouldReturnToService(asset, existing.id)) {
+          await updateEquipment(db, asset.id, {
+            status: EQUIPMENT_STATUS.IN_SERVICE,
+            out_of_service_issue_id: null,
+          })
+        }
+      } catch (err) {
+        logWarn('equipment', 'return-to-service failed', {
+          issueId: existing.id, equipmentId: existing.equipment_id, error: err.message,
+        })
+      }
+    }
 
     // Notify the submitter their report is resolved. Best-effort —
     // a push delivery failure should not unwind the state change.

@@ -59,6 +59,14 @@ export async function POST(request, props) {
     : ['email_marketing'])
   if (channels.length === 0) channels = ['email_marketing']
 
+  // LOCCOMMS.4 — `?l=` scopes the opt-out to the location whose email this was.
+  //
+  // NO `l` = unsubscribe from EVERY location. That is deliberate and is exact
+  // back-compat: emails already delivered carry the old location-less URL, and
+  // someone clicking one expects to be removed. Removing them from everything
+  // is the only direction that cannot generate a spam complaint.
+  const scopeLocationId = new URL(request.url).searchParams.get('l') || null
+
   // Find the contact preference by token
   const { data: pref, error } = await db
     .from('contact_preferences')
@@ -77,8 +85,29 @@ export async function POST(request, props) {
   const logEntries = []
   const ipAddress = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || null
 
+  // LOCCOMMS.4 — decide "is this channel currently ON?" against the row we are
+  // about to write, NOT always the global one.
+  //
+  // Getting this wrong is silent and severe: someone opted out globally but
+  // opted IN at one location (the exact shape of the leads recovered in
+  // LEADCAP.1) has pref.email_marketing === false, so a scoped unsubscribe
+  // would produce an EMPTY patch and their click would do nothing at all.
+  let currentState = pref
+  if (scopeLocationId) {
+    const { data: locRow } = await db
+      .from('contact_location_preferences')
+      .select('email_marketing, sms_marketing, whatsapp_marketing')
+      .eq('contact_id', pref.contact_id)
+      .eq('location_id', scopeLocationId)
+      .maybeSingle()
+    // No row = they are not on that list, so there is nothing to leave.
+    // Fall through with an all-false state; the response stays identical so
+    // the URL is never an oracle for which lists someone is on.
+    currentState = locRow || { email_marketing: false, sms_marketing: false, whatsapp_marketing: false }
+  }
+
   for (const channel of channels) {
-    if (pref[channel] === true) {
+    if (currentState[channel] === true) {
       updates[channel] = false
       logEntries.push({
         contact_id: pref.contact_id,
@@ -90,10 +119,33 @@ export async function POST(request, props) {
     }
   }
 
-  if (Object.keys(updates).length > 1) {
-    await db.from('contact_preferences').update(updates).eq('id', pref.id)
+  // LOCCOMMS.4 — where the opt-out is written, and why it matters.
+  //
+  // A SCOPED unsubscribe must NOT touch contact_preferences. The mig 489 sync
+  // trigger propagates any global channel going FALSE to ALL of that contact's
+  // location rows — correct for a global opt-out, catastrophic here: leaving a
+  // Hatch Street list would silently strip the person off Stillorgan's too,
+  // which is the exact harm this PR exists to stop.
+  //
+  // So: scoped -> write only that location's row. Global -> write
+  // contact_preferences and let the trigger fan the OFF out everywhere.
+  const channelPatch = {}
+  for (const ch of Object.keys(updates)) if (ch !== 'updated_at') channelPatch[ch] = updates[ch]
+  const hasChanges = Object.keys(channelPatch).length > 0
+
+  if (hasChanges) {
+    if (scopeLocationId) {
+      await db.from('contact_location_preferences')
+        .update({ ...channelPatch, updated_at: updates.updated_at })
+        .eq('contact_id', pref.contact_id)
+        .eq('location_id', scopeLocationId)
+    } else {
+      await db.from('contact_preferences').update(updates).eq('id', pref.id)
+    }
     if (logEntries.length) {
-      await db.from('consent_log').insert(logEntries)
+      await db.from('consent_log').insert(
+        logEntries.map((e) => ({ ...e, location_id: scopeLocationId })),
+      )
     }
   }
 
@@ -101,9 +153,15 @@ export async function POST(request, props) {
   // flipped — preserves the convention used by Postmark-aware filters
   // elsewhere. No equivalent contacts.* fields exist for whatsapp /
   // sms marketing; those are read off contact_preferences directly.
-  if (updates.email_marketing === false) {
-    await db.from('contacts').update({ email_status: 'unsubscribed' }).eq('id', pref.contact_id)
-  }
+  // LOCCOMMS.4 — only stamp the GLOBAL email_status on a GLOBAL unsubscribe.
+  // On a scoped opt-out it would be a lie: the person still receives mail from
+  // their other locations, and this flag blocks manual staff sends everywhere.
+  // Retiring the column entirely is PR 5, with the five readers that use it.
+  // LOCCOMMS.5 — the global email_status stamp is GONE. The opt-out is recorded
+  // in contact_location_preferences (globally, the mig 489 trigger fans it to
+  // every location), and email_status now carries reputation only.
+  //   PR 4 note retained: on a SCOPED opt-out this stamp was already skipped,
+  //   because it would have blocked manual sends from every other location too.
 
   return NextResponse.json({
     success: true,

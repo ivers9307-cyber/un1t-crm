@@ -58,7 +58,7 @@ const STRIKE_L = f(845)
 const STRIKE_T = f(112)
 const STRIKE_ANGLE = '-40deg'
 
-// Timeline (ms). Every shared value runs a sequence summing to CYCLE so
+// Timeline (ms). Every shared value runs a sequence summing to _CYCLE so
 // the bars and the strike can never drift apart across repeats.
 const STAGGER = 240 // gap between one bar lighting and the next
 const BAR_IN = 220
@@ -67,7 +67,12 @@ const STRIKE_IN = 340
 const HOLD_END = 1700 // everything lit until here
 const FADE_OUT = 260
 const TAIL = 140 // dark beat before the next rep
-const CYCLE = HOLD_END + FADE_OUT + TAIL // 2100
+// Underscore-prefixed because nothing reads it: the sequences below compose
+// the same total by hand (barLoop is start + BAR_IN + (HOLD_END - start -
+// BAR_IN) + FADE_OUT + TAIL, which cancels to exactly this). It stays as the
+// written-down statement of that invariant — change any constant above and
+// this is the number the sequences must still add up to.
+const _CYCLE = HOLD_END + FADE_OUT + TAIL // 2100
 
 // One bar's loop: light at `start`, hold, fade back to DIM, rest.
 function barLoop(start) {

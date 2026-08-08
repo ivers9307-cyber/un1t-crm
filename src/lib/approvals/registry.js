@@ -55,6 +55,7 @@ import { issuesProvider } from './providers/issues'
 import { agentRequestsProvider } from './providers/agent-requests'
 import { hyroxSessionsProvider } from './providers/hyrox-sessions'
 import { hostEventsProvider } from './providers/host-events'
+import { offerPurchasesProvider } from './providers/offer-purchases'
 import { hasPermission } from '@/lib/permissions'
 
 export const APPROVALS_PROVIDERS = Object.freeze([
@@ -80,6 +81,8 @@ export const APPROVALS_PROVIDERS = Object.freeze([
   hyroxSessionsProvider,
   // HOST-APPROVALS.1 — host events pending review (org-scoped).
   hostEventsProvider,
+  // OFFERS.6 — paid sale-offer purchases awaiting Glofox fulfilment.
+  offerPurchasesProvider,
 ])
 
 /**

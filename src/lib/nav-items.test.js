@@ -81,10 +81,21 @@ describe('Work — the action queues, grouped and ordered', () => {
   it('contains exactly the queue surfaces (finance moved to Accounting in RCOV.P2)', () => {
     expect(hrefsIn('work')).toEqual([
       '/communications',
+      // EMAIL-TICKET.4 — the studio email queue is an action queue too, and
+      // sits next to the hub it lives inside.
+      '/communications/tickets',
       '/bookings',
       '/approvals',
       '/issues',
     ])
+  })
+
+  it('gates the email ticket queue on email_inbox, NOT the marketing `email` key', () => {
+    // Two different populations: `email` is campaign/broadcast mail,
+    // `email_inbox` is the ticketed studio accounts (accounts@, sales@).
+    const tickets = ALL_NAV.find((i) => i.href === '/communications/tickets')
+    expect(tickets.permission).toBe('email_inbox')
+    expect(tickets.anyPermission).toBeUndefined()
   })
 })
 
@@ -105,8 +116,13 @@ describe('Sales', () => {
 })
 
 describe('Gym', () => {
-  it('contains the daily surfaces only: schedule, events, challenges, pulse, live HR', () => {
-    expect(hrefsIn('gym')).toEqual(['/schedule', '/events', '/challenges', '/pulse', '/live'])
+  it('contains the daily surfaces only: schedule, events, challenges, pulse, live HR, maintenance', () => {
+    expect(hrefsIn('gym')).toEqual(['/schedule', '/events', '/challenges', '/pulse', '/live', '/maintenance'])
+  })
+
+  it('gates Maintenance on equipment_admin OR equipment_inspect (EQUIP-MAINT.1)', () => {
+    const maintenance = ALL_NAV.find((i) => i.href === '/maintenance')
+    expect(maintenance.anyPermission).toEqual(['equipment_admin', 'equipment_inspect'])
   })
 
   it('keeps Live HR a top-level gym entry with Class timer nested under it', () => {

@@ -100,9 +100,12 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'That class is no longer available — please pick another.' }, { status: 400 })
   }
 
-  // restrictToLocation: a public form must not resolve (and then enqueue a Glofox
-  // booking / write consent against) an existing contact at another location.
-  const contactId = await findOrCreateRaceContact({ db, locationId, email: b.email.toLowerCase(), name, phone: b.phone, restrictToLocation: true })
+  // restrictToOrg (LEADCAP.1): a public form must not resolve (and then enqueue
+  // a Glofox booking / write consent against) a contact in another ORGANISATION.
+  // Sibling locations in the same org are fine — and necessary, since
+  // `contacts_email_unique` is global and a location-only match left a known
+  // email unable to insert (23505 → 500).
+  const contactId = await findOrCreateRaceContact({ db, locationId, email: b.email.toLowerCase(), name, phone: b.phone, restrictToOrg: true })
   if (!contactId) return NextResponse.json({ success: false, error: 'Could not capture your details. Please try again.' }, { status: 500 })
 
   try { await db.from('contacts').update({ lead_source: leadSource }).eq('id', contactId).is('lead_source', null) } catch (e) { logWarn('classbook', 'lead_source failed', { err: e }) }
@@ -124,7 +127,7 @@ export async function POST(request) {
   try { await writeContactTag(db, { contactId, locationId, tag }) } catch (e) { logWarn('classbook', 'tag failed', { err: e }) }
   try {
     const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
-    await applyFormMarketingConsent(db, { contactId, consent: true, source: 'start_class', ipAddress: ip })
+    await applyFormMarketingConsent(db, { contactId, consent: true, source: 'start_class', ipAddress: ip, locationId })
   } catch (e) { logWarn('classbook', 'consent failed', { err: e }) }
   try {
     const { data: openDeal } = await db.from('deals').select('id').eq('contact_id', contactId).eq('status', 'open').maybeSingle()

@@ -78,8 +78,14 @@ describe('buildWhatsAppAudienceAsync', () => {
     const { builder, calls } = makeFakeQuery()
     const db = { from: (t) => { calls.push({ method: 'from', args: [t] }); return builder } }
     await buildWhatsAppAudienceAsync(db, { logic: 'and', filters: [] }, 'loc-uuid')
-    // Gate now reads the denormalized contacts.whatsapp_marketing — no contact_preferences embed.
-    expect(calls).toContainEqual({ method: 'eq', args: ['whatsapp_marketing', true] })
+    // LOCCOMMS.3 — the gate now reads the VIEW's per-location consent column
+    // (contact_location_audience.loc_whatsapp_marketing, mig 491) rather than
+    // the denormalised global contacts.whatsapp_marketing. Still single-table
+    // filtering and still no contact_preferences embed, which is what keeps
+    // head:true counts safe.
+    expect(calls).toContainEqual({ method: 'eq', args: ['loc_whatsapp_marketing', true] })
+    // the stale global column must NOT be the gate any more
+    expect(calls).not.toContainEqual({ method: 'eq', args: ['whatsapp_marketing', true] })
     expect(calls).toContainEqual({ method: 'not', args: ['wa_phone', 'is', null] })
     expect(calls).toContainEqual({ method: 'neq', args: ['wa_status', 'blocked'] })
     expect(calls).toContainEqual({ method: 'neq', args: ['wa_status', 'opted_out'] })

@@ -147,7 +147,7 @@ export function validateSubmission({ description, photos = [] } = {}) {
  * (the route handles that).
  */
 export async function insertIssueWithAttachments(db, {
-  locationId, submitterId, description, attachments = [],
+  locationId, submitterId, description, attachments = [], equipmentId = null,
 }) {
   const { data: issue, error: issueErr } = await db
     .from('issues')
@@ -156,8 +156,12 @@ export async function insertIssueWithAttachments(db, {
       submitter_id: submitterId,
       description,
       status: ISSUE_STATUS.OPEN,
+      // EQUIP-MAINT.2 — only present when raised by a failed equipment
+      // inspection. Omitted (not null) for ordinary reports so the
+      // insert payload is unchanged for the existing caller.
+      ...(equipmentId ? { equipment_id: equipmentId } : {}),
     })
-    .select('id, location_id, submitter_id, description, status, created_at')
+    .select('id, location_id, submitter_id, description, status, equipment_id, created_at')
     .single()
 
   if (issueErr) {
@@ -252,7 +256,7 @@ export const ISSUE_INBOX_OPEN_STATUSES = Object.freeze([
 ])
 
 const HANDLER_SELECT_COLUMNS = `
-  id, location_id, submitter_id, description, status,
+  id, location_id, submitter_id, description, status, equipment_id,
   created_at, claimed_at, resolved_at, closed_at,
   claimed_by, resolved_by, resolution_notes,
   locations:location_id ( id, name ),

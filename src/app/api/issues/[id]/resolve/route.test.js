@@ -28,10 +28,12 @@ vi.mock('@/lib/issues', () => ({
 vi.mock('@/lib/push-dedup', () => ({ sendPushOnce: vi.fn(async () => ({ sent: 1 })) }))
 vi.mock('@/lib/log', () => ({ logWarn: vi.fn() }))
 vi.mock('@/lib/audit', () => ({ logAuditEvent: vi.fn(async () => ({ logged: true })) }))
+vi.mock('@/lib/equipment-db', () => ({ getEquipment: vi.fn(), updateEquipment: vi.fn() }))
 
 import { POST } from './route.js'
 import { resolveIssue, getInboxIssue } from '@/lib/issues'
 import { logAuditEvent } from '@/lib/audit'
+import { getEquipment, updateEquipment } from '@/lib/equipment-db'
 
 const ISSUE = {
   id: 'issue-1',
@@ -52,6 +54,8 @@ beforeEach(() => {
     ok: true,
     data: { id: 'issue-1', status: 'resolved', resolution_notes: 'Re-tensioned the belt' },
   })
+  getEquipment.mockResolvedValue(null)
+  updateEquipment.mockResolvedValue({})
 })
 
 describe('POST /api/issues/[id]/resolve', () => {
@@ -68,5 +72,31 @@ describe('POST /api/issues/[id]/resolve', () => {
       locationId: 'loc-1',
     }))
     expect(logAuditEvent.mock.calls.at(-1)[0].target.id).toBeUndefined()
+  })
+
+  it('returns the asset to service when the resolved issue is what removed it', async () => {
+    getInboxIssue.mockResolvedValue({ ...ISSUE, equipment_id: 'eq-1' })
+    getEquipment.mockResolvedValue({
+      id: 'eq-1', status: 'out_of_service', out_of_service_issue_id: 'issue-1',
+    })
+    await POST(req({ notes: 'Belt replaced' }), { params: { id: 'issue-1' } })
+    expect(updateEquipment).toHaveBeenCalledWith(expect.anything(), 'eq-1', {
+      status: 'in_service', out_of_service_issue_id: null,
+    })
+  })
+
+  it('leaves an asset alone when a DIFFERENT issue took it off the floor', async () => {
+    getInboxIssue.mockResolvedValue({ ...ISSUE, equipment_id: 'eq-1' })
+    getEquipment.mockResolvedValue({
+      id: 'eq-1', status: 'out_of_service', out_of_service_issue_id: 'issue-OTHER',
+    })
+    await POST(req({ notes: 'unrelated' }), { params: { id: 'issue-1' } })
+    expect(updateEquipment).not.toHaveBeenCalled()
+  })
+
+  it('does not touch equipment for an ordinary issue with no equipment link', async () => {
+    getInboxIssue.mockResolvedValue({ ...ISSUE, equipment_id: null })
+    await POST(req({ notes: 'done' }), { params: { id: 'issue-1' } })
+    expect(updateEquipment).not.toHaveBeenCalled()
   })
 })

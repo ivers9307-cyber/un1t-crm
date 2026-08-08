@@ -31,7 +31,7 @@ import { logWarn } from '@/lib/log'
 import { resolveCurrentOccurrence } from '@/lib/class-occurrences'
 import { lookupBookedMember, resolveClassLinkSource, resolveBookedOccurrenceForMember } from '@/lib/class-bookings'
 import { classSessionAction, shouldCloseSupersededSession } from '@/lib/hr-session-lifecycle'
-import { applyBatchToRunningSummary, normaliseRunningState } from '@/lib/heart-rate'
+import { applyBatchToRunningSummary, normaliseRunningState, resolveScoringConfig } from '@/lib/heart-rate'
 import { selectAll } from '@/lib/select-all'
 
 // 90 min covers an hour-long class plus 15min before + 15min after.
@@ -178,6 +178,32 @@ export function latestBridgeSeenMs(bridges) {
 export function isBridgeOnline(bridges, nowMs = Date.now(), windowMs = BRIDGE_ONLINE_WINDOW_MS) {
   const last = latestBridgeSeenMs(bridges)
   return last > 0 && (nowMs - last) < windowMs
+}
+
+/**
+ * Display status for ONE bridge row, derived from heartbeat freshness rather
+ * than trusting the stored column.
+ *
+ * `ble_bridges.status` only ever moves toward 'online' — the heartbeat route
+ * writes it and nothing writes it back, because a Pi that loses power cannot
+ * send a final 'offline'. The Stillorgan bridge therefore read ONLINE for 17
+ * days after it died, with "Last seen 15 days ago" rendered right next to it,
+ * and the outage went unnoticed.
+ *
+ * Freshness outranks the column, but only in one direction: a bridge that is
+ * still heartbeating and reporting 'error' is genuinely in error, and that
+ * must survive.
+ *
+ * Same window as the TV connection dot, so the two surfaces cannot disagree.
+ *
+ * @param {{ status?: string|null, last_seen_at?: string|null }|null} bridge
+ * @param {number} nowMs
+ * @param {number} windowMs
+ * @returns {'online'|'offline'|'error'}
+ */
+export function deriveBridgeStatus(bridge, nowMs = Date.now(), windowMs = BRIDGE_ONLINE_WINDOW_MS) {
+  if (!isBridgeOnline([bridge], nowMs, windowMs)) return 'offline'
+  return bridge?.status === 'error' ? 'error' : 'online'
 }
 
 // ── pure: build sample rows from a strap → session map ──────────
@@ -659,6 +685,40 @@ function resolveMaxHrForBridgeInsert(contact) {
 
 // ── insertion ───────────────────────────────────────────────────
 
+// Per-location zone-points cache for the ingest hot path. The running aggregate
+// must score with the OPERATOR'S zone_points (settings.scoring, the same config
+// endSession applies via resolveScoringConfig) — scoring with defaults made the
+// live board's points jump at session end wherever an operator customised them
+// (re-audit A4). Ingest runs every ~2s per bridge, so cache the resolved config
+// per location for 60s per warm instance; a settings edit reaches the live
+// board within a minute and endSession stays authoritative regardless.
+const ZONE_POINTS_TTL_MS = 60_000
+const zonePointsCache = new Map() // locationId -> { at: ms, zonePoints }
+
+async function loadZonePointsForLocation(db, locationId) {
+  if (!locationId) return undefined
+  const hit = zonePointsCache.get(locationId)
+  if (hit && Date.now() - hit.at < ZONE_POINTS_TTL_MS) return hit.zonePoints
+  try {
+    const { data, error } = await db
+      .from('locations')
+      .select('settings')
+      .eq('id', locationId)
+      .maybeSingle()
+    if (error) throw error
+    const { zonePoints } = resolveScoringConfig(data || {})
+    zonePointsCache.set(locationId, { at: Date.now(), zonePoints })
+    return zonePoints
+  } catch (e) {
+    // Best-effort: default scoring beats failing the ingest ack. Don't cache
+    // the failure — retry on the next batch.
+    logWarn('bridge-samples', 'zone-points load failed — scoring with defaults', {
+      err: e?.message || e, locationId,
+    })
+    return undefined
+  }
+}
+
 /**
  * Upsert with onConflict (session_id, recorded_at) ignoreDuplicates.
  * Bridge retries after a network blip don't 409.
@@ -667,9 +727,11 @@ function resolveMaxHrForBridgeInsert(contact) {
  *   - touches heart_rate_sessions.last_sample_at (the stale-flag signal), and
  *   - maintains the INCREMENTAL running HR aggregate (audit W2/#11) so the live
  *     TV board reads a single session row instead of re-scanning every sample
- *     every 2s poll. See updateRunningAggregateForSession.
+ *     every 2s poll. See updateRunningAggregateForSession. Pass
+ *     opts.locationId (the authed bridge's location) so the aggregate scores
+ *     with that location's zone_points, not the defaults.
  */
-export async function insertHrSamples(db, rows) {
+export async function insertHrSamples(db, rows, opts = {}) {
   if (rows.length === 0) return { inserted: 0, error: null }
   const { error, count } = await db
     .from('hr_samples')
@@ -690,11 +752,15 @@ export async function insertHrSamples(db, rows) {
   }
   for (const arr of bySession.values()) arr.sort((a, b) => (a.recorded_at < b.recorded_at ? -1 : a.recorded_at > b.recorded_at ? 1 : 0))
 
+  // One resolve per ingest call (cached 60s per location) — shared by every
+  // session slice in the batch; a bridge only ever serves one location.
+  const zonePoints = await loadZonePointsForLocation(db, opts.locationId)
+
   await Promise.all(
     Array.from(bySession.entries()).map(async ([sessionId, batch]) => {
       const latestTs = batch[batch.length - 1].recorded_at
       try {
-        await updateRunningAggregateForSession(db, sessionId, batch, latestTs)
+        await updateRunningAggregateForSession(db, sessionId, batch, latestTs, zonePoints)
       } catch (e) {
         logWarn('bridge-samples', 'running aggregate update failed', { err: e?.message || e, sessionId })
         // Aggregate is best-effort — it self-heals on the next batch (or the
@@ -737,7 +803,7 @@ export async function insertHrSamples(db, rows) {
  * running fold state is re-seeded so subsequent in-order batches take the fast
  * path again. Logged so we can watch the rate.
  */
-async function updateRunningAggregateForSession(db, sessionId, batch, latestTs) {
+async function updateRunningAggregateForSession(db, sessionId, batch, latestTs, zonePoints) {
   const { data: session, error: sErr } = await db
     .from('heart_rate_sessions')
     .select('id, max_hr_used, zones_seconds, live_sum_bpm, live_sample_count, live_last_bpm, live_last_at')
@@ -763,12 +829,12 @@ async function updateRunningAggregateForSession(db, sessionId, batch, latestTs) 
     logWarn('bridge-samples', 'aggregate: out-of-order/duplicate batch → full recompute', {
       sessionId, batchFirst: batch[0].recorded_at, liveLastAt: session.live_last_at,
     })
-    await fullRecomputeRunningAggregate(db, sessionId, maxHr, latestTs)
+    await fullRecomputeRunningAggregate(db, sessionId, maxHr, latestTs, zonePoints)
     return
   }
 
-  const prevState = normaliseRunningState(session)
-  const next = applyBatchToRunningSummary(prevState, batch, maxHr)
+  const prevState = normaliseRunningState(session, { zonePoints })
+  const next = applyBatchToRunningSummary(prevState, batch, maxHr, { zonePoints })
   await db.from('heart_rate_sessions')
     .update({
       zones_seconds: next.zonesSeconds,
@@ -801,7 +867,7 @@ async function updateRunningAggregateForSession(db, sessionId, batch, latestTs) 
  * path is byte-identical to an uninterrupted fold. The live board still reads
  * the same running columns; it under-reads the pending tail by ≤5s as always.
  */
-async function fullRecomputeRunningAggregate(db, sessionId, maxHr, latestTs) {
+async function fullRecomputeRunningAggregate(db, sessionId, maxHr, latestTs, zonePoints) {
   const samples = await selectAll((from, to) => db
     .from('hr_samples')
     .select('recorded_at, bpm')
@@ -809,7 +875,7 @@ async function fullRecomputeRunningAggregate(db, sessionId, maxHr, latestTs) {
     .order('recorded_at', { ascending: true })
     .range(from, to))
 
-  const state = applyBatchToRunningSummary(undefined, samples, maxHr)
+  const state = applyBatchToRunningSummary(undefined, samples, maxHr, { zonePoints })
 
   await db.from('heart_rate_sessions')
     .update({

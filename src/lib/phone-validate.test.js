@@ -13,6 +13,33 @@ describe('toMobileE164 — Irish mobiles', () => {
     expect(toMobileE164('00353871234567')).toBe('+353871234567')
     expect(toMobileE164('353871234567')).toBe('+353871234567')
   })
+
+  // The trunk zero is dropped when a number is written for a +353 prefix, so
+  // the bare 9-digit NSN is a normal way to hold (and type) an Irish mobile —
+  // 431 contacts are stored in exactly this shape. toE164Ireland() in twilio.js
+  // has always accepted it; this gate used to reject it outright.
+  it('accepts the bare 9-digit form with no trunk zero and no country code', () => {
+    expect(toMobileE164('871234567')).toBe('+353871234567')
+    expect(toMobileE164('87 123 4567')).toBe('+353871234567')
+    expect(toMobileE164('83-123-4567')).toBe('+353831234567')
+    expect(toMobileE164('851234567')).toBe('+353851234567')
+    expect(toMobileE164('861234567')).toBe('+353861234567')
+    expect(toMobileE164('891234567')).toBe('+353891234567')
+  })
+
+  // Guards the narrowing: bare 8… is deliberately NOT as broad as the 08* used
+  // for the trunk-zero form, or 0818 lo-call (not a mobile, not
+  // WhatsApp-reachable) would ride in on the new branch.
+  //
+  // The asymmetry below is intentional. The national 0818 form is accepted
+  // today by the pre-existing broad IE_MOBILE_NATIONAL (08*), and this change
+  // leaves that exactly as it was — narrowing a live public gate is the
+  // separate decision we explicitly declined to make here. The point is only
+  // that widening must not ADD a second way in for a non-mobile.
+  it('does not widen into 0818 lo-call', () => {
+    expect(toMobileE164('818123456')).toBeNull() // bare form — rejected by the new branch
+    expect(toMobileE164('0818123456')).toBe('+353818123456') // national form — pre-existing, unchanged
+  })
 })
 
 describe('toMobileE164 — UK mobiles', () => {
@@ -20,6 +47,31 @@ describe('toMobileE164 — UK mobiles', () => {
     expect(toMobileE164('07911123456')).toBe('+447911123456')
     expect(toMobileE164('+44 7911 123456')).toBe('+447911123456')
     expect(toMobileE164('00447911123456')).toBe('+447911123456')
+  })
+})
+
+describe('toMobileE164 — country code followed by a national trunk zero', () => {
+  // Without the repair these fail the E.164 mobile tests and get waved through
+  // by the generic international branch, storing a string that is not valid
+  // E.164 and cannot be dialled or messaged. 106 rows in prod hold the +353
+  // form, 2 the +44 form.
+  it('repairs +3530… to +353…', () => {
+    expect(toMobileE164('+3530871234567')).toBe('+353871234567')
+    expect(toMobileE164('3530871234567')).toBe('+353871234567')
+    expect(toMobileE164('003530871234567')).toBe('+353871234567')
+  })
+  it('repairs +440… to +44…', () => {
+    expect(toMobileE164('+4407911123456')).toBe('+447911123456')
+    expect(toMobileE164('4407911123456')).toBe('+447911123456')
+    expect(toMobileE164('004407911123456')).toBe('+447911123456')
+  })
+  // The repair must not fire on a legitimate 44…/353… that merely contains a
+  // zero further in, nor disturb the already-correct forms.
+  it('leaves correct country-coded numbers alone', () => {
+    expect(toMobileE164('+447911023456')).toBe('+447911023456') // 0 mid-number
+    expect(toMobileE164('+353870234567')).toBe('+353870234567') // 0 mid-number
+    expect(toMobileE164('+447911123456')).toBe('+447911123456')
+    expect(toMobileE164('+353871234567')).toBe('+353871234567')
   })
 })
 
@@ -43,5 +95,20 @@ describe('isValidMobileNumber — rejects non-mobiles + junk', () => {
   it('returns true for the valid forms', () => {
     expect(isValidMobileNumber('087 123 4567')).toBe(true)
     expect(isValidMobileNumber('+353871234567')).toBe(true)
+  })
+})
+
+// The trunk-zero repair this block used to also cover now lives in
+// "country code followed by a national trunk zero" above, which tests both
+// +353 and +44. Only the landline documentation is kept here.
+describe('toMobileE164 — +353 landline in E.164 form', () => {
+  // toMobileE164 accepts any well-formed 8–15 digit international number it
+  // cannot classify, so a +353 landline passes this mobile-only gate. Raised
+  // during ZOOMSYNC.1 and left alone as out of scope; since measured against
+  // prod and left alone again on the numbers — the shape reaches 3 rows in
+  // `contacts`, one of which converted to a member, so rejecting it would have
+  // cost more than it saved. Pinned so it reads as a decision, not an oversight.
+  it('lets an Irish landline through — measured, deliberately not narrowed', () => {
+    expect(toMobileE164('+35315551234')).toBe('+35315551234')
   })
 })

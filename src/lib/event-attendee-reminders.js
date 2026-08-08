@@ -143,12 +143,14 @@ function buildEventReminderPush({ ev, offset, whenLabel }) {
 
 // Send the reminder email to the registration's captain contact. Transactional,
 // so marketing consent is irrelevant; the HARD administrative opt-out and
-// bounced/complained/unsubscribed email states still suppress it.
+// bounced/complained email states still suppress it.
 async function sendReminderEmail({ db, ev, reg, offset, whenLabel, locationName, members }) {
   const c = reg?.contact
   const to = c?.email
   if (!to) return { status: 'skipped', reason: 'no_email' }
-  if (c?.email_status && ['bounced', 'complained', 'unsubscribed'].includes(c.email_status)) {
+  // LOCCOMMS.5 — see booking-confirmations.js: transactional mail follows the
+  // transaction, not a marketing list.
+  if (c?.email_status && ['bounced', 'complained'].includes(c.email_status)) {
     return { status: 'skipped', reason: `email_status=${c.email_status}` }
   }
   const prefs = c?.contact_preferences

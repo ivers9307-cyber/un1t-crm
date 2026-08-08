@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
   ArrowLeft, Mail, Eye, MousePointerClick, AlertTriangle,
-  Ban, Send, CheckCircle2, XCircle, Users
+  Ban, Send, CheckCircle2, XCircle, Users, RotateCcw
 } from 'lucide-react'
 
 const recipientStatusConfig = {
@@ -64,9 +64,31 @@ function AbVariantRow({ label, subject, stats, isWinner }) {
   )
 }
 
-export default function CampaignDetail({ campaign, recipients = [], abStats = null, locationId: _locationId, userId: _userId }) {
+export default function CampaignDetail({ campaign, recipients = [], abStats = null, resendChild = null, resendParent = null, locationId: _locationId, userId: _userId }) {
   const router = useRouter()
   const [tab, setTab] = useState('overview')  // overview, recipients, preview
+  // CAMPAIGN-RESEND — cancel-pending-resend state (the child doesn't
+  // exist yet, so cancelling is just clearing the parent's flag).
+  const [resendBusy, setResendBusy] = useState(false)
+  const [resendCancelled, setResendCancelled] = useState(false)
+
+  const resendPending = campaign.resend_enabled && !resendChild && !resendCancelled
+  const resendDueAt = campaign.sent_at && campaign.resend_wait_hours
+    ? new Date(new Date(campaign.sent_at).getTime() + campaign.resend_wait_hours * 3_600_000)
+    : null
+
+  async function cancelResend() {
+    setResendBusy(true)
+    try {
+      const res = await fetch(`/api/campaigns/${campaign.id}/resend`, { method: 'DELETE' })
+      if (res.ok) {
+        setResendCancelled(true)
+        router.refresh()
+      }
+    } finally {
+      setResendBusy(false)
+    }
+  }
 
   // CAMPAIGN.4 — drafts are routed to <CampaignEditor> by the page.
   // If we somehow get here with a draft, send the user to the editor
@@ -113,6 +135,16 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
           <div>
             <h2 className="text-lg font-semibold">{campaign.name}</h2>
             <p className="text-xs text-un1t-subtle">{campaign.subject || 'No subject'}</p>
+            {resendParent && (
+              <p className="text-xs text-un1t-subtle flex items-center gap-1 mt-0.5">
+                <RotateCcw size={11} />
+                Resend of{' '}
+                <Link href={`/email/campaigns/${resendParent.id}`} className="underline hover:text-un1t-text">
+                  {resendParent.name}
+                </Link>
+                {' '}— non-openers only
+              </p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -144,6 +176,43 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
       <div className="flex-1 overflow-auto">
         {tab === 'overview' && (
           <div className="p-6 space-y-6">
+            {/* CAMPAIGN-RESEND — pending / fired resend state */}
+            {resendPending && (
+              <div className="bg-blue-500/[0.05] border border-blue-500/30 rounded-lg p-4 flex items-center justify-between gap-4">
+                <div className="flex items-start gap-2.5 text-sm">
+                  <RotateCcw size={16} className="text-blue-700 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-un1t-text font-medium">Resend to non-openers scheduled</p>
+                    <p className="text-xs text-un1t-subtle mt-0.5">
+                      {resendDueAt
+                        ? <>Goes out around {resendDueAt.toLocaleString('en-IE', { dateStyle: 'medium', timeStyle: 'short' })} to everyone who hasn&apos;t opened by then</>
+                        : <>Goes out {campaign.resend_wait_hours || '—'}h after this campaign finishes sending</>}
+                      {campaign.resend_subject ? <> · subject: “{campaign.resend_subject}”</> : ' · same subject'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={cancelResend}
+                  disabled={resendBusy}
+                  className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text disabled:opacity-40 shrink-0"
+                >
+                  {resendBusy ? 'Cancelling…' : 'Cancel resend'}
+                </button>
+              </div>
+            )}
+            {resendChild && (
+              <div className="bg-un1t-surface border border-un1t-border rounded-lg p-4 flex items-center gap-2.5 text-sm">
+                <RotateCcw size={16} className="text-un1t-subtle shrink-0" />
+                <span className="text-un1t-subtle">
+                  Resent to non-openers —{' '}
+                  <Link href={`/email/campaigns/${resendChild.id}`} className="text-un1t-text underline">
+                    {resendChild.name}
+                  </Link>
+                  {resendChild.status !== 'sent' && <span className="capitalize"> ({resendChild.status})</span>}
+                </span>
+              </div>
+            )}
+
             {/* Stat cards */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <StatCard icon={Send}              label="Sent"       value={totalSent} />

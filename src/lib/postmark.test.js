@@ -27,10 +27,17 @@ import {
   buildAudienceQuery,
   consentFieldForStream,
   sendBatch,
+  sendEmail,
   isTransientSendError,
   sendMarketingEmail,
+  getLocationInboxReplyTo,
+  getDefaultMailboxAddress,
 } from './postmark.js'
 import { createServerClient } from './supabase'
+// EMAIL-MAILBOX-ADMIN.1 — the Reply-To resolution reads two tables in
+// sequence, which the fluent recorder above cannot model. Reuse the shared
+// ticket-suite fake, which honours eq/limit/maybeSingle for real.
+import { makeDb } from '@/app/api/email/tickets/_test-db'
 
 // Fluent fake recording method calls (mirrors sms.test.js).
 function makeFakeQuery() {
@@ -337,11 +344,15 @@ describe('consentFieldForStream', () => {
 })
 
 describe('buildAudienceQuery — consent gate', () => {
-  it('defaults to gating on email_marketing', () => {
+  it('defaults to gating on the PER-LOCATION email consent column', () => {
+    // LOCCOMMS.3 — marketing consent moved to contact_location_audience
+    // (mig 491). email_administrative stays GLOBAL — see the next test, which
+    // is the guard that the mapping did not over-apply.
     const { builder, calls } = makeFakeQuery()
     const db = { from: () => builder }
     buildAudienceQuery(db, { logic: 'and', filters: [] }, 'loc-uuid')
-    expect(calls).toContainEqual({ method: 'eq', args: ['email_marketing', true] })
+    expect(calls).toContainEqual({ method: 'eq', args: ['loc_email_marketing', true] })
+    expect(calls).not.toContainEqual({ method: 'eq', args: ['email_marketing', true] })
     expect(calls).toContainEqual({ method: 'not', args: ['email_status', 'in', '("bounced","complained")'] })
   })
 
@@ -566,5 +577,170 @@ describe('sendMarketingEmail — broadcast stream + one-click unsubscribe header
       unsubscribeUrl: 'https://crm.test/unsubscribe/tok-1',
     })
     expect(createServerClient).not.toHaveBeenCalled()
+  })
+})
+
+// LOCCOMMS.4 — the unsubscribe URL carries the SENDING location, so opting out
+// of a Hatch Street email does not silently remove someone from Stillorgan's
+// list. Stillorgan has 3,364 reachable contacts against Hatch's 82, so a global
+// unsubscribe fired from a Hatch campaign strips members off the list of the
+// gym they actually attend.
+describe('LOCCOMMS.4 — unsubscribe URL carries the sending location', () => {
+  const contact = { contact_preferences: [{ unsubscribe_token: 'tok' }] }
+
+  it('appends ?l= when a location is supplied', () => {
+    expect(buildUnsubscribeUrl(contact, 'https://crm.example', 'loc-hatch'))
+      .toBe('https://crm.example/unsubscribe/tok?l=loc-hatch')
+  })
+
+  it('omits ?l= when no location is supplied — that means GLOBAL unsubscribe', () => {
+    // BACK-COMPAT: emails already delivered carry the old, location-less URL.
+    // Those must keep working, and with no `l` they unsubscribe from EVERY
+    // location — today's exact behaviour, and the only direction that cannot
+    // generate a spam complaint.
+    expect(buildUnsubscribeUrl(contact, 'https://crm.example'))
+      .toBe('https://crm.example/unsubscribe/tok')
+  })
+
+  it('survives the List-Unsubscribe transform with the param intact', () => {
+    const page = buildUnsubscribeUrl(contact, 'https://crm.example', 'loc-hatch')
+    expect(toListUnsubscribeUrl(page))
+      .toBe('https://crm.example/api/unsubscribe/tok?l=loc-hatch')
+  })
+
+  it('still falls back to contact.id when there is no preferences token', () => {
+    expect(buildUnsubscribeUrl({ id: 'c1' }, 'https://crm.example', 'loc-hatch'))
+      .toBe('https://crm.example/unsubscribe/c1?l=loc-hatch')
+  })
+})
+
+describe('EMAIL-MAILBOX-ADMIN.1 — where a studio’s replies go', () => {
+  const LOC = 'loc-1'
+  const mailbox = (over = {}) => ({
+    id: 'mb-1', location_id: LOC, address: 'studio@un1tdublin.com',
+    label: 'Studio', is_default: true, active: true, ...over,
+  })
+
+  it('prefers the DEFAULT email account over the deprecated column', async () => {
+    // mig 485 documented is_default as the Reply-To source from the start,
+    // but nothing could set it until the accounts editor shipped — so this
+    // path kept reading a column no operator can edit any more.
+    const db = makeDb({
+      mailboxes: [mailbox()],
+      locations: [{ id: LOC, email_inbox_reply_to: 'legacy@un1tdublin.com' }],
+    })
+    createServerClient.mockReturnValue(db)
+    expect(await getLocationInboxReplyTo(LOC)).toBe('studio@un1tdublin.com')
+  })
+
+  it('ignores a DEACTIVATED default — its mail dead-letters', async () => {
+    const db = makeDb({
+      mailboxes: [mailbox({ active: false })],
+      locations: [{ id: LOC, email_inbox_reply_to: 'legacy@un1tdublin.com' }],
+    })
+    createServerClient.mockReturnValue(db)
+    expect(await getLocationInboxReplyTo(LOC)).toBe('legacy@un1tdublin.com')
+  })
+
+  it('ignores a non-default account — an address nobody chose is not a Reply-To', async () => {
+    const db = makeDb({
+      mailboxes: [mailbox({ is_default: false })],
+      locations: [{ id: LOC, email_inbox_reply_to: null }],
+    })
+    createServerClient.mockReturnValue(db)
+    expect(await getLocationInboxReplyTo(LOC)).toBeNull()
+  })
+
+  it('falls back to the deprecated column for studios configured before mig 485', async () => {
+    const db = makeDb({ mailboxes: [], locations: [{ id: LOC, email_inbox_reply_to: 'legacy@un1tdublin.com' }] })
+    createServerClient.mockReturnValue(db)
+    expect(await getLocationInboxReplyTo(LOC)).toBe('legacy@un1tdublin.com')
+  })
+
+  it('never picks up ANOTHER studio’s default account', async () => {
+    const db = makeDb({
+      mailboxes: [mailbox({ location_id: 'loc-other', address: 'studio@hatch.ie' })],
+      locations: [{ id: LOC, email_inbox_reply_to: null }],
+    })
+    createServerClient.mockReturnValue(db)
+    expect(await getLocationInboxReplyTo(LOC)).toBeNull()
+  })
+
+  it('is null rather than throwing when the lookup fails — the send still goes', async () => {
+    const db = makeDb({ errors: { email_mailboxes: { message: 'boom' }, locations: { message: 'boom' } } })
+    createServerClient.mockReturnValue(db)
+    expect(await getLocationInboxReplyTo(LOC)).toBeNull()
+    expect(await getDefaultMailboxAddress(db, LOC)).toBeNull()
+  })
+
+  it('getDefaultMailboxAddress needs both a client and a location', async () => {
+    expect(await getDefaultMailboxAddress(null, LOC)).toBeNull()
+    expect(await getDefaultMailboxAddress(makeDb({ mailboxes: [mailbox()] }), null)).toBeNull()
+  })
+})
+
+// ── sendEmail Cc / Bcc (EMAIL-CC.1) ───────────────────────────────
+//
+// THE WIRE IS WHERE THE CONFIDENTIALITY GUARANTEE IS EITHER KEPT OR LOST.
+// Postmark strips the Bcc header from every delivered message, so a Bcc passed
+// in its own API field is genuinely invisible to the other recipients — but
+// that is only true of the `Bcc` FIELD. The same address written into
+// `body.Headers` would ride out on the message itself, visible to everyone.
+// These tests pin the request body, which is the last thing this codebase
+// controls before the provider takes over.
+describe('sendEmail — Cc and Bcc on the wire', () => {
+  beforeEach(() => {
+    process.env.POSTMARK_API_KEY = 'test-token'
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function okFetch() {
+    return vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ MessageID: 'pm-1', To: 'a@x.ie', SubmittedAt: '2026-08-07T10:00:00Z' }),
+    })
+  }
+
+  it('sends Cc and Bcc in their own Postmark fields', async () => {
+    const fetchSpy = okFetch()
+    await sendEmail({
+      to: 'a@x.ie, b@x.ie', cc: 'c@x.ie', bcc: 'secret@x.ie',
+      subject: 'S', htmlBody: '<p>hi</p>', stream: 'outbound',
+    })
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.To).toBe('a@x.ie, b@x.ie')
+    expect(body.Cc).toBe('c@x.ie')
+    expect(body.Bcc).toBe('secret@x.ie')
+  })
+
+  // THE LEAK TEST. A bcc address anywhere but the Bcc field — in To, in Cc, or
+  // in a header — reaches the other recipients.
+  it('never puts a bcc address in To, Cc or any header', async () => {
+    const fetchSpy = okFetch()
+    await sendEmail({
+      to: 'a@x.ie', cc: 'c@x.ie', bcc: 'secret@x.ie',
+      subject: 'S', htmlBody: '<p>hi</p>', stream: 'outbound',
+      headers: [{ Name: 'In-Reply-To', Value: '<x@mail>' }],
+    })
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.To).not.toContain('secret@x.ie')
+    expect(body.Cc).not.toContain('secret@x.ie')
+    expect(JSON.stringify(body.Headers)).not.toContain('secret@x.ie')
+    expect(body.Bcc).toBe('secret@x.ie')
+  })
+
+  // Purely additive: the request body for every pre-EMAIL-CC.1 caller must be
+  // shaped exactly as it was, or a Cc/Bcc key with no value goes out on every
+  // email the estate sends.
+  it('omits Cc and Bcc entirely when the caller passes neither', async () => {
+    const fetchSpy = okFetch()
+    await sendEmail({ to: 'a@x.ie', subject: 'S', htmlBody: '<p>hi</p>' })
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body)
+    expect(body.Cc).toBeUndefined()
+    expect(body.Bcc).toBeUndefined()
+    expect('Cc' in JSON.parse(fetchSpy.mock.calls[0][1].body)).toBe(false)
   })
 })

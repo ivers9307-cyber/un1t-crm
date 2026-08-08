@@ -30,6 +30,12 @@ const Schema = z.object({
   // outbound/transactional stream (gates on email_administrative, no
   // unsubscribe footer). Maps to campaigns.postmark_stream below.
   email_type: z.enum(['marketing', 'utility']).optional(),
+  // CAMPAIGN-RESEND (mig 506) — auto-resend to non-openers. Marketing
+  // only (enforced below — outbound has no open tracking); bounds mirror
+  // the DB CHECK on resend_wait_hours.
+  resend_enabled: z.boolean().optional(),
+  resend_wait_hours: z.number().int().min(1).max(168).optional(),
+  resend_subject: z.string().max(500).optional(),
 })
 
 export async function POST(request) {
@@ -38,7 +44,7 @@ export async function POST(request) {
 
   const validation = await validateBody(request, Schema)
   if (!validation.ok) return validation.response
-  const { location_id, name, subject, audience_filter, html_content, design_json, action = 'draft', scheduled_at, email_type = 'marketing' } = validation.data
+  const { location_id, name, subject, audience_filter, html_content, design_json, action = 'draft', scheduled_at, email_type = 'marketing', resend_enabled, resend_wait_hours, resend_subject } = validation.data
 
   const guard = assertLocationAccess(user, location_id)
   if (guard) return guard
@@ -47,6 +53,17 @@ export async function POST(request) {
   }
   if (action === 'schedule' && !scheduled_at) {
     return NextResponse.json({ success: false, error: 'scheduled_at is required to schedule' }, { status: 400 })
+  }
+  // CAMPAIGN-RESEND — marketing only (the outbound stream has open
+  // tracking off by design, so "didn't open" is unknowable there), and a
+  // wait is required so the spawner has a real deadline.
+  if (resend_enabled) {
+    if (email_type === 'utility') {
+      return NextResponse.json({ success: false, error: 'Resend to non-openers is only available for marketing emails' }, { status: 400 })
+    }
+    if (!resend_wait_hours) {
+      return NextResponse.json({ success: false, error: 'resend_wait_hours is required when resend is enabled' }, { status: 400 })
+    }
   }
 
   const status = action === 'send' ? 'queued' : action === 'schedule' ? 'scheduled' : 'draft'
@@ -62,6 +79,11 @@ export async function POST(request) {
     postmark_stream: email_type === 'utility' ? 'outbound' : 'broadcast',
   }
   if (action === 'schedule') row.scheduled_at = scheduled_at
+  if (resend_enabled) {
+    row.resend_enabled = true
+    row.resend_wait_hours = resend_wait_hours
+    row.resend_subject = resend_subject || null
+  }
 
   const db = createServerClient()
   const { data, error } = await db.from('campaigns').insert(row).select('id').single()

@@ -59,6 +59,25 @@ import { overlayConnections } from '@/lib/connection-registry'
 // SMS steps are deliberately NOT gated or stamped in this slice (the
 // cap covers email + WhatsApp, the two channels campaigns/broadcasts
 // share) — extend here if SMS marketing volume ever warrants it.
+// LOCCOMMS.5 — resolve the contact's consent row for the SEQUENCE'S location.
+//
+// Sequences do not go through buildAudienceQuery, so the PR 3 cutover missed
+// them and they were still gating on the denormalised global column. That was
+// wrong in both directions: someone opted out globally but opted IN here was
+// wrongly skipped, and someone opted in globally but opted OUT here was wrongly
+// sent to — the harm this programme exists to prevent.
+//
+// Returns null when there is no row for that location, and callers treat null
+// as "do not send". That matches the INNER join in contact_location_audience,
+// so the broadcast and sequence paths agree: row absent = that location may
+// never send to this person.
+function locationConsent(contact, sequence) {
+  const rows = contact?.contact_location_preferences || []
+  const locId = sequence?.location_id
+  if (!locId) return null
+  return rows.find((r) => r.location_id === locId) || null
+}
+
 function assertNotFrequencyCapped(contact, frequencyCap) {
   if (frequencyCap?.enabled && isFrequencyCapped(contact, frequencyCap)) {
     throw new FrequencyCapDeferral(frequencyCapDeferUntil(contact, frequencyCap))
@@ -116,11 +135,19 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
   // mid-sequence unsubscribes are normal contact behaviour, and the
   // error path pauses the whole enrolment after MAX_ERRORS (see
   // recordStepSkip).
-  if (contact.email_marketing !== true) {
-    await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: 'no email marketing consent' })
+  const emailConsent = locationConsent(contact, sequence)
+  if (emailConsent?.email_marketing !== true) {
+    await recordStepSkip(db, {
+      contact, sequence, step, channel: 'email',
+      reason: emailConsent
+        ? 'no email marketing consent for this location'
+        : 'not on this location\u2019s list',
+    })
     return null
   }
-  if (contact.email_status && ['bounced', 'complained', 'unsubscribed'].includes(contact.email_status)) {
+  // LOCCOMMS.5 / mig 492 — 'unsubscribed' deliberately absent: the value is
+  // retired (mig 501 CHECK), consent is the per-location gate above.
+  if (contact.email_status && ['bounced', 'complained'].includes(contact.email_status)) {
     await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: `email_status is '${contact.email_status}'` })
     return null
   }
@@ -164,7 +191,7 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
   // unsubscribe link, appendUnsubscribeFooter skips it so recipients
   // don't see two "Unsubscribe" links.
   const baseUrl = getAppUrl()
-  const unsubscribeUrl = buildUnsubscribeUrl(contact, baseUrl)
+  const unsubscribeUrl = buildUnsubscribeUrl(contact, baseUrl, sequence?.location_id)
   const mergedSubject = applyMergeTags(subject, contact)
   const merged = applyMergeTags(html, contact, {
     unsubscribe_url: unsubscribeUrl,
@@ -228,8 +255,14 @@ export async function sendWhatsappStep(db, { step, sequence, contact, frequencyC
   // audience layer; a sequence contact can text STOP mid-flow, so the
   // gate must run at SEND time — that contact must never receive
   // another WA step.
-  if (contact.whatsapp_marketing !== true) {
-    await recordStepSkip(db, { contact, sequence, step, channel: 'WhatsApp', reason: 'no WhatsApp marketing consent' })
+  const waConsent = locationConsent(contact, sequence)
+  if (waConsent?.whatsapp_marketing !== true) {
+    await recordStepSkip(db, {
+      contact, sequence, step, channel: 'WhatsApp',
+      reason: waConsent
+        ? 'no WhatsApp marketing consent for this location'
+        : 'not on this location\u2019s list',
+    })
     return null
   }
   if (['opted_out', 'blocked', 'undeliverable'].includes(contact.wa_status)) {

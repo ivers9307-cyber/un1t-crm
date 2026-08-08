@@ -27,6 +27,7 @@ on:
       - '.eslintrc.json'
       - 'eslint.config.mjs'
       - 'eslint.mobile-imports.config.mjs'
+      - 'eslint.mobile.config.mjs'
       - 'eslint.guardrails.config.mjs'
       - 'eslint-rules/**'
       - 'vitest.config.js'
@@ -60,6 +61,7 @@ on:
       - '.eslintrc.json'
       - 'eslint.config.mjs'
       - 'eslint.mobile-imports.config.mjs'
+      - 'eslint.mobile.config.mjs'
       - 'eslint.guardrails.config.mjs'
       - 'eslint-rules/**'
       - 'vitest.config.js'
@@ -103,6 +105,18 @@ jobs:
       - name: Mobile import resolution
         run: npm run check:mobile-imports
 
+      # MOBILE-LINT.1 — until this step existed NO linter ran against mobile/**
+      # at all: the root eslint.config.mjs ignores it, deferring to `expo lint`,
+      # which has never worked here (mobile/package.json carries no eslint
+      # dependency, so it dies with "Cannot find module 'eslint'"). `npm run
+      # lint` therefore reported clean on mobile-only changes — three of them
+      # shipped that way, each needing a throwaway manual no-unused-vars /
+      # no-undef pass. Its very first run caught a live crash: expenses/[id].jsx
+      # still called setOcrState/setOcrConfidence/setOcrError after
+      # INVOICES-QUEUE.1 PR 3 deleted them. See eslint.mobile.config.mjs.
+      - name: Mobile lint
+        run: npm run check:mobile-lint
+
       # Catches the #408 class of bug — an /api route shipping with NO auth
       # guard at all (middleware only proves a valid JWT exists; champ-app
       # customers hold valid JWTs on the same Supabase project). Audit
@@ -118,6 +132,16 @@ jobs:
       # runtime. See scripts/check-location-scoping.mjs.
       - name: Location scoping presence
         run: npm run check:location-scoping
+
+      # Catches the RLS-RESTRICTIVE.1 class — a restrictive `FOR ALL ...
+      # USING (false)` deny-writes policy that also folds away the table's
+      # permissive SELECT (FOR ALL includes SELECT). The read returns an
+      # EMPTY SET rather than an error, and realtime subscribers silently
+      # never fire. Reached 16 tables before anything noticed. Derived from
+      # the net policy state in supabase/migrations. See migration 485 and
+      # scripts/check-rls-restrictive.mjs.
+      - name: RLS restrictive-policy sanity
+        run: npm run check:rls-restrictive
 
       # Catches the audit's recurring silent-data-loss classes — a .catch on a
       # supabase thenable (throws, query never runs) and a .limit(>=1000) without

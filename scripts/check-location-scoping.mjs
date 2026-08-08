@@ -87,6 +87,25 @@ const SCOPING_HELPERS = [
   'assertCreateInOrg(',
   'orgScopeLocationIds(',
   'orgLocationIds(',
+  // src/app/api/email/tickets/_helpers.js — EMAIL-TICKET.4's two-level gate.
+  // loadTicketForUser runs assertLocationAccessOr404 on the ticket's own
+  // location AND requires the ticket's mailbox to be in the caller's visible
+  // set; loadVisibleMailboxes builds that set with .eq('location_id', …) plus
+  // the caller's email_mailbox_access grants, and a NULL-mailbox ticket is
+  // elevated-only. Rows derived from the returned ticket — email_inbox_messages
+  // by ticket_id, contacts by the ticket's own contact_id — inherit that
+  // scoping, which is why the handlers look unscoped in isolation.
+  'loadTicketForUser(',
+  'loadVisibleMailboxes(',
+  // src/app/api/email/tickets/_helpers.js — the SEND-AS gate (EMAIL-OUTBOUND
+  // -ATTACH.1), extracted verbatim from the compose route. Reads the named
+  // mailbox row, then runs assertLocationAccessOr404 at THAT mailbox's
+  // location, then hasPermissionForLocation('email_inbox') there, then requires
+  // the mailbox to come back from loadVisibleMailboxes — and returns THAT row,
+  // never the caller's id. The location a caller may write to is the one it
+  // hands back, which is why the handlers that use it look unscoped in
+  // isolation.
+  'loadSendingMailbox(',
   // src/lib/audience-filter.js — every send audience goes through the
   // whitelist filter, which applies the location scope with the audience.
   'applyAudienceFilter(',
@@ -228,6 +247,12 @@ export const EXEMPT = {
   },
   'src/app/api/public/class-booking-payments/[id]/route.js': {
     class_booking_requests: 'Public paid-booking status poll: the row is resolved by its own unguessable UUID (the payment id handed to the payer in the create response) — the id IS the capability token, not enumerable. Returns only display-safe checkout fields (status/provider/token/url/amount/class_name), no contact PII. Mirrors public/event-payments/[id].',
+  },
+  'src/app/api/public/offers/[slug]/checkout/route.js': {
+    sale_offers: 'Public sale catalogue (OFFERS.4): the row is looked up by its globally-unique slug and every active offer is deliberately world-readable — it IS the product page data. The only sensitive field the route touches is price_cents, which it reads server-side precisely so the client can never supply an amount.',
+  },
+  'src/app/api/public/offer-purchases/[id]/route.js': {
+    offer_purchases: 'Public paid-purchase status poll (OFFERS.4): the row is resolved by its own unguessable UUID (the purchaseId handed to the payer in the checkout response) — the id IS the capability token, not enumerable. Returns only { paid, state }, no buyer PII. Mirrors public/class-booking-payments/[id].',
   },
   'src/app/api/public/branding/route.js': {
     company_settings: 'Anonymous login-screen branding: deliberately serves the FIRST configured row (logo/name only) when no location context exists yet. Known single-tenant shortcut — revisit when a second org onboards, but it exposes no contact/tenant data.',

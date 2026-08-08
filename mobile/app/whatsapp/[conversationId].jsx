@@ -13,7 +13,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import {
   View, Text, ScrollView, Pressable, TextInput, ActivityIndicator,
-  Alert, KeyboardAvoidingView, Platform, FlatList,
+  Alert, KeyboardAvoidingView, Platform,
 } from 'react-native'
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'

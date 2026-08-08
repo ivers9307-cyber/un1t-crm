@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { logWarn } from '@/lib/log'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
@@ -74,6 +75,25 @@ export async function POST(request, props) {
   if (!validation.ok) return validation.response
   const body = validation.data
 
+  // Integrity check on the optional session link (re-audit): the session must
+  // BELONG to the recipient member and live in the same location. Without this
+  // any UUID was accepted — a UI bug (or a crafted request) could pin a kudo to
+  // another member's session. 400, not 404: the recipient contact is already
+  // authorised above; this is a bad linkage in the payload, not enumeration.
+  if (body.session_id) {
+    const { data: session, error: sessionErr } = await db
+      .from('heart_rate_sessions')
+      .select('id, contact_id, location_id')
+      .eq('id', body.session_id)
+      .maybeSingle()
+    if (sessionErr || !session || session.contact_id !== id || session.location_id !== contact.location_id) {
+      return NextResponse.json(
+        { success: false, error: 'session_id does not belong to this member' },
+        { status: 400 },
+      )
+    }
+  }
+
   const insertPayload = {
     contact_id: id,
     location_id: contact.location_id,
@@ -94,7 +114,10 @@ export async function POST(request, props) {
     .single()
 
   if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+    // Log the real DB error server-side; never return PostgREST internals to
+    // the client (re-audit H7 class — raw error.message leaks schema detail).
+    logWarn('kudos', 'insert failed', { err: error.message, contactId: id })
+    return NextResponse.json({ success: false, error: 'Could not send kudos' }, { status: 500 })
   }
 
   return NextResponse.json({ success: true, data })

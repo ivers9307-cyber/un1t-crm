@@ -12,8 +12,9 @@
 //
 // Presentational + self-contained: no store, just a local `busy` guard
 // against double-clicks and an onChanged() ping so the parent thread
-// re-fetches the fresh row. Email has no agent, so this control is WA/IG
-// only (EmailInbox does not render it).
+// re-fetches the fresh row. WA/IG are the only channels — email has no
+// customer agent, and since INBOX-SPLIT.1 it is not an inbox channel at
+// all (its surface is /communications/tickets).
 
 import { useState } from 'react'
 import { Sparkles, UserCheck } from 'lucide-react'

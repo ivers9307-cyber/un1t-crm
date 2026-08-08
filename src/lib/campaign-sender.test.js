@@ -299,6 +299,61 @@ describe('tickCampaignSend — preheader + text alternative (CAMPAIGN-REL.3/.4)'
   })
 })
 
+describe('tickCampaignSend — Reply-To (EMAIL-MAILBOX-ADMIN.1)', () => {
+  // routeFor() answers { data: [] } for every table but campaign_recipients,
+  // so this route adds the studio's default account on top of it. The lookup
+  // ends in .maybeSingle(), so the shape is a ROW (or null) — the proxy fake
+  // does not unwrap it, the route function decides.
+  function routeWithMailbox(mailboxes, base) {
+    return (state) => (state.table === 'email_mailboxes' ? { data: mailboxes[0] ?? null } : base(state))
+  }
+
+  it('stamps the studio’s DEFAULT account, not the deprecated column', async () => {
+    const base = routeFor({ candidates: [makeRecipient('r1', 0)] })
+    const { db } = makeDb(routeWithMailbox([{ address: 'studio@un1tdublin.com' }], base))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, {
+      ...campaign,
+      locations: { name: 'Stillorgan', email_inbox_reply_to: 'legacy@un1tdublin.com' },
+    })
+
+    expect(sendBatch.mock.calls[0][0][0].replyTo).toBe('studio@un1tdublin.com')
+  })
+
+  it('falls back to the deprecated column when the studio has no default account', async () => {
+    const base = routeFor({ candidates: [makeRecipient('r1', 0)] })
+    const { db } = makeDb(routeWithMailbox([], base))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, {
+      ...campaign,
+      locations: { name: 'Stillorgan', email_inbox_reply_to: 'legacy@un1tdublin.com' },
+    })
+
+    expect(sendBatch.mock.calls[0][0][0].replyTo).toBe('legacy@un1tdublin.com')
+  })
+
+  it('a per-campaign reply_to still wins over both', async () => {
+    const base = routeFor({ candidates: [makeRecipient('r1', 0)] })
+    const { db } = makeDb(routeWithMailbox([{ address: 'studio@un1tdublin.com' }], base))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, { ...campaign, reply_to: 'hello@un1t.ie' })
+
+    expect(sendBatch.mock.calls[0][0][0].replyTo).toBe('hello@un1t.ie')
+  })
+
+  it('sends with no Reply-To at a studio that has neither', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, campaign)
+
+    expect(sendBatch.mock.calls[0][0][0].replyTo).toBeUndefined()
+  })
+})
+
 // ── CAMPAIGN-AB (COMMS-AUDIT 2026-07-10) — subject-line A/B testing ──
 
 const HOUR = 3600_000
@@ -821,5 +876,197 @@ describe('tickCampaignSend — marketing frequency cap (FREQ-CAP.1)', () => {
     await tickCampaignSend(db, capCampaign({ postmark_stream: 'outbound' }))
 
     expect(touchStamps(statements)).toHaveLength(0)
+  })
+})
+
+// ── EMAIL-NOTRACK.1 — marketing tracking must not move ────────────
+//
+// The split lives in postmark.js resolveTracking(), but the thing that
+// actually has to hold is end-to-end: a Marketing campaign's real
+// emailBatch, fed through the REAL sendBatch, must still produce
+// TrackOpens:true + TrackLinks:'HtmlOnly'. Asserting only on the pure
+// helper would miss campaign-sender silently dropping `stream` from the
+// email object — which is exactly what would turn every campaign
+// untracked. So this reaches for vi.importActual and closes the loop.
+describe('EMAIL-NOTRACK.1 — campaign-sender output is unchanged', () => {
+  const realBatchPayload = async (emails) => {
+    const { sendBatch: realSendBatch } = await vi.importActual('./postmark.js')
+    process.env.POSTMARK_API_KEY = 'test-token'
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => emails.map((_, i) => ({ ErrorCode: 0, MessageID: `pm-${i}` })),
+    })
+    await realSendBatch(emails)
+    const payload = JSON.parse(spy.mock.calls[0][1].body)
+    spy.mockRestore()
+    return payload
+  }
+
+  it('a MARKETING campaign still hands sendBatch an explicit broadcast stream', async () => {
+    // If this regresses to an omitted stream, tracking silently turns off
+    // for every campaign — the pure helper's tests would still pass.
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, campaign) // postmark_stream: null → broadcast
+
+    const batch = sendBatch.mock.calls[0][0]
+    expect(batch[0].stream).toBe('broadcast')
+    expect(batch[0].trackEngagement).toBeUndefined()
+  })
+
+  it('that batch, through the REAL sendBatch, still tracks opens and clicks', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, campaign)
+
+    const payload = await realBatchPayload(sendBatch.mock.calls[0][0])
+    expect(payload[0].MessageStream).toBe('broadcast')
+    expect(payload[0].TrackOpens).toBe(true)
+    expect(payload[0].TrackLinks).toBe('HtmlOnly')
+  })
+
+  it('a UTILITY (outbound-stream) campaign is the one path that loses tracking', async () => {
+    // Documented, not accidental: a Utility campaign is gated on
+    // email_administrative consent, not marketing consent, so it is
+    // transactional mail wearing campaign machinery. Its open/click
+    // stats will read zero from here on. `trackEngagement: true` on the
+    // email object is the one-line restore if that is ever wanted.
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, { ...campaign, postmark_stream: 'outbound' })
+
+    const payload = await realBatchPayload(sendBatch.mock.calls[0][0])
+    expect(payload[0].MessageStream).toBe('outbound')
+    expect(payload[0].TrackOpens).toBe(false)
+    expect(payload[0].TrackLinks).toBe('None')
+  })
+})
+
+// ── CAMPAIGN-RESEND (mig 506) — resend children ───────────────────
+//
+// A campaign with parent_campaign_id set is a resend-to-non-openers
+// child. Its populate step ignores the audience DSL and instead reads
+// the PARENT's unopened sent/delivered recipients, re-intersected with
+// contact_location_audience so consent / suppression / bounces since
+// the original send are honoured. Resends also bypass the marketing
+// frequency cap (deliberate operator action) but still stamp
+// last_marketing_touch_at.
+describe('tickCampaignSend — resend children (CAMPAIGN-RESEND)', () => {
+  const childCampaign = (over = {}) => ({
+    ...campaign,
+    id: 'child-1',
+    parent_campaign_id: 'parent-1',
+    ...over,
+  })
+
+  const touchStamps = (statements) =>
+    statements.filter(s =>
+      s.table === 'contacts' &&
+      s.ops[0]?.method === 'update' &&
+      'last_marketing_touch_at' in s.ops[0].args[0]
+    )
+
+  // Populate-phase route: the child has no recipients yet; the parent's
+  // non-openers come from campaign_recipients; the view returns survivors.
+  const resendPopulateRoute = ({ nonOpeners, survivors }) => (state) => {
+    if (state.table === 'campaign_recipients') {
+      const first = state.ops[0]
+      if (first.method === 'select' && first.args[1]?.head) return { count: 0 }
+      if (first.method === 'select' && hasEq(state, 'campaign_id', 'parent-1')) return { data: nonOpeners }
+      return {}
+    }
+    if (state.table === 'contact_location_audience') return { data: survivors }
+    return {}
+  }
+
+  it('populates from the parent’s non-openers ∩ audience view, not the audience DSL', async () => {
+    const { db, statements } = makeDb(resendPopulateRoute({
+      nonOpeners: [{ contact_id: 'c-1' }, { contact_id: 'c-2' }, { contact_id: 'c-3' }],
+      survivors: [{ id: 'c-1' }, { id: 'c-3' }],
+    }))
+
+    const result = await tickCampaignSend(db, childCampaign())
+
+    expect(result.phase).toBe('populate')
+    expect(buildAudienceQueryAsync).not.toHaveBeenCalled()
+
+    // Parent non-opener read: unopened + sent/delivered only.
+    const parentRead = statements.find(s =>
+      s.table === 'campaign_recipients' && hasEq(s, 'campaign_id', 'parent-1'))
+    expect(parentRead.ops.find(o => o.method === 'is').args).toEqual(['opened_at', null])
+    expect(parentRead.ops.find(o => o.method === 'in').args).toEqual(['status', ['sent', 'delivered']])
+
+    // View re-check carries the full marketing gate set.
+    const viewRead = statements.find(s => s.table === 'contact_location_audience')
+    expect(hasEq(viewRead, 'audience_location_id', 'loc-1')).toBe(true)
+    expect(hasEq(viewRead, 'loc_email_marketing', true)).toBe(true)
+    expect(viewRead.ops.find(o => o.method === 'not').args)
+      .toEqual(['email_status', 'in', '("bounced","complained")'])
+    expect(viewRead.ops.find(o => o.method === 'is').args).toEqual(['email_suppressed_at', null])
+    expect(viewRead.ops.find(o => o.method === 'in').args).toEqual(['id', ['c-1', 'c-2', 'c-3']])
+
+    // Only survivors become recipient rows.
+    const insert = statements.find(s => s.table === 'campaign_recipients' && s.ops[0].method === 'insert')
+    expect(insert.ops[0].args[0]).toEqual([
+      { campaign_id: 'child-1', contact_id: 'c-1', status: 'queued' },
+      { campaign_id: 'child-1', contact_id: 'c-3', status: 'queued' },
+    ])
+    expect(campaignUpdates(statements)).toContainEqual(
+      expect.objectContaining({ status: 'sending', total_recipients: 2 }))
+  })
+
+  it('finalises as sent-with-zero when nobody survives the view re-check', async () => {
+    const { db, statements } = makeDb(resendPopulateRoute({
+      nonOpeners: [{ contact_id: 'c-1' }],
+      survivors: [],
+    }))
+
+    const result = await tickCampaignSend(db, childCampaign())
+
+    expect(result).toEqual({ phase: 'populate', sent: 0 })
+    expect(campaignUpdates(statements)).toContainEqual(
+      expect.objectContaining({ status: 'sent', total_recipients: 0 }))
+    expect(statements.some(s => s.table === 'campaign_recipients' && s.ops[0].method === 'insert')).toBe(false)
+  })
+
+  it('surfaces a populate error when the parent non-opener read fails', async () => {
+    const { db } = makeDb((state) => {
+      if (state.table === 'campaign_recipients') {
+        const first = state.ops[0]
+        if (first.method === 'select' && first.args[1]?.head) return { count: 0 }
+        return { data: null, error: { message: 'boom' } }
+      }
+      return {}
+    })
+
+    const result = await tickCampaignSend(db, childCampaign())
+    expect(result.phase).toBe('populate')
+    expect(result.error).toMatch(/boom/)
+  })
+
+  it('bypasses the frequency cap for a resend child but still stamps the touch', async () => {
+    const { db, statements } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, childCampaign({
+      locations: { name: 'Stillorgan', settings: { comms_frequency_cap: { enabled: true, min_hours_between: 24 } } },
+    }))
+
+    // No cap filter on the queued fetch even though the cap is enabled…
+    const chunk = statements.find(s =>
+      s.table === 'campaign_recipients' &&
+      s.ops[0]?.method === 'select' &&
+      !s.ops[0].args[1]?.head &&
+      hasEq(s, 'status', 'queued'))
+    expect(chunk.ops.some(o => o.method === 'or' && String(o.args[0]).includes('last_marketing_touch_at'))).toBe(false)
+
+    // …and the successful send still consumes the contact's window.
+    const stamps = touchStamps(statements)
+    expect(stamps).toHaveLength(1)
+    expect(stamps[0].ops.find(o => o.method === 'in').args[1]).toEqual(['contact-r1'])
   })
 })

@@ -15,11 +15,12 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifyHostOnboardingToken } from '@/lib/host-onboarding-tokens'
 import { retrieveAccountStatus } from '@/lib/payments/stripe-connect'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
+export async function GET(request, props) {
   const params = await props.params
   const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || null
   const payload = secret ? verifyHostOnboardingToken(params.token, secret) : null
@@ -27,6 +28,17 @@ export async function GET(_request, props) {
     return NextResponse.json({ success: false, error: 'This onboarding link is invalid or has expired.' }, { status: 400 })
   }
   const db = createServerClient()
+
+  // Abuse limiter (audit H2a) — after the cheap HMAC verify (invalid links
+  // 400 without a DB round-trip; signed tokens can't be enumerated), before
+  // DB + the pending-host live Stripe call this read can trigger. Keyed on IP
+  // alone (deposit-view convention). The page fetches once on load + once per
+  // tab-refocus, so 30-per-5-min is generous for a legit host. Fails open
+  // inside checkRateLimit.
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `host-connect-view:${ip}`, { max: 30, windowMs: 5 * 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
+
   const { data: host } = await db
     .from('event_hosts')
     .select('id, name, payment_provider, charges_enabled, payouts_enabled, details_submitted, stripe_connected_account_id, onboarding_completed_at')

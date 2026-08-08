@@ -220,3 +220,25 @@ export const TEAM_MEMBER_ROLE = Object.freeze({
   MEMBER: 'member',
 })
 export const TEAM_MEMBER_ROLE_VALUES = Object.values(TEAM_MEMBER_ROLE)
+
+// ── email_tickets.status (mig 482) ────────────────────────────────
+// Support lifecycle. `solved` still reopens on an inbound reply;
+// `closed` is terminal, and an inbound against it mints a NEW ticket
+// rather than resurrecting it (resolveTicketAction in
+// src/lib/email-tickets.js). That distinction is what stops a ticket
+// decaying back into mig 394's immortal per-person thread.
+export const EMAIL_TICKET_STATUS = Object.freeze({
+  OPEN: 'open',       // needs the studio's attention
+  PENDING: 'pending', // replied, waiting on the member
+  SOLVED: 'solved',   // handled, still reopenable
+  CLOSED: 'closed',   // terminal — a reply starts a new ticket
+})
+export const EMAIL_TICKET_STATUS_VALUES = Object.values(EMAIL_TICKET_STATUS)
+
+// ── email_tickets.priority (mig 482) ──────────────────────────────
+export const EMAIL_TICKET_PRIORITY = Object.freeze({
+  LOW: 'low',
+  NORMAL: 'normal',
+  HIGH: 'high',
+})
+export const EMAIL_TICKET_PRIORITY_VALUES = Object.values(EMAIL_TICKET_PRIORITY)

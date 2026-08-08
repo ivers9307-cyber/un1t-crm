@@ -9,6 +9,7 @@ import { ADMIN_ROLES } from '@/lib/schemas'
 import { loadHostForOrg } from '@/lib/hosts'
 import { linkStaffDecision } from '@/lib/host-staff-link'
 import { logError } from '@/lib/log'
+import { escapeLikePattern } from '@/lib/like-escape'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -60,8 +61,7 @@ export async function POST(request, props) {
 
   // Exact (case-insensitive) match — escape LIKE metacharacters so an email with
   // '_' or '%' can't act as a wildcard and match the wrong profile.
-  const likeEmail = email.replace(/[\\%_]/g, '\\$&')
-  const { data: staffProfile } = await db.from('profiles').select('id, full_name, email').ilike('email', likeEmail).maybeSingle()
+  const { data: staffProfile } = await db.from('profiles').select('id, full_name, email').ilike('email', escapeLikePattern(email)).maybeSingle()
   const sameOrg = staffProfile ? await staffSharesOrg(db, staffProfile.id, orgId) : false
   const existingLink = staffProfile
     ? (await db.from('host_users').select('host_id').eq('auth_user_id', staffProfile.id).maybeSingle()).data

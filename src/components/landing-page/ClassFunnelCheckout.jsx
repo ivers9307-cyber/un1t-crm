@@ -105,7 +105,12 @@ export default function ClassFunnelCheckout({ paymentId, checkout, priceLabel, o
       {error ? (
         <p className="text-sm text-red-300 text-center">{error}</p>
       ) : (
-        <div ref={targetRef} className="min-h-[320px]" />
+        /* WHITE panel behind the widget: it ships a light theme (dark labels)
+           with no dark mode, so mounted bare on the dark funnel card its text
+           was unreadable — same defect fixed on /offers in OFFERS.8d (#1293). */
+        <div className="rounded-xl bg-white p-3">
+          <div ref={targetRef} className="min-h-[320px]" />
+        </div>
       )}
       {onCancel && !error && (
         <button type="button" onClick={onCancel} className="mt-4 w-full text-white/50 text-sm hover:text-white/80">← Back</button>

@@ -151,6 +151,11 @@ const nextConfig = {
   // are NOT used — verified to mis-match (`/bookings` lost the
   // header when `/book` was excluded via lookahead).
   async headers() {
+    // NOT a global policy — applied ONLY to the two `frameable` sources at
+    // the bottom of the returned list. Read in isolation this line looks
+    // like the whole app is frameable by anyone; it isn't. Twice now a
+    // reviewer has flagged it as an app-wide clickjacking hole (most
+    // recently the email-ticketing spec, 2026-08-05).
     const frameable = [
       { key: 'Content-Security-Policy', value: 'frame-ancestors *' },
     ]

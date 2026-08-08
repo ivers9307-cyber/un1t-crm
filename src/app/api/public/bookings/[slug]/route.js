@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 // GET /api/public/bookings/:slug — Public: Calendly booking-type
 // details + form fields. No auth required — this powers the public
@@ -22,6 +23,14 @@ import { createServerClient } from '@/lib/supabase'
 export async function GET(request, props) {
   const params = await props.params;
   const db = createServerClient()
+
+  // Public-browse abuse limiter (audit H2a) — 60-per-5-min per slug+IP: a human
+  // loads this page once (maybe a handful of reloads); the cap only bites
+  // scripted scraping. Slug-keyed per SAAS-6 so one tenant's booking page can't
+  // starve another's bucket for a shared IP. Fails open inside checkRateLimit.
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `pubbooktype:${params.slug}:${ip}`, { max: 60, windowMs: 5 * 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
 
   const { data, error } = await db.from('event_types')
     .select(`

@@ -9,8 +9,13 @@
 // navigation (confirmation / payment) OUT to the top window, so the
 // flow doesn't get trapped inside the host's iframe.
 //
-// No X-Frame-Options / frame-ancestors are set app-wide, so this route
-// is framable by default — which is the whole point here.
+// This route is framable ONLY because next.config.js grants it an
+// explicit exemption. Since AUDIT-JUN10.2 (#409) the app ships
+// `X-Frame-Options: SAMEORIGIN` on every path, and `/embed/:path*`
+// overrides it with `CSP: frame-ancestors *` (CSP supersedes XFO in
+// modern browsers). Delete that exemption and every third-party embed
+// breaks silently — the iframe just renders blank, with nothing in the
+// server logs to say why.
 
 import { notFound } from 'next/navigation'
 import { createServerClient } from '@/lib/supabase'

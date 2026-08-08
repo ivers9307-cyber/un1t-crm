@@ -20,6 +20,14 @@
 // fails — the route returns { is_member: false } whether the email
 // is unknown OR known-but-not-a-member. That keeps the public
 // endpoint from being abused as a member-enumeration oracle.
+//
+// That last property depended on the lookup being an EQUALITY check. Until
+// 2026-08-07 it was an unescaped .ilike(), so `%@somedomain.com` probed the
+// whole domain at once: where exactly one member matched, the route answered
+// is_member: true and handed back their first_name — the enumeration oracle
+// this header says it prevents. See src/lib/like-escape.js.
+
+import { escapeLikePattern } from './like-escape'
 
 /**
  * Look up a single email against members for one location.
@@ -45,11 +53,17 @@ export async function validateMemberByEmail({ db, email, locationId }) {
 
   // ilike on email column (already indexed by mig 001) so unicode/
   // case differences match. Tight scope: location + active membership.
+  //
+  // escapeLikePattern: `email` is typed into the PUBLIC race/event register
+  // and check-member forms. Unescaped, `a_b@example.com` also matches
+  // `axb@example.com` — so a stranger could submit a lookalike address, be
+  // told is_member: true, and receive that member's contact_id and
+  // first_name back. Member pricing keys off exactly this result.
   const { data, error } = await db
     .from('contacts')
     .select('id, first_name, name, pipeline_stage_slug')
     .eq('location_id', locationId)
-    .ilike('email', normalised)
+    .ilike('email', escapeLikePattern(normalised))
     .maybeSingle()
 
   if (error || !data) return fail

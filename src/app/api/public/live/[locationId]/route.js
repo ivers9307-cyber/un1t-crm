@@ -29,6 +29,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { buildLiveBoardPayload } from '@/lib/live-board'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { stampRender, deviceFromRequest } from '@/lib/fleet-render'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -68,6 +69,15 @@ export async function GET(request, props) {
   if (!location) {
     return NextResponse.json({ ok: false, error: 'Location not found' }, { status: 404, headers: NO_STORE })
   }
+
+  // FLEET-CMD.2 — this request IS the proof a kiosk is rendering.
+  //
+  // Fire-and-forget, deliberately NOT awaited: the studio board must never
+  // wait on fleet telemetry, and stampRender swallows its own errors. Placed
+  // after the location check so an unknown location cannot be used to probe
+  // device names.
+  const device = deviceFromRequest(request)
+  if (device) void stampRender(db, device, locationId)
 
   const payload = await buildLiveBoardPayload(db, { location, nowMs })
   return NextResponse.json(payload, { headers: NO_STORE })

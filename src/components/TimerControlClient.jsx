@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Play, Pause, Square, SkipForward, SkipBack, Plus, Pencil, Trash2 } from 'lucide-react'
 import { buildTimeline, computeEffectiveElapsedMs, resolveTimerState, SEG_COLOR } from '@/lib/class-timer'
+import { createBrowserClient } from '@/lib/supabase'
 import TimerTemplateEditor from '@/components/TimerTemplateEditor'
 
 const POLL_MS = 2000
@@ -29,6 +30,17 @@ const PRESETS = [
   ] },
   { name: 'EMOM — 10 min', structure: [
     { kind: 'round', count: 10, segments: [{ label: 'Minute', type: 'work', seconds: 60 }] },
+  ] },
+  { name: '32 min — 2 × 16 (45/15) + water', structure: [
+    { kind: 'round', count: 16, segments: [
+      { label: 'Work', type: 'work', seconds: 45 },
+      { label: 'Rest', type: 'rest', seconds: 15 },
+    ] },
+    { kind: 'segment', label: 'Water break', type: 'rest', seconds: 120 },
+    { kind: 'round', count: 16, segments: [
+      { label: 'Work', type: 'work', seconds: 45 },
+      { label: 'Rest', type: 'rest', seconds: 15 },
+    ] },
   ] },
 ]
 
@@ -65,6 +77,20 @@ export default function TimerControlClient({ locationId }) {
     loadActive()
     const t = setInterval(loadActive, POLL_MS)
     return () => clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locationId])
+
+  // TIMER-PUSH.1 — realtime nudge: another device starting/controlling the
+  // run pings `timer:<locationId>`; re-fetch immediately instead of waiting
+  // out the 2s poll (which stays as the fallback).
+  useEffect(() => {
+    if (!locationId) return undefined
+    let client
+    try { client = createBrowserClient() } catch { return undefined }
+    const chan = client.channel(`timer:${locationId}`)
+    chan.on('broadcast', { event: 'timer' }, () => loadActive())
+    chan.subscribe()
+    return () => { client.removeChannel(chan) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locationId])
 

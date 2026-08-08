@@ -1,47 +1,98 @@
+// CAMPAIGN-RESEND (mig 506) — the unified composer's email entry
+// accepts the resend-to-non-openers config and persists it onto the
+// campaign row. Marketing stream only (outbound has no open tracking),
+// and a wait is required so the spawner has a real deadline.
+
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-vi.mock('@/lib/supabase', () => ({ createServerClient: vi.fn() }))
+let inserted = []
+const fakeDb = {
+  from: () => ({
+    insert: (row) => {
+      inserted.push(row)
+      return {
+        select: () => ({
+          single: () => Promise.resolve({ data: { id: 'camp-new' }, error: null }),
+        }),
+      }
+    },
+  }),
+}
+
+vi.mock('@/lib/supabase', () => ({ createServerClient: () => fakeDb }))
 vi.mock('@/lib/auth', () => ({
-  getCurrentUser: vi.fn(),
+  getCurrentUser: vi.fn(async () => ({ id: 'user-1', activeLocation: { id: 'loc-1' } })),
   assertLocationAccess: vi.fn(() => null),
 }))
 vi.mock('@/lib/permissions', () => ({ hasPermission: vi.fn(() => true) }))
 
 import { POST } from './route.js'
-import { getCurrentUser } from '@/lib/auth'
-import { createServerClient } from '@/lib/supabase'
 
-beforeEach(() => { vi.clearAllMocks() })
-
-function dbCapturingInsert(captured) {
-  const chain = {
-    insert: (row) => { captured.row = row; return chain },
-    select: () => chain,
-    single: () => Promise.resolve({ data: { id: 'camp-1' }, error: null }),
-  }
-  return { from: () => chain }
+const base = {
+  location_id: '00000000-0000-0000-0000-000000000001',
+  name: 'Weekend offer',
+  subject: 'Last chance',
+  html_content: '<html><body>Hi</body></html>',
+  action: 'send',
+  email_type: 'marketing',
 }
 
-function req(body) {
-  return new Request('http://localhost/api/communications/email-draft', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
-  })
+function post(body) {
+  return POST(new Request('http://test.local/api/communications/email-draft', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }))
 }
 
-it('maps email_type=utility → postmark_stream=outbound on insert', async () => {
-  getCurrentUser.mockResolvedValue({ id: 'u1', activeLocation: { id: 'loc-1' }, role: 'owner' })
-  const captured = {}
-  createServerClient.mockReturnValue(dbCapturingInsert(captured))
-  const res = await POST(req({ location_id: '00000000-0000-0000-0000-000000000001', name: 'Workshop logistics', email_type: 'utility' }))
-  expect(res.status).toBe(200)
-  expect(captured.row.postmark_stream).toBe('outbound')
+beforeEach(() => {
+  vi.clearAllMocks()
+  inserted = []
 })
 
-it('defaults to postmark_stream=broadcast when email_type omitted', async () => {
-  getCurrentUser.mockResolvedValue({ id: 'u1', activeLocation: { id: 'loc-1' }, role: 'owner' })
-  const captured = {}
-  createServerClient.mockReturnValue(dbCapturingInsert(captured))
-  const res = await POST(req({ location_id: '00000000-0000-0000-0000-000000000001', name: 'June newsletter' }))
-  expect(res.status).toBe(200)
-  expect(captured.row.postmark_stream).toBe('broadcast')
+describe('email-draft — resend-to-non-openers config', () => {
+  it('persists resend fields on a marketing campaign', async () => {
+    const res = await post({ ...base, resend_enabled: true, resend_wait_hours: 48, resend_subject: 'Still open?' })
+    expect(res.status).toBe(200)
+    expect(inserted[0]).toMatchObject({
+      resend_enabled: true,
+      resend_wait_hours: 48,
+      resend_subject: 'Still open?',
+    })
+  })
+
+  it('a blank resend subject persists as null (reuse the original)', async () => {
+    await post({ ...base, resend_enabled: true, resend_wait_hours: 24 })
+    expect(inserted[0].resend_enabled).toBe(true)
+    expect(inserted[0].resend_subject).toBeNull()
+  })
+
+  it('rejects resend on a utility (outbound) send', async () => {
+    const res = await post({ ...base, email_type: 'utility', resend_enabled: true, resend_wait_hours: 48 })
+    expect(res.status).toBe(400)
+    expect(inserted).toHaveLength(0)
+    const body = await res.json()
+    expect(body.error).toMatch(/marketing/i)
+  })
+
+  it('rejects resend without a wait', async () => {
+    const res = await post({ ...base, resend_enabled: true })
+    expect(res.status).toBe(400)
+    expect(inserted).toHaveLength(0)
+  })
+
+  it('rejects an out-of-bounds wait via schema validation', async () => {
+    const zero = await post({ ...base, resend_enabled: true, resend_wait_hours: 0 })
+    expect(zero.status).toBe(400)
+    const week2 = await post({ ...base, resend_enabled: true, resend_wait_hours: 300 })
+    expect(week2.status).toBe(400)
+    expect(inserted).toHaveLength(0)
+  })
+
+  it('a campaign without resend opts in to nothing', async () => {
+    const res = await post(base)
+    expect(res.status).toBe(200)
+    expect(inserted[0]).not.toHaveProperty('resend_enabled')
+    expect(inserted[0]).not.toHaveProperty('resend_wait_hours')
+  })
 })

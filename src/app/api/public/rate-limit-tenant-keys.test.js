@@ -39,10 +39,41 @@ import { POST as funnelEventPOST } from './funnel-event/route.js'
 import { POST as bookPOST } from './book/route.js'
 import { GET as preferencesGET } from '../preferences/[token]/route.js'
 import { POST as unsubscribePOST } from '../unsubscribe/[token]/route.js'
+import { GET as depositGET } from './deposit/[token]/route.js'
+import { POST as depositPayPOST } from './deposit/[token]/accept-and-pay/route.js'
+import { GET as bcaFileGET } from './bca/[token]/file/[slug]/route.js'
+import { GET as bcaMergedGET } from './bca/[token]/merged/route.js'
+import { GET as bookingTypeGET } from './bookings/[slug]/route.js'
+import { GET as slotsGET } from './bookings/[slug]/slots/route.js'
+import { GET as brandingGET } from './branding/route.js'
+import { GET as challengesGET } from './challenges/[locationId]/route.js'
+import { GET as eventPaymentGET } from './event-payments/[id]/route.js'
+import { GET as eventRegistrationGET } from './event-registrations/[id]/route.js'
+import { GET as raceGET } from './events/[slug]/route.js'
+import { GET as raceDisplayGET } from './events/[slug]/display/route.js'
+import { GET as checkinQrGET } from './events/checkin-qr/route.js'
+import { GET as hostConnectGET } from './host-connect/[token]/route.js'
+import { POST as hostConnectStartPOST } from './host-connect/[token]/start/route.js'
+import { GET as hostConnectRefreshGET } from './host-connect/[token]/refresh/route.js'
+import { GET as presentStateGET } from './presentations/[token]/state/route.js'
+import { GET as tvContentGET } from './tv/[token]/content/route.js'
+import { signCheckinToken } from '@/lib/event-checkin-tokens'
+import { signHostOnboardingToken } from '@/lib/host-onboarding-tokens'
 
 const IP = '203.0.113.9'
 const LOC_A = 'aaaaaaaa-0000-0000-0000-0000000000aa'
 const EVENT_TYPE = 'cccccccc-0000-0000-0000-0000000000cc'
+const REG_ID = 'dddddddd-0000-0000-0000-0000000000dd'
+const PAY_ID = 'eeeeeeee-0000-0000-0000-0000000000ee'
+const HOST_ID = 'ffffffff-0000-0000-0000-0000000000ff'
+
+// The H2a routes verify HMAC tokens (checkin-qr, host-connect) before their
+// limiter, and host-connect/refresh calls getAppUrl() up front — both read
+// env at request time. Vitest runs each test file in its own process, so
+// setting these here can't leak into other files.
+const SIGNING_SECRET = 'test-signing-secret'
+process.env.SUPABASE_SERVICE_ROLE_KEY = SIGNING_SECRET
+process.env.NEXT_PUBLIC_APP_URL = 'http://test.local'
 
 function req(url, { method = 'GET', body } = {}) {
   return new Request(`http://test.local${url}`, {
@@ -185,6 +216,184 @@ describe('SAAS-6 tenant-keyed rate limits — swept call sites', () => {
     }))
     expect(res.status).toBe(404)
     expect(checkRateLimit).not.toHaveBeenCalled()
+  })
+})
+
+describe('H2 — car-deposit token endpoints are rate limited', () => {
+  it('deposit view keys on IP alone (anti-enumeration — the enumerator varies the token)', async () => {
+    const res = await depositGET(req('/api/public/deposit/some-token'), props({ token: 'some-token' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`deposit-view:${IP}`)
+  })
+
+  it('accept-and-pay keys on token + IP (strict payment-initiation guard)', async () => {
+    const res = await depositPayPOST(
+      req('/api/public/deposit/some-token/accept-and-pay', { method: 'POST', body: { terms_version: 1 } }),
+      props({ token: 'some-token' }),
+    )
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`deposit-pay:some-token:${IP}`)
+  })
+
+  it('accept-and-pay: a malformed body 400s WITHOUT consuming the limiter window', async () => {
+    const res = await depositPayPOST(
+      req('/api/public/deposit/some-token/accept-and-pay', { method: 'POST', body: {} }),
+      props({ token: 'some-token' }),
+    )
+    expect(res.status).toBe(400)
+    expect(checkRateLimit).not.toHaveBeenCalled()
+  })
+})
+
+describe('H2a — remaining public routes are rate limited', () => {
+  it('bca file download keys on IP alone (anti-enumeration)', async () => {
+    const res = await bcaFileGET(req('/api/public/bca/tok/file/doc_01'), props({ token: 'tok', slug: 'doc_01' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`bca-file:${IP}`)
+  })
+
+  it('bca file: an invalid slug 400s WITHOUT consuming the limiter window', async () => {
+    const res = await bcaFileGET(req('/api/public/bca/tok/file/evil'), props({ token: 'tok', slug: 'evil' }))
+    expect(res.status).toBe(400)
+    expect(checkRateLimit).not.toHaveBeenCalled()
+  })
+
+  it('bca merged download keys on IP alone (anti-enumeration)', async () => {
+    const res = await bcaMergedGET(req('/api/public/bca/tok/merged'), props({ token: 'tok' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`bca-merged:${IP}`)
+  })
+
+  it('booking-type details keys on the booking-page slug', async () => {
+    const res = await bookingTypeGET(req('/api/public/bookings/pt-intro'), props({ slug: 'pt-intro' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`pubbooktype:pt-intro:${IP}`)
+  })
+
+  it('booking slots keys on the booking-page slug', async () => {
+    const res = await slotsGET(req('/api/public/bookings/pt-intro/slots?date=2026-08-01'), props({ slug: 'pt-intro' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`pubslots:pt-intro:${IP}`)
+  })
+
+  it('booking slots: a malformed date 400s WITHOUT consuming the limiter window', async () => {
+    const res = await slotsGET(req('/api/public/bookings/pt-intro/slots?date=nope'), props({ slug: 'pt-intro' }))
+    expect(res.status).toBe(400)
+    expect(checkRateLimit).not.toHaveBeenCalled()
+  })
+
+  it('branding keys on the requested location (defaulting to "default")', async () => {
+    let res = await brandingGET(req('/api/public/branding'))
+    expect(res.status).toBe(429)
+    expect(checkRateLimit.mock.calls[0][1]).toBe(`pubbranding:default:${IP}`)
+
+    res = await brandingGET(req(`/api/public/branding?location_id=${LOC_A}`))
+    expect(res.status).toBe(429)
+    expect(checkRateLimit.mock.calls[1][1]).toBe(`pubbranding:${LOC_A}:${IP}`)
+  })
+
+  it('challenges TV board keys on the location', async () => {
+    const res = await challengesGET(req(`/api/public/challenges/${LOC_A}`), props({ locationId: LOC_A }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`pubchallenges:${LOC_A}:${IP}`)
+  })
+
+  it('event-payment status keys on IP alone (anti-enumeration — the enumerator varies the UUID)', async () => {
+    const res = await eventPaymentGET(req(`/api/public/event-payments/${PAY_ID}`), props({ id: PAY_ID }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`event-payment:${IP}`)
+  })
+
+  it('event-registration summary keys on IP alone (anti-enumeration)', async () => {
+    const res = await eventRegistrationGET(req(`/api/public/event-registrations/${REG_ID}`), props({ id: REG_ID }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`event-reg:${IP}`)
+  })
+
+  it('race details keys on the race slug', async () => {
+    const res = await raceGET(req('/api/public/events/city-race'), props({ slug: 'city-race' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`pubrace:city-race:${IP}`)
+  })
+
+  it('race display board keys on the race slug (polled tier)', async () => {
+    const res = await raceDisplayGET(req('/api/public/events/city-race/display'), props({ slug: 'city-race' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`race-display:city-race:${IP}`)
+    // Polled every 2s by the race-day TV — pin the polled-tier size so a
+    // future "tidy-up" to the 30/5min token-GET shape (which a legit board
+    // WOULD hit) fails this test.
+    expect(checkRateLimit.mock.calls[0][2]).toEqual({ max: 240, windowMs: 60_000 })
+  })
+
+  it('checkin-qr keys on IP alone, after the HMAC verify', async () => {
+    const token = signCheckinToken(
+      { eventId: EVENT_TYPE, registrationId: REG_ID, memberId: LOC_A },
+      SIGNING_SECRET,
+    )
+    const res = await checkinQrGET(req(`/api/public/events/checkin-qr?t=${encodeURIComponent(token)}`))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`checkin-qr:${IP}`)
+  })
+
+  it('checkin-qr: an unsigned token 400s WITHOUT consuming the limiter window', async () => {
+    const res = await checkinQrGET(req('/api/public/events/checkin-qr?t=garbage'))
+    expect(res.status).toBe(400)
+    expect(checkRateLimit).not.toHaveBeenCalled()
+  })
+
+  it('host-connect status keys on IP alone, after the HMAC verify', async () => {
+    const token = signHostOnboardingToken({ hostId: HOST_ID }, SIGNING_SECRET)
+    const res = await hostConnectGET(req(`/api/public/host-connect/${token}`), props({ token }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`host-connect-view:${IP}`)
+  })
+
+  it('host-connect: an unsigned token 400s WITHOUT consuming the limiter window', async () => {
+    const res = await hostConnectGET(req('/api/public/host-connect/garbage'), props({ token: 'garbage' }))
+    expect(res.status).toBe(400)
+    expect(checkRateLimit).not.toHaveBeenCalled()
+  })
+
+  it('host-connect start keys on token + IP (strict Stripe-mutation guard)', async () => {
+    const token = signHostOnboardingToken({ hostId: HOST_ID }, SIGNING_SECRET)
+    const res = await hostConnectStartPOST(
+      req(`/api/public/host-connect/${token}/start`, { method: 'POST' }),
+      props({ token }),
+    )
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`host-connect-start:${token}:${IP}`)
+    expect(checkRateLimit.mock.calls[0][2]).toEqual({ max: 10, windowMs: 15 * 60_000 })
+  })
+
+  it('host-connect refresh keys on token + IP (mints a Stripe Account Link per hit)', async () => {
+    const token = signHostOnboardingToken({ hostId: HOST_ID }, SIGNING_SECRET)
+    const res = await hostConnectRefreshGET(req(`/api/public/host-connect/${token}/refresh`), props({ token }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`host-connect-refresh:${token}:${IP}`)
+    expect(checkRateLimit.mock.calls[0][2]).toEqual({ max: 10, windowMs: 15 * 60_000 })
+  })
+
+  it('host-connect refresh: an unsigned token redirects WITHOUT consuming the limiter window', async () => {
+    const res = await hostConnectRefreshGET(req('/api/public/host-connect/garbage/refresh'), props({ token: 'garbage' }))
+    expect(res.status).toBe(307)
+    expect(checkRateLimit).not.toHaveBeenCalled()
+  })
+
+  it('presentation state keys on token + IP (polled tier)', async () => {
+    const res = await presentStateGET(req('/api/public/presentations/deck-tok/state'), props({ token: 'deck-tok' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`present-state:deck-tok:${IP}`)
+    // Polled every 4s by PresentViewer — pin the polled-tier size.
+    expect(checkRateLimit.mock.calls[0][2]).toEqual({ max: 240, windowMs: 60_000 })
+  })
+
+  it('tv content keys on token + IP (polled tier)', async () => {
+    const res = await tvContentGET(req('/api/public/tv/tv-tok/content'), props({ token: 'tv-tok' }))
+    expect(res.status).toBe(429)
+    expect(limiterKey()).toBe(`tv-content:tv-tok:${IP}`)
+    // Polled every ~3s by the /tv page — pin the polled-tier size.
+    expect(checkRateLimit.mock.calls[0][2]).toEqual({ max: 240, windowMs: 60_000 })
   })
 })
 

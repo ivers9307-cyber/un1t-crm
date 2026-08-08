@@ -2,6 +2,8 @@
 //
 // Currently exposes:
 //   - Default landing page (permissions.landing_preference)
+//   - Email signature (profiles.email_signature, EMAIL-TICKET.5) —
+//     only for people who work an email queue somewhere
 //
 // Linked to from the user block at the bottom of the sidebar.
 // Visible to every authenticated user — no permission gate beyond
@@ -12,10 +14,11 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { ChevronRight, History, FileSignature } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
-import { hasPermission } from '@/lib/permissions'
+import { hasPermission, hasPermissionForLocation } from '@/lib/permissions'
 import { resolveLandingPreference } from '@shared/permissions'
 import { createServerClient } from '@/lib/supabase'
 import AccountForm from '@/components/AccountForm'
+import EmailSignatureForm from '@/components/EmailSignatureForm'
 import PasswordChangeForm from '@/components/PasswordChangeForm'
 import StudioPinSettings from '@/components/StudioPinSettings'
 
@@ -37,6 +40,18 @@ export default async function AccountPage() {
   }
 
   const currentPreference = resolveLandingPreference(user)
+
+  // EMAIL-TICKET.5 — the signature card is only useful to someone who
+  // answers a ticket queue, so it shows for anyone holding email_inbox
+  // at ANY of their locations. Resolved per location rather than via
+  // plain hasPermission() on purpose: a manager at one studio who is
+  // staff at another would otherwise lose the editor for their own
+  // signature whenever their session happened to be pointed at the
+  // second one — the same active-vs-requested mix-up EMAIL-TICKET.5
+  // fixed on /api/email/tickets.
+  const worksAQueue = (user.locations || []).some(
+    (l) => hasPermissionForLocation(user, l.id, 'email_inbox')
+  )
 
   // STUDIO-PIN.3 — pull PIN state + home_screen_path for the studio-
   // device settings card. Single targeted read; the rest of the user
@@ -61,6 +76,14 @@ export default async function AccountPage() {
         initialPreference={currentPreference}
         allowed={allowed}
       />
+
+      {worksAQueue && (
+        <div className="mt-8">
+          {/* getCurrentUser() spreads the whole profiles row, so the current
+              value is already loaded — no extra read. */}
+          <EmailSignatureForm initialSignature={user.email_signature || ''} />
+        </div>
+      )}
 
       <div className="mt-8 pt-6 border-t border-un1t-border">
         <PasswordChangeForm email={user.email} />

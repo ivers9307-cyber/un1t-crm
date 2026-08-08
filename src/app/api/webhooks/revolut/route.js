@@ -31,6 +31,7 @@ import { emitEvent, EVENT_TYPES } from '@/lib/contact-events'
 import { triggerSequencesForOrderStatus } from '@/lib/sequences'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { overlayConnections } from '@/lib/connection-registry'
+import { escapeLikePattern } from '@/lib/like-escape'
 
 export const runtime = 'nodejs'
 
@@ -175,10 +176,13 @@ export async function POST(request) {
       // trigger (Tier 1A) has someone to enrol. We don't auto-create
       // contacts on the cars side — the cars deposit flow is for
       // car buyers, not necessarily UN1T contacts.
+      // escapeLikePattern: buyer_email is typed into the public deposit form,
+      // so a '%' or '_' in it would resolve to some unrelated contact and
+      // enrol THEM in the order_* sequence.
       const { data: existingContact } = await db
         .from('contacts')
         .select('id')
-        .ilike('email', car.buyer_email.toLowerCase().trim())
+        .ilike('email', escapeLikePattern(car.buyer_email.toLowerCase().trim()))
         .maybeSingle()
       const buyerContactId = existingContact?.id || null
 

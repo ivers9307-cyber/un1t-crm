@@ -166,3 +166,29 @@ describe('getLegacyBrandRows — read-only display descriptors for the admin vie
     expect(marketing.extraHostnames).toContain('www.un1tdublin.com')
   })
 })
+
+describe('ccfautos-web brand', () => {
+  const brand = BRANDS.find((b) => b.id === 'ccfautos-web')
+
+  it('exists and covers apex + www', () => {
+    expect(brand).toBeTruthy()
+    expect(brand.hostnames).toContain('ccfautos.com')
+    expect(brand.hostnames).toContain('www.ccfautos.com')
+  })
+
+  it('resolves from the hostname, with and without a port', () => {
+    expect(resolveBrand('ccfautos.com')).toBe(brand)
+    expect(resolveBrand('www.ccfautos.com:443')).toBe(brand)
+  })
+
+  it('rewrites root and strays to the landing page', () => {
+    expect(brand.rootHandler).toBe('rewrite')
+    expect(brand.rootRewriteTo).toBe('/ccf')
+    expect(brand.fallbackHandler).toBe('rewrite')
+    expect(brand.fallbackRewriteTo).toBe('/ccf')
+  })
+
+  it('allows ONLY the landing page + its enquiry API', () => {
+    expect(brand.allowedPaths).toEqual(['/ccf', '/api/public/ccf-enquiry'])
+  })
+})

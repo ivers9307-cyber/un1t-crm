@@ -12,14 +12,15 @@
 // worth it for the operator-facing workflow.
 
 import { createServerClient } from '@/lib/supabase'
+import { resolvePostmarkToken } from '@/lib/postmark-token'
 import { XeroError } from './client'
 
 const STORAGE_BUCKET = 'contractor-invoices'
 const POSTMARK_API_URL = 'https://api.postmarkapp.com'
 
 function getPostmarkToken() {
-  const t = process.env.POSTMARK_API_KEY
-  if (!t) throw new XeroError('POSTMARK_API_KEY is not configured.')
+  const t = resolvePostmarkToken()
+  if (!t) throw new XeroError('Postmark is not configured (set POSTMARK_API_KEY).')
   return t
 }
 

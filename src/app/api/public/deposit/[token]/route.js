@@ -7,13 +7,24 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
+export async function GET(request, props) {
   const params = await props.params;
   const db = createServerClient()
+
+  // Token-enumeration guard (audit H2). Keyed on IP alone — an enumerator
+  // varies the token, so a per-token bucket would never fill. Deliberately
+  // tenant-UNSCOPED: the tenant is only knowable AFTER resolving the token.
+  // Generous enough for a legit buyer reloading their receipt (same
+  // 30-per-5-min shape as the other public GET reads); fails open inside
+  // checkRateLimit so a limiter outage never blocks a real buyer.
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `deposit-view:${ip}`, { max: 30, windowMs: 5 * 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
   // The nested company_settings join lets the public page render
   // the per-location logo without a second round-trip. Buyer-facing
   // branding follows the car's location: a CCF Autos car shows CCF

@@ -172,7 +172,7 @@ export async function POST(request, props) {
     try {
       const consent = body.marketing_consent !== false
       const { applyFormMarketingConsent } = await import('@/lib/marketing-consent')
-      await applyFormMarketingConsent(db, { contactId, consent, source: 'event_form', ipAddress: ip })
+      await applyFormMarketingConsent(db, { contactId, consent, source: 'event_form', ipAddress: ip, locationId: contactLocationId })
     } catch (e) { logWarn('lead-gen', 'marketing consent write error', { err: e }) }
 
     // Funnel tags — per-event slug tag + generic lead_gen tag. Both
@@ -357,6 +357,10 @@ export async function POST(request, props) {
       consent,
       source:    'event_form',
       ipAddress: ip,
+      // HOST-MASTER.4: contacts for host events live at the org's master
+      // location, so the consent relationship belongs there too — matching
+      // the writeContactTags call above.
+      locationId: contactLocationId,
     })
   } catch (e) {
     logWarn('event-register', 'marketing consent write error', { err: e })

@@ -5,15 +5,21 @@
 //   provider?   Filter to a specific provider ('glofox', 'inbody', 'postmark', …).
 //   status?     Filter by status ('pending', 'resolved', 'failed', 'discarded').
 //
-// Returns up to 200 rows, newest first.
+// Returns up to 200 rows, newest first, each annotated with `replayable` —
+// whether the provider has a registered idempotent re-driver — so the UI
+// offers Replay only where the registry allows it (the email-family keys
+// postmark_queue / postmark_inbound / email_ticket_* are DELIBERATELY not in
+// it; see src/lib/webhook-replay.js) rather than duplicating that list
+// client-side and drifting.
 // Response: { success: true, data: [...rows] }
 //
-// NOTE: GET only — NO replay/POST. Replay is Phase 2 (needs a per-provider
-// idempotency pass before any auto-retry or manual re-drive is wired).
+// Actions live on the sibling routes: [id]/replay (registry-gated) and
+// [id]/resolve (the human acknowledge path, DEADLETTER-UI.1).
 
 import { NextResponse } from 'next/server'
 import { getCurrentUser } from '@/lib/auth'
 import { createServerClient } from '@/lib/supabase'
+import { isReplayable } from '@/lib/webhook-replay'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -58,5 +64,6 @@ export async function GET(request) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 })
   }
 
-  return NextResponse.json({ success: true, data: data || [] })
+  const rows = (data || []).map((r) => ({ ...r, replayable: isReplayable(r.provider) }))
+  return NextResponse.json({ success: true, data: rows })
 }

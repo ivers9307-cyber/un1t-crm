@@ -7,10 +7,22 @@
 // INBODY: dead-letters when the inbody_webhook_events UPSERT fails.
 //   Replay = redo that same upsert (onConflict ignoreDuplicates → idempotent).
 //
-// POSTMARK: dead-letters when the postmark_webhook_queue INSERT fails.
-//   Replay = re-insert the raw payload into the queue (the drain cron dedupes
-//   via recordWebhookEvent before queueing, but at dead-letter time the dedup
-//   already succeeded — this is a pure queue-insert retry, safe to repeat).
+// POSTMARK: dead-letters when the postmark_webhook_queue INSERT fails — i.e.
+//   the event never reached the queue at all. Replay = re-insert the raw
+//   payload into the queue; a pure insert retry, safe to repeat.
+//   It deliberately does NOT call recordWebhookEvent, and must never be
+//   "fixed" to. Dedup happens ONCE, in /api/webhooks/postmark, BEFORE the
+//   queue insert; neither the drain cron nor this replay dedups. By
+//   dead-letter time that (RecordType:MessageID) claim has already been
+//   recorded, and nothing prunes webhook_events — so re-recording here would
+//   report `seen` and permanently no-op EVERY postmark replay.
+//
+//   NOT the key for a queue row that exhausted MAX_ATTEMPTS while PROCESSING:
+//   those capture under 'postmark_queue' (src/lib/postmark-queue.js), which is
+//   intentionally absent from this registry. Re-queueing one would mint a
+//   fresh row with attempts = 0 — resetting the budget that just ran out, so a
+//   permanently-failing payload never terminates — and replayDeadLetter would
+//   stamp `resolved` on the successful INSERT, when nothing was processed.
 //
 // GLOFOX: dead-letters AFTER action processing throws (post-dedup). Re-running
 //   actions risks partial-completion. EXCLUDED — not in this registry.

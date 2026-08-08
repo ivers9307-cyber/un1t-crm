@@ -110,9 +110,22 @@ export async function POST(request) {
 
   const outcome = await claimAndProcessQueueRow(db, row)
   if (outcome.status === 'failed') {
-    console.warn(
-      `[qstash postmark worker] event ${row.id} failed (attempt ${(row.attempts || 0) + 1}): ${outcome.error}`
-    )
+    const attempt = outcome.attempts ?? (row.attempts || 0) + 1
+    if (outcome.deadLettered) {
+      // POSTMARK-DLQ.1 — this was the attempt that spent the budget. The row
+      // is now invisible to the select above (and to the cron), so the
+      // payload lives on only in webhook_dead_letter. Still a 500: QStash's
+      // retry is harmless (the re-fetch filters the row out and answers 200
+      // skipped) and the failure is real.
+      console.error(
+        `[qstash postmark worker] event ${row.id} EXHAUSTED after ${attempt} attempts ` +
+        `— dead-lettered to webhook_dead_letter (provider postmark_queue): ${outcome.error}`
+      )
+    } else {
+      console.warn(
+        `[qstash postmark worker] event ${row.id} failed (attempt ${attempt}): ${outcome.error}`
+      )
+    }
   }
   const { status, body } = responseForOutcome(outcome)
   return NextResponse.json(body, { status })

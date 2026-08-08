@@ -1,14 +1,18 @@
 // POST /api/timer/runs  — start a timer run from a template.
 //
-// CLASS-TIMER. Manager-gated. Snapshots the template structure, finalises any
-// live run at the location (one-live-run invariant), inserts a running run.
+// CLASS-TIMER. Gated by the `class_timer` permission (CLASS-TIMER-PERM.1 —
+// every role by default so coaches on shift can run the timer). Snapshots the
+// template structure, finalises any live run at the location (one-live-run
+// invariant), inserts a running run.
 
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
+import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
-import { uuidLike, MANAGER_ROLES } from '@/lib/schemas'
+import { uuidLike } from '@/lib/schemas'
+import { broadcastTimerPing } from '@/lib/timer-broadcast'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -20,7 +24,7 @@ const StartSchema = z.object({
 
 export async function POST(request) {
   const user = await getCurrentUser()
-  if (!user || !MANAGER_ROLES.includes(user.role)) {
+  if (!user || !hasPermission(user, 'class_timer')) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 })
   }
   const validation = await validateBody(request, StartSchema)
@@ -63,5 +67,6 @@ export async function POST(request) {
     .select('*')
     .single()
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  await broadcastTimerPing(body.location_id)
   return NextResponse.json({ success: true, run: data })
 }

@@ -16,6 +16,7 @@ import { z } from 'zod'
 import { createServerClient } from '@/lib/supabase'
 import { createOrder, getOrder, RevolutError } from '@/lib/revolut'
 import { getDepositBaseUrl, getRequestOrigin } from '@/lib/app-url'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -36,6 +37,18 @@ export async function POST(request, props) {
   }
 
   const db = createServerClient()
+
+  // Strict abuse limit (audit H2) — this is an UNAUTHENTICATED endpoint that
+  // stamps a T&Cs acceptance and creates a Revolut order. Keyed per IP+token
+  // so one buyer retrying can't be starved by another NAT'd buyer, and a
+  // scripted hammer against one link is capped. 10-per-15-min matches the
+  // strict public-mutation shape (unsubscribe/[token]); a legit buyer clicks
+  // this a handful of times at most. Fails open inside checkRateLimit so a
+  // limiter outage never blocks a real payment.
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `deposit-pay:${params.token}:${ip}`, { max: 10, windowMs: 15 * 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
+
   const { data: car } = await db
     .from('cars')
     .select(`

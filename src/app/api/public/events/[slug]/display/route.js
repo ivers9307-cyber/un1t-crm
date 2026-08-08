@@ -15,13 +15,25 @@
 
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-export async function GET(_request, props) {
+export async function GET(request, props) {
   const params = await props.params;
   const db = createServerClient()
+
+  // Abuse limiter (audit H2a) — POLLED route: the display page refreshes every
+  // 2s during a race (≈30 req/min per screen). 240-per-minute per slug+IP is
+  // the live/tv-live polled-route convention: 8x headroom for a legit board
+  // (plus a spare/preview behind the same IP) while still capping a public,
+  // unauthenticated endpoint. Fails open inside checkRateLimit — a limiter
+  // outage must never black out the race-day board.
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `race-display:${params.slug}:${ip}`, { max: 240, windowMs: 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
+
   const { data: race, error: raceErr } = await db
     .from('race_events')
     .select(`

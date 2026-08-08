@@ -19,7 +19,13 @@
 export const MOBILE_NAV_FEATURES = Object.freeze([
   { key: 'schedule', label: 'Schedule',  permKeys: ['schedule'],                   barEligible: true },
   { key: 'whatsapp', label: 'WhatsApp',  permKeys: ['whatsapp'],                   barEligible: true },
-  { key: 'studio',   label: 'Studio',    permKeys: ['studio_management'],          barEligible: true },
+  // INBOX-SPLIT.M1 — email is its OWN surface, not a channel inside Messages,
+  // exactly as on web (the unified inbox is WhatsApp + Instagram; email is
+  // worked at /communications/tickets). Its permKey is the top-level
+  // `email_inbox` — the same key the /api/email/tickets* routes enforce — so
+  // the gate that places the tab is the gate that lets its calls through.
+  { key: 'email',    label: 'Email',     permKeys: ['email_inbox'],                barEligible: true },
+  { key: 'studio',   label: 'Studio',    permKeys: ['studio_management', 'class_timer', 'tv_displays'], barEligible: true },
   { key: 'pipeline', label: 'Pipeline',  permKeys: ['pipeline'],                   barEligible: true },
   { key: 'bookings', label: 'Bookings',  permKeys: ['bookings'],                   barEligible: true },
   { key: 'invoices', label: 'Invoices',  permKeys: ['invoices'], employmentType: 'contractor', barEligible: true },
@@ -47,12 +53,18 @@ export const BAR_ELIGIBLE = Object.freeze(
 // employment type without per-type hand-maintenance. Owners are intentionally
 // lean (Schedule + Studio); every other role reproduces today's bar.
 const FINANCE_KEY = { fte: 'expenses', contractor: 'invoices' }
+//
+// `email` is allowed (bar-placeable) for the three roles that hold
+// `email_inbox` by default — master, manager, owner. head_coach and staff do
+// not hold the key, so listing it for them would only ever be dead weight; if
+// an operator grants it, the resolver still surfaces it in More, which is
+// where every other granted-but-not-templated feature lands.
 const LAYOUT_BASE = {
-  owner:      { bar: ['schedule', 'studio'],             allowed: ['schedule', 'studio', 'whatsapp', 'pipeline', 'bookings'] },
-  manager:    { bar: ['schedule', 'whatsapp', 'studio'], allowed: ['schedule', 'whatsapp', 'studio', 'pipeline', 'bookings'] },
+  owner:      { bar: ['schedule', 'studio'],             allowed: ['schedule', 'studio', 'whatsapp', 'email', 'pipeline', 'bookings'] },
+  manager:    { bar: ['schedule', 'whatsapp', 'studio'], allowed: ['schedule', 'whatsapp', 'email', 'studio', 'pipeline', 'bookings'] },
   head_coach: { bar: ['schedule', 'whatsapp', 'studio'], allowed: ['schedule', 'whatsapp', 'studio', 'bookings', 'pipeline'] },
   staff:      { bar: ['schedule'],                       allowed: ['schedule', 'bookings'] },
-  master:     { bar: ['schedule', 'studio'],             allowed: ['schedule', 'studio', 'whatsapp', 'pipeline', 'bookings'] },
+  master:     { bar: ['schedule', 'studio'],             allowed: ['schedule', 'studio', 'whatsapp', 'email', 'pipeline', 'bookings'] },
 }
 function withFinance(base, employmentType) {
   return { bar: [...base.bar], allowed: [...base.allowed, FINANCE_KEY[employmentType]] }

@@ -55,11 +55,28 @@ export default async function CampaignDetailPage(props) {
     abStats = data || []
   }
 
+  // CAMPAIGN-RESEND (mig 506) — parent/child linkage for the banner and
+  // the "Resend of …" header line. At most one child (partial unique idx).
+  const { data: resendChild } = await db.from('campaigns')
+    .select('id, name, status')
+    .eq('parent_campaign_id', params.id)
+    .maybeSingle()
+  let resendParent = null
+  if (campaign.parent_campaign_id) {
+    const { data } = await db.from('campaigns')
+      .select('id, name')
+      .eq('id', campaign.parent_campaign_id)
+      .maybeSingle()
+    resendParent = data
+  }
+
   return (
     <CampaignDetail
       campaign={campaign}
       recipients={recipients || []}
       abStats={abStats}
+      resendChild={resendChild}
+      resendParent={resendParent}
       locationId={user.activeLocation?.id}
       userId={user.id}
     />

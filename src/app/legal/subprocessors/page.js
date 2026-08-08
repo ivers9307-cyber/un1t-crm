@@ -29,6 +29,7 @@ const SUBPROCESSORS = [
   ['Meta Platforms', 'WhatsApp Cloud API and Instagram messaging; hashed identifiers for ad conversions', 'US', 'DPA + SCCs'],
   ['Postmark (ActiveCampaign)', 'Transactional and marketing email delivery', 'US', 'DPA + SCCs'],
   ['Twilio', 'SMS delivery', 'US', 'DPA + SCCs'],
+  ['Zoom Video Communications', 'Cloud telephony. Member and lead names and phone numbers are held in a shared external-contacts directory so inbound calls to the studio are identified by name', 'EU / US', 'DPA + SCCs'],
   ['Stripe', 'Payment processing (event tickets; platform billing)', 'EU / US', 'DPA + SCCs'],
   ['Revolut Business', 'Payment processing (deposits)', 'EU', 'DPA'],
   ['Xero', 'Accounting (invoices and bills)', 'EU / global', 'DPA'],

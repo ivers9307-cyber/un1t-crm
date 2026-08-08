@@ -6,7 +6,7 @@
 // in the phase 4 panel.
 
 import { describe, it, expect, vi } from 'vitest'
-import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary } from './dashboard-data'
+import { fetchIncompletePayProfiles, fetchPendingRosterApprovalsCount, paginatedSumCents, fetchAdsSummary, fetchStudioDashboardData } from './dashboard-data'
 
 function mockSupabaseFor(rows) {
   return {
@@ -154,7 +154,7 @@ describe('fetchPendingRosterApprovalsCount', () => {
 function chainableBuilder(response) {
   const calls = []
   const b = { calls }
-  for (const m of ['select', 'eq', 'neq', 'gte', 'lte', 'is', 'not', 'in', 'order', 'range', 'limit']) {
+  for (const m of ['select', 'eq', 'neq', 'gt', 'gte', 'lte', 'is', 'not', 'in', 'order', 'range', 'limit']) {
     b[m] = (...args) => { calls.push([m, ...args]); return b }
   }
   b.then = (resolve, reject) => Promise.resolve()
@@ -224,12 +224,34 @@ describe('fetchAdsSummary', () => {
     }
   }
 
-  it("filters level='campaign' in the query itself and orders by date", async () => {
+  it("filters level='campaign' in the query itself and pages with a stable id order", async () => {
     const supabase = adsSupabase({ adsRows: [], attributedCount: 0 })
     await fetchAdsSummary(supabase, 'loc1')
     const calls = supabase.builders.ad_insights_daily[0].calls
     expect(calls).toContainEqual(['eq', 'level', 'campaign'])
-    expect(calls).toContainEqual(['order', 'date', { ascending: true }])
+    expect(calls).toContainEqual(['order', 'id', { ascending: true }])
+    expect(calls).toContainEqual(['range', 0, 999])
+  })
+
+  it('paginates past the 1k-row cap and sums every page', async () => {
+    // 1001 campaign rows → page 1 (1000) + page 2 (1), summed exactly.
+    const adsRows = Array.from({ length: 1001 }, () => ({ level: 'campaign', spend: '1.00', results: 1 }))
+    let adsFetches = 0
+    const supabase = {
+      from: vi.fn(table => {
+        if (table !== 'ad_insights_daily') return chainableBuilder({ count: 0, error: null })
+        adsFetches++
+        return chainableBuilder(calls => {
+          const [, from, to] = calls.find(c => c[0] === 'range')
+          return { data: adsRows.slice(from, to + 1), error: null }
+        })
+      }),
+    }
+    const res = await fetchAdsSummary(supabase, 'loc1')
+    expect(res.success).toBe(true)
+    expect(res.data.spend).toBe(1001)
+    expect(res.data.results).toBe(1001)
+    expect(adsFetches).toBe(2)
   })
 
   it('sums campaign spend/results and computes costPerResult + attributed', async () => {
@@ -276,5 +298,70 @@ describe('fetchAdsSummary', () => {
     }
     const res = await fetchAdsSummary(supabase, 'loc1')
     expect(res).toEqual({ success: false, error: 'ads down' })
+  })
+})
+
+describe('fetchStudioDashboardData', () => {
+  // `contacts` is queried twice: first the head:true "new leads this
+  // week" count, then the funnel page loop. Hand out a builder per
+  // from() call so the test can inspect which column each filtered on.
+  function studioSupabase({ leadCount = 0, funnelRows = [] } = {}) {
+    const builders = []
+    let contactsCall = 0
+    const supabase = {
+      from: (table) => {
+        let b
+        if (table === 'contacts') {
+          contactsCall += 1
+          b = contactsCall === 1
+            ? chainableBuilder({ count: leadCount, error: null })
+            : chainableBuilder({ data: funnelRows, error: null })
+        } else {
+          b = chainableBuilder({ data: [], error: null })
+        }
+        b.table = table
+        builders.push(b)
+        return b
+      },
+    }
+    return { supabase, builders }
+  }
+
+  it('counts new leads on joined_at, never the import-poisoned lead_created_at', async () => {
+    const { supabase, builders } = studioSupabase({ leadCount: 7 })
+    const res = await fetchStudioDashboardData(supabase, 'loc1')
+
+    expect(res.success).toBe(true)
+    expect(res.data.newLeadsThisWeek).toBe(7)
+
+    const countBuilder = builders.find(b => b.table === 'contacts')
+    const gte = countBuilder.calls.find(c => c[0] === 'gte')
+    expect(gte[1]).toBe('joined_at')
+
+    // lead_created_at defaults to NOW() at insert, so a bulk import
+    // would spike this count — it must not appear anywhere.
+    const everyArg = builders.flatMap(b => b.calls.flat())
+    expect(everyArg).not.toContain('lead_created_at')
+  })
+
+  it('still shapes the funnel and total from the paged contacts scan', async () => {
+    const { supabase } = studioSupabase({
+      leadCount: 2,
+      funnelRows: [
+        { pipeline_stage_slug: 'new_lead' },
+        { pipeline_stage_slug: 'new_lead' },
+        { pipeline_stage_slug: 'converted' },
+        { pipeline_stage_slug: null },
+      ],
+    })
+    const res = await fetchStudioDashboardData(supabase, 'loc1')
+
+    expect(res.data.funnel).toEqual({ new_lead: 2, converted: 1, unknown: 1 })
+    expect(res.data.totalContacts).toBe(4)
+  })
+
+  it('refuses without a location', async () => {
+    const res = await fetchStudioDashboardData({ from: vi.fn() }, null)
+    expect(res).toEqual({ success: false, error: 'No location' })
   })
 })

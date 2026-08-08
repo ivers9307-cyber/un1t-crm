@@ -292,8 +292,11 @@ export default function RaceCheckoutPage({ paymentId }) {
               </div>
             )}
 
-            {/* Embedded Checkout (Revolut or Stripe) mounts here — ref + min-height must remain */}
-            <div className="rounded-xl bg-white/[0.03] border border-white/10 p-3">
+            {/* Embedded Checkout (Revolut or Stripe) mounts here — ref + min-height must remain.
+                WHITE panel: the Revolut widget ships a light theme (dark labels/inputs) with no
+                dark mode, so on the old bg-white/[0.03] its text was unreadable — the same defect
+                fixed on /offers in OFFERS.8d (PR #1293). */}
+            <div className="rounded-xl bg-white p-3">
               <div ref={targetRef} className="min-h-[280px]" />
             </div>
 

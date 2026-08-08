@@ -1,20 +1,27 @@
-// Messages tab — unified WhatsApp + Instagram + Email inbox
-// (MOBILE-MSG.M2/M3; INBOX-EMAIL-M.1 added email as the third channel).
+// Messages tab — unified WhatsApp + Instagram inbox (MOBILE-MSG.M2/M3).
 //
-// Merges all three channels into one list (client-side, like the web
-// unified inbox), newest message first, with unread-count badges and a
-// channel glyph on each avatar. Queue chips (All / Needs reply / Agent
-// handoff / Approval) mirror the web queues so a coach on their phone
-// can triage exactly what the desk sees — especially threads Mia
+// Merges both chat channels into one list (client-side, like the web
+// unified inbox), newest message first, with unread-count badges
+// and a channel glyph on each avatar. Queue chips (All / Needs reply /
+// Agent handoff / Approval) mirror the web queues so a coach on their
+// phone can triage exactly what the desk sees — especially threads Mia
 // escalated or requests she's holding for a human decision.
 // Tapping opens the per-channel conversation thread.
 // Pull-to-refresh re-fetches.
 //
+// EMAIL IS NOT A CHANNEL HERE (INBOX-SPLIT.M1). It was one briefly —
+// INBOX-EMAIL-M.1 added it, EMAIL-TICKET-M.1 repointed it at the ticket
+// system — and it is now its OWN tab (app/(tabs)/email.jsx), matching web,
+// where the unified inbox is WhatsApp + Instagram and email is worked at
+// /communications/tickets. A queue with a lifecycle, a subject line,
+// per-account access and nothing that auto-closes does not belong
+// interleaved with chat threads. Nothing on this screen should reach for
+// /api/email/tickets*, the `email_inbox` permission, or a ticket id.
+//
 // pending_approval: the web /api/whatsapp/conversations route annotates
 // it server-side, but mobile WA reads go direct to Supabase — so we
 // re-derive it here from one batched pending-requests read. IG rows
-// arrive pre-annotated from /api/instagram/conversations; email threads
-// never have approvals (no customer agent on email).
+// arrive pre-annotated from /api/instagram/conversations.
 
 import { useState, useEffect, useCallback } from 'react'
 import {
@@ -26,28 +33,23 @@ import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../lib/auth-context'
 import { listConversations, isWindowOpen } from '../../lib/whatsapp-api'
 import { listConversations as listInstagram, igDisplayName } from '../../lib/instagram-api'
-import { listConversations as listEmail, emailDisplayName } from '../../lib/email-api'
 import { listPendingApprovalConversationIds } from '../../lib/inbox-approvals-api'
 import { isAgentHandoff, hasPendingApproval, queueCounts, filterByQueue, QUEUES } from '../../lib/inbox'
 
 const CHANNEL_GLYPHS = {
   whatsapp: { icon: 'logo-whatsapp', color: '#25D366' },
   instagram: { icon: 'logo-instagram', color: '#E1306C' },
-  email: { icon: 'mail', color: '#2563EB' },
 }
 
 function ConversationRow({ conv, onPress }) {
   const ig = conv.channel === 'instagram'
-  const em = conv.channel === 'email'
   const c = conv.contacts
   const name = ig
     ? igDisplayName(conv)
-    : em
-      ? emailDisplayName(conv)
-      : (c?.name
-        || [c?.first_name, c?.last_name].filter(Boolean).join(' ')
-        || conv.wa_profile_name
-        || conv.wa_phone)
+    : (c?.name
+      || [c?.first_name, c?.last_name].filter(Boolean).join(' ')
+      || conv.wa_profile_name
+      || conv.wa_phone)
   const isInbound = conv.last_message_direction === 'inbound'
   const time = conv.last_message_at
     ? new Date(conv.last_message_at).toLocaleString(undefined, {
@@ -56,9 +58,9 @@ function ConversationRow({ conv, onPress }) {
         ...(isToday(conv.last_message_at) ? {} : { month: 'short', day: 'numeric' }),
       })
     : ''
-  // The 24h send window only exists on WhatsApp — IG and email rows
-  // never show the Closed chip.
-  const windowOpen = ig || em || isWindowOpen(conv)
+  // The 24h send window only exists on WhatsApp — IG rows never show the
+  // Closed chip.
+  const windowOpen = ig || isWindowOpen(conv)
   const glyph = CHANNEL_GLYPHS[conv.channel] || CHANNEL_GLYPHS.whatsapp
   return (
     <Pressable
@@ -130,7 +132,6 @@ const CHIP_BADGE_COLORS = {
 
 function routeForConversation(c) {
   if (c.channel === 'instagram') return `/instagram/${c.id}`
-  if (c.channel === 'email') return `/email/${c.id}`
   return `/whatsapp/${c.id}`
 }
 
@@ -143,27 +144,23 @@ export default function WhatsApp() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
   const [igError, setIgError] = useState(null)
-  const [emError, setEmError] = useState(null)
 
   const load = useCallback(async () => {
     if (!activeLocation) return
     setError(null)
-    const [wa, ig, em, pendingIds] = await Promise.all([
+    const [wa, ig, pendingIds] = await Promise.all([
       listConversations(activeLocation.id),
       listInstagram(activeLocation.id),
-      listEmail(activeLocation.id),
       listPendingApprovalConversationIds(activeLocation.id),
     ])
     if (!wa.success) setError(wa.error || 'Failed to load conversations')
-    // An Instagram or Email failure must never blank the other
-    // channels — degrade to what loaded, with a soft note.
+    // An Instagram failure must never blank WhatsApp — degrade to what
+    // loaded, with a soft note.
     setIgError(ig.success ? null : ig.error || 'Instagram couldn’t load')
-    setEmError(em.success ? null : em.error || 'Email couldn’t load')
     const waRows = (wa.success ? wa.data || [] : []).map(c => ({ ...c, channel: 'whatsapp' }))
     const igRows = (ig.success ? ig.data || [] : []).map(c => ({ ...c, channel: 'instagram' }))
-    const emRows = (em.success ? em.data || [] : []).map(c => ({ ...c, channel: 'email' }))
     setConversations(
-      [...waRows, ...igRows, ...emRows]
+      [...waRows, ...igRows]
         // WA rows come direct from Supabase without the route's
         // pending_approval annotation — backfill it from the batched
         // pending-requests read (IG rows keep their server flag).
@@ -215,12 +212,7 @@ export default function WhatsApp() {
       )}
       {igError && (
         <View className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 mb-3">
-          <Text className="text-amber-700 text-sm">Instagram unavailable — showing other channels only. {igError}</Text>
-        </View>
-      )}
-      {emError && (
-        <View className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 mb-3">
-          <Text className="text-amber-700 text-sm">Email unavailable — showing other channels only. {emError}</Text>
+          <Text className="text-amber-700 text-sm">Instagram unavailable — showing WhatsApp only. {igError}</Text>
         </View>
       )}
 

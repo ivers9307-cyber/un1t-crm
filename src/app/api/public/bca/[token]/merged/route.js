@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { BCA_STORAGE } from '@/lib/bca'
 import { recordBcaDownload, getClientIp } from '@/lib/bca-events'
+import { checkRateLimit, getClientIp as limiterIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -20,6 +21,14 @@ export const dynamic = 'force-dynamic'
 export async function GET(request, props) {
   const params = await props.params;
   const db = createServerClient()
+
+  // Token-enumeration guard (audit H2a). Keyed on IP alone — an enumerator
+  // varies the token, so a per-token bucket would never fill (deposit-view
+  // convention). 30-per-5-min covers a legit reviewer re-downloading the
+  // merged PDF many times over; fails open inside checkRateLimit.
+  const ip = limiterIp(request)
+  const limit = await checkRateLimit(db, `bca-merged:${ip}`, { max: 30, windowMs: 5 * 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
   const { data: row } = await db
     .from('car_bca_submissions')
     .select('id, merged_pdf_path, download_expires_at')

@@ -1,4 +1,5 @@
 import { createServerClient } from './supabase'
+import { resolvePostmarkToken } from './postmark-token'
 import { applyAudienceFilter, applyAudienceFilterAsync } from './audience-filter'
 import { htmlToPlainText } from './email-content'
 import { resolveEmailSender } from './tenant-email'
@@ -42,7 +43,7 @@ export function isTransientSendError(result) {
 }
 
 function getPostmarkToken() {
-  const token = process.env.POSTMARK_API_KEY || process.env.POSTMARK_SERVER_TOKEN
+  const token = resolvePostmarkToken()
   if (!token) {
     throw new Error(
       'Postmark API key not configured. Set POSTMARK_API_KEY in your environment variables. ' +
@@ -80,6 +81,73 @@ async function resolveTenantOverride({ locationId, sender }) {
   return { token, from }
 }
 
+// ── Engagement tracking (EMAIL-NOTRACK.1) ─────────────────────────
+//
+// Richard's call (2026-08-07): delivery status yes; open and click
+// tracking NO on one-to-one mail. Marketing keeps both — there the
+// recipient sits in a consented bulk audience and the open rate
+// informs a real decision.
+//
+// Until now sendEmail/sendBatch set TrackOpens + TrackLinks
+// UNCONDITIONALLY, so a ticket reply, a contract, a password reset and
+// a receipt were instrumented exactly like a marketing blast:
+//   • TrackOpens embeds a 1x1 pixel — it leaks open time and IP, and
+//     these are Irish members, so GDPR applies. We already block
+//     INBOUND remote images by default for precisely this reason
+//     (EMAIL-INBOX): blocking theirs while shipping our own is
+//     indefensible.
+//   • TrackLinks rewrites every href through Postmark's click domain.
+//     Beyond privacy that is a FUNCTIONAL hazard on transactional
+//     mail: a rewritten link reads as phishing in a support reply,
+//     and a rewritten password-reset or contract-signing link is a
+//     live failure mode, not a cosmetic one.
+//
+// THE SPLIT IS ON THE MESSAGE STREAM: 'broadcast' (marketing) tracks,
+// everything else does not.
+//
+// WHY WE KEY ON THE CALLER'S *EXPLICIT* STREAM, NOT THE RESOLVED ONE:
+// sendEmail's `stream` has historically defaulted to 'broadcast', so
+// keying on the resolved value would make TRACKING THE DEFAULT — a new
+// call site that forgot to say anything would silently ship a pixel.
+// The safe outcome has to be the one you get by omission, so an
+// omitted stream reads as "unstated", not as "marketing", and gets no
+// tracking. The resolved default stays 'broadcast' on the wire because
+// the List-Unsubscribe one-click headers hang off it (UNSUB.3) and
+// changing that would be an unsubscribe-compliance change, which this
+// work deliberately does not touch. Every one of the ~20 production
+// call sites passes `stream` explicitly today, so the two readings
+// differ for no live caller — the distinction exists to make the NEXT
+// call site safe by default.
+//
+// The off-values match the house precedent already used by the direct
+// -fetch transactional senders (contractor-invoice-email.js,
+// xero/bills-email.js, xero/contractor-bills.js,
+// xero/fte-expense-claims.js): explicit false/'None' rather than
+// omitted keys, so the send never inherits a server- or stream-level
+// tracking default from the Postmark dashboard.
+export const MARKETING_STREAM = 'broadcast'
+
+const TRACKING_ON = Object.freeze({ TrackOpens: true, TrackLinks: 'HtmlOnly' })
+const TRACKING_OFF = Object.freeze({ TrackOpens: false, TrackLinks: 'None' })
+
+/**
+ * Resolve the Postmark tracking fields for one message.
+ *
+ * @param {Object} opts
+ * @param {string} [opts.stream] - the stream the CALLER passed, raw.
+ *   `undefined` deliberately does NOT mean marketing (see above).
+ * @param {boolean} [opts.trackEngagement] - explicit per-call override.
+ *   `true` forces tracking on (a genuinely consented send that happens
+ *   not to ride the broadcast stream), `false` forces it off even for
+ *   marketing. Anything else (the normal case) defers to the stream.
+ * @returns {{TrackOpens: boolean, TrackLinks: string}}
+ */
+export function resolveTracking({ stream, trackEngagement } = {}) {
+  if (trackEngagement === true) return { ...TRACKING_ON }
+  if (trackEngagement === false) return { ...TRACKING_OFF }
+  return stream === MARKETING_STREAM ? { ...TRACKING_ON } : { ...TRACKING_OFF }
+}
+
 // ============================================================
 // CORE SENDING
 // ============================================================
@@ -103,12 +171,40 @@ export function toListUnsubscribeUrl(pageUrl) {
 /**
  * Send a single email via Postmark
  * @param {Object} options
- * @param {string} options.to - recipient email
+ * @param {string} options.to - recipient email (comma-separated for several)
+ * @param {string} options.cc - EMAIL-CC.1 — Cc recipients, comma-separated.
+ *   Visible to every recipient, which is the whole point of a Cc.
+ * @param {string} options.bcc - EMAIL-CC.1 — Bcc recipients, comma-separated.
+ *   THIS IS THE ONLY PLACE A BCC ADDRESS MAY GO. It is set on Postmark's own
+ *   `Bcc` API field and is never folded into To/Cc and never written into
+ *   `Headers` — Postmark does not put a Bcc header on the delivered message,
+ *   so no recipient ever sees the list. Callers build both fields through
+ *   toPostmarkFields() in src/lib/email-recipients.js, which is the single
+ *   site where a resolved recipient set becomes wire values.
  * @param {string} options.subject - email subject
  * @param {string} options.htmlBody - HTML content
  * @param {string} options.from - sender (e.g. "UN1T <hello@un1t.ie>")
  * @param {string} options.replyTo - reply-to address
- * @param {string} options.stream - 'broadcast' or 'outbound' (transactional)
+ * @param {string} options.stream - THIS APP'S INTERNAL stream vocabulary:
+ *   'broadcast' (marketing) or 'outbound' (transactional). It drives
+ *   open/click tracking, the List-Unsubscribe gate, consentFieldForStream()
+ *   and what gets written to email_sends.postmark_stream. Resolves to
+ *   'broadcast' when omitted (unchanged), but an OMITTED stream never enables
+ *   open/click tracking — see resolveTracking.
+ * @param {string} options.postmarkStream - EMAIL-OUTBOUND-SERVER.1 — the
+ *   POSTMARK MESSAGE STREAM ID that goes on the wire as `MessageStream`, when
+ *   it differs from the internal one. A DIFFERENT CONCEPT from `stream` above:
+ *   this is an opaque provider-side slug (e.g. 'email-send' on the ticketing
+ *   server), scoped to whichever Postmark server the token belongs to, and it
+ *   means nothing to this application. Omit it (every pre-existing caller) and
+ *   the internal stream goes on the wire exactly as before.
+ *   NEVER let this value reach consentFieldForStream(), campaigns.postmark_stream
+ *   (CHECK-constrained to broadcast|outbound by mig 302) or
+ *   email_sends.postmark_stream — there it would be silently read as the
+ *   internal vocabulary and misclassify the send's consent family.
+ * @param {boolean} options.trackEngagement - EMAIL-NOTRACK.1 explicit
+ *   override for open/click tracking. Omit it (every caller today) and the
+ *   stream decides: marketing tracks, transactional does not.
  * @param {string} options.tag - tracking tag
  * @param {Object} options.metadata - custom metadata
  * @param {string} options.unsubscribeUrl - List-Unsubscribe URL for GDPR
@@ -124,12 +220,23 @@ export function toListUnsubscribeUrl(pageUrl) {
  */
 export async function sendEmail({
   to,
+  // EMAIL-CC.1 — both default to undefined, so the request body below is
+  // byte-identical to a pre-EMAIL-CC.1 send for every caller that omits them.
+  cc,
+  bcc,
   subject,
   htmlBody,
   textBody,
   from,
   replyTo,
-  stream = 'broadcast',
+  // EMAIL-NOTRACK.1 — NO destructuring default. The wire default is applied
+  // below as `messageStream`; `stream` stays raw so resolveTracking can tell
+  // "the caller said broadcast" from "the caller said nothing".
+  stream,
+  // EMAIL-OUTBOUND-SERVER.1 — Postmark's own stream id, wire-only. See the
+  // docstring: this is NOT `stream` and must never be treated as it.
+  postmarkStream,
+  trackEngagement,
   tag,
   metadata = {},
   unsubscribeUrl,
@@ -144,6 +251,19 @@ export async function sendEmail({
 }) {
   const tenant = await resolveTenantOverride({ locationId, sender })
 
+  // THE INTERNAL stream, resolved. Preserves the historical default so the
+  // List-Unsubscribe gate below is byte-identical for a caller that omits
+  // `stream`; only tracking reads the raw value.
+  const internalStream = stream || 'broadcast'
+
+  // WHAT GOES ON THE WIRE. EMAIL-OUTBOUND-SERVER.1 split these two: a send on
+  // a non-default Postmark server rides a stream id that exists only on THAT
+  // server ('email-send' on the ticketing server), while the message is still
+  // internally transactional. With postmarkStream omitted — every caller but
+  // the ticket routes — the two are the same value and the payload is
+  // byte-identical to before.
+  const messageStream = postmarkStream || internalStream
+
   const headers = {
     'Accept': 'application/json',
     'Content-Type': 'application/json',
@@ -153,6 +273,13 @@ export async function sendEmail({
   const body = {
     From: tenant.from || from || process.env.POSTMARK_FROM_EMAIL || 'UN1T <hello@un1t.ie>',
     To: to,
+    // EMAIL-CC.1 — `|| undefined` so an empty string never becomes a key with
+    // no value, and so the serialised body keeps its old shape when omitted.
+    // Bcc is set HERE and nowhere else in this function: nothing below adds it
+    // to `body.Headers`, which is what keeps the address off the delivered
+    // message. See the sendEmail docblock.
+    Cc: cc || undefined,
+    Bcc: bcc || undefined,
     Subject: subject,
     HtmlBody: htmlBody,
     // CAMPAIGN-REL.4 — always ship a plain-text alternative. HTML-only
@@ -160,11 +287,12 @@ export async function sendEmail({
     // the HTML when the caller didn't supply one.
     TextBody: textBody || htmlToPlainText(htmlBody) || undefined,
     ReplyTo: replyTo || undefined,
-    MessageStream: stream,
+    MessageStream: messageStream,
     Tag: tag || undefined,
     Metadata: metadata,
-    TrackOpens: true,
-    TrackLinks: 'HtmlOnly',
+    // EMAIL-NOTRACK.1 — spread in the same key position the two literals
+    // occupied, so a marketing payload serialises byte-for-byte as before.
+    ...resolveTracking({ stream, trackEngagement }),
   }
 
   // Add List-Unsubscribe header for GDPR compliance (required for
@@ -177,7 +305,12 @@ export async function sendEmail({
   // nothing changed on our side, contact stays opted-in).
   // /api/unsubscribe/[token] does accept POST and writes
   // contact_preferences + consent_log correctly.
-  if (stream === 'broadcast' && unsubscribeUrl) {
+  // Reads the RESOLVED INTERNAL stream on purpose: unsubscribe compliance is
+  // out of scope for EMAIL-NOTRACK.1, so an omitted stream keeps attaching the
+  // one-click headers exactly as it did before. It is deliberately NOT the
+  // wire value — "is this marketing?" is a question about our own vocabulary,
+  // and a provider stream id can never answer it.
+  if (internalStream === 'broadcast' && unsubscribeUrl) {
     body.Headers = [
       { Name: 'List-Unsubscribe', Value: `<${toListUnsubscribeUrl(unsubscribeUrl)}>` },
       { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' },
@@ -207,7 +340,17 @@ export async function sendEmail({
 
   if (!response.ok) {
     console.error('Postmark send error:', result)
-    throw new Error(result.Message || 'Failed to send email')
+    // EMAIL-OUTBOUND-SERVER.1 — carry Postmark's own classification on the
+    // error. `message` is unchanged (every existing caller reads only that),
+    // but a rejection is now machine-readable: the ticket send path has to
+    // tell "this From has no verified sender signature" (ErrorCode 400/401,
+    // recoverable by sending from a domain we own) apart from every other
+    // rejection, which it must NOT retry. sendBatch already had this via its
+    // per-message { ErrorCode, HttpStatus } results; sendEmail threw it away.
+    const err = new Error(result?.Message || 'Failed to send email')
+    err.errorCode = typeof result?.ErrorCode === 'number' ? result.ErrorCode : null
+    err.httpStatus = response.status
+    throw err
   }
 
   return {
@@ -224,6 +367,9 @@ export async function sendEmail({
  * batch: `{ locationId }` (resolved once) or a pre-resolved `{ sender }`.
  * With neither (every caller today) the resolver returns the global default
  * and the token + per-email From are byte-identical to before.
+ *
+ * EMAIL-NOTRACK.1 — each email may carry `trackEngagement` (boolean) to
+ * override the stream-derived open/click tracking for that message only.
  */
 export async function sendBatch(emails, { locationId, sender } = {}) {
   const tenant = await resolveTenantOverride({ locationId, sender })
@@ -254,8 +400,12 @@ export async function sendBatch(emails, { locationId, sender } = {}) {
       MessageStream: email.stream || 'broadcast',
       Tag: email.tag || undefined,
       Metadata: email.metadata || {},
-      TrackOpens: true,
-      TrackLinks: 'HtmlOnly',
+      // EMAIL-NOTRACK.1 — per-email, and keyed on the RAW email.stream for
+      // the same reason as sendEmail: an unstated stream must not opt the
+      // recipient into a tracking pixel. campaign-sender always sets
+      // `stream` explicitly ('broadcast' for Marketing campaigns), so the
+      // marketing payload is unchanged.
+      ...resolveTracking({ stream: email.stream, trackEngagement: email.trackEngagement }),
       ...(email.stream !== 'outbound' && email.unsubscribeUrl ? {
         Headers: [
           // UNSUB.3 — POST endpoint, not the friendly page (see
@@ -361,10 +511,18 @@ export function applyMergeTags(html, contact, extras = {}) {
  * provides baseUrl from getAppUrl() so this is unit-testable
  * without env vars.
  */
-export function buildUnsubscribeUrl(contact, baseUrl) {
+export function buildUnsubscribeUrl(contact, baseUrl, locationId) {
   const prefs = contact?.contact_preferences?.[0] || contact?.contact_preferences
   const token = prefs?.unsubscribe_token || contact?.id
-  return `${baseUrl}/unsubscribe/${token}`
+  // LOCCOMMS.4 — `?l=` scopes the opt-out to the SENDING location, so leaving a
+  // Hatch Street list does not silently remove someone from Stillorgan's.
+  //
+  // OMITTING IT IS MEANINGFUL, NOT A BUG: no `l` = unsubscribe from EVERY
+  // location. Emails already delivered carry the old location-less URL and must
+  // keep working; someone clicking one expects to be removed, and removing them
+  // from everything is the only direction that cannot generate a complaint.
+  const scope = locationId ? `?l=${encodeURIComponent(locationId)}` : ''
+  return `${baseUrl}/unsubscribe/${token}${scope}`
 }
 
 /**
@@ -441,6 +599,25 @@ function assertConsentField(consentField) {
   return consentField
 }
 
+// LOCCOMMS.3 — map a consent field to its column on contact_location_audience.
+//
+// The three MARKETING channels are per-location and live on the view as
+// loc_*; `email_administrative` deliberately stays GLOBAL (it comes through
+// `c.*` unchanged) because transactional mail follows the transaction, not a
+// marketing list — you cannot unsubscribe from a booking confirmation.
+//
+// One place for the mapping so a caller can never half-migrate and gate a
+// per-location send on the stale denormalised global column.
+const LOCATION_CONSENT_COLUMNS = {
+  email_marketing:    'loc_email_marketing',
+  sms_marketing:      'loc_sms_marketing',
+  whatsapp_marketing: 'loc_whatsapp_marketing',
+}
+
+export function consentColumnFor(consentField) {
+  return LOCATION_CONSENT_COLUMNS[consentField] || consentField
+}
+
 export function buildAudienceQuery(db, filter, locationId, { columns = '*', selectOpts, consentField = 'email_marketing' } = {}) {
   // CLASSIFY.1 — uses denormalised contacts.email_marketing instead of
   // an inner-join on contact_preferences. Single-table filtering kills
@@ -460,11 +637,21 @@ export function buildAudienceQuery(db, filter, locationId, { columns = '*', sele
   // hits the TransformBuilder overload — the head/count options vanish.
   // Callers that need a count must therefore request it on the FIRST
   // select(), which is what this helper does for them.
+  // LOCCOMMS.3 — reads contact_location_audience (mig 491), NOT contacts.
+  // Per-location consent is the authority: a Hatch campaign previously reached
+  // only contacts whose ROW sat at Hatch (58 of 81; the other 23 silently
+  // unreachable since June). The view INNER-joins contact_location_preferences,
+  // so "row absent = that location may never send" is enforced structurally.
+  //
+  // Still a VIEW and still single-table filtering, deliberately. CLASSIFY.1
+  // (below) moved this off an inner-join on contact_preferences because
+  // PostgREST embedded-resource filters silently break head:true counts — a
+  // wrong count here is a campaign that under- or over-sends with no error.
   let query = db
-    .from('contacts')
+    .from('contact_location_audience')
     .select(columns, selectOpts)
-    .eq('location_id', locationId)
-    .eq(assertConsentField(consentField), true)
+    .eq('audience_location_id', locationId)
+    .eq(consentColumnFor(assertConsentField(consentField)), true)
     .not('email_status', 'in', '("bounced","complained")')
 
   // EMAIL-HYGIENE.1 — the MARKETING path additionally excludes contacts
@@ -494,11 +681,13 @@ export function buildAudienceQuery(db, filter, locationId, { columns = '*', sele
  * select-overload gotcha.
  */
 export async function buildAudienceQueryAsync(db, filter, locationId, { columns = '*', selectOpts, consentField = 'email_marketing' } = {}) {
+  // LOCCOMMS.3 — same per-location cutover as buildAudienceQuery above. This is
+  // the builder the LIVE send path (campaign-sender.js) actually calls.
   let query = db
-    .from('contacts')
+    .from('contact_location_audience')
     .select(columns, selectOpts)
-    .eq('location_id', locationId)
-    .eq(assertConsentField(consentField), true)
+    .eq('audience_location_id', locationId)
+    .eq(consentColumnFor(assertConsentField(consentField)), true)
     .not('email_status', 'in', '("bounced","complained")')
   // EMAIL-HYGIENE.1 — same marketing-only inactivity-suppression gate as
   // buildAudienceQuery above (email_suppressed_at, mig 395).
@@ -565,16 +754,56 @@ export async function sendTransactionalEmail({
 }
 
 /**
- * EMAIL-INBOX.1 — the location's inbound-inbox address (mig 394,
- * locations.email_inbox_reply_to). When set, campaign + marketing
- * sends stamp it as Reply-To so customer replies route back into the
- * unified inbox via /api/webhooks/postmark-inbound. Returns null when
- * unset or on any error (callers treat it as best-effort).
+ * EMAIL-MAILBOX-ADMIN.1 — the address of a location's DEFAULT email account
+ * (email_mailboxes, mig 485), or null.
+ *
+ * `is_default` was documented from the start as "the address stamped as
+ * Reply-To on campaign + marketing sends" (mig 485's own COMMENT), but until
+ * the account editor shipped nothing could set it, so the send paths still
+ * read the column it replaced. Now that an operator can choose the default,
+ * the default is what they get.
+ *
+ * Active only: a deactivated account stops accepting inbound, so stamping it
+ * as Reply-To would invite customers to write to an address whose mail
+ * dead-letters.
+ *
+ * Takes the caller's client rather than making one — the send paths already
+ * hold a service-role client, and this runs per campaign tick.
+ */
+export async function getDefaultMailboxAddress(db, locationId) {
+  if (!db || !locationId) return null
+  try {
+    const { data } = await db.from('email_mailboxes')
+      .select('address')
+      .eq('location_id', locationId)
+      .eq('is_default', true)
+      .eq('active', true)
+      .limit(1)
+      .maybeSingle()
+    return data?.address || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * EMAIL-INBOX.1 — the location's inbound-inbox address. When set, campaign +
+ * marketing sends stamp it as Reply-To so customer replies route back in via
+ * /api/webhooks/postmark-inbound. Returns null when unset or on any error
+ * (callers treat it as best-effort).
+ *
+ * The default email_mailboxes row wins; locations.email_inbox_reply_to (mig
+ * 394, DEPRECATED by mig 485) is the fallback, kept because it still holds a
+ * live value for studios configured before the accounts model and nothing
+ * writes it any more. A studio with no default account and no legacy column
+ * gets null — replies then go to the sending address, exactly as before.
  */
 export async function getLocationInboxReplyTo(locationId) {
   if (!locationId) return null
   try {
     const db = createServerClient()
+    const fromMailbox = await getDefaultMailboxAddress(db, locationId)
+    if (fromMailbox) return fromMailbox
     const { data } = await db.from('locations')
       .select('email_inbox_reply_to')
       .eq('id', locationId)

@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { BCA_STORAGE } from '@/lib/bca'
 import { recordBcaDownload, getClientIp } from '@/lib/bca-events'
+import { checkRateLimit, getClientIp as limiterIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -24,6 +25,15 @@ export async function GET(request, props) {
   }
 
   const db = createServerClient()
+
+  // Token-enumeration guard (audit H2a). Keyed on IP alone — an enumerator
+  // varies the token, so a per-token bucket would never fill (deposit-view
+  // convention). 30-per-5-min is generous for the legit BCA reviewer clicking
+  // through every source doc (~10 slugs per submission); fails open inside
+  // checkRateLimit so a limiter outage never blocks a real download.
+  const ip = limiterIp(request)
+  const limit = await checkRateLimit(db, `bca-file:${ip}`, { max: 30, windowMs: 5 * 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
   const { data: row } = await db
     .from('car_bca_submissions')
     .select('id, documents, download_expires_at')

@@ -18,9 +18,12 @@
 //       consent === true  → all three flags set to TRUE
 //       consent === false → all three flags set to FALSE
 //
-//   - Mirrors contacts.email_status to keep broadcast audience
-//     builders aligned (same convention as the preference-centre
-//     and admin-panel paths).
+//   - Opt-IN normalises contacts.email_status to 'active' (clearing a
+//     legacy NULL; bounced/complained are never touched). Opt-OUT never
+//     writes email_status: mig 492 retired 'unsubscribed' — the column is
+//     reputation-only, and the opt-out lives in
+//     contact_location_preferences (same convention as the
+//     preference-centre and admin-panel paths, LOCCOMMS.5).
 //
 //   - Diffs against current values so a no-op submission writes no
 //     consent_log entries, and re-submissions don't spam the audit
@@ -44,6 +47,13 @@ const MARKETING_CHANNELS = ['email_marketing', 'sms_marketing', 'whatsapp_market
  * @param {boolean} args.consent          true = enroll in marketing, false = opt out
  * @param {string}  args.source           consent_log.source ('booking_form', 'event_form', etc.)
  * @param {string}  [args.ipAddress]      caller IP for the audit row
+ * @param {string}  [args.locationId]     LOCCOMMS.2 — the location the FORM belongs to,
+ *        which is often NOT contacts.location_id. Supplying it records the decision in
+ *        contact_location_preferences for that location; omitting it writes only the
+ *        global row. Every public form should pass it — a form that forgets records the
+ *        consent globally and the location can never send to that person (row absent =
+ *        never send). Host-list signups deliberately omit it: hosts have their own
+ *        mechanism (host_contacts + host_email_suppressions).
  *
  * @returns {Promise<{
  *   ok:      boolean,
@@ -53,7 +63,7 @@ const MARKETING_CHANNELS = ['email_marketing', 'sms_marketing', 'whatsapp_market
  * }>}
  */
 export async function applyFormMarketingConsent(db, args) {
-  const { contactId, consent, source, ipAddress = null } = args || {}
+  const { contactId, consent, source, ipAddress = null, locationId = null } = args || {}
   if (!db || !contactId || typeof consent !== 'boolean' || !source) {
     return { ok: false, error: 'invalid args', skipped: null, changed: [] }
   }
@@ -78,6 +88,34 @@ export async function applyFormMarketingConsent(db, args) {
     return { ok: true, skipped: 'classpass', changed: [] }
   }
 
+  // LOCCOMMS.2 — record the decision at the location the FORM belongs to, which
+  // is frequently NOT contacts.location_id: a Stillorgan member joining the
+  // Hatch Street waitlist needs a row at Hatch. The mig 489 sync triggers
+  // deliberately never create that row, because a global preference change is
+  // not evidence that someone joined a particular location's list. This is.
+  //
+  // MUST run before the "nothing changed" early return below. Someone already
+  // opted in globally who joins a new location produces an empty `changed` set,
+  // so anything written after that return would never run — the person would
+  // join the list with nothing recording it, and row-absent means that location
+  // may never send to them.
+  if (locationId) {
+    const locRow = {
+      contact_id:      contactId,
+      location_id:     locationId,
+      source,
+      updated_at:      new Date().toISOString(),
+      unsubscribed_at: consent ? null : new Date().toISOString(),
+    }
+    for (const ch of MARKETING_CHANNELS) locRow[ch] = consent
+    const { error: locErr } = await db
+      .from('contact_location_preferences')
+      .upsert(locRow, { onConflict: 'contact_id,location_id' })
+    if (locErr) {
+      logWarn('marketing-consent', 'location preference write failed', { err: locErr.message, locationId })
+    }
+  }
+
   // 2. Load current preferences (if any). Mig 005 trigger creates a
   //    row on contact insert; defensive in case an older contact
   //    predates that.
@@ -97,9 +135,8 @@ export async function applyFormMarketingConsent(db, args) {
     if (current !== consent) changed.push(ch)
   }
 
-  if (changed.length === 0 && contact.email_status !== (consent ? 'unsubscribed' : 'active')) {
-    // Nothing to do — preferences already match the consent intent
-    // AND email_status is consistent.
+  if (changed.length === 0) {
+    // Nothing to do — preferences already match the consent intent.
     return { ok: true, skipped: null, changed: [] }
   }
 
@@ -126,19 +163,19 @@ export async function applyFormMarketingConsent(db, args) {
     await db.from('consent_log').insert(logRows)
   }
 
-  // 6. Mirror to contacts.email_status when email_marketing was in
-  //    the changed set. Only flip between 'active' and 'unsubscribed'
-  //    — leave 'bounced' / 'complained' alone (those are reputation
-  //    states the operator shouldn't accidentally clear).
+  // 6. Mirror to contacts.email_status ONLY on opt-in, normalising a
+  //    legacy NULL (or deploy-gap 'unsubscribed' residue) to 'active'.
+  //    LOCCOMMS.5 / mig 492 — reputation only; never stamp 'unsubscribed'
+  //    (mig 501's CHECK would reject it). An opt-out is already recorded
+  //    in contact_location_preferences + contact_preferences above.
+  //    'bounced' / 'complained' are never cleared — reputation states a
+  //    form submission must not reset.
   const emailFlipped = changed.includes('email_marketing')
   const flipReputationOk = (
     contact.email_status === 'active' || contact.email_status === 'unsubscribed' || contact.email_status === null
   )
-  if (emailFlipped && flipReputationOk) {
-    const targetStatus = consent ? 'active' : 'unsubscribed'
-    if (contact.email_status !== targetStatus) {
-      await db.from('contacts').update({ email_status: targetStatus }).eq('id', contactId)
-    }
+  if (emailFlipped && consent && flipReputationOk && contact.email_status !== 'active') {
+    await db.from('contacts').update({ email_status: 'active' }).eq('id', contactId)
   }
 
   return { ok: true, skipped: null, changed }
@@ -240,19 +277,18 @@ export async function applyMarketingPreferencesBulk(db, args) {
   }))
   await db.from('consent_log').insert(logRows)
 
-  // 6. Mirror email_status when email_marketing was in the changed
-  //    set. Same reputation-state guard as applyFormMarketingConsent.
-  if (changed.includes('email_marketing')) {
+  // 6. Mirror email_status ONLY on opt-in — same rule as
+  //    applyFormMarketingConsent: LOCCOMMS.5 / mig 492, reputation only;
+  //    never stamp 'unsubscribed'. The opt-out lives in the preference
+  //    rows written above.
+  if (changed.includes('email_marketing') && wantedPrefs.email_marketing) {
     const flipReputationOk = (
       contact.email_status === 'active'
       || contact.email_status === 'unsubscribed'
       || contact.email_status === null
     )
-    if (flipReputationOk) {
-      const targetStatus = wantedPrefs.email_marketing ? 'active' : 'unsubscribed'
-      if (contact.email_status !== targetStatus) {
-        await db.from('contacts').update({ email_status: targetStatus }).eq('id', contactId)
-      }
+    if (flipReputationOk && contact.email_status !== 'active') {
+      await db.from('contacts').update({ email_status: 'active' }).eq('id', contactId)
     }
   }
 

@@ -35,6 +35,10 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // Email
   const [subject, setSubject] = useState('')
   const [emailType, setEmailType] = useState('marketing') // 'marketing' | 'utility'
+  // CAMPAIGN-RESEND — auto-resend to non-openers (marketing email only)
+  const [resendEnabled, setResendEnabled] = useState(false)
+  const [resendWaitHours, setResendWaitHours] = useState(48)
+  const [resendSubject, setResendSubject] = useState('')
   // WhatsApp
   const [templateId, setTemplateId] = useState('')
   const [variables, setVariables] = useState({})
@@ -129,12 +133,14 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
       ? !!templateId
       : subject.trim().length > 0 // email — needs a subject (design is inline)
   const audienceValid = !useExplicit || people.length > 0
+  const useResend = channel === 'email' && emailType === 'marketing' && resendEnabled
+  const resendValid = !useResend || (Number(resendWaitHours) >= 1 && Number(resendWaitHours) <= 168)
   const isSchedule = scheduleMode === 'later'
   const isDrip = channel === 'whatsapp' && waMode === 'drip'
   // For WhatsApp the meaningful gate is the reachable count, not raw matches —
   // an audience of 1 with 0 reachable has nobody to send to.
   const sendableCount = channel === 'whatsapp' ? reachable : count
-  const canSend = !busy && composeValid && scheduleValid && audienceValid && (sendableCount == null || sendableCount > 0)
+  const canSend = !busy && composeValid && scheduleValid && audienceValid && resendValid && (sendableCount == null || sendableCount > 0)
 
   // ── submit ──────────────────────────────────────────────────────
   async function postJson(url, payload) {
@@ -203,11 +209,17 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         const data = await postJson('/api/communications/email-draft', {
           name: defaultLabel(), subject, audience_filter: effectiveFilter, location_id: locationId,
           html_content: html, design_json: design, action, email_type: emailType,
+          ...(useResend ? {
+            resend_enabled: true,
+            resend_wait_hours: Number(resendWaitHours),
+            ...(resendSubject.trim() ? { resend_subject: resendSubject.trim() } : {}),
+          } : {}),
           ...(action === 'schedule' ? { scheduled_at: scheduledIso } : {}),
         })
         setResult({
           channel, id: data.id, detail: `/email/campaigns/${data.id}`,
           mode: action === 'schedule' ? 'scheduled' : 'sent', when: scheduledIso, queued: action === 'send',
+          resendWait: useResend ? Number(resendWaitHours) : null,
         })
       }
     } catch (e) {
@@ -234,6 +246,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   function reset() {
     setResult(null); setError(null); setBody(''); setTemplateId(''); setVariables({})
     setLabel(''); setFilter(EMPTY_FILTER); setScheduleMode('now'); setScheduledAtLocal('')
+    setResendEnabled(false); setResendWaitHours(48); setResendSubject('')
     setWaMode('blast'); setDailyCap(500); setPerTickCap(''); setWindowStart('09:00'); setWindowEnd('20:00')
     setReachable(null); setExcluded(null)
   }
@@ -297,6 +310,11 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
                     </>
                   })()}
             </p>
+            {result.resendWait != null && (
+              <p className="text-xs text-un1t-subtle mt-2">
+                Anyone who doesn&apos;t open it gets the resend about {result.resendWait}h after this send completes.
+              </p>
+            )}
           </>
         )}
         <div className="flex items-center justify-center gap-2 mt-5">
@@ -478,6 +496,51 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
           </>
         )}
       </Section>
+
+      {/* Follow-up — marketing email only (CAMPAIGN-RESEND) */}
+      {channel === 'email' && emailType === 'marketing' && (
+        <Section title="Follow-up" sub="Automatically resend this email to anyone who doesn't open it — same design, optionally a fresh subject.">
+          <label className="flex items-start gap-2 cursor-pointer select-none">
+            <input type="checkbox" className="mt-0.5 accent-un1t-text"
+              checked={resendEnabled} onChange={e => setResendEnabled(e.target.checked)} />
+            <span className="text-sm text-un1t-text">
+              Resend to people who don&apos;t open
+              <span className="block text-[11px] text-un1t-subtle mt-0.5">Unsubscribes, bounces and suppressions between the two sends are respected automatically.</span>
+            </span>
+          </label>
+          {resendEnabled && (
+            <div className="mt-3 space-y-3">
+              <div>
+                <span className="block text-xs font-medium text-un1t-subtle mb-1">Wait before resending</span>
+                <div className="flex items-center gap-2">
+                  {[24, 48, 72].map(h => (
+                    <ChannelPill key={h} active={Number(resendWaitHours) === h} onClick={() => setResendWaitHours(h)} icon={Clock} label={`${h}h`} small />
+                  ))}
+                  <input type="number" min={1} max={168} className={`${fieldCls} w-24`}
+                    value={resendWaitHours} onChange={e => setResendWaitHours(e.target.value)} />
+                  <span className="text-xs text-un1t-subtle">hours</span>
+                </div>
+                {Number(resendWaitHours) >= 1 && Number(resendWaitHours) < 24 && (
+                  <p className="mt-1 text-xs text-amber-700 flex items-start gap-1.5">
+                    <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                    Opens are still arriving — resending this early reaches people who just haven&apos;t got to it yet.
+                  </p>
+                )}
+                {!resendValid && (
+                  <p className="mt-1 text-[11px] text-rose-700">Pick a wait between 1 and 168 hours.</p>
+                )}
+              </div>
+              <label className="block">
+                <span className="block text-xs font-medium text-un1t-subtle mb-1">New subject <span className="text-un1t-subtle/60">(optional)</span></span>
+                <input className={fieldCls} value={resendSubject} maxLength={500}
+                  onChange={e => setResendSubject(e.target.value)} placeholder={subject || 'Reuses the original subject if left blank'} />
+                <span className="block text-[11px] text-un1t-subtle mt-1">A fresh subject usually lifts second-send opens. Leave blank to reuse the original.</span>
+              </label>
+              <p className="text-[11px] text-un1t-subtle">Open counts undercount slightly — some inboxes preload images, so a few real openers still look unopened and the odd non-opener looks opened.</p>
+            </div>
+          )}
+        </Section>
+      )}
 
       {/* Pacing — WhatsApp only (WA-DRIP) */}
       {channel === 'whatsapp' && (

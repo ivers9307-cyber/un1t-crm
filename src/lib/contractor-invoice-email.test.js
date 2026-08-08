@@ -127,3 +127,22 @@ describe('sendInvoiceDeclinedEmail — branding from company_settings', () => {
     expect(html).toContain('Please itemise the extra sessions.')
   })
 })
+
+// Prod regression 2026-08-02: Vercel sets POSTMARK_SERVER_TOKEN (the
+// var the main postmark.js lib falls back to) but not POSTMARK_API_KEY.
+// This lib read POSTMARK_API_KEY only, so approving an invoice recorded
+// the approval but the contractor email threw "POSTMARK_API_KEY is not
+// configured." Token resolution now goes through resolvePostmarkToken.
+describe('Postmark token fallback', () => {
+  it('sends with POSTMARK_SERVER_TOKEN when POSTMARK_API_KEY is unset', async () => {
+    vi.stubEnv('POSTMARK_API_KEY', '')
+    vi.stubEnv('POSTMARK_SERVER_TOKEN', 'server-token-only')
+    vi.mocked(createServerClient).mockReturnValue(mockClient())
+    const fetchMock = stubPostmark()
+
+    const res = await sendInvoiceApprovedEmail('inv-1')
+
+    expect(res.messageId).toBe('mid-1')
+    expect(fetchMock.mock.calls[0][1].headers['X-Postmark-Server-Token']).toBe('server-token-only')
+  })
+})

@@ -29,7 +29,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { verifySharedSecret } from '@/lib/webhook-auth'
 import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
-import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
+import { deadLetterWebhook, resolveEmailSendLocation } from '@/lib/webhook-dead-letter'
 import { publishQueuePush, POSTMARK_WORKER_PATH } from '@/lib/qstash'
 
 // Force Node.js runtime so node:crypto is available for the timing-safe compare.
@@ -126,6 +126,10 @@ export async function POST(request) {
       eventType: recordType,
       payload: body,
       error,
+      // DEADLETTER-LOC.1 — best-effort (never throws). The queue insert just
+      // failed, so this lookup may fail too; a NULL location still lands and
+      // the health pane's NULL-inclusive count catches it.
+      locationId: await resolveEmailSendLocation(db, messageId),
     })
     // Return 200 so Postmark does not retry-storm us while the queue table is
     // unavailable — the dead-letter row keeps the event visible for ops.

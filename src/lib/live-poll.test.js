@@ -38,10 +38,26 @@ describe('boardIsActive', () => {
 })
 
 describe('nextPollDelay', () => {
-  it('polls fast while active', () => {
-    expect(nextPollDelay({ sessions: [{ id: 'a' }] })).toBe(ACTIVE_POLL_MS)
+  // Fixed instants — Dublin is UTC+1 (IST) in July, UTC+0 (GMT) in January.
+  const daytime = new Date('2026-07-01T12:00:00Z')     // 13:00 Dublin
+  const overnight = new Date('2026-07-01T02:00:00Z')   // 03:00 Dublin
+  const lateEvening = new Date('2026-01-15T22:30:00Z') // 22:30 Dublin (GMT)
+  const earlyMorning = new Date('2026-07-01T05:30:00Z') // 06:30 Dublin (IST)
+
+  it('polls fast while active, day or night', () => {
+    expect(nextPollDelay({ sessions: [{ id: 'a' }] }, daytime)).toBe(ACTIVE_POLL_MS)
+    expect(nextPollDelay({ sessions: [{ id: 'a' }] }, overnight)).toBe(ACTIVE_POLL_MS)
   })
-  it('backs off when idle', () => {
-    expect(nextPollDelay({ sessions: [], available_straps: [] })).toBe(IDLE_POLL_MS)
+
+  // TV-POLL-FAST.1 — the 30s idle back-off made a timer start take up to 30s
+  // to reach the TV during the day. Idle now only backs off overnight.
+  it('keeps the fast cadence when idle during opening hours', () => {
+    expect(nextPollDelay({ sessions: [], available_straps: [] }, daytime)).toBe(ACTIVE_POLL_MS)
+    expect(nextPollDelay({ sessions: [], available_straps: [] }, earlyMorning)).toBe(ACTIVE_POLL_MS)
+  })
+
+  it('backs off when idle overnight (Dublin wall-clock, DST-aware)', () => {
+    expect(nextPollDelay({ sessions: [], available_straps: [] }, overnight)).toBe(IDLE_POLL_MS)
+    expect(nextPollDelay({ sessions: [], available_straps: [] }, lateEvening)).toBe(IDLE_POLL_MS)
   })
 })

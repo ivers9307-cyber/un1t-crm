@@ -356,6 +356,12 @@ export async function glofoxCredentialsForLocation(db, locationId) {
     // (e.g. "untstillorgan"). Surface it via settings.glofox.namespace
     // — one row UPDATE per location to backfill.
     namespace:     cfg.namespace      || null,
+    // STUDIO-KPI.4: operator-editable trainer-id → display-name map
+    // (settings.glofox.trainer_names, via the Glofox settings tab).
+    // Overrides API-resolved names in resolveTrainerNames.
+    trainerNames:  (cfg.trainer_names && typeof cfg.trainer_names === 'object')
+      ? cfg.trainer_names
+      : null,
     webhookSecret: cfg.webhook_secret || null,
   }
 }
@@ -1251,6 +1257,41 @@ export async function fetchUserBookingsResult(creds, userId, opts = {}) {
     return { ok: true, bookings: Array.isArray(body?.data) ? body.data : [] }
   } catch {
     return { ok: false, bookings: [] }
+  }
+}
+
+/**
+ * STUDIO-KPI.4 — a Glofox user's display name. Event payloads carry
+ * only trainer ids (trainers_obj arrives empty), so trainer names are
+ * resolved via the API and this picks the name off whatever user/
+ * trainer shape comes back.
+ */
+export function glofoxDisplayName(user) {
+  if (!user || typeof user !== 'object') return null
+  if (typeof user.name === 'string' && user.name.trim()) return user.name.trim()
+  const joined = [user.first_name, user.last_name]
+    .filter((s) => typeof s === 'string' && s.trim())
+    .map((s) => s.trim())
+    .join(' ')
+  return joined || null
+}
+
+/**
+ * STUDIO-KPI.4 — best-effort trainer list via GET /2.0/trainers.
+ * UNPROBED endpoint: it may not exist on this Glofox tier (like
+ * /2.0/calendar, which WRONG_URLs). Any failure returns [] and the
+ * caller falls back to per-id /2.0/members lookups — trainers are
+ * users in Glofox's model, so their ids resolve there.
+ */
+export async function fetchGlofoxTrainers(creds) {
+  if (!creds?.branchId) return []
+  try {
+    const r = await glofoxFetch(creds, '/2.0/trainers?limit=100')
+    if (!r.ok) return []
+    const body = await r.json()
+    return Array.isArray(body?.data) ? body.data : (Array.isArray(body) ? body : [])
+  } catch {
+    return []
   }
 }
 

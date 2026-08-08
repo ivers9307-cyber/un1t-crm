@@ -1,94 +1,38 @@
-import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
-import { getCurrentUser, assertLocationAccessOr404, requireInboxPermission } from '@/lib/auth'
-import { validateBody } from '@/lib/validate'
+import { getCurrentUser, requireInboxPermission } from '@/lib/auth'
+import { goneResponse } from '../_gone'
 
-const PatchConversationBody = z.object({
-  resolved: z.boolean(),
-})
-
-// GET /api/email/conversations/[id] — conversation + messages thread
-// (EMAIL-INBOX.1). Mirrors the Instagram single-conversation route.
-// Resets unread_count on open.
-export async function GET(request, props) {
-  const params = await props.params
+// GET / PATCH /api/email/conversations/[id] — RETIRED (EMAIL-CONV-STOP.1,
+// 2026-08-07).
+//
+// GET was the conversation + message thread (and zeroed unread_count as a side
+// effect); PATCH stamped or cleared resolved_at. Both now return 410 Gone and
+// read and write nothing — the email surface is /api/email/tickets* (mig 482),
+// and this repo no longer touches email_conversations anywhere.
+//
+// Kept rather than deleted for installed mobile builds on frozen OTA lanes; a
+// 404 from a missing route is indistinguishable from a network error inside the
+// app. Full reasoning + the device_tokens census in ../_gone.js.
+//
+// 401 before 403 before 410, so an unauthenticated caller cannot enumerate. The
+// `email_inbox` gate from INBOX-PERM.2 stays in front even though the handlers
+// now answer nothing; the 410 supersedes it in practice, not in code.
+export async function GET() {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
   const perm = requireInboxPermission(user, 'em')
   if (perm) return perm
 
-  const db = createServerClient()
-  const { searchParams } = new URL(request.url)
-  const limit = parseInt(searchParams.get('limit') || '50')
-
-  const { data: conversation, error } = await db.from('email_conversations')
-    .select('*, contacts!contact_id(id, name, first_name, email, pipeline_stage_slug)')
-    .eq('id', params.id)
-    .single()
-
-  if (error || !conversation) {
-    return NextResponse.json({ success: false, error: 'Conversation not found' }, { status: 404 })
-  }
-
-  // Caller must belong to the conversation's location (404, not 403 —
-  // don't confirm the id exists).
-  const guard = assertLocationAccessOr404(user, conversation.location_id)
-  if (guard) return guard
-
-  // Newest rows first then reversed for display — same fix as the IG
-  // route (ascending+limit freezes the pane once a thread outgrows the
-  // cap). html_body is deliberately NOT selected: the thread renders
-  // text_body only, and quoted HTML chains can be hundreds of KB.
-  const { data: messagesDesc } = await db.from('email_inbox_messages')
-    .select('id, conversation_id, contact_id, location_id, direction, from_email, to_email, subject, text_body, postmark_message_id, source, status, sent_at, created_at')
-    .eq('conversation_id', params.id)
-    .order('created_at', { ascending: false })
-    .limit(limit)
-  const messages = (messagesDesc || []).slice().reverse()
-
-  // Mark as read.
-  await db.from('email_conversations')
-    .update({ unread_count: 0 })
-    .eq('id', params.id)
-
-  return NextResponse.json({ success: true, conversation, messages })
+  return goneResponse()
 }
 
-// PATCH /api/email/conversations/[id] — operator workflow state.
-// Body: { resolved: boolean } → stamps/clears resolved_at (UIX-P1
-// semantics). No agent-rearm here — the email channel has no customer
-// agent; resolve is purely the queue state.
-export async function PATCH(request, props) {
-  const params = await props.params
+export async function PATCH() {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
   const perm = requireInboxPermission(user, 'em')
   if (perm) return perm
 
-  const validation = await validateBody(request, PatchConversationBody)
-  if (!validation.ok) return validation.response
-  const body = validation.data
-
-  const db = createServerClient()
-  const { data: conversation, error } = await db.from('email_conversations')
-    .select('id, location_id')
-    .eq('id', params.id)
-    .single()
-  if (error || !conversation) {
-    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  }
-  const guard = assertLocationAccessOr404(user, conversation.location_id)
-  if (guard) return guard
-
-  const { error: upErr } = await db.from('email_conversations')
-    .update({ resolved_at: body.resolved ? new Date().toISOString() : null })
-    .eq('id', params.id)
-  if (upErr) return NextResponse.json({ success: false, error: upErr.message }, { status: 500 })
-
-  return NextResponse.json({ success: true, resolved: body.resolved })
+  return goneResponse()
 }

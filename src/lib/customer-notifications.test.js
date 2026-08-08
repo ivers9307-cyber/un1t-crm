@@ -1,21 +1,31 @@
-import { describe, it, expect } from 'vitest'
-import { buildSessionPush, buildGoalPush, buildStreakAtRiskPush, buildTargetHitPush, buildTierUpPush, buildFriendRequestPush, buildFriendAcceptedPush, buildReactionPush, periodKey, streakAtRisk } from './customer-notifications.js'
-import { attendanceDrop, buildWinbackPush, buildClassReminderPush } from './customer-notifications.js'
+// Tests for customer-notifications.js — every push builder, the push
+// idempotency periodKey (Dublin-calendar + year-boundary correctness),
+// the streakAtRisk predicate (Dublin/UTC midnight + DST edges), and
+// attendanceDrop. BYTE-SYNC: this file is fully identical in
+// champ-app/shared/ and un1t-crm/src/lib/ (the relative import works in
+// both) — port new tests both ways.
 
-describe('buildClassReminderPush', () => {
-  it('builds a pre-class reminder with the class name + time label', () => {
-    const p = buildClassReminderPush({ className: 'UN1T HIIT', timeLabel: '7:30pm', classBookingId: 'cb-1' })
-    expect(p.title).toBe('UN1T HIIT starting soon')
-    expect(p.body).toContain('7:30pm')
-    expect(p.data).toEqual({ type: 'class_reminder', class_booking_id: 'cb-1' })
-  })
-  it('degrades gracefully with no name / time', () => {
-    const p = buildClassReminderPush({})
-    expect(p.title).toBe('Your class starting soon')
-    expect(p.data.type).toBe('class_reminder')
-    expect(p.data.class_booking_id).toBeNull()
-  })
-})
+import { describe, it, expect } from 'vitest'
+import {
+  buildSessionPush,
+  buildGoalPush,
+  buildTargetHitPush,
+  buildTierUpPush,
+  buildStreakAtRiskPush,
+  buildClassReminderPush,
+  buildFriendRequestPush,
+  buildFriendAcceptedPush,
+  buildReactionPush,
+  buildWinbackPush,
+  periodKey,
+  streakAtRisk,
+  attendanceDrop,
+} from './customer-notifications.js'
+
+const DAY = 24 * 3600 * 1000
+const at = (iso) => new Date(iso).getTime()
+
+// ── buildSessionPush ──────────────────────────────────────────────
 
 describe('buildSessionPush', () => {
   const base = { effortPoints: 280, className: 'Conditioning', sessionId: 'sess-1' }
@@ -43,6 +53,8 @@ describe('buildSessionPush', () => {
   })
 })
 
+// ── remaining push builders ───────────────────────────────────────
+
 describe('buildGoalPush', () => {
   it('weekly goal copy', () => {
     const r = buildGoalPush({ goal: { id: 'g1', target_value: 500 }, def: { unit: 'points', period: 'week' } })
@@ -54,45 +66,6 @@ describe('buildGoalPush', () => {
     const r = buildGoalPush({ goal: { id: 'g2', target_value: 16 }, def: { unit: 'classes', period: 'month' } })
     expect(r.title).toBe('Goal smashed — 16 classes this month')
     expect(r.body).toBe('Monthly target complete. Nice work.')
-  })
-})
-
-describe('buildStreakAtRiskPush', () => {
-  it('names the streak length', () => {
-    const r = buildStreakAtRiskPush({ streak: 5 })
-    expect(r.title).toBe('Keep the 5-day streak alive')
-    expect(r.body).toBe("Train today so you don't lose it.")
-    expect(r.data).toEqual({ type: 'streak_at_risk' })
-  })
-})
-
-describe('periodKey', () => {
-  it('month key', () => {
-    expect(periodKey('month', new Date('2026-06-20T12:00:00Z').getTime())).toBe('2026-06')
-  })
-  it('ISO week key', () => {
-    expect(periodKey('week', new Date('2026-06-20T12:00:00Z').getTime())).toBe('2026-W25')
-  })
-})
-
-describe('streakAtRisk', () => {
-  const N = new Date('2026-06-20T18:00:00Z').getTime()
-  const dayAgo = (n) => new Date(N - n * 24 * 3600 * 1000).toISOString()
-  it('flags a >=3 run ending yesterday with nothing today', () => {
-    const ss = [{ started_at: dayAgo(1) }, { started_at: dayAgo(2) }, { started_at: dayAgo(3) }]
-    expect(streakAtRisk(ss, N, 3)).toBe(3)
-  })
-  it('does not flag if they already trained today', () => {
-    const ss = [{ started_at: dayAgo(0) }, { started_at: dayAgo(1) }, { started_at: dayAgo(2) }]
-    expect(streakAtRisk(ss, N, 3)).toBe(0)
-  })
-  it('does not flag a run below the threshold', () => {
-    const ss = [{ started_at: dayAgo(1) }, { started_at: dayAgo(2) }]
-    expect(streakAtRisk(ss, N, 3)).toBe(0)
-  })
-  it('does not flag a streak already broken (last session 2 days ago)', () => {
-    const ss = [{ started_at: dayAgo(2) }, { started_at: dayAgo(3) }, { started_at: dayAgo(4) }]
-    expect(streakAtRisk(ss, N, 3)).toBe(0)
   })
 })
 
@@ -115,6 +88,30 @@ describe('buildTierUpPush', () => {
     expect(r.title).toBe('You reached Gold 🏆')
     expect(r.body).toBe('6 months hit. Keep the run going.')
     expect(r.data).toEqual({ type: 'tier_up' })
+  })
+})
+
+describe('buildStreakAtRiskPush', () => {
+  it('names the streak length', () => {
+    const r = buildStreakAtRiskPush({ streak: 5 })
+    expect(r.title).toBe('Keep the 5-day streak alive')
+    expect(r.body).toBe("Train today so you don't lose it.")
+    expect(r.data).toEqual({ type: 'streak_at_risk' })
+  })
+})
+
+describe('buildClassReminderPush', () => {
+  it('builds a pre-class reminder with the class name + time label', () => {
+    const p = buildClassReminderPush({ className: 'UN1T HIIT', timeLabel: '7:30pm', classBookingId: 'cb-1' })
+    expect(p.title).toBe('UN1T HIIT starting soon')
+    expect(p.body).toContain('7:30pm')
+    expect(p.data).toEqual({ type: 'class_reminder', class_booking_id: 'cb-1' })
+  })
+  it('degrades gracefully with no name / time', () => {
+    const p = buildClassReminderPush({})
+    expect(p.title).toBe('Your class starting soon')
+    expect(p.data.type).toBe('class_reminder')
+    expect(p.data.class_booking_id).toBeNull()
   })
 })
 
@@ -150,40 +147,181 @@ describe('buildReactionPush', () => {
     expect(r.data).toEqual({ type: 'feed' })
   })
 })
-const _DAY = 24*3600*1000
-const _now = Date.parse('2026-06-21T12:00:00Z')
-const _sAt = (daysAgo) => ({ started_at: new Date(_now - daysAgo*_DAY).toISOString() })
 
-describe('attendanceDrop', () => {
-  it('fires when a regular halves their rate but is still current', () => {
-    const base = []; for (let d = 15; d <= 83; d += 3.5) base.push(_sAt(d))
-    expect(attendanceDrop([...base, _sAt(10)], _now).dropping).toBe(true)
-  })
-  it('does NOT fire when attendance is steady', () => {
-    const all = []; for (let d = 1; d <= 83; d += 3.5) all.push(_sAt(d))
-    expect(attendanceDrop(all, _now).dropping).toBe(false)
-  })
-  it('does NOT fire for a non-regular (baseline below threshold)', () => {
-    expect(attendanceDrop([_sAt(20), _sAt(40), _sAt(10)], _now).dropping).toBe(false)
-  })
-  it('does NOT fire when long-gone (last session beyond stillCurrentDays)', () => {
-    // strong baseline, but the most recent session is 50d ago (> 42) → not current
-    const base = []; for (let d = 50; d <= 110; d += 3) base.push(_sAt(d))
-    expect(attendanceDrop(base, _now).dropping).toBe(false)
-  })
-  it('FIRES for a regular who went fully quiet recently but is still current (core win-back case)', () => {
-    // trained ~2x/wk through ~3 weeks ago, nothing in the last 14d, last session 18d ago (< 42)
-    const base = []; for (let d = 18; d <= 83; d += 3.5) base.push(_sAt(d))
-    expect(attendanceDrop(base, _now).dropping).toBe(true)
-  })
-  it('empty + future-dated sessions are safe', () => {
-    expect(attendanceDrop([], _now).dropping).toBe(false)
-    expect(attendanceDrop([{ started_at: new Date(_now + _DAY).toISOString() }], _now).dropping).toBe(false)
-  })
-})
 describe('buildWinbackPush', () => {
   it('returns the winback push shape', () => {
     const p = buildWinbackPush()
-    expect(p.data.type).toBe('winback'); expect(p.title).toBeTruthy(); expect(p.body).toBeTruthy()
+    expect(p.data.type).toBe('winback')
+    expect(p.title).toBeTruthy()
+    expect(p.body).toBeTruthy()
+  })
+})
+
+// ── periodKey ─────────────────────────────────────────────────────
+
+describe('periodKey — month', () => {
+  it('formats YYYY-MM on the Dublin calendar', () => {
+    expect(periodKey('month', at('2026-06-15T12:00:00Z'))).toBe('2026-06')
+  })
+  it('IST midnight-edge belongs to the Dublin month', () => {
+    // 00:30 IST on 1 Jul (= 2026-06-30T23:30Z) is July, not June.
+    expect(periodKey('month', at('2026-06-30T23:30:00Z'))).toBe('2026-07')
+  })
+})
+
+describe('periodKey — ISO week', () => {
+  it('formats YYYY-Www', () => {
+    expect(periodKey('week', at('2026-06-20T12:00:00Z'))).toBe('2026-W25')
+  })
+  it('IST midnight-edge belongs to the Dublin day\'s ISO week', () => {
+    // Sun 2026-06-21T23:30Z is already Mon 22 Jun 00:30 IST → next ISO week.
+    expect(periodKey('week', at('2026-06-21T23:30:00Z'))).toBe('2026-W26')
+  })
+  it('2025-W01 and 2026-W01 are distinct keys across the year roll', () => {
+    // Wed 2025-01-01 is ISO 2025-W01; Wed 2026-01-01 is ISO 2026-W01.
+    const k2025 = periodKey('week', at('2025-01-01T12:00:00Z'))
+    const k2026 = periodKey('week', at('2026-01-01T12:00:00Z'))
+    expect(k2025).toBe('2025-W01')
+    expect(k2026).toBe('2026-W01')
+    expect(k2025).not.toBe(k2026)
+  })
+  it('late-December Monday already belongs to the NEXT ISO week-year', () => {
+    // Mon 2025-12-29 is ISO week 2026-W01 (week-year != calendar year).
+    expect(periodKey('week', at('2025-12-29T12:00:00Z'))).toBe('2026-W01')
+  })
+  it('Tue 2024-12-31 belongs to ISO 2025-W01', () => {
+    expect(periodKey('week', at('2024-12-31T12:00:00Z'))).toBe('2025-W01')
+  })
+})
+
+// ── streakAtRisk ──────────────────────────────────────────────────
+
+describe('streakAtRisk', () => {
+  // "now" mid-afternoon so today/yesterday are unambiguous.
+  const now = at('2026-06-23T15:00:00Z')
+
+  it('returns the streak when the run ended YESTERDAY (Dublin) and >= minStreak', () => {
+    const sessions = [
+      { started_at: '2026-06-22T10:00:00Z' }, // yesterday
+      { started_at: '2026-06-21T10:00:00Z' },
+      { started_at: '2026-06-20T10:00:00Z' },
+    ]
+    expect(streakAtRisk(sessions, now, 3)).toBe(3)
+  })
+
+  it('returns 0 when the member already trained TODAY (not at risk)', () => {
+    const sessions = [
+      { started_at: '2026-06-23T09:00:00Z' }, // today
+      { started_at: '2026-06-22T10:00:00Z' },
+      { started_at: '2026-06-21T10:00:00Z' },
+    ]
+    expect(streakAtRisk(sessions, now, 3)).toBe(0)
+  })
+
+  it('returns 0 when the last session is 2+ days ago', () => {
+    const sessions = [
+      { started_at: '2026-06-21T10:00:00Z' }, // 2 days ago
+      { started_at: '2026-06-20T10:00:00Z' },
+      { started_at: '2026-06-19T10:00:00Z' },
+    ]
+    expect(streakAtRisk(sessions, now, 3)).toBe(0)
+  })
+
+  it('returns 0 when the run is shorter than minStreak', () => {
+    const sessions = [
+      { started_at: '2026-06-22T10:00:00Z' }, // yesterday only
+    ]
+    expect(streakAtRisk(sessions, now, 3)).toBe(0)
+  })
+
+  it('Dublin/UTC midnight edge: an IST 23:xx-UTC session yesterday counts', () => {
+    // "now" = 2026-06-23T15:00Z. A session at 2026-06-21T23:30Z is
+    // 00:30 IST on 2026-06-22 in Dublin = YESTERDAY, so a 3-run ending
+    // there is at risk. A naive UTC "yesterday = now - 24h" (=Jun 22
+    // 15:00) with UTC bucketing would place this session on Jun 21 and
+    // MISS it.
+    const sessions = [
+      { started_at: '2026-06-21T23:30:00Z' }, // Dublin Jun 22 (yesterday)
+      { started_at: '2026-06-20T23:30:00Z' }, // Dublin Jun 21
+      { started_at: '2026-06-19T23:30:00Z' }, // Dublin Jun 20
+    ]
+    expect(streakAtRisk(sessions, now, 3)).toBe(3)
+  })
+
+  it('flags at the Dublin midnight edge (23:30Z BST = 00:30 next Dublin day)', () => {
+    // 2026-06-20T23:30Z is already 00:30 on 06-21 in Dublin (IST). A member
+    // whose run ended on the 06-20 Dublin day is at risk NOW — a UTC "today"
+    // comparison (still 06-20 in UTC) misses this whole 23:00-24:00Z window.
+    const edge = at('2026-06-20T23:30:00Z')
+    const sessions = [
+      { started_at: '2026-06-20T10:00:00Z' },
+      { started_at: '2026-06-19T10:00:00Z' },
+      { started_at: '2026-06-18T10:00:00Z' },
+    ]
+    expect(streakAtRisk(sessions, edge, 3)).toBe(3)
+  })
+
+  it('spring-forward night: streak ending on the DST Sunday is detected next day', () => {
+    // now = Mon 2026-03-30 15:00 IST. Yesterday = Sun 2026-03-29 (spring-fwd).
+    const nowDst = at('2026-03-30T14:00:00Z') // 15:00 IST
+    const sessions = [
+      { started_at: '2026-03-29T10:00:00Z' }, // Sun 29 Dublin (yesterday)
+      { started_at: '2026-03-28T10:00:00Z' }, // Sat 28
+      { started_at: '2026-03-27T10:00:00Z' }, // Fri 27
+    ]
+    expect(streakAtRisk(sessions, nowDst, 3)).toBe(3)
+  })
+})
+
+// ── attendanceDrop ────────────────────────────────────────────────
+
+describe('attendanceDrop', () => {
+  const now = at('2026-06-30T12:00:00Z')
+  const sAt = (daysAgo) => ({ started_at: new Date(now - daysAgo * DAY).toISOString() })
+
+  it('fires when a regular halves their rate but is still current', () => {
+    const sessions = []
+    for (let d = 15; d <= 83; d += 3.5) sessions.push(sAt(d))
+    expect(attendanceDrop([...sessions, sAt(10)], now).dropping).toBe(true)
+  })
+
+  it('FIRES for a regular who fully stopped recently but is still current (core win-back case)', () => {
+    // Baseline: ~2/week over the 70-day baseline window (before the last
+    // 14 days); recent 14 days: nothing, but last session within 42 days.
+    const sessions = []
+    for (let d = 15; d <= 69; d += 3) sessions.push(sAt(d))
+    const r = attendanceDrop(sessions, now)
+    expect(r.dropping).toBe(true)
+    expect(r.recentRate).toBe(0)
+    expect(r.baselineRate).toBeGreaterThanOrEqual(1)
+  })
+
+  it('does NOT flag a steady attendee', () => {
+    const sessions = []
+    for (let d = 1; d <= 80; d += 3) sessions.push(sAt(d))
+    expect(attendanceDrop(sessions, now).dropping).toBe(false)
+  })
+
+  it('does NOT flag a non-regular (baseline below threshold)', () => {
+    expect(attendanceDrop([sAt(20), sAt(40), sAt(10)], now).dropping).toBe(false)
+  })
+
+  it('does NOT flag a long-gone member (last session outside stillCurrentDays)', () => {
+    const sessions = []
+    for (let d = 50; d <= 80; d += 3) sessions.push(sAt(d))
+    // last session ~50 days ago > default stillCurrentDays (42) → not a win-back.
+    expect(attendanceDrop(sessions, now).dropping).toBe(false)
+  })
+
+  it('ignores empty, future-dated and unparseable sessions', () => {
+    expect(attendanceDrop([], now).dropping).toBe(false)
+    const sessions = [
+      { started_at: new Date(now + 5 * DAY).toISOString() }, // future
+      { started_at: 'not-a-date' },
+    ]
+    const r = attendanceDrop(sessions, now)
+    expect(r.dropping).toBe(false)
+    expect(r.baselineRate).toBe(0)
+    expect(r.recentRate).toBe(0)
   })
 })

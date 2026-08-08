@@ -18,7 +18,7 @@ vi.mock('@/lib/webhook-replay', () => ({
   isReplayable: vi.fn((p) => p === 'inbody' || p === 'postmark'),
 }))
 
-import { deadLetterWebhook } from './webhook-dead-letter.js'
+import { deadLetterWebhook, resolveEmailSendLocation } from './webhook-dead-letter.js'
 import { logWarn } from '@/lib/log'
 import { publishQueuePush, WEBHOOK_REPLAY_WORKER_PATH } from '@/lib/qstash'
 
@@ -110,6 +110,33 @@ describe('deadLetterWebhook', () => {
     expect(row.payload).toEqual({})
   })
 
+  // EMAIL-INBOUND-POISON.1 — jsonb rejects \u0000, so a NUL-bearing payload
+  // could not even be dead-lettered: the one capture path for a poison webhook
+  // failed on exactly the payloads that need it most. Lone surrogates fail the
+  // same way (unencodable as UTF-8).
+  it('strips NUL bytes and lone surrogates so a poison payload can actually land in jsonb', async () => {
+    const db = makeDb()
+    await deadLetterWebhook(db, {
+      provider: 'postmark_inbound',
+      eventType: 'inbound_email',
+      payload: {
+        MessageID: 'pm-1',
+        Subject: 'bad\u0000subject',
+        FromFull: { Name: 'Ada\ud800', Email: 'a@b.com' },
+        Headers: [{ Name: 'X-Test', Value: 'v\u0000' }],
+      },
+      error: 'poison\u0000error',
+    })
+    const [row] = db._insertMock.mock.calls[0]
+    expect(row.payload).toEqual({
+      MessageID: 'pm-1',
+      Subject: 'badsubject',
+      FromFull: { Name: 'Ada', Email: 'a@b.com' },
+      Headers: [{ Name: 'X-Test', Value: 'v' }],
+    })
+    expect(row.error).toBe('poisonerror')
+  })
+
   // ── QSTASH.3 replay push ────────────────────────────────────────────────────
 
   it('publishes a delayed replay push for a replayable provider after a successful insert', async () => {
@@ -187,5 +214,38 @@ describe('deadLetterWebhook', () => {
       'webhook-dead-letter', 'capture threw',
       expect.objectContaining({ provider: 'postmark' })
     )
+  })
+})
+
+// ── resolveEmailSendLocation (DEADLETTER-LOC.1) ────────────────────────────────
+
+describe('resolveEmailSendLocation', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  function makeSendsDb(result) {
+    const limit = vi.fn().mockReturnValue(Promise.resolve(result))
+    const eq = vi.fn().mockReturnValue({ limit })
+    const select = vi.fn().mockReturnValue({ eq })
+    return { from: vi.fn().mockReturnValue({ select }), _eq: eq }
+  }
+
+  it('returns the send log row location for a known MessageID', async () => {
+    const db = makeSendsDb({ data: [{ location_id: 'loc-hatch' }], error: null })
+    await expect(resolveEmailSendLocation(db, 'pm-1')).resolves.toBe('loc-hatch')
+    expect(db.from).toHaveBeenCalledWith('email_sends')
+    expect(db._eq).toHaveBeenCalledWith('postmark_message_id', 'pm-1')
+  })
+
+  it('returns null for an unknown MessageID, a null send location, or no id at all', async () => {
+    await expect(resolveEmailSendLocation(makeSendsDb({ data: [], error: null }), 'pm-x')).resolves.toBeNull()
+    await expect(resolveEmailSendLocation(makeSendsDb({ data: [{ location_id: null }], error: null }), 'pm-x')).resolves.toBeNull()
+    const untouched = makeSendsDb({ data: [], error: null })
+    await expect(resolveEmailSendLocation(untouched, null)).resolves.toBeNull()
+    expect(untouched.from).not.toHaveBeenCalled()
+  })
+
+  it('never throws — a broken lookup degrades to null (the capture must still land)', async () => {
+    const db = { from: vi.fn().mockImplementation(() => { throw new Error('db down') }) }
+    await expect(resolveEmailSendLocation(db, 'pm-1')).resolves.toBeNull()
   })
 })

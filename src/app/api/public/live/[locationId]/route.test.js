@@ -20,6 +20,7 @@ vi.mock('@/lib/class-occurrences', () => ({ resolveCurrentClassForTv: vi.fn(() =
 
 import { GET } from './route.js'
 import { createServerClient } from '@/lib/supabase'
+import { getAvailableStraps } from '@/lib/live-class'
 
 const PAGE = 1000
 
@@ -144,6 +145,28 @@ describe('GET /api/public/live/[locationId]', () => {
     db.rpc = vi.fn(() => Promise.resolve({ data: 100000, error: null }))
     const res = await callRoute(db)
     expect(res.status).toBe(429)
+  })
+
+  // C11 — unpaired straps only render while seen inside the same 2-minute
+  // staleness window the session tiles use. A dead Pi stops overwriting
+  // last_seen_straps, so without the cutoff phantom BPMs froze on the TV
+  // indefinitely.
+  it('drops unpaired straps not seen within the 2-minute staleness window', async () => {
+    const now = Date.now()
+    getAvailableStraps.mockResolvedValueOnce([
+      { device_key: 'ant:1', protocol: 'ant', name: null, rssi: null, lastBpm: 120, seenAt: new Date(now - 10_000).toISOString(), bridgeId: 'b-1', bridgeName: 'Studio 1' },
+      { device_key: 'ant:2', protocol: 'ant', name: null, rssi: null, lastBpm: 140, seenAt: new Date(now - 10 * 60_000).toISOString(), bridgeId: 'b-1', bridgeName: 'Studio 1' },
+      { device_key: 'ant:3', protocol: 'ant', name: null, rssi: null, lastBpm: 90, seenAt: null, bridgeId: 'b-1', bridgeName: 'Studio 1' },
+    ])
+    const db = makeDb({ samples: [] })
+    const res = await callRoute(db)
+    const body = await res.json()
+    expect(body.ok).toBe(true)
+    // Only the fresh strap survives; the 10-min-stale one and the one with no
+    // seen_at (freshness unprovable) disappear. Payload shape unchanged.
+    expect(body.available_straps).toEqual([
+      { label: 'ant:1', protocol: 'ant', currentBpm: 120 },
+    ])
   })
 
   // DECISION #1 (mig 348) — opted-out members are dropped from the public tiles;

@@ -24,19 +24,29 @@ export default async function CommunicationsLayout({ children }) {
   const canEmail = hasPermission(user, 'email')
   const canWhatsapp = hasPermission(user, 'whatsapp')
   const canSms = hasPermission(user, 'sms')
-  if (!canEmail && !canWhatsapp && !canSms) redirect('/')
+  // EMAIL-TICKET.4 — the ticket inbox lives at /communications/tickets and is
+  // gated on `email_inbox`, a DIFFERENT key from the marketing `email` one.
+  // Without it in this OR, someone granted only the ticket surface gets
+  // bounced off their own page by this layout before it ever renders.
+  const canEmailInbox = hasPermission(user, 'email_inbox')
+  if (!canEmail && !canWhatsapp && !canSms && !canEmailInbox) redirect('/')
 
   return (
     <CommsShell>
       <h1 className="text-2xl font-bold text-un1t-text mb-1">Communications</h1>
       <p className="text-sm text-un1t-subtle mb-5">
         {[
-          canEmail && 'email',
+          (canEmail || canEmailInbox) && 'email',
           canWhatsapp && 'WhatsApp',
           canSms && 'SMS',
         ].filter(Boolean).join(' + ')} for {user.activeLocation?.name || 'your studio'}
       </p>
-      <CommunicationsTabs canSms={canSms} canEmail={canEmail} canWhatsapp={canWhatsapp} />
+      <CommunicationsTabs
+        canSms={canSms}
+        canEmail={canEmail}
+        canWhatsapp={canWhatsapp}
+        canEmailInbox={canEmailInbox}
+      />
       {children}
     </CommsShell>
   )

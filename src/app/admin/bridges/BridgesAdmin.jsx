@@ -263,6 +263,7 @@ function RegisterForm({ locations, onSubmit, onCancel }) {
   const [name, setName] = useState('')
   const [locationId, setLocationId] = useState(locations[0]?.id || '')
   const [hardwareId, setHardwareId] = useState('')
+  const [tailscaleHostname, setTailscaleHostname] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
 
@@ -275,6 +276,7 @@ function RegisterForm({ locations, onSubmit, onCancel }) {
         name: name.trim(),
         location_id: locationId,
         hardware_id: hardwareId.trim(),
+        tailscale_hostname: tailscaleHostname.trim(),
       })
     } catch (e2) {
       setErr(e2.message)
@@ -326,9 +328,25 @@ function RegisterForm({ locations, onSubmit, onCancel }) {
           />
         </div>
       </div>
+      <div>
+        <label className="block text-xs font-medium text-un1t-subtle">
+          Tailscale hostname <span className="font-normal text-un1t-muted">(optional)</span>
+        </label>
+        <input
+          type="text"
+          value={tailscaleHostname}
+          onChange={(e) => setTailscaleHostname(e.target.value)}
+          placeholder="stillorgan-bridge"
+          className="mt-1 w-full rounded-md border border-un1t-border bg-un1t-bg px-2.5 py-1.5 font-mono text-sm"
+        />
+      </div>
       <p className="text-xs text-un1t-muted">
         The hardware ID is a unique label for the physical Pi — anything
-        memorable works (e.g. the studio name plus a number).
+        memorable works (e.g. the studio name plus a number). The Tailscale
+        hostname is the device name from <span className="font-mono">fleet.yaml</span> in
+        un1t-pi, and is what lets fleet alerting tell &ldquo;the Pi is off&rdquo;
+        apart from &ldquo;the Pi is on but the bridge is dead&rdquo;. Leave it
+        blank if this bridge isn&rsquo;t on the tailnet.
       </p>
       {err && <p className="text-xs text-red-600">{err}</p>}
       <div className="flex items-center gap-2">

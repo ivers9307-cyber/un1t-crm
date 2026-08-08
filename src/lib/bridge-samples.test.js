@@ -13,6 +13,7 @@ import {
   getActiveStrapMap,
   insertHrSamples,
   isBridgeOnline,
+  deriveBridgeStatus,
   latestBridgeSeenMs,
   BRIDGE_ONLINE_WINDOW_MS,
   dublinWallClockToMs,
@@ -218,7 +219,7 @@ describe('insertHrSamples', () => {
   // `sessionsById` seeds the current running state per session; `allSamplesById`
   // seeds the full persisted sample set the fallback pages. Every update is
   // captured on the session's `updates[]`.
-  function makeDb({ upsertResult = { error: null, count: 0 }, sessionsById = {}, allSamplesById = {}, sessionSelectError = null, sessionUpdateError = null } = {}) {
+  function makeDb({ upsertResult = { error: null, count: 0 }, sessionsById = {}, allSamplesById = {}, locationsById = {}, sessionSelectError = null, sessionUpdateError = null } = {}) {
     const state = JSON.parse(JSON.stringify(sessionsById))
     const updates = []
     const upsert = vi.fn(() => Promise.resolve(upsertResult))
@@ -258,10 +259,18 @@ describe('insertHrSamples', () => {
       },
     })
 
+    const locationsSelect = () => {
+      const chain = {}
+      chain.eq = (col, id) => { chain._id = id; return chain }
+      chain.maybeSingle = () => Promise.resolve({ data: locationsById[chain._id] || null, error: null })
+      return chain
+    }
+
     return {
       from: vi.fn((table) => {
         if (table === 'hr_samples') return { upsert, select: () => hrSamplesSelect() }
         if (table === 'heart_rate_sessions') return { select: sessionsSelect, update: sessionsUpdate }
+        if (table === 'locations') return { select: locationsSelect }
         throw new Error(`unexpected table ${table}`)
       }),
       _updates: updates,
@@ -314,6 +323,44 @@ describe('insertHrSamples', () => {
     expect(p.live_last_bpm).toBe(145)
     expect(p.live_last_at).toBe('2026-05-21T16:00:02.000Z')
     expect(p.last_sample_at).toBe('2026-05-21T16:00:02.000Z')
+  })
+
+  it('scores the running aggregate with the LOCATION\'s zone_points, not defaults (re-audit A4)', async () => {
+    // Operator sets Zone 3 to 30 pts/min. 2 counted seconds in Z3 → floor(2·30/60)
+    // = 1 point; the default 3 pts/min would floor to 0. Uses a unique location
+    // id so the module-level 60s zone-points cache can't leak across tests.
+    const db = makeDb({
+      upsertResult: { error: null, count: 3 },
+      sessionsById: { s: { id: 's', max_hr_used: 200 } },
+      locationsById: { 'loc-a4-zp': { settings: { scoring: { zone_points: { 3: 30 } } } } },
+    })
+    const rows = [
+      { session_id: 's', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 145 },
+      { session_id: 's', recorded_at: '2026-05-21T16:00:01.000Z', bpm: 145 },
+      { session_id: 's', recorded_at: '2026-05-21T16:00:02.000Z', bpm: 145 },
+    ]
+    await insertHrSamples(db, rows, { locationId: 'loc-a4-zp' })
+    const u = updatesFor(db, 's')
+    expect(u).toHaveLength(1)
+    expect(u[0].patch.zones_seconds[3]).toBe(2)
+    expect(u[0].patch.effort_points).toBe(1) // custom 30/min, NOT the default-scored 0
+    expect(db.from).toHaveBeenCalledWith('locations')
+  })
+
+  it('scores with defaults (and never reads locations) when no locationId is passed', async () => {
+    const db = makeDb({
+      upsertResult: { error: null, count: 3 },
+      sessionsById: { s: { id: 's', max_hr_used: 200 } },
+    })
+    const rows = [
+      { session_id: 's', recorded_at: '2026-05-21T16:00:00.000Z', bpm: 145 },
+      { session_id: 's', recorded_at: '2026-05-21T16:00:01.000Z', bpm: 145 },
+      { session_id: 's', recorded_at: '2026-05-21T16:00:02.000Z', bpm: 145 },
+    ]
+    await insertHrSamples(db, rows)
+    const u = updatesFor(db, 's')
+    expect(u[0].patch.effort_points).toBe(0) // default Z3 = 3/min → floor(2·3/60) = 0
+    expect(db.from).not.toHaveBeenCalledWith('locations')
   })
 
   it('continues the fold from persisted running state (second in-order batch)', async () => {
@@ -817,5 +864,50 @@ describe('resolveStrapsForBatch: back-to-back class supersede (item 1)', () => {
     const map = await resolveStrapsForBatch(db, { bridgeId: 'b', locationId: 'loc1', deviceKeys: ['ant:12511'], nowMs: NOW })
     expect(map.get('ant:12511')).toMatchObject({ sessionId: 'old-sess', via: 'auto' })
     expect(inserted).toBeNull() // no fresh session created
+  })
+})
+
+describe('deriveBridgeStatus', () => {
+  const now = new Date('2026-06-17T18:00:00.000Z').getTime()
+  const ago = (ms) => new Date(now - ms).toISOString()
+
+  it('reports offline when the heartbeat is stale, whatever the column says', () => {
+    // The bug this exists for: the Stillorgan bridge sat at status='online'
+    // for 17 days after it died, because nothing ever writes 'offline' — a
+    // Pi that loses power cannot send a final heartbeat. The admin badge
+    // rendered the raw column and read ONLINE next to "Last seen 15 days ago".
+    const dead = { status: 'online', last_seen_at: ago(15 * 24 * 60 * 60 * 1000) }
+    expect(deriveBridgeStatus(dead, now)).toBe('offline')
+  })
+
+  it('reports online when the heartbeat is fresh', () => {
+    expect(deriveBridgeStatus({ status: 'online', last_seen_at: ago(5_000) }, now)).toBe('online')
+  })
+
+  it('preserves a self-reported error while the bridge is still alive', () => {
+    // 'error' is set by the bridge itself and is meaningful — freshness must
+    // not overwrite it, only outrank it once the bridge goes quiet.
+    expect(deriveBridgeStatus({ status: 'error', last_seen_at: ago(5_000) }, now)).toBe('error')
+  })
+
+  it('outranks a stale error with offline', () => {
+    expect(deriveBridgeStatus({ status: 'error', last_seen_at: ago(60 * 60 * 1000) }, now)).toBe('offline')
+  })
+
+  it('reports offline for a bridge that has never connected', () => {
+    expect(deriveBridgeStatus({ status: 'offline', last_seen_at: null }, now)).toBe('offline')
+    expect(deriveBridgeStatus({ status: 'online', last_seen_at: null }, now)).toBe('offline')
+  })
+
+  it('uses the same freshness window as the TV connection dot', () => {
+    const justInside = { status: 'online', last_seen_at: ago(BRIDGE_ONLINE_WINDOW_MS - 1_000) }
+    const justOutside = { status: 'online', last_seen_at: ago(BRIDGE_ONLINE_WINDOW_MS + 1_000) }
+    expect(deriveBridgeStatus(justInside, now)).toBe('online')
+    expect(deriveBridgeStatus(justOutside, now)).toBe('offline')
+  })
+
+  it('tolerates a missing or malformed row', () => {
+    expect(deriveBridgeStatus(null, now)).toBe('offline')
+    expect(deriveBridgeStatus({ status: 'online', last_seen_at: 'not-a-date' }, now)).toBe('offline')
   })
 })

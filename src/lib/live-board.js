@@ -48,12 +48,24 @@ export async function buildLiveBoardPayload(db, { location, nowMs = Date.now() }
   }
 
   // Unpaired straps — broadcasting but not attached to any open session.
+  // Staleness cutoff (audit C11): a strap only renders while its bridge has
+  // ACTUALLY seen it inside the same 2-minute window the session tiles use —
+  // without this, a Pi dying mid-class froze phantom BPMs on the TV
+  // indefinitely (last_seen_straps is only overwritten by the next scan
+  // report, which a dead bridge never sends). A strap with no parseable
+  // seen_at can't prove freshness, so it is dropped too. Stale entries just
+  // disappear — the payload shape is unchanged.
   const rawStraps = await getAvailableStraps(db, locationId)
-  const availableStraps = (rawStraps || []).map((s) => ({
-    label: maskStrapLabel(s.device_key),
-    protocol: s.protocol,
-    currentBpm: s.lastBpm ?? null,
-  }))
+  const availableStraps = (rawStraps || [])
+    .filter((s) => {
+      const seenMs = s.seenAt ? new Date(s.seenAt).getTime() : NaN
+      return Number.isFinite(seenMs) && (nowMs - seenMs) <= STALE_AFTER_MS
+    })
+    .map((s) => ({
+      label: maskStrapLabel(s.device_key),
+      protocol: s.protocol,
+      currentBpm: s.lastBpm ?? null,
+    }))
 
   // Open sessions at this location. The running HR aggregate (zones_seconds /
   // effort_points / peak_hr_bpm / avg_hr_bpm) is maintained INCREMENTALLY at

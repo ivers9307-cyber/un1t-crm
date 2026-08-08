@@ -10,8 +10,11 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 POSTMARK_API_KEY=
 POSTMARK_FROM_EMAIL=hello@un1t.ie
-POSTMARK_WEBHOOK_TOKEN=          # shared secret sent in X-Webhook-Token by Postmark (required — route 500s if unset)
+POSTMARK_WEBHOOK_TOKEN=          # shared secret sent in X-Webhook-Token by Postmark (required — route 500s if unset). Set it on EVERY server that posts to us (marketing + support inbox)
 POSTMARK_WEBHOOK_TOKEN_PREVIOUS= # optional — old token kept live during rotation; unset after every Postmark webhook config has been flipped to the new value
+POSTMARK_EMAIL_INBOX_SERVER_TOKEN= # server token for the SUPPORT INBOX's own Postmark server. Ticket reply/compose only; no fallback — unset = those two routes 503 (EMAIL-OUTBOUND-SERVER.1)
+POSTMARK_EMAIL_INBOX_STREAM=     # Postmark message stream id on that server. Defaults to 'email-send'. Postmark's vocabulary, NOT this app's broadcast/outbound
+POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN= # token-in-URL secret for the support inbox's INBOUND webhook. ⚠️ Postmark points at the SUPABASE EDGE SHIM, not Vercel: https://iyvtbjjxdggiadzwwvdj.supabase.co/functions/v1/postmark-inbound-shim/<token> (EMAIL-INBOUND-SHIM.1, cut over 2026-08-07). The shim re-hosts attachments to Storage and forwards slim JSON to /api/webhooks/postmark-inbound/<same token> — repointing Postmark at the Vercel URL directly "works" but silently reinstates the ~3.3 MB inbound ceiling (Vercel 413s bodies over ~4.5 MB BEFORE the handler runs; Postmark base64-inlines attachments). Same token value as Edge Function secret + Vercel env. Probe from outside: POST a bogus token to the shim URL — 404 = secrets set and healthy, 500 missing_secret = secrets lost (same trick on the Vercel URL; the 404 is the healthy answer). Revert path in an emergency = paste the Vercel URL back into Postmark, accepting the size ceiling until the shim is restored.
 WHATSAPP_ACCESS_TOKEN=
 WHATSAPP_PHONE_NUMBER_ID=
 WHATSAPP_BUSINESS_ACCOUNT_ID=    # optional
@@ -35,6 +38,7 @@ REVOLUT_API_KEY=                 # Secret API key (sk_live_... or sk_sandbox_...
 REVOLUT_API_BASE_URL=            # https://merchant.revolut.com (prod) or https://sandbox-merchant.revolut.com
 REVOLUT_WEBHOOK_SECRET=          # signing_secret for the CARS deposit webhook (/api/webhooks/revolut)
 REVOLUT_RACE_WEBHOOK_SECRET=     # signing_secret for the RACE-PAYMENTS webhook (/api/webhooks/revolut/race-payments). Mig 084. If unset, race route falls back to REVOLUT_WEBHOOK_SECRET (single-merchant transitional case).
+REVOLUT_OFFER_WEBHOOK_SECRET=    # signing_secret for the OFFERS webhook (/api/webhooks/revolut/offer-payments). Mig 505. If unset, the route falls back to REVOLUT_WEBHOOK_SECRET.
 REVOLUT_API_VERSION=2026-03-12   # optional; default in src/lib/revolut.js
 NEXT_PUBLIC_REVOLUT_MODE=        # 'prod' | 'sandbox' — must match REVOLUT_API_BASE_URL
 NEXT_PUBLIC_REVOLUT_PUBLIC_KEY=  # Public API key (pk_live_... or pk_sandbox_...) for the embedded checkout widget
@@ -137,6 +141,15 @@ The earlier Files API path (`src/lib/xero/files.js`) has been deleted — nothin
 
 **Postmark.** Auth is enforced — `POSTMARK_WEBHOOK_TOKEN` is required, and a missing env var returns 500 (not 200-with-warning). The 5xx is deliberate: Postmark retries 5xx responses for ~24h, so a config drift gets recovered as soon as the env var is set, instead of silently dropping events. A bad/missing `X-Webhook-Token` returns 403 (Postmark won't retry 4xx — correct behaviour for a deliberately-rogue caller). The auth predicate is exported from the route as `verifyPostmarkRequest({ headerValue, primarySecret, previousSecret })` and unit-tested in `src/lib/postmark-webhook-auth.test.js`. **Token rotation:** set `POSTMARK_WEBHOOK_TOKEN_PREVIOUS` to the old token while you flip every webhook custom-header config in Postmark over to the new one — both are accepted in the meantime, with a `[security]` warning when the previous one matches so you remember to finish the rotation. Unset PREVIOUS after.
 
+**Postmark — TWO SERVERS, ONE ENDPOINT (EMAIL-OUTBOUND-SERVER.1).** Marketing and the support inbox are separate Postmark servers, and since EMAIL-OUTBOUND-SERVER.1 the ticket reply/compose routes *send* on the support one (`POSTMARK_EMAIL_INBOX_SERVER_TOKEN`, stream `email-send`). Their Delivery/Bounce/SpamComplaint events therefore arrive from a second server. **`/api/webhooks/postmark` is server-agnostic and needs no change to accept them:** it authenticates on a shared secret (not on server identity), dedupes on `RecordType:MessageID`, and every downstream correlation — `email_sends`, `campaign_recipients`, `email_inbox_messages.postmark_message_id` (EMAIL-DELIVERY.1) — keys purely off Postmark's `MessageID`, which is an **account-wide** GUID. Configure the same URL and the same `X-Webhook-Token` custom header on the support server:
+
+```
+https://crm.un1tdublin.com/api/webhooks/postmark
+X-Webhook-Token: <POSTMARK_WEBHOOK_TOKEN>
+```
+
+Until that is configured, ticket replies simply produce **no** delivery events: the thread shows no delivered/bounced marker, `email_sends.status` stays `sent`, and a hard bounce on a support reply does not reach the marketing suppression path (which is otherwise unchanged — see `postmark-webhook-processor.js`). Nothing errors; the events are never sent.
+
 **Meta WhatsApp.** Strict HMAC verification via `verifyMetaSignature()` against `WHATSAPP_APP_SECRET`. Missing env var or bad signature → 403.
 
 When adding a new webhook handler, read the body with `await request.text()` first (verify HMAC), then `JSON.parse()` — calling `request.json()` consumes the body and the re-serialised JSON won't byte-match the signed payload. Mirror the Postmark pattern of exporting the pure auth predicate from the route module so the test can exercise it without mocking Supabase (see `verifyTwilioSignature` in the Twilio status webhook for another example).
@@ -153,7 +166,7 @@ Migrated jobs:
 
 | Job | Enqueue site (publish) | Worker route | Shared claim lib | Sweeper cron |
 |---|---|---|---|---|
-| Postmark webhook queue | `/api/webhooks/postmark` (dedup `postmark-queue-<id>`) | `/api/webhooks/qstash/postmark` | `src/lib/postmark-queue.js` (CAS on `processed_at` NULL→now) | `/api/cron/process-postmark-webhooks` (`*/2`) |
+| Postmark webhook queue | `/api/webhooks/postmark` (dedup `postmark-queue-<id>`) | `/api/webhooks/qstash/postmark` | `src/lib/postmark-queue.js` (CAS on `processed_at` NULL→now) | `/api/cron/process-postmark-webhooks` (`*/10` — vercel.json is the truth; QStash push delivers most rows in seconds, the cron is the sweeper) |
 | Webhook dead-letter replay | `deadLetterWebhook()` in `src/lib/webhook-dead-letter.js`, replayable providers only (dedup `webhook-replay-<id>`, 60s `Upstash-Delay` so the first replay respects the minimum backoff) | `/api/webhooks/qstash/webhook-replay` | `src/lib/webhook-replay-queue.js` (CAS on `last_attempt_at` unchanged-since-read; no status flip — the table has no 'replaying' status) | `/api/cron/webhook-replay` (`*/5`, keeps the exponential backoff for swept rows; QStash's own retry schedule covers pushed rows) |
 | Contact imports | async path of `/api/contacts/import/commit` (dedup `contact-import-<id>`, no delay) | `/api/webhooks/qstash/contact-imports` (`maxDuration` 300 — imports legitimately run minutes; a QStash per-delivery timeout redelivering mid-import 200-skips on the 'processing' status while the original invocation keeps working, by design) | `src/lib/contact-import-queue.js` (CAS on status `pending`→`processing`; no release-on-failure — failed imports stamp `failed` for the operator, they are not blindly retryable) | `/api/cron/process-contact-imports` (`*/2`; keeps the CRON-ONLY stuck-recovery pass that resets `processing` rows older than 5 min back to `pending`) |
 | Bulk invoice analysis | `/api/invoices-inbox/bulk-queue-analysis` — per queued row, onto the **`invoice-analysis` QUEUE, parallelism 2** (dedup `invoice-analysis-<id>`; allSettled-batched after the row updates) — the ONLY site that sets `analysis_queued_at` | `/api/webhooks/qstash/invoice-analysis` (`maxDuration` 300; **deterministic extraction failures 200** — the row is stamped with its `extraction_error` and DE-QUEUED per the INV-BULK.1 design, so QStash must not burn rate limit retrying it; 500 only for infrastructure errors) | `src/lib/invoice-analysis-queue.js` (by-id conditional UPDATE mirroring the `claim_invoice_analysis_batch` RPC predicate — fresh `analysis_claimed_at`, stale claims >10 min re-claimable) | `/api/cron/process-invoice-analysis` (`*/2`; keeps the RPC batch claim — FOR UPDATE SKIP LOCKED — whose stale-claim arm IS the crash recovery) |

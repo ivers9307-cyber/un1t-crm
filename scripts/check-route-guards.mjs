@@ -27,6 +27,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { stripComments } from './lib/strip-comments.mjs'
 
 const API_ROOT = 'src/app/api'
 
@@ -58,6 +59,12 @@ const SESSION_GUARDS = [
   'loadLineForUser(',
   'loadBookkeeper(',
   'verifyBridgeToken(',
+  // verifyFleetDeviceToken resolves a sha256 bearer against
+  // fleet_devices.api_token_hash and returns the device it authenticates as;
+  // both /api/fleet/commands/* routes 401 on null and scope every read and
+  // write to that device_name — verified in src/lib/fleet-device-auth.js.
+  // (FLEET-CMD.1)
+  'verifyFleetDeviceToken(',
   "@/lib/studio-session",
   // resolveCustomerContact validates the member's Supabase JWT (getUser) AND
   // resolves + scopes to their contacts row — verified in src/lib/customer-auth.js.
@@ -110,13 +117,75 @@ const INBOX_ROUTE_PREFIXES = [
   'src/app/api/instagram/conversations',
   'src/app/api/instagram/media',
   'src/app/api/email/conversations',
+  // EMAIL-TICKET.4 — the ticket routes are the same class: service-role, no
+  // RLS, so the `email_inbox` check IS the channel gate (the per-account
+  // email_mailbox_access gate sits behind it).
+  'src/app/api/email/tickets',
 ]
-const INBOX_PERMISSION_GUARDS = ['requireInboxPermission(', 'hasPermission(']
+
+// EMAIL-TICKET-CLEANUP.1 — the last two entries are location-scoped forms of
+// the same gate, and adding them is a fix, not a loosening:
+//
+//   hasPermissionForLocation(  resolves `email_inbox` at the location the route
+//                              is ABOUT rather than the caller's active one.
+//                              The ticket list route has used it since
+//                              EMAIL-TICKET.5 and once passed this check only by
+//                              accident — the literal `hasPermission(` was
+//                              matching PROSE in its header comment explaining
+//                              why it no longer calls hasPermission. That hole
+//                              is CLOSED (EMAIL-MOPUP.5, 2026-08-08 audit):
+//                              every match below runs on stripComments() output
+//                              (scripts/lib/strip-comments.mjs, pinned by
+//                              tests/strip-comments.test.js), so a token that
+//                              survives only in a comment no longer satisfies
+//                              this lint.
+//   loadTicketForUser(         src/app/api/email/tickets/_helpers.js. VERIFIED:
+//                              it calls hasPermissionForLocation(user,
+//                              ticket.location_id, 'email_inbox') and returns a
+//                              404 response when it fails, before any caller
+//                              sees a ticket. The five detail routes delegate
+//                              to it because the ticket's location is not
+//                              knowable until the row is read, so the check
+//                              CANNOT sit at the top of the route the way this
+//                              list's other entries do.
+//
+// EMAIL-ATTACH-PREVIEW.1 —
+//   loadAttachmentForTicket(   src/app/api/email/tickets/[id]/attachments/_helpers.js.
+//                              VERIFIED: its FIRST statement is
+//                              `await loadTicketForUser(db, user, ticketId)` and
+//                              it returns that helper's refusal response
+//                              unchanged before touching the attachment row —
+//                              so it is the entry above, one call deeper, plus
+//                              the attachment-belongs-to-this-ticket pairing
+//                              check. It exists because the download route and
+//                              its /preview sibling must be gated IDENTICALLY,
+//                              and two copies of that resolution would be two
+//                              definitions of who may read `accounts@`.
+// EMAIL-MOPUP.5 —
+//   loadSendingMailbox(        src/app/api/email/tickets/_helpers.js. VERIFIED:
+//                              it runs assertLocationAccessOr404, then
+//                              hasPermissionForLocation(user, location,
+//                              'email_inbox') refusing with 404, then the
+//                              per-account visible-set check — the full gate,
+//                              one call deeper, for routes gated by the MAILBOX
+//                              they send from (compose, upload-sign). Exposed
+//                              the moment comment-stripping landed: the compose
+//                              route had been satisfying this list via the
+//                              PROSE "used to be hasPermission()" in its header
+//                              — the exact #1266 failure mode, live again.
+const INBOX_PERMISSION_GUARDS = [
+  'requireInboxPermission(',
+  'hasPermission(',
+  'hasPermissionForLocation(',
+  'loadTicketForUser(',
+  'loadAttachmentForTicket(',
+  'loadSendingMailbox(',
+]
 
 function checkInboxPermission(file) {
   const rel = file.split(path.sep).join('/')
   if (!INBOX_ROUTE_PREFIXES.some((p) => rel.startsWith(p))) return true
-  const src = fs.readFileSync(file, 'utf8')
+  const src = stripComments(fs.readFileSync(file, 'utf8'))
   return INBOX_PERMISSION_GUARDS.some((t) => src.includes(t))
 }
 
@@ -133,7 +202,7 @@ function classify(file) {
   const rel = file.split(path.sep).join('/')
   if (rel.includes('/api/public/')) return { ok: true, kind: 'public' }
   if (EXEMPT[rel]) return { ok: true, kind: 'exempt' }
-  const src = fs.readFileSync(file, 'utf8')
+  const src = stripComments(fs.readFileSync(file, 'utf8'))
   if (rel.includes('/api/webhooks/')) {
     return { ok: WEBHOOK_GUARD.test(src), kind: 'webhook' }
   }

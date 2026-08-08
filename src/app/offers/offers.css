@@ -1,0 +1,64 @@
+/* OFFERS.7 — weekend "lock in" sale pages. Brutalist-premium monochrome:
+   black ground, hairline rules, outline display type, cards invert to white
+   on hover. Red is reserved for the countdown only. Genuinely dark public
+   surface (like /tv, /present) — not the CRM light theme. */
+
+.ofr {
+  --ofr-ink: #0a0a0a;
+  --ofr-paper: #ffffff;
+  --ofr-line: #2b2b2b;
+  --ofr-line-soft: #1c1c1c;
+  --ofr-red: #ef4444;
+  background: #000;
+  color: var(--ofr-paper);
+  min-height: 100vh;
+  font-family: var(--font-archivo), Helvetica, Arial, sans-serif;
+}
+.ofr-frame { max-width: 1100px; margin: 0 auto; border-left: 1px solid var(--ofr-line-soft); border-right: 1px solid var(--ofr-line-soft); }
+.ofr-display { font-family: var(--font-archivo-black), 'Arial Black', sans-serif; text-transform: uppercase; }
+.ofr-outline { color: transparent; -webkit-text-stroke: 2px var(--ofr-paper); }
+.ofr-outline-thin { color: transparent; -webkit-text-stroke: 1.5px var(--ofr-paper); }
+
+/* marquee strip */
+.ofr-strip { overflow: hidden; border-bottom: 1px solid var(--ofr-line); background: var(--ofr-paper); color: var(--ofr-ink); white-space: nowrap; }
+.ofr-strip span { display: inline-block; padding: 10px 0; font-family: var(--font-archivo-black); font-size: 13px; letter-spacing: .28em; text-transform: uppercase; animation: ofr-slide 18s linear infinite; }
+@keyframes ofr-slide { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+/* countdown — the one red element, deliberately loud */
+.ofr-deadline { display: inline-flex; gap: 16px; align-items: baseline; margin-top: 34px; border: 1px solid var(--ofr-line); padding: 14px 20px; }
+.ofr-deadline b { font-family: var(--font-archivo-black); font-size: 13px; letter-spacing: .2em; text-transform: uppercase; }
+.ofr-count { font-family: var(--font-archivo-black); font-variant-numeric: tabular-nums; font-size: clamp(22px, 3.2vw, 34px); letter-spacing: .08em; color: var(--ofr-red); line-height: 1; }
+
+/* cards — hover floods green (Richard, 2026-08-08, mockup-approved).
+   color/text-decoration live HERE, not inline on the Link — an inline
+   color:'inherit' outranks the :hover rule and pins the type white. */
+.ofr-card { border-bottom: 1px solid var(--ofr-line); padding: 38px 26px 30px; display: flex; flex-direction: column; gap: 18px; position: relative; transition: background .2s, color .2s; color: inherit; text-decoration: none; }
+.ofr-card:hover { background: #22c55e; color: var(--ofr-ink); }
+.ofr-card:hover .ofr-outline-thin { -webkit-text-stroke-color: var(--ofr-ink); }
+.ofr-card:hover .ofr-go { background: var(--ofr-ink); color: var(--ofr-paper); border-color: var(--ofr-ink); }
+.ofr-card:hover .ofr-meta { color: #0a3d1c; }
+.ofr-card:hover .ofr-was { color: #14532d; }
+.ofr-card:hover .ofr-flag { background: var(--ofr-ink); color: #22c55e; }
+.ofr-meta { color: #9a9a9a; font-size: 14px; line-height: 1.55; flex: 1; }
+.ofr-go { border: 1px solid currentColor; background: var(--ofr-paper); color: var(--ofr-ink); font-family: var(--font-archivo-black); font-size: 12px; letter-spacing: .24em; text-transform: uppercase; padding: 13px 22px; text-align: center; }
+.ofr-flag { position: absolute; top: 0; right: 0; background: var(--ofr-paper); color: var(--ofr-ink); font-family: var(--font-archivo-black); font-size: 10px; letter-spacing: .22em; text-transform: uppercase; padding: 7px 12px; }
+.ofr-was { font-size: 12px; color: #8a8a8a; letter-spacing: .08em; text-decoration: line-through; }
+
+/* Revolut widget panel — white because the widget ships a light theme with
+   no dark mode (labels vanish on the black page). On narrow phones the
+   widget's iframe is wider than the padded column, so the panel goes
+   near-full-bleed to give it room instead of letting buttons overflow. */
+.ofr-widget-panel { background: #ffffff; padding: 18px 16px; }
+@media (max-width: 480px) {
+  .ofr-widget-panel { margin-left: -24px; margin-right: -24px; padding: 16px 10px; }
+}
+
+/* product page form */
+.ofr-input { width: 100%; background: transparent; border: 1px solid var(--ofr-line); color: var(--ofr-paper); padding: 13px 14px; font-size: 15px; font-family: inherit; }
+.ofr-input:focus { outline: 2px solid var(--ofr-paper); outline-offset: -1px; }
+.ofr-label { display: block; font-size: 11px; letter-spacing: .26em; text-transform: uppercase; color: #8a8a8a; margin-bottom: 8px; }
+.ofr-pay { width: 100%; background: var(--ofr-paper); color: var(--ofr-ink); border: 0; font-family: var(--font-archivo-black); font-size: 14px; letter-spacing: .26em; text-transform: uppercase; padding: 18px; cursor: pointer; }
+.ofr-pay:hover { background: #d8d8d8; }
+.ofr-pay:disabled { opacity: .5; cursor: default; }
+.ofr-includes li { list-style: none; display: flex; gap: 16px; padding: 15px 0; border-bottom: 1px solid var(--ofr-line-soft); font-size: 15px; color: #cfcfcf; }
+.ofr-includes li::before { content: "—"; color: #666; }

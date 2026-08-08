@@ -14,7 +14,7 @@ import {
 } from 'react-native'
 import Markdown from 'react-native-markdown-display'
 import { Ionicons } from '@expo/vector-icons'
-import { useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams } from 'expo-router'
 import { useAuth } from '../../lib/auth-context'
 import { getContract, signContract, declineContract } from '../../lib/contracts-api'
 
@@ -70,7 +70,6 @@ function fmtDate(iso) {
 
 export default function ContractDetail() {
   const { id } = useLocalSearchParams()
-  const router = useRouter()
   const { profile } = useAuth()
   const [contract, setContract] = useState(null)
   const [loading, setLoading] = useState(true)

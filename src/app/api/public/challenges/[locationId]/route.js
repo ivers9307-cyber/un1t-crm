@@ -6,6 +6,7 @@ import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { computeStandings, computeCollective } from '@/lib/challenges-io'
 import { challengePhase, windowIso } from '@/lib/challenges'
+import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -13,11 +14,21 @@ export const dynamic = 'force-dynamic'
 const TOP = 25
 const project = (standings) => standings.slice(0, TOP).map((r) => ({ name: r.name, value: r.value, rank: r.rank }))
 
-export async function GET(_request, props) {
+export async function GET(request, props) {
   const params = await props.params
   const db = createServerClient()
   const locationId = params.locationId
   const nowMs = Date.now()
+
+  // Abuse limiter (audit H2a) — the challenge TV board polls this every 45s
+  // (ChallengeTvClient POLL_MS), ≈7 requests per 5 min, so 60-per-5-min gives a
+  // legit board ~8x headroom while capping scripted hammering of a
+  // standings-computation-heavy endpoint. Keyed per location+IP (SAAS-6) so one
+  // studio's board can't starve another's. Fails open inside checkRateLimit —
+  // a limiter outage must never black out the TV.
+  const ip = getClientIp(request)
+  const limit = await checkRateLimit(db, `pubchallenges:${locationId}:${ip}`, { max: 60, windowMs: 5 * 60_000 })
+  if (!limit.allowed) return rateLimitResponse(limit)
 
   const { data: location } = await db.from('locations').select('id, name').eq('id', locationId).single()
   if (!location) return NextResponse.json({ ok: false, error: 'Location not found' }, { status: 404 })

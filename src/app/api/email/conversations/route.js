@@ -1,51 +1,28 @@
-import { createServerClient } from '@/lib/supabase'
 import { NextResponse } from 'next/server'
-import { getCurrentUser, assertLocationAccess, getUserLocationIds, requireInboxPermission } from '@/lib/auth'
-import { INBOX_SEARCH_MIN_LENGTH, buildInboxSearchOr, searchInboxContactIds } from '@/lib/inbox-search-server'
+import { getCurrentUser, requireInboxPermission } from '@/lib/auth'
+import { goneResponse } from './_gone'
 
-// GET /api/email/conversations — list email conversations (operator
-// inbox, EMAIL-INBOX.1). Mirrors /api/instagram/conversations: reads
-// are location-scoped to a specific ?location_id (access-checked) or
-// the union of the caller's locations. Service-role client because the
-// email_* RLS denies authenticated writes and we re-impose the read
-// scope here in the query.
-export async function GET(request) {
+// GET /api/email/conversations — RETIRED (EMAIL-CONV-STOP.1, 2026-08-07).
+//
+// Was the operator inbox list for the mig 394 email channel. It now returns
+// 410 Gone and reads nothing: the email surface is /api/email/tickets* (mig
+// 482), and this repo no longer touches email_conversations anywhere.
+//
+// The file is kept rather than deleted because installed mobile builds on
+// frozen OTA lanes still call it, and a 404 is indistinguishable from a network
+// error inside the app. Full reasoning, and the device_tokens census that says
+// nobody is actually on those lanes, in ./_gone.js.
+//
+// The guard order below is load-bearing: 401 before 403 before 410, so an
+// unauthenticated caller learns nothing about which routes exist. INBOX-PERM.2
+// re-gated this route from `whatsapp` to `email_inbox` days ago; that gate is
+// kept even though the handler now answers nothing.
+export async function GET() {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
 
-  // Channel permission — service-role client, so this IS the gate (INBOX-PERM.1).
   const perm = requireInboxPermission(user, 'em')
   if (perm) return perm
 
-  const { searchParams } = new URL(request.url)
-  const locationId = searchParams.get('location_id')
-
-  const db = createServerClient()
-  let query = db.from('email_conversations')
-    .select('*, contacts!contact_id(id, name, first_name, email, pipeline_stage_slug)')
-    .order('last_message_at', { ascending: false, nullsFirst: false })
-    .limit(50)
-
-  if (locationId) {
-    const guard = assertLocationAccess(user, locationId)
-    if (guard) return guard
-    query = query.eq('location_id', locationId)
-  } else {
-    const userLocationIds = getUserLocationIds(user)
-    if (userLocationIds.length === 0) return NextResponse.json({ success: true, conversations: [] })
-    query = query.in('location_id', userLocationIds)
-  }
-
-  // INBOX-SEARCH.1 — see whatsapp/conversations: ?q= = most-recent 50 MATCHES.
-  const q = (searchParams.get('q') || '').trim()
-  if (q.length >= INBOX_SEARCH_MIN_LENGTH) {
-    const scopeIds = locationId ? [locationId] : getUserLocationIds(user)
-    const contactIds = await searchInboxContactIds(db, { q, locationIds: scopeIds })
-    query = query.or(buildInboxSearchOr('email_conversations', q, contactIds))
-  }
-
-  const { data, error } = await query
-  if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-
-  return NextResponse.json({ success: true, conversations: data || [] })
+  return goneResponse()
 }

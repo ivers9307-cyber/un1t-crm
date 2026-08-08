@@ -28,7 +28,8 @@ const PAGE_SIZE = 1000
 const HARD_LIMIT = 20_000
 
 // Non-contactable email statuses (mirrors the per-channel gate in CLAUDE.md)
-const NON_CONTACTABLE_EMAIL_STATUSES = new Set(['bounced', 'complained', 'unsubscribed'])
+// LOCCOMMS.5 / mig 492 — 'unsubscribed' retired; reputation states only.
+const NON_CONTACTABLE_EMAIL_STATUSES = new Set(['bounced', 'complained'])
 
 /**
  * Page all glofox_invoices rows for a given set of contact_ids and status.

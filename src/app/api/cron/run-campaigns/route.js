@@ -21,6 +21,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { tickCampaignSend } from '@/lib/campaign-sender'
+import { spawnDueResends } from '@/lib/campaign-resend'
 import { stampHeartbeat } from '@/lib/cron-heartbeat'
 import { getEmailCapStatus } from '@/lib/usage-caps'
 import { pickFairCampaigns } from '@/lib/campaign-fairness'
@@ -87,6 +88,19 @@ export async function GET(request) {
         summary.promoted = promoted?.length || 0
       }
     }
+  }
+
+  // STEP 1b — spawn due non-opener resends (CAMPAIGN-RESEND, mig 506).
+  // Children are inserted 'queued' and picked up by STEP 2 like any other
+  // campaign; a failure here must never block the send ticks.
+  try {
+    const resends = await spawnDueResends(db)
+    summary.resends_spawned = resends.spawned
+    if (resends.errors.length > 0) {
+      console.warn('[cron run-campaigns] resend spawn errors:', JSON.stringify(resends.errors))
+    }
+  } catch (err) {
+    console.error('[cron run-campaigns] resend spawn failed:', err?.message || err)
   }
 
   // STEP 2 — pick campaigns to tick this run.

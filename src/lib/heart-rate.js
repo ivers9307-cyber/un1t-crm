@@ -192,6 +192,27 @@ export function effortPointsFromZones(zonesSeconds, zonePoints) {
   return Math.floor(raw)
 }
 
+/**
+ * Total gap-capped sampled seconds from a stored zones_seconds JSONB —
+ * the same quantity summariseSession reports as totalSeconds (its
+ * zonesSeconds sum IS its totalSeconds). Lets after-the-fact consumers
+ * (the calorie backfill) recover a session's ACTUAL sampled duration
+ * without re-paging hr_samples — wall-clock (ended_at − started_at) is
+ * wrong for auto-closed sessions, which sit open until the 4h backstop.
+ *
+ * @param {{ [zoneId: number|string]: number }|null|undefined} zonesSeconds
+ * @returns {number} total seconds (0 for null/empty/non-numeric input).
+ */
+export function zonesTotalSeconds(zonesSeconds) {
+  if (!zonesSeconds || typeof zonesSeconds !== 'object') return 0
+  let total = 0
+  for (const v of Object.values(zonesSeconds)) {
+    const n = Number(v)
+    if (Number.isFinite(n) && n > 0) total += n
+  }
+  return total
+}
+
 // ── incremental running summary (live board) ─────────────────────
 //
 // The live TV board (buildLiveBoardPayload) used to page EVERY hr_sample for
@@ -245,9 +266,11 @@ export function emptyRunningSummary() {
  * an ISO string, any counter as null on a fresh session.
  *
  * @param {object|null|undefined} prev
+ * @param {{ zonePoints?: { [zoneId: number]: number } }} [opts]  location scoring
+ *   overrides for the derived-points recompute — omit for defaults.
  * @returns {ReturnType<typeof emptyRunningSummary>}
  */
-export function normaliseRunningState(prev) {
+export function normaliseRunningState(prev, opts = {}) {
   const base = emptyRunningSummary()
   if (!prev || typeof prev !== 'object') return base
   const z = prev.zonesSeconds || prev.zones_seconds || {}
@@ -268,8 +291,9 @@ export function normaliseRunningState(prev) {
     base.lastAtMs = Number.isFinite(ms) ? ms : null
   }
   // effortPoints is derived, not authoritative — recompute from zones so it is
-  // always consistent with the zone tally we just loaded.
-  base.effortPoints = effortPointsFromZones(base.zonesSeconds)
+  // always consistent with the zone tally we just loaded (and with the
+  // location's scoring config when the caller passes it).
+  base.effortPoints = effortPointsFromZones(base.zonesSeconds, opts.zonePoints)
   return base
 }
 
@@ -304,7 +328,9 @@ export const MAX_SAMPLE_GAP_SECONDS = 5
  * @returns {ReturnType<typeof emptyRunningSummary>}  the new state
  */
 export function applyBatchToRunningSummary(prevState, batchSamples, maxHr, opts = {}) {
-  const state = normaliseRunningState(prevState)
+  // Thread the scoring opts into the normalise so the empty-batch early return
+  // below can never rewrite custom-scored points with default-scored ones.
+  const state = normaliseRunningState(prevState, opts)
 
   // Defensive sort — the batch SHOULD already be recorded_at-ascending (the
   // bridge buffers in order), but a caller must never corrupt the aggregate on

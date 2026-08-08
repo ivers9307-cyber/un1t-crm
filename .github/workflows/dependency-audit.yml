@@ -1,8 +1,15 @@
 # Dependency audit (audit this-quarter item CI-2).
 #
-# Fails on a HIGH/critical advisory against RUNTIME deps (--omit=dev). This is
-# the gate that would have caught the undici scare and the live sharp/libvips
-# HIGH. Two triggers a regression can't dodge:
+# Fails on a HIGH/critical advisory in EITHER tree:
+#   - web    — runtime deps only (--omit=dev), allowlist /.audit-allowlist.json
+#   - mobile — the whole tree,    allowlist mobile/.audit-allowlist.json
+# Mobile was added in DEPAUDIT.2. Before that this job listed
+# mobile/package*.json in its `paths:` trigger but only ever ran `npm ci` +
+# audit at the repo ROOT, so a mobile-only advisory fired the job and passed
+# unexamined — the first real run found 4 HIGH + 1 CRITICAL.
+#
+# This is the gate that would have caught the undici scare and the live
+# sharp/libvips HIGH. Two triggers a regression can't dodge:
 #   - schedule: catches a NEW advisory published against unchanged, frozen deps
 #     (exactly the sharp case — no dependency change, yet suddenly vulnerable).
 #   - pull_request (only when a lockfile/manifest changes): scans Dependabot
@@ -12,6 +19,17 @@
 #
 # --audit-level=high ignores moderates (the build-time postcss-via-Next
 # moderate stays below the threshold and does not fail CI).
+#
+# The audit runs through `npm run check:dependency-audit`, not bare
+# `npm audit`, so a known-and-accepted advisory can be recorded in
+# `.audit-allowlist.json` (with a reason and an EXPIRY) while a genuinely
+# new one still fails. Motivation: the ip-address advisories left this
+# job red on every branch 2026-08-04 → 08-07 and, because it is not a
+# required check (main has no branch protection at all), PRs merged
+# straight past it. A permanently-red check is the worst of both worlds —
+# the noise of a gate with none of the protection — and a bare `npm audit`
+# gives no way to tell "the known one is still open" from "something new
+# just landed". See scripts/check-dependency-audit.mjs.
 name: Dependency audit
 
 on:
@@ -31,8 +49,15 @@ concurrency:
 
 jobs:
   audit:
-    name: npm audit (runtime, high+)
+    name: npm audit (web runtime + mobile, high+)
     runs-on: ubuntu-latest
+    # Least privilege: read the tree, and open the tracking issue the
+    # scheduled-failure step needs. Explicit because a repo default of
+    # read-only would otherwise make that step fail silently-ish, at the
+    # one moment we most need it to work.
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v7
       - name: Set up Node
@@ -42,4 +67,66 @@ jobs:
       - name: Install dependencies (web)
         run: npm ci
       - name: Audit runtime dependencies (web)
-        run: npm audit --omit=dev --audit-level=high
+        run: npm run check:dependency-audit
+
+      # DEPAUDIT.2 — the mobile tree, which this job had NEVER audited
+      # despite listing mobile/package*.json in its own `paths:` trigger
+      # since day one. A mobile-only advisory fired the job and passed
+      # unexamined. Turning it on immediately surfaced 4 HIGH + 1 CRITICAL
+      # (shell-quote via react-devtools-core), all previously invisible.
+      #
+      # `--package-lock-only` is what makes this cheap: it resolves the
+      # tree from mobile/package-lock.json and queries the registry
+      # WITHOUT installing, so CI never pays for the Expo 57 / RN 0.86
+      # native dependency tree just to run an audit. No `npm ci` here on
+      # purpose.
+      #
+      # Note there is no --omit=dev: it is INERT under
+      # --package-lock-only (verified — byte-identical reports with and
+      # without), so including it would only imply a filter that is not
+      # happening. The mobile gate covers the whole tree, which is the
+      # right posture anyway: its only devDependency is @babel/core.
+      #
+      # `!cancelled()` rather than the default: a red WEB audit must not
+      # hide the mobile result. One run should always report both trees.
+      - name: Audit dependencies (mobile)
+        if: ${{ !cancelled() }}
+        run: npm run check:dependency-audit:mobile
+
+      # The scheduled run is the only trigger that catches a NEW advisory
+      # against frozen deps — and it is precisely the one nobody sees: it
+      # runs on main with no PR to hang a red X on. That is how the
+      # ip-address advisories sat unnoticed from Monday to Thursday. So on
+      # a scheduled failure, open (or refresh) a single tracking issue.
+      #
+      # Fixed title => `gh issue list --search` finds the existing one and
+      # we comment instead of opening a duplicate every Monday.
+      #
+      # No untrusted event input is interpolated anywhere here (workflow
+      # injection): the only expressions used are github.repository,
+      # github.run_id and github.server_url, all runner-controlled, and
+      # they are passed via env: rather than substituted into run:.
+      - name: Open a tracking issue on scheduled failure
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: 'Dependency audit: unaccepted high/critical advisory'
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --repo "$REPO" --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          body=$(printf '%s\n' \
+            "The scheduled dependency audit failed on \`main\` (web runtime deps and/or the mobile tree — see the run for which step)." \
+            "" \
+            "Run: $RUN_URL" \
+            "" \
+            "This job is **not** a required check, so nothing blocks merges while it is red." \
+            "Resolve it by upgrading, removing the dependency, or recording a dated accept in the failing tree's allowlist" \
+            "(\`.audit-allowlist.json\` for web, \`mobile/.audit-allowlist.json\` for mobile)." \
+            "See \`scripts/check-dependency-audit.mjs\` for the three options in full.")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --body "$body"
+          fi

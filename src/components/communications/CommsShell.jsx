@@ -16,7 +16,11 @@ import { usePathname } from 'next/navigation'
 
 export default function CommsShell({ children }) {
   const pathname = usePathname() || ''
+  // EMAIL-TICKET.4 — the ticket inbox is the same shape of tool as the
+  // unified inbox (three panes, full height), so it takes the full width for
+  // the same reason: boxing it into max-w-7xl wastes the thread pane.
   const fullWidth = pathname.startsWith('/communications/inbox')
+    || pathname.startsWith('/communications/tickets')
   return (
     <div className={fullWidth ? 'p-6' : 'p-6 max-w-7xl'}>
       {children}

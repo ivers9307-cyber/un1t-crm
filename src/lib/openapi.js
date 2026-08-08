@@ -22,6 +22,7 @@ import {
   reportFrequencySchema, reportTypeSchema,
   permissionsSchema, audienceFilterSchema,
   passwordSchema, tenantDomainBrandConfigSchema,
+  ccfEnquirySchema,
 } from './schemas.js'
 import { LeadSchema } from './leads.js'
 import { MAX_STORED_EXAMPLE_CHARS, MAX_STORED_EXAMPLES } from '@/lib/hyrox/constants'
@@ -264,6 +265,64 @@ registry.registerPath({
     200: { description: 'Lead captured' },
     400: { description: 'Validation failed or studio not accepting sign-ups', content: { 'application/json': { schema: ErrorResponse } } },
     429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/ccf-enquiry',
+  tags: ['Public'],
+  summary: 'CCF Autos coming-soon page enquiry capture',
+  description: 'Anonymous. Rate-limited to 5 requests per IP per 15 min. Inserts into car_enquiries (CCF-WEB.1).',
+  // Same .extend({}) trick as LeadSchema above: ccfEnquirySchema is built in
+  // schemas.js before extendZodWithOpenApi(z) runs here.
+  request: { body: { content: { 'application/json': { schema: ccfEnquirySchema.extend({}).openapi('CcfEnquiry') } } } },
+  responses: {
+    200: { description: 'Enquiry captured' },
+    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/public/offers/{slug}/checkout',
+  tags: ['Public'],
+  summary: 'Start a Revolut checkout for one sale offer',
+  description: 'Anonymous. Rate-limited to 8 requests per IP per 15 min. Amount is read from sale_offers server-side — the body carries buyer details only. 410 once the sale window has closed.',
+  responses: {
+    200: { description: 'Order created; returns { purchaseId, checkout: { provider, token } }' },
+    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown offer', content: { 'application/json': { schema: ErrorResponse } } },
+    410: { description: 'Sale ended', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/offer-purchases/{id}',
+  tags: ['Public'],
+  summary: 'Paid-status of one offer purchase (checkout polling)',
+  description: 'Anonymous, display-safe: returns only { paid, state }. Re-checks Revolut while pending (capped at 20 rechecks per purchase per 5 min).',
+  responses: {
+    200: { description: 'Status returned' },
+    404: { description: 'Unknown purchase', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/offer-purchases/{id}/fulfil',
+  tags: ['Approvals'],
+  summary: 'Mark a paid sale-offer purchase fulfilled',
+  description: 'Session auth + the approvals_offer_purchases grant. Ids outside the caller\'s locations return 404. Idempotent — re-fulfilling returns { already: true }.',
+  responses: {
+    200: { description: 'Fulfilled (or already fulfilled)' },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing approvals_offer_purchases', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown or inaccessible purchase', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Purchase is not paid', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -722,6 +781,43 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/webhooks/qstash/zoom-contacts',
+  tags: ['Webhooks (Inbound)'],
+  security: [{ WebhookToken: [] }],
+  summary: 'QStash push-delivery worker applying one Zoom Phone external-contact write',
+  description:
+    'QStash → CRM. Delivers a single `{ op, e164, … }` job published by the /api/cron/zoom-contact-sync reconcile ' +
+    'onto the `zoom-contacts` QUEUE (parallelism 2 — deliberate pacing; Zoom allows 30/sec on Pro), verified via the ' +
+    'Upstash-Signature HS256 JWT (current + next signing keys). Applies exactly ONE create / update / delete against ' +
+    "Zoom's /phone/external_contacts, because Zoom has no batch endpoint. Every write is idempotent: a 409 duplicate " +
+    'on create and a 404 on delete both count as success, so an overlapping run or a redelivery is harmless. ' +
+    '400 for a malformed or unknown-op job (retrying can never help); 500 on a Zoom-side failure so QStash retries.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            op: z.enum(['create', 'update', 'delete']),
+            e164: z.string().optional(),
+            name: z.string().optional(),
+            contactId: z.string().optional(),
+            zoomId: z.string().optional(),
+          }).openapi('QstashZoomContactsMessage'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Write applied (including the idempotent 409-duplicate and 404-already-gone cases)' },
+    400: { description: 'Malformed JSON or unknown op — not retryable', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Bad / missing Upstash signature', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'Our own QStash signing keys are unset', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Zoom-side failure — QStash should retry', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/webhooks/qstash/receipt-hunts',
   tags: ['Webhooks (Inbound)'],
   security: [{ WebhookToken: [] }],
@@ -955,7 +1051,7 @@ registry.registerPath({
   tags: ['Webhooks (Inbound)'],
   security: [],
   summary: 'Tokenised Postmark inbound email (unified inbox)',
-  description: 'Postmark inbound stream → CRM. Threads customer email replies into email_conversations for the unified inbox. Authenticated by the unguessable `{token}` path segment (POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN), not a header.',
+  description: 'Postmark inbound stream → CRM. Threads customer email replies into email_tickets (mig 482) — as of EMAIL-CONV-STOP.1 it no longer writes the deprecated email_conversations table. Authenticated by the unguessable `{token}` path segment (POSTMARK_EMAIL_INBOX_WEBHOOK_TOKEN), not a header.',
   request: {
     params: z.object({ token: z.string() }),
     body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('PostmarkInboundEmailEvent') } } },
@@ -966,21 +1062,34 @@ registry.registerPath({
   },
 })
 
-// Email inbox conversations (cookie auth) — EMAIL-INBOX.1
+// Email inbox conversations (cookie auth) — EMAIL-INBOX.1, now RETIRED.
+//
+// EMAIL-CONV-STOP.1 (2026-08-07): all four operations answer **410 Gone** and
+// touch no data. Superseded by /api/email/tickets* (mig 482). The routes still
+// exist only so installed mobile builds on frozen OTA lanes get an actionable
+// error rather than a 404 they cannot tell apart from a network failure.
+//
+// The `email_inbox` gate from INBOX-PERM.2 is still in front of the 410 (it
+// used to resolve the `em` channel against `whatsapp`, which let a
+// WhatsApp-only staffer read and send the studio's email), so 401 and 403 are
+// still reachable and an unauthenticated caller cannot enumerate.
+const GoneOnly = {
+  401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  403: { description: 'Missing the email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
+  410: { description: 'Gone — retired, use /api/email/tickets*', content: { 'application/json': { schema: ErrorResponse } } },
+}
+
 registry.registerPath({
   method: 'get',
   path: '/api/email/conversations',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'List email inbox conversations',
-  description: "Operator inbox list for the email channel. Location-scoped: ?location_id (access-checked) or the union of the caller's locations.",
+  summary: 'RETIRED — list email inbox conversations (410 Gone)',
+  description: 'Retired by EMAIL-CONV-STOP.1. Was the operator inbox list for the email channel; now returns 410 Gone and reads nothing. Use GET /api/email/tickets.',
   request: {
     query: z.object({ location_id: uuidLike.optional() }),
   },
-  responses: {
-    200: { description: 'Conversation list' },
-    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
-  },
+  responses: { ...GoneOnly },
 })
 
 registry.registerPath({
@@ -988,15 +1097,12 @@ registry.registerPath({
   path: '/api/email/conversations/{id}',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Email conversation + message thread',
-  description: 'Returns the conversation and its most recent messages (text bodies only) and resets unread_count. 404 for foreign-location ids.',
+  summary: 'RETIRED — email conversation + message thread (410 Gone)',
+  description: 'Retired by EMAIL-CONV-STOP.1. Was the conversation and its recent messages (and reset unread_count); now returns 410 Gone and reads nothing. Use GET /api/email/tickets/{id}.',
   request: {
     params: z.object({ id: uuidLike }),
   },
-  responses: {
-    200: { description: 'Conversation + messages' },
-    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
-  },
+  responses: { ...GoneOnly },
 })
 
 registry.registerPath({
@@ -1004,16 +1110,13 @@ registry.registerPath({
   path: '/api/email/conversations/{id}',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Resolve / reopen an email conversation',
-  description: 'Stamps or clears resolved_at (UIX-P1 queue semantics). A new inbound email auto-clears it in the webhook.',
+  summary: 'RETIRED — resolve / reopen an email conversation (410 Gone)',
+  description: 'Retired by EMAIL-CONV-STOP.1. Was the resolved_at stamp (UIX-P1 queue semantics); now returns 410 Gone and writes nothing. Use PATCH /api/email/tickets/{id}/status.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ resolved: z.boolean() }).openapi('EmailConversationPatch') } } },
   },
-  responses: {
-    200: { description: 'Updated' },
-    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
-  },
+  responses: { ...GoneOnly },
 })
 
 registry.registerPath({
@@ -1021,16 +1124,437 @@ registry.registerPath({
   path: '/api/email/conversations/{id}/send',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],
-  summary: 'Reply to an email conversation',
-  description: "Sends a plain-text operator reply via Postmark's transactional stream with In-Reply-To/References threading headers, logs it to the thread (and email_sends when a contact is linked).",
+  summary: 'RETIRED — reply to an email conversation (410 Gone)',
+  description: 'Retired by EMAIL-CONV-STOP.1. Was a plain-text operator reply on Postmark’s transactional stream; now returns 410 Gone and never reaches Postmark. Use POST /api/email/tickets/{id}/reply.',
   request: {
     params: z.object({ id: uuidLike }),
     body: { content: { 'application/json': { schema: z.object({ text: z.string().min(1).max(10000), subject: z.string().max(500).optional() }).openapi('EmailInboxReply') } } },
   },
+  responses: { ...GoneOnly },
+})
+
+// Email tickets (cookie auth) — EMAIL-TICKET.4.
+// TWO GATES on every route below: the `email_inbox` permission gates the
+// surface (NOT the older `email` key, which gates marketing mail), and a row
+// in email_mailbox_access gates each individual account. A ticket on a mailbox
+// the caller cannot see is a 404, never a 403.
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/tickets',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List email tickets + the caller’s visible mailboxes',
+  description: 'The studio ticket queue at one location, plus the mailboxes this caller may see (already in tab order). Filtered to those mailboxes and capped at 200, newest activity first. No visible mailboxes = an empty list, not an error.',
+  request: {
+    query: z.object({
+      location_id: uuidLike,
+      mailbox_id: uuidLike.optional(),
+      view: z.enum(['unassigned', 'mine', 'needs_reply', 'closed']).optional(),
+    }),
+  },
   responses: {
-    200: { description: 'Reply sent' },
-    400: { description: 'Send failed / no recipient', content: { 'application/json': { schema: ErrorResponse } } },
+    200: { description: '{ mailboxes, tickets }' },
+    400: { description: 'Missing location_id / unknown view', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing email_inbox permission or foreign location', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Mailbox visibility lookup failed — NOT an empty inbox', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// EMAIL-TICKET-CLEANUP.3 — the Email nav badge. Deliberately parameterless
+// (location comes off the session), like every other badge count endpoint.
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/tickets/count',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Count email tickets awaiting a reply (nav badge)',
+  description:
+    'Tickets at the caller’s ACTIVE location, on a mailbox they may see, that are `open` with an inbound last message — i.e. mail nobody has answered yet. The same predicate as the list route’s `needs_reply` view, so the badge and that tab always agree. Not the whole live queue: nothing in this feature auto-closes, so counting tickets already waiting on the member would never come down. Returns count 0 (not an error) for a session without the permission or without an active location.',
+  responses: {
+    200: { description: '{ count }', content: { 'application/json': { schema: SuccessResponse(z.object({ count: z.number() })) } } },
+    401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Mailbox visibility or count query failed — NOT a zero', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/tickets/{id}',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Ticket + its message thread',
+  description: 'Returns the ticket (with its mailbox and linked contact) and the thread oldest-first, text bodies only. EMAIL-CC.1: each message also carries to_emails, cc_emails and bcc_emails, and the payload carries reply_recipients = { to, mode: reply | reply_all } — who a reply would reach, derived by the same code the reply route sends with, or null when that could not be worked out. bcc_emails is STAFF-ONLY: this route is behind the ticket gate (location + email_inbox at that location + a grant on the ticket mailbox), it must never be rendered on a member-visible surface, and it is never an input to a later reply or forward. 404 — never 403 — when the ticket is missing, at a foreign location, or on a mailbox the caller cannot see. Does NOT mark it read; that is POST /read. EMAIL-DELIVERY.1: each OUTBOUND message also carries delivery_status (null | delivered | bounced | complained), delivery_status_at, delivery_detail and delivery_bounce_type (hard | soft | transient). NULL means sent with no provider event yet — it is NOT a failure and must never render as one.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ ticket, messages }' },
     404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/reply',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Reply to a ticket, or add an internal note',
+  description: "internal:true writes a staff-only note to the thread and sends NOTHING (no first_response_at, no status change) and MUST carry no recipients and no files — a note with to/cc/bcc or attachments is a 400. Otherwise the reply goes out on Postmark's transactional stream ('outbound', no marketing-consent gate — the member wrote to us first), threaded off the last inbound message, Reply-To the ticket's own mailbox; the ticket then moves to pending and stamps first_response_at if unset. A failed send leaves the ticket untouched. EMAIL-CC.1 — THE RECIPIENT SET IS DERIVED, NOT CHOSEN: the server sends to everybody on the thread (the From + To + Cc of the latest non-note message, minus the studio's own addresses), so a one-person thread is a Reply and a wider one is a Reply All with no way to express the difference on the wire. `to`/`cc`/`bcc` in the body ADD people on top of that; there is deliberately no way to remove a participant. bcc_emails of earlier messages is NEVER read back as a recipient. All three lists are deduped case-insensitively across each other (To beats Cc beats Bcc) and capped at 25 addresses COMBINED. Bcc goes out in Postmark's own Bcc field, so no recipient sees it. Response carries { recipients: { to, cc, bcc }, mode }. EMAIL-OUTBOUND-ATTACH.1: `attachments` carries REFERENCES to files already uploaded via /api/email/attachments/upload-sign, never bytes — the platform rejects a body over ~4.5 MB before this handler runs. They are read back out of Storage and size-checked BEFORE the send (7 MB of raw file bytes per email, from Postmark's 10 MB post-base64 ceiling), so an oversized or unreadable set is a 400 with nothing sent and nothing written — the thread never shows a reply claiming files that did not go.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      text: z.string().min(1).max(10000),
+      internal: z.boolean().optional(),
+      to: z.array(z.string().email()).max(25).optional(),
+      cc: z.array(z.string().email()).max(25).optional(),
+      bcc: z.array(z.string().email()).max(25).optional(),
+      attachments: z.array(z.object({
+        draft_id: uuidLike,
+        index: z.number().int().min(0).max(9),
+        filename: z.string().min(1).max(255),
+        mime: z.string().min(1).max(255),
+      })).max(10).optional(),
+    }).openapi('EmailTicketReply') } } },
+  },
+  responses: {
+    200: { description: 'Note written / reply sent' },
+    400: { description: 'Invalid body, no recipient, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// EMAIL-FORWARD.1 (mig 501) — pass one message on the ticket to a third party.
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/forward',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Forward one message on a ticket to somebody else',
+  description: "Sends `message_id` (a message on THIS ticket) to addresses the operator types, and files the result as an OUTBOUND message on the SAME ticket carrying forwarded_message_id — the record of 'we sent this to the accountant' belongs with the correspondence it is about, and the recipient's reply threads back onto this ticket through the ordinary inbound path. THE TICKET IS DELIBERATELY NOT MOVED: no status change, no last_message_at, no first_response_at, because `needs_reply` is (open AND inbound last message) and stamping an outbound one would drop a ticket the member is still waiting on out of the queue. AN INTERNAL NOTE CANNOT BE FORWARDED — 400, since a note was never sent to anyone and mailing staff-only commentary to a third party under the studio's address is the worst thing this surface could do. RECIPIENTS ARE TYPED, NEVER DERIVED (the opposite of a reply): nothing on this route reads bcc_emails off stored correspondence, and the quoted header block is a closed list of five — From, Date, Subject, To, Cc — so a forward reveals exactly what it would have had the original's Bcc never been typed. The shared model still applies: deduped case-insensitively across To/Cc/Bcc (To beats Cc beats Bcc), the studio's own addresses excluded from all three, 25 addresses combined, Bcc in Postmark's own Bcc field only. THE BODY IS PLAIN TEXT: text_body is quoted and HTML-escaped, and the original's html_body never reaches the wire — re-sending a stranger's markup under our own DKIM signature is how forwarding launders a phish, and our sanitiser's permissiveness is bought by the sandboxed iframe the thread renders into, which a recipient's mail client is not. `attachment_ids` chooses which of the ORIGINAL'S files ride along; they are read from the bytes already in the bucket (nothing is copied to a new key), the forwarded rows point at the same storage_path with forwarded_from_id set, and the mailbox quota is not charged twice. A file with no stored bytes, an id from another message, an unreadable object, or a set past the 7 MB outbound ceiling is a 400 with NOTHING SENT — files are never silently dropped. No email_sends row is written (a forward goes to a third party, not to the member). Every address is written to audit_events under the sender's name.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      message_id: uuidLike,
+      to: z.array(z.string().email()).min(1).max(25),
+      cc: z.array(z.string().email()).max(25).optional(),
+      bcc: z.array(z.string().email()).max(25).optional(),
+      note: z.string().max(10000).optional(),
+      attachment_ids: z.array(uuidLike).max(10).optional(),
+    }).openapi('EmailTicketForward') } } },
+  },
+  responses: {
+    200: { description: '{ message, message_id, recipients, forwarded_message_id, attachment_count }' },
+    400: { description: 'Invalid body, an internal note, no usable recipient, an unforwardable file, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Ticket not accessible, or the message is not on this ticket', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A pre-send lookup failed (nothing sent), or the forward went out but could not be filed — do NOT resend', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The ticketing Postmark server is unconfigured — nothing was sent', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/status',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Move a ticket through its lifecycle',
+  description: 'Sets solved_at / closed_at moving into those states and clears them moving out. Nothing auto-closes anywhere in this feature — this route is the only way a ticket leaves the queue.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({ status: z.enum(['open', 'pending', 'solved', 'closed']) }).openapi('EmailTicketStatus') } } },
+  },
+  responses: {
+    200: { description: 'Updated ticket' },
+    400: { description: 'Invalid status', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/assign',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Claim, release or reassign a ticket',
+  description: "EMAIL-ASSIGN.1 — who owns this ticket. assignee 'me' CLAIMS an unassigned ticket (conditional on assigned_to IS NULL, so simultaneous claims race in Postgres and the loser gets 409 already_assigned; a ticket somebody else holds is a 409 outright — taking over is an explicit elevated reassign). assignee null RELEASES your own ticket, or anybody's when elevated at the ticket's location. Any other string is a profile id: elevated-only, and the TARGET must be able to SEE the ticket (a grant on its mailbox, owner at its location, or master) — 400 assignee_cannot_see otherwise. Gated through loadTicketForUser like every ticket write: 404, never 403, for tickets outside the caller's visible set.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      assignee: z.union([z.literal('me'), z.null(), z.string().min(1).max(64)]),
+    }).openapi('EmailTicketAssign') } } },
+  },
+  responses: {
+    200: { description: 'Updated ticket + resolved assignee_name' },
+    400: { description: 'Invalid body, or the target cannot see the ticket', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Releasing another’s ticket, or reassigning, without elevation', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Somebody else already holds it', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/tickets/{id}/assignees',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Who a ticket can be assigned to',
+  description: 'EMAIL-ASSIGN.1 — feeds the elevated reassign picker: holders of a grant on the ticket’s mailbox plus owners at its location, named. Elevated-only (403) because the list enumerates colleagues’ mailbox access; sits behind loadTicketForUser’s 404 so it reveals nothing about tickets the caller cannot already see.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ assignees: [{ id, full_name }] }' },
+    403: { description: 'Not elevated at the ticket’s location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/compose',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Start a new ticket by emailing someone',
+  description: "A new email IS a ticket whose first message is outbound — one email_tickets row plus one outbound email_inbox_messages row, and thereafter an ordinary ticket (their reply threads back through the normal inbound path). The location comes off the MAILBOX, never the request, and `mailbox_id` must be in the caller's visible set: anything else is a 404, never a 403, so mailbox ids can't be enumerated. Sends on Postmark's transactional stream ('outbound') with Reply-To the chosen mailbox, links a contact when one matches the recipient, and stamps first_response_at. THE SEND HAPPENS FIRST: a failed send writes nothing at all, so there is never a ticket queued for an email that did not go. EMAIL-CC.1 — to[0] is the PRIMARY recipient: it is what requester_email records, what the contact link resolves against and what email_sends logs. Cc/Bcc are deduped case-insensitively against To and each other (To beats Cc beats Bcc), the studio's own mailbox addresses are stripped from all three (cc'ing one would file a phantom inbound ticket), and the combined total is capped at 25. Every address on a composed email was typed by a person, so the whole set is written to audit_events under the sender's name.",
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      mailbox_id: uuidLike,
+      // EMAIL-CC.1 — several recipients; the SCALAR FORM IS STILL ACCEPTED and
+      // normalised to a one-element array, so nothing that posted here before
+      // has to change.
+      to: z.union([z.string().email(), z.array(z.string().email()).max(25).min(1)]),
+      cc: z.array(z.string().email()).max(25).optional(),
+      bcc: z.array(z.string().email()).max(25).optional(),
+      subject: z.string().min(1).max(200),
+      text: z.string().min(1).max(10000),
+      // EMAIL-OUTBOUND-ATTACH.1 — references to already-uploaded drafts, never
+      // bytes. Same field and same rules as the reply route.
+      attachments: z.array(z.object({
+        draft_id: uuidLike,
+        index: z.number().int().min(0).max(9),
+        filename: z.string().min(1).max(255),
+        mime: z.string().min(1).max(255),
+      })).max(10).optional(),
+    }).openapi('EmailTicketCompose') } } },
+  },
+  responses: {
+    200: { description: '{ ticket_id, ticket, message, message_id }' },
+    400: { description: 'Invalid body, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing email_inbox permission', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Mailbox missing, inactive, or not visible to the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Sent, but the ticket/message could not be filed — do NOT resend', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/read',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Mark a ticket read',
+  description: 'Zeroes unread_count and nothing else (updated_at deliberately does not move). Its own endpoint so the detail GET stays free of writes.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Marked read' },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ── Attachments + storage quota — EMAIL-ATTACH.1 (mig 496) ──────────────────
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/tickets/{id}/attachments/{attachmentId}',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Short-lived signed URL for one stored attachment',
+  description: "The email-attachments bucket is private, so this is the only way a client sees the bytes; the URL expires in 5 minutes. Access is the TICKET's access (location + the mailbox the ticket arrived at) PLUS a check that the attachment belongs to THIS ticket — without that pairing check, any ticket the caller can open would unlock any attachment id in the estate. 404 — never 403 — for a missing attachment, one on another ticket, and one whose bytes were never stored (the body then names the skipped_reason so staff can ask for a resend). storage_path is never returned.",
+  request: { params: z.object({ id: uuidLike, attachmentId: uuidLike }) },
+  responses: {
+    200: { description: '{ url, filename, mime_type, size_bytes, expires_in }' },
+    404: { description: 'Not found / not accessible / not stored', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Recorded as stored but Storage would not sign it', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/tickets/{id}/attachments/{attachmentId}/preview',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Short-lived signed INLINE URL for one stored attachment',
+  description: "EMAIL-ATTACH-PREVIEW.1 — the same object as the route above, signed WITHOUT the download flag so the browser renders it instead of saving it. Two routes rather than one route with a ?disposition= parameter, deliberately: the disposition must never be something a request asserts, and neither route accepts a Storage option of any kind. Identical gate (the ticket's access plus the attachment-belongs-to-this-ticket pairing check) and identical 5-minute TTL. Mints a URL ONLY for an allow-list of types that are safe AND universally renderable — image/jpeg, image/png, image/gif, image/webp, application/pdf — enforced here and again in the signer. Everything else is 404 with preview_kind null, which the UI renders as 'download instead', never as an error: image/svg+xml is scriptable markup from an unauthenticated stranger and never gets an inline handle; image/heic and image/heif are what iPhones send and no mainstream browser can decode them; Word/Excel/PowerPoint have no native renderer and are NOT sent to any third-party viewer. storage_path is never returned.",
+  request: { params: z.object({ id: uuidLike, attachmentId: uuidLike }) },
+  responses: {
+    200: { description: '{ url, preview_kind, filename, mime_type, size_bytes, expires_in }' },
+    404: { description: 'Not found / not accessible / not stored / no preview for this type', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Recorded as stored but Storage would not sign it', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/email/storage',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Attachment storage used per email account',
+  description: "Per-mailbox fill against the 5 GB ceiling (mig 496), with a level of ok / warning (≥80%) / critical (≥95%) / full (≥100%), plus the location's `unfiled` bucket when a removed account has left bytes behind. Accounts with no counter row yet report 0 rather than being omitted. Inbound email is NEVER rejected on a full mailbox — the message lands in full and the attachment is recorded with skipped_reason 'quota'. Master or owner-at-location only.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ quota_bytes, mailboxes, unfiled, prune_batch_limit }' },
+    403: { description: 'Not master/owner at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/locations/{id}/email/storage',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Reclaim attachment storage, or repair a drifted counter',
+  description: "action='prune' deletes the stored bytes for attachments older than older_than_days (default 365) on SOLVED or CLOSED tickets only — a ticket someone is still working is never touched. The attachment ROW survives with storage_path NULL and skipped_reason 'pruned', so staff can still see a file existed and ask for a resend, and the mailbox counter is DECREMENTED by exactly what was removed (a prune that freed bytes without moving the counter would leave the mailbox permanently full). Bounded per call; `remaining` > 0 means run it again. mailbox_id null targets the location's unfiled bucket. action='recalculate' re-derives every counter at the location from the attachment rows. Master or owner-at-location only; another studio's mailbox id is 404.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      action: z.enum(['prune', 'recalculate']),
+      mailbox_id: uuidLike.nullable().optional(),
+      older_than_days: z.number().int().min(0).max(3650).optional(),
+    }).openapi('EmailStorageAction') } } },
+  },
+  responses: {
+    200: { description: '{ pruned, bytes_freed, remaining } or { recalculated }' },
+    400: { description: 'Unknown action or invalid body', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not master/owner at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such mailbox at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ── Outbound attachments — EMAIL-OUTBOUND-ATTACH.1 ──────────────────────────
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/attachments/upload-sign',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Authorise a browser upload for a file staff want to attach',
+  description: "Step 1 of attaching a file to a ticket reply or a new email. The bytes NEVER travel through this API: Vercel rejects a request body over ~4.5 MB before a handler runs, so the browser uploads straight to the private email-attachments bucket with the one-shot token this returns, and the send request carries only { draft_id, index, filename, mime }. THE CLIENT NEVER NAMES A PATH — the key is built here as outbound/<caller's profile id>/<draft_id>/<index>.<ext>, so a session can only ever address its own drafts and can never reach the canonical <location_id>/… or the shim's inbound/… half of the bucket. Pass EXACTLY ONE of ticket_id (gated exactly as the reply route is: the ticket's location, email_inbox there, and the mailbox it arrived at must be visible) or mailbox_id (gated exactly as compose is: the mailbox's location, email_inbox there, and it must be a mailbox the caller may send as). 404 — never 403 — for every refusal. Charges no quota and writes no row: a draft becomes an attachment only when a message carrying it actually goes out.",
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      ticket_id: uuidLike.optional(),
+      mailbox_id: uuidLike.optional(),
+      draft_id: uuidLike,
+      index: z.number().int().min(0).max(9),
+      filename: z.string().min(1).max(255),
+      mime: z.string().min(1).max(255),
+      size: z.number().int().positive(),
+    }).openapi('EmailAttachmentUploadSign') } } },
+  },
+  responses: {
+    200: { description: '{ path, token } for supabase.storage.uploadToSignedUrl' },
+    400: { description: 'Invalid body, both/neither target, or the file is over the 7 MB per-email ceiling', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Ticket or mailbox missing, or not usable by the caller', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Storage would not mint an upload token', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/attachments/discard',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Throw away an uploaded draft the operator removed before sending',
+  description: "The × on a chip, and the cancelled composer. Needs no ticket or mailbox: the object key is rebuilt from the CALLER'S OWN profile id, so this can only ever remove one of their own drafts and there is nothing to enumerate — another person's draft uuid simply derives a key under the caller's prefix that does not exist. Always 200, deliberately: the client calls it while tidying its own state and a storage failure is not something an operator can act on (it is logged server-side). A draft that is never discarded is never metered — quota is charged only when a message row is filed — so an abandoned one costs storage, not a mailbox's ceiling.",
+  request: {
+    body: { content: { 'application/json': { schema: z.object({
+      draft_id: uuidLike,
+      index: z.number().int().min(0).max(9),
+      filename: z.string().min(1).max(255),
+      mime: z.string().min(1).max(255),
+    }).openapi('EmailAttachmentDiscard') } } },
+  },
+  responses: {
+    200: { description: '{ discarded: true }' },
+    400: { description: 'Invalid body', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ── Email accounts (mailboxes) + per-account access — EMAIL-MAILBOX-ADMIN.1 ──
+// Master or owner-AT-LOCATION only, NOT the `email_inbox` permission: a
+// manager holds that key and is not elevated, so gating here on it would let
+// a manager grant themselves accounts@ — the exact hole the per-account model
+// exists to close.
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/email/mailboxes',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'The studio’s email accounts and who may read each',
+  description: "Returns { mailboxes, staff }. Unlike the inbox this INCLUDES deactivated accounts — managing them is the point of the surface. Each mailbox carries an `access` array listing every active staff member at the location tagged implicit (owner-at-location or master — no grant row exists and none can be created), granted (a row in email_mailbox_access) or none. Master or owner-at-location only.",
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ mailboxes, staff }' },
+    403: { description: 'Not at this location, or not master/owner here', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/locations/{id}/email/mailboxes',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Add an email account to a studio',
+  description: "Creates an email_mailboxes row (mig 485). The address is stored trimmed + lowercased and must be free ESTATE-WIDE — UNIQUE(lower(address)) is global, so a clash may be at a studio the caller cannot see; the 409 explains the rule rather than reporting a constraint, and names the other studio only for a master. is_default=true clears the location's incumbent default first (at most one per location). Master or owner-at-location only.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      address: z.string().email(),
+      label: z.string().min(1).max(40),
+      is_default: z.boolean().optional(),
+    }).openapi('EmailMailboxCreate') } } },
+  },
+  responses: {
+    201: { description: '{ mailbox }' },
+    400: { description: 'Invalid address or label', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not master/owner at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Address already belongs to an account somewhere in the estate', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/locations/{id}/email/mailboxes/{mailboxId}',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Rename, re-default, deactivate or reactivate an account',
+  description: "THERE IS NO DELETE: email_tickets.mailbox_id is ON DELETE SET NULL, so deleting would strip historic tickets of the address they arrived at. active=false is the removal path — it stops inbound routing and hides the tab from everyone including owners, keeping the row and its history — and it CLEARS is_default so a studio never defaults to an undeliverable address. The address itself is immutable (editing it would reattribute history). is_default=true clears the incumbent first and is refused for a deactivated account. Master or owner-at-location only; another studio's mailbox id is 404, never 403.",
+  request: {
+    params: z.object({ id: uuidLike, mailboxId: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      label: z.string().min(1).max(40).optional(),
+      is_default: z.boolean().optional(),
+      active: z.boolean().optional(),
+    }).openapi('EmailMailboxPatch') } } },
+  },
+  responses: {
+    200: { description: '{ mailbox }' },
+    400: { description: 'Empty patch, bad label, or default-on-a-deactivated-account', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not master/owner at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such mailbox at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/locations/{id}/email/mailboxes/{mailboxId}/access',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Grant or revoke one person’s access to one account',
+  description: "Idempotent set-access: { profile_id, granted } → { granted, changed }. Grants stamp granted_by with the acting user; revokes DELETE the row, so both directions also write an audit_events row (the revoke would otherwise leave no record anywhere that access ever existed). The grantee must be an active staff member at this location — email_mailbox_access carries no location of its own, so without that check a grant could be minted for any profile in the estate. Owners-at-location and masters are refused in BOTH directions with an explanation: they read every account here implicitly, no row exists for them, and silently no-opping would have an operator toggling an owner and watching nothing happen. Master or owner-at-location only.",
+  request: {
+    params: z.object({ id: uuidLike, mailboxId: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      profile_id: uuidLike,
+      granted: z.boolean(),
+    }).openapi('EmailMailboxAccessSet') } } },
+  },
+  responses: {
+    200: { description: '{ granted, changed }' },
+    400: { description: 'Not staff here, or the person is implicitly elevated', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Not master/owner at this location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such mailbox at this location', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -1156,33 +1680,6 @@ registry.registerPath({
   description: 'Pi bridge → CRM. Returns list of InBody scans that are pending ingest.',
   responses: {
     200: { description: 'Pending scans', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeIngestPendingResponse') } } },
-    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
-
-registry.registerPath({
-  method: 'get',
-  path: '/api/bridge/tapo/directives',
-  tags: ['Bridge'],
-  security: [{ BridgeAuth: [] }],
-  summary: 'Desired on/off state per Tapo device',
-  description: "CRM → Pi bridge. Returns the desired power state for each enabled Tapo device at the bridge's location, computed from fixed windows / class-linked rules / manual overrides (src/lib/tapo/desired-state.js). Polled each reconcile tick.",
-  responses: {
-    200: { description: 'Directives', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeTapoDirectivesResponse') } } },
-    401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
-  },
-})
-
-registry.registerPath({
-  method: 'post',
-  path: '/api/bridge/tapo/state',
-  tags: ['Bridge'],
-  security: [{ BridgeAuth: [] }],
-  summary: 'Report actual Tapo device states',
-  description: 'Pi bridge → CRM. Reports each Tapo device\'s actual on/off state after a reconcile tick. Devices the CRM does not know yet auto-register as enabled=false (adoptable) rows.',
-  request: { body: { content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeTapoState') } } } },
-  responses: {
-    200: { description: 'Stored — returns updated/discovered counts', content: { 'application/json': { schema: z.object({}).passthrough().openapi('BridgeTapoStateResponse') } } },
     401: { description: 'Invalid bridge token', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
@@ -2224,6 +2721,56 @@ const TenantDomainBrandConfig = tenantDomainBrandConfigSchema.extend({}).openapi
 
 registry.registerPath({
   method: 'get',
+  path: '/api/admin/webhook-dead-letter',
+  tags: ['Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List captured webhook dead-letter rows (master/owner only)',
+  description: 'Newest 200 webhook_dead_letter rows (mig 315): events that 200\'d their provider but failed to process — unroutable/unparseable inbound email, exhausted postmark_webhook_queue rows (bounces, complaints, RFC-8058 one-click unsubscribes), sent-but-unfiled ticket mail, and glofox/inbody capture failures. Each row is annotated `replayable` (does the provider have a registered idempotent re-driver — see src/lib/webhook-replay.js). Filter with ?provider= and ?status= (pending|resolved|failed|discarded). Consumed by /admin/webhook-dead-letter.',
+  request: { query: z.object({ provider: z.string().optional(), status: z.enum(['pending', 'resolved', 'failed', 'discarded']).optional() }) },
+  responses: {
+    200: { description: 'Dead-letter rows, newest first' },
+    401: { description: 'Not signed in', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — master or owner required', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/webhook-dead-letter/{id}/replay',
+  tags: ['Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Manually replay one dead-letter row (master/owner only)',
+  description: 'Re-drives the captured payload through the provider\'s registered idempotent re-driver. Only registry providers (inbody, postmark ingest failures) are accepted — postmark_queue, postmark_inbound and email_ticket_* are deliberately NOT replayable (re-queueing an exhausted row resets its retry budget; replaying a sent email double-sends it) and answer 400. Pending/failed rows only.',
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { description: '{ success, status } — resolved on success' },
+    400: { description: 'Provider not auto-replayable, or row discarded', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such row', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Row already resolved', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/webhook-dead-letter/{id}/resolve',
+  tags: ['Admin'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Acknowledge one dead-letter row as handled (master/owner only)',
+  description: 'The human path for the deliberately non-replayable sources (DEADLETTER-UI.1): records that the event was dealt with outside this table (resolved) or needs no action (discarded). Stamps resolved_at either way — that is what removes the row from the integration-health backlog count. Pending/failed rows only; no payload processing of any kind.',
+  request: {
+    params: z.object({ id: z.string() }),
+    body: { content: { 'application/json': { schema: z.object({ status: z.enum(['resolved', 'discarded']).optional().openapi({ description: 'Default resolved' }) }).openapi('DeadLetterResolve') } } },
+  },
+  responses: {
+    200: { description: '{ success, data: { id, status } }' },
+    400: { description: 'Invalid target status', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'No such row', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Row already resolved/discarded', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
   path: '/api/admin/tenant-domains',
   tags: ['Admin'],
   security: [{ CookieAuth: [] }],
@@ -2358,6 +2905,22 @@ registry.registerPath({
     200: { description: 'Per-platform sync results' },
     403: { description: 'Forbidden — admin role at this location required', content: { 'application/json': { schema: ErrorResponse } } },
     404: { description: 'Location not found', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// Glofox trainer-id reference list (STUDIO-KPI.4)
+registry.registerPath({
+  method: 'get',
+  path: '/api/locations/{id}/glofox-trainers',
+  tags: ['Locations'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Trainer ids seen in the Glofox timetable + their resolved names',
+  description: 'STUDIO-KPI.4 — distinct trainer ids from the last 28 days of class_occurrences with how each resolves (operator override from settings.glofox.trainer_names, the Glofox API, or unresolved). Powers the Trainer-names reference list in the Glofox settings tab. Master/owner/manager only.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ trainers: [{ id, name, source, classes }], windowDays }' },
+    400: { description: 'Glofox not configured on this location', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 
@@ -2671,6 +3234,10 @@ registry.registerPath({
             active: z.boolean().optional(),
             monthly_contractor_budget_eur: z.number().min(0).nullish(),
             invoices_inbound_slug: z.string().nullish(),
+            // DEPRECATED (mig 485) — superseded by email_mailboxes. Still
+            // accepted so an existing integration does not break, but the CRM
+            // no longer sends it: add the studio's addresses with
+            // POST /api/locations/{id}/email/mailboxes instead.
             email_inbox_reply_to: z.string().email().nullish(),
           }).openapi('LocationCreate'),
         },
@@ -3834,6 +4401,51 @@ registry.registerPath({
   },
 })
 
+// ZOOMOPS.1 — Zoom contact sync operator surface: /settings/integrations/zoom-contacts
+registry.registerPath({
+  method: 'post',
+  path: '/api/integrations/zoom-contacts/run',
+  tags: ['Settings'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Trigger the Zoom Phone contact sync — preview, a real run, or a guard override',
+  description:
+    'Calls the same runZoomContactSync() the nightly cron does, recorded to zoom_sync_runs with trigger=manual. ' +
+    'Three permission tiers on one route: a PREVIEW (`dry:true`, `force` absent/false) writes nothing to Zoom and ' +
+    'is open to any member of the synced organisation (ZOOM_SYNC_ORGANIZATION_ID) — manager and up; a REAL run ' +
+    '(`dry:false`) and the deletion-guard OVERRIDE (`force:true`, which can ride alongside either dry value) both ' +
+    'require the integrations_zoom_manage permission (owner/master by default). Membership in the synced org is ' +
+    "checked via assertOrganizationAccess (the caller's location/org-admin assignments) — deliberately NOT the " +
+    "caller's currently-active location, so switching the location dropdown can't flip access. `limit` caps how " +
+    'many pending writes get enqueued to QStash this run (creates first); omitted, a real run enqueues everything ' +
+    '— the settings-page UI defaults this control to 200 rather than blank so the unlimited path is chosen, never ' +
+    "defaulted into. The guard's suppressed-delete sample is redacted to a bare count in the response for a caller " +
+    'without integrations_zoom_manage; the confirmation UI reads the real numbers from the stored zoom_sync_runs ' +
+    'row instead. The cron route is unchanged and keeps its own CRON_SECRET guard — this is an addition, not a ' +
+    'replacement, so an authenticated browser session can never become a way around cron auth.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            dry: z.boolean().optional().openapi({ description: 'Preview only — computes the diff, enqueues nothing. Open to any org member.' }),
+            limit: z.number().positive().optional().openapi({ description: 'Cap on jobs enqueued this run (creates first). Omitted = unbounded.' }),
+            force: z.boolean().optional().openapi({ description: 'Bypass the deletion guard for this run. Requires integrations_zoom_manage regardless of dry.' }),
+          }).openapi('ZoomContactsRunRequest'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Sync outcome — counts, enqueued, guard verdict (sample redacted without integrations_zoom_manage), and stats',
+      content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('ZoomContactsRunResponse') } },
+    },
+    400: { description: 'Malformed JSON body, or limit not a positive number', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthenticated', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Outside the synced organisation, or a real run/guard override attempted without integrations_zoom_manage', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 // INTEG hub inline #4 Phase 2 — in-hub Manage (write-only) for the
 // credential-bearing `locations` providers.
 registry.registerPath({
@@ -4300,6 +4912,353 @@ registry.registerPath({
     400: { description: 'Validation failed, unknown key, or empty patch', content: { 'application/json': { schema: ErrorResponse } } },
     401: { description: 'Unauthorized — no host session', content: { 'application/json': { schema: ErrorResponse } } },
     500: { description: 'Database update failed', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// Equipment Maintenance (EQUIP-MAINT.1) — register, types + checklists,
+// per-location inspection weekday. PR 1: no inspection-run routes yet.
+// ============================================================================
+
+const EquipmentChecklistItem = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  order: z.number().int().optional(),
+}).openapi('EquipmentChecklistItem')
+
+const EquipmentSettingsUpdate = z.object({
+  inspectionDayOfWeek: z.number().int().min(0).max(6),
+  enabled: z.boolean(),
+}).openapi('EquipmentSettingsUpdate')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/equipment/settings',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: "Get the location's equipment inspection settings",
+  description: 'The inspection weekday + feature switch for the active location, or null data if never configured. Readable by anyone with equipment_inspect.',
+  responses: {
+    200: { description: 'Settings, or null if unconfigured', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough().nullable()).openapi('EquipmentSettingsResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'put',
+  path: '/api/equipment/settings',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: "Upsert the location's equipment inspection settings (equipment_admin)",
+  description: 'Sets the studio inspection weekday (Postgres dow, 0=Sunday) and whether the feature is enabled at this location. equipment_admin only.',
+  request: { body: { content: { 'application/json': { schema: EquipmentSettingsUpdate } } } },
+  responses: {
+    200: { description: 'Settings saved', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentSettingsUpdateResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — equipment_admin only', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+const EquipmentTypeCreate = z.object({
+  name: z.string().min(1).max(100),
+  intervalWeeks: z.number().int().min(1).max(52),
+  items: z.array(EquipmentChecklistItem),
+}).openapi('EquipmentTypeCreate')
+
+const EquipmentTypeUpdate = z.object({
+  name: z.string().min(1).max(100).optional(),
+  intervalWeeks: z.number().int().min(1).max(52).optional(),
+  items: z.array(EquipmentChecklistItem).optional(),
+  enabled: z.boolean().optional(),
+}).openapi('EquipmentTypeUpdate')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/equipment/types',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List equipment types for the active location',
+  description: 'Enabled types only by default; pass ?includeDisabled=1 for the full list (needed to re-enable a soft-disabled type). Readable by anyone with equipment_inspect — the walk-round needs the checklist items.',
+  request: { query: z.object({ includeDisabled: z.enum(['0', '1']).optional() }) },
+  responses: {
+    200: { description: 'Equipment types', content: { 'application/json': { schema: SuccessResponse(z.array(z.object({}).passthrough())).openapi('EquipmentTypeListResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/equipment/types',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Create an equipment type (equipment_admin)',
+  description: 'Checklist items are validated + renumbered by order from array position (validateItems), so a stale client-sent order can never desync the list. equipment_admin only.',
+  request: { body: { content: { 'application/json': { schema: EquipmentTypeCreate } } } },
+  responses: {
+    200: { description: 'Type created', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentTypeCreateResponse') } } },
+    400: { description: 'Invalid checklist items (empty, duplicate id, over-long label, …)', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — equipment_admin only', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'An equipment type with that name already exists at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/equipment/types/{id}',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Edit an equipment type (equipment_admin)',
+  description: 'Changing intervalWeeks deliberately does NOT touch existing equipment.next_due_on — it applies from the next roll-forward. 404-not-403 detail-route posture on a type at another location. equipment_admin only.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: EquipmentTypeUpdate } } },
+  },
+  responses: {
+    200: { description: 'Type updated', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentTypeUpdateResponse') } } },
+    400: { description: 'Invalid checklist items, or an empty patch', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'An equipment type with that name already exists at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/equipment/types/{id}',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Soft-disable an equipment type (equipment_admin)',
+  description: 'Sets enabled:false rather than deleting — equipment.type_id is `on delete restrict`, so a hard delete would 500 once assets exist. Refused with 409 while any non-retired asset still uses the type. 404-not-403 detail-route posture.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Type disabled', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentTypeDisableResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Equipment still uses this type — retire or re-type it first', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+const EquipmentCreate = z.object({
+  typeId: z.string().min(1),
+  name: z.string().min(1).max(100),
+  assetTag: z.string().max(50).nullish(),
+  serialNumber: z.string().max(100).nullish(),
+  manufacturer: z.string().max(100).nullish(),
+  zone: z.string().max(100).nullish(),
+  purchaseDate: isoDate.nullish(),
+  notes: z.string().max(2000).nullish(),
+  firstDueOn: isoDate.nullish(),
+}).openapi('EquipmentCreate')
+
+const EquipmentUpdate = z.object({
+  typeId: z.string().min(1).optional(),
+  name: z.string().min(1).max(100).optional(),
+  assetTag: z.string().max(50).nullish(),
+  serialNumber: z.string().max(100).nullish(),
+  manufacturer: z.string().max(100).nullish(),
+  zone: z.string().max(100).nullish(),
+  purchaseDate: isoDate.nullish(),
+  notes: z.string().max(2000).nullish(),
+  nextDueOn: isoDate.optional(),
+  status: z.enum(['in_service', 'out_of_service']).optional(),
+}).openapi('EquipmentUpdate')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/equipment',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'List the equipment register for the active location',
+  description: 'Non-retired assets by default; pass ?includeRetired=1 for the full history view. Each row embeds its equipment_types (id, name, interval_weeks). Readable by anyone with equipment_inspect.',
+  request: { query: z.object({ includeRetired: z.enum(['0', '1']).optional() }) },
+  responses: {
+    200: { description: 'Equipment rows', content: { 'application/json': { schema: SuccessResponse(z.array(z.object({}).passthrough())).openapi('EquipmentListResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/equipment',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Register a new equipment asset (equipment_admin)',
+  description: 'next_due_on is computed server-side (firstDueOn) from the location inspection weekday — never trusted from the client — unless an operator supplies an explicit firstDueOn. The type must exist, belong to this location, and be enabled. equipment_admin only.',
+  request: { body: { content: { 'application/json': { schema: EquipmentCreate } } } },
+  responses: {
+    200: { description: 'Asset registered', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentCreateResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — equipment_admin only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Equipment type not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Type is disabled, or the asset tag is already in use at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/equipment/{id}',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Get a single equipment asset',
+  description: 'Embeds its equipment_types (id, name, interval_weeks, items) for use as the checklist snapshot source. 404-not-403 detail-route posture on an asset at another location.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Equipment asset', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentDetailResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/equipment/{id}',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Edit an equipment asset, or manually change its status (equipment_admin)',
+  description: 'Re-typing deliberately leaves next_due_on alone — the new checklist applies to the next inspection, its interval from the next roll-forward. A manual status change also clears out_of_service_issue_id, so a later resolve of an unrelated issue on this asset is a no-op rather than a surprise return-to-service. Refused with 409 on a retired asset. equipment_admin only.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: EquipmentUpdate } } },
+  },
+  responses: {
+    200: { description: 'Asset updated', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentUpdateResponse') } } },
+    400: { description: 'Empty patch', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Forbidden — equipment_admin only', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing asset or missing new type, at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Asset is retired, or the asset tag is already in use at this location', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/equipment/{id}',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Retire an equipment asset (equipment_admin)',
+  description: 'Sets status:"retired" rather than hard-deleting — equipment_inspections references the asset with `on delete restrict`, so a hard delete would 500 once it has inspection history. Clears out_of_service_issue_id. 404-not-403 detail-route posture.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'Asset retired', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentRetireResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+// ============================================================================
+// Equipment Maintenance (EQUIP-MAINT.2) — the inspection run: the due
+// list, draft create-or-resume, tick, and submit. PR 1 (above)
+// registered the register/types/settings routes; these four complete
+// the walk-round.
+// ============================================================================
+
+const InspectionTick = z.object({
+  itemId: z.string().min(1),
+  state: z.enum(['pass', 'fail']),
+  note: z.string().trim().max(500).optional().nullable(),
+}).openapi('InspectionTick')
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/equipment/due',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: "What's due for inspection at the active location",
+  description: 'Computed, not pre-generated — one indexed comparison against equipment.next_due_on, plus the assets currently out of service. `enabled:false` (with empty due/outOfService lists) when inspections have never been configured, or have been switched off, for this location. Readable by anyone with equipment_inspect.',
+  responses: {
+    200: { description: 'Due list + out-of-service assets', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentDueResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/equipment/{id}/inspection',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: "Create-or-resume the inspection draft for an asset's current cycle (equipment_inspect)",
+  description: 'Lazily created on first open, snapshotting the type\'s checklist so a mid-walk-round type edit can\'t shift state — so an abandoned walk-round leaves a draft with ticks, not nothing. Idempotent by construction: unique (equipment_id, due_on) means a double-tap returns the same draft rather than minting a second. 404-not-403 on a cross-location asset.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: 'The draft (newly created, or resumed)', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentInspectionDraftResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing asset or its type, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Asset is not in service, the inspection for this cycle has already been submitted, or the type has no checklist items', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'patch',
+  path: '/api/equipment/inspections/{id}',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Record one pass/fail mark on a draft inspection (equipment_inspect)',
+  description: "One item per request, so a dropped connection loses one tick rather than the whole walk-round. A fail requires a non-empty note. itemId must belong to this run's snapshot — a stale client can't write keys that no longer exist. 404-not-403 on a cross-location inspection.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: InspectionTick } } },
+  },
+  responses: {
+    200: { description: 'The updated inspection', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentInspectionTickResponse') } } },
+    400: { description: 'itemId not part of this snapshot, or a fail submitted with no note', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'This inspection has already been submitted', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/equipment/inspections/{id}/submit',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Submit a completed inspection (equipment_inspect)',
+  description: 'Ordering is load-bearing server-side: the fault issue (with photos) is created FIRST, then the inspection is marked submitted and the asset rolled forward — a failed issue insert leaves the inspection in draft so the inspector can retry with ticks intact. An all-pass run raises no issue; a run with any fail raises exactly one issues row carrying equipment_id and — when takeOutOfService is set — takes the asset off the floor until that issue resolves. Photos upload only here, never on the draft, since the storage path is namespaced by the issue id.',
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: {
+      content: {
+        'multipart/form-data': {
+          schema: z.object({
+            results:          z.string().openapi({ description: 'JSON-encoded { [itemId]: { state, note?, at, by } } — the full local results map, submitted alongside the individual PATCH ticks' }),
+            note:              z.string().optional().openapi({ description: 'Overall note, appended to the fault report if any check failed' }),
+            takeOutOfService:  z.enum(['true', 'false']).optional().openapi({ description: 'Ignored server-side unless at least one item failed' }),
+            photo_0:           z.any().optional().openapi({ type: 'string', format: 'binary' }),
+            photo_1:           z.any().optional().openapi({ type: 'string', format: 'binary' }),
+            photo_2:           z.any().optional().openapi({ type: 'string', format: 'binary' }),
+          }).openapi('EquipmentInspectionSubmitBody'),
+        },
+      },
+    },
+  },
+  responses: {
+    200: { description: 'Submitted — the inspection row, the raised issueId (if any), nextDueOn, and whether the asset was taken out of service', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentInspectionSubmitResponse') } } },
+    400: { description: 'Unmarked items (a `missing` array is included), malformed results JSON, a rejected photo, or an invalid inspection interval on the type', content: { 'application/json': { schema: ErrorResponse } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found (missing, or at another location)', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'This inspection has already been submitted', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'Photo upload failed, or the issue insert failed (the inspection stays draft, ticks intact)', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/equipment/inspections',
+  tags: ['Equipment Maintenance'],
+  security: [{ CookieAuth: [] }],
+  summary: 'The compliance log: every submitted inspection at the active location, newest first (equipment_admin)',
+  description: 'The view you put in front of an insurer or an H&S auditor — gated on equipment_admin rather than equipment_inspect because it is an oversight surface, not an operational one. Paginated with `limit`/`offset` (`limit` capped at 100): unlike the register, this table grows without bound (roughly 1,500 rows/year for a 60-asset fortnightly-cycle studio) and every `.select()` caps at 1000 rows regardless of `.limit()`. Optional `equipmentId` narrows the log to one asset\'s history. No CSV export — on-screen only, per the operator.',
+  request: {
+    query: z.object({
+      limit: z.coerce.number().int().min(1).max(100).optional().openapi({ description: 'Default 50, capped at 100' }),
+      offset: z.coerce.number().int().min(0).optional().openapi({ description: 'Default 0' }),
+      equipmentId: uuidLike.optional(),
+    }),
+  },
+  responses: {
+    200: { description: 'A page of submitted inspections, newest first, with total for pagination', content: { 'application/json': { schema: SuccessResponse(z.object({}).passthrough()).openapi('EquipmentInspectionLogResponse') } } },
+    401: { description: 'Unauthorized', content: { 'application/json': { schema: ErrorResponse } } },
   },
 })
 

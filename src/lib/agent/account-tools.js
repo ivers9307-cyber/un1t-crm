@@ -22,6 +22,7 @@
 // formatRecentAttendance) are unit-tested; the executor does the IO.
 
 import { formatDublinClassTime } from './dublin-format'
+import { escapeLikePattern } from '../like-escape'
 
 // ── Anthropic tool definitions ──────────────────────────────────────
 export const ACCOUNT_TOOLS = [
@@ -381,17 +382,11 @@ async function contactsForSender(db, { contactId, locationId }) {
   return pool
 }
 
-/**
- * Escape the LIKE wildcards (% and _) in customer-supplied text before it
- * goes into .ilike. Pure. Underscores are common in real email addresses, and
- * unescaped they match ANY character — with the old .limit(1) that could fetch
- * a different member's row as the single candidate and fail a legitimate
- * verification; '%' scanned broadly. Never a bypass (emailPathVerifies
- * re-checks strict equality), but the query must still mean what it says.
- */
-export function escapeLikePattern(s) {
-  return String(s ?? '').replace(/[\\%_]/g, (c) => `\\${c}`)
-}
+// Re-exported for the callers (and tests) that already import it from here.
+// The definition moved to src/lib/like-escape.js on 2026-08-07 once the same
+// class of bug turned up in the inbound-email webhook and five other lookups —
+// this was the first place it was found, not the only place it applies.
+export { escapeLikePattern }
 
 // Contacts at this location whose email the customer just supplied. Escaped
 // pattern + a small pool (not .limit(1)) so a wildcard-ish input can never

@@ -12,7 +12,8 @@ import { redirect } from 'next/navigation'
 import {
   FileSignature, Tv, Download, BookOpen, ChevronRight,
   Award, ScrollText, Plug, LayoutGrid, Radio, Smartphone,
-  CheckSquare, Globe, BadgeEuro, Building2, Dumbbell,
+  CheckSquare, Globe, BadgeEuro, Building2, Dumbbell, HardDrive,
+  AlertTriangle,
 } from 'lucide-react'
 import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
@@ -71,6 +72,12 @@ export default async function AdminHubPage() {
     // coaches on shift. Master + owner write; anyone with admin
     // access can browse to see the current layout.
     { ownerOrMasterOnly: true,    href: '/admin/checklists',        icon: CheckSquare,   title: 'Checklists',          desc: 'Role + day-of-week checklists for coaches. Items shown on the mobile app during their shift.' },
+    // FLEET-CMD.1 — keyed on fleet_restart, the SAFE tier, so a coach who
+    // can restart a frozen board can find the page. Destructive actions are
+    // gated per-action behind fleet_admin inside it.
+    { perm: 'fleet_restart',      href: '/admin/fleet',             icon: HardDrive,     title: 'Studio devices (Pis)', desc: 'Restart a frozen TV, reboot or power down a studio Raspberry Pi, redeploy the HR bridge.' },
+    // DEADLETTER-UI.1 — owner+master, matching the page and API gates.
+    { ownerOrMasterOnly: true,    href: '/admin/webhook-dead-letter', icon: AlertTriangle, title: 'Webhook dead letters', desc: 'Captured events that failed to process — unroutable inbound email, exhausted bounces and unsubscribes, unfiled sent mail. Review and resolve.' },
   ].filter((t) => {
     if (master) return true
     if (t.ownerOrMasterOnly) return ownerOrMaster

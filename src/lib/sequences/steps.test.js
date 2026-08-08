@@ -579,7 +579,7 @@ describe('send-step return ids are row uuids, never provider ids (re-send loop g
     const out = await steps.sendWhatsappStep(sendStepDb(), {
       step: { id: 'step-1', whatsapp_template_id: 't1', whatsapp_variables: {} },
       sequence: { id: 'seq-1', location_id: 'loc-1' },
-      contact: { id: 'c1', wa_phone: '353860000000', whatsapp_marketing: true, wa_status: 'active' },
+      contact: { id: 'c1', wa_phone: '353860000000', whatsapp_marketing: true, wa_status: 'active', contact_location_preferences: [{ location_id: 'loc-1', whatsapp_marketing: true, email_marketing: true, sms_marketing: true }] },
     })
     expect(out).toBe('aaaaaaaa-0000-0000-0000-000000000001')
     expect(String(out)).not.toContain('wamid')
@@ -593,7 +593,7 @@ describe('send-step return ids are row uuids, never provider ids (re-send loop g
     const out = await steps.sendWhatsappStep(sendStepDb({ msgRowResult: { data: null, error: { message: 'insert failed' } } }), {
       step: { id: 'step-1', whatsapp_template_id: 't1', whatsapp_variables: {} },
       sequence: { id: 'seq-1', location_id: 'loc-1' },
-      contact: { id: 'c1', wa_phone: '353860000000', whatsapp_marketing: true, wa_status: 'active' },
+      contact: { id: 'c1', wa_phone: '353860000000', whatsapp_marketing: true, wa_status: 'active', contact_location_preferences: [{ location_id: 'loc-1', whatsapp_marketing: true, email_marketing: true, sms_marketing: true }] },
     })
     expect(out).toBeNull()
   })
@@ -629,6 +629,8 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
   const consentedContact = {
     id: 'c1', location_id: 'loc-1', wa_phone: '353860000000',
     whatsapp_marketing: true, wa_status: 'active',
+    // LOCCOMMS.5 — steps gate on the row for sequence.location_id.
+    contact_location_preferences: [{ location_id: 'loc-1', email_marketing: true, sms_marketing: true, whatsapp_marketing: true }],
   }
 
   function consentDb({ failActivityInsert = false } = {}) {
@@ -680,11 +682,17 @@ describe('sendWhatsappStep — send-time consent gate + graceful skips (COMMS-AU
     expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/whatsapp phone/i)
   })
 
-  it('whatsapp_marketing not true → recorded skip (mirrors the broadcast reachability gate)', async () => {
+  it('per-location whatsapp consent not true → recorded skip (mirrors the broadcast gate)', async () => {
+    // LOCCOMMS.5 — the gate moved from the denormalised global column to the
+    // row for sequence.location_id. Same intent, expressed where consent now
+    // actually lives.
     for (const whatsapp_marketing of [false, null, undefined]) {
       const db = consentDb()
       const out = await steps.sendWhatsappStep(db, {
-        step, sequence, contact: { ...consentedContact, whatsapp_marketing },
+        step, sequence, contact: {
+          ...consentedContact,
+          contact_location_preferences: [{ location_id: 'loc-1', whatsapp_marketing, email_marketing: true, sms_marketing: true }],
+        },
       })
       expect(out).toBeNull()
       expect(db.activityInserts).toHaveLength(1)
@@ -756,6 +764,8 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
   const consentedContact = {
     id: 'c9', location_id: 'loc-1', email: 'a@b.ie',
     email_marketing: true, email_status: 'active',
+    // LOCCOMMS.5 — steps gate on the row for sequence.location_id.
+    contact_location_preferences: [{ location_id: 'loc-1', email_marketing: true, sms_marketing: true, whatsapp_marketing: true }],
   }
 
   function emailDb({ failActivityInsert = false } = {}) {
@@ -806,12 +816,16 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     expect(db.rpcCalls).toContain('increment_step_sent')
   })
 
-  it('email_marketing not true → recorded skip (campaign sends gate on email_marketing=true; sequences must match)', async () => {
+  it('per-location email consent not true → recorded skip (broadcast and sequence paths must agree)', async () => {
+    // LOCCOMMS.5 — see the WhatsApp equivalent above.
     for (const email_marketing of [false, null, undefined]) {
       const db = emailDb()
       const out = await steps.sendEmailStep(db, {
         enrollment: { id: 'e9' }, step, sequence,
-        contact: { ...consentedContact, email_marketing },
+        contact: {
+          ...consentedContact,
+          contact_location_preferences: [{ location_id: 'loc-1', email_marketing, whatsapp_marketing: true, sms_marketing: true }],
+        },
       })
       expect(out).toBeNull()
       expect(db.activityInserts).toHaveLength(1)
@@ -821,8 +835,8 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
   })
 
-  it.each(['bounced', 'complained', 'unsubscribed'])(
-    'email_status %s → recorded skip, not an error (mid-sequence unsubscribe must not pause the enrolment)',
+  it.each(['bounced', 'complained'])(
+    'email_status %s → recorded skip, not an error (a mid-sequence bounce must not pause the enrolment)',
     async (email_status) => {
       const db = emailDb()
       const out = await steps.sendEmailStep(db, {
@@ -835,6 +849,20 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
       expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toContain(email_status)
     },
   )
+
+  it('email_status unsubscribed (retired, mig 492) does NOT suppress — the per-location gate above is the consent check', async () => {
+    // The value is reputation-only residue; a contact carrying it who holds
+    // per-location consent (e.g. re-opted-in at this location) must get the
+    // step. Suppressing here recreated the cross-location over-blocking mig
+    // 492 removed.
+    const db = emailDb()
+    const out = await steps.sendEmailStep(db, {
+      enrollment: { id: 'e9' }, step, sequence,
+      contact: { ...consentedContact, email_status: 'unsubscribed' },
+    })
+    expect(out).toBe('cccccccc-0000-0000-0000-000000000003')
+    expect(pm.sendMarketingEmail).toHaveBeenCalledTimes(1)
+  })
 
   it('email_suppressed_at set (engagement hygiene, EMAIL-HYGIENE.1) → recorded skip, mirrors the campaign audience gate', async () => {
     const db = emailDb()

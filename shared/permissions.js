@@ -33,7 +33,7 @@
 export const WEB_PERMISSIONS = Object.freeze([
   // — Dashboards (cross-platform, see CROSS_PLATFORM_DASHBOARD_KEYS) —
   { key: 'dashboard_personal', label: 'Dashboard · Today',     hint: 'Personal home view — your shifts, swaps, inbox' },
-  { key: 'dashboard_studio',   label: 'Dashboard · Studio',    hint: 'Operational view — leads, members, approvals' },
+  { key: 'dashboard_studio',   label: 'Dashboard · Studio',    hint: 'Web: revenue KPI scorecard by location · mobile: ops view' },
   { key: 'dashboard_business', label: 'Dashboard · Business',  hint: 'Owner-level — pipeline, won deals, payroll' },
   // ADS-REPORT.0 — paid-ad performance dashboard (/dashboard/ads).
   // Desktop analytics surface, like the other radar/analytics
@@ -96,6 +96,12 @@ export const WEB_PERMISSIONS = Object.freeze([
   // future studio-ops actions (alarm arm/disarm, camera live view,
   // etc.) will land under the same gate.
   { key: 'studio_management', label: 'Studio Management',       hint: 'Remote door unlock + future on-site operations. Requires UniFi Access configured for the location.' },
+  // CLASS-TIMER-PERM.1 — split off `studio_management` so coaches on
+  // shift can run the class interval timer without also holding door
+  // unlock / AC control. Cross-platform (same key gates the web page,
+  // the mobile timer screen and every /api/timer/* route). ON for
+  // every role by default — revoke per user/role via the Roles tab.
+  { key: 'class_timer',       label: 'Class timer',             hint: 'Start, pause and stop the class interval timer on the studio TV, including quick-add presets and timer templates.' },
   // TAPO-T1.4 — Tapo plug/switch control. Registry, per-device
   // schedules (fixed windows + class-linked power), and manual
   // overrides live at /automations/devices. Web-only until the
@@ -164,6 +170,7 @@ export const WEB_PERMISSIONS = Object.freeze([
   { key: 'approvals_shift_swaps',         group: 'approvals', label: '… Shift swaps',          hint: 'Approve shift-swap requests. Manager + head coach + owner + master by default.' },
   { key: 'approvals_rosters',             group: 'approvals', label: '… Roster approvals',     hint: 'Approve over-budget draft rosters. Owner + master by default.' },
   { key: 'approvals_hyrox_sessions',      group: 'approvals', label: '… Hyrox sessions',       hint: 'Review and approve AI-generated Hyrox Training Club sessions before they publish to the studio TV.' },
+  { key: 'approvals_offer_purchases',     group: 'approvals', label: '… Offer sales',          hint: 'See paid sale-offer purchases and mark them fulfilled once the member is set up in Glofox. Manager + head coach + owner + master by default.' },
   // AUTOMATIONS-HUB.1 — operator surface for toggling per-location
   // automations (e.g. auto-creating new leads in Glofox). Web-only;
   // no mobile counterpart (operator/admin surface only). Master +
@@ -181,6 +188,35 @@ export const WEB_PERMISSIONS = Object.freeze([
   // handler inbox + claim/resolve actions. Master + owner only by
   // default per the "All owners at the studio" routing decision.
   { key: 'issues_inbox', label: 'Issues',                       hint: 'Handler inbox for staff-reported issues at the studio (broken kit, cleaning, safety). Master + owner only by default; the submitter surface is open to all staff.' },
+  // EMAIL-TICKET.2 — the studio email inbox. NOT the same as `email`, which
+  // gates marketing/campaign email. Two levels, like approvals_inbox: this key
+  // gates the surface, and a row in email_mailbox_access (mig 485) gates each
+  // individual account within it. Holding this key alone shows nothing — a
+  // studio with no mailboxes, or a person with no grants, gets no inbox.
+  { key: 'email_inbox', label: 'Email inbox',
+    hint: 'Ticketed inbox for the studio email accounts (accounts@, sales@, studio@). Access to each individual account is granted separately per person. Master + owner + manager by default.' },
+  // EQUIP-MAINT.1 — equipment maintenance. Two keys, deliberately
+  // split: `equipment_admin` is the setup surface (register, types,
+  // intervals, inspection weekday) and is owner + master only;
+  // `equipment_inspect` is doing the walk-round and is universal, the
+  // same way `issues` submission is open to all staff.
+  { key: 'equipment_admin',   label: 'Equipment setup',      hint: 'Manage the equipment register, define equipment types with their inspection checklists and intervals, and set the studio inspection day. Owner + master only by default.' },
+  { key: 'equipment_inspect', label: 'Equipment inspections', hint: 'See what equipment is due for inspection and complete the checklist. Universal by default — turning this OFF removes a person’s ability to run inspections.' },
+  // FLEET-CMD.1 — remote actions on the studio Raspberry Pis. Two keys,
+  // split by BLAST RADIUS rather than seniority, the same way
+  // equipment_admin/equipment_inspect splits setup from the walk-round.
+  //
+  // `fleet_restart` covers the actions that cannot break anything: restart
+  // the kiosk browser (5s, the launcher relaunches it) and read logs. It is
+  // on for anyone on shift because the person who notices a frozen
+  // leaderboard is a coach standing in the room, and the alternative is
+  // messaging Richard and waiting for a laptop.
+  //
+  // `fleet_admin` covers what can strand a device — reboot, shutdown (which
+  // needs a physical trip to undo; a Pi has no usable wake-on-LAN over WiFi)
+  // and redeploying the bridge service. Owner + master only.
+  { key: 'fleet_restart', label: 'Studio devices — restart', hint: 'Restart a frozen TV/kiosk browser and read device logs. Safe by design: the worst outcome is a screen blinking. On by default for anyone on shift.' },
+  { key: 'fleet_admin',   label: 'Studio devices — power',   hint: 'Reboot or shut down a studio Raspberry Pi and redeploy the HR bridge. Shutdown requires someone to physically power-cycle the device afterwards. Owner + master only by default.' },
   // INVOICES-QUEUE.1 (mig 185) — bookkeeper flag. Gates the
   // analyse + send-to-Xero actions inside /invoices and unlocks a
   // dedicated Bookkeeper queue tab in /approvals. Owners can still
@@ -209,6 +245,18 @@ export const WEB_PERMISSIONS = Object.freeze([
   // it off per location via Location Settings if they don't run
   // marketing for that studio (e.g. CCF Autos).
   { key: 'landing_page', label: 'Landing page editor',          hint: 'Edit the public marketing page at /welcome. Includes WYSIWYG editor + sidebar settings form.' },
+  // ZOOMOPS.1 — operator controls for the Zoom Phone contact sync at
+  // /settings/integrations/zoom-contacts (run history, the report of
+  // contacts the sync can't use, and preview / run / guard-override
+  // buttons). Deliberately NOT checked for a preview (dry: true) — a
+  // preview writes nothing to Zoom, so it's open to anyone who can reach
+  // the settings page. Running the sync for real, and especially
+  // overriding its deletion guard, can add or remove thousands of
+  // entries from the shared company phone directory, so both of those
+  // are gated on this key. Owner + master by default. Web-only (see
+  // WEB_ONLY_OK in scripts/check-mobile-parity.mjs) — the destructive
+  // controls need a confirmation dialog the mobile app has no home for.
+  { key: 'integrations_zoom_manage', label: 'Manage the Zoom phone directory sync', hint: 'Run the Zoom Phone contact sync for real, and override its deletion guard. Preview is open to anyone who can reach the settings page; running and the guard override are owner + master only.' },
 ])
 
 // APPROVALS-PERCAT.1 — provider key → per-category permission key. The
@@ -222,6 +270,7 @@ export const APPROVAL_CATEGORY_PERMISSION = Object.freeze({
   shift_swaps: 'approvals_shift_swaps',
   rosters: 'approvals_rosters',
   hyrox_sessions: 'approvals_hyrox_sessions',
+  offer_purchases: 'approvals_offer_purchases',
 })
 
 // Ordered list of the six per-category permission keys (matches
@@ -244,8 +293,13 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: true,
     pulse_admin: true,
     events: true, bookings: true, races: true,
-    email: true, whatsapp: true, sms: true,
-    schedule: true, attendance_reports: true, assistant: true, studio_management: true,
+    // EMAIL-TICKET.2 — email_inbox is deliberately coarse: it only gates
+    // the inbox surface. The real control is the per-account grant in
+    // email_mailbox_access (mig 485) — holding this key alone shows
+    // nothing until a studio has a mailbox and the person has a grant
+    // on it, the same two-level shape as approvals_inbox.
+    email: true, email_inbox: true, whatsapp: true, sms: true,
+    schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
     device_control: true,
     // Studio Management children (STUDIO-GROUP.1) — master has all.
     contracts: true, tv_displays: true, glofox_import: true, preferences_import: true,
@@ -256,14 +310,18 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     accounting_hub: true,
     approvals_contractor_invoices: true, approvals_fte_expenses: true, approvals_agent_requests: true,
     approvals_time_off: true, approvals_shift_swaps: true, approvals_rosters: true, approvals_hyrox_sessions: true,
+    approvals_offer_purchases: true,
     automations: true,
     challenges: true,
     issues_inbox: true,
+    equipment_admin: true, equipment_inspect: true,
+    fleet_restart: true, fleet_admin: true,
     bookkeeper: true,
     contact_linking: true,
     consultations: true,
     settings: true,
     landing_page: true,
+    integrations_zoom_manage: true,
   },
   staff: {
     dashboard_personal: true, dashboard_studio: false, dashboard_business: false, dashboard_ads: false,
@@ -273,8 +331,8 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: false,                   // retention analytics — not a staff surface
     pulse_admin: false,                            // Pulse operator hub — retention oversight, not a staff surface
     events: true, bookings: true, races: true,    // race-day starts/finishes are a front-of-house duty
-    email: false, whatsapp: false, sms: false,
-    schedule: true, attendance_reports: false, assistant: false, studio_management: false,
+    email: false, email_inbox: false, whatsapp: false, sms: false,
+    schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true,
     device_control: false,                         // on-site device control — not a staff surface
     // Studio Management children — all off for staff.
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
@@ -285,14 +343,18 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     accounting_hub: false,                         // bookkeeping oversight — master + owner only
     approvals_contractor_invoices: false, approvals_fte_expenses: false, approvals_agent_requests: false,
     approvals_time_off: false, approvals_shift_swaps: false, approvals_rosters: false, approvals_hyrox_sessions: false,  // staff don't approve anything
+    approvals_offer_purchases: false,
     automations: false,                             // operator surface — not a staff concern
     challenges: false,                              // operator challenge admin — not a staff concern
     issues_inbox: false,                            // staff submit; owner + master handle
+    equipment_admin: false, equipment_inspect: true, // setup is owner + master; anyone on shift runs a walk-round
+    fleet_restart: true, fleet_admin: false,   // a coach on shift can restart a frozen board; nothing destructive
     bookkeeper: false,                              // accountant sign-off — never the default
     contact_linking: false,                         // admin-level contact dedup action
     consultations: false,                            // coach/web surface — off for staff
     settings: false,
     landing_page: false,                          // marketing copy isn't a staff concern
+    integrations_zoom_manage: false,               // owner + master only — destructive directory writes
   },
   // Reception (2026-07) — front-of-house desk role. Staff-level
   // access plus the WhatsApp inbox (answering member messages is a
@@ -307,8 +369,8 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: false,
     pulse_admin: false,
     events: true, bookings: true, races: true,       // front desk runs the booking desk
-    email: false, whatsapp: true, sms: false,        // WhatsApp inbox is the front-desk channel
-    schedule: true, attendance_reports: false, assistant: false, studio_management: false,
+    email: false, email_inbox: false, whatsapp: true, sms: false,        // WhatsApp inbox is the front-desk channel
+    schedule: true, attendance_reports: false, assistant: false, studio_management: false, class_timer: true,
     device_control: false,
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
     presentations: false,
@@ -318,14 +380,18 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     accounting_hub: false,                         // bookkeeping oversight — master + owner only
     approvals_contractor_invoices: false, approvals_fte_expenses: false, approvals_agent_requests: false,
     approvals_time_off: false, approvals_shift_swaps: false, approvals_rosters: false, approvals_hyrox_sessions: false,
+    approvals_offer_purchases: false,
     automations: false,
     challenges: false,
     issues_inbox: false,
+    equipment_admin: false, equipment_inspect: true, // front-of-house is on shift too
+    fleet_restart: true, fleet_admin: false,   // front-of-house stands next to the TVs
     bookkeeper: false,
     contact_linking: false,
     consultations: false,
     settings: false,
     landing_page: false,
+    integrations_zoom_manage: false,               // owner + master only — destructive directory writes
   },
   head_coach: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: false, dashboard_ads: false,
@@ -335,9 +401,10 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: true,                    // retention analytics — head coaches own retention
     pulse_admin: true,                             // Pulse operator hub — head coaches own retention
     events: true, bookings: true, races: true,
-    email: true, whatsapp: true, sms: true,
+    email: true, email_inbox: false, whatsapp: true, sms: true,
     schedule: true, attendance_reports: false,    // head coaches don't see attendance — owner/manager only
     assistant: true, studio_management: false,    // explicit opt-in
+    class_timer: true,                             // running the class timer is a coaching duty
     device_control: false,                         // owner + manager by default; grant per-user
     // Studio Management children — all off for head_coach (explicit opt-in by admin).
     contracts: false, tv_displays: false, glofox_import: false, preferences_import: false,
@@ -348,14 +415,18 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     accounting_hub: false,                         // bookkeeping oversight — master + owner only
     approvals_contractor_invoices: false, approvals_fte_expenses: false, approvals_agent_requests: true,
     approvals_time_off: true, approvals_shift_swaps: true, approvals_rosters: false, approvals_hyrox_sessions: true,  // head coach approves schedule items only
+    approvals_offer_purchases: true,               // head coach can fulfil a sale from the floor
     automations: false,                             // operator surface — head coach doesn't manage automations
     challenges: false,                              // operator challenge admin — head coach doesn't create challenges
     issues_inbox: false,                            // owner + master only by default
+    equipment_admin: false, equipment_inspect: true,
+    fleet_restart: true, fleet_admin: false,
     bookkeeper: false,
     contact_linking: true,
     consultations: true,
     settings: false,
     landing_page: false,
+    integrations_zoom_manage: false,               // owner + master only — destructive directory writes
   },
   manager: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: false, dashboard_ads: true,
@@ -365,8 +436,8 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: true,                    // managers track engagement / retention by default
     pulse_admin: true,                             // managers run the Pulse operator hub
     events: true, bookings: true, races: true,
-    email: true, whatsapp: true, sms: true,
-    schedule: true, attendance_reports: true, assistant: true, studio_management: true,
+    email: true, email_inbox: true, whatsapp: true, sms: true,
+    schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
     device_control: true,                          // managers run on-site device control
     // Studio Management children — manager gets TV displays (marketing
     // surface they handle day-to-day). Contracts + imports stay
@@ -379,14 +450,18 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     accounting_hub: false,                         // bookkeeping oversight — master + owner only
     approvals_contractor_invoices: false, approvals_fte_expenses: false, approvals_agent_requests: true,
     approvals_time_off: true, approvals_shift_swaps: true, approvals_rosters: false, approvals_hyrox_sessions: true,  // managers approve schedule items (time-off, swaps)
+    approvals_offer_purchases: true,               // managers fulfil sale purchases in Glofox
     automations: true,                              // managers can toggle per-location automations
     challenges: true,                               // managers can create/edit challenges
     issues_inbox: false,                            // owner + master only by default
+    equipment_admin: false, equipment_inspect: true,
+    fleet_restart: true, fleet_admin: false,   // reboot/shutdown can strand a device — owner + master only
     bookkeeper: false,                              // grant temporarily for month-end cover if needed
     contact_linking: true,
     consultations: true,
     settings: true,
     landing_page: false,                          // owner/master decision; per-user override available
+    integrations_zoom_manage: false,               // owner + master only — destructive directory writes
   },
   owner: {
     dashboard_personal: true, dashboard_studio: true, dashboard_business: true, dashboard_ads: true,
@@ -396,8 +471,8 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     engagement_analytics: true,
     pulse_admin: true,
     events: true, bookings: true, races: true,
-    email: true, whatsapp: true, sms: true,
-    schedule: true, attendance_reports: true, assistant: true, studio_management: true,
+    email: true, email_inbox: true, whatsapp: true, sms: true,
+    schedule: true, attendance_reports: true, assistant: true, studio_management: true, class_timer: true,
     device_control: true,
     // Studio Management children — owner gets contracts + TV displays
     // by default (mirroring the old role-only gates). Imports stay
@@ -410,14 +485,18 @@ export const DEFAULT_WEB_PERMISSIONS_BY_ROLE = Object.freeze({
     accounting_hub: true,                          // owner reviews receipt coverage, same tier as invoices_inbox
     approvals_contractor_invoices: true, approvals_fte_expenses: true, approvals_agent_requests: true,
     approvals_time_off: true, approvals_shift_swaps: true, approvals_rosters: true, approvals_hyrox_sessions: true,  // owner approves invoices, expenses, schedule items
+    approvals_offer_purchases: true,
     automations: true,                              // owner manages per-location automations
     challenges: true,                               // owner manages member challenges
     issues_inbox: true,                             // owner IS the handler per the routing design
+    equipment_admin: true, equipment_inspect: true, // owner owns the register + schedule
+    fleet_restart: true, fleet_admin: true,    // owner owns the hardware at their location
     bookkeeper: false,                              // owner approves at the source; accountant sign-off is master/dedicated only
     contact_linking: true,
     consultations: true,
     settings: true,
     landing_page: true,
+    integrations_zoom_manage: true,
   },
 })
 
@@ -530,6 +609,10 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   // them for the parity linter, so issues_inbox drops out of WEB_ONLY_OK).
   // Master + owner only — matches the isHandler gate on every triage route.
   { key: 'issue_triage', label: 'Issue inbox',                hint: 'Triage staff-reported issues at the studio — claim, resolve and close them. Master + owner only (the submit + own-history surface stays open to all staff).', webEquivalent: 'issues_inbox' },
+  // EQUIP-MAINT.1 — the walk-round itself. This is where the work
+  // actually happens: staff on the floor tapping through due kit.
+  // webEquivalent links it to the web key for the parity linter.
+  { key: 'equipment_inspect', label: 'Equipment inspections', hint: 'See what equipment is due for inspection today and complete the checklist, reporting faults with photos.', webEquivalent: 'equipment_inspect' },
   // W2 — supplier/contractor-invoice approver inbox (review + approve /
   // decline) on mobile, mirroring the web invoices_inbox. Master + owner
   // only — the approve/decline routes enforce owner-at-location / master.
@@ -564,6 +647,10 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   { key: 'notify_lead',        label: '… New leads assigned',     hint: 'Notify when a new contact is created at your location',         mobileOnly: true, isNotify: true },
   { key: 'notify_whatsapp',    label: '… WhatsApp messages',      hint: 'Notify on inbound WhatsApp (subject to inbox permission)',      mobileOnly: true, isNotify: true },
   { key: 'notify_instagram',   label: '… Instagram messages',     hint: 'Notify on inbound Instagram DMs (subject to inbox permission)', mobileOnly: true, isNotify: true },
+  // EMAIL-INBOUND-PUSH.1 — recipients are already narrowed server-side to
+  // people who could open the ticket (email_inbox at its location + a grant
+  // on its mailbox, or elevated); this key is only the personal opt-out.
+  { key: 'notify_email',       label: '… Email tickets',          hint: 'Notify when new inbound email lands in a mailbox you can open (subject to inbox permission)', mobileOnly: true, isNotify: true },
   { key: 'notify_agent_activity', label: '… Mia is handling a chat', hint: 'One quiet ping per active chat when the AI agent is handling a customer (subject to inbox permission)', mobileOnly: true, isNotify: true },
   // APPROVALS-STUDIO.1 — a customer approval landed in the queue (Mia
   // booking issue, /start funnel review, pause/cancel request). Fans out
@@ -618,6 +705,12 @@ export const MOBILE_PERMISSIONS = Object.freeze([
   //   report; they want closure).
   { key: 'notify_issue_submitted',      label: '… Issue submitted',         hint: 'Notify when a staff member at your studio reports a problem (owner + master by default)',                              mobileOnly: true, isNotify: true },
   { key: 'notify_issue_resolved',       label: '… Issue resolved',          hint: 'Notify when an issue you reported has been resolved',                                                                   mobileOnly: true, isNotify: true },
+  // EQUIP-MAINT.3 — inspection reminders. Registered here because an
+  // UNREGISTERED category resolves FALSE for every role but master, so
+  // an unregistered push reaches only whoever tested it and silently
+  // nobody else (bit app_update and test within a day of each other).
+  { key: 'notify_inspection_due',     label: '… Equipment inspections due', hint: 'Notify on your studio inspection day when equipment is due to be checked', mobileOnly: true, isNotify: true },
+  { key: 'notify_inspection_overdue', label: '… Inspections not done',      hint: 'Notify owners when equipment was due for inspection and no one submitted it', mobileOnly: true, isNotify: true },
 ])
 
 export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
@@ -634,6 +727,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals: true,
     staff_management: true,
     issue_triage: true,
+    equipment_inspect: true,
     invoices_inbox: true,
     card_receipts: true,
     orders: true,
@@ -643,7 +737,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: true, lead_radar: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_agent_activity: true,
+    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: true, notify_agent_activity: true,
     notify_agent_requests: true,
     notify_host_event_review: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -653,6 +747,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_tasks: true, notify_bookings: true,
     notify_checklist_overdue: true, notify_checklist_compliance: true,
     notify_issue_submitted: true, notify_issue_resolved: true,
+    notify_inspection_due: true, notify_inspection_overdue: true,
   },
   staff: {
     hyrox: false,
@@ -668,6 +763,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals: false,
     staff_management: false,
     issue_triage: false,
+    equipment_inspect: true,
     invoices_inbox: false,
     card_receipts: false,
     orders: false,
@@ -677,7 +773,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: false, lead_radar: false,  // retention/acquisition oversight — not a staff surface
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: false, notify_whatsapp: false, notify_instagram: false, notify_agent_activity: false,
+    notify_lead: false, notify_whatsapp: false, notify_instagram: false, notify_email: false, notify_agent_activity: false,
     notify_agent_requests: false,
     notify_host_event_review: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -693,6 +789,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // Staff don't handle issue reports — only get resolved on their
     // own reports.
     notify_issue_submitted: false, notify_issue_resolved: true,
+    notify_inspection_due: true, notify_inspection_overdue: false,
   },
   // Reception — staff-level mobile access + the WhatsApp inbox and
   // the operator bookings view (today/tomorrow is the desk's core
@@ -709,6 +806,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals: false,
     staff_management: false,
     issue_triage: false,
+    equipment_inspect: true,
     invoices_inbox: false,
     card_receipts: false,
     orders: false,
@@ -718,7 +816,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: false, lead_radar: false,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: false, notify_whatsapp: true, notify_instagram: false, notify_agent_activity: true,
+    notify_lead: false, notify_whatsapp: true, notify_instagram: false, notify_email: false, notify_agent_activity: true,
     notify_agent_requests: false,
     notify_host_event_review: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -728,6 +826,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     notify_tasks: true, notify_bookings: true,
     notify_checklist_overdue: true, notify_checklist_compliance: false,
     notify_issue_submitted: false, notify_issue_resolved: true,
+    notify_inspection_due: true, notify_inspection_overdue: false,
   },
   head_coach: {
     hyrox: true,
@@ -740,6 +839,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals: true,
     staff_management: false,
     issue_triage: false,
+    equipment_inspect: true,
     invoices_inbox: false,
     card_receipts: false,
     orders: false,
@@ -749,7 +849,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: true, lead_radar: true,    // head coaches own retention + conversion
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_agent_activity: true,
+    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: false, notify_agent_activity: true,
     notify_agent_requests: true,
     notify_host_event_review: false,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -765,6 +865,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // Head coach isn't the issue handler by default (owner + master
     // routing) but can be granted via per-user opt-in.
     notify_issue_submitted: false, notify_issue_resolved: true,
+    notify_inspection_due: true, notify_inspection_overdue: false,
   },
   manager: {
     hyrox: true,
@@ -777,6 +878,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals: true,
     staff_management: true,
     issue_triage: false,
+    equipment_inspect: true,
     invoices_inbox: false,
     card_receipts: true,
     orders: true,
@@ -786,7 +888,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: false, lead_radar: false,  // owner + head_coach by default; grant per-user if needed
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_agent_activity: true,
+    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: true, notify_agent_activity: true,
     notify_agent_requests: true,
     notify_host_event_review: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -804,6 +906,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // Manager isn't the issue handler by default (owner + master
     // routing) but resolved stays on (parity-superset of staff).
     notify_issue_submitted: false, notify_issue_resolved: true,
+    notify_inspection_due: true, notify_inspection_overdue: false,
   },
   owner: {
     hyrox: true,
@@ -816,6 +919,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     approvals: true,
     staff_management: true,
     issue_triage: true,
+    equipment_inspect: true,
     invoices_inbox: true,
     card_receipts: true,
     orders: true,
@@ -825,7 +929,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     churn_radar: true, lead_radar: true,
     push_notifications: true,
     notify_time_off: true, notify_schedule: true, notify_swap: true,
-    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_agent_activity: true,
+    notify_lead: true, notify_whatsapp: true, notify_instagram: true, notify_email: true, notify_agent_activity: true,
     notify_agent_requests: true,
     notify_host_event_review: true,
     notify_invoice_approved: true, notify_invoice_declined: true,
@@ -843,6 +947,7 @@ export const DEFAULT_MOBILE_PERMISSIONS_BY_ROLE = Object.freeze({
     // Owner IS the issue handler by default (per the "all owners at
     // the studio" routing decision in REPORT-ISSUE.1).
     notify_issue_submitted: true, notify_issue_resolved: true,
+    notify_inspection_due: true, notify_inspection_overdue: true,
   },
 })
 
@@ -947,12 +1052,26 @@ export const CROSS_PLATFORM_DASHBOARD_KEYS = Object.freeze([
 export const CROSS_PLATFORM_KEYS = Object.freeze([
   ...CROSS_PLATFORM_DASHBOARD_KEYS,
   'studio_management',
+  // CLASS-TIMER-PERM.1 — one toggle governs the web timer page and
+  // the mobile timer screen, same shape as studio_management.
+  'class_timer',
   // INV-M.1 — the mobile bookkeeper queue (app/invoices/queue.jsx:
   // bulk extract + the Not-in-Xero supplier flag) reads the SAME
   // top-level key the /api/invoices-inbox bulk routes enforce, so
   // one admin toggle governs both platforms. Field edits + the
   // send-to-Xero step stay web-only.
   'bookkeeper',
+  // EMAIL-TICKET-M.1 — the mobile email surface now rides
+  // /api/email/tickets*, and EVERY one of those routes gates on the
+  // top-level `email_inbox` key (hasPermission / hasPermissionForLocation
+  // — they are service-role routes, so that check IS the gate). A
+  // separate mobile-namespaced key would let the UI gate and the server
+  // gate disagree in the worst direction: `.mobile.email_inbox` ON with
+  // the web key OFF renders an inbox where every call 403s. Same
+  // reasoning as `bookkeeper` above — the platform that enforces the key
+  // decides which key it is. Per-account visibility is still the
+  // email_mailbox_access grant, on both platforms.
+  'email_inbox',
 ])
 
 // ============================================================
@@ -1220,7 +1339,7 @@ export const LANDING_PREFERENCE_VALUES = Object.freeze([
 export const LANDING_PREFERENCE_OPTIONS = Object.freeze([
   { value: 'auto',     label: 'Smart default',    hint: 'Lands on the most-aggregated dashboard you have access to (Business → Studio → Today)' },
   { value: 'personal', label: 'Today',            hint: 'Your shifts across all locations, swap requests, inbox', perm: 'dashboard_personal' },
-  { value: 'studio',   label: 'Studio',           hint: 'Operational view for the active location', perm: 'dashboard_studio' },
+  { value: 'studio',   label: 'Studio',           hint: 'Revenue KPI scorecard by location', perm: 'dashboard_studio' },
   { value: 'business', label: 'Business',         hint: 'Owner-level view for the active location',  perm: 'dashboard_business' },
 ])
 

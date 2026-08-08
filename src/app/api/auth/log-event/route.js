@@ -30,6 +30,7 @@ import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser } from '@/lib/auth'
 import { logAuditEvent } from '@/lib/audit'
 import { checkRateLimit, getClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { escapeLikePattern } from '@/lib/like-escape'
 
 export const runtime = 'nodejs'
 
@@ -53,10 +54,14 @@ const Body = z.object({
 
 async function lookupActor(db, email) {
   if (!email) return null
+  // escapeLikePattern: this endpoint is UNAUTHENTICATED (see POST below), so
+  // `email` is caller-supplied. Unescaped, `a_b@…` would resolve the audit
+  // actor to a DIFFERENT staff member's profile — attributing an auth event to
+  // the wrong person in the audit log, which is the one thing it must not do.
   const { data } = await db
     .from('profiles')
     .select('id, full_name, email')
-    .ilike('email', email)
+    .ilike('email', escapeLikePattern(email))
     .maybeSingle()
   return data || null
 }
