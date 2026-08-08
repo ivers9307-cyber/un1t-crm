@@ -33,7 +33,7 @@ function OfferCard({ offer }) {
     <Link
       href={`/offers/${offer.slug}`}
       className="ofr-card"
-      style={{ minHeight: 400, textDecoration: 'none', color: 'inherit', borderRight: '1px solid var(--ofr-line-soft)' }}
+      style={{ minHeight: 400, borderRight: '1px solid var(--ofr-line-soft)' }}
     >
       {flag && <span className="ofr-flag">{flag}</span>}
       <span className="ofr-display" style={{ fontSize: 'clamp(44px,5vw,64px)', lineHeight: .9 }}>
