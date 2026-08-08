@@ -341,4 +341,46 @@ describe('maybeNotifyInboundEmail', () => {
     sendPush.mockRejectedValue(new Error('expo down'))
     await expect(maybeNotifyInboundEmail(db, BASE)).resolves.toBeUndefined()
   })
+
+  // EMAIL-PUSH-ASSIGNEE.1 — EMAIL-ASSIGN.1-2 gave assigned_to a write path,
+  // so an owned ticket pings its owner alone (the WhatsApp webhook's
+  // pattern), NOT everyone with mailbox access. The assignee is preferred
+  // only when they still pass the exact same gates as everyone else: a claim
+  // is not a licence to keep receiving subject lines after the grant, the
+  // permission or the membership behind it is revoked.
+  it('pushes ONLY the assignee when the ticket is owned and they pass the gates', async () => {
+    const db = fakeDb({
+      links: [link('u-owner', 'owner'), link('u-granted', 'manager')],
+      grants: ['u-granted'],
+    })
+    await maybeNotifyInboundEmail(db, { ...BASE, assignedTo: 'u-granted' })
+    expect(sendPush).toHaveBeenCalledTimes(1)
+    expect(sendPush.mock.calls[0][0]).toEqual(['u-granted'])
+    // Still location-scoped, so the notify_email opt-out is judged at the
+    // ticket's own studio.
+    expect(sendPush.mock.calls[0][2]).toEqual({ locationId: 'loc-hatch' })
+  })
+
+  it('falls back to the full fan-out when the assignee no longer passes the gates', async () => {
+    // The grant was revoked after they claimed. Two things must both hold:
+    // the stale assignee gets NOTHING (the leak), and the mail is still
+    // announced to whoever can actually open it (an owned ticket whose owner
+    // cannot see it is, for notification purposes, unowned).
+    const db = fakeDb({
+      links: [link('u-owner', 'owner'), link('u-stale', 'manager')],
+      grants: [], // u-stale's email_mailbox_access row is gone
+    })
+    await maybeNotifyInboundEmail(db, { ...BASE, assignedTo: 'u-stale' })
+    expect(sendPush).toHaveBeenCalledTimes(1)
+    expect(sendPush.mock.calls[0][0]).toEqual(['u-owner'])
+  })
+
+  it('falls back likewise for an assignee who left the location entirely', async () => {
+    const db = fakeDb({
+      links: [link('u-owner', 'owner')], // u-gone has no assignment row here any more
+      grants: [],
+    })
+    await maybeNotifyInboundEmail(db, { ...BASE, assignedTo: 'u-gone' })
+    expect(sendPush.mock.calls[0][0]).toEqual(['u-owner'])
+  })
 })

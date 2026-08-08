@@ -726,7 +726,7 @@ async function processInboundEmail(db, body, messageId) {
       // TICKET'S mailbox decides who may be told, and the PRE-increment unread
       // count is the one-ping-per-unseen-burst gate (EMAIL-INBOUND-PUSH.1).
       const { data: found, error: tErr } = await db.from('email_tickets')
-        .select('id, status, subject, first_response_at, mailbox_id, unread_count')
+        .select('id, status, subject, first_response_at, mailbox_id, unread_count, assigned_to')
         .eq('id', threadedTicketId)
         .eq('location_id', locationId)
         .maybeSingle()
@@ -942,6 +942,11 @@ async function processInboundEmail(db, body, messageId) {
       // PRE-increment on purpose: read off the ticket row before this
       // message's bump, so a burst onto an already-unseen ticket pings once.
       preUnreadCount: action.action === 'append' ? (threadedTicket?.unread_count || 0) : 0,
+      // EMAIL-PUSH-ASSIGNEE.1 — an owned ticket pings its owner alone
+      // (subject to the fan-out's own gates). Only an append can carry one:
+      // a freshly-created ticket has no owner (no auto-assign,
+      // EMAIL-ASSIGN.1-2).
+      assignedTo: action.action === 'append' ? (threadedTicket?.assigned_to ?? null) : null,
     })
   } catch (err) {
     console.error('[postmark-inbound] push failed (email still filed)', err?.message)
@@ -1039,7 +1044,7 @@ async function finishDedupedDelivery(db, { body, messageId, locationId, mailboxI
   }
 
   const { data: tickets, error: tErr } = await db.from('email_tickets')
-    .select('id, last_message_at, mailbox_id, unread_count')
+    .select('id, last_message_at, mailbox_id, unread_count, assigned_to')
     .eq('id', winner.ticket_id)
     .limit(1)
   if (tErr) {
@@ -1069,6 +1074,7 @@ async function finishDedupedDelivery(db, { body, messageId, locationId, mailboxI
           ...pushContext,
           preview,
           preUnreadCount: ticket.unread_count || 0,
+          assignedTo: ticket.assigned_to ?? null,
         })
       } catch (err) {
         console.error('[postmark-inbound] finish-up push failed (email still filed)', err?.message)

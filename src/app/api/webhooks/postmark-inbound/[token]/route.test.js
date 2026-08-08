@@ -1472,6 +1472,9 @@ describe('push fan-out (EMAIL-INBOUND-PUSH.1)', () => {
       requesterName: 'Ada Member',
       subject: 'Billing question',
       preUnreadCount: 0,
+      // A freshly-created ticket can have no owner (no auto-assign,
+      // EMAIL-ASSIGN.1-2) — stated, not implied.
+      assignedTo: null,
     })
     // EVERY active address of ours rides along — any studio's, because a
     // cross-studio internal mail is still our own outbound.
@@ -1490,6 +1493,9 @@ describe('push fan-out (EMAIL-INBOUND-PUSH.1)', () => {
           id: 'T-open', location_id: 'loc-hatch', status: 'open',
           subject: 'Billing question', first_response_at: null,
           mailbox_id: 'mb-hatch', unread_count: 2,
+          // EMAIL-PUSH-ASSIGNEE.1 — an owned ticket's reply pings its owner,
+          // so the route must read the owner off the thread's ticket row.
+          assigned_to: 'u-claimed',
         },
       },
     })
@@ -1502,6 +1508,7 @@ describe('push fan-out (EMAIL-INBOUND-PUSH.1)', () => {
       ticketId: 'T-open',
       ticketMailboxId: 'mb-hatch',
       preUnreadCount: 2,
+      assignedTo: 'u-claimed',
     })
   })
 
@@ -1534,6 +1541,7 @@ describe('push fan-out (EMAIL-INBOUND-PUSH.1)', () => {
           id: 'T-open', location_id: 'loc-hatch', status: 'open',
           subject: 'Billing question', first_response_at: null,
           mailbox_id: 'mb-hatch', unread_count: 0,
+          assigned_to: 'u-claimed',
           last_message_at: '2026-08-01T00:00:00Z', // stale — the bump never landed
         },
       },
@@ -1551,6 +1559,7 @@ describe('push fan-out (EMAIL-INBOUND-PUSH.1)', () => {
       ticketMailboxId: 'mb-hatch',
       preUnreadCount: 0,
       fromEmail: 'member@example.com',
+      assignedTo: 'u-claimed',
     })
   })
 
