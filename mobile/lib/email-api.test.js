@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 vi.mock('./api', () => ({ api: vi.fn() }))
 
 import { api } from './api'
-import { getTicket } from './email-api'
+import { getTicket, getTicketCount } from './email-api'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -73,5 +73,25 @@ describe('assignTicket', () => {
     const res = await assignTicket('T-1', 'me', { locationId: 'loc-1' })
     expect(res.success).toBe(false)
     expect(res.error).toBe('already_assigned')
+  })
+})
+
+// EMAIL-BADGE-M.1 — the Email tab badge count. The endpoint exists precisely
+// so this surface never polls the whole 200-row queue for a number
+// (EMAIL-TICKET-CLEANUP.3); the wrapper's job is the right path + the
+// location header, and passing failure through so the poller can keep its
+// last-known count instead of flashing a confident zero.
+describe('getTicketCount', () => {
+  it('asks the cheap count route, location-scoped', async () => {
+    api.mockResolvedValue({ success: true, data: { count: 4 } })
+    const res = await getTicketCount('loc-1')
+    expect(api).toHaveBeenCalledWith('/api/email/tickets/count', { locationId: 'loc-1' })
+    expect(res).toEqual({ success: true, data: { count: 4 } })
+  })
+
+  it('passes a failure through untouched — the poller keeps its last count', async () => {
+    api.mockResolvedValue({ success: false, error: 'blip' })
+    const res = await getTicketCount('loc-1')
+    expect(res.success).toBe(false)
   })
 })

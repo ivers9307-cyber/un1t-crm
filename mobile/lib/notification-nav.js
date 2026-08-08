@@ -93,6 +93,11 @@ export function routeForNotification(data) {
     case 'instagram_inbound':
     case 'instagram_agent_handoff':
       return data.conversation_id ? `/instagram/${data.conversation_id}` : '/(tabs)/whatsapp'
+    // EMAIL-INBOUND-PUSH.1 — inbound ticket mail (postmark-inbound webhook).
+    // The ticket thread screen owns replying, notes and status; without an
+    // id, land on the Email tab's queue.
+    case 'email_inbound':
+      return isSafeId(data.ticket_id) ? `/email/${data.ticket_id}` : '/(tabs)/email'
     // AGENT-ACTIVITY.1 — "X is chatting with Mia"; open the right channel thread.
     case 'agent_activity':
       if (!data.conversation_id) return '/(tabs)/whatsapp'

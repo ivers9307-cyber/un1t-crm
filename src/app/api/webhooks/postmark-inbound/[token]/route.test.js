@@ -40,8 +40,14 @@ vi.mock('@/lib/webhook-events', async () => {
   const actual = await vi.importActual('@/lib/webhook-events')
   return { ...actual, recordWebhookEvent: vi.fn() }
 })
+// EMAIL-INBOUND-PUSH.1 — the fan-out itself (recipient gating, batching,
+// own-address suppression) is tested in src/lib/email-inbound-push.test.js;
+// here it is mocked so these tests assert WHAT the route hands it and that a
+// push failure can never fail the webhook.
+vi.mock('@/lib/email-inbound-push', () => ({ maybeNotifyInboundEmail: vi.fn() }))
 
 import { POST, maxDuration } from './route'
+import { maybeNotifyInboundEmail } from '@/lib/email-inbound-push'
 import { createServerClient } from '@/lib/supabase'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { recordWebhookEvent } from '@/lib/webhook-events'
@@ -1440,5 +1446,138 @@ describe('inbound Cc capture', () => {
     expect((await res.json()).mailbox_id).toBe('mb-hatch')
     const [ticket] = insertsInto(db, 'email_tickets')
     expect(ticket.payload.location_id).toBe('loc-hatch')
+  })
+})
+
+// EMAIL-INBOUND-PUSH.1 — the webhook tells staff about inbound mail, the way
+// the WhatsApp and Instagram webhooks always have. The route's job here is
+// three facts handed to the (mocked) fan-out: the TICKET'S mailbox (which
+// decides who may be told), the PRE-increment unread count (the one-ping-per-
+// unseen-burst gate), and every address of ours (so our own outbound arriving
+// at our own webhook announces nothing) — plus the guarantee that no push
+// failure can ever fail the filing.
+describe('push fan-out (EMAIL-INBOUND-PUSH.1)', () => {
+  it('pushes on a new ticket, carrying mailbox, sender and a zero pre-unread', async () => {
+    const res = await post(inbound())
+
+    expect(res.status).toBe(200)
+    expect(maybeNotifyInboundEmail).toHaveBeenCalledTimes(1)
+    const [dbArg, args] = maybeNotifyInboundEmail.mock.calls[0]
+    expect(dbArg).toBe(db)
+    expect(args).toMatchObject({
+      locationId: 'loc-hatch',
+      ticketId: 'new-ticket',
+      ticketMailboxId: 'mb-hatch',
+      fromEmail: 'member@example.com',
+      requesterName: 'Ada Member',
+      subject: 'Billing question',
+      preUnreadCount: 0,
+    })
+    // EVERY active address of ours rides along — any studio's, because a
+    // cross-studio internal mail is still our own outbound.
+    expect(args.ownAddresses).toEqual(expect.arrayContaining([
+      'stillorgan@un1tdublin.com', 'accounts@hatchstreetfitness.com',
+    ]))
+  })
+
+  it('an append carries the TICKET’S mailbox and its pre-increment unread count', async () => {
+    // The batching gate: unread 2 means an earlier ping is still outstanding.
+    // The route does not decide — it reports the pre-bump state faithfully.
+    db = makeDb({
+      threadRows: [{ ticket_id: 'T-open', created_at: '2026-08-06T08:00:00Z', location_id: 'loc-hatch', rfc_message_id: 'ours-1@mtasv.net' }],
+      tickets: {
+        'T-open': {
+          id: 'T-open', location_id: 'loc-hatch', status: 'open',
+          subject: 'Billing question', first_response_at: null,
+          mailbox_id: 'mb-hatch', unread_count: 2,
+        },
+      },
+    })
+    createServerClient.mockImplementation(() => db)
+
+    await post(reply())
+
+    expect(maybeNotifyInboundEmail).toHaveBeenCalledTimes(1)
+    expect(maybeNotifyInboundEmail.mock.calls[0][1]).toMatchObject({
+      ticketId: 'T-open',
+      ticketMailboxId: 'mb-hatch',
+      preUnreadCount: 2,
+    })
+  })
+
+  it('a push failure cannot fail the webhook — the mail is filed and 200 stands', async () => {
+    maybeNotifyInboundEmail.mockRejectedValueOnce(new Error('expo down'))
+
+    const res = await post(inbound())
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).success).toBe(true)
+    expect(insertsInto(db, 'email_inbox_messages')).toHaveLength(1)
+  })
+
+  it('a dead-lettered recipient pushes nobody', async () => {
+    await post(inbound({ ToFull: [{ Email: 'mailbox+samplehash@inbound.postmarkapp.com' }] }))
+    expect(maybeNotifyInboundEmail).not.toHaveBeenCalled()
+  })
+
+  it('the crash-finish path pushes exactly when it ran the bump the dead attempt missed', async () => {
+    // The dead attempt's own push runs AFTER its bump, so a missing bump
+    // proves the push never happened either — the finish-up owes both.
+    db = makeDb({
+      threadRows: [{
+        id: 'msg-crashed', ticket_id: 'T-open', location_id: 'loc-hatch',
+        postmark_message_id: 'pm-inbound-1',
+        created_at: new Date(Date.now() - 5_000).toISOString(),
+      }],
+      tickets: {
+        'T-open': {
+          id: 'T-open', location_id: 'loc-hatch', status: 'open',
+          subject: 'Billing question', first_response_at: null,
+          mailbox_id: 'mb-hatch', unread_count: 0,
+          last_message_at: '2026-08-01T00:00:00Z', // stale — the bump never landed
+        },
+      },
+    })
+    createServerClient.mockImplementation(() => db)
+    bindDedupeLedger(db)
+    holdClaim(db, 'inbound-email:pm-inbound-1', 120_000)
+
+    const res = await post(inbound())
+
+    expect((await res.json()).deduped).toBe(true)
+    expect(maybeNotifyInboundEmail).toHaveBeenCalledTimes(1)
+    expect(maybeNotifyInboundEmail.mock.calls[0][1]).toMatchObject({
+      ticketId: 'T-open',
+      ticketMailboxId: 'mb-hatch',
+      preUnreadCount: 0,
+      fromEmail: 'member@example.com',
+    })
+  })
+
+  it('the crash-finish path pushes NOBODY when the bump already landed', async () => {
+    // A late manual re-delivery of old, already-handled mail must not ping
+    // anyone — same reasoning as not re-bumping the ticket.
+    const msgAt = new Date(Date.now() - 3600_000).toISOString()
+    db = makeDb({
+      threadRows: [{
+        id: 'msg-done', ticket_id: 'T-closed', location_id: 'loc-hatch',
+        postmark_message_id: 'pm-inbound-1', created_at: msgAt,
+      }],
+      tickets: {
+        'T-closed': {
+          id: 'T-closed', location_id: 'loc-hatch', status: 'closed',
+          subject: 'Billing question', first_response_at: null,
+          mailbox_id: 'mb-hatch', unread_count: 0, last_message_at: msgAt,
+        },
+      },
+    })
+    createServerClient.mockImplementation(() => db)
+    bindDedupeLedger(db)
+    holdClaim(db, 'inbound-email:pm-inbound-1', 7200_000)
+
+    const res = await post(inbound())
+
+    expect((await res.json()).deduped).toBe(true)
+    expect(maybeNotifyInboundEmail).not.toHaveBeenCalled()
   })
 })

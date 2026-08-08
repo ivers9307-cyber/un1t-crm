@@ -19,6 +19,7 @@ import { canMobile } from '../../lib/permissions'
 import { registerForPushNotifications } from '../../lib/push-register'
 import { resolveLayoutForUser } from '../../lib/mobile-layout'
 import { getNeedsActionCount } from '../../lib/whatsapp-api'
+import { getTicketCount } from '../../lib/email-api'
 import ImpersonateBanner from '../../components/ImpersonateBanner'
 import PendingContractsBanner from '../../components/PendingContractsBanner'
 
@@ -35,13 +36,15 @@ export default function TabsLayout() {
   // exactly what the tab shows. 60s poll, mirroring the web's cadence;
   // failures leave the last-known count rather than flashing it away.
   //
-  // The Email tab is deliberately UNBADGED. There is no ticket count
-  // endpoint — the only source is GET /api/email/tickets, which returns up
-  // to 200 full ticket rows — so badging it would mean polling the whole
-  // queue from this layout on every device that holds `email_inbox`. The web
-  // sidebar's own "Email" entry carries no badge for the same reason. If a
-  // count is wanted later, add a cheap count route first and badge from that.
+  // The Email tab badge (EMAIL-BADGE-M.1) rides the cheap count route that
+  // EMAIL-TICKET-CLEANUP.3 added for the web sidebar — tickets somebody
+  // wrote to us that nobody has answered yet, at the active location,
+  // counting only mailboxes this person can open. Same predicate as the
+  // queue's needs_reply view, so tapping the badge shows the rows it
+  // counted. Same 60s cadence and keep-last-count-on-failure posture as the
+  // Messages badge above it.
   const [needsActionCount, setNeedsActionCount] = useState(0)
+  const [emailNeedsReplyCount, setEmailNeedsReplyCount] = useState(0)
 
   useEffect(() => {
     if (
@@ -68,6 +71,26 @@ export default function TabsLayout() {
     async function poll() {
       const res = await getNeedsActionCount(activeLocation.id)
       if (!cancelled && res?.success) setNeedsActionCount(res.data?.count || 0)
+    }
+    poll()
+    const t = setInterval(poll, 60000)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [profile, activeLocation])
+
+  useEffect(() => {
+    if (!profile || !activeLocation) return
+    // Only poll when the Email surface is reachable for this user — the
+    // route itself answers 0 for an ineligible session, but not polling at
+    // all is cheaper than polling to learn nothing.
+    const { bar: barKeys, more: moreKeys } = resolveLayoutForUser(profile, activeLocation)
+    if (!barKeys.includes('email') && !moreKeys.includes('email')) {
+      setEmailNeedsReplyCount(0)
+      return
+    }
+    let cancelled = false
+    async function poll() {
+      const res = await getTicketCount(activeLocation.id)
+      if (!cancelled && res?.success) setEmailNeedsReplyCount(res.data?.count || 0)
     }
     poll()
     const t = setInterval(poll, 60000)
@@ -146,6 +169,14 @@ export default function TabsLayout() {
               ...(key === 'whatsapp' && needsActionCount > 0
                 ? {
                     tabBarBadge: needsActionCount > 99 ? '99+' : needsActionCount,
+                    tabBarBadgeStyle: { backgroundColor: '#16A34A', color: '#FFFFFF', fontSize: 11 },
+                  }
+                : {}),
+              // Needs-reply tickets on the Email tab (EMAIL-BADGE-M.1) —
+              // same actionable-work semantics, same style.
+              ...(key === 'email' && emailNeedsReplyCount > 0
+                ? {
+                    tabBarBadge: emailNeedsReplyCount > 99 ? '99+' : emailNeedsReplyCount,
                     tabBarBadgeStyle: { backgroundColor: '#16A34A', color: '#FFFFFF', fontSize: 11 },
                   }
                 : {}),

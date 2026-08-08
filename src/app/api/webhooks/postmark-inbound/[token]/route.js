@@ -206,6 +206,7 @@ import { resolveTicketAction, ticketSubject, pickThreadedTicket } from '@/lib/em
 import { statusTimestamps } from '@/app/api/email/tickets/_helpers'
 import { escapeLikePattern } from '@/lib/like-escape'
 import { storeInboundAttachments, discardStagedAttachments } from '@/lib/email-attachments-server'
+import { maybeNotifyInboundEmail } from '@/lib/email-inbound-push'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -651,6 +652,16 @@ async function processInboundEmail(db, body, messageId) {
   }
   const locationId = mailbox.location_id
 
+  // EMAIL-INBOUND-PUSH.1 — every address of ours, so the push fan-out never
+  // announces our own outbound arriving at our own webhook (compose from
+  // sales@ to accounts@, a member's reply-all echoing us). Derived from the
+  // ACTIVE list already fetched above; an inactive address that still mails us
+  // is rare enough that a spurious ping beats an extra query on every inbound.
+  const ownAddresses = [
+    ...(mailboxes || []).map(m => m.address),
+    process.env.POSTMARK_FROM_EMAIL,
+  ]
+
   // (b) From address → contacts (deterministic pick; prefer the mailbox's
   // location). Runs even when (a) matched but the send had no contact — and
   // fills contact linkage for recipient-only matches.
@@ -711,8 +722,11 @@ async function processInboundEmail(db, body, messageId) {
     }
     const threadedTicketId = pickThreadedTicket([...(byRfc.data || []), ...(byPostmark.data || [])])
     if (threadedTicketId) {
+      // mailbox_id + unread_count ride along for the push fan-out below: the
+      // TICKET'S mailbox decides who may be told, and the PRE-increment unread
+      // count is the one-ping-per-unseen-burst gate (EMAIL-INBOUND-PUSH.1).
       const { data: found, error: tErr } = await db.from('email_tickets')
-        .select('id, status, subject, first_response_at')
+        .select('id, status, subject, first_response_at, mailbox_id, unread_count')
         .eq('id', threadedTicketId)
         .eq('location_id', locationId)
         .maybeSingle()
@@ -842,6 +856,7 @@ async function processInboundEmail(db, body, messageId) {
     if (msgErr.code === '23505') {
       return finishDedupedDelivery(db, {
         body, messageId, locationId, mailboxId: mailbox.id, now, preview,
+        pushContext: { fromEmail, ownAddresses, requesterName: counterpartName, subject },
       })
     }
     await recordInboundFailure('message_insert_failed', msgErr)
@@ -903,6 +918,35 @@ async function processInboundEmail(db, body, messageId) {
   // .catch(), or the rpc never fires.
   try { await db.rpc('increment_email_ticket_unread', { p_ticket_id: ticketId }) } catch {}
 
+  // ── Tell the staff (EMAIL-INBOUND-PUSH.1) ─────────────────────────
+  // Last, and subordinate to everything above: the mail is filed whether or
+  // not anyone is pinged, matching the WhatsApp/Instagram webhooks' posture.
+  // Recipient gating (email_inbox at this location + a grant on the TICKET'S
+  // mailbox, or elevated), the one-ping-per-unseen-burst batching and the
+  // own-address suppression all live in maybeNotifyInboundEmail; the route
+  // only reports the facts. Note the mailbox handed over is the ticket's on
+  // an append — visibility follows where the THREAD lives, which can differ
+  // from (or, for mig 484 backfill rows, predate) the delivering address.
+  try {
+    await maybeNotifyInboundEmail(db, {
+      locationId,
+      ticketId,
+      ticketMailboxId: action.action === 'append'
+        ? (threadedTicket?.mailbox_id ?? null)
+        : mailbox.id,
+      fromEmail,
+      ownAddresses,
+      requesterName: counterpartName,
+      subject,
+      preview,
+      // PRE-increment on purpose: read off the ticket row before this
+      // message's bump, so a burst onto an already-unseen ticket pings once.
+      preUnreadCount: action.action === 'append' ? (threadedTicket?.unread_count || 0) : 0,
+    })
+  } catch (err) {
+    console.error('[postmark-inbound] push failed (email still filed)', err?.message)
+  }
+
   return NextResponse.json({
     success: true,
     ticket_id: ticketId,
@@ -955,7 +999,7 @@ async function bumpTicketForInbound(db, ticketId, { now, preview }) {
  * unread rpc and its 200 leaves a retry that re-increments once — unread off
  * by one beats a reply nobody is told about.
  */
-async function finishDedupedDelivery(db, { body, messageId, locationId, mailboxId, now, preview }) {
+async function finishDedupedDelivery(db, { body, messageId, locationId, mailboxId, now, preview, pushContext }) {
   const { data: winners, error: findErr } = await db.from('email_inbox_messages')
     .select('id, ticket_id, created_at')
     .eq('postmark_message_id', messageId)
@@ -995,7 +1039,7 @@ async function finishDedupedDelivery(db, { body, messageId, locationId, mailboxI
   }
 
   const { data: tickets, error: tErr } = await db.from('email_tickets')
-    .select('id, last_message_at')
+    .select('id, last_message_at, mailbox_id, unread_count')
     .eq('id', winner.ticket_id)
     .limit(1)
   if (tErr) {
@@ -1012,6 +1056,23 @@ async function finishDedupedDelivery(db, { body, messageId, locationId, mailboxI
         return NextResponse.json({ success: false, error: 'ticket_bump_failed' }, { status: 500 })
       }
       try { await db.rpc('increment_email_ticket_unread', { p_ticket_id: winner.ticket_id }) } catch {}
+      // The dead attempt's push runs AFTER its bump, so a missing bump proves
+      // the push never fired either — the finish-up owes staff the ping too
+      // (EMAIL-INBOUND-PUSH.1). Guarded by the SAME state check as the bump:
+      // a late manual re-delivery of already-handled mail lands in the
+      // else-branch above and pings nobody. Same pre-increment unread gate.
+      try {
+        await maybeNotifyInboundEmail(db, {
+          locationId,
+          ticketId: winner.ticket_id,
+          ticketMailboxId: ticket.mailbox_id ?? null,
+          ...pushContext,
+          preview,
+          preUnreadCount: ticket.unread_count || 0,
+        })
+      } catch (err) {
+        console.error('[postmark-inbound] finish-up push failed (email still filed)', err?.message)
+      }
     }
   }
 
