@@ -560,6 +560,93 @@ describe('pruning — the release valve, and it MUST move the counter', () => {
   it('refuses without a location rather than pruning everything', async () => {
     expect(await pruneMailboxAttachments(db, { locationId: null })).toMatchObject({ ok: false })
   })
+
+  // ══ SHARED OBJECTS (EMAIL-FORWARD.1, mig 501) ═════════════════════
+  // A forward's attachment row points at the ORIGINAL'S key rather than a copy.
+  // That breaks the one-row-one-object assumption this whole function was
+  // written under, so both halves of the fix get their own test.
+  describe('an attachment that was FORWARDED shares one object with two rows', () => {
+    /** A reference row on a second message, pointing at att-0's own key. */
+    function seedForwardOf(ownerId, { createdAt = OLD } = {}) {
+      db._state.messages.push({ id: 'msg-fwd', ticket_id: 'tk-1', location_id: LOC })
+      db._state.attachments.push({
+        id: 'att-fwd', message_id: 'msg-fwd', location_id: LOC, mailbox_id: MAILBOX,
+        attachment_index: 0, filename: 'f0.pdf', mime_type: 'application/pdf',
+        size_bytes: 1000, storage_path: `${LOC}/msg-1/0.pdf`, skipped_reason: null,
+        forwarded_from_id: ownerId, created_at: createdAt,
+      })
+    }
+    const rowById = (id) => db._state.attachments.find(a => a.id === id)
+
+    // Pruning it would remove an object the OWNER still points at, and hand the
+    // mailbox back space it was never charged for.
+    it('never prunes a forwarded row on its own', async () => {
+      seedPrunable({ count: 1 })
+      // The owner is far too new to prune; only the reference row is old.
+      rowById('att-0').created_at = NEW
+      seedForwardOf('att-0')
+
+      const res = await pruneMailboxAttachments(db, {
+        locationId: LOC, mailboxId: MAILBOX, olderThanDays: 30,
+      })
+
+      expect(res).toMatchObject({ pruned: 0, bytesFreed: 0 })
+      // The owner's bytes are still there, which is the whole point.
+      expect(objectKeys(db)).toEqual([`email-attachments/${LOC}/msg-1/0.pdf`])
+      expect(rowById('att-fwd').storage_path).toBe(`${LOC}/msg-1/0.pdf`)
+      expect(usageFor(db, LOC, MAILBOX).bytes_used).toBe(1000)
+    })
+
+    // Without the cascade this row is a chip in the thread that downloads a 404
+    // — silently, months later, with nothing on any screen explaining it.
+    it('marks the forwarded copy pruned when the owner’s bytes go', async () => {
+      seedPrunable({ count: 1 })
+      seedForwardOf('att-0')
+
+      const res = await pruneMailboxAttachments(db, {
+        locationId: LOC, mailboxId: MAILBOX, olderThanDays: 30,
+      })
+
+      // ONE owner freed — `pruned` counts bytes reclaimed, not rows touched.
+      expect(res).toMatchObject({ pruned: 1, bytesFreed: 1000 })
+      expect(objectKeys(db)).toEqual([])
+      for (const id of ['att-0', 'att-fwd']) {
+        expect(rowById(id).storage_path).toBeNull()
+        expect(rowById(id).skipped_reason).toBe('pruned')
+        // The record survives on both, so staff can still see a file existed.
+        expect(rowById(id).filename).toBe('f0.pdf')
+      }
+    })
+
+    // The reference row was never charged, so refunding it would leave the
+    // counter under-reporting and disagreeing with mig 501's recalc.
+    it('decrements ONCE for two rows sharing one object', async () => {
+      seedPrunable({ count: 1 })
+      seedForwardOf('att-0')
+      await pruneMailboxAttachments(db, { locationId: LOC, mailboxId: MAILBOX, olderThanDays: 30 })
+      expect(usageFor(db, LOC, MAILBOX).bytes_used).toBe(0)
+      // …and a recalc agrees, rather than "repairing" it back to something else.
+      await db.rpc('recalc_email_storage_usage', { p_location_id: LOC })
+      expect(usageFor(db, LOC, MAILBOX).bytes_used).toBe(0)
+    })
+
+    // The cascade is not merely a batch-boundary guard, but the boundary is the
+    // case where a naive implementation looks fine in testing and fails in prod.
+    it('cascades even when the forwarded copy falls outside the batch', async () => {
+      seedPrunable({ count: 2, size: 10 })
+      seedForwardOf('att-1')
+
+      const res = await pruneMailboxAttachments(db, {
+        locationId: LOC, mailboxId: MAILBOX, olderThanDays: 30, limit: 2,
+      })
+
+      // Only owners are candidates, so both owners fit in the batch of 2 and
+      // the reference row is reached by the cascade rather than by the batch.
+      expect(res).toMatchObject({ pruned: 2 })
+      expect(rowById('att-fwd').skipped_reason).toBe('pruned')
+      expect(objectKeys(db)).toEqual([])
+    })
+  })
 })
 
 describe('recalcStorageUsage — the drift repair', () => {

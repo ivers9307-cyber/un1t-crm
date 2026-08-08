@@ -171,6 +171,51 @@ export function messageKind(message) {
   return message.direction === 'outbound' ? 'outbound' : 'inbound'
 }
 
+// ── Forwarding (EMAIL-FORWARD.1) ─────────────────────────────────────
+
+/**
+ * May this message be forwarded as mail?
+ *
+ * INTERNAL NOTES MAY NOT — they were never sent to anyone, they are written on
+ * the assumption that only colleagues read them, and mailing one to a third
+ * party under the studio's own address is the worst thing this surface could
+ * do. The route refuses it too; this is the affordance that stops an operator
+ * trying, and the two say the same thing on purpose.
+ *
+ * @param {object|null} message
+ * @returns {boolean}
+ */
+export function canForwardMessage(message) {
+  return !!message && !message.is_internal_note
+}
+
+/**
+ * The "Forwarded …" line on a message that IS a forward, or null.
+ *
+ * Read off `forwarded_message_id` (mig 501), never off the "Fwd: " subject
+ * prefix: a subject is editable text that happens to correlate today, and a
+ * thread that decides how to render a message by pattern-matching its subject
+ * is one renamed subject away from lying.
+ *
+ * A forward whose quoted message is no longer in the loaded window (a thread
+ * over the 200-message cap, or a deleted row — the FK is ON DELETE SET NULL)
+ * still says it was a forward. That fact does not depend on being able to
+ * resolve the target, and dropping the marker would silently reclassify it as
+ * an ordinary reply.
+ *
+ * @param {object|null} message
+ * @param {Map<string, object>} [byId]  every message on the thread
+ * @returns {string|null}
+ */
+export function forwardedMarker(message, byId) {
+  if (!message?.forwarded_message_id) return null
+  const source = byId?.get?.(message.forwarded_message_id) || null
+  if (!source) return 'Forwarded a message from this ticket'
+  const who = source.from_email || (source.direction === 'outbound' ? 'this studio' : 'the member')
+  const when = messageTimestamp(source.sent_at || source.created_at)
+  return `Forwarded the message from ${who}${when ? ` · ${when}` : ''}`
+}
+
 // ── Recipients (EMAIL-CC.1) ──────────────────────────────────────────
 //
 // THE BUTTON LABEL IS THE SAFETY FEATURE. Reply and Reply All are not two

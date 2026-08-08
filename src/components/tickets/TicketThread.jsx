@@ -37,7 +37,7 @@ import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft, Lock, Mail, AlertCircle, MailCheck, ImageOff, Maximize2, Minimize2,
-  ShieldAlert, Download, FileWarning, Check, MailX, ShieldX,
+  ShieldAlert, Download, FileWarning, Check, MailX, ShieldX, Forward,
 } from 'lucide-react'
 import { EmptyState, Loading } from '@/components/ui'
 import { formatBytes, SKIPPED_REASON_LABEL } from '@/lib/email-attachment-quota'
@@ -56,6 +56,8 @@ import {
   mailboxLabel,
   messageRecipients,
   threadSignature,
+  canForwardMessage,
+  forwardedMarker,
 } from '@/lib/ticket-display'
 import TicketReplyBox from './TicketReplyBox'
 
@@ -78,6 +80,10 @@ export default function TicketThread({
   statusSaving = false,
   onSend,
   sending = false,
+  // EMAIL-FORWARD.1 — opens the forward composer for ONE message. Owned by the
+  // inbox (like compose), because a forward is a modal over the whole surface
+  // rather than something a bubble can render inside itself.
+  onForward,
 }) {
   const endRef = useRef(null)
   // EMAIL-ATTACH-RACE.1 — scroll on a NEW message, not on every re-read.
@@ -110,6 +116,10 @@ export default function TicketThread({
   const name = requesterLabel(ticket)
   const status = statusMeta(ticket?.status)
   const priority = priorityMeta(ticket?.priority)
+  // EMAIL-FORWARD.1 — so a forward's bubble can name the message it passed on.
+  // Built once per render rather than inside the map, which would be quadratic
+  // on a thread at the 200-message cap.
+  const messagesById = new Map(messages.map(m => [m.id, m]))
 
   return (
     <>
@@ -224,6 +234,8 @@ export default function TicketThread({
               message={m}
               ticketId={ticketId}
               onOpenAttachment={setOpenAttachment}
+              onForward={onForward}
+              messagesById={messagesById}
             />
           ))
         )}
@@ -583,13 +595,52 @@ function AttachmentsUnavailableNotice() {
   )
 }
 
-function ThreadMessage({ message, ticketId, onOpenAttachment }) {
+/**
+ * "Forward" on one message (EMAIL-FORWARD.1).
+ *
+ * Per-message rather than one control on the thread, because a forward is OF a
+ * message — a button at the bottom of the pane would have to ask "which one?",
+ * and the answer to that is the click that just happened.
+ *
+ * NEVER RENDERED ON AN INTERNAL NOTE. canForwardMessage() says so and the
+ * route refuses one anyway; the two are deliberately independent, because this
+ * is the affordance and that is the gate.
+ */
+function ForwardAction({ message, onForward, onAccent = false }) {
+  if (!onForward || !canForwardMessage(message)) return null
+  return (
+    <button
+      type="button"
+      onClick={() => onForward(message)}
+      className={`inline-flex items-center gap-1 text-[11px] ${
+        onAccent ? 'text-white/80 hover:text-white' : 'text-un1t-subtle hover:text-un1t-text'
+      }`}
+    >
+      <Forward size={11} className="shrink-0" aria-hidden="true" />
+      Forward
+    </button>
+  )
+}
+
+/** "Forwarded the message from …" — only on a message that IS a forward. */
+function ForwardedMarker({ label, onAccent = false }) {
+  if (!label) return null
+  return (
+    <p className={`mb-1 flex items-center gap-1.5 text-[11px] ${onAccent ? 'text-white/75' : 'text-un1t-muted'}`}>
+      <Forward size={11} className="shrink-0" aria-hidden="true" />
+      {label}
+    </p>
+  )
+}
+
+function ThreadMessage({ message, ticketId, onOpenAttachment, onForward, messagesById }) {
   const kind = messageKind(message)
   const stamp = messageTimestamp(message.sent_at || message.created_at)
   const body = message.text_body || '(no text content)'
   // Notes never take the HTML path, whatever the payload contains: the route
   // does not emit a document for them, and this guard says so twice.
   const html = kind === 'note' ? null : message.html_document || null
+  const forwarded = forwardedMarker(message, messagesById)
 
   if (kind === 'note') {
     return (
@@ -627,6 +678,10 @@ function ThreadMessage({ message, ticketId, onOpenAttachment }) {
               {stamp && ` · ${stamp}`}
               {delivery?.tone === 'quiet' && <>{' · '}<DeliveredMarker message={message} /></>}
             </p>
+            {/* Above the recipients, because "this was a forward" changes how
+                the To line reads: those addresses are a third party, not the
+                member. */}
+            <ForwardedMarker label={forwarded} onAccent />
             <RecipientLines message={message} onAccent />
             {html ? (
               <EmailFrame
@@ -641,6 +696,9 @@ function ThreadMessage({ message, ticketId, onOpenAttachment }) {
             {message.html_unsafe && <UnsafeHtmlNotice />}
             {message.html_omitted && <HtmlOmittedNotice />}
             <Attachments ticketId={ticketId} attachments={message.attachments} onOpen={onOpenAttachment} onAccent />
+            <div className="mt-1.5">
+              <ForwardAction message={message} onForward={onForward} onAccent />
+            </div>
           </div>
         </div>
         {delivery && delivery.tone !== 'quiet' && (
@@ -673,6 +731,9 @@ function ThreadMessage({ message, ticketId, onOpenAttachment }) {
         {message.html_unsafe && <UnsafeHtmlNotice />}
         {message.html_omitted && <HtmlOmittedNotice />}
         <Attachments ticketId={ticketId} attachments={message.attachments} onOpen={onOpenAttachment} />
+        <div className="mt-1.5">
+          <ForwardAction message={message} onForward={onForward} />
+        </div>
       </div>
     </div>
   )
