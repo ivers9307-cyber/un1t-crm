@@ -127,6 +127,12 @@ export default function TicketReplyBox({
       // would offer the operator references that no longer resolve.
       setFiles([])
     }
+    // Anything else keeps the draft — INCLUDING `result.sent`, the
+    // delivered-but-unfiled case (EMAIL-REPLY-UNFILED.1): the mail went out
+    // but the thread could not record it, so the words in this box are the
+    // operator's only copy of what the member received, and the banner above
+    // says not to send them again. Clearing here would make that failure look
+    // like a clean success.
   }
 
   return (

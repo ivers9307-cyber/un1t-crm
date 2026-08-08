@@ -641,7 +641,31 @@ const PRUNABLE_TICKET_STATUSES = ['solved', 'closed']
  *     counter agree (which is what recalc would conclude anyway), and the leak
  *     is a cost line, not a correctness one
  *
+ * ══ SHARED OBJECTS (EMAIL-FORWARD.1, mig 501) ═══════════════════════
+ * Since forwarding landed, ONE OBJECT CAN HAVE TWO ROWS: a forward's
+ * attachment row points at the ORIGINAL'S canonical key rather than a copy, and
+ * carries `forwarded_from_id` to say so. That breaks the one-row-one-object
+ * assumption this function was written under, in two places, so both are
+ * handled explicitly rather than left to luck:
+ *
+ *   • CANDIDATES ARE OWNERS ONLY (`forwarded_from_id IS NULL`). A reference row
+ *     owns no bytes: pruning it would remove an object the owner still points
+ *     at, and decrement the mailbox for space it was never charged.
+ *   • THE MARK CASCADES. After the batch is marked, every row pointing INTO
+ *     that batch is marked too — WITHOUT a second decrement, because those rows
+ *     were never charged. Without this, a forward whose original happened to
+ *     fall in the batch would be left as a chip that downloads a 404: the
+ *     failure would be silent, months later, and unattributable. The forward's
+ *     chip instead reads "Removed to free space", which is exactly true.
+ *
+ * The cascade is not merely a batch-boundary guard. A forward lives on the same
+ * ticket as the message it quotes, so the two are ALWAYS eligible together —
+ * they simply may not land in the same 200-row batch.
+ *
  * @returns {Promise<{ok: boolean, error?: string, pruned: number, bytesFreed: number, remaining: number}>}
+ *   `pruned` counts OWNER rows — the rows whose bytes were actually reclaimed.
+ *   Cascaded reference rows are logged, not counted: reporting them would tell
+ *   an operator more files were freed than bytes recovered.
  */
 export async function pruneMailboxAttachments(db, {
   locationId, mailboxId = null, olderThanDays = 365, limit = PRUNE_BATCH_LIMIT,
@@ -653,12 +677,18 @@ export async function pruneMailboxAttachments(db, {
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
   const batch = Math.min(Math.max(1, Math.floor(Number(limit) || PRUNE_BATCH_LIMIT)), PRUNE_BATCH_LIMIT)
 
-  // Candidates: stored, in this bucket, old enough. Over-fetch by one so the
-  // caller can be told there is more without a second count query.
+  // Candidates: stored, in this bucket, old enough — and OWNERS of their bytes.
+  // A row with forwarded_from_id set shares another row's object (mig 501): it
+  // has nothing of its own to free, and removing that object would break the
+  // owner. It is dealt with by the cascade below instead.
+  //
+  // Over-fetch by one so the caller can be told there is more without a second
+  // count query.
   let q = db.from('email_ticket_attachments')
     .select('id, message_id, size_bytes, storage_path')
     .eq('location_id', locationId)
     .not('storage_path', 'is', null)
+    .is('forwarded_from_id', null)
     .lt('created_at', cutoff)
     .order('created_at', { ascending: true })
     .limit(batch + 1)
@@ -693,6 +723,12 @@ export async function pruneMailboxAttachments(db, {
 
   const bytesFreed = changed.reduce((sum, r) => sum + (Number(r.size_bytes) || 0), 0)
 
+  // ── Cascade to anything FORWARDING these bytes (mig 501) ──────────
+  // BEFORE the objects go, for the same reason the owners are marked first:
+  // nothing may be left pointing at bytes that are already gone. No decrement
+  // — a forwarded row was never charged.
+  await markForwardsOfPruned(db, changed.map(r => r.id))
+
   // ── Remove the bytes ──────────────────────────────────────────────
   const paths = changed.map(r => pathById.get(r.id)).filter(Boolean)
   try {
@@ -718,6 +754,46 @@ export async function pruneMailboxAttachments(db, {
   }
 
   return { ok: true, pruned: changed.length, bytesFreed, remaining }
+}
+
+/**
+ * Mark every FORWARD of a just-pruned attachment as pruned too (EMAIL-FORWARD.1).
+ *
+ * A forwarded row shares the owner's object, so once those bytes are removed
+ * its storage_path addresses nothing. Left alone it is a chip in the thread
+ * that downloads a 404 — silently, and long after anyone could connect it to a
+ * prune. Marked, it reads "Removed to free space", which is the truth for both
+ * rows.
+ *
+ * NO DECREMENT, deliberately: these rows never added to bytes_used (nothing was
+ * uploaded for them) and mig 501's recalc excludes them, so giving space back
+ * for one would make the counter under-report and the repair tool disagree
+ * with the write path.
+ *
+ * Never throws and never fails the prune. The owners' bytes are genuinely
+ * reclaimed either way; a missed cascade leaves a dead chip, which is a smaller
+ * wrong than a prune that reports failure after it has already deleted objects.
+ */
+async function markForwardsOfPruned(db, ownerIds) {
+  const ids = (ownerIds || []).filter(Boolean)
+  if (ids.length === 0) return
+  try {
+    const { error } = await db.from('email_ticket_attachments')
+      .update({ storage_path: null, skipped_reason: 'pruned' })
+      .in('forwarded_from_id', ids)
+      // Idempotent: a row already marked by an earlier pass is skipped rather
+      // than rewritten, exactly like the owners' own UPDATE.
+      .not('storage_path', 'is', null)
+    if (error) {
+      console.error(
+        '[email-attachments] PRUNE COULD NOT MARK FORWARDED COPIES — their bytes are about to be ' +
+        'removed and their rows still claim a storage_path, so those chips will fail to download:',
+        error.message,
+      )
+    }
+  } catch (err) {
+    console.error('[email-attachments] prune cascade to forwarded copies threw:', err?.message)
+  }
 }
 
 /**

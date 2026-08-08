@@ -1179,6 +1179,34 @@ registry.registerPath({
   },
 })
 
+// EMAIL-FORWARD.1 (mig 501) — pass one message on the ticket to a third party.
+registry.registerPath({
+  method: 'post',
+  path: '/api/email/tickets/{id}/forward',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Forward one message on a ticket to somebody else',
+  description: "Sends `message_id` (a message on THIS ticket) to addresses the operator types, and files the result as an OUTBOUND message on the SAME ticket carrying forwarded_message_id — the record of 'we sent this to the accountant' belongs with the correspondence it is about, and the recipient's reply threads back onto this ticket through the ordinary inbound path. THE TICKET IS DELIBERATELY NOT MOVED: no status change, no last_message_at, no first_response_at, because `needs_reply` is (open AND inbound last message) and stamping an outbound one would drop a ticket the member is still waiting on out of the queue. AN INTERNAL NOTE CANNOT BE FORWARDED — 400, since a note was never sent to anyone and mailing staff-only commentary to a third party under the studio's address is the worst thing this surface could do. RECIPIENTS ARE TYPED, NEVER DERIVED (the opposite of a reply): nothing on this route reads bcc_emails off stored correspondence, and the quoted header block is a closed list of five — From, Date, Subject, To, Cc — so a forward reveals exactly what it would have had the original's Bcc never been typed. The shared model still applies: deduped case-insensitively across To/Cc/Bcc (To beats Cc beats Bcc), the studio's own addresses excluded from all three, 25 addresses combined, Bcc in Postmark's own Bcc field only. THE BODY IS PLAIN TEXT: text_body is quoted and HTML-escaped, and the original's html_body never reaches the wire — re-sending a stranger's markup under our own DKIM signature is how forwarding launders a phish, and our sanitiser's permissiveness is bought by the sandboxed iframe the thread renders into, which a recipient's mail client is not. `attachment_ids` chooses which of the ORIGINAL'S files ride along; they are read from the bytes already in the bucket (nothing is copied to a new key), the forwarded rows point at the same storage_path with forwarded_from_id set, and the mailbox quota is not charged twice. A file with no stored bytes, an id from another message, an unreadable object, or a set past the 7 MB outbound ceiling is a 400 with NOTHING SENT — files are never silently dropped. No email_sends row is written (a forward goes to a third party, not to the member). Every address is written to audit_events under the sender's name.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      message_id: uuidLike,
+      to: z.array(z.string().email()).min(1).max(25),
+      cc: z.array(z.string().email()).max(25).optional(),
+      bcc: z.array(z.string().email()).max(25).optional(),
+      note: z.string().max(10000).optional(),
+      attachment_ids: z.array(uuidLike).max(10).optional(),
+    }).openapi('EmailTicketForward') } } },
+  },
+  responses: {
+    200: { description: '{ message, message_id, recipients, forwarded_message_id, attachment_count }' },
+    400: { description: 'Invalid body, an internal note, no usable recipient, an unforwardable file, or the send failed', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Ticket not accessible, or the message is not on this ticket', content: { 'application/json': { schema: ErrorResponse } } },
+    500: { description: 'A pre-send lookup failed (nothing sent), or the forward went out but could not be filed — do NOT resend', content: { 'application/json': { schema: ErrorResponse } } },
+    503: { description: 'The ticketing Postmark server is unconfigured — nothing was sent', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
 registry.registerPath({
   method: 'post',
   path: '/api/email/tickets/{id}/status',

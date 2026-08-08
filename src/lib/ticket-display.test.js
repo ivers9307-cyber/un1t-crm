@@ -16,6 +16,8 @@ import {
   priorityMeta,
   messageKind,
   messageRecipients,
+  canForwardMessage,
+  forwardedMarker,
   replyActionLabel,
   deliveryMeta,
   deliveryTimestamp,
@@ -424,5 +426,56 @@ describe('threadSignature', () => {
   it('survives an empty thread', () => {
     expect(threadSignature([])).toBe(threadSignature([]))
     expect(threadSignature(undefined)).toBe(threadSignature([]))
+  })
+})
+
+// EMAIL-FORWARD.1 — the two rules the thread must not get wrong about a
+// forward: a note may never offer the action, and a forward must never be
+// mistaken for an ordinary reply.
+describe('canForwardMessage', () => {
+  it('allows an ordinary inbound or outbound message', () => {
+    expect(canForwardMessage({ direction: 'inbound', is_internal_note: false })).toBe(true)
+    expect(canForwardMessage({ direction: 'outbound', is_internal_note: false })).toBe(true)
+  })
+
+  // The affordance half of the rule the route enforces: a note was sent to
+  // nobody and is written assuming only colleagues read it.
+  it('never allows an internal note', () => {
+    expect(canForwardMessage({ direction: 'outbound', is_internal_note: true })).toBe(false)
+  })
+
+  it('never throws on nothing', () => {
+    expect(canForwardMessage(null)).toBe(false)
+    expect(canForwardMessage(undefined)).toBe(false)
+  })
+})
+
+describe('forwardedMarker', () => {
+  const SOURCE = {
+    id: 'm-1', direction: 'inbound', from_email: 'ada@example.com',
+    created_at: '2026-08-07T09:00:00Z',
+  }
+  const byId = new Map([[SOURCE.id, SOURCE]])
+
+  it('is null for anything that is not a forward', () => {
+    expect(forwardedMarker({ id: 'm-2', direction: 'outbound' }, byId)).toBeNull()
+    expect(forwardedMarker(null, byId)).toBeNull()
+  })
+
+  it('names who the quoted message was from', () => {
+    const label = forwardedMarker({ id: 'm-2', forwarded_message_id: 'm-1' }, byId)
+    expect(label).toContain('ada@example.com')
+  })
+
+  // A thread over the 200-message cap, or a source row deleted (the FK is ON
+  // DELETE SET NULL). It is still a forward, and dropping the marker would
+  // silently reclassify it as an ordinary reply.
+  it('still says it was a forward when the quoted message is not loaded', () => {
+    const label = forwardedMarker({ id: 'm-2', forwarded_message_id: 'gone' }, byId)
+    expect(label).toMatch(/forwarded/i)
+  })
+
+  it('never throws without a lookup map', () => {
+    expect(forwardedMarker({ forwarded_message_id: 'm-1' })).toMatch(/forwarded/i)
   })
 })
