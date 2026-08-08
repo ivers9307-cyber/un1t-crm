@@ -1,9 +1,12 @@
 // CAMPAIGN.13 — drain the postmark_webhook_queue.
 //
-// Runs every minute. Pulls a batch of unprocessed events, runs
-// each through processPostmarkEvent, marks them processed. If a
-// row errors, the error is stashed on the row and attempts++; the
-// cron tries again next tick up to a small retry budget.
+// Runs every TEN minutes (vercel.json is the truth — this header once said
+// "every minute" and INTEGRATIONS.md said */2, three answers to one
+// question; EMAIL-MONITOR.3 aligned all three). QStash push delivers most
+// rows within seconds of arrival, so this cron is the SWEEPER: it pulls a
+// batch of unprocessed events, runs each through processPostmarkEvent, and
+// marks them processed. If a row errors, the error is stashed on the row and
+// attempts++; the cron tries again next tick up to a small retry budget.
 //
 // POSTMARK-DLQ.1: the batch filter below (`attempts < MAX_ATTEMPTS`) is what
 // makes an exhausted row invisible, so the shared helper dead-letters it at
