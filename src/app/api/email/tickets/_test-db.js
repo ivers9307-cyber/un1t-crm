@@ -293,6 +293,11 @@ export function makeDb(state = {}) {
       const truth = new Map()
       for (const a of s.attachments) {
         if (a.location_id !== locationId || !a.storage_path) continue
+        // EMAIL-FORWARD.1 (mig 501) — a row with forwarded_from_id set shares
+        // the ORIGINAL'S object, so counting it would bill one file twice.
+        // Modelled rather than ignored: without this line the fake would report
+        // the double-count as correct and a recalc regression would pass.
+        if (a.forwarded_from_id) continue
         const k = a.mailbox_id ?? null
         truth.set(k, (truth.get(k) || 0) + (Number(a.size_bytes) || 0))
       }
