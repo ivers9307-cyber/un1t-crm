@@ -29,13 +29,14 @@
 .ofr-deadline b { font-family: var(--font-archivo-black); font-size: 13px; letter-spacing: .2em; text-transform: uppercase; }
 .ofr-count { font-family: var(--font-archivo-black); font-variant-numeric: tabular-nums; font-size: clamp(22px, 3.2vw, 34px); letter-spacing: .08em; color: var(--ofr-red); line-height: 1; }
 
-/* cards */
+/* cards — hover floods sky blue (Richard, 2026-08-08, mockup-approved) */
 .ofr-card { border-bottom: 1px solid var(--ofr-line); padding: 38px 26px 30px; display: flex; flex-direction: column; gap: 18px; position: relative; transition: background .2s, color .2s; }
-.ofr-card:hover { background: var(--ofr-paper); color: var(--ofr-ink); }
+.ofr-card:hover { background: #38bdf8; color: var(--ofr-ink); }
 .ofr-card:hover .ofr-outline-thin { -webkit-text-stroke-color: var(--ofr-ink); }
-.ofr-card:hover .ofr-go { background: var(--ofr-ink); color: var(--ofr-paper); }
-.ofr-card:hover .ofr-meta { color: #3d3d3d; }
-.ofr-card:hover .ofr-flag { background: var(--ofr-ink); color: var(--ofr-paper); }
+.ofr-card:hover .ofr-go { background: var(--ofr-ink); color: var(--ofr-paper); border-color: var(--ofr-ink); }
+.ofr-card:hover .ofr-meta { color: #0c3550; }
+.ofr-card:hover .ofr-was { color: #155e83; }
+.ofr-card:hover .ofr-flag { background: var(--ofr-ink); color: #38bdf8; }
 .ofr-meta { color: #9a9a9a; font-size: 14px; line-height: 1.55; flex: 1; }
 .ofr-go { border: 1px solid currentColor; background: var(--ofr-paper); color: var(--ofr-ink); font-family: var(--font-archivo-black); font-size: 12px; letter-spacing: .24em; text-transform: uppercase; padding: 13px 22px; text-align: center; }
 .ofr-flag { position: absolute; top: 0; right: 0; background: var(--ofr-paper); color: var(--ofr-ink); font-family: var(--font-archivo-black); font-size: 10px; letter-spacing: .22em; text-transform: uppercase; padding: 7px 12px; }
