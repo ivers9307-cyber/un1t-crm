@@ -94,6 +94,91 @@ export function emailSendStatus({ total = 0, bounced = 0, complained = 0 } = {})
   return { status: 'ok', detail: `${t} sent, ${bad} bounced/complained (24h)` }
 }
 
+// EMAIL-MONITOR.1 — is mail still ARRIVING? (2026-08-08 audit, P1.)
+//
+// The channel's founding failure: for fourteen months every inbound delivery
+// got a 500 (one unset env var) and NOTHING measured it — the queue simply
+// looked quiet. This grades arrival per MAILBOX, derived from the rows the
+// pipeline files rather than a heartbeat stamp: MAX(created_at) of inbound
+// messages measures exactly "mail made it all the way in", and a stamp the
+// webhook writes is one more thing the broken webhook wouldn't write.
+//
+// Thresholds scale with observed volume so a quiet-by-nature address doesn't
+// cry wolf: a busy mailbox (≥8 arrivals in the window) warns after 7 quiet
+// days and goes down after 14; an occasional one (1–7) after 14/28. A mailbox
+// with NOTHING in the window is 'unknown', not red — it may be new, or
+// Stillorgan's cannot-receive domain — but note a dead webhook passes through
+// warn and down on its way there, so silence is never green.
+//
+// rehost_failed folds in because a spike there is exactly how the shim's
+// Storage-auth bug hid (#1268): mail kept filing, files kept vanishing.
+export const EMAIL_INBOUND_WINDOW_DAYS = 60
+const EMAIL_INBOUND_DAY_MS = 24 * 60 * 60 * 1000
+const BUSY_MAILBOX_MIN_ARRIVALS = 8
+const REHOST_FAILED_DOWN_AT = 10
+
+export function emailInboundStatus({ mailboxes = [], inbound = [], rehostFailed24h = 0, now } = {}) {
+  const nowMs = Number(now) || 0
+  const byMailbox = new Map()
+  for (const row of inbound) {
+    const key = row?.mailboxId
+    if (!key) continue
+    const at = Date.parse(row?.createdAt)
+    if (!Number.isFinite(at)) continue
+    const cur = byMailbox.get(key) || { count: 0, lastAt: 0 }
+    cur.count += 1
+    if (at > cur.lastAt) cur.lastAt = at
+    byMailbox.set(key, cur)
+  }
+
+  let lastInboundMs = 0
+  const graded = []
+  for (const mb of mailboxes) {
+    const seen = byMailbox.get(mb?.id)
+    if (!seen) { graded.push({ status: 'unknown', mb }) ; continue }
+    if (seen.lastAt > lastInboundMs) lastInboundMs = seen.lastAt
+    const quietDays = (nowMs - seen.lastAt) / EMAIL_INBOUND_DAY_MS
+    const busy = seen.count >= BUSY_MAILBOX_MIN_ARRIVALS
+    const warnAt = busy ? 7 : 14
+    const downAt = busy ? 14 : 28
+    const status = quietDays > downAt ? 'down' : quietDays > warnAt ? 'warn' : 'ok'
+    graded.push({ status, mb, quietDays })
+  }
+
+  const known = graded.filter((g) => g.status !== 'unknown')
+  const offenders = graded.filter((g) => g.status === 'warn' || g.status === 'down')
+  const rehost = Number(rehostFailed24h) || 0
+
+  let status
+  if (graded.length === 0 || known.length === 0) status = 'unknown'
+  else status = worstStatus(known)
+  // Escalation, never de-escalation: arrival health cannot hide vanishing files.
+  if (rehost > 0 && (status === 'ok' || status === 'unknown')) status = 'warn'
+  if (rehost >= REHOST_FAILED_DOWN_AT && status !== 'down') status = 'down'
+
+  const parts = []
+  if (offenders.length) {
+    parts.push(offenders
+      .map((g) => `${g.mb?.address || 'mailbox'} quiet ${Math.floor(g.quietDays)}d`)
+      .join(' · '))
+  } else if (known.length === 0) {
+    parts.push(`No inbound email in ${EMAIL_INBOUND_WINDOW_DAYS} days`)
+  } else {
+    const ageMs = nowMs - lastInboundMs
+    const rel = ageMs < EMAIL_INBOUND_DAY_MS
+      ? `${Math.max(1, Math.round(ageMs / (60 * 60 * 1000)))}h ago`
+      : `${Math.floor(ageMs / EMAIL_INBOUND_DAY_MS)}d ago`
+    parts.push(`Last inbound ${rel}`)
+  }
+  if (rehost > 0) parts.push(`${rehost} attachment${rehost === 1 ? '' : 's'} failed re-hosting (24h)`)
+
+  return {
+    status,
+    detail: parts.join(' · '),
+    lastInboundAt: lastInboundMs ? new Date(lastInboundMs).toISOString() : null,
+  }
+}
+
 // Both zoom-contacts routes cap execution at maxDuration=300s (Vercel's hard
 // limit on the function), so a run that is genuinely still executing is never
 // older than that. The margin above it absorbs clock skew between this
@@ -264,6 +349,55 @@ export async function getIntegrationHealth(db, locationId) {
     rows.push({ key: 'email', name: 'Email (Postmark)', status: s.status, detail: s.detail })
   } catch { rows.push({ key: 'email', name: 'Email (Postmark)', status: 'unknown', detail: 'Unavailable' }) }
 
+  // 6b. Email INBOUND — is mail still arriving? (EMAIL-MONITOR.1; the
+  // 14-months-of-silence failure mode.) Rendered only for locations that run
+  // mailboxes — a studio without email has nothing to monitor. Derived from
+  // filed rows, not a heartbeat stamp: see emailInboundStatus.
+  try {
+    const { data: mailboxes } = await db.from('email_mailboxes')
+      .select('id, address')
+      .eq('location_id', locationId)
+      .eq('active', true)
+      .limit(200)
+    if ((mailboxes || []).length > 0) {
+      const windowIso = new Date(Date.now() - EMAIL_INBOUND_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString()
+      const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      // Newest-first + a DELIBERATE cap at the PostgREST ceiling: pagination
+      // is wrong here — a health grade needs recency, not completeness, and
+      // newest-first means overflow truncates only the OLD end, so "last
+      // arrival" stays exact and 1000+ arrivals in the window is trivially a
+      // healthy volume signal for every mailbox that appears in it.
+      const [{ data: arrivals }, rehostRes] = await Promise.all([
+        // eslint-disable-next-line guardrails/no-uncapped-supabase-limit -- deliberate: newest-first health sample; overflow drops only the old end, recency stays exact
+        db.from('email_inbox_messages')
+          .select('created_at, email_tickets!inner(mailbox_id)')
+          .eq('location_id', locationId)
+          .eq('direction', 'inbound')
+          .gte('created_at', windowIso)
+          .order('created_at', { ascending: false })
+          .limit(1000),
+        // No embedded filter here — a count-only (head:true) select with an
+        // embedded-resource filter returns 0 (the known PostgREST trap).
+        db.from('email_ticket_attachments')
+          .select('id', { count: 'exact', head: true })
+          .eq('location_id', locationId)
+          .eq('skipped_reason', 'rehost_failed')
+          .gte('created_at', dayAgoIso),
+      ])
+      const inbound = (arrivals || []).map((r) => ({
+        mailboxId: r?.email_tickets?.mailbox_id || null,
+        createdAt: r?.created_at,
+      }))
+      const s = emailInboundStatus({
+        mailboxes, inbound, rehostFailed24h: rehostRes?.count || 0, now: Date.now(),
+      })
+      rows.push({
+        key: 'email_inbound', name: 'Email (inbound)',
+        status: s.status, detail: s.detail, lastSuccess: s.lastInboundAt,
+      })
+    }
+  } catch { rows.push({ key: 'email_inbound', name: 'Email (inbound)', status: 'unknown', detail: 'Unavailable' }) }
+
   // 7. Payments — hard checkout failures over 7d. race_payments has no
   // location_id; scope via the parent race_event (inner join). NOT head:true —
   // an embedded-resource filter under a count-only select returns 0 (known
@@ -353,5 +487,6 @@ const REMEDIES = {
   glofox: { text: 'Reconnect Glofox in Settings → Integrations.', href: '/settings/integrations-hub' },
   xero: { text: 'Reconnect Xero in Settings → Integrations if the sync error persists.', href: '/settings/integrations-hub' },
   email: { text: 'A high bounce/complaint rate hurts deliverability — review recipients and your sending domain.', href: '/settings/email-domain' },
+  email_inbound: { text: 'Inbound email may have stopped arriving. Probe the webhook: POST a bogus token to the shim URL — 404 = healthy, 500 missing_secret = secrets lost. Full runbook in docs/architecture/INTEGRATIONS.md; check the Postmark Activity page for undelivered inbound.', href: null },
   payments: { text: 'Checkouts are failing — verify the payment provider (Revolut/Stripe) connection and recent transactions.', href: null },
 }

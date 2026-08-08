@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { cronStatus, waNumberStatus, backlogStatus, worstStatus, registryHealth, emailSendStatus, paymentStatus, zoomSyncStatus, ZOOM_RUN_GRACE_MS } from './integration-health.js'
+import { cronStatus, emailInboundStatus, waNumberStatus, backlogStatus, worstStatus, registryHealth, emailSendStatus, paymentStatus, zoomSyncStatus, ZOOM_RUN_GRACE_MS } from './integration-health.js'
 
 describe('cronStatus', () => {
   it('ok when nothing is stale', () => {
@@ -152,5 +152,76 @@ describe('zoomSyncStatus', () => {
   // unknown forever on bad data.
   it('is down when finished_at is null and started_at is missing entirely', () => {
     expect(zoomSyncStatus({ finished_at: null }).status).toBe('down')
+  })
+})
+
+// EMAIL-MONITOR.1 (2026-08-08 audit, production-readiness P1): "is mail still
+// ARRIVING?" — the question nothing answered for the fourteen months the
+// inbound webhook 500'd on every delivery. Graded per mailbox so one busy
+// address cannot mask a dead one, thresholds scaled to observed volume so a
+// quiet-by-nature mailbox doesn't cry wolf, and rehost_failed folded in
+// because a spike there is exactly how the shim's storage bug hid (#1268).
+describe('emailInboundStatus', () => {
+  const DAY = 24 * 60 * 60 * 1000
+  const NOW = Date.parse('2026-08-08T12:00:00Z')
+  const MB = { id: 'mb-1', address: 'accounts@hatchstreetfitness.com' }
+  const MB2 = { id: 'mb-2', address: 'studio@hatchstreetfitness.com' }
+  // n arrivals for a mailbox, newest `quietDays` ago, spread daily before that.
+  const arrivals = (mailboxId, n, quietDays) =>
+    Array.from({ length: n }, (_, i) => ({
+      mailboxId,
+      createdAt: new Date(NOW - (quietDays + i) * DAY).toISOString(),
+    }))
+
+  it('a busy mailbox heard from recently is ok, and reports the last arrival', () => {
+    const s = emailInboundStatus({ mailboxes: [MB], inbound: arrivals('mb-1', 10, 0.1), now: NOW })
+    expect(s.status).toBe('ok')
+    expect(s.detail).toMatch(/last inbound/i)
+    expect(s.lastInboundAt).toBe(new Date(NOW - 0.1 * DAY).toISOString())
+  })
+
+  it('a busy mailbox quiet for 8 days is warn, naming the address and the gap', () => {
+    const s = emailInboundStatus({ mailboxes: [MB], inbound: arrivals('mb-1', 10, 8), now: NOW })
+    expect(s.status).toBe('warn')
+    expect(s.detail).toContain(MB.address)
+    expect(s.detail).toMatch(/8d/)
+  })
+
+  it('a busy mailbox quiet for 15 days is down', () => {
+    const s = emailInboundStatus({ mailboxes: [MB], inbound: arrivals('mb-1', 10, 15), now: NOW })
+    expect(s.status).toBe('down')
+  })
+
+  it('an occasional mailbox gets looser thresholds — 15d quiet is only warn, 29d is down', () => {
+    expect(emailInboundStatus({ mailboxes: [MB], inbound: arrivals('mb-1', 3, 15), now: NOW }).status).toBe('warn')
+    expect(emailInboundStatus({ mailboxes: [MB], inbound: arrivals('mb-1', 3, 29), now: NOW }).status).toBe('down')
+  })
+
+  it('a mailbox with NO inbound in the window is unknown, not red — it may be new or quiet by nature', () => {
+    const s = emailInboundStatus({ mailboxes: [MB], inbound: [], now: NOW })
+    expect(s.status).toBe('unknown')
+    expect(s.detail).toMatch(/no inbound/i)
+  })
+
+  it('one healthy mailbox cannot mask a dead one — worst status wins, only the offender is named', () => {
+    const s = emailInboundStatus({
+      mailboxes: [MB, MB2],
+      inbound: [...arrivals('mb-1', 10, 15), ...arrivals('mb-2', 10, 0.2)],
+      now: NOW,
+    })
+    expect(s.status).toBe('down')
+    expect(s.detail).toContain(MB.address)
+    expect(s.detail).not.toContain(MB2.address)
+  })
+
+  it('rehost failures escalate a healthy row — a spike is how the shim bug hid (#1268)', () => {
+    const healthy = { mailboxes: [MB], inbound: arrivals('mb-1', 10, 0.1), now: NOW }
+    expect(emailInboundStatus({ ...healthy, rehostFailed24h: 3 }).status).toBe('warn')
+    expect(emailInboundStatus({ ...healthy, rehostFailed24h: 3 }).detail).toMatch(/re-?host/i)
+    expect(emailInboundStatus({ ...healthy, rehostFailed24h: 12 }).status).toBe('down')
+  })
+
+  it('tolerates empty input', () => {
+    expect(emailInboundStatus({ now: NOW }).status).toBe('unknown')
   })
 })
