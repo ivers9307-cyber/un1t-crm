@@ -9,8 +9,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { loadRevolutSdk, revolutMode, revolutPublicKey } from '@/lib/revolut-embed'
 
-export default function OfferCheckout({ slug, priceLabel }) {
-  const [step, setStep] = useState('form') // form | pay | paid
+export default function OfferCheckout({ slug, priceLabel, resumePurchaseId = null }) {
+  // resumePurchaseId: set when Revolut redirected the buyer back after an
+  // app-handoff payment (Revolut Pay on mobile) — start by confirming that
+  // purchase instead of showing a fresh form.
+  const [step, setStep] = useState(resumePurchaseId ? 'confirming' : 'form') // form | pay | confirming | paid
   const [fields, setFields] = useState({ name: '', email: '', phone: '' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -71,23 +74,42 @@ export default function OfferCheckout({ slug, priceLabel }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, session])
 
-  // Paid fallback poll (some methods never fire onSuccess inline).
+  // Paid fallback poll (some methods never fire onSuccess inline), doubling
+  // as the redirect-return confirmation loop. On a terminal failure while
+  // confirming, fall back to the form with a message.
   useEffect(() => {
-    if (step !== 'pay' || !session?.purchaseId) return
+    const purchaseId = step === 'pay' ? session?.purchaseId : step === 'confirming' ? resumePurchaseId : null
+    if (!purchaseId) return
     let stopped = false
     const tick = async () => {
       if (stopped || paidRef.current) return
       try {
-        const r = await fetch(`/api/public/offer-purchases/${session.purchaseId}`, { cache: 'no-store' })
+        const r = await fetch(`/api/public/offer-purchases/${purchaseId}`, { cache: 'no-store' })
         const j = await r.json().catch(() => ({}))
         if (!stopped && j?.data?.paid) { markPaid(); return }
+        if (!stopped && step === 'confirming' && (j?.data?.state === 'failed' || j?.data?.state === 'cancelled')) {
+          setError('The payment was not completed. You can try again below.')
+          setStep('form')
+          return
+        }
       } catch { /* keep polling */ }
       if (!stopped) setTimeout(tick, 3000)
     }
-    const t = setTimeout(tick, 3000)
+    const t = setTimeout(tick, step === 'confirming' ? 300 : 3000)
     return () => { stopped = true; clearTimeout(t) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, session])
+
+  if (step === 'confirming') {
+    return (
+      <div className="text-center py-10">
+        <p className="ofr-display text-2xl mb-4">Confirming your payment…</p>
+        <p className="text-sm" style={{ color: '#9a9a9a' }}>
+          One moment. If you completed the payment in the Revolut app, this updates automatically.
+        </p>
+      </div>
+    )
+  }
 
   if (step === 'paid') {
     return (
