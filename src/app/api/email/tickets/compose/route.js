@@ -20,6 +20,7 @@ import {
   fileOutboundAttachments,
   outboundAttachmentsField,
 } from '@/lib/email-outbound-attachments-server'
+import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { loadSendingMailbox, loadOwnAddresses } from '../_helpers'
 
 // POST /api/email/tickets/compose — start a conversation (EMAIL-TICKET.5).
@@ -253,6 +254,66 @@ export async function POST(request) {
 
   const now = new Date().toISOString()
 
+  // ── The record of the send — built BEFORE the filing inserts ──────
+  // From here on the email is with the recipient; everything below is
+  // bookkeeping about a send that already happened, and either filing insert
+  // can still fail. Built up front so the failure branches write the same
+  // record the happy path would have (EMAIL-COMPOSE-UNFILED.1, mirroring
+  // EMAIL-REPLY-UNFILED.1 on the reply route).
+  //
+  // The email_sends row: the contact's history, delivery-webhook correlation,
+  // and how a reply matches back to this contact via postmark_message_id.
+  // contact_id is NOT NULL there, so an unlinked recipient gets no row (null
+  // here). postmark_stream is THIS APP'S 'outbound' (the shared constant),
+  // never the Postmark message stream id the message rode — see the reply
+  // route for the full reasoning.
+  const sendLogRow = contact?.id ? {
+    contact_id: contact.id,
+    location_id: locationId,
+    source_type: 'inbox_compose',
+    subject,
+    from_email: send.fromEmail,
+    to_email: to,
+    postmark_message_id: result.messageId,
+    postmark_stream: TICKET_INTERNAL_STREAM,
+    status: 'sent',
+  } : null
+
+  // EMAIL-COMPOSE-UNFILED.1 — the delivered send has to be recorded SOMEWHERE
+  // when a filing insert fails, because the rows that should have been its
+  // record don't exist: in the ticket-insert case NOTHING referenced it at
+  // all. Dead letter carries everything a human re-files from; provider is
+  // deliberately NOT a REPLAYABLE_PROVIDERS key (a replay of a send that
+  // already happened would BE the double-send); location-stamped so
+  // integration health counts it. Best-effort by construction — a DB bad
+  // enough to fail these too must still not turn "already sent" back into a
+  // retryable-looking error.
+  async function recordUnfiledSend({ ticketId, error }) {
+    try {
+      await deadLetterWebhook(db, {
+        provider: 'email_ticket_compose',
+        eventType: 'sent_not_filed',
+        payload: {
+          ticket_id: ticketId,
+          mailbox_id: mailbox.id,
+          postmark_message_id: result.messageId,
+          from_email: send.fromEmail || null,
+          recipients: { to: recipients.to, cc: recipients.cc, bcc: recipients.bcc },
+          subject,
+          text_body: text,
+          contact_id: contact?.id || null,
+          author_profile_id: user.id,
+          sent_at: now,
+        },
+        error,
+        locationId,
+      })
+      if (sendLogRow) await db.from('email_sends').insert(sendLogRow)
+    } catch (e) {
+      console.error('[tickets/compose] breadcrumbs after the unfiled send also failed:', e?.message)
+    }
+  }
+
   const { data: ticket, error: ticketErr } = await db.from('email_tickets').insert({
     // Both come off the mailbox, never off the request.
     location_id: locationId,
@@ -275,9 +336,13 @@ export async function POST(request) {
   }).select('*').single()
   if (ticketErr || !ticket) {
     console.error('[tickets/compose] ticket insert failed AFTER a successful send:', ticketErr?.message)
+    await recordUnfiledSend({ ticketId: null, error: ticketErr })
     return NextResponse.json({
       success: false,
       error: 'The email was sent but could not be filed as a ticket. Do not resend — check with the recipient before trying again.',
+      // Machine-readable, so the composer can tell this 500 from every other
+      // without string-matching the copy (same contract as the reply route).
+      data: { sent: true, message_id: result.messageId },
     }, { status: 500 })
   }
 
@@ -312,10 +377,11 @@ export async function POST(request) {
     // shows what was sent and to whom — deleting it would erase the only
     // record of an email that genuinely went out.
     console.error('[tickets/compose] message insert failed AFTER a successful send:', msgErr.message)
+    await recordUnfiledSend({ ticketId: ticket.id, error: msgErr })
     return NextResponse.json({
       success: false,
       error: 'The email was sent and the ticket created, but the message could not be filed. Do not resend.',
-      data: { ticket_id: ticket.id },
+      data: { sent: true, ticket_id: ticket.id, message_id: result.messageId },
     }, { status: 500 })
   }
 
@@ -329,26 +395,10 @@ export async function POST(request) {
     mailboxId: mailbox.id,
   })
 
-  // Log to email_sends so the email shows in the contact's history, the
-  // delivery webhooks can track it, and a reply matches back to this contact
-  // via postmark_message_id. contact_id is NOT NULL there, so an unlinked
-  // recipient skips the log — the message row above is still the record.
-  //
-  // postmark_stream is THIS APP'S 'outbound' (the shared constant), never the
-  // Postmark message stream id the message rode — see the reply route for the
-  // full reasoning.
-  if (contact?.id) {
-    await db.from('email_sends').insert({
-      contact_id: contact.id,
-      location_id: locationId,
-      source_type: 'inbox_compose',
-      subject,
-      from_email: send.fromEmail,
-      to_email: to,
-      postmark_message_id: result.messageId,
-      postmark_stream: TICKET_INTERNAL_STREAM,
-      status: 'sent',
-    })
+  // Log to email_sends — the row was built above, before the filing inserts;
+  // see the sendLogRow comment for everything it is and is not.
+  if (sendLogRow) {
+    await db.from('email_sends').insert(sendLogRow)
   }
 
   // ── Attribution (EMAIL-CC.1) ──────────────────────────────────────

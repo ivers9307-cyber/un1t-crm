@@ -37,7 +37,7 @@ import { _resetInboxSenderCache, TICKET_INTERNAL_STREAM } from '@/lib/email-inbo
 import { EMAIL_ATTACHMENT_BUCKET } from '@/lib/email-attachment-quota'
 import { outboundDraftPath } from '@/lib/email-outbound-attachments'
 import {
-  makeDb, insertsInto, updatesTo, writesTo, selectsFrom, seedObject, objectKeys,
+  makeDb, insertsInto, updatesTo, writesTo, selectsFrom, seedObject, objectKeys, failWrites,
 } from '../../_test-db'
 import {
   MB_STUDIO, T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION,
@@ -1015,29 +1015,9 @@ describe('POST …/reply — added recipients', () => {
 // delivered send has to be recorded SOMEWHERE a human can find it, because the
 // message row that should have been its record does not exist.
 
-// Fail WRITES on `tables` while leaving reads untouched. `state.errors` cannot
-// express this — it fails every operation on the table, so the route would
-// refuse at the threading lookup and never send; the case under test only
-// exists because the reads succeeded and the insert then failed.
-function failWrites(dbInstance, tables) {
-  const realFrom = dbInstance.from
-  dbInstance.from = (table) => {
-    const b = realFrom(table)
-    if (!tables.includes(table)) return b
-    const failure = { data: null, error: { code: 'XX000', message: `${table} write exploded` } }
-    for (const op of ['insert', 'update']) {
-      const orig = b[op]
-      b[op] = (payload) => {
-        orig(payload)
-        b.single = () => Promise.resolve(failure)
-        b.maybeSingle = () => Promise.resolve(failure)
-        b.then = (res, rej) => Promise.resolve(failure).then(res, rej)
-        return b
-      }
-    }
-    return b
-  }
-}
+// `failWrites` (shared harness, ../../_test-db.js) fails WRITES only —
+// `state.errors` would fail the threading lookup too, and the route would then
+// refuse before sending, which is precisely not the case under test.
 
 describe('POST …/reply — filing fails AFTER the send (EMAIL-REPLY-UNFILED.1)', () => {
   let errors

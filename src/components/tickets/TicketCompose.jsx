@@ -45,7 +45,7 @@ const FORM_ID = 'ticket-compose-form'
 const INPUT_CLASSES =
   'w-full rounded-md border border-un1t-border bg-un1t-bg px-3 py-2 text-sm text-un1t-text placeholder:text-un1t-subtle/60 focus:outline-none focus:ring-1 focus:ring-un1t-text/30'
 
-export default function TicketCompose({ mailboxes = [], initialMailboxId = null, onClose, onSent }) {
+export default function TicketCompose({ mailboxes = [], initialMailboxId = null, onClose, onSent, onSentUnfiled }) {
   // The queue route already orders the tabs default-first, but say it out loud
   // rather than leaning on that ordering from another file.
   const [mailboxId, setMailboxId] = useState(() => (
@@ -121,6 +121,14 @@ export default function TicketCompose({ mailboxes = [], initialMailboxId = null,
           ? body.issues.map(i => i.message).join('; ')
           : null
         setError(detail || body?.error || 'Could not send that')
+        // EMAIL-COMPOSE-UNFILED.1 — `data.sent` on a failure body means the
+        // email IS with the recipient and only the filing failed. The modal
+        // stays open with the copy above ("Do not resend") and the draft — the
+        // only remaining record of what they received — while the parent
+        // quietly refetches the queue: when the ticket row WAS created, it
+        // should appear behind this modal rather than look like nothing
+        // happened.
+        if (body?.data?.sent) onSentUnfiled?.()
         return
       }
       // The parent owns closing and opening the new ticket — the modal does

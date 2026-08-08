@@ -417,6 +417,35 @@ export const usageFor = (db, locationId, mailboxId = null) =>
     u => u.location_id === locationId && (u.mailbox_id ?? null) === mailboxId
   ) || null
 
+/**
+ * Fail WRITES on `tables` while leaving reads untouched — the harness for the
+ * sent-but-unfiled family (EMAIL-REPLY-UNFILED.1). `state.errors` cannot
+ * express this: it fails every operation on the table, so a route that reads
+ * before it sends would refuse up front and never reach the send; the case
+ * under test only exists because the reads succeeded and a write then failed.
+ * The failed write is NOT recorded on db.inserts/db.updates (settle never
+ * runs), so per-table assertions see exactly what the real DB kept.
+ */
+export function failWrites(db, tables) {
+  const realFrom = db.from
+  db.from = (table) => {
+    const b = realFrom(table)
+    if (!tables.includes(table)) return b
+    const failure = { data: null, error: { code: 'XX000', message: `${table} write exploded` } }
+    for (const op of ['insert', 'update']) {
+      const orig = b[op]
+      b[op] = (payload) => {
+        orig(payload)
+        b.single = () => Promise.resolve(failure)
+        b.maybeSingle = () => Promise.resolve(failure)
+        b.then = (res, rej) => Promise.resolve(failure).then(res, rej)
+        return b
+      }
+    }
+    return b
+  }
+}
+
 export const insertsInto = (db, table) => db.inserts.filter(i => i.table === table)
 export const updatesTo = (db, table) => db.updates.filter(u => u.table === table)
 export const deletesFrom = (db, table) => db.deletes.filter(d => d.table === table)
