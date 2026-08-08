@@ -835,8 +835,8 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     expect(pm.sendMarketingEmail).not.toHaveBeenCalled()
   })
 
-  it.each(['bounced', 'complained', 'unsubscribed'])(
-    'email_status %s → recorded skip, not an error (mid-sequence unsubscribe must not pause the enrolment)',
+  it.each(['bounced', 'complained'])(
+    'email_status %s → recorded skip, not an error (a mid-sequence bounce must not pause the enrolment)',
     async (email_status) => {
       const db = emailDb()
       const out = await steps.sendEmailStep(db, {
@@ -849,6 +849,20 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
       expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toContain(email_status)
     },
   )
+
+  it('email_status unsubscribed (retired, mig 492) does NOT suppress — the per-location gate above is the consent check', async () => {
+    // The value is reputation-only residue; a contact carrying it who holds
+    // per-location consent (e.g. re-opted-in at this location) must get the
+    // step. Suppressing here recreated the cross-location over-blocking mig
+    // 492 removed.
+    const db = emailDb()
+    const out = await steps.sendEmailStep(db, {
+      enrollment: { id: 'e9' }, step, sequence,
+      contact: { ...consentedContact, email_status: 'unsubscribed' },
+    })
+    expect(out).toBe('cccccccc-0000-0000-0000-000000000003')
+    expect(pm.sendMarketingEmail).toHaveBeenCalledTimes(1)
+  })
 
   it('email_suppressed_at set (engagement hygiene, EMAIL-HYGIENE.1) → recorded skip, mirrors the campaign audience gate', async () => {
     const db = emailDb()

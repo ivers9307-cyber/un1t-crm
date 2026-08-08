@@ -145,7 +145,9 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
     })
     return null
   }
-  if (contact.email_status && ['bounced', 'complained', 'unsubscribed'].includes(contact.email_status)) {
+  // LOCCOMMS.5 / mig 492 — 'unsubscribed' deliberately absent: the value is
+  // retired (mig 501 CHECK), consent is the per-location gate above.
+  if (contact.email_status && ['bounced', 'complained'].includes(contact.email_status)) {
     await recordStepSkip(db, { contact, sequence, step, channel: 'email', reason: `email_status is '${contact.email_status}'` })
     return null
   }
