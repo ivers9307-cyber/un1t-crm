@@ -30,6 +30,10 @@ function includesFor(offer) {
 
 export default async function OfferPage(props) {
   const { slug } = await props.params
+  const sp = await props.searchParams
+  // Revolut's redirect back after an app-handoff payment carries ?purchase=
+  // (set by the checkout route's redirectUrl) — resume in confirming mode.
+  const resumePurchaseId = typeof sp?.purchase === 'string' ? sp.purchase : null
   const db = createServerClient()
   const { data: offer } = await db.from('sale_offers').select('*').eq('slug', slug).maybeSingle()
   if (!offer) notFound()
@@ -69,7 +73,7 @@ export default async function OfferPage(props) {
           {was && <span className="ofr-was">{was}</span>}
         </div>
         {open ? (
-          <OfferCheckout slug={offer.slug} priceLabel={priceLabel} />
+          <OfferCheckout slug={offer.slug} priceLabel={priceLabel} resumePurchaseId={resumePurchaseId} />
         ) : (
           <div style={{ paddingTop: 24 }}>
             <p className="ofr-display" style={{ fontSize: 28 }}>The sale has ended</p>

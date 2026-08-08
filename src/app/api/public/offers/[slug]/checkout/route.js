@@ -40,12 +40,29 @@ export async function POST(request, props) {
   }
 
   const purchaseId = crypto.randomUUID()
+  // Redirect-flow payment methods (Revolut Pay app-handoff on mobile, some
+  // 3DS journeys) need a return target on the ORDER — without one the widget
+  // suppresses Revolut Pay on phones entirely (desktop uses QR/popup and
+  // doesn't care). Return to the product page with the purchase id; the page
+  // resumes in a confirming state and the status poll settles it. Origin is
+  // allowlisted to the marketing domain so a forged Origin header can't
+  // point Revolut's redirect anywhere else.
+  const origin = (() => {
+    try {
+      const h = new URL(request.headers.get('origin') || '').hostname
+      if (h === 'un1tdublin.com' || h.endsWith('.un1tdublin.com')) {
+        return request.headers.get('origin')
+      }
+    } catch { /* fall through to default */ }
+    return 'https://www.un1tdublin.com'
+  })()
   const order = await createOrder({
     amount: offer.price_cents, // server-side price ONLY
     currency: offer.currency,
     description: `UN1T — ${offer.name}`,
     metadata: { offer_purchase_id: purchaseId, offer_slug: offer.slug, location_id: offer.location_id },
     idempotencyKey: purchaseId,
+    redirectUrl: `${origin}/offers/${offer.slug}?purchase=${purchaseId}`,
   })
 
   const { error } = await db.from('offer_purchases').insert({

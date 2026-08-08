@@ -55,6 +55,11 @@ describe('POST /api/public/offers/[slug]/checkout', () => {
     expect(json.data.purchaseId).toBeTruthy()
     // Price comes ONLY from sale_offers — the client-sent amount is ignored.
     expect(createOrder).toHaveBeenCalledWith(expect.objectContaining({ amount: 49700, currency: 'EUR' }))
+    // Redirect target for app-handoff methods (Revolut Pay mobile): the
+    // product page + purchase id, on the allowlisted marketing origin.
+    const { redirectUrl } = createOrder.mock.calls[0][0]
+    expect(redirectUrl).toMatch(/^https:\/\/www\.un1tdublin\.com\/offers\/3-month-membership\?purchase=.+/)
+    expect(redirectUrl).toContain(`purchase=${json.data.purchaseId}`)
     const inserted = state.inserts[0]
     expect(inserted).toEqual(expect.objectContaining({
       offer_id: 'offer-1', location_id: 'loc1', revolut_order_id: 'ord_1',
