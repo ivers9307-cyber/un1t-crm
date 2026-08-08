@@ -70,6 +70,7 @@ import { resolveEmailSender } from './tenant-email.js'
 import { injectPreheader, htmlToPlainText } from './email-content.js'
 import { resolveAbPhase, assignAbVariants, clampAbTestPct, decideAbWinner, subjectForVariant } from './campaign-ab.js'
 import { frequencyCapFromLocationSettings, capCutoffIso, stampMarketingTouch, CAMPAIGN_CAP_SKIP_AFTER_MS } from './frequency-cap.js'
+import { loadNonOpenerContactIds } from './campaign-resend.js'
 import { getAppUrl } from './app-url.js'
 
 const CHUNK_SIZE = 500             // recipients per cron tick per campaign
@@ -115,7 +116,13 @@ export async function tickCampaignSend(db, campaign) {
   // gated OR stamped — utility/outbound campaigns are administrative mail
   // and must never consume a contact's marketing window.
   const capSetting = frequencyCapFromLocationSettings(campaign.locations?.settings)
-  const capActive = stream === 'broadcast' && capSetting.enabled
+  // CAMPAIGN-RESEND — a resend child (parent_campaign_id set) bypasses the
+  // cap: the operator deliberately chose to re-contact exactly these people,
+  // and the original send already stamped their window (which would
+  // otherwise hold the entire resend until the cap cleared, then the 7-day
+  // valve would skip everyone). Successful sends still stamp the touch below
+  // so SUBSEQUENT campaigns count the resend.
+  const capActive = stream === 'broadcast' && capSetting.enabled && !campaign.parent_campaign_id
 
   // Hard stop — cancel-while-sending.
   if (campaign.cancel_requested_at) {
@@ -140,13 +147,42 @@ export async function tickCampaignSend(db, campaign) {
 
   if ((existingCount || 0) === 0) {
     const contacts = []
-    for (let from = 0; ; from += AUDIENCE_PAGE_SIZE) {
-      const { query } = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id, { consentField })
-      const { data, error } = await query.range(from, from + AUDIENCE_PAGE_SIZE - 1)
-      if (error) return { phase: 'populate', error: `audience load failed: ${error.message}` }
-      if (!data || data.length === 0) break
-      contacts.push(...data)
-      if (data.length < AUDIENCE_PAGE_SIZE) break
+    if (campaign.parent_campaign_id) {
+      // CAMPAIGN-RESEND — the child's audience is the parent's non-openers,
+      // re-intersected with contact_location_audience AT POPULATE TIME so
+      // consent, suppression and bounces since the original send are
+      // honoured. Query the VIEW itself, never inner-join around it
+      // (LOCCOMMS invariant: a missing preference row must mean "never
+      // send", which the view encodes). Resends are broadcast-only, so
+      // the gate set is always the marketing one.
+      let nonOpenerIds
+      try {
+        nonOpenerIds = await loadNonOpenerContactIds(db, campaign.parent_campaign_id)
+      } catch (err) {
+        return { phase: 'populate', error: err?.message || String(err) }
+      }
+      for (let i = 0; i < nonOpenerIds.length; i += AUDIENCE_PAGE_SIZE) {
+        const chunk = nonOpenerIds.slice(i, i + AUDIENCE_PAGE_SIZE)
+        const { data, error } = await db
+          .from('contact_location_audience')
+          .select('id')
+          .eq('audience_location_id', campaign.location_id)
+          .eq('loc_email_marketing', true)
+          .not('email_status', 'in', '("bounced","complained")')
+          .is('email_suppressed_at', null)
+          .in('id', chunk)
+        if (error) return { phase: 'populate', error: `resend audience load failed: ${error.message}` }
+        contacts.push(...(data || []))
+      }
+    } else {
+      for (let from = 0; ; from += AUDIENCE_PAGE_SIZE) {
+        const { query } = await buildAudienceQueryAsync(db, campaign.audience_filter, campaign.location_id, { consentField })
+        const { data, error } = await query.range(from, from + AUDIENCE_PAGE_SIZE - 1)
+        if (error) return { phase: 'populate', error: `audience load failed: ${error.message}` }
+        if (!data || data.length === 0) break
+        contacts.push(...data)
+        if (data.length < AUDIENCE_PAGE_SIZE) break
+      }
     }
 
     if (contacts.length === 0) {

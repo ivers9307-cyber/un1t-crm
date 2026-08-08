@@ -945,3 +945,128 @@ describe('EMAIL-NOTRACK.1 — campaign-sender output is unchanged', () => {
     expect(payload[0].TrackLinks).toBe('None')
   })
 })
+
+// ── CAMPAIGN-RESEND (mig 506) — resend children ───────────────────
+//
+// A campaign with parent_campaign_id set is a resend-to-non-openers
+// child. Its populate step ignores the audience DSL and instead reads
+// the PARENT's unopened sent/delivered recipients, re-intersected with
+// contact_location_audience so consent / suppression / bounces since
+// the original send are honoured. Resends also bypass the marketing
+// frequency cap (deliberate operator action) but still stamp
+// last_marketing_touch_at.
+describe('tickCampaignSend — resend children (CAMPAIGN-RESEND)', () => {
+  const childCampaign = (over = {}) => ({
+    ...campaign,
+    id: 'child-1',
+    parent_campaign_id: 'parent-1',
+    ...over,
+  })
+
+  const touchStamps = (statements) =>
+    statements.filter(s =>
+      s.table === 'contacts' &&
+      s.ops[0]?.method === 'update' &&
+      'last_marketing_touch_at' in s.ops[0].args[0]
+    )
+
+  // Populate-phase route: the child has no recipients yet; the parent's
+  // non-openers come from campaign_recipients; the view returns survivors.
+  const resendPopulateRoute = ({ nonOpeners, survivors }) => (state) => {
+    if (state.table === 'campaign_recipients') {
+      const first = state.ops[0]
+      if (first.method === 'select' && first.args[1]?.head) return { count: 0 }
+      if (first.method === 'select' && hasEq(state, 'campaign_id', 'parent-1')) return { data: nonOpeners }
+      return {}
+    }
+    if (state.table === 'contact_location_audience') return { data: survivors }
+    return {}
+  }
+
+  it('populates from the parent’s non-openers ∩ audience view, not the audience DSL', async () => {
+    const { db, statements } = makeDb(resendPopulateRoute({
+      nonOpeners: [{ contact_id: 'c-1' }, { contact_id: 'c-2' }, { contact_id: 'c-3' }],
+      survivors: [{ id: 'c-1' }, { id: 'c-3' }],
+    }))
+
+    const result = await tickCampaignSend(db, childCampaign())
+
+    expect(result.phase).toBe('populate')
+    expect(buildAudienceQueryAsync).not.toHaveBeenCalled()
+
+    // Parent non-opener read: unopened + sent/delivered only.
+    const parentRead = statements.find(s =>
+      s.table === 'campaign_recipients' && hasEq(s, 'campaign_id', 'parent-1'))
+    expect(parentRead.ops.find(o => o.method === 'is').args).toEqual(['opened_at', null])
+    expect(parentRead.ops.find(o => o.method === 'in').args).toEqual(['status', ['sent', 'delivered']])
+
+    // View re-check carries the full marketing gate set.
+    const viewRead = statements.find(s => s.table === 'contact_location_audience')
+    expect(hasEq(viewRead, 'audience_location_id', 'loc-1')).toBe(true)
+    expect(hasEq(viewRead, 'loc_email_marketing', true)).toBe(true)
+    expect(viewRead.ops.find(o => o.method === 'not').args)
+      .toEqual(['email_status', 'in', '("bounced","complained")'])
+    expect(viewRead.ops.find(o => o.method === 'is').args).toEqual(['email_suppressed_at', null])
+    expect(viewRead.ops.find(o => o.method === 'in').args).toEqual(['id', ['c-1', 'c-2', 'c-3']])
+
+    // Only survivors become recipient rows.
+    const insert = statements.find(s => s.table === 'campaign_recipients' && s.ops[0].method === 'insert')
+    expect(insert.ops[0].args[0]).toEqual([
+      { campaign_id: 'child-1', contact_id: 'c-1', status: 'queued' },
+      { campaign_id: 'child-1', contact_id: 'c-3', status: 'queued' },
+    ])
+    expect(campaignUpdates(statements)).toContainEqual(
+      expect.objectContaining({ status: 'sending', total_recipients: 2 }))
+  })
+
+  it('finalises as sent-with-zero when nobody survives the view re-check', async () => {
+    const { db, statements } = makeDb(resendPopulateRoute({
+      nonOpeners: [{ contact_id: 'c-1' }],
+      survivors: [],
+    }))
+
+    const result = await tickCampaignSend(db, childCampaign())
+
+    expect(result).toEqual({ phase: 'populate', sent: 0 })
+    expect(campaignUpdates(statements)).toContainEqual(
+      expect.objectContaining({ status: 'sent', total_recipients: 0 }))
+    expect(statements.some(s => s.table === 'campaign_recipients' && s.ops[0].method === 'insert')).toBe(false)
+  })
+
+  it('surfaces a populate error when the parent non-opener read fails', async () => {
+    const { db } = makeDb((state) => {
+      if (state.table === 'campaign_recipients') {
+        const first = state.ops[0]
+        if (first.method === 'select' && first.args[1]?.head) return { count: 0 }
+        return { data: null, error: { message: 'boom' } }
+      }
+      return {}
+    })
+
+    const result = await tickCampaignSend(db, childCampaign())
+    expect(result.phase).toBe('populate')
+    expect(result.error).toMatch(/boom/)
+  })
+
+  it('bypasses the frequency cap for a resend child but still stamps the touch', async () => {
+    const { db, statements } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, childCampaign({
+      locations: { name: 'Stillorgan', settings: { comms_frequency_cap: { enabled: true, min_hours_between: 24 } } },
+    }))
+
+    // No cap filter on the queued fetch even though the cap is enabled…
+    const chunk = statements.find(s =>
+      s.table === 'campaign_recipients' &&
+      s.ops[0]?.method === 'select' &&
+      !s.ops[0].args[1]?.head &&
+      hasEq(s, 'status', 'queued'))
+    expect(chunk.ops.some(o => o.method === 'or' && String(o.args[0]).includes('last_marketing_touch_at'))).toBe(false)
+
+    // …and the successful send still consumes the contact's window.
+    const stamps = touchStamps(statements)
+    expect(stamps).toHaveLength(1)
+    expect(stamps[0].ops.find(o => o.method === 'in').args[1]).toEqual(['contact-r1'])
+  })
+})
