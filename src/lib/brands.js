@@ -194,7 +194,13 @@ export function resolveBrand(hostname) {
 // so adding a new asset prefix is one edit, not three.
 // ─────────────────────────────────────────────────────────────────
 
-const FRAMEWORK_ASSET_PATHS = ['/_next/']
+// '/.well-known/' rides the framework passthrough on EVERY brand host:
+// Apple Pay domain verification (APPLEPAY.1) fetches
+// /.well-known/apple-developer-merchantid-domain-association anonymously,
+// and the brand fallback rewrite was swallowing it — so Apple Pay could
+// never verify un1tdublin.com (or pay.ccfautos.com) and the button never
+// appeared in Safari. The file itself lives in public/.well-known/.
+const FRAMEWORK_ASSET_PATHS = ['/_next/', '/.well-known/']
 const FRAMEWORK_ASSET_FILES = new Set([
   '/favicon.ico',
   '/robots.txt',
