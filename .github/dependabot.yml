@@ -17,6 +17,21 @@ updates:
     groups:
       web-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # DEFERRED MAJORS (2026-08-09) — both are gated on toolchain support,
+      # not on work in this repo; a bare bump fails CI on arrival:
+      # • tailwindcss v4: web and mobile share class strings through shared/,
+      #   and NativeWind pins tailwind ^3 (see the /mobile ignore below). Web
+      #   moves to v4 only together with a NativeWind release that supports
+      #   it, as one deliberate task (PostCSS plugin swap + CSS-first config
+      #   + renamed-utility sweep), never via a version bump PR.
+      # • typescript v7 (native compiler): zero .ts files here — the package
+      #   exists only as a peer of eslint-config-next → typescript-eslint,
+      #   whose peer range rejects 7. Bump when typescript-eslint supports it.
+      - dependency-name: 'tailwindcss'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'typescript'
+        update-types: ['version-update:semver-major']
     labels: [dependencies]
 
   # Mobile (Expo/RN). CAUTION: EAS runs a strict `npm ci` and the app tracks a
