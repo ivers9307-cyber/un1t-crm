@@ -64,7 +64,7 @@ export default async function SendsHistoryPage() {
   if (canEmail && locationId) {
     // campaigns has its own count columns (total_bounced, not total_failed).
     const { data } = await db.from('campaigns')
-      .select('id, name, status, total_recipients, total_sent, total_bounced, created_at, scheduled_at, sent_at')
+      .select('id, name, status, total_recipients, total_sent, total_bounced, created_at, scheduled_at, sent_at, parent_campaign_id, resend_enabled')
       .eq('location_id', locationId).order('created_at', { ascending: false }).limit(100)
     for (const c of data || []) rows.push({ ...c, channel: 'email', total_failed: c.total_bounced || 0, detail: `/email/campaigns/${c.id}` })
   }
@@ -108,6 +108,14 @@ export default async function SendsHistoryPage() {
                       <Link href={r.detail} className="flex items-center gap-2 min-w-0">
                         <Icon size={15} className="text-un1t-subtle shrink-0" />
                         <span className="text-un1t-text truncate">{r.name || 'Untitled'}</span>
+                        {/* CAMPAIGN-RESEND — child = a resend campaign; a flagged
+                            parent still has its resend pending. */}
+                        {r.parent_campaign_id && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-un1t-border/40 text-un1t-subtle shrink-0">Resend</span>
+                        )}
+                        {r.resend_enabled && r.status === 'sent' && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-700 shrink-0">resend scheduled</span>
+                        )}
                       </Link>
                     </td>
                     <td className="px-4 py-3">
