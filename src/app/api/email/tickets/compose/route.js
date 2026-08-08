@@ -5,6 +5,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, email as emailAddress } from '@/lib/schemas'
 import { sendTicketEmail, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
+import { appendSignature } from '@/lib/email-signature'
 import { normalizeEmail, pickContact, inboundPreview } from '@/lib/email-inbox'
 import { ticketSubject } from '@/lib/email-tickets'
 import { escapeLikePattern } from '@/lib/like-escape'
@@ -215,10 +216,6 @@ export async function POST(request) {
   // ticket when nothing threads), and the errors below say plainly that the
   // mail went out so nobody re-sends it blind.
   //
-  // TODO(EMAIL-TICKET.5): append the sender's signature here once the reply
-  // route's per-profile signature helper exists — one call, both paths, no
-  // second copy of the rule.
-  //
   // EMAIL-CC.1 — all three lists via toPostmarkFields(), the single site where
   // a resolved set becomes wire values. Bcc reaches Postmark's own Bcc field
   // and nothing else. Note the WIRE strings go out while the ticket below is
@@ -228,14 +225,21 @@ export async function POST(request) {
   // inbox's own Postmark server and stream, with Reply-To that same mailbox so
   // the answer threads back onto this ticket. Same call as the reply route;
   // changing it is one change for both.
+  // The sender's sign-off, exactly as the reply route builds it: appended
+  // BEFORE the HTML conversion so textToHtml escapes body and signature in one
+  // pass, and stored below so the row records what was actually sent. A
+  // composed email is a ticket whose first message is outbound — not a second
+  // concept — so it does not get a second signature rule either.
+  const outboundText = appendSignature(text, user.email_signature)
+
   const send = await sendTicketEmail({
     mailboxAddress: mailbox.address,
     to: wire.to,
     cc: wire.cc,
     bcc: wire.bcc,
     subject,
-    htmlBody: textToHtml(text),
-    textBody: text,
+    htmlBody: textToHtml(outboundText),
+    textBody: outboundText,
     tag: 'ticket-compose',
     metadata: { mailbox_id: mailbox.id, contact_id: contact?.id || '' },
     // undefined when there are none, so the Postmark payload is byte-identical
@@ -300,7 +304,9 @@ export async function POST(request) {
           from_email: send.fromEmail || null,
           recipients: { to: recipients.to, cc: recipients.cc, bcc: recipients.bcc },
           subject,
-          text_body: text,
+          // The SIGNED body — this payload is the re-fileable record of what
+          // the member actually received.
+          text_body: outboundText,
           contact_id: contact?.id || null,
           author_profile_id: user.id,
           sent_at: now,
@@ -362,7 +368,7 @@ export async function POST(request) {
     cc_emails: recipients.cc,
     bcc_emails: recipients.bcc,
     subject,
-    text_body: text,
+    text_body: outboundText,
     postmark_message_id: result.messageId,
     // mig 493 — WHO wrote it. On a shared queue an anonymous "outbound" is the
     // difference between a conversation and a pile of text.
