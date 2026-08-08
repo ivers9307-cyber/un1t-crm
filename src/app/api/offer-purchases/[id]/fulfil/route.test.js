@@ -2,7 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const state = { user: null, row: null, updates: [], updateError: null }
 
-vi.mock('@/lib/auth', () => ({ getCurrentUser: async () => state.user }))
+vi.mock('@/lib/auth', () => ({
+  getCurrentUser: async () => state.user,
+  // Mirror the real Or404 contract: null when allowed, a 404 response otherwise.
+  assertLocationAccessOr404: (user, locationId) => {
+    const allowed = (user?.locations || []).some((l) => l.id === locationId)
+    return allowed ? null : new Response(JSON.stringify({ success: false, error: 'Not found' }), { status: 404 })
+  },
+}))
 vi.mock('@/lib/permissions', () => ({
   hasPermission: (user, key) => Boolean(user?.perms?.[key]),
 }))

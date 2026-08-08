@@ -248,6 +248,12 @@ export const EXEMPT = {
   'src/app/api/public/class-booking-payments/[id]/route.js': {
     class_booking_requests: 'Public paid-booking status poll: the row is resolved by its own unguessable UUID (the payment id handed to the payer in the create response) — the id IS the capability token, not enumerable. Returns only display-safe checkout fields (status/provider/token/url/amount/class_name), no contact PII. Mirrors public/event-payments/[id].',
   },
+  'src/app/api/public/offers/[slug]/checkout/route.js': {
+    sale_offers: 'Public sale catalogue (OFFERS.4): the row is looked up by its globally-unique slug and every active offer is deliberately world-readable — it IS the product page data. The only sensitive field the route touches is price_cents, which it reads server-side precisely so the client can never supply an amount.',
+  },
+  'src/app/api/public/offer-purchases/[id]/route.js': {
+    offer_purchases: 'Public paid-purchase status poll (OFFERS.4): the row is resolved by its own unguessable UUID (the purchaseId handed to the payer in the checkout response) — the id IS the capability token, not enumerable. Returns only { paid, state }, no buyer PII. Mirrors public/class-booking-payments/[id].',
+  },
   'src/app/api/public/branding/route.js': {
     company_settings: 'Anonymous login-screen branding: deliberately serves the FIRST configured row (logo/name only) when no location context exists yet. Known single-tenant shortcut — revisit when a second org onboards, but it exposes no contact/tenant data.',
   },

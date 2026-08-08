@@ -6,7 +6,7 @@
 // can't be enumerated. Idempotent — re-fulfilling returns 200 with
 // already: true and leaves the original stamp untouched.
 import { NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth'
+import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 
@@ -27,10 +27,9 @@ export async function POST(_request, props) {
     .eq('id', id)
     .maybeSingle()
 
-  const allowedLocation = row && (user.locations || []).some((l) => l.id === row.location_id)
-  if (!row || !allowedLocation) {
-    return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
-  }
+  if (!row) return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 })
+  const guard = assertLocationAccessOr404(user, row.location_id)
+  if (guard) return guard
   if (row.state !== 'paid') {
     return NextResponse.json({ success: false, error: 'Purchase is not paid' }, { status: 409 })
   }
