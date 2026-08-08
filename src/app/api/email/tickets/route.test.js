@@ -303,3 +303,33 @@ describe('GET /api/email/tickets — a failed mailbox lookup is not an empty inb
     expect(body.data).toEqual({ mailboxes: [], tickets: [] })
   })
 })
+
+
+// EMAIL-ASSIGN.1 — the queue resolves assignee names server-side (profiles is
+// unreadable client-side) and tells the UI whether the viewer may reassign.
+describe('assignment enrichment', () => {
+  it('attaches assignee_name to assigned rows and leaves unassigned ones null', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      tickets: [
+        { ...T_STUDIO, assigned_to: 'profile-owner' },
+        { ...T_ACCOUNTS, assigned_to: null },
+      ],
+      profiles: [{ id: 'profile-owner', full_name: 'Orla Owner', role: 'owner' }],
+    }))
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { res, body } = await list()
+    expect(res.status).toBe(200)
+    const byId = new Map(body.data.tickets.map(t => [t.id, t]))
+    expect(byId.get(T_STUDIO.id).assignee_name).toBe('Orla Owner')
+    expect(byId.get(T_ACCOUNTS.id).assignee_name).toBeNull()
+  })
+
+  it('tells the UI whether the viewer is elevated — the reassign control gates on it', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    expect((await list()).body.data.viewer_is_elevated).toBe(true)
+
+    getCurrentUser.mockResolvedValue(COACH)
+    expect((await list()).body.data.viewer_is_elevated).toBe(false)
+  })
+})

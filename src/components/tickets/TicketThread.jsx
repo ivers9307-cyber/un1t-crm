@@ -78,6 +78,11 @@ export default function TicketThread({
   onBack,
   onStatusChange,
   statusSaving = false,
+  // EMAIL-ASSIGN.1 — claim/release for everyone, reassign for elevated
+  // viewers. onAssign takes 'me' | null | <profile id>; the route decides.
+  onAssign,
+  assignSaving = false,
+  viewerIsElevated = false,
   onSend,
   sending = false,
   // EMAIL-FORWARD.1 — opens the forward composer for ONE message. Owned by the
@@ -212,6 +217,21 @@ export default function TicketThread({
             })}
           </div>
           <span className="text-[11px] text-un1t-muted">Nothing closes itself — close it when it's done.</span>
+        </div>
+
+        {/* Ownership (EMAIL-ASSIGN.1). Claim is one click because the common
+            case is "I'm answering this"; release undoes exactly that; the
+            reassign picker appears only for elevated viewers, fed by the
+            assignees route (grant-holders + owners — people who can SEE it). */}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="text-[11px] uppercase tracking-wide text-un1t-muted">Owner</span>
+          <AssignControl
+            ticket={ticket}
+            currentUserId={currentUserId}
+            viewerIsElevated={viewerIsElevated}
+            onAssign={onAssign}
+            saving={assignSaving}
+          />
         </div>
       </div>
 
@@ -588,6 +608,63 @@ function RecipientLines({ message, onAccent = false }) {
           {line.note && <span className={label}>· {line.note}</span>}
         </p>
       ))}
+    </div>
+  )
+}
+
+/**
+ * Claim / release / reassign (EMAIL-ASSIGN.1). The assignee list is fetched
+ * lazily, once per ticket, and only for elevated viewers — it enumerates
+ * colleagues' mailbox access, which the route 403s to everybody else.
+ */
+function AssignControl({ ticket, currentUserId, viewerIsElevated, onAssign, saving }) {
+  const [assignees, setAssignees] = useState(null)
+  const mine = !!currentUserId && ticket?.assigned_to === currentUserId
+  const assigned = !!ticket?.assigned_to
+  const ticketId = ticket?.id || null
+
+  useEffect(() => {
+    setAssignees(null)
+    if (!viewerIsElevated || !ticketId) return undefined
+    let cancelled = false
+    fetch(`/api/email/tickets/${ticketId}/assignees`)
+      .then(r => r.json())
+      .then(j => { if (!cancelled && j?.success) setAssignees(j.data?.assignees || []) })
+      // A failed lookup just hides the picker; claim/release still work.
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [ticketId, viewerIsElevated])
+
+  const btn = 'rounded-md border border-un1t-border px-2.5 py-1 text-xs text-un1t-subtle transition-colors hover:text-un1t-text disabled:opacity-50'
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {!assigned && (
+        <button type="button" onClick={() => onAssign?.('me')} disabled={saving} className={btn}>
+          Claim
+        </button>
+      )}
+      {(mine || (assigned && viewerIsElevated)) && (
+        <button type="button" onClick={() => onAssign?.(null)} disabled={saving} className={btn}>
+          {mine ? 'Release' : 'Unassign'}
+        </button>
+      )}
+      {viewerIsElevated && Array.isArray(assignees) && assignees.length > 0 && (
+        <select
+          aria-label="Assign to"
+          value=""
+          disabled={saving}
+          onChange={(e) => { if (e.target.value) onAssign?.(e.target.value) }}
+          className="rounded-md border border-un1t-border bg-un1t-bg px-2 py-1 text-xs text-un1t-subtle focus:outline-none"
+        >
+          <option value="">Assign to…</option>
+          {assignees
+            .filter(a => a.id !== ticket?.assigned_to)
+            .map(a => (
+              <option key={a.id} value={a.id}>{a.full_name || 'Unnamed'}</option>
+            ))}
+        </select>
+      )}
     </div>
   )
 }

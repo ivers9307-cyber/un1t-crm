@@ -401,6 +401,9 @@ export function initialsOf(name) {
 export function assigneeLabel(ticket, currentUserId) {
   if (!ticket?.assigned_to) return 'Unassigned'
   if (currentUserId && ticket.assigned_to === currentUserId) return 'Assigned to you'
+  // EMAIL-ASSIGN.1 — the routes resolve assignee_name server-side (profiles
+  // is unreadable client-side); an unresolved name degrades to 'Assigned'.
+  if (ticket.assignee_name) return `Assigned to ${ticket.assignee_name}`
   return 'Assigned'
 }
 

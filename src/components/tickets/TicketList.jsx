@@ -30,6 +30,8 @@ export default function TicketList({
   locationName,
   showMailbox = false,
   mailboxById = {},
+  // EMAIL-ASSIGN.1 — lets a row say 'You' instead of the viewer's own name.
+  currentUserId,
 }) {
   return (
     <>
@@ -65,6 +67,7 @@ export default function TicketList({
                   onSelect={onSelect}
                   showMailbox={showMailbox}
                   mailbox={mailboxById[t.mailbox_id] || null}
+                  currentUserId={currentUserId}
                 />
               </li>
             ))}
@@ -75,7 +78,7 @@ export default function TicketList({
   )
 }
 
-function TicketRow({ ticket, selected, onSelect, showMailbox, mailbox }) {
+function TicketRow({ ticket, selected, onSelect, showMailbox, mailbox, currentUserId }) {
   const name = requesterLabel(ticket)
   const unread = ticket.unread_count > 0
   const status = statusMeta(ticket.status)
@@ -123,8 +126,15 @@ function TicketRow({ ticket, selected, onSelect, showMailbox, mailbox }) {
             {ticket.last_message_preview || '—'}
           </span>
 
-          {(showMailbox || showStatus || priority || unread) && (
+          {(showMailbox || showStatus || priority || unread || ticket.assigned_to) && (
             <span className="mt-1.5 flex flex-wrap items-center gap-1">
+              {ticket.assigned_to && (
+                <span className="rounded-full bg-un1t-surface px-1.5 py-0.5 text-[10px] text-un1t-subtle ring-1 ring-inset ring-un1t-border">
+                  {currentUserId && ticket.assigned_to === currentUserId
+                    ? 'You'
+                    : (ticket.assignee_name || 'Assigned')}
+                </span>
+              )}
               {showMailbox && (
                 <span
                   className="rounded-full bg-un1t-surface px-1.5 py-0.5 text-[10px] text-un1t-subtle ring-1 ring-inset ring-un1t-border"

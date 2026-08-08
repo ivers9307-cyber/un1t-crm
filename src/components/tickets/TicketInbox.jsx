@@ -15,7 +15,8 @@
 // WHAT IT DELIBERATELY DOES NOT DO
 //   • No html_body. The thread renders text_body only — sanitised HTML is a
 //     later plan and injecting raw email HTML is an XSS hole.
-//   • No assignment picker. `assigned_to` is display-only here.
+//   • Assignment is claim/release for everyone and reassign for elevated
+//     viewers (EMAIL-ASSIGN.1) — the picker lives in TicketThread.
 //   • No auto-close, anywhere, ever (Richard, 2026-08-06). A ticket leaves the
 //     queue because a person put it there.
 
@@ -69,6 +70,9 @@ export default function TicketInbox({ locationId, locationName, userId }) {
   const [threadError, setThreadError] = useState(null)
   const [sending, setSending] = useState(false)
   const [statusSaving, setStatusSaving] = useState(false)
+  const [assignSaving, setAssignSaving] = useState(false)
+  // EMAIL-ASSIGN.1 — whether the viewer may reassign; the queue route says.
+  const [viewerIsElevated, setViewerIsElevated] = useState(false)
 
   // EMAIL-TICKET.5 — starting a conversation rather than answering one.
   const [composeOpen, setComposeOpen] = useState(false)
@@ -106,6 +110,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
       setQueueError(null)
       setMailboxes(body.data?.mailboxes || [])
       setTickets(body.data?.tickets || [])
+      setViewerIsElevated(!!body.data?.viewer_is_elevated)
     } catch {
       if (queueRequest.current !== url) return
       // Transient — keep the last good queue on screen rather than blanking
@@ -318,6 +323,45 @@ export default function TicketInbox({ locationId, locationName, userId }) {
     }
   }
 
+  // EMAIL-ASSIGN.1 — claim ('me'), release (null) or reassign (profile id).
+  // Same merge discipline as handleStatus: spread the server row OVER the
+  // local one (it lacks the mailbox/contact the detail route added), then
+  // refetch the queue — the row may have just left or entered 'mine'.
+  async function handleAssign(assignee) {
+    if (!selectedId || assignSaving) return
+    setAssignSaving(true)
+    setThreadError(null)
+    try {
+      const res = await fetch(`/api/email/tickets/${selectedId}/assign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assignee }),
+      })
+      const body = await res.json()
+      if (!body?.success) {
+        setThreadError(
+          body?.error === 'already_assigned'
+            ? 'Somebody claimed this ticket just now — refresh to see who'
+            : body?.error === 'assignee_cannot_see'
+              ? 'That person cannot see this mailbox — grant them access first'
+              : body?.error || 'Could not change the assignee',
+        )
+        return
+      }
+      const updated = body.data?.ticket
+      if (updated) {
+        const withName = { ...updated, assignee_name: body.data?.assignee_name ?? null }
+        setTicket(prev => (prev ? { ...prev, ...withName } : withName))
+        setTickets(prev => prev.map(t => (t.id === updated.id ? { ...t, ...withName } : t)))
+      }
+      await loadQueue(true)
+    } catch {
+      setThreadError('Could not change the assignee — check your connection and try again')
+    } finally {
+      setAssignSaving(false)
+    }
+  }
+
   async function handleStatus(status) {
     if (!selectedId || statusSaving) return
     setStatusSaving(true)
@@ -511,6 +555,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
           className={`${selectedId ? 'hidden md:flex' : 'flex'} w-full flex-col border-r border-un1t-border md:w-[22rem] lg:w-[24rem] shrink-0`}
         >
           <TicketList
+            currentUserId={userId}
             tickets={tickets}
             loading={loading}
             selectedId={selectedId}
@@ -535,6 +580,9 @@ export default function TicketInbox({ locationId, locationName, userId }) {
             onBack={clearSelection}
             onStatusChange={handleStatus}
             statusSaving={statusSaving}
+            onAssign={handleAssign}
+            assignSaving={assignSaving}
+            viewerIsElevated={viewerIsElevated}
             onSend={handleSend}
             sending={sending}
             onForward={setForwarding}

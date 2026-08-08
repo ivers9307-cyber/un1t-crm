@@ -112,6 +112,26 @@ export function replyToTicket(ticketId, text, { internal = false, locationId } =
 }
 
 /**
+ * Claim ('me'), release (null) or reassign (a profile id) — EMAIL-ASSIGN.1.
+ * Same contract as web; the route enforces who may do which (claim = anyone
+ * who can see the ticket, reassign = elevated) and answers 409 when somebody
+ * else claimed it first.
+ */
+export async function assignTicket(ticketId, assignee, { locationId } = {}) {
+  const res = await api(`/api/email/tickets/${ticketId}/assign`, {
+    method: 'POST',
+    locationId,
+    body: { assignee },
+  })
+  if (!res.success) return { success: false, error: res.error || 'Failed to change assignee' }
+  return {
+    success: true,
+    ticket: res.data?.ticket || null,
+    assigneeName: res.data?.assignee_name || null,
+  }
+}
+
+/**
  * Move a ticket through its lifecycle: open | pending | solved | closed.
  *
  * This is the ONLY way a ticket leaves the queue — nothing auto-closes
