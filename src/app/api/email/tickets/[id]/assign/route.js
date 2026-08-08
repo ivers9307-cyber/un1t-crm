@@ -49,39 +49,53 @@ const AssignSchema = z.object({
   assignee: z.union([z.literal('me'), z.null(), z.string().trim().min(1).max(64)]),
 })
 
+// A cast error is a refusal, not an outage: real PostgREST 22P02s an .eq on
+// a uuid column fed a non-uuid string. loadTicketForUser sets the precedent
+// — a malformed id IS "no such row" (review finding 2; the schema stays
+// permissive on purpose so the refusal is uniform for every unknown target).
+const isCastError = (e) => e?.code === '22P02'
+
 /**
- * May `profileId` see this ticket? Mirrors the read model, resolved from the
- * DB because the target is not the caller: a grant row on the ticket's
- * mailbox, owner at the ticket's location, or master. The `email_inbox`
- * surface key is deliberately not re-derived here — a grant row is already a
- * deliberate per-account authorisation and the read routes remain the full
- * gate; this fails closed to the same population they would approve (the
- * same trade migs 496/502 made in RLS).
+ * May `profileId` see this ticket? Resolved from the DB because the target is
+ * not the caller: master, OR a current MEMBER of the ticket's location who is
+ * owner there or holds a grant on the ticket's mailbox.
+ *
+ * MEMBERSHIP IS REQUIRED alongside the grant (review finding 1): mig 485's
+ * grant rows CASCADE on mailbox/profile delete but NOT on profile_locations
+ * removal, so an ex-staffer's grant outlives their departure — a grant alone
+ * proves nothing about today. The `email_inbox` surface KEY is the one
+ * dimension deliberately not re-derived for the target (its resolver tiers
+ * live on the caller-shaped user object; re-implementing them here would be a
+ * second definition that drifts — the migs 496/502 trade). Residual: a
+ * member+grant-holder whose key was switched off can still be named, 404s on
+ * the ticket, and the mis-assignment is visible in the queue and reversible
+ * by any elevated release — never silent.
  */
 async function assigneeCanSee(db, { profileId, mailboxId, locationId }) {
-  if (mailboxId) {
-    const { data: grant, error } = await db.from('email_mailbox_access')
-      .select('mailbox_id')
-      .eq('mailbox_id', mailboxId)
-      .eq('profile_id', profileId)
-      .maybeSingle()
-    if (error) return { error }
-    if (grant) return { ok: true }
-  }
+  const { data: profile, error: pErr } = await db.from('profiles')
+    .select('id, role')
+    .eq('id', profileId)
+    .maybeSingle()
+  if (pErr && !isCastError(pErr)) return { error: pErr }
+  if (profile?.role === 'master') return { ok: true }
+
   const { data: pl, error: plErr } = await db.from('profile_locations')
     .select('role')
     .eq('profile_id', profileId)
     .eq('location_id', locationId)
     .maybeSingle()
-  if (plErr) return { error: plErr }
-  if (pl?.role === 'owner') return { ok: true }
-  const { data: profile, error: pErr } = await db.from('profiles')
-    .select('id, role')
-    .eq('id', profileId)
+  if (plErr && !isCastError(plErr)) return { error: plErr }
+  if (!pl) return { ok: false } // not a member (or not a real id) — cannot see
+  if (pl.role === 'owner') return { ok: true }
+
+  if (!mailboxId) return { ok: false } // NULL-mailbox tickets are elevated-only
+  const { data: grant, error: gErr } = await db.from('email_mailbox_access')
+    .select('mailbox_id')
+    .eq('mailbox_id', mailboxId)
+    .eq('profile_id', profileId)
     .maybeSingle()
-  if (pErr) return { error: pErr }
-  if (profile?.role === 'master') return { ok: true }
-  return { ok: false }
+  if (gErr && !isCastError(gErr)) return { error: gErr }
+  return { ok: !!grant }
 }
 
 /** The assignee's display name, best-effort — cosmetic, never fails the write. */

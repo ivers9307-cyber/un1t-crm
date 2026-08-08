@@ -52,6 +52,10 @@ function setup(ticket = {}, extra = {}) {
     ],
     profileLocations: [
       { profile_id: TARGET_OWNER, location_id: LOC_A, role: 'owner' },
+      // A grant alone is not visibility — the target must also still be a
+      // MEMBER of the location (review finding 1: stale grants survive
+      // profile_locations removal).
+      { profile_id: COACH.id, location_id: LOC_A, role: 'staff' },
     ],
     ...extra,
   }))
@@ -164,6 +168,44 @@ describe('reassign (assignee: <profile id>)', () => {
   it('refuses a target who cannot SEE the ticket — no grant, not elevated', async () => {
     getCurrentUser.mockResolvedValue(OWNER)
     const res = await post(T_STUDIO.id, { assignee: TARGET_NO_ACCESS })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('assignee_cannot_see')
+  })
+
+  it('refuses a grant-holder who is no longer a MEMBER of the location — an ex-staffer’s stale grant is not visibility', async () => {
+    // mig 485 grants CASCADE on mailbox/profile delete but NOT on
+    // profile_locations removal, so an ex-staffer's grant row survives their
+    // departure. Assigning to them would strand the ticket (review finding 1).
+    getCurrentUser.mockResolvedValue(OWNER)
+    setup({}, {
+      grants: [GRANT_STUDIO, { mailbox_id: T_STUDIO.mailbox_id, profile_id: 'profile-ex-staffer' }],
+      profiles: [
+        { id: COACH.id, full_name: 'Casey Coach', role: 'staff' },
+        { id: 'profile-ex-staffer', full_name: 'Gone Gary', role: 'staff' },
+      ],
+      profileLocations: [
+        { profile_id: COACH.id, location_id: LOC_A, role: 'staff' },
+      ],
+    })
+    const res = await post(T_STUDIO.id, { assignee: 'profile-ex-staffer' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('assignee_cannot_see')
+  })
+
+  it('answers a malformed target id with 400 cannot-see, not a 500 — the uuid cast error is a refusal', async () => {
+    // Real PostgREST 22P02s an .eq on a uuid column with a non-uuid value
+    // (the fake does not cast, so the error is injected). loadTicketForUser
+    // sets the precedent: a cast error IS "no such row".
+    getCurrentUser.mockResolvedValue(OWNER)
+    const realFrom = db.from
+    db.from = (table) => {
+      const b = realFrom(table)
+      if (table === 'profile_locations') {
+        b.maybeSingle = () => Promise.resolve({ data: null, error: { code: '22P02', message: 'invalid input syntax for type uuid' } })
+      }
+      return b
+    }
+    const res = await post(T_STUDIO.id, { assignee: 'not-a-uuid-at-all' })
     expect(res.status).toBe(400)
     expect((await res.json()).error).toBe('assignee_cannot_see')
   })

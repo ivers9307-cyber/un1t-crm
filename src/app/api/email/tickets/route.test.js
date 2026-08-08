@@ -136,7 +136,7 @@ describe('GET /api/email/tickets — mailbox visibility', () => {
     setupDb(baseState({ grants: [] }))
     const { res, body } = await list()
     expect(res.status).toBe(200)
-    expect(body).toEqual({ success: true, data: { mailboxes: [], tickets: [] } })
+    expect(body).toEqual({ success: true, data: { mailboxes: [], tickets: [], viewer_is_elevated: false } })
   })
 
   it('a granted user sees only their mailbox’s tickets', async () => {
@@ -262,7 +262,7 @@ describe('GET /api/email/tickets — views', () => {
 //
 // `mailboxRes.data` is null on a PostgREST error, so `|| []` turned "we could
 // not find out what you may read" into "you may read nothing" — served as a
-// cheerful 200 `{ mailboxes: [], tickets: [] }`. TicketInbox renders that as
+// cheerful 200 `{ mailboxes: [], tickets: [], viewer_is_elevated: false }`. TicketInbox renders that as
 // the calm "no email accounts here yet" empty state, so the operator reads it
 // as "no mail", stops looking, and nobody ever learns the query failed.
 //
@@ -300,7 +300,7 @@ describe('GET /api/email/tickets — a failed mailbox lookup is not an empty inb
     setupDb(baseState({ grants: [] }))
     const { res, body } = await list()
     expect(res.status).toBe(200)
-    expect(body.data).toEqual({ mailboxes: [], tickets: [] })
+    expect(body.data).toEqual({ mailboxes: [], tickets: [], viewer_is_elevated: false })
   })
 })
 

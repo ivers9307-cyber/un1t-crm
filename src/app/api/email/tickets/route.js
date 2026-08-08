@@ -95,7 +95,7 @@ export async function GET(request) {
 
   // Nothing visible → nothing to show. Not an error.
   if (mailboxes.length === 0) {
-    return NextResponse.json({ success: true, data: { mailboxes: [], tickets: [] } })
+    return NextResponse.json({ success: true, data: { mailboxes: [], tickets: [], viewer_is_elevated: elevated } })
   }
 
   // Asking for an account you cannot see is also empty rather than an error:
@@ -103,7 +103,7 @@ export async function GET(request) {
   // but not yours" would leak which addresses the studio runs.
   const mailboxId = searchParams.get('mailbox_id')
   if (mailboxId && !mailboxes.some(m => m.id === mailboxId)) {
-    return NextResponse.json({ success: true, data: { mailboxes, tickets: [] } })
+    return NextResponse.json({ success: true, data: { mailboxes, tickets: [], viewer_is_elevated: elevated } })
   }
 
   let query = db.from('email_tickets')

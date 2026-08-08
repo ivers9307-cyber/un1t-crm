@@ -42,7 +42,19 @@ export async function GET(request, props) {
       .eq('mailbox_id', ticket.mailbox_id)
       .limit(ASSIGNEE_LIMIT)
     if (error) return NextResponse.json({ success: false, error: 'assignees_lookup_failed' }, { status: 500 })
-    for (const g of grants || []) if (g?.profile_id) ids.add(g.profile_id)
+    // A grant alone is not visibility (review finding 1): grant rows survive
+    // profile_locations removal, so filter to CURRENT members of the ticket's
+    // location — the same rule the assign route enforces on write.
+    const grantIds = [...new Set((grants || []).map(g => g?.profile_id).filter(Boolean))]
+    if (grantIds.length > 0) {
+      const { data: members, error: mErr } = await db.from('profile_locations')
+        .select('profile_id')
+        .eq('location_id', ticket.location_id)
+        .in('profile_id', grantIds)
+        .limit(ASSIGNEE_LIMIT)
+      if (mErr) return NextResponse.json({ success: false, error: 'assignees_lookup_failed' }, { status: 500 })
+      for (const m of members || []) if (m?.profile_id) ids.add(m.profile_id)
+    }
   }
   const { data: owners, error: ownersErr } = await db.from('profile_locations')
     .select('profile_id')

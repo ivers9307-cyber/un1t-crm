@@ -329,6 +329,10 @@ export default function TicketInbox({ locationId, locationName, userId }) {
   // refetch the queue — the row may have just left or entered 'mine'.
   async function handleAssign(assignee) {
     if (!selectedId || assignSaving) return
+    // TICKET-FETCH-RACE.1's rule extends to action responses: if the operator
+    // switches tickets while this POST is in flight, ticket A's row must not
+    // paint over ticket B's thread (review finding 3).
+    const id = selectedId
     setAssignSaving(true)
     setThreadError(null)
     try {
@@ -338,14 +342,15 @@ export default function TicketInbox({ locationId, locationName, userId }) {
         body: JSON.stringify({ assignee }),
       })
       const body = await res.json()
+      if (threadFor.current !== id) return // superseded — the operator switched tickets
       if (!body?.success) {
-        setThreadError(
-          body?.error === 'already_assigned'
-            ? 'Somebody claimed this ticket just now — refresh to see who'
-            : body?.error === 'assignee_cannot_see'
-              ? 'That person cannot see this mailbox — grant them access first'
-              : body?.error || 'Could not change the assignee',
-        )
+        const friendly = {
+          already_assigned: 'Somebody claimed this ticket just now — refresh to see who',
+          assignee_cannot_see: 'That person cannot see this mailbox — grant them access first',
+          not_yours: 'This ticket is assigned to somebody else',
+          not_elevated: 'Only an owner can reassign tickets',
+        }
+        setThreadError(friendly[body?.error] || body?.error || 'Could not change the assignee')
         return
       }
       const updated = body.data?.ticket
@@ -356,7 +361,9 @@ export default function TicketInbox({ locationId, locationName, userId }) {
       }
       await loadQueue(true)
     } catch {
-      setThreadError('Could not change the assignee — check your connection and try again')
+      if (threadFor.current === id) {
+        setThreadError('Could not change the assignee — check your connection and try again')
+      }
     } finally {
       setAssignSaving(false)
     }
@@ -364,6 +371,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
 
   async function handleStatus(status) {
     if (!selectedId || statusSaving) return
+    const id = selectedId // guard stale responses across a ticket switch
     setStatusSaving(true)
     setThreadError(null)
     try {
@@ -373,6 +381,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
         body: JSON.stringify({ status }),
       })
       const body = await res.json()
+      if (threadFor.current !== id) return // superseded — the operator switched tickets
       if (!body?.success) {
         setThreadError(body?.error || 'Could not change the status')
         return
