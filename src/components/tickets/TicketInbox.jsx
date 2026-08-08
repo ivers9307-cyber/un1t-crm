@@ -266,6 +266,19 @@ export default function TicketInbox({ locationId, locationName, userId }) {
       const body = await res.json()
       if (!body?.success) {
         setThreadError(body?.error || 'Could not send that')
+        // EMAIL-REPLY-UNFILED.1 — `data.sent` on a failure body is the route
+        // saying the reply IS with the member and only the filing failed. The
+        // server best-effort-advanced the ticket, so refresh rather than leave
+        // a queue row inviting the second send — QUIETLY, because a refresh
+        // hiccup repainting the banner as "could not load" would bury the one
+        // sentence that stops the resend. `sent` rides on the result so the
+        // composer keeps the draft: at this point it is the only surviving
+        // copy of what the member received.
+        if (body?.data?.sent) {
+          await loadThread(selectedId, { quiet: true })
+          await loadQueue(true)
+          return { ok: false, sent: true }
+        }
         return { ok: false }
       }
       await loadThread(selectedId)
