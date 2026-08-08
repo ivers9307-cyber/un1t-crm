@@ -5,6 +5,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { sendTicketEmail } from '@/lib/email-inbox-send'
 import { appendSignature } from '@/lib/email-signature'
+import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { logAuditEvent } from '@/lib/audit'
 import { uuidLike, email as emailAddress } from '@/lib/schemas'
 import {
@@ -331,11 +332,36 @@ export async function POST(request, props) {
   }).select('*').single()
   if (msgErr) {
     // The email HAS gone. Say so plainly rather than returning a bare 500 an
-    // operator would read as "it failed, send it again".
+    // operator would read as "it failed, send it again" — and record the
+    // delivered send, because the row that failed to write was the only thing
+    // that would ever have referenced it (EMAIL-COMPOSE-UNFILED.1, same
+    // contract as reply and compose). deadLetterWebhook never throws; the
+    // provider is deliberately NOT a REPLAYABLE_PROVIDERS key — a replay of a
+    // send that already happened would BE the double-send.
     console.error('[tickets/forward] message insert failed AFTER a successful send:', msgErr.message)
+    await deadLetterWebhook(db, {
+      provider: 'email_ticket_forward',
+      eventType: 'sent_not_filed',
+      payload: {
+        ticket_id: ticket.id,
+        // WHAT was passed on — the one fact a forward adds over a reply, and
+        // the SENT text (note + quoted correspondence) a third party now has.
+        forwarded_message_id: source.id,
+        postmark_message_id: send.result.messageId,
+        from_email: send.fromEmail || null,
+        recipients: { to: recipients.to, cc: recipients.cc, bcc: recipients.bcc },
+        subject,
+        text_body: outboundText,
+        author_profile_id: user.id,
+        sent_at: now,
+      },
+      error: msgErr,
+      locationId: ticket.location_id,
+    })
     return NextResponse.json({
       success: false,
       error: 'The forward was sent but could not be filed on the ticket. Do not resend — check with the recipient before trying again.',
+      data: { sent: true, message_id: send.result.messageId },
     }, { status: 500 })
   }
 

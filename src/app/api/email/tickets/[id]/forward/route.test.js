@@ -34,7 +34,7 @@ import { _resetInboxSenderCache, TICKET_INTERNAL_STREAM } from '@/lib/email-inbo
 import { EMAIL_ATTACHMENT_BUCKET } from '@/lib/email-attachment-quota'
 import { MAX_OUTBOUND_ATTACHMENT_TOTAL_BYTES } from '@/lib/email-outbound-attachments'
 import {
-  makeDb, insertsInto, updatesTo, writesTo, seedObject, objectKeys, usageFor,
+  makeDb, insertsInto, updatesTo, writesTo, seedObject, objectKeys, usageFor, failWrites,
 } from '../../_test-db'
 import {
   MB_STUDIO, T_STUDIO, T_ACCOUNTS, T_OTHER_LOCATION,
@@ -667,5 +667,62 @@ describe('POST …/forward — the files ride along, shared not copied', () => {
     const res = await post(T_STUDIO.id, { ...GOOD, attachment_ids: [lying.id] })
     expect(res.status).toBe(400)
     expect(sendEmail).not.toHaveBeenCalled()
+  })
+})
+
+// ── The forward's own sent-but-unfiled branch (EMAIL-COMPOSE-UNFILED.1) ──
+//
+// The branch shipped with the right COPY from day one; what it lacked was the
+// machine-readable `data.sent` flag the reply route carries (so the client can
+// tell this 500 from every other) and any durable record of the delivered
+// send — the message row that failed to write was the only thing that would
+// ever have referenced it. `failWrites` is the shared write-only-failure
+// harness (../../_test-db.js).
+describe('POST …/forward — filing fails AFTER the send', () => {
+  let errors
+  beforeEach(() => {
+    errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+  afterEach(() => errors.mockRestore())
+
+  it('answers with the flag and dead-letters the delivered forward', async () => {
+    setupDb(world())
+    failWrites(db, ['email_inbox_messages'])
+    const res = await post(T_STUDIO.id, GOOD)
+
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/was sent/i)
+    expect(body.error).toMatch(/do not resend/i)
+    expect(body.error).not.toContain('write exploded')
+    expect(body.data).toMatchObject({ sent: true, message_id: 'pm-fwd-1' })
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+
+    const [dead] = insertsInto(db, 'webhook_dead_letter')
+    expect(dead.payload).toMatchObject({
+      provider: 'email_ticket_forward',
+      event_type: 'sent_not_filed',
+      location_id: T_STUDIO.location_id,
+    })
+    // Enough to reconstruct the row by hand — including WHAT was forwarded,
+    // which is the one fact a forward adds over a reply.
+    expect(dead.payload.payload).toMatchObject({
+      ticket_id: T_STUDIO.id,
+      forwarded_message_id: INBOUND.id,
+      postmark_message_id: 'pm-fwd-1',
+    })
+    expect(dead.payload.payload.recipients.to).toEqual(['accountant@example.com'])
+    // The quoted body went to a third party; the record of what they received
+    // has to be the SENT text, note and quote included.
+    expect(dead.payload.payload.text_body).toContain(GOOD.note)
+    expect(dead.payload.payload.text_body).toContain(INBOUND.text_body)
+  })
+
+  it('still refuses to touch the ticket — an unfiled forward moves nothing either', async () => {
+    setupDb(world())
+    failWrites(db, ['email_inbox_messages'])
+    await post(T_STUDIO.id, GOOD)
+    expect(updatesTo(db, 'email_tickets')).toHaveLength(0)
   })
 })

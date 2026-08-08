@@ -530,6 +530,11 @@ export default function TicketInbox({ locationId, locationName, userId }) {
           initialMailboxId={mailboxId}
           onClose={() => setComposeOpen(false)}
           onSent={handleComposed}
+          // EMAIL-COMPOSE-UNFILED.1 — the email went out but filing failed.
+          // The modal stays open (draft + "Do not resend" copy); this only
+          // refetches the queue quietly, so a ticket row that WAS created
+          // appears behind it instead of looking like nothing happened.
+          onSentUnfiled={() => loadQueue(true)}
         />
       )}
 

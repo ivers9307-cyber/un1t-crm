@@ -26,7 +26,7 @@ import { sendEmail } from '@/lib/postmark'
 import { _resetInboxSenderCache, TICKET_INTERNAL_STREAM } from '@/lib/email-inbox-send'
 import { EMAIL_ATTACHMENT_BUCKET } from '@/lib/email-attachment-quota'
 import { outboundDraftPath } from '@/lib/email-outbound-attachments'
-import { makeDb, insertsInto, writesTo, seedObject } from '../_test-db'
+import { makeDb, insertsInto, writesTo, seedObject, failWrites } from '../_test-db'
 import {
   LOC_A, MB_STUDIO, MB_ACCOUNTS, MB_OTHER_LOCATION,
   COACH, COACH_NO_INBOX, OWNER, MULTI_LOCATION,
@@ -630,5 +630,107 @@ describe('POST /api/email/tickets/compose — recipients', () => {
     expect((await post(VALID)).status).toBe(404)
     expect(sendEmail).not.toHaveBeenCalled()
     expect(writesTo(db)).toEqual([])
+  })
+})
+
+// ── EMAIL-COMPOSE-UNFILED.1 — filing fails AFTER the send ────────────
+//
+// Everything above refuses BEFORE Postmark is called. These pin the other side
+// of the send-first ordering: the email is with the recipient and a write then
+// failed. The route already answered with "Do not resend" copy; what was
+// missing (audit 2026-08-08, residual from EMAIL-REPLY-UNFILED.1) was any
+// coverage of either branch, the machine-readable `data.sent` flag the reply
+// route now carries, and a durable record of the delivered send — in the
+// ticket-insert case NOTHING referenced it anywhere.
+//
+// `failWrites` (shared harness, ../_test-db.js) fails WRITES only —
+// `state.errors` would fail the mailbox read too and the route would 404
+// before sending.
+describe('POST /api/email/tickets/compose — filing fails AFTER the send (EMAIL-COMPOSE-UNFILED.1)', () => {
+  let errors
+  beforeEach(() => {
+    errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+  afterEach(() => errors.mockRestore())
+
+  it('TICKET insert fails → says the mail is ALREADY SENT, never the raw DB error', async () => {
+    failWrites(db, ['email_tickets'])
+    const res = await post(VALID)
+
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.success).toBe(false)
+    expect(body.error).toMatch(/was sent/i)
+    expect(body.error).toMatch(/do not resend/i)
+    expect(body.error).not.toContain('write exploded')
+    expect(body.data).toMatchObject({ sent: true, message_id: 'pm-compose-1' })
+    expect(sendEmail).toHaveBeenCalledTimes(1)
+    expect(errors).toHaveBeenCalled()
+  })
+
+  it('TICKET insert fails → the delivered send is dead-lettered AND logged for the contact', async () => {
+    // Without these two rows the send would exist NOWHERE — no ticket, no
+    // message, nothing for the delivery webhook to correlate against.
+    setupDb(baseState({ grants: [GRANT_STUDIO], contacts: [MEMBER_CONTACT] }))
+    failWrites(db, ['email_tickets'])
+    await post(VALID)
+
+    const [dead] = insertsInto(db, 'webhook_dead_letter')
+    expect(dead.payload).toMatchObject({
+      // NOT a REPLAYABLE_PROVIDERS key — a replay of a send that already
+      // happened would BE the double-send.
+      provider: 'email_ticket_compose',
+      event_type: 'sent_not_filed',
+      location_id: LOC_A,
+    })
+    expect(dead.payload.payload).toMatchObject({
+      ticket_id: null,
+      mailbox_id: MB_STUDIO.id,
+      postmark_message_id: 'pm-compose-1',
+      subject: VALID.subject,
+      text_body: VALID.text,
+    })
+    expect(dead.payload.payload.recipients.to).toEqual(['lead@example.com'])
+
+    const [sendRow] = insertsInto(db, 'email_sends')
+    expect(sendRow.payload).toMatchObject({
+      contact_id: MEMBER_CONTACT.id,
+      postmark_message_id: 'pm-compose-1',
+      source_type: 'inbox_compose',
+    })
+  })
+
+  it('MESSAGE insert fails → the ticket STAYS, and the flag carries its id', async () => {
+    setupDb(baseState({ grants: [GRANT_STUDIO], contacts: [MEMBER_CONTACT] }))
+    failWrites(db, ['email_inbox_messages'])
+    const res = await post(VALID)
+
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error).toMatch(/was sent/i)
+    expect(body.error).toMatch(/do not resend/i)
+    expect(body.data).toMatchObject({ sent: true, message_id: 'pm-compose-1' })
+    // The ticket row survives — the queue still shows what was sent and to
+    // whom (the branch's existing behaviour, now pinned)…
+    expect(body.data.ticket_id).toBeTruthy()
+    expect(db._state.tickets.find(t => t.id === body.data.ticket_id)).toBeTruthy()
+    // …and both breadcrumbs name it.
+    const [dead] = insertsInto(db, 'webhook_dead_letter')
+    expect(dead.payload.provider).toBe('email_ticket_compose')
+    expect(dead.payload.payload.ticket_id).toBe(body.data.ticket_id)
+    const [sendRow] = insertsInto(db, 'email_sends')
+    expect(sendRow.payload.postmark_message_id).toBe('pm-compose-1')
+  })
+
+  it('keeps the distinct answer when every breadcrumb ALSO fails', async () => {
+    const warns = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    failWrites(db, ['email_tickets', 'email_inbox_messages', 'email_sends', 'webhook_dead_letter'])
+    const res = await post(VALID)
+
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error).toMatch(/do not resend/i)
+    expect(body.data).toMatchObject({ sent: true })
+    warns.mockRestore()
   })
 })
