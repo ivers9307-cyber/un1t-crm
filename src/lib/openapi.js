@@ -285,6 +285,33 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'post',
+  path: '/api/public/offers/{slug}/checkout',
+  tags: ['Public'],
+  summary: 'Start a Revolut checkout for one sale offer',
+  description: 'Anonymous. Rate-limited to 8 requests per IP per 15 min. Amount is read from sale_offers server-side — the body carries buyer details only. 410 once the sale window has closed.',
+  responses: {
+    200: { description: 'Order created; returns { purchaseId, checkout: { provider, token } }' },
+    400: { description: 'Validation failed', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown offer', content: { 'application/json': { schema: ErrorResponse } } },
+    410: { description: 'Sale ended', content: { 'application/json': { schema: ErrorResponse } } },
+    429: { description: 'Rate limited', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/public/offer-purchases/{id}',
+  tags: ['Public'],
+  summary: 'Paid-status of one offer purchase (checkout polling)',
+  description: 'Anonymous, display-safe: returns only { paid, state }. Re-checks Revolut while pending (capped at 20 rechecks per purchase per 5 min).',
+  responses: {
+    200: { description: 'Status returned' },
+    404: { description: 'Unknown purchase', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'get',
   path: '/api/public/branding',
   tags: ['Public'],
