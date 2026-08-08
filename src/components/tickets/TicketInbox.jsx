@@ -34,6 +34,7 @@ import {
 import TicketList from './TicketList'
 import TicketThread from './TicketThread'
 import TicketCompose from './TicketCompose'
+import TicketForward from './TicketForward'
 
 // Same cadence as the rest of the inbox family. Realtime is deliberately not
 // wired here yet: the email tables' RESTRICTIVE-policy history (mig 485) means
@@ -71,6 +72,10 @@ export default function TicketInbox({ locationId, locationName, userId }) {
 
   // EMAIL-TICKET.5 — starting a conversation rather than answering one.
   const [composeOpen, setComposeOpen] = useState(false)
+  // EMAIL-FORWARD.1 — the ONE message being forwarded, or null. Held here
+  // rather than in the thread because the composer is a modal over the whole
+  // surface, and because closing it has to be able to re-read the thread.
+  const [forwarding, setForwarding] = useState(null)
 
   const view = ticketView(viewId)
   const queueUrl = buildTicketsUrl({ locationId, mailboxId, viewId })
@@ -190,6 +195,10 @@ export default function TicketInbox({ locationId, locationName, userId }) {
   function selectTicket(row) {
     if (!row?.id) return
     setSelectedId(row.id)
+    // A forward composer left open across a ticket switch would be holding a
+    // message from the ticket you just left — one click from sending somebody
+    // else's correspondence to the address you were about to type.
+    setForwarding(null)
     // Paint the header from the list row immediately; loadThread replaces it
     // with the full record (mailbox + linked contact) a moment later.
     setTicket(row)
@@ -218,6 +227,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
     setTicket(null)
     setMessages([])
     setAttachmentsUnavailable(false)
+    setForwarding(null)
     // A stale set from the previous ticket would label the next one's Reply
     // button with the wrong people. Null degrades to "reply to the requester".
     setReplyRecipients(null)
@@ -303,6 +313,16 @@ export default function TicketInbox({ locationId, locationName, userId }) {
     } finally {
       setStatusSaving(false)
     }
+  }
+
+  // A forward is an outbound message on THIS ticket, so the thread re-read is
+  // all that is needed — and it is all that is done. The QUEUE is deliberately
+  // not refetched, because the route deliberately does not touch the ticket:
+  // forwarding a member's question to the accountant is not answering the
+  // member, so the row must keep saying they are waiting (EMAIL-FORWARD.1).
+  async function handleForwarded() {
+    setForwarding(null)
+    await loadThread(selectedId)
   }
 
   // A composed email IS a ticket, so there is nothing special to do with it:
@@ -481,6 +501,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
             statusSaving={statusSaving}
             onSend={handleSend}
             sending={sending}
+            onForward={setForwarding}
           />
         </div>
       </div>
@@ -496,6 +517,18 @@ export default function TicketInbox({ locationId, locationName, userId }) {
           initialMailboxId={mailboxId}
           onClose={() => setComposeOpen(false)}
           onSent={handleComposed}
+        />
+      )}
+
+      {/* Mounted only while forwarding, for the same reason compose is: a
+          half-typed forward must not survive the thread's background re-read,
+          and a fresh one must not inherit the last one's recipients. */}
+      {forwarding && ticket && (
+        <TicketForward
+          ticket={ticket}
+          message={forwarding}
+          onClose={() => setForwarding(null)}
+          onSent={handleForwarded}
         />
       )}
     </div>

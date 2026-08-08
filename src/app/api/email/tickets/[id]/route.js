@@ -59,6 +59,11 @@ const MESSAGE_COLUMNS = [
   'from_email', 'to_email', 'to_emails', 'cc_emails', 'bcc_emails',
   'subject', 'text_body', 'html_body',
   'is_internal_note', 'author_profile_id',
+  // EMAIL-FORWARD.1 (mig 501) — set on an outbound message that is a FORWARD,
+  // naming the message on this same ticket whose content it passed on. NULL on
+  // everything else. The thread renders its marker off this rather than off the
+  // "Fwd: " subject prefix, which is editable text.
+  'forwarded_message_id',
   'postmark_message_id', 'rfc_message_id', 'source', 'status', 'sent_at', 'created_at',
   // EMAIL-DELIVERY.1 (mig 498) — what Postmark told us happened to an outbound
   // message. All four are NULL until an event arrives, and the thread renders
