@@ -110,6 +110,33 @@ describe('deadLetterWebhook', () => {
     expect(row.payload).toEqual({})
   })
 
+  // EMAIL-INBOUND-POISON.1 — jsonb rejects \u0000, so a NUL-bearing payload
+  // could not even be dead-lettered: the one capture path for a poison webhook
+  // failed on exactly the payloads that need it most. Lone surrogates fail the
+  // same way (unencodable as UTF-8).
+  it('strips NUL bytes and lone surrogates so a poison payload can actually land in jsonb', async () => {
+    const db = makeDb()
+    await deadLetterWebhook(db, {
+      provider: 'postmark_inbound',
+      eventType: 'inbound_email',
+      payload: {
+        MessageID: 'pm-1',
+        Subject: 'bad\u0000subject',
+        FromFull: { Name: 'Ada\ud800', Email: 'a@b.com' },
+        Headers: [{ Name: 'X-Test', Value: 'v\u0000' }],
+      },
+      error: 'poison\u0000error',
+    })
+    const [row] = db._insertMock.mock.calls[0]
+    expect(row.payload).toEqual({
+      MessageID: 'pm-1',
+      Subject: 'badsubject',
+      FromFull: { Name: 'Ada', Email: 'a@b.com' },
+      Headers: [{ Name: 'X-Test', Value: 'v' }],
+    })
+    expect(row.error).toBe('poisonerror')
+  })
+
   // ── QSTASH.3 replay push ────────────────────────────────────────────────────
 
   it('publishes a delayed replay push for a replayable provider after a successful insert', async () => {

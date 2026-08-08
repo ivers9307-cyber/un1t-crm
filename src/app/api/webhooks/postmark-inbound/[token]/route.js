@@ -187,7 +187,6 @@ import { recordWebhookEvent, WEBHOOK_PROVIDERS } from '@/lib/webhook-events'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
 import { htmlToPlainText } from '@/lib/email-content'
 import {
-  normalizeEmail,
   getHeader,
   extractCandidateMessageIds,
   extractRfcMessageId,
@@ -195,7 +194,10 @@ import {
   pickContact,
   inboundPreview,
   truncateHtmlBody,
+  senderEmail,
+  parseEmailDate,
 } from '@/lib/email-inbox'
+import { sanitizeDbText } from '@/lib/db-safe-text'
 import { inboundAddresses } from '@/lib/email-recipients'
 import { resolveMailboxByRecipient } from '@/lib/email-mailboxes'
 import { resolveTicketAction, ticketSubject, pickThreadedTicket } from '@/lib/email-tickets'
@@ -204,6 +206,25 @@ import { storeInboundAttachments, discardStagedAttachments } from '@/lib/email-a
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+// EMAIL-DEDUPE-STALE.1 — bound the crash window. The shim in front of this
+// route gives up at FORWARD_TIMEOUT_MS (30s); without an explicit cap the
+// platform default lets this function outlive that, and — worse — lets an
+// attempt keep RUNNING past the stale-claim threshold below, which would let a
+// retry reprocess concurrently with a live writer. 20s is 10–100× the route's
+// real work (a handful of indexed queries; inline attachment uploads are
+// bounded by Vercel's own ~4.5 MB body cap), keeps the shim able to relay a
+// real 5xx, and keeps `stale ⇒ owner is dead` true with 3× margin.
+export const maxDuration = 20
+
+// A held dedupe claim older than this cannot belong to a live attempt
+// (maxDuration kills the function at 20s; 60s adds clock-skew margin). Younger
+// claims are treated as in-flight and answered 503 — see classifySeenClaim.
+const STALE_CLAIM_MS = 60_000
+
+// The finish-up bump guard (see finishDedupedDelivery): app-clock vs DB-clock
+// tolerance when deciding whether a ticket already reflects its last message.
+const BUMP_SKEW_MS = 2_000
 
 /**
  * Token-in-URL auth — timing-safe compare against the primary and the
@@ -270,6 +291,63 @@ async function releaseDedupeClaim(db, eventId) {
   }
 }
 
+/**
+ * What does a held dedupe claim actually mean? See the POST comment for the
+ * three verdicts. Errors resolve to 'in_flight' — the safe answer, because a
+ * 503 keeps Postmark retrying and a later attempt classifies again — EXCEPT a
+ * missing claim row (someone released it between our insert-conflict and this
+ * read), which is 'stale': re-processing is what the releaser intended.
+ *
+ * @returns {Promise<'completed'|'in_flight'|'stale'>}
+ */
+async function classifySeenClaim(db, messageId, eventId) {
+  try {
+    const { data: filed, error: filedErr } = await db.from('email_inbox_messages')
+      .select('id')
+      .eq('postmark_message_id', messageId)
+      .limit(1)
+    if (filedErr) {
+      console.error('[postmark-inbound] claim classification (message) failed:', filedErr.message)
+      return 'in_flight'
+    }
+    if (filed && filed.length > 0) {
+      // Filed. Whether the dead attempt also finished its bump is decided on
+      // the reprocess path (23505 → finishDedupedDelivery) — but only a STALE
+      // claim reprocesses; a young one short-circuits, because its owner may
+      // be alive between the insert and the bump right now.
+      const age = await claimAgeMs(db, eventId)
+      if (age !== null && age > STALE_CLAIM_MS) return 'stale'
+      return 'completed'
+    }
+    const age = await claimAgeMs(db, eventId)
+    if (age === null) return 'stale' // claim vanished — a releaser beat us
+    return age > STALE_CLAIM_MS ? 'stale' : 'in_flight'
+  } catch (err) {
+    console.error('[postmark-inbound] claim classification threw:', err?.message)
+    return 'in_flight'
+  }
+}
+
+/** Age of this route's own claim row in ms, or null when it is not there. */
+async function claimAgeMs(db, eventId) {
+  const { data: claims, error } = await db.from('webhook_events')
+    .select('received_at')
+    .eq('provider', WEBHOOK_PROVIDERS.POSTMARK)
+    .eq('event_id', eventId)
+    .limit(1)
+  if (error) {
+    console.error('[postmark-inbound] claim age lookup failed:', error.message)
+    // Unknowable ≠ absent: treat as brand-new so the caller answers 503 and a
+    // later retry classifies again, rather than reprocessing blind.
+    return 0
+  }
+  const row = claims?.[0]
+  if (!row) return null
+  const t = new Date(row.received_at).getTime()
+  if (Number.isNaN(t)) return null
+  return Date.now() - t
+}
+
 export async function POST(request, { params }) {
   const { token } = await params
   const auth = verifyEmailInboundRequest({
@@ -312,9 +390,38 @@ export async function POST(request, { params }) {
     db, provider: WEBHOOK_PROVIDERS.POSTMARK, eventId,
   })
   if (dedup.seen) {
-    // A genuine re-delivery of a message a previous attempt processed to a
-    // 2xx. Unchanged: short-circuit, write nothing.
-    return NextResponse.json({ success: true, deduped: true })
+    // EMAIL-DEDUPE-STALE.1 — a held claim is CLASSIFIED, never blindly
+    // trusted. The release-on-5xx machinery below closes every door this
+    // route ANSWERS through, but the claim commits BEFORE processing, so a
+    // door that never answers — a platform kill (timeout/OOM/crash) between
+    // the claim insert and the message insert — used to orphan it:
+    // Postmark's retry found the claim, got 200 `deduped`, stopped retrying,
+    // and the mail was filed nowhere. Three verdicts:
+    //
+    //   completed — the message row exists (the unique index on
+    //     email_inbox_messages.postmark_message_id is the completion marker,
+    //     no schema change needed). Genuine re-delivery → short-circuit.
+    //   in_flight — no message yet and the claim is younger than any dead
+    //     attempt can be (STALE_CLAIM_MS > maxDuration). The first attempt
+    //     may still be writing: answer 503 so Postmark keeps the retry chain
+    //     alive WITHOUT us racing a live writer. This also closes the
+    //     residual window the header used to accept — a retry can no longer
+    //     200 while attempt 1 is mid-failure.
+    //   stale — no live owner is possible. Re-process under the existing
+    //     claim; if the message row does exist after all, the insert's 23505
+    //     lands in finishDedupedDelivery, which completes whatever the dead
+    //     attempt left undone (attachments, bump, unread).
+    //
+    // These returns happen BEFORE the claim-holding section below on
+    // purpose: the 503 is a 5xx that must NOT release a live owner's claim.
+    const verdict = await classifySeenClaim(db, messageId, eventId)
+    if (verdict === 'completed') {
+      return NextResponse.json({ success: true, deduped: true })
+    }
+    if (verdict === 'in_flight') {
+      return NextResponse.json({ success: false, error: 'claim_in_flight' }, { status: 503 })
+    }
+    // verdict === 'stale' — fall through and re-process.
   }
 
   // ── From here the claim is HELD ───────────────────────────────────
@@ -381,12 +488,31 @@ async function processInboundEmail(db, body, messageId) {
     return res
   }
 
-  const fromEmail = normalizeEmail(body.FromFull?.Email || body.From)
+  // senderEmail prefers the typed FromFull.Email and falls back to the raw
+  // `From` header — which is a DISPLAY string ("Ada <a@b.com>"), so it gets
+  // the same angle-bracket extraction as every other display header. The
+  // bare parse used to fail on that form and drop mail whose sender was in
+  // plain sight.
+  const fromEmail = senderEmail(body)
   if (!fromEmail) {
     // A real email always has a sender; without one there is nothing to
-    // thread. 200 so Postmark doesn't retry an unfixable payload.
-    console.warn('[postmark-inbound] no parseable From address', { messageId })
-    return unfiled(NextResponse.json({ success: true, ignored: 'no_sender' }))
+    // thread. 200 so Postmark doesn't retry an unfixable payload — but
+    // DEAD-LETTERED (EMAIL-INBOUND-NOSENDER.1), not console-warned into the
+    // void: a console line in Vercel logs is not a surface anyone triages,
+    // and this used to be the one drop with no captured payload. Provider
+    // 'postmark_inbound' (pending, operator-visible), NOT the
+    // auto-replayable 'postmark' key — same reasoning as no_matching_mailbox
+    // below. The staged bytes are still discarded (unfiled): the captured
+    // payload keeps the slim marker shape for triage, nothing will ever
+    // reference the objects.
+    await deadLetterWebhook(db, {
+      provider: 'postmark_inbound',
+      eventType: 'inbound_email',
+      payload: body,
+      error: 'no_sender',
+    })
+    console.warn('[postmark-inbound] no parseable From address — dead-lettered', { messageId })
+    return unfiled(NextResponse.json({ success: true, dead_lettered: 'no_sender' }))
   }
 
   // ── Threading resolution ──────────────────────────────────────────
@@ -399,7 +525,16 @@ async function processInboundEmail(db, body, messageId) {
   // Resolves CONTACT only. It used to resolve location too; since the
   // mailbox cutover the delivered-to address is the only thing that says
   // where mail landed, and a threading header is attacker-controlled.
-  const candidates = extractCandidateMessageIds(headers).slice(0, MAX_THREAD_CANDIDATES)
+  //
+  // sanitizeDbText on each candidate (EMAIL-INBOUND-POISON.1): a NUL inside
+  // In-Reply-To would otherwise ride into the `.in()` filters and can fail
+  // the SELECT itself — another deterministic 5xx. Our own stored ids never
+  // contain these bytes, so a stripped candidate matches exactly what an
+  // attacker could already match by typing the clean id directly.
+  const candidates = extractCandidateMessageIds(headers)
+    .map(sanitizeDbText)
+    .filter(Boolean)
+    .slice(0, MAX_THREAD_CANDIDATES)
   if (candidates.length) {
     const { data: sends, error: sendsErr } = await db.from('email_sends')
       .select('contact_id, postmark_message_id, sent_at')
@@ -528,9 +663,17 @@ async function processInboundEmail(db, body, messageId) {
   }
   const action = resolveTicketAction(threadedTicket)
 
-  const subject = body.Subject || null
-  const counterpartName = body.FromFull?.Name || null
-  const textBody = (body.TextBody || '').trim() || htmlToPlainText(body.HtmlBody) || ''
+  // EMAIL-INBOUND-POISON.1 — every attacker-suppliable string is stripped of
+  // what Postgres text cannot hold (NUL, lone surrogates) BEFORE the inserts.
+  // Unsanitised, one poison byte failed the insert deterministically and the
+  // message 5xx-looped through its whole retry schedule, never filed. The
+  // HtmlBody strip runs AFTER truncateHtmlBody on purpose: the UTF-16 slice
+  // can itself orphan a surrogate at the cut point.
+  const subject = sanitizeDbText(body.Subject) || null
+  const counterpartName = sanitizeDbText(body.FromFull?.Name) || null
+  const textBody = sanitizeDbText((body.TextBody || '').trim())
+    || sanitizeDbText(htmlToPlainText(body.HtmlBody))
+    || ''
   const now = new Date().toISOString()
   const preview = inboundPreview(textBody) || (subject ? inboundPreview(subject) : '')
   // EMAIL-CC.1 — the To and Cc headers, kept apart. Both capped at
@@ -613,21 +756,31 @@ async function processInboundEmail(db, body, messageId) {
     cc_emails: ccEmails,
     subject,
     text_body: textBody,
-    html_body: truncateHtmlBody(body.HtmlBody || null),
+    // Truncate FIRST, then strip — the slice can orphan a surrogate pair at
+    // its cut point, and that orphan fails the insert like any other.
+    html_body: sanitizeDbText(truncateHtmlBody(body.HtmlBody || null)),
     postmark_message_id: messageId,
-    rfc_message_id: extractRfcMessageId(headers),
-    in_reply_to: getHeader(headers, 'In-Reply-To'),
-    references_header: getHeader(headers, 'References'),
+    rfc_message_id: sanitizeDbText(extractRfcMessageId(headers)),
+    in_reply_to: sanitizeDbText(getHeader(headers, 'In-Reply-To')),
+    references_header: sanitizeDbText(getHeader(headers, 'References')),
     status: 'received',
-    sent_at: body.Date ? new Date(body.Date).toISOString() : now,
+    // parseEmailDate never throws — `new Date(body.Date).toISOString()` did,
+    // on a malformed attacker-supplied Date, 5xx-looping the whole payload.
+    sent_at: parseEmailDate(body.Date) || now,
   })
     .select('id')
     .single()
   if (msgErr) {
-    // 23505 = the unique postmark_message_id index caught a racing
-    // duplicate — that's a success, not an error.
+    // 23505 = the unique postmark_message_id index says the message row
+    // already exists — a previous attempt filed it and then failed or died
+    // AFTER the insert (a fully-successful attempt keeps its claim, so a
+    // re-delivery short-circuits in classifySeenClaim and never gets here).
+    // Finish what that attempt may have left undone rather than answering
+    // `deduped` with the bump and attachments missing.
     if (msgErr.code === '23505') {
-      return NextResponse.json({ success: true, deduped: true })
+      return finishDedupedDelivery(db, {
+        body, messageId, locationId, mailboxId: mailbox.id, now, preview,
+      })
     }
     console.error('[postmark-inbound] message insert failed:', msgErr.message)
     return unfiled(NextResponse.json({ success: false, error: 'message_insert_failed' }, { status: 500 }))
@@ -672,17 +825,17 @@ async function processInboundEmail(db, body, messageId) {
   }
 
   // ── Bump the ticket ───────────────────────────────────────────────
-  // No `subject` here on purpose: a ticket is named by the issue that opened
-  // it. Mig 394 tracked the latest inbound and thread names drifted with
-  // every "Re: Re: Fwd:".
+  // CHECKED since EMAIL-BUMP-CHECK.1 (it was fire-and-forget): the message is
+  // filed, but a lost bump leaves a closed/stale ticket with an unseen reply
+  // inside — invisible in every queue view. Failing here 5xxes, the claim is
+  // released on the way out, and Postmark's retry lands on the 23505 path
+  // above, whose finishDedupedDelivery re-runs this exact bump. Deliberately
+  // BEFORE the unread rpc, so the retry increments exactly once.
   if (action.action === 'append') {
-    await db.from('email_tickets').update({
-      status: 'open',
-      last_message_at: now,
-      last_message_direction: 'inbound',
-      last_message_preview: preview,
-      updated_at: now,
-    }).eq('id', ticketId)
+    const bumped = await bumpTicketForInbound(db, ticketId, { now, preview })
+    if (!bumped) {
+      return NextResponse.json({ success: false, error: 'ticket_bump_failed' }, { status: 500 })
+    }
   }
   // supabase-js builders are thenables with no .catch — try/catch, not
   // .catch(), or the rpc never fires.
@@ -694,4 +847,104 @@ async function processInboundEmail(db, body, messageId) {
     mailbox_id: mailbox.id,
     matched_via: matchedVia,
   })
+}
+
+/**
+ * The inbound summary bump. No `subject` on purpose: a ticket is named by the
+ * issue that opened it — mig 394 tracked the latest inbound and thread names
+ * drifted with every "Re: Re: Fwd:".
+ */
+async function bumpTicketForInbound(db, ticketId, { now, preview }) {
+  const { error } = await db.from('email_tickets').update({
+    status: 'open',
+    last_message_at: now,
+    last_message_direction: 'inbound',
+    last_message_preview: preview,
+    updated_at: now,
+  }).eq('id', ticketId)
+  if (error) {
+    console.error('[postmark-inbound] ticket bump failed:', error.message)
+    return false
+  }
+  return true
+}
+
+/**
+ * The 23505 path: the message row exists, written by an attempt that then
+ * failed or died. Complete the parts it may not have reached — attachments
+ * (idempotent by (message_id, attachment_index) + deterministic object keys),
+ * the ticket bump and the unread increment — against the WINNING row, then
+ * answer `deduped`.
+ *
+ * The bump is guarded by state, not by memory of who did what: if the winning
+ * ticket's last_message_at already covers the winning message's created_at,
+ * the bump (or a later message's) has landed and re-running it would REOPEN a
+ * ticket on a stray re-delivery of old mail. BUMP_SKEW_MS absorbs the
+ * app-clock/DB-clock gap between our `now` stamp and the row default.
+ *
+ * Residual, accepted: an attempt killed in the microseconds between its
+ * unread rpc and its 200 leaves a retry that re-increments once — unread off
+ * by one beats a reply nobody is told about.
+ */
+async function finishDedupedDelivery(db, { body, messageId, locationId, mailboxId, now, preview }) {
+  const { data: winners, error: findErr } = await db.from('email_inbox_messages')
+    .select('id, ticket_id, created_at')
+    .eq('postmark_message_id', messageId)
+    .limit(1)
+  const winner = winners?.[0]
+  if (findErr || !winner) {
+    // 23505 said the row exists; not being able to read it back is transient.
+    // 5xx → release → retry, rather than a `deduped` that skipped the bump.
+    console.error('[postmark-inbound] dedupe finish-up lookup failed:', findErr?.message || 'row not found')
+    return NextResponse.json({ success: false, error: 'dedupe_finish_failed' }, { status: 500 })
+  }
+
+  // Same call as the primary path, against the winning row's id. Everything
+  // already recorded is skipped; anything the dead attempt never reached is
+  // stored and metered now. Never fails the response — same governing rule.
+  if (Array.isArray(body.Attachments) && body.Attachments.length > 0) {
+    try {
+      const stored = await storeInboundAttachments(db, {
+        attachments: body.Attachments,
+        messageId: winner.id,
+        locationId,
+        mailboxId,
+        postmarkMessageId: messageId,
+      })
+      if (stored.skipped > 0) {
+        console.warn('[postmark-inbound] finish-up attachments not stored', {
+          messageId, ...stored.reasons,
+        })
+      }
+    } catch (err) {
+      console.error('[postmark-inbound] finish-up attachment storage threw:', err?.message)
+    }
+  }
+
+  if (!winner.ticket_id) {
+    return NextResponse.json({ success: true, deduped: true })
+  }
+
+  const { data: tickets, error: tErr } = await db.from('email_tickets')
+    .select('id, last_message_at')
+    .eq('id', winner.ticket_id)
+    .limit(1)
+  if (tErr) {
+    console.error('[postmark-inbound] dedupe finish-up ticket read failed:', tErr.message)
+    return NextResponse.json({ success: false, error: 'dedupe_finish_failed' }, { status: 500 })
+  }
+  const ticket = tickets?.[0]
+  if (ticket) {
+    const messageAt = new Date(winner.created_at || 0).getTime() || 0
+    const bumpedAt = ticket.last_message_at ? (new Date(ticket.last_message_at).getTime() || 0) : 0
+    if (bumpedAt < messageAt - BUMP_SKEW_MS) {
+      const bumped = await bumpTicketForInbound(db, winner.ticket_id, { now, preview })
+      if (!bumped) {
+        return NextResponse.json({ success: false, error: 'ticket_bump_failed' }, { status: 500 })
+      }
+      try { await db.rpc('increment_email_ticket_unread', { p_ticket_id: winner.ticket_id }) } catch {}
+    }
+  }
+
+  return NextResponse.json({ success: true, deduped: true })
 }

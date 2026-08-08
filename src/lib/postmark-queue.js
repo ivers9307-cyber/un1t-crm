@@ -28,6 +28,28 @@ import { logError } from './log.js'
 
 export const MAX_ATTEMPTS = 5 // give up after this many failures per event
 
+// ── POSTMARK-QUEUE-RECLAIM.1 — making "died mid-claim" distinguishable ──
+// The table has no completion column, so `processed_at set` used to mean BOTH
+// "successfully processed" and "claimed by an attempt that died" (consumer
+// killed mid-processing, or the release UPDATE below failed — it was never
+// inspected). Those stranded rows carry bounces, spam complaints and one-click
+// unsubscribes, Postmark already got its 200, and both consumers skip
+// non-NULL processed_at: invisible forever, the exact class POSTMARK-DLQ.1
+// exists to prevent.
+//
+// Code-only fix, no DDL: the claim CAS stamps this marker into `error`; the
+// success path clears it. A row with `processed_at` set AND the marker still
+// present is therefore a claim whose owner never finished — reclaimable once
+// it is older than any live attempt can be. Rows written by older code never
+// carry the marker, so a deploy overlap can only under-reclaim, never falsely
+// reclaim a genuinely processed row.
+export const CLAIMED_ERROR_MARKER = 'claimed_in_flight'
+
+// A claim older than this cannot belong to a live consumer: the cron and the
+// QStash worker both run inside Vercel's function timeout (≤ 300s). 10 min
+// keeps a comfortable margin and the sweep runs every cron tick.
+export const STALE_QUEUE_CLAIM_MS = 10 * 60_000
+
 /**
  * Dead-letter provider key for a queue row that burned its retry budget.
  *
@@ -92,14 +114,35 @@ async function captureExhaustedRow(db, row, { attempts, error }) {
 export async function claimAndProcessQueueRow(db, row) {
   const { data: claimed } = await db
     .from('postmark_webhook_queue')
-    .update({ processed_at: new Date().toISOString() })
+    .update({ processed_at: new Date().toISOString(), error: CLAIMED_ERROR_MARKER })
     .eq('id', row.id)
     .is('processed_at', null)
     .select('id, attempts')
   if (!claimed || claimed.length === 0) return { status: 'skipped' }
 
   const result = await processPostmarkEvent(db, row.payload)
-  if (result.ok) return { status: 'processed' }
+  if (result.ok) {
+    // Completion stamp — clearing the marker is what says "done" rather than
+    // "died holding the claim". Checked but never fatal: the event WAS
+    // handled, and a row that keeps the marker is merely re-processed by the
+    // stale sweep, which the release path below already makes designed-in.
+    try {
+      const { error: doneErr } = await db
+        .from('postmark_webhook_queue')
+        .update({ error: null })
+        .eq('id', row.id)
+      if (doneErr) {
+        logError('postmark-queue', 'completion stamp failed — the stale sweep will re-process this row', {
+          id: row.id, err: doneErr,
+        })
+      }
+    } catch (e) {
+      logError('postmark-queue', 'completion stamp threw — the stale sweep will re-process this row', {
+        id: row.id, err: e,
+      })
+    }
+    return { status: 'processed' }
+  }
 
   const error = result.error || 'unknown'
 
@@ -129,13 +172,126 @@ export async function claimAndProcessQueueRow(db, row) {
     await captureExhaustedRow(db, row, { attempts, error })
   }
 
-  await db
-    .from('postmark_webhook_queue')
-    .update({
-      processed_at: null,
-      attempts,
-      error: deadLettered ? `${EXHAUSTED_ERROR_PREFIX}: ${error}` : error,
-    })
-    .eq('id', row.id)
+  // The release used to be fire-and-forget: an UPDATE that errored here left
+  // the row claimed forever, looking processed, with its bounce/unsubscribe
+  // never handled. Checked now, retried once (a transient blip is the common
+  // case), and if both fail the row still carries CLAIMED_ERROR_MARKER, so
+  // the stale sweep reclaims it — logged loudly either way. The original
+  // processing error is never masked.
+  const releasePayload = {
+    processed_at: null,
+    attempts,
+    error: deadLettered ? `${EXHAUSTED_ERROR_PREFIX}: ${error}` : error,
+  }
+  const released = await releaseQueueClaim(db, row.id, releasePayload)
+  if (!released) {
+    const retried = await releaseQueueClaim(db, row.id, releasePayload)
+    if (!retried) {
+      logError('postmark-queue', 'CLAIM RELEASE FAILED twice — row stays claimed until the stale sweep reclaims it', {
+        id: row.id, attempts, err: error,
+      })
+    }
+  }
   return { status: 'failed', error, attempts, deadLettered }
+}
+
+/** One release attempt. Never throws; true = the UPDATE reported success. */
+async function releaseQueueClaim(db, id, payload) {
+  try {
+    const { error } = await db
+      .from('postmark_webhook_queue')
+      .update(payload)
+      .eq('id', id)
+    if (error) {
+      logError('postmark-queue', 'claim release failed', { id, err: error })
+      return false
+    }
+    return true
+  } catch (e) {
+    logError('postmark-queue', 'claim release threw', { id, err: e })
+    return false
+  }
+}
+
+/**
+ * Give back claims whose owners died — POSTMARK-QUEUE-RECLAIM.1.
+ *
+ * A row with `processed_at` set and CLAIMED_ERROR_MARKER still in `error` is a
+ * claim that was never completed (consumer killed mid-processing) and never
+ * released (the release UPDATE failed twice). Once it is older than any live
+ * attempt can be, flip it back to pending with attempts+1 so the ordinary
+ * consumers retry it — and if that +1 spends the budget, dead-letter the
+ * payload FIRST, exactly like a normal exhausting attempt (these rows carry
+ * bounces and one-click unsubscribes; losing one means we keep mailing someone
+ * who asked us to stop).
+ *
+ * Race-safe: the release is guarded on `error` still being the marker, so an
+ * overlapping cron tick reclaims each row at most once. (Both ticks may have
+ * captured an exhausting row's dead-letter — capture-before-release is the
+ * POSTMARK-DLQ.1 ordering, and a duplicate capture beats a lost one.)
+ *
+ * Never throws — the cron calls this before its batch and must never be taken
+ * down by it.
+ *
+ * @returns {Promise<{reclaimed: number, deadLettered: number, failed: number}>}
+ */
+export async function reclaimStaleQueueClaims(db, { staleMs = STALE_QUEUE_CLAIM_MS, limit = 50 } = {}) {
+  const summary = { reclaimed: 0, deadLettered: 0, failed: 0 }
+  let rows
+  try {
+    const cutoff = new Date(Date.now() - staleMs).toISOString()
+    const { data, error } = await db
+      .from('postmark_webhook_queue')
+      .select('id, payload, attempts')
+      .eq('error', CLAIMED_ERROR_MARKER)
+      .not('processed_at', 'is', null)
+      .lt('processed_at', cutoff)
+      .order('processed_at', { ascending: true })
+      .limit(limit)
+    if (error) {
+      logError('postmark-queue', 'stale-claim scan failed', { err: error })
+      return summary
+    }
+    rows = data || []
+  } catch (e) {
+    logError('postmark-queue', 'stale-claim scan threw', { err: e })
+    return summary
+  }
+
+  for (const row of rows) {
+    try {
+      const prevAttempts = Number(row.attempts) || 0
+      const attempts = prevAttempts + 1
+      const deadLettered = prevAttempts < MAX_ATTEMPTS && attempts >= MAX_ATTEMPTS
+      if (deadLettered) {
+        logError('postmark-queue', 'stale claim exhausted on reclaim — dead-lettered', {
+          id: row?.id, recordType: row?.payload?.RecordType || 'unknown', attempts,
+        })
+        await captureExhaustedRow(db, row, { attempts, error: 'stale claim reclaimed' })
+      }
+      const { error } = await db
+        .from('postmark_webhook_queue')
+        .update({
+          processed_at: null,
+          attempts,
+          error: deadLettered
+            ? `${EXHAUSTED_ERROR_PREFIX}: stale claim reclaimed`
+            : 'stale claim reclaimed',
+        })
+        .eq('id', row.id)
+        .eq('error', CLAIMED_ERROR_MARKER)
+        .select('id')
+      if (error) {
+        summary.failed += 1
+        logError('postmark-queue', 'stale-claim release failed', { id: row?.id, err: error })
+        continue
+      }
+      summary.reclaimed += 1
+      if (deadLettered) summary.deadLettered += 1
+    } catch (e) {
+      summary.failed += 1
+      logError('postmark-queue', 'stale-claim release threw', { id: row?.id, err: e })
+    }
+  }
+  return summary
 }

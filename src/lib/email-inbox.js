@@ -24,10 +24,22 @@ export const HTML_BODY_MAX_CHARS = 300_000
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
+// EMAIL-INBOUND-POISON.1 — bytes Postgres text cannot hold. `[^@\s]` admits
+// NUL, other control characters and lone surrogates, and an "address" carrying
+// one fails the INSERT of every column it lands in — deterministically, on
+// every Postmark retry. No real mail server delivers such an address, so it is
+// REJECTED rather than stripped: stripping would merge `a\u0000b@x.com` into
+// the real `ab@x.com`, linking a stranger's mail to a real contact (the same
+// identity-forgery class as the LIKE-wildcard bug in like-escape.js).
+// The `u` flag makes the surrogate range match LONE halves only — a valid
+// pair (an astral character) is one code point outside the range.
+const UNSTORABLE_RE = /[\u0000-\u001f]|[\ud800-\udfff]/u
+
 /** Lowercased, trimmed address — or null if it doesn't look like one. */
 export function normalizeEmail(addr) {
   if (!addr || typeof addr !== 'string') return null
   const e = addr.trim().toLowerCase()
+  if (UNSTORABLE_RE.test(e)) return null
   return EMAIL_RE.test(e) ? e : null
 }
 
@@ -87,6 +99,35 @@ function parseAddressList(str) {
     const angled = part.match(/<([^<>]+)>/)
     return normalizeEmail(angled ? angled[1] : part)
   }).filter(Boolean)
+}
+
+/**
+ * The sender's address off a Postmark inbound payload, or null.
+ *
+ * FromFull.Email (typed, already bare) is preferred; the raw `From` header is
+ * the fallback — and it is a DISPLAY string ("Ada Member <member@x.com>"), so
+ * it goes through the same angle-bracket extraction as every other display
+ * header here. The bare-address parse used to run on it directly, fail on the
+ * display form, and drop the mail as `no_sender` with the address in plain
+ * sight.
+ */
+export function senderEmail(payload) {
+  if (!payload || typeof payload !== 'object') return null
+  return normalizeEmail(payload.FromFull?.Email) || parseAddressList(payload.From)[0] || null
+}
+
+/**
+ * An email Date header as an ISO timestamp, or null when it does not parse.
+ *
+ * `new Date(value).toISOString()` throws a RangeError on a malformed date, and
+ * the header is attacker-supplied — inlined in the webhook, that throw was a
+ * deterministic 5xx on every Postmark retry of the same payload
+ * (EMAIL-INBOUND-POISON.1). Callers fall back to their own receive time.
+ */
+export function parseEmailDate(value) {
+  if (!value || typeof value !== 'string') return null
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
 }
 
 /**

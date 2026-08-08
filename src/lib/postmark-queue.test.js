@@ -28,9 +28,12 @@ vi.mock('@/lib/log', () => ({
 
 import {
   claimAndProcessQueueRow,
+  reclaimStaleQueueClaims,
   MAX_ATTEMPTS,
   EXHAUSTED_PROVIDER,
   EXHAUSTED_ERROR_PREFIX,
+  CLAIMED_ERROR_MARKER,
+  STALE_QUEUE_CLAIM_MS,
 } from './postmark-queue.js'
 import { processPostmarkEvent } from '@/lib/postmark-webhook-processor'
 import { deadLetterWebhook } from '@/lib/webhook-dead-letter'
@@ -40,16 +43,18 @@ import { isReplayable } from '@/lib/webhook-replay'
 // ── db mock factory ───────────────────────────────────────────────────────────
 
 /**
- * Chainable Supabase mock for the two update shapes this lib uses:
- *   claim:    update({processed_at}).eq('id').is('processed_at', null).select('id, attempts')
- *   release:  update({processed_at: null, attempts, error}).eq('id')   (awaited)
+ * Chainable Supabase mock for the three update shapes this lib uses:
+ *   claim:      update({processed_at, error: marker}).eq('id').is('processed_at', null).select('id, attempts')
+ *   release:    update({processed_at: null, attempts, error}).eq('id')   (awaited)
+ *   completion: update({error: null}).eq('id')                          (awaited)
  *
  * `claimData` is what the claim CAS reads back — the authoritative attempts
  * count, which may differ from the caller's snapshot when the two consumers
- * race.
+ * race. `releaseErrors` is a queue of per-call release results (shifted), so a
+ * test can fail the first release and let the retry succeed.
  */
-function makeDb({ claimData = [{ id: 'row-1' }] } = {}) {
-  const calls = { claims: [], releases: [], claimSelects: [] }
+function makeDb({ claimData = [{ id: 'row-1' }], releaseErrors = [], completionError = null } = {}) {
+  const calls = { claims: [], releases: [], completions: [], claimSelects: [] }
 
   const fromMock = vi.fn(() => ({
     update: vi.fn((payload) => {
@@ -58,7 +63,16 @@ function makeDb({ claimData = [{ id: 'row-1' }] } = {}) {
         return {
           eq: vi.fn((col, val) => {
             calls.releases.push({ payload, id: val })
-            return Promise.resolve({ error: null })
+            return Promise.resolve({ error: releaseErrors.shift() ?? null })
+          }),
+        }
+      }
+      if (!('processed_at' in payload)) {
+        // completion stamp
+        return {
+          eq: vi.fn((col, val) => {
+            calls.completions.push({ payload, id: val })
+            return Promise.resolve({ error: completionError })
           }),
         }
       }
@@ -350,5 +364,196 @@ describe('claimAndProcessQueueRow — exhaustion dead-letter', () => {
     await claimAndProcessQueueRow(db, { id: 'row-1', payload: {}, attempts: 4 })
 
     expect(deadLetterWebhook.mock.calls[0][1].eventType).toBe('unknown')
+  })
+})
+
+// ── POSTMARK-QUEUE-RECLAIM.1 — the strand windows ─────────────────────────────
+// Two ways a row used to get stuck LOOKING processed while its bounce /
+// unsubscribe was never handled, invisible forever (Postmark already got its
+// 200, both consumers skip non-NULL processed_at):
+//   • the release UPDATE after a failed attempt errors — it was never
+//     inspected, so the claim was simply never given back;
+//   • the consumer dies mid-processing (platform kill) — nobody is alive to
+//     release at all.
+// Neither state was distinguishable from "successfully processed": the table
+// has no completion column. The fix is code-only: the claim CAS stamps
+// CLAIMED_ERROR_MARKER into `error`, success clears it, so `processed_at set +
+// marker still there` = a claim whose owner died — reclaimable once it is
+// older than any live attempt can be.
+
+describe('claim marker + completion stamp', () => {
+  const row = { id: 'row-1', payload: { RecordType: 'Bounce', MessageID: 'm1' }, attempts: 0 }
+
+  it('stamps the claim with the in-flight marker', async () => {
+    const db = makeDb()
+    processPostmarkEvent.mockResolvedValue({ ok: true })
+
+    await claimAndProcessQueueRow(db, row)
+
+    expect(db._calls.claims[0].payload.error).toBe(CLAIMED_ERROR_MARKER)
+  })
+
+  it('clears the marker on success so the row reads as done', async () => {
+    const db = makeDb()
+    processPostmarkEvent.mockResolvedValue({ ok: true })
+
+    const result = await claimAndProcessQueueRow(db, row)
+
+    expect(result).toEqual({ status: 'processed' })
+    expect(db._calls.completions).toHaveLength(1)
+    expect(db._calls.completions[0]).toEqual({ payload: { error: null }, id: 'row-1' })
+  })
+
+  it('a failed completion stamp is logged loudly and does not fail the row', async () => {
+    // The row now reads as in-flight and the stale sweep will re-process it —
+    // re-processing is designed-in (the release path re-processes too), and it
+    // beats inventing a failure for an event that WAS handled.
+    const db = makeDb({ completionError: { message: 'update refused' } })
+    processPostmarkEvent.mockResolvedValue({ ok: true })
+
+    const result = await claimAndProcessQueueRow(db, row)
+
+    expect(result).toEqual({ status: 'processed' })
+    expect(logError).toHaveBeenCalledWith(
+      'postmark-queue', expect.stringContaining('completion stamp failed'),
+      expect.objectContaining({ id: 'row-1' })
+    )
+  })
+
+  it('does not release a failed attempt without checking — a refused release is retried once', async () => {
+    const db = makeDb({ releaseErrors: [{ message: 'connection reset' }, null] })
+    processPostmarkEvent.mockResolvedValue({ ok: false, error: 'kaboom' })
+
+    const result = await claimAndProcessQueueRow(db, row)
+
+    expect(result.status).toBe('failed')
+    expect(db._calls.releases).toHaveLength(2) // first refused, retry landed
+    expect(db._calls.releases[1].payload).toEqual(db._calls.releases[0].payload)
+  })
+
+  it('a release that fails twice is logged loudly — the stale sweep is the recovery', async () => {
+    const db = makeDb({ releaseErrors: [{ message: 'refused' }, { message: 'refused again' }] })
+    processPostmarkEvent.mockResolvedValue({ ok: false, error: 'kaboom' })
+
+    const result = await claimAndProcessQueueRow(db, row)
+
+    // The original processing error still comes back — a release failure must
+    // never mask it.
+    expect(result.status).toBe('failed')
+    expect(result.error).toBe('kaboom')
+    expect(db._calls.releases).toHaveLength(2)
+    expect(logError).toHaveBeenCalledWith(
+      'postmark-queue', expect.stringContaining('RELEASE FAILED'),
+      expect.objectContaining({ id: 'row-1' })
+    )
+  })
+})
+
+describe('reclaimStaleQueueClaims', () => {
+  /**
+   * Chainable mock for the sweep's two shapes:
+   *   scan:    select(...).eq('error', marker).not(...).lt('processed_at', cutoff)
+   *              .order(...).limit(n)            (awaited thenable)
+   *   release: update({...}).eq('id').eq('error', marker).select('id')
+   */
+  function makeSweepDb({ staleRows = [], scanError = null, releaseData = null } = {}) {
+    const calls = { scans: [], releases: [] }
+    const db = {
+      from: vi.fn(() => {
+        const b = { _filters: [], _op: 'select' }
+        const filter = (kind) => (...args) => { b._filters.push([kind, ...args]); return b }
+        b.select = (cols) => {
+          if (b._op === 'update') {
+            calls.releases.push({ payload: b._payload, filters: b._filters })
+            return Promise.resolve({
+              data: releaseData ?? b._filters.filter(f => f[0] === 'eq' && f[1] === 'id').map(f => ({ id: f[2] })),
+              error: null,
+            })
+          }
+          b._cols = cols
+          return b
+        }
+        b.update = (p) => { b._op = 'update'; b._payload = p; return b }
+        b.eq = filter('eq')
+        b.not = filter('not')
+        b.lt = filter('lt')
+        b.order = () => b
+        b.limit = () => b
+        b.then = (res, rej) => {
+          calls.scans.push({ filters: b._filters })
+          return Promise.resolve(scanError ? { data: null, error: scanError } : { data: staleRows, error: null }).then(res, rej)
+        }
+        return b
+      }),
+      _calls: calls,
+    }
+    return db
+  }
+
+  it('scans for the marker with a cutoff at least STALE_QUEUE_CLAIM_MS in the past', async () => {
+    const db = makeSweepDb()
+    const before = Date.now() - STALE_QUEUE_CLAIM_MS
+
+    await reclaimStaleQueueClaims(db)
+
+    const scan = db._calls.scans[0]
+    expect(scan.filters).toContainEqual(['eq', 'error', CLAIMED_ERROR_MARKER])
+    const lt = scan.filters.find(f => f[0] === 'lt' && f[1] === 'processed_at')
+    expect(lt).toBeTruthy()
+    expect(new Date(lt[2]).getTime()).toBeLessThanOrEqual(Date.now() - STALE_QUEUE_CLAIM_MS)
+    expect(new Date(lt[2]).getTime()).toBeGreaterThanOrEqual(before - 5_000)
+  })
+
+  it('releases a stale claim with attempts+1 so the consumers retry it', async () => {
+    const db = makeSweepDb({
+      staleRows: [{ id: 'row-7', payload: { RecordType: 'Bounce' }, attempts: 1 }],
+    })
+
+    const summary = await reclaimStaleQueueClaims(db)
+
+    expect(summary.reclaimed).toBe(1)
+    expect(db._calls.releases).toHaveLength(1)
+    const rel = db._calls.releases[0]
+    expect(rel.payload.processed_at).toBeNull()
+    expect(rel.payload.attempts).toBe(2)
+    expect(rel.payload.error).not.toBe(CLAIMED_ERROR_MARKER)
+    // Guarded: only a row still carrying the marker is released, so a racing
+    // sweep (overlapping cron ticks) cannot double-release.
+    expect(rel.filters).toContainEqual(['eq', 'id', 'row-7'])
+    expect(rel.filters).toContainEqual(['eq', 'error', CLAIMED_ERROR_MARKER])
+    expect(deadLetterWebhook).not.toHaveBeenCalled()
+  })
+
+  it('dead-letters the payload when the reclaim burns the last attempt', async () => {
+    const payload = { RecordType: 'SubscriptionChange', Recipient: 'member@example.com' }
+    const db = makeSweepDb({
+      staleRows: [{ id: 'row-9', payload, attempts: MAX_ATTEMPTS - 1 }],
+    })
+
+    const summary = await reclaimStaleQueueClaims(db)
+
+    expect(summary.reclaimed).toBe(1)
+    expect(summary.deadLettered).toBe(1)
+    expect(deadLetterWebhook).toHaveBeenCalledTimes(1)
+    expect(deadLetterWebhook.mock.calls[0][1]).toMatchObject({
+      provider: EXHAUSTED_PROVIDER,
+      eventType: 'SubscriptionChange',
+      payload,
+    })
+    expect(db._calls.releases[0].payload.error).toContain(EXHAUSTED_ERROR_PREFIX)
+  })
+
+  it('returns zeros and stays quiet when nothing is stale', async () => {
+    const db = makeSweepDb()
+    const summary = await reclaimStaleQueueClaims(db)
+    expect(summary).toEqual({ reclaimed: 0, deadLettered: 0, failed: 0 })
+    expect(db._calls.releases).toHaveLength(0)
+  })
+
+  it('a failing scan is logged and returns zeros — never throws into the cron', async () => {
+    const db = makeSweepDb({ scanError: { message: 'scan refused' } })
+    const summary = await reclaimStaleQueueClaims(db)
+    expect(summary).toEqual({ reclaimed: 0, deadLettered: 0, failed: 0 })
+    expect(logError).toHaveBeenCalled()
   })
 })

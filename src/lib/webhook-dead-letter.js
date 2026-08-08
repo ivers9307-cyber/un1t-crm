@@ -12,6 +12,7 @@
 import { logWarn } from '@/lib/log'
 import { isReplayable } from '@/lib/webhook-replay'
 import { publishQueuePush, WEBHOOK_REPLAY_WORKER_PATH } from '@/lib/qstash'
+import { sanitizeDbText, sanitizeJsonForDb } from '@/lib/db-safe-text'
 
 /**
  * Record a webhook event that 200'd the provider but failed to PROCESS, so it
@@ -35,8 +36,12 @@ export async function deadLetterWebhook(db, {
       .insert({
         provider,
         event_type: eventType,
-        payload: payload ?? {},
-        error: error == null ? null : String(error?.message || error).slice(0, 2000),
+        // EMAIL-INBOUND-POISON.1: jsonb rejects NUL and lone surrogates, and
+        // the payloads most likely to need capturing are exactly the poison
+        // ones that carry them — unsanitised, this insert failed on precisely
+        // the events it exists to keep.
+        payload: sanitizeJsonForDb(payload ?? {}),
+        error: error == null ? null : sanitizeDbText(String(error?.message || error)).slice(0, 2000),
         location_id: locationId,
         last_attempt_at: new Date().toISOString(),
       })
