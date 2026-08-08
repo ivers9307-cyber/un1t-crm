@@ -312,6 +312,21 @@ registry.registerPath({
 })
 
 registry.registerPath({
+  method: 'post',
+  path: '/api/offer-purchases/{id}/fulfil',
+  tags: ['Approvals'],
+  summary: 'Mark a paid sale-offer purchase fulfilled',
+  description: 'Session auth + the approvals_offer_purchases grant. Ids outside the caller\'s locations return 404. Idempotent — re-fulfilling returns { already: true }.',
+  responses: {
+    200: { description: 'Fulfilled (or already fulfilled)' },
+    401: { description: 'No session', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Missing approvals_offer_purchases', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Unknown or inaccessible purchase', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Purchase is not paid', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
   method: 'get',
   path: '/api/public/branding',
   tags: ['Public'],
