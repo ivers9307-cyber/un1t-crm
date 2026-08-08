@@ -201,6 +201,7 @@ import { sanitizeDbText } from '@/lib/db-safe-text'
 import { inboundAddresses } from '@/lib/email-recipients'
 import { resolveMailboxByRecipient } from '@/lib/email-mailboxes'
 import { resolveTicketAction, ticketSubject, pickThreadedTicket } from '@/lib/email-tickets'
+import { statusTimestamps } from '@/app/api/email/tickets/_helpers'
 import { escapeLikePattern } from '@/lib/like-escape'
 import { storeInboundAttachments, discardStagedAttachments } from '@/lib/email-attachments-server'
 
@@ -857,6 +858,13 @@ async function processInboundEmail(db, body, messageId) {
 async function bumpTicketForInbound(db, ticketId, { now, preview }) {
   const { error } = await db.from('email_tickets').update({
     status: 'open',
+    // statusTimestamps' invariant (2026-08-08 audit): moving OUT of
+    // solved/closed CLEARS the stamps. The staff status and reply routes
+    // already honoured it; this bump — which is also the reopen path, and is
+    // re-run verbatim by finishDedupedDelivery — did not, so a reopened
+    // ticket kept its old solved_at and a later re-solve preserved the stale
+    // stamp as though the member's reply never happened.
+    ...statusTimestamps('open', null, now),
     last_message_at: now,
     last_message_direction: 'inbound',
     last_message_preview: preview,

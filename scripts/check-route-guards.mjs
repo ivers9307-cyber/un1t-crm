@@ -27,6 +27,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { stripComments } from './lib/strip-comments.mjs'
 
 const API_ROOT = 'src/app/api'
 
@@ -128,13 +129,16 @@ const INBOX_ROUTE_PREFIXES = [
 //   hasPermissionForLocation(  resolves `email_inbox` at the location the route
 //                              is ABOUT rather than the caller's active one.
 //                              The ticket list route has used it since
-//                              EMAIL-TICKET.5 and passed this check only by
+//                              EMAIL-TICKET.5 and once passed this check only by
 //                              accident — the literal `hasPermission(` was
 //                              matching PROSE in its header comment explaining
-//                              why it no longer calls hasPermission. Delete the
-//                              comment and the gate would have "failed" a route
-//                              that is correct; keep the comment on a route with
-//                              no gate at all and it would have passed.
+//                              why it no longer calls hasPermission. That hole
+//                              is CLOSED (EMAIL-MOPUP.5, 2026-08-08 audit):
+//                              every match below runs on stripComments() output
+//                              (scripts/lib/strip-comments.mjs, pinned by
+//                              tests/strip-comments.test.js), so a token that
+//                              survives only in a comment no longer satisfies
+//                              this lint.
 //   loadTicketForUser(         src/app/api/email/tickets/_helpers.js. VERIFIED:
 //                              it calls hasPermissionForLocation(user,
 //                              ticket.location_id, 'email_inbox') and returns a
@@ -157,18 +161,31 @@ const INBOX_ROUTE_PREFIXES = [
 //                              its /preview sibling must be gated IDENTICALLY,
 //                              and two copies of that resolution would be two
 //                              definitions of who may read `accounts@`.
+// EMAIL-MOPUP.5 —
+//   loadSendingMailbox(        src/app/api/email/tickets/_helpers.js. VERIFIED:
+//                              it runs assertLocationAccessOr404, then
+//                              hasPermissionForLocation(user, location,
+//                              'email_inbox') refusing with 404, then the
+//                              per-account visible-set check — the full gate,
+//                              one call deeper, for routes gated by the MAILBOX
+//                              they send from (compose, upload-sign). Exposed
+//                              the moment comment-stripping landed: the compose
+//                              route had been satisfying this list via the
+//                              PROSE "used to be hasPermission()" in its header
+//                              — the exact #1266 failure mode, live again.
 const INBOX_PERMISSION_GUARDS = [
   'requireInboxPermission(',
   'hasPermission(',
   'hasPermissionForLocation(',
   'loadTicketForUser(',
   'loadAttachmentForTicket(',
+  'loadSendingMailbox(',
 ]
 
 function checkInboxPermission(file) {
   const rel = file.split(path.sep).join('/')
   if (!INBOX_ROUTE_PREFIXES.some((p) => rel.startsWith(p))) return true
-  const src = fs.readFileSync(file, 'utf8')
+  const src = stripComments(fs.readFileSync(file, 'utf8'))
   return INBOX_PERMISSION_GUARDS.some((t) => src.includes(t))
 }
 
@@ -185,7 +202,7 @@ function classify(file) {
   const rel = file.split(path.sep).join('/')
   if (rel.includes('/api/public/')) return { ok: true, kind: 'public' }
   if (EXEMPT[rel]) return { ok: true, kind: 'exempt' }
-  const src = fs.readFileSync(file, 'utf8')
+  const src = stripComments(fs.readFileSync(file, 'utf8'))
   if (rel.includes('/api/webhooks/')) {
     return { ok: WEBHOOK_GUARD.test(src), kind: 'webhook' }
   }

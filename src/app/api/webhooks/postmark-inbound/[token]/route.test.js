@@ -580,6 +580,14 @@ describe('threading', () => {
     expect(update.payload).not.toHaveProperty('subject')
     expect(update.filters).toContainEqual(['eq', 'id', 'T-closed'])
 
+    // …and the reopen CLEARS the archive stamps (2026-08-08 audit). The
+    // statusTimestamps invariant — moving OUT of solved/closed clears them —
+    // was honoured by the staff status and reply routes but not here, so a
+    // reopened ticket kept its old solved_at, and a later re-solve preserved
+    // that stale stamp as though the member's reply never happened.
+    expect(update.payload.solved_at).toBeNull()
+    expect(update.payload.closed_at).toBeNull()
+
     expect(insertsInto(db, 'email_inbox_messages')[0].payload.ticket_id).toBe('T-closed')
     expect((await res.json()).ticket_id).toBe('T-closed')
   })

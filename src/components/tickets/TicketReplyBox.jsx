@@ -42,11 +42,11 @@
 // blocks the note until they are removed. The route refuses the combination
 // too, so the rule is stated in both places.
 
-import { useEffect, useState } from 'react'
-import { Send, Lock, PenLine, Users, AlertCircle } from 'lucide-react'
+import { useState } from 'react'
+import { Send, Lock, Users, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { isArchivedStatus, statusMeta, replyActionLabel } from '@/lib/ticket-display'
-import { SIGNATURE_SEPARATOR, normalizeSignature } from '@/lib/email-signature'
+import SignatureHint from './SignatureHint'
 import RecipientEditor, { EMPTY_RECIPIENTS } from './RecipientEditor'
 import AttachmentPicker, { readyDrafts, hasPendingUploads } from './AttachmentPicker'
 
@@ -63,29 +63,8 @@ export default function TicketReplyBox({
   const [text, setText] = useState('')
   const [recipients, setRecipients] = useState(EMPTY_RECIPIENTS)
   const [files, setFiles] = useState([])
-  // Only fetched when the parent didn't supply one. The composer is nested two
-  // components deep inside the inbox, and the signature belongs to the VIEWER
-  // rather than to the ticket, so it is fetched here rather than threaded
-  // through props that have nothing else to do with it.
-  const [fetchedSignature, setFetchedSignature] = useState('')
-
-  useEffect(() => {
-    if (signature !== undefined) return
-    let cancelled = false
-    fetch('/api/me/preferences')
-      .then((r) => r.json())
-      .then((j) => {
-        if (!cancelled && j?.success) setFetchedSignature(j.data?.email_signature || '')
-      })
-      // A failed lookup just hides the preview. The route appends the
-      // signature server-side either way, so this is cosmetic.
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [signature])
 
   const isNote = mode === 'note'
-  const resolvedSignature = normalizeSignature(signature !== undefined ? signature : fetchedSignature)
-  const showSignature = !isNote && !!resolvedSignature
   // The reply route 400s without a requester address. Say so up front rather
   // than letting an operator type a reply into a dead end.
   const canReply = !!ticket?.requester_email
@@ -199,32 +178,10 @@ export default function TicketReplyBox({
         }`}
       />
 
-      {/* Auto-appended sign-off. Deliberately NOT an input: it sits outside
-          the textarea, carries its own label, and links to where it is
-          actually changed. */}
-      {showSignature && (
-        <div className="mt-2 rounded-lg border border-dashed border-un1t-border bg-un1t-surface/60 px-3 py-2">
-          <div className="flex items-center justify-between gap-2">
-            <span className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-un1t-muted">
-              <PenLine size={11} aria-hidden="true" />
-              Added automatically
-            </span>
-            {/* A new tab, not a <Link> soft-nav: navigating away from the
-                composer would discard whatever reply is half-written in it. */}
-            <a
-              href="/account"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[11px] text-un1t-subtle underline decoration-dotted underline-offset-2 hover:text-un1t-text"
-            >
-              Edit signature
-            </a>
-          </div>
-          <pre className="mt-1 whitespace-pre-wrap break-words font-sans text-xs text-un1t-subtle">
-            {`${SIGNATURE_SEPARATOR}\n${resolvedSignature}`}
-          </pre>
-        </div>
-      )}
+      {/* Auto-appended sign-off — the shared hint, so the reply box and the
+          composer can never disagree about what the server adds. Never shown
+          on a note: a note is sent to nobody. */}
+      {!isNote && <SignatureHint signature={signature} />}
 
       {/* Files ride on a reply only. In note mode the picker is gone but any
           already-attached files stay visible in the notice below — dropping
