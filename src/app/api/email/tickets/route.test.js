@@ -136,7 +136,7 @@ describe('GET /api/email/tickets — mailbox visibility', () => {
     setupDb(baseState({ grants: [] }))
     const { res, body } = await list()
     expect(res.status).toBe(200)
-    expect(body).toEqual({ success: true, data: { mailboxes: [], tickets: [] } })
+    expect(body).toEqual({ success: true, data: { mailboxes: [], tickets: [], viewer_is_elevated: false } })
   })
 
   it('a granted user sees only their mailbox’s tickets', async () => {
@@ -262,7 +262,7 @@ describe('GET /api/email/tickets — views', () => {
 //
 // `mailboxRes.data` is null on a PostgREST error, so `|| []` turned "we could
 // not find out what you may read" into "you may read nothing" — served as a
-// cheerful 200 `{ mailboxes: [], tickets: [] }`. TicketInbox renders that as
+// cheerful 200 `{ mailboxes: [], tickets: [], viewer_is_elevated: false }`. TicketInbox renders that as
 // the calm "no email accounts here yet" empty state, so the operator reads it
 // as "no mail", stops looking, and nobody ever learns the query failed.
 //
@@ -300,6 +300,36 @@ describe('GET /api/email/tickets — a failed mailbox lookup is not an empty inb
     setupDb(baseState({ grants: [] }))
     const { res, body } = await list()
     expect(res.status).toBe(200)
-    expect(body.data).toEqual({ mailboxes: [], tickets: [] })
+    expect(body.data).toEqual({ mailboxes: [], tickets: [], viewer_is_elevated: false })
+  })
+})
+
+
+// EMAIL-ASSIGN.1 — the queue resolves assignee names server-side (profiles is
+// unreadable client-side) and tells the UI whether the viewer may reassign.
+describe('assignment enrichment', () => {
+  it('attaches assignee_name to assigned rows and leaves unassigned ones null', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      tickets: [
+        { ...T_STUDIO, assigned_to: 'profile-owner' },
+        { ...T_ACCOUNTS, assigned_to: null },
+      ],
+      profiles: [{ id: 'profile-owner', full_name: 'Orla Owner', role: 'owner' }],
+    }))
+    getCurrentUser.mockResolvedValue(OWNER)
+    const { res, body } = await list()
+    expect(res.status).toBe(200)
+    const byId = new Map(body.data.tickets.map(t => [t.id, t]))
+    expect(byId.get(T_STUDIO.id).assignee_name).toBe('Orla Owner')
+    expect(byId.get(T_ACCOUNTS.id).assignee_name).toBeNull()
+  })
+
+  it('tells the UI whether the viewer is elevated — the reassign control gates on it', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    expect((await list()).body.data.viewer_is_elevated).toBe(true)
+
+    getCurrentUser.mockResolvedValue(COACH)
+    expect((await list()).body.data.viewer_is_elevated).toBe(false)
   })
 })

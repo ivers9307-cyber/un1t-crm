@@ -15,7 +15,8 @@
 // WHAT IT DELIBERATELY DOES NOT DO
 //   • No html_body. The thread renders text_body only — sanitised HTML is a
 //     later plan and injecting raw email HTML is an XSS hole.
-//   • No assignment picker. `assigned_to` is display-only here.
+//   • Assignment is claim/release for everyone and reassign for elevated
+//     viewers (EMAIL-ASSIGN.1) — the picker lives in TicketThread.
 //   • No auto-close, anywhere, ever (Richard, 2026-08-06). A ticket leaves the
 //     queue because a person put it there.
 
@@ -69,6 +70,9 @@ export default function TicketInbox({ locationId, locationName, userId }) {
   const [threadError, setThreadError] = useState(null)
   const [sending, setSending] = useState(false)
   const [statusSaving, setStatusSaving] = useState(false)
+  const [assignSaving, setAssignSaving] = useState(false)
+  // EMAIL-ASSIGN.1 — whether the viewer may reassign; the queue route says.
+  const [viewerIsElevated, setViewerIsElevated] = useState(false)
 
   // EMAIL-TICKET.5 — starting a conversation rather than answering one.
   const [composeOpen, setComposeOpen] = useState(false)
@@ -106,6 +110,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
       setQueueError(null)
       setMailboxes(body.data?.mailboxes || [])
       setTickets(body.data?.tickets || [])
+      setViewerIsElevated(!!body.data?.viewer_is_elevated)
     } catch {
       if (queueRequest.current !== url) return
       // Transient — keep the last good queue on screen rather than blanking
@@ -318,8 +323,55 @@ export default function TicketInbox({ locationId, locationName, userId }) {
     }
   }
 
+  // EMAIL-ASSIGN.1 — claim ('me'), release (null) or reassign (profile id).
+  // Same merge discipline as handleStatus: spread the server row OVER the
+  // local one (it lacks the mailbox/contact the detail route added), then
+  // refetch the queue — the row may have just left or entered 'mine'.
+  async function handleAssign(assignee) {
+    if (!selectedId || assignSaving) return
+    // TICKET-FETCH-RACE.1's rule extends to action responses: if the operator
+    // switches tickets while this POST is in flight, ticket A's row must not
+    // paint over ticket B's thread (review finding 3).
+    const id = selectedId
+    setAssignSaving(true)
+    setThreadError(null)
+    try {
+      const res = await fetch(`/api/email/tickets/${selectedId}/assign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assignee }),
+      })
+      const body = await res.json()
+      if (threadFor.current !== id) return // superseded — the operator switched tickets
+      if (!body?.success) {
+        const friendly = {
+          already_assigned: 'Somebody claimed this ticket just now — refresh to see who',
+          assignee_cannot_see: 'That person cannot see this mailbox — grant them access first',
+          not_yours: 'This ticket is assigned to somebody else',
+          not_elevated: 'Only an owner can reassign tickets',
+        }
+        setThreadError(friendly[body?.error] || body?.error || 'Could not change the assignee')
+        return
+      }
+      const updated = body.data?.ticket
+      if (updated) {
+        const withName = { ...updated, assignee_name: body.data?.assignee_name ?? null }
+        setTicket(prev => (prev ? { ...prev, ...withName } : withName))
+        setTickets(prev => prev.map(t => (t.id === updated.id ? { ...t, ...withName } : t)))
+      }
+      await loadQueue(true)
+    } catch {
+      if (threadFor.current === id) {
+        setThreadError('Could not change the assignee — check your connection and try again')
+      }
+    } finally {
+      setAssignSaving(false)
+    }
+  }
+
   async function handleStatus(status) {
     if (!selectedId || statusSaving) return
+    const id = selectedId // guard stale responses across a ticket switch
     setStatusSaving(true)
     setThreadError(null)
     try {
@@ -329,6 +381,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
         body: JSON.stringify({ status }),
       })
       const body = await res.json()
+      if (threadFor.current !== id) return // superseded — the operator switched tickets
       if (!body?.success) {
         setThreadError(body?.error || 'Could not change the status')
         return
@@ -511,6 +564,7 @@ export default function TicketInbox({ locationId, locationName, userId }) {
           className={`${selectedId ? 'hidden md:flex' : 'flex'} w-full flex-col border-r border-un1t-border md:w-[22rem] lg:w-[24rem] shrink-0`}
         >
           <TicketList
+            currentUserId={userId}
             tickets={tickets}
             loading={loading}
             selectedId={selectedId}
@@ -535,6 +589,9 @@ export default function TicketInbox({ locationId, locationName, userId }) {
             onBack={clearSelection}
             onStatusChange={handleStatus}
             statusSaving={statusSaving}
+            onAssign={handleAssign}
+            assignSaving={assignSaving}
+            viewerIsElevated={viewerIsElevated}
             onSend={handleSend}
             sending={sending}
             onForward={setForwarding}

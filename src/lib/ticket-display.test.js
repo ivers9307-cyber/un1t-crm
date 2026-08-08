@@ -166,6 +166,10 @@ describe('labels', () => {
     expect(assigneeLabel({ assigned_to: 'u1' }, 'u1')).toBe('Assigned to you')
     expect(assigneeLabel({ assigned_to: 'u2' }, 'u1')).toBe('Assigned')
     expect(assigneeLabel({ assigned_to: null }, 'u1')).toBe('Unassigned')
+    // EMAIL-ASSIGN.1 — a resolved name beats the anonymous 'Assigned', and
+    // 'you' still beats the name (the viewer knows their own name).
+    expect(assigneeLabel({ assigned_to: 'u2', assignee_name: 'Sarah' }, 'u1')).toBe('Assigned to Sarah')
+    expect(assigneeLabel({ assigned_to: 'u1', assignee_name: 'Casey' }, 'u1')).toBe('Assigned to you')
   })
 
   it('names a mailbox by label, then address', () => {

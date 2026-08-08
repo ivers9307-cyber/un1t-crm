@@ -183,7 +183,15 @@ export function makeDb(state = {}) {
       // The list shape matters for the prune path, which decrements the counter
       // by exactly what its UPDATE actually changed — that is what stops two
       // concurrent prunes double-counting the same rows.
-      return shape === 'list' ? { data: hit, error: null } : { data: hit[0] ?? null, error: null }
+      //
+      // EMAIL-ASSIGN.1 (review finding 4): a conditional UPDATE that matched
+      // NOTHING under .single() is PGRST116 in real PostgREST — the shape the
+      // claim/release race handling keys on. Returning null-data success here
+      // made that branch dead code under this harness.
+      if (shape === 'list') return { data: hit, error: null }
+      return hit[0]
+        ? { data: hit[0], error: null }
+        : { data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' } }
     }
     // EMAIL-MAILBOX-ADMIN.1 — revoking a mailbox grant DELETES the row, and
     // "the person can no longer see it" is only proven if the fake actually

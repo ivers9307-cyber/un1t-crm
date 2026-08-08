@@ -48,3 +48,30 @@ describe('getTicket', () => {
     expect(res.error).toBe('nope')
   })
 })
+
+// EMAIL-ASSIGN.1 — the mobile claim path. Mirrors the web contract exactly:
+// 'me' | null | <profile id>, the route decides.
+describe('assignTicket', () => {
+  it("posts the assignee and passes the route's ticket + name back", async () => {
+    api.mockResolvedValue({
+      success: true,
+      data: { ticket: { id: 'T-1', assigned_to: 'p-1' }, assignee_name: 'Casey' },
+    })
+    const { assignTicket } = await import('./email-api')
+    const res = await assignTicket('T-1', 'me', { locationId: 'loc-1' })
+    expect(res.success).toBe(true)
+    expect(res.ticket.assigned_to).toBe('p-1')
+    expect(res.assigneeName).toBe('Casey')
+    expect(api).toHaveBeenCalledWith('/api/email/tickets/T-1/assign', expect.objectContaining({
+      method: 'POST', locationId: 'loc-1', body: { assignee: 'me' },
+    }))
+  })
+
+  it('surfaces a refusal as a failure with the code intact', async () => {
+    api.mockResolvedValue({ success: false, error: 'already_assigned' })
+    const { assignTicket } = await import('./email-api')
+    const res = await assignTicket('T-1', 'me', { locationId: 'loc-1' })
+    expect(res.success).toBe(false)
+    expect(res.error).toBe('already_assigned')
+  })
+})

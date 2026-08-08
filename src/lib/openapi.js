@@ -1269,6 +1269,43 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'post',
+  path: '/api/email/tickets/{id}/assign',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Claim, release or reassign a ticket',
+  description: "EMAIL-ASSIGN.1 — who owns this ticket. assignee 'me' CLAIMS an unassigned ticket (conditional on assigned_to IS NULL, so simultaneous claims race in Postgres and the loser gets 409 already_assigned; a ticket somebody else holds is a 409 outright — taking over is an explicit elevated reassign). assignee null RELEASES your own ticket, or anybody's when elevated at the ticket's location. Any other string is a profile id: elevated-only, and the TARGET must be able to SEE the ticket (a grant on its mailbox, owner at its location, or master) — 400 assignee_cannot_see otherwise. Gated through loadTicketForUser like every ticket write: 404, never 403, for tickets outside the caller's visible set.",
+  request: {
+    params: z.object({ id: uuidLike }),
+    body: { content: { 'application/json': { schema: z.object({
+      assignee: z.union([z.literal('me'), z.null(), z.string().min(1).max(64)]),
+    }).openapi('EmailTicketAssign') } } },
+  },
+  responses: {
+    200: { description: 'Updated ticket + resolved assignee_name' },
+    400: { description: 'Invalid body, or the target cannot see the ticket', content: { 'application/json': { schema: ErrorResponse } } },
+    403: { description: 'Releasing another’s ticket, or reassigning, without elevation', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+    409: { description: 'Somebody else already holds it', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/email/tickets/{id}/assignees',
+  tags: ['Email'],
+  security: [{ CookieAuth: [] }],
+  summary: 'Who a ticket can be assigned to',
+  description: 'EMAIL-ASSIGN.1 — feeds the elevated reassign picker: holders of a grant on the ticket’s mailbox plus owners at its location, named. Elevated-only (403) because the list enumerates colleagues’ mailbox access; sits behind loadTicketForUser’s 404 so it reveals nothing about tickets the caller cannot already see.',
+  request: { params: z.object({ id: uuidLike }) },
+  responses: {
+    200: { description: '{ assignees: [{ id, full_name }] }' },
+    403: { description: 'Not elevated at the ticket’s location', content: { 'application/json': { schema: ErrorResponse } } },
+    404: { description: 'Not found / not accessible', content: { 'application/json': { schema: ErrorResponse } } },
+  },
+})
+
+registry.registerPath({
+  method: 'post',
   path: '/api/email/tickets/compose',
   tags: ['Email'],
   security: [{ CookieAuth: [] }],

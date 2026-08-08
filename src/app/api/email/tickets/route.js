@@ -95,7 +95,7 @@ export async function GET(request) {
 
   // Nothing visible → nothing to show. Not an error.
   if (mailboxes.length === 0) {
-    return NextResponse.json({ success: true, data: { mailboxes: [], tickets: [] } })
+    return NextResponse.json({ success: true, data: { mailboxes: [], tickets: [], viewer_is_elevated: elevated } })
   }
 
   // Asking for an account you cannot see is also empty rather than an error:
@@ -103,7 +103,7 @@ export async function GET(request) {
   // but not yours" would leak which addresses the studio runs.
   const mailboxId = searchParams.get('mailbox_id')
   if (mailboxId && !mailboxes.some(m => m.id === mailboxId)) {
-    return NextResponse.json({ success: true, data: { mailboxes, tickets: [] } })
+    return NextResponse.json({ success: true, data: { mailboxes, tickets: [], viewer_is_elevated: elevated } })
   }
 
   let query = db.from('email_tickets')
@@ -124,5 +124,33 @@ export async function GET(request) {
   const { data, error } = await query
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
 
-  return NextResponse.json({ success: true, data: { mailboxes, tickets: data || [] } })
+  // EMAIL-ASSIGN.1 — assignee names, resolved here because `profiles` is
+  // unreadable client-side (no grant for `authenticated`; an embed would 500
+  // the whole select). Best-effort: an unresolved name degrades to null and
+  // the row renders 'Assigned', exactly like a pre-assignment ticket.
+  const tickets = data || []
+  const assigneeIds = [...new Set(tickets.map(t => t.assigned_to).filter(Boolean))]
+  let assigneeNames = new Map()
+  if (assigneeIds.length > 0) {
+    try {
+      const { data: profiles } = await db.from('profiles')
+        .select('id, full_name').in('id', assigneeIds).limit(TICKET_LIMIT)
+      assigneeNames = new Map((profiles || []).map(p => [p.id, p.full_name]))
+    } catch { /* cosmetic — never fail the queue for a name */ }
+  }
+  const shaped = tickets.map(t => ({
+    ...t,
+    assignee_name: t.assigned_to ? (assigneeNames.get(t.assigned_to) || null) : null,
+  }))
+
+  return NextResponse.json({
+    success: true,
+    data: {
+      mailboxes,
+      tickets: shaped,
+      // The reassign control gates on this — claiming needs no elevation,
+      // assigning somebody ELSE does.
+      viewer_is_elevated: elevated,
+    },
+  })
 }

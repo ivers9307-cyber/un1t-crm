@@ -8,7 +8,7 @@ import {
   replyMode,
 } from '@/lib/email-recipients'
 import { attachmentPreviewKind } from '@/lib/email-attachment-preview'
-import { loadTicketForUser, loadOwnAddresses } from '../_helpers'
+import { loadTicketForUser, loadOwnAddresses, isElevatedAtLocation } from '../_helpers'
 
 // GET /api/email/tickets/[id] — one ticket and its thread (EMAIL-TICKET.4).
 //
@@ -154,14 +154,29 @@ export async function GET(request, props) {
     replyRecipients = { to, mode: replyMode(to) }
   }
 
+  // EMAIL-ASSIGN.1 — assignee display name, best-effort: `profiles` has no
+  // grant for `authenticated`, so the name resolves here or nowhere. An
+  // unresolved name degrades to null ('Assigned'), never a failure.
+  let assigneeName = null
+  if (ticket.assigned_to) {
+    try {
+      const { data: assignee } = await db.from('profiles')
+        .select('full_name').eq('id', ticket.assigned_to).maybeSingle()
+      assigneeName = assignee?.full_name || null
+    } catch { /* cosmetic */ }
+  }
+
   return NextResponse.json({
     success: true,
     data: {
       // `mailbox` is the account this ticket arrived at, resolved through the
       // caller's visible set — so it is safe to render, and it is what the
       // reply goes back out from.
-      ticket: { ...ticket, mailbox, contact: contact || null },
+      ticket: { ...ticket, mailbox, contact: contact || null, assignee_name: assigneeName },
       messages,
+      // EMAIL-ASSIGN.1 — the reassign control gates on this; claiming needs
+      // no elevation, assigning somebody ELSE does.
+      viewer_is_elevated: isElevatedAtLocation(user, ticket.location_id),
       // { to: string[], mode: 'reply' | 'reply_all' }, or null — see above.
       // `to` is derived from From/To/Cc only; bcc_emails is never a
       // participant, so it can never appear here.

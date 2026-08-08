@@ -308,3 +308,33 @@ describe('GET …/[id] — recipients (EMAIL-CC.1)', () => {
       .toEqual({ to: [T_STUDIO.requester_email], mode: 'reply' })
   })
 })
+
+// EMAIL-ASSIGN.1 — the thread header needs the assignee's name and whether
+// the viewer may reassign; both resolved here, where the service role can
+// read `profiles`.
+describe('assignment enrichment', () => {
+  it('resolves assignee_name on the ticket, null when unassigned or unresolvable', async () => {
+    setupDb(baseState({
+      grants: [GRANT_STUDIO],
+      tickets: [{ ...T_STUDIO, assigned_to: 'profile-owner' }],
+      messages: MESSAGES,
+      profiles: [{ id: 'profile-owner', full_name: 'Orla Owner', role: 'owner' }],
+    }))
+    const body = await (await get(T_STUDIO.id)).json()
+    expect(body.data.ticket.assignee_name).toBe('Orla Owner')
+
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: MESSAGES }))
+    const unassigned = await (await get(T_STUDIO.id)).json()
+    expect(unassigned.data.ticket.assignee_name).toBeNull()
+  })
+
+  it('carries viewer_is_elevated for the reassign control', async () => {
+    getCurrentUser.mockResolvedValue(OWNER)
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: MESSAGES }))
+    expect((await (await get(T_STUDIO.id)).json()).data.viewer_is_elevated).toBe(true)
+
+    getCurrentUser.mockResolvedValue(COACH)
+    setupDb(baseState({ grants: [GRANT_STUDIO], messages: MESSAGES }))
+    expect((await (await get(T_STUDIO.id)).json()).data.viewer_is_elevated).toBe(false)
+  })
+})

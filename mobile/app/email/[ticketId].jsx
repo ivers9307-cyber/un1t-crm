@@ -54,7 +54,7 @@ import { useHeaderHeight } from 'expo-router/react-navigation'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../../lib/auth-context'
 import {
-  getTicket, replyToTicket, setTicketStatus, markTicketRead, emailDisplayName,
+  getTicket, replyToTicket, setTicketStatus, markTicketRead, assignTicket, emailDisplayName,
   previewTicketAttachment, downloadTicketAttachment,
 } from '../../lib/email-api'
 import {
@@ -380,7 +380,7 @@ function MessageBubble({ msg, ticketId, locationId, onViewImage }) {
 
 export default function EmailTicket() {
   const { ticketId } = useLocalSearchParams()
-  const { activeLocation } = useAuth()
+  const { activeLocation, profile } = useAuth()
   const headerHeight = useHeaderHeight()
   const insets = useSafeAreaInsets()
   const [ticket, setTicket] = useState(null)
@@ -391,6 +391,7 @@ export default function EmailTicket() {
   const [isNote, setIsNote] = useState(false)
   const [sending, setSending] = useState(false)
   const [savingStatus, setSavingStatus] = useState(false)
+  const [savingAssign, setSavingAssign] = useState(false)
   // The route sets this when the ATTACHMENT lookup failed (2026-08-08 audit):
   // the messages below are real, but their files are unknown — which must be
   // said, or a blipped lookup reads as "the member sent no files". Web renders
@@ -483,6 +484,30 @@ export default function EmailTicket() {
   // Nothing in this system closes itself (Richard, 2026-08-06) — every
   // ticket is answered or closed by a person, so closing has to be
   // reachable from the thread rather than desktop-only.
+  // EMAIL-ASSIGN.1 — claim or release from the phone. Reassign-to-anyone
+  // stays a desk task (the picker enumerates colleagues' access); claim is
+  // the on-the-floor action this screen exists for.
+  async function changeAssignee(next) {
+    if (savingAssign) return
+    setSavingAssign(true)
+    const res = await assignTicket(ticketId, next, { locationId: activeLocation?.id })
+    setSavingAssign(false)
+    if (!res.success) {
+      Alert.alert('Couldn’t update owner',
+        res.error === 'already_assigned'
+          ? 'Somebody claimed this ticket just now.'
+          : res.error || 'Unknown error')
+      // Their claim beat ours — show the truth.
+      refresh({ quiet: true })
+      return
+    }
+    // The route's row lacks the mailbox/contact enrichment — merge, never
+    // replace (the EMAIL-MOPUP.4 lesson).
+    if (res.ticket) {
+      setTicket(prev => (prev ? { ...prev, ...res.ticket, assignee_name: res.assigneeName } : prev))
+    }
+  }
+
   async function changeStatus(next) {
     if (savingStatus || next === ticket?.status) return
     setSavingStatus(true)
@@ -550,6 +575,38 @@ export default function EmailTicket() {
                   orphans its correspondence rather than hiding it. */}
               {ticket?.mailbox ? `To ${mailboxLabel(ticket.mailbox)}` : 'No mailbox on this ticket'}
             </Text>
+
+            {/* Ownership (EMAIL-ASSIGN.1): who's on it, and one-tap claim /
+                release. Names resolve server-side; 'you' beats the name. */}
+            <View className="flex-row items-center mt-0.5">
+              <Text className="text-[11px] text-un1t-subtle flex-1" numberOfLines={1}>
+                {!ticket?.assigned_to
+                  ? 'Unassigned'
+                  : ticket.assigned_to === profile?.id
+                    ? 'Assigned to you'
+                    : ticket.assignee_name
+                      ? `Assigned to ${ticket.assignee_name}`
+                      : 'Assigned'}
+              </Text>
+              {!ticket?.assigned_to && (
+                <Pressable
+                  onPress={() => changeAssignee('me')}
+                  disabled={savingAssign}
+                  className={`ml-2 rounded border border-un1t-border px-2 py-0.5 ${savingAssign ? 'opacity-50' : ''}`}
+                >
+                  <Text className="text-[11px] text-un1t-text">Claim</Text>
+                </Pressable>
+              )}
+              {ticket?.assigned_to === profile?.id && (
+                <Pressable
+                  onPress={() => changeAssignee(null)}
+                  disabled={savingAssign}
+                  className={`ml-2 rounded border border-un1t-border px-2 py-0.5 ${savingAssign ? 'opacity-50' : ''}`}
+                >
+                  <Text className="text-[11px] text-un1t-subtle">Release</Text>
+                </Pressable>
+              )}
+            </View>
 
             <View className="flex-row items-center mt-2">
               {TICKET_STATUS_ORDER.map(s => {
