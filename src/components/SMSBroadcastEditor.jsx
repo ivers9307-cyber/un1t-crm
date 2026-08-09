@@ -261,6 +261,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
       {/* Tabs */}
       <div className="flex gap-1 mb-4 border-b border-un1t-border">
         <button
+          type="button"
           onClick={() => setTab('setup')}
           className={`px-4 py-2 text-sm border-b-2 -mb-px ${tab === 'setup' ? 'border-un1t-text text-un1t-text' : 'border-transparent text-un1t-subtle hover:text-un1t-text'}`}
         >
@@ -268,6 +269,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
         </button>
         {(isLocked || isSending) && (
           <button
+            type="button"
             onClick={() => setTab('results')}
             className={`px-4 py-2 text-sm border-b-2 -mb-px ${tab === 'results' ? 'border-un1t-text text-un1t-text' : 'border-transparent text-un1t-subtle hover:text-un1t-text'}`}
           >
@@ -386,6 +388,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
               <div className="flex gap-2 flex-wrap">
                 {!isScheduled && (
                   <button
+                    type="button"
                     onClick={handleSave}
                     disabled={saving || !body.trim()}
                     className="flex items-center gap-1.5 text-sm bg-un1t-border text-un1t-text px-4 py-2 rounded-md hover:bg-un1t-border/70 disabled:opacity-50"
@@ -395,6 +398,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
                 )}
                 {isScheduled && (
                   <button
+                    type="button"
                     onClick={handleUnschedule}
                     className="flex items-center gap-1.5 text-sm bg-un1t-border text-un1t-text px-4 py-2 rounded-md hover:bg-un1t-border/70"
                   >
@@ -403,6 +407,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
                 )}
                 {broadcastId && !isScheduled && (
                   <button
+                    type="button"
                     onClick={handleCancel}
                     className="flex items-center gap-1.5 text-sm bg-un1t-border/40 text-un1t-subtle px-3 py-2 rounded-md hover:text-un1t-text"
                   >
@@ -411,6 +416,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
                 )}
                 {broadcastId && !isScheduled && (
                   <button
+                    type="button"
                     onClick={handleDelete}
                     className="flex items-center gap-1.5 text-sm text-red-700 px-3 py-2 rounded-md hover:bg-red-500/10"
                   >
@@ -421,6 +427,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
               <div className="flex gap-2">
                 {!isScheduled && scheduledAtLocal && broadcastId && (
                   <button
+                    type="button"
                     onClick={handleSchedule}
                     disabled={scheduling || !body.trim()}
                     className="flex items-center gap-1.5 text-sm bg-un1t-border text-un1t-text px-4 py-2 rounded-md hover:bg-un1t-border/70 disabled:opacity-50"
@@ -430,6 +437,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
                 )}
                 {!isScheduled && (
                   <button
+                    type="button"
                     onClick={handleSend}
                     disabled={sending || !broadcastId || !body.trim()}
                     className="flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-2 rounded-md hover:bg-un1t-accent disabled:opacity-50"

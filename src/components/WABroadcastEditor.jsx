@@ -243,6 +243,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
         {!isTerminal && !isDripInFlight && (
           <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={handleSave}
               disabled={saving}
               className="flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
@@ -255,6 +256,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
                 'scheduled' entry state anyway). */}
             {isScheduled ? (
               <button
+                type="button"
                 onClick={handleUnschedule}
                 disabled={cancelling}
                 className="flex items-center gap-1.5 text-sm border border-rose-500/30 text-rose-700 font-medium px-4 py-1.5 rounded-md hover:bg-rose-500/10 transition-colors disabled:opacity-50"
@@ -264,6 +266,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
               </button>
             ) : (
               <button
+                type="button"
                 onClick={handleSend}
                 disabled={sending || !templateId}
                 className="flex items-center gap-1.5 text-sm bg-green-600 text-white font-medium px-4 py-1.5 rounded-md hover:bg-green-700 transition-colors disabled:opacity-50"
@@ -304,6 +307,7 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
             { key: 'recipients', label: `Recipients (${broadcast.total_sent || 0})` },
           ].map(t => (
             <button
+              type="button"
               key={t.key}
               onClick={() => setTab(t.key)}
               className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
