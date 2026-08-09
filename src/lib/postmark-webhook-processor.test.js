@@ -76,6 +76,12 @@ function stubEngagementDb({ send }) {
           eq: (col, val) => { filters.push(['eq', col, val]); return chain },
           in: (col, val) => { filters.push(['in', col, val]); return chain },
           not: (col, op, val) => { filters.push(['not', col, op, val]); return chain },
+          // COMMSFIX.F.2 — the Click handler stamps clicked_at with an
+          // .is('clicked_at', null) guard (first click only). The fake tracks
+          // the client: without this the whole handler throws here and the
+          // hygiene assertion below fails for a reason that has nothing to do
+          // with hygiene.
+          is: (col, val) => { filters.push(['is', col, val]); return chain },
           then: (resolve, reject) => {
             if (table === 'contacts') contactUpdates.push({ values, filters })
             return Promise.resolve({ error: null }).then(resolve, reject)
@@ -625,5 +631,191 @@ describe('processPostmarkEvent — SubscriptionChange reactivation (COMMSFIX.C.7
 
     expect(r.ok).toBe(true)
     expect(db.contactUpdates).toEqual([])
+  })
+})
+
+// ─── COMMSFIX.F.2 — Click writes rows, never arrays ──────────────────
+//
+// The old handler did select clicked_links → push → update. That is a
+// lost-update race; it never lost anything only because the webhook dedup key
+// collapsed every repeat Click on a message into one event, so the processor
+// saw at most one Click per message. COMMSFIX.C narrows that key and repeats
+// start flowing — at which point two concurrent Clicks each read the array,
+// append, and overwrite each other.
+//
+// These tests are written against the NEW model: one campaign_link_clicks row
+// per click event, and two BLIND writes to the recipient row (clicked_at
+// guarded to the first click, status unguarded). The load-bearing property is
+// negative — the handler must never SELECT campaign_recipients — so the fake
+// records reads as well as writes, and a reinstated read-modify-write fails
+// the test rather than passing it quietly.
+function stubClickDb({ send, insertError = null } = {}) {
+  const inserts = []
+  const recipientUpdates = []
+  const recipientSelects = []
+
+  function builder(table) {
+    const b = { _op: 'select', _values: null, _filters: [] }
+    const settle = (shape) => {
+      if (b._op === 'insert') {
+        inserts.push({ table, values: b._values })
+        return Promise.resolve({ data: null, error: insertError })
+      }
+      if (b._op === 'update') {
+        if (table === 'campaign_recipients') {
+          recipientUpdates.push({ values: b._values, filters: b._filters })
+        }
+        return Promise.resolve({ data: null, error: null })
+      }
+      if (table === 'campaign_recipients') recipientSelects.push({ filters: b._filters })
+      // campaign_recipients resolves to a REAL row so the old read-modify-write
+      // would actually execute against this fake — otherwise the
+      // "never writes clicked_links" assertion would pass on the old code too,
+      // for the wrong reason (its `if (recipient)` guard falling through).
+      const row = table === 'email_sends'
+        ? send
+        : table === 'campaign_recipients'
+          ? { clicked_links: [], clicked_at: null }
+          : null
+      return Promise.resolve({ data: shape === 'single' ? row : [], error: null })
+    }
+    b.select = () => b
+    b.insert = (values) => { b._op = 'insert'; b._values = values; return b }
+    b.update = (values) => { b._op = 'update'; b._values = values; return b }
+    b.eq = (col, val) => { b._filters.push(['eq', col, val]); return b }
+    b.is = (col, val) => { b._filters.push(['is', col, val]); return b }
+    b.in = (col, val) => { b._filters.push(['in', col, val]); return b }
+    b.not = (col, op, val) => { b._filters.push(['not', col, op, val]); return b }
+    b.single = () => settle('single')
+    b.maybeSingle = () => settle('single')
+    b.then = (resolve, reject) => settle('list').then(resolve, reject)
+    return b
+  }
+
+  return { inserts, recipientUpdates, recipientSelects, from: builder, rpc: () => Promise.resolve({ error: null }) }
+}
+
+const CAMPAIGN_SEND = { id: 's1', contact_id: 'c1', campaign_id: 'camp1', location_id: 'loc1' }
+const clickEvent = (url) => ({ RecordType: 'Click', MessageID: 'pm-click', OriginalLink: url })
+
+describe('processPostmarkEvent — Click (COMMSFIX.F.2)', () => {
+  it('inserts one campaign_link_clicks row carrying campaign, contact, location, url and message id', async () => {
+    const db = stubClickDb({ send: CAMPAIGN_SEND })
+
+    const r = await processPostmarkEvent(db, clickEvent('https://un1t.ie/offers'))
+
+    expect(r.ok).toBe(true)
+    const clicks = db.inserts.filter((i) => i.table === 'campaign_link_clicks')
+    expect(clicks).toHaveLength(1)
+    expect(clicks[0].values).toEqual(expect.objectContaining({
+      campaign_id: 'camp1',
+      contact_id: 'c1',
+      location_id: 'loc1',
+      url: 'https://un1t.ie/offers',
+      postmark_message_id: 'pm-click',
+    }))
+    expect(typeof clicks[0].values.clicked_at).toBe('string')
+  })
+
+  it('TWO clicks on one message produce TWO rows — the case the array model lost', async () => {
+    const db = stubClickDb({ send: CAMPAIGN_SEND })
+
+    await processPostmarkEvent(db, clickEvent('https://un1t.ie/offers'))
+    await processPostmarkEvent(db, clickEvent('https://un1t.ie/timetable'))
+
+    const clicks = db.inserts.filter((i) => i.table === 'campaign_link_clicks')
+    expect(clicks).toHaveLength(2)
+    expect(clicks.map((c) => c.values.url)).toEqual([
+      'https://un1t.ie/offers',
+      'https://un1t.ie/timetable',
+    ])
+  })
+
+  it('never SELECTs campaign_recipients — no read-modify-write anywhere on the click path', async () => {
+    const db = stubClickDb({ send: CAMPAIGN_SEND })
+
+    await processPostmarkEvent(db, clickEvent('https://un1t.ie/offers'))
+
+    expect(db.recipientSelects).toEqual([])
+  })
+
+  it('stamps clicked_at blind and guarded to the FIRST click only', async () => {
+    const db = stubClickDb({ send: CAMPAIGN_SEND })
+
+    await processPostmarkEvent(db, clickEvent('https://un1t.ie/offers'))
+
+    const stamp = db.recipientUpdates.find((u) => 'clicked_at' in u.values)
+    expect(stamp).toBeTruthy()
+    expect(stamp.filters).toContainEqual(['eq', 'postmark_message_id', 'pm-click'])
+    // The guard IS the "second click does not move clicked_at" behaviour:
+    // a row whose clicked_at is already set is filtered out server-side.
+    expect(stamp.filters).toContainEqual(['is', 'clicked_at', null])
+    expect(stamp.values).not.toHaveProperty('status')
+  })
+
+  it('stamps status=clicked unguarded, in its own write', async () => {
+    const db = stubClickDb({ send: CAMPAIGN_SEND })
+
+    await processPostmarkEvent(db, clickEvent('https://un1t.ie/offers'))
+
+    const status = db.recipientUpdates.find((u) => u.values.status === 'clicked')
+    expect(status).toBeTruthy()
+    expect(status.filters).toContainEqual(['eq', 'postmark_message_id', 'pm-click'])
+    expect(status.filters).not.toContainEqual(['is', 'clicked_at', null])
+  })
+
+  it('never writes clicked_links (DEPRECATED, mig 510)', async () => {
+    const db = stubClickDb({ send: CAMPAIGN_SEND })
+
+    await processPostmarkEvent(db, clickEvent('https://un1t.ie/offers'))
+
+    for (const u of db.recipientUpdates) expect(u.values).not.toHaveProperty('clicked_links')
+    for (const i of db.inserts) expect(i.values).not.toHaveProperty('clicked_links')
+  })
+
+  it('logs a failed insert instead of swallowing it — silence is the failure mode', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = stubClickDb({
+      send: CAMPAIGN_SEND,
+      insertError: { message: 'null value in column "location_id" violates not-null constraint' },
+    })
+
+    const r = await processPostmarkEvent(db, clickEvent('https://un1t.ie/offers'))
+
+    // Logged, but the event still succeeds — a click row is not worth
+    // dead-lettering the whole webhook event over.
+    expect(r.ok).toBe(true)
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining('campaign_link_clicks'),
+      expect.stringContaining('not-null constraint'),
+    )
+    spy.mockRestore()
+  })
+
+  it('inserts nothing for a transactional (non-campaign) send, and does not log it as an error', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = stubClickDb({ send: { id: 's2', contact_id: 'c1', campaign_id: null, location_id: 'loc1' } })
+
+    const r = await processPostmarkEvent(db, clickEvent('https://un1t.ie/offers'))
+
+    expect(r.ok).toBe(true)
+    expect(db.inserts.filter((i) => i.table === 'campaign_link_clicks')).toEqual([])
+    expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
+  })
+
+  it('logs a campaign send that has no location_id rather than firing a doomed insert', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = stubClickDb({ send: { id: 's3', contact_id: 'c1', campaign_id: 'camp1', location_id: null } })
+
+    const r = await processPostmarkEvent(db, clickEvent('https://un1t.ie/offers'))
+
+    expect(r.ok).toBe(true)
+    expect(db.inserts.filter((i) => i.table === 'campaign_link_clicks')).toEqual([])
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining('location_id'),
+      expect.objectContaining({ campaignId: 'camp1' }),
+    )
+    spy.mockRestore()
   })
 })

@@ -247,7 +247,7 @@ export async function processPostmarkEvent(db, body) {
         const clickedUrl = body.OriginalLink
 
         const { data: clickSend } = await db.from('email_sends')
-          .select('id, contact_id, campaign_id')
+          .select('id, contact_id, campaign_id, location_id')
           .eq('postmark_message_id', messageId)
           .single()
 
@@ -265,23 +265,55 @@ export async function processPostmarkEvent(db, body) {
           // Atomic click counter (best-effort) — replaces the read-modify-write.
           try { await db.rpc('increment_email_send_clicks', { p_send_id: clickSend.id }) } catch {}
 
-          const { data: recipient } = await db.from('campaign_recipients')
-            .select('clicked_links, clicked_at')
-            .eq('postmark_message_id', messageId)
-            .single()
-
-          if (recipient) {
-            const links = recipient.clicked_links || []
-            links.push({ url: clickedUrl, clicked_at: now })
-
-            await db.from('campaign_recipients')
-              .update({
-                status: 'clicked',
-                clicked_at: recipient.clicked_at || now,
-                clicked_links: links,
-              })
-              .eq('postmark_message_id', messageId)
+          // COMMSFIX.F.2 — one row per click event (mig 510). This replaces a
+          // select → push → update on campaign_recipients.clicked_links: a
+          // lost-update race that only ever looked safe because the webhook
+          // dedup key collapsed repeat Clicks on a message into one event.
+          // COMMSFIX.C narrows that key, so repeats now arrive and two
+          // concurrent Clicks would overwrite each other's array. An INSERT
+          // has nothing to lose, and "which link won" becomes a GROUP BY.
+          //
+          // Transactional sends carry no campaign_id and are skipped without
+          // comment — campaign_link_clicks is a campaign report. A campaign
+          // send with no location_id IS anomalous (campaigns.location_id is
+          // nullable, the click row's is not), so it is logged rather than
+          // fired as an insert guaranteed to violate the constraint.
+          if (clickSend.campaign_id && clickSend.location_id && clickedUrl) {
+            const { error: linkErr } = await db.from('campaign_link_clicks').insert({
+              campaign_id: clickSend.campaign_id,
+              contact_id: clickSend.contact_id,
+              location_id: clickSend.location_id,
+              url: clickedUrl,
+              clicked_at: now,
+              postmark_message_id: messageId,
+            })
+            // Never swallowed: a silently-dropped click is the failure mode
+            // this whole programme keeps finding. Logged, not thrown — a lost
+            // report row is not worth dead-lettering the webhook event.
+            if (linkErr) {
+              console.error('[postmark processor] campaign_link_clicks insert failed:', linkErr.message)
+            }
+          } else if (clickSend.campaign_id) {
+            console.error('[postmark processor] campaign_link_clicks insert skipped — campaign send is missing location_id or url:', {
+              sendId: clickSend.id,
+              campaignId: clickSend.campaign_id,
+              hasUrl: Boolean(clickedUrl),
+            })
           }
+
+          // The recipient row keeps status/clicked_at — the resend targeting
+          // and the Recipients tab read them. Both are stamped BLIND: two
+          // writes, zero reads, so nothing here can lose an update either.
+          // clicked_at is guarded to the first click server-side; a later
+          // click matches no row and is a filtered no-op.
+          await db.from('campaign_recipients')
+            .update({ clicked_at: now })
+            .eq('postmark_message_id', messageId)
+            .is('clicked_at', null)
+
+          await db.from('campaign_recipients')
+            .update({ status: 'clicked' })
+            .eq('postmark_message_id', messageId)
 
           if (clickSend.campaign_id) {
             const { error } = await db.rpc('increment_campaign_metric', {
