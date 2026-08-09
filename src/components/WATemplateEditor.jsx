@@ -442,6 +442,7 @@ export default function WATemplateEditor({ template, locationId, userId, events 
             </button>
           )}
           <button
+            type="button"
             onClick={handleSave}
             disabled={saving || isSubmitted}
             className="flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
@@ -808,7 +809,7 @@ export default function WATemplateEditor({ template, locationId, userId, events 
                     )}
                   </div>
                   {!(isSubmitted && !canResubmit) && (
-                    <button onClick={() => removeButton(i)} className="p-1 text-un1t-muted hover:text-red-400">
+                    <button type="button" onClick={() => removeButton(i)} className="p-1 text-un1t-muted hover:text-red-400">
                       <Trash2 size={14} />
                     </button>
                   )}
@@ -817,16 +818,16 @@ export default function WATemplateEditor({ template, locationId, userId, events 
 
               {buttons.length < 3 && !(isSubmitted && !canResubmit) && (
                 <div className="flex gap-2">
-                  <button onClick={() => addButton('QUICK_REPLY')} className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border px-3 py-1.5 rounded-md transition-colors">
+                  <button type="button" onClick={() => addButton('QUICK_REPLY')} className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border px-3 py-1.5 rounded-md transition-colors">
                     + Quick Reply
                   </button>
-                  <button onClick={() => addButton('URL')} className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border px-3 py-1.5 rounded-md transition-colors">
+                  <button type="button" onClick={() => addButton('URL')} className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border px-3 py-1.5 rounded-md transition-colors">
                     + URL Button
                   </button>
-                  <button onClick={() => addButton('FLOW')} className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border px-3 py-1.5 rounded-md transition-colors">
+                  <button type="button" onClick={() => addButton('FLOW')} className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border px-3 py-1.5 rounded-md transition-colors">
                     + Flow Button
                   </button>
-                  <button onClick={() => addButton('PHONE_NUMBER')} className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border px-3 py-1.5 rounded-md transition-colors">
+                  <button type="button" onClick={() => addButton('PHONE_NUMBER')} className="text-xs text-un1t-subtle hover:text-un1t-text border border-un1t-border px-3 py-1.5 rounded-md transition-colors">
                     + Call Button
                   </button>
                 </div>

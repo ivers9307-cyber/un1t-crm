@@ -286,6 +286,7 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
       <div className="flex border-b border-un1t-border bg-un1t-surface shrink-0">
         {tabs.map(t => (
           <button
+            type="button"
             key={t.key}
             onClick={() => setTab(t.key)}
             className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
@@ -319,6 +320,7 @@ export default function CampaignDetail({ campaign, recipients = [], abStats = nu
                   </div>
                 </div>
                 <button
+                  type="button"
                   onClick={cancelResend}
                   disabled={resendBusy}
                   className="text-xs px-3 py-1.5 rounded-md border border-un1t-border text-un1t-subtle hover:text-un1t-text disabled:opacity-40 shrink-0"

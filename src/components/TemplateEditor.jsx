@@ -167,6 +167,7 @@ export default function TemplateEditor({ template, locationId, userId }) {
         </div>
 
         <button
+          type="button"
           onClick={handleSave}
           disabled={saving}
           className="flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
@@ -196,6 +197,7 @@ export default function TemplateEditor({ template, locationId, userId }) {
       {/* Visual/Code toggle */}
       <div className="flex items-center gap-2 px-5 py-2 bg-un1t-surface border-b border-un1t-border">
         <button
+          type="button"
           onClick={() => setEditorMode('visual')}
           className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
             editorMode === 'visual' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'
@@ -204,6 +206,7 @@ export default function TemplateEditor({ template, locationId, userId }) {
           <Paintbrush size={12} /> Visual Editor
         </button>
         <button
+          type="button"
           onClick={async () => {
             if (editorMode === 'visual' && window.unlayer) {
               const exported = await exportFromUnlayer()

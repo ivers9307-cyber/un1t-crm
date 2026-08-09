@@ -557,6 +557,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
             </span>
           )}
           <button
+            type="button"
             onClick={handleSave}
             disabled={saving}
             className="flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
@@ -576,6 +577,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
               form pre-filled with the operator's address; submit
               actually sends. Toast-style status sits below the bar. */}
           <button
+            type="button"
             onClick={() => setTestOpen((v) => !v)}
             className="flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors"
             title="Send a test copy to your inbox before broadcasting"
@@ -588,6 +590,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
           {(['draft'].includes(campaignStatus)) && (
             <>
               <button
+                type="button"
                 onClick={() => setScheduleOpen((v) => !v)}
                 disabled={sending || !subject}
                 className="flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
@@ -597,6 +600,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                 Schedule
               </button>
               <button
+                type="button"
                 onClick={handleSend}
                 disabled={sending || !subject}
                 className="flex items-center gap-1.5 text-sm bg-un1t-text text-un1t-bg font-medium px-4 py-1.5 rounded-md hover:bg-un1t-accent transition-colors disabled:opacity-50"
@@ -605,6 +609,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                 {sending ? 'Queueing…' : 'Send Campaign'}
               </button>
               <button
+                type="button"
                 onClick={handleDelete}
                 className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-border hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors"
                 title="Delete this draft"
@@ -620,6 +625,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                 Scheduled {campaign?.scheduled_at ? new Date(campaign.scheduled_at).toLocaleString('en-IE') : ''}
               </span>
               <button
+                type="button"
                 onClick={handleCancel}
                 className="flex items-center gap-1.5 text-sm text-un1t-subtle hover:text-un1t-text border border-un1t-border hover:border-un1t-text/30 px-3 py-1.5 rounded-md transition-colors"
               >
@@ -627,6 +633,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                 Unschedule
               </button>
               <button
+                type="button"
                 onClick={handleDelete}
                 className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-border hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors"
               >
@@ -645,6 +652,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                       : `Sending ${progress.total_sent.toLocaleString()} / ${progress.total_recipients.toLocaleString()}`)}
               </span>
               <button
+                type="button"
                 onClick={handleCancel}
                 disabled={!!progress.cancel_requested_at}
                 className="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 border border-un1t-border hover:border-red-400/40 px-3 py-1.5 rounded-md transition-colors disabled:opacity-50"
@@ -676,6 +684,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
             className="bg-un1t-bg border border-un1t-border rounded-md px-3 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
           />
           <button
+            type="button"
             onClick={handleSchedule}
             disabled={sending || !scheduleAt}
             className="inline-flex items-center gap-1.5 text-sm bg-emerald-600 text-white font-medium px-4 py-1.5 rounded-md hover:bg-emerald-500 disabled:opacity-50"
@@ -683,6 +692,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
             {sending ? <><Loader2 size={14} className="animate-spin" /> Scheduling…</> : <><Calendar size={14} /> Schedule</>}
           </button>
           <button
+            type="button"
             onClick={() => setScheduleOpen(false)}
             className="text-sm text-un1t-subtle hover:text-un1t-text"
           >
@@ -739,6 +749,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
       <div className="flex border-b border-un1t-border bg-un1t-surface shrink-0">
         {tabs.map(t => (
           <button
+            type="button"
             key={t.key}
             onClick={() => switchTab(t.key)}
             className={`px-5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
@@ -759,6 +770,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
             {/* Visual/Code toggle */}
             <div className="flex items-center gap-2 px-5 py-2 bg-un1t-surface border-b border-un1t-border">
               <button
+                type="button"
                 onClick={() => setEditorMode('visual')}
                 className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors ${
                   editorMode === 'visual' ? 'bg-un1t-text text-un1t-bg' : 'text-un1t-subtle hover:text-un1t-text'
@@ -767,6 +779,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                 <Paintbrush size={12} /> Visual Editor
               </button>
               <button
+                type="button"
                 onClick={async () => {
                   // Export from Unlayer before switching to code
                   if (editorMode === 'visual' && window.unlayer) {
