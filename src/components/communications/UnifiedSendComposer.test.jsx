@@ -12,7 +12,7 @@
 //   - the email panel now shows "N will receive it" with the B5 excluded
 //     breakdown instead of a raw filter-only number.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
 
 vi.mock('next/navigation', () => ({
