@@ -9,6 +9,21 @@ import AudienceBuilder, { STAGE_MEMBER_DEFAULT_ROW } from './AudienceBuilder'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
 import Link from 'next/link'
 
+// FILTER-P1.6 — what the send path ACTUALLY gates on, per
+// buildAudienceQueryAsync (src/lib/postmark.js): the campaign's location, the
+// per-location consent flag for the stream, email_status not in
+// (bounced, complained), and — marketing only — no inactivity suppression
+// (email_suppressed_at, mig 395). The old banner claimed a ClassPass
+// exclusion that exists NOWHERE in the send path, and a "valid email" check
+// that is vacuous because contacts.email is NOT NULL.
+const AUDIENCE_GATES = {
+  marketing: "this location's marketing opt-in, no hard bounce or spam complaint, and no inactivity suppression.",
+  utility: "this location's transactional opt-in, and no hard bounce or spam complaint.",
+}
+
+// One POST per pause, not one per keystroke.
+const COUNT_DEBOUNCE_MS = 400
+
 export default function CampaignEditor({ campaign, locationId, userId, initialAudienceFilter = null }) {
   const router = useRouter()
   const db = createBrowserClient()
@@ -492,11 +507,24 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
   // Falls back to the saved filter server-side if body.filter is omitted.
   // Tracks loading + error state so the banner can show what's actually
   // happening rather than always saying "Save the campaign to compute".
+  // FILTER-P1.6 — LAST REQUEST WINS. The count used to fire from the
+  // builder's onChange AND from a useEffect on the same state — two POSTs per
+  // keystroke, un-debounced, unabortable and unordered. A slow earlier
+  // response overwrote a later one, leaving a stale number on screen that the
+  // Send confirm dialog then quoted verbatim. Every request now carries a
+  // sequence number; only the newest may write state, and the previous one is
+  // aborted rather than left racing.
+  const countSeqRef = useRef(0)
+  const countAbortRef = useRef(null)
   const refreshAudienceCount = useCallback(async (filterOverride) => {
     if (!campaignId) {
       setAudienceState('idle')
       return
     }
+    const seq = ++countSeqRef.current
+    countAbortRef.current?.abort()
+    const controller = new AbortController()
+    countAbortRef.current = controller
     setAudienceState('loading')
     setAudienceError(null)
     try {
@@ -505,8 +533,10 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
         headers: { 'Content-Type': 'application/json' },
         // FILTER-P1.1 — a half-built row never reaches the count endpoint.
         body: JSON.stringify({ filter: stripUnsetFilterRows(filterOverride ?? audienceFilter), email_type: emailType }),
+        signal: controller.signal,
       })
       const result = await response.json().catch(() => ({}))
+      if (seq !== countSeqRef.current) return   // superseded — do not write state
       if (!response.ok || !result.success) {
         setAudienceState('error')
         setAudienceError(result?.error || `HTTP ${response.status}`)
@@ -515,16 +545,19 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
       setAudienceCount(result.audience_count)
       setAudienceState('ready')
     } catch (err) {
+      // An abort is this component superseding itself, not a failure to show.
+      if (seq !== countSeqRef.current || err?.name === 'AbortError') return
       setAudienceState('error')
       setAudienceError(err?.message || 'Network error')
     }
   }, [campaignId, audienceFilter, emailType])
 
   useEffect(() => {
-    if (campaignId) refreshAudienceCount()
-    // audienceFilter is intentionally a dep — re-counts whenever the
-    // operator edits the filter. refreshAudienceCount is stable per
-    // campaignId + audienceFilter via useCallback.
+    if (!campaignId) return
+    // Debounced: one POST per pause, not one per keystroke. This effect is now
+    // the ONLY count trigger — the builder's onChange no longer calls it too.
+    const t = setTimeout(() => { refreshAudienceCount() }, COUNT_DEBOUNCE_MS)
+    return () => clearTimeout(t)
   }, [campaignId, audienceFilter, refreshAudienceCount])
 
   const tabs = [
@@ -842,14 +875,14 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                 <div className={`${tone} border rounded-lg p-4 mb-6 flex items-center gap-3`}>
                   <Users size={20} className={`${iconColor} shrink-0`} />
                   <div>
-                    <div className="text-2xl font-semibold text-un1t-text tabular-nums">
+                    <div data-testid="audience-count" className="text-2xl font-semibold text-un1t-text tabular-nums">
                       {showCount
                         ? audienceCount.toLocaleString()
                         : isLoading ? 'Computing…' : '—'}
                     </div>
                     <div className="text-xs text-un1t-subtle">
                       {showCount
-                        ? `contact${audienceCount === 1 ? '' : 's'} will receive this campaign — already filtered for ${emailType === 'utility' ? 'transactional opt-in' : 'marketing opt-in'}, valid email, non-ClassPass.`
+                        ? `contact${audienceCount === 1 ? '' : 's'} will receive this campaign — already filtered for ${AUDIENCE_GATES[emailType === 'utility' ? 'utility' : 'marketing']}`
                         : isError
                           ? `Couldn't compute recipient count: ${audienceError || 'unknown error'}`
                           : isLoading
@@ -862,10 +895,9 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
             })()}
             <AudienceBuilder
               filter={audienceFilter}
-              onChange={(f) => {
-                setAudienceFilter(f)
-                refreshAudienceCount()
-              }}
+              // FILTER-P1.6 — setState only. The debounced effect above owns
+              // the count; calling it here too is what made it fire twice.
+              onChange={setAudienceFilter}
               audienceCount={audienceCount}
               defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW}
             />

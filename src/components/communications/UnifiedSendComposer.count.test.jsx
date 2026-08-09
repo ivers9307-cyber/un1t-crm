@@ -115,3 +115,40 @@ describe('UnifiedSendComposer — email will-receive breakdown (B6d)', () => {
     screen.getByText(/300 inactive/)
   })
 })
+
+// ── FILTER-P1.6c — "no match" and "no reach" are different problems ──
+//
+// The composer rendered "No contacts match this filter." whenever count === 0,
+// but `count` is the ELIGIBLE number, not the match count — so it could
+// contradict the "N match this filter · 0 will receive it" line directly above
+// it. The second case is both the more common cause and the more actionable
+// message, and the two need different fixes (widen the filter vs. look at
+// consent/bounces/suppression).
+describe('UnifiedSendComposer — zero-count message tells the truth (P1.6c)', () => {
+  it('says nobody MATCHED when the filter itself returns nothing', async () => {
+    stubCount(() => ok({ count: 0, matched: 0, excluded: {} }))
+    render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
+    await screen.findByText(/No contacts match this filter/i)
+  })
+
+  it('does NOT say "no contacts match" when contacts matched but none are reachable', async () => {
+    stubCount(() => ok({ count: 0, matched: 240, excluded: { no_phone: 240 } }))
+    render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
+    await waitFor(() => expect(screen.queryByText(/0 will receive it|will receive it/i)).not.toBeNull(), { timeout: 2000 })
+    expect(screen.queryByText(/^No contacts match this filter\.$/i)).toBeNull()
+  })
+
+  it('names the matched count and points at reachability instead', async () => {
+    stubCount(() => ok({ count: 0, matched: 240, excluded: { no_phone: 240 } }))
+    render(<UnifiedSendComposer locationId="loc-1" channels={['sms']} initialAudienceFilter={FILTER} />)
+    const msg = await screen.findByText(/none (of them )?can be reached|but none/i, {}, { timeout: 2000 })
+    expect(msg.textContent).toMatch(/240/)
+  })
+
+  it('keeps the WhatsApp warning keyed on REACHABLE, not raw matches', async () => {
+    stubCount(() => ok({ count: 300, matched: 300, reachable: 0 }))
+    render(<UnifiedSendComposer locationId="loc-1" channels={['whatsapp']} initialAudienceFilter={FILTER} />)
+    const msg = await screen.findByText(/but none/i, {}, { timeout: 2000 })
+    expect(msg.textContent).toMatch(/300/)
+  })
+})
