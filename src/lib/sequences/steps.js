@@ -190,10 +190,23 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
   // append is idempotent — if the merged body already contains the
   // unsubscribe link, appendUnsubscribeFooter skips it so recipients
   // don't see two "Unsubscribe" links.
+  // COMMSFIX.E.4 — resolve the location name so {{location_name}}
+  // renders in sequence EMAIL steps as it already does in SMS steps
+  // (six shipped templates sign off 'UN1T {{location_name}}'; without
+  // the extra it rendered 'UN1T ' with a trailing space). Best-effort:
+  // a branding miss must never block a send, so a missing row merges ''.
+  const { data: seqLocation } = await db
+    .from('locations')
+    .select('id, name')
+    .eq('id', sequence.location_id)
+    .single()
+  const locationName = seqLocation?.name || ''
+
   const baseUrl = getAppUrl()
   const unsubscribeUrl = buildUnsubscribeUrl(contact, baseUrl, sequence?.location_id)
-  const mergedSubject = applyMergeTags(subject, contact)
+  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName })
   const merged = applyMergeTags(html, contact, {
+    location_name: locationName,
     unsubscribe_url: unsubscribeUrl,
     preference_url: `${baseUrl}/preferences/${unsubscribeUrl.split('/unsubscribe/')[1]}`,
   })
@@ -365,16 +378,37 @@ export async function sendSmsStep(db, { step, sequence, contact }) {
   if (!step.sms_body) {
     throw new Error('SMS step has no sms_body.')
   }
+  // Per-contact gates — recorded SKIPS, never errors (COMMSFIX.E.1).
+  // These used to THROW, feeding error_count until MAX_ERRORS auto-
+  // paused the whole enrolment — the identical wedge class fixed for
+  // email/WA after the live 2026-07-10 incident (see recordStepSkip).
   if (!contact?.phone) {
-    throw new Error('Contact has no phone number — cannot send SMS step.')
+    await recordStepSkip(db, { contact, sequence, step, channel: 'SMS', reason: 'contact has no phone number' })
+    return null
   }
-  // Mirrors the broadcast and ad-hoc send-side gate. Opted-out
-  // contacts are silently skipped at the audience layer for
-  // broadcasts, but for sequences a contact may have opted out
-  // mid-flow. Throwing here causes the standard sequence error
-  // path to log + retry / pause the enrollment after MAX_ERRORS.
+  // Send-time consent gate — the per-location model every other send
+  // path already enforces (LOCCOMMS.5): resolve the row for the
+  // SEQUENCE'S location; row absent = that location may never send.
+  // sendSmsStep was the last step still bypassing it (it only read
+  // the global sms_status), so a contact who opted out of SMS
+  // marketing for this location via the preference centre still got
+  // dunning SMS — the exact consent breach this programme prevents.
+  const smsConsent = locationConsent(contact, sequence)
+  if (smsConsent?.sms_marketing !== true) {
+    await recordStepSkip(db, {
+      contact, sequence, step, channel: 'SMS',
+      reason: smsConsent
+        ? 'no SMS marketing consent for this location'
+        : 'not on this location’s list',
+    })
+    return null
+  }
+  // Global channel-status gate (STOP replies, carrier invalidation).
+  // Mirrors the broadcast reachability predicate; absent = active
+  // (back-compat for pre-mig-059 contacts).
   if (contact.sms_status && contact.sms_status !== 'active') {
-    throw new Error(`Contact's sms_status is '${contact.sms_status}' — refusing to send.`)
+    await recordStepSkip(db, { contact, sequence, step, channel: 'SMS', reason: `sms_status is '${contact.sms_status}'` })
+    return null
   }
 
   // Resolve the sequence's location so we get the right alpha
