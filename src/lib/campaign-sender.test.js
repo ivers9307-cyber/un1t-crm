@@ -1364,3 +1364,26 @@ describe('tickCampaignSend — email_sends insert ordering + error handling (COM
     err.mockRestore()
   })
 })
+
+// COMMSFIX.C.4 — the unsubscribe link a campaign sends must say WHICH campaign.
+describe('tickCampaignSend — unsubscribe URL carries the campaign id (COMMSFIX.C.4)', () => {
+  it('passes the campaign id into the broadcast unsubscribe URL', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, campaign)
+
+    const batch = sendBatch.mock.calls[0][0]
+    expect(batch[0].unsubscribeUrl).toContain('c=camp-1')
+    expect(batch[0].unsubscribeUrl).toContain('l=loc-1')
+  })
+
+  it('sends no unsubscribe URL at all on the utility stream', async () => {
+    const { db } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, { ...campaign, postmark_stream: 'outbound' })
+
+    expect(sendBatch.mock.calls[0][0][0].unsubscribeUrl).toBeNull()
+  })
+})
