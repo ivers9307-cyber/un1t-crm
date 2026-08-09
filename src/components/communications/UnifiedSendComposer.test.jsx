@@ -17,6 +17,7 @@ vi.mock('./ContactMultiSelect', () => ({ default: () => <div /> }))
 // Controlled Unlayer stand-in — the real hook is covered by
 // useUnlayerEditor.test.jsx; here we drive its two outcomes.
 let unlayerLoaded = true
+let unlayerDirty = false
 let exportImpl = async () => ({ html: '<html><body>Hi</body></html>', design: { rows: [] } })
 vi.mock('./useUnlayerEditor', async () => {
   const actual = await vi.importActual('./useUnlayerEditor.js')
@@ -25,6 +26,7 @@ vi.mock('./useUnlayerEditor', async () => {
     useUnlayerEditor: () => ({
       ref: { current: null },
       loaded: unlayerLoaded,
+      dirty: unlayerDirty,
       exportHtml: (...args) => exportImpl(...args),
     }),
   }
@@ -48,6 +50,7 @@ function mockFetch() {
 beforeEach(() => {
   posts = []
   unlayerLoaded = true
+  unlayerDirty = false
   exportImpl = async () => ({ html: '<html><body>Hi</body></html>', design: { rows: [] } })
   vi.stubGlobal('fetch', mockFetch())
 })
@@ -109,11 +112,53 @@ describe('UnifiedSendComposer — a failed export never posts', () => {
   })
 
   it('does not create an empty draft when Open the full editor hits a failed export', async () => {
+
     exportImpl = async () => { throw new Error(EXPORT_FAILED) }
     await readyWithSubject()
     fireEvent.click(screen.getByRole('button', { name: /open the full editor/i }))
 
     await waitFor(() => expect(screen.getByText(EXPORT_FAILED)).toBeTruthy())
     expect(posts.filter(p => String(p.url).includes('email-draft'))).toHaveLength(0)
+  })
+})
+
+// COMMSFIX.D.4a — the Unlayer mount div only renders while channel === 'email',
+// and the hook deliberately re-inits fresh on re-mount. Clicking the WhatsApp
+// pill to check a template name and clicking back therefore wiped a
+// half-finished design with no warning, no stash and no beforeunload guard.
+// Audit 2026-08-09 composer-ux.
+describe('UnifiedSendComposer — switching away from email guards the design', () => {
+  function renderMulti() {
+    return render(<UnifiedSendComposer locationId="loc-1" channels={['email', 'whatsapp']} templates={[]} />)
+  }
+  const whatsappPill = () => screen.getByRole('button', { name: /^WhatsApp$/ })
+  const emailPanel = () => screen.queryByPlaceholderText('Email subject')
+
+  it('switches silently when the design is untouched', () => {
+    const confirmSpy = vi.fn(() => true)
+    vi.stubGlobal('confirm', confirmSpy)
+    renderMulti()
+    fireEvent.click(whatsappPill())
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(emailPanel()).toBeNull()
+  })
+
+  it('asks before discarding a design that has been edited', () => {
+    unlayerDirty = true
+    const confirmSpy = vi.fn(() => true)
+    vi.stubGlobal('confirm', confirmSpy)
+    renderMulti()
+    fireEvent.click(whatsappPill())
+    expect(confirmSpy).toHaveBeenCalledTimes(1)
+    expect(confirmSpy.mock.calls[0][0]).toMatch(/design/i)
+    expect(emailPanel()).toBeNull()
+  })
+
+  it('stays on email — design intact — when the operator declines', () => {
+    unlayerDirty = true
+    vi.stubGlobal('confirm', vi.fn(() => false))
+    renderMulti()
+    fireEvent.click(whatsappPill())
+    expect(emailPanel()).toBeTruthy()
   })
 })

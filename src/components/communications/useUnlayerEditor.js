@@ -27,6 +27,11 @@ export const EXPORT_FAILED = "The email designer didn't finish loading — nothi
 
 export function useUnlayerEditor({ mountId, active = true } = {}) {
   const [loaded, setLoaded] = useState(false)
+  // COMMSFIX.D.4a — has the operator actually put work into the canvas? The
+  // mount div only exists while the email channel is selected and this hook
+  // deliberately re-inits fresh on re-mount, so the composer needs to know
+  // whether a channel switch would destroy anything worth asking about.
+  const [dirty, setDirty] = useState(false)
   const ref = useRef(null)
 
   // Load the Unlayer embed script once (shared global across the app).
@@ -66,6 +71,15 @@ export function useUnlayerEditor({ mountId, active = true } = {}) {
       mergeTags: MERGE_TAGS,
       features: { textEditor: { spellChecker: true } },
     })
+    // COMMSFIX.D.4a — Unlayer fires design:updated on every real edit. A fresh
+    // init starts clean, so `dirty` means "this canvas holds operator work".
+    // Guarded: older embed builds may not expose addEventListener.
+    setDirty(false)
+    if (typeof window.unlayer.addEventListener === 'function') {
+      try {
+        window.unlayer.addEventListener('design:updated', () => setDirty(true))
+      } catch { /* editor build without the event — dirty just stays false */ }
+    }
   }, [loaded, active, mountId])
 
   // Export the current HTML + design. The 2.5s timeout mirrors CampaignEditor —
@@ -99,5 +113,5 @@ export function useUnlayerEditor({ mountId, active = true } = {}) {
     }
   }), [])
 
-  return { ref, loaded, exportHtml }
+  return { ref, loaded, dirty, exportHtml }
 }

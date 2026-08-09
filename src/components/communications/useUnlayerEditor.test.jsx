@@ -9,7 +9,7 @@
 // send instead of silently sending nothing.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { renderHook, cleanup } from '@testing-library/react'
+import { renderHook, render, cleanup, screen, act } from '@testing-library/react'
 import { useUnlayerEditor } from './useUnlayerEditor.js'
 
 function hook() {
@@ -62,5 +62,34 @@ describe('useUnlayerEditor — exportHtml failure modes reject', () => {
       html: '<html><body>Hi</body></html>',
       design,
     })
+  })
+})
+
+// COMMSFIX.D.4a — the composer needs to know whether the canvas holds operator
+// work before it lets a channel switch destroy it.
+describe('useUnlayerEditor — dirty tracking', () => {
+  function Harness() {
+    const { ref, dirty } = useUnlayerEditor({ mountId: 'unlayer-dirty', active: true })
+    return <div ref={ref} data-testid="mount" data-dirty={String(dirty)} />
+  }
+  const isDirty = () => screen.getByTestId('mount').getAttribute('data-dirty')
+
+  it('starts clean and flips on the first design:updated event', async () => {
+    let handler = null
+    window.unlayer = {
+      init: () => {},
+      addEventListener: (evt, cb) => { if (evt === 'design:updated') handler = cb },
+    }
+    render(<Harness />)
+    expect(isDirty()).toBe('false')
+
+    await act(async () => { handler() })
+    expect(isDirty()).toBe('true')
+  })
+
+  it('stays clean on an embed build with no addEventListener', () => {
+    window.unlayer = { init: () => {} }
+    render(<Harness />)
+    expect(isDirty()).toBe('false')
   })
 })
