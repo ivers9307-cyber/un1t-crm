@@ -569,7 +569,17 @@ export async function tickCampaignSend(db, campaign) {
 
     return {
       to: contact.email,
-      subject: applyMergeTags(rawSubject, contact),
+      // COMMSFIX.D.4b — the subject gets the SAME extras as the body. It was
+      // merged with no extras at all, so {{location_name}}, {{unsubscribe_url}}
+      // and {{preference_url}} — all three advertised by the editor's merge-tag
+      // panel as usable "in your subject line or email body" — resolved to
+      // applyMergeTags' '' fallbacks. 'News from {{location_name}}' shipped as
+      // 'News from ' while the identical tag in the body rendered correctly.
+      subject: applyMergeTags(rawSubject, contact, {
+        location_name: campaign.locations?.name || '',
+        unsubscribe_url: unsubscribeUrl,
+        preference_url: preferenceUrl,
+      }),
       htmlBody: finalHtml,
       textBody,
       from: campaign.from_name

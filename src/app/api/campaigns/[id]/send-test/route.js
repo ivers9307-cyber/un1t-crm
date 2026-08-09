@@ -114,7 +114,14 @@ export async function POST(request, props) {
     unsubscribe_url: unsubscribeUrl,
     preference_url: preferenceUrl,
   })
-  const subject = '[TEST] ' + applyMergeTags(campaign.subject, renderContact)
+  // COMMSFIX.D.4b — same extras as the body (and as the real send), so the
+  // test reproduces the delivered subject instead of silently dropping
+  // {{location_name}} / {{unsubscribe_url}} / {{preference_url}}.
+  const subject = '[TEST] ' + applyMergeTags(campaign.subject, renderContact, {
+    location_name: campaign.locations?.name || '',
+    unsubscribe_url: unsubscribeUrl,
+    preference_url: preferenceUrl,
+  })
 
   const fromHeader = campaign.from_name
     ? `${campaign.from_name} <${campaign.from_email || process.env.POSTMARK_FROM_EMAIL}>`
