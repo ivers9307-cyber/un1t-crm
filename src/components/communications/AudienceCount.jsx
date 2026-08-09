@@ -107,7 +107,7 @@ export default function AudienceCount({
   // onResult is called from the effect; keeping it in a ref means a host that
   // passes an inline arrow does not re-trigger the count on every render.
   const onResultRef = useRef(onResult)
-  onResultRef.current = onResult
+  useEffect(() => { onResultRef.current = onResult })
 
   useEffect(() => {
     let alive = true

@@ -18,7 +18,8 @@ import {
   ArrowLeft, Save, Send, Users, MessageSquare,
   CheckCircle2, XCircle, Trash2, Ban, Calendar, Clock,
 } from 'lucide-react'
-import AudienceBuilder, { STAGE_MEMBER_DEFAULT_ROW } from './AudienceBuilder'
+import AudienceBuilder from './AudienceBuilder'
+import AudienceCount from './communications/AudienceCount'
 
 // SMS segment math — single GSM7 fits 160 chars; multi-segment
 // concatenation is 153 per segment (7 lost to UDH per segment).
@@ -344,13 +345,20 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
             {/* COMMSFIX.B.4 — the prop is `filter`, not `value`; the old
                 value= made every saved/deep-linked audience invisible and one
                 'Add filter' click silently replaced it with the default row. */}
+            {/* FILTER-B.3 (FILTER-FOUND row 1) — no Stage = member starting
+                guess. See WABroadcastEditor for the reasoning; the count
+                below is what made dropping it safe. */}
             <AudienceBuilder
               filter={audienceFilter}
               onChange={setAudienceFilter}
-              audienceCount={null}
               locationId={locationId}
               disabled={isLocked || isScheduled}
-              defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW}
+            />
+            <AudienceCount
+              className="mt-3"
+              locationId={locationId}
+              filter={audienceFilter}
+              channel="sms"
             />
           </div>
 

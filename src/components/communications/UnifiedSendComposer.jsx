@@ -5,12 +5,13 @@
 // schedule, SMS only). It's a FACADE: on send it creates the existing
 // per-channel broadcast record and fires the existing send route — the send
 // libs + crons are untouched. Email joins in Phase 2.
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { MessageSquare, MessageCircle, Mail, Send, Clock, Check, AlertTriangle, Users, Loader2, Filter, Bookmark } from 'lucide-react'
+import { MessageSquare, MessageCircle, Mail, Send, Clock, Check, AlertTriangle, Users, Filter, Bookmark } from 'lucide-react'
 import { Button } from '@/components/ui'
 import AudienceBuilder, { STAGE_MEMBER_DEFAULT_ROW } from '@/components/AudienceBuilder'
+import AudienceCount from './AudienceCount'
 import { stripUnsetFilterRows } from '@/lib/audience-filter'
 // FILTER-A.1 — presets are a SEND-composer affordance only. Sequences and
 // /contacts render the same builder without them (a sequence audience is a
@@ -71,10 +72,8 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // into the add-a-condition placeholder while Send stayed enabled.
   const [count, setCount] = useState(null)
   const [matched, setMatched] = useState(null)
-  const [counting, setCounting] = useState(false)
   const [countError, setCountError] = useState(null)
   const [reachable, setReachable] = useState(null)   // WhatsApp only
-  const [excluded, setExcluded] = useState(null)     // per-channel breakdown from the count route
   // Submit
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
@@ -173,43 +172,20 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
     setChannel(next)
   }
 
-  // Live audience size — debounced. For WhatsApp we ask channel-aware so the
-  // number reflects consent + a usable wa_phone (the same gate the send applies).
-  useEffect(() => {
-    let alive = true
-    setCounting(true)
-    const t = setTimeout(async () => {
-      try {
-        const res = await fetch('/api/communications/audience-count', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ location_id: locationId, audience_filter: effectiveFilter, channel }),
-        })
-        const data = await res.json()
-        if (!alive) return
-        if (data?.success) {
-          setCount(data.count ?? null)
-          setMatched(typeof data.matched === 'number' ? data.matched : null)
-          setReachable(channel === 'whatsapp' ? (data.reachable ?? null) : null)
-          setExcluded(data.excluded ?? null)
-          setCountError(null)
-        } else {
-          // Surface the server's message (InvalidAudienceFilterError → 400)
-          // instead of silently rendering the add-a-condition placeholder.
-          setCount(null); setMatched(null); setReachable(null); setExcluded(null)
-          setCountError(data?.error || `Couldn't count the audience (${res.status})`)
-        }
-      } catch {
-        if (alive) {
-          setCount(null); setMatched(null); setReachable(null); setExcluded(null)
-          setCountError('Couldn’t count the audience — check your connection and try again.')
-        }
-      } finally {
-        if (alive) setCounting(false)
-      }
-    }, 400)
-    return () => { alive = false; clearTimeout(t) }
-  }, [locationId, effectiveFilter, channel])
+  // FILTER-B.3 — the count block moved to the shared <AudienceCount> (mounted
+  // below), which owns the debounced fetch for all four builder hosts. The
+  // composer keeps the numbers in state only because `canSend` gates on them:
+  // one request, one number, no second source of truth.
+  const handleCountResult = useCallback((r) => {
+    setCount(r.count)
+    setMatched(r.matched)
+    setReachable(r.reachable)
+    setCountError(r.error)
+  }, [])
+  // The count is asked for the RAW filter (so <AudienceCount> can name any
+  // unfinished row); the persist paths keep using effectiveFilter, which is
+  // the same thing already stripped.
+  const countFilter = useExplicit ? effectiveFilter : filter
 
   const insertTag = (tag) => {
     const el = bodyRef.current
@@ -369,7 +345,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
     setLabel(''); setFilter(EMPTY_FILTER); setAppliedSegmentId(null); setScheduleMode('now'); setScheduledAtLocal('')
     setResendEnabled(false); setResendWaitHours(48); setResendSubject('')
     setWaMode('blast'); setDailyCap(500); setPerTickCap(''); setWindowStart('09:00'); setWindowEnd('20:00')
-    setReachable(null); setExcluded(null); setMatched(null); setCountError(null)
+    setReachable(null); setMatched(null); setCountError(null)
   }
 
   // ── result screen ───────────────────────────────────────────────
@@ -521,53 +497,20 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         )}
         {useExplicit
           ? <ContactMultiSelect locationId={locationId} value={people} onChange={setPeople} />
-          : <AudienceBuilder filter={filter} onChange={handleFilterChange} audienceCount={null} defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW} presets={AUDIENCE_PRESETS} locationId={locationId} />}
-        <div className="mt-2 flex flex-col gap-0.5 text-xs text-un1t-subtle">
-          <div className="flex items-center gap-1.5">
-            <Users size={13} />
-            {counting
-              ? <span className="flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> counting…</span>
-              : countError
-                ? <span className="flex items-start gap-1.5 text-rose-700"><AlertTriangle size={13} className="mt-0.5 shrink-0" />{countError}</span>
-                : count == null
-                  ? <span>Add a condition to see how many contacts match.</span>
-                  : channel === 'whatsapp'
-                    ? <span><b className="text-un1t-text">{count.toLocaleString()}</b> match · <b className="text-un1t-text">{(reachable ?? 0).toLocaleString()}</b> reachable on WhatsApp</span>
-                    : matched != null
-                      ? <span><b className="text-un1t-text">{matched.toLocaleString()}</b> match this filter · <b className="text-un1t-text">{count.toLocaleString()}</b> will receive it</span>
-                      : <span><b className="text-un1t-text">{count.toLocaleString()}</b> contact{count === 1 ? '' : 's'} match this filter</span>}
-          </div>
-          {/* COMMSFIX.B.6 — email excluded breakdown from the B5 send-parity
-              count (reasons are independent counts and may overlap). */}
-          {channel === 'email' && !counting && !countError && excluded && (matched ?? 0) - (count ?? 0) > 0 && (
-            <div className="flex items-start gap-1.5 text-amber-700">
-              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-              <span>
-                {((matched ?? 0) - (count ?? 0)).toLocaleString()} won&apos;t receive it
-                {' — '}
-                {[
-                  excluded.not_opted_in ? `${excluded.not_opted_in.toLocaleString()} no marketing opt-in` : null,
-                  excluded.bounced_or_complained ? `${excluded.bounced_or_complained.toLocaleString()} bounced or complained` : null,
-                  excluded.suppressed ? `${excluded.suppressed.toLocaleString()} inactive 90+ days` : null,
-                ].filter(Boolean).join(', ')}
-              </span>
-            </div>
-          )}
-          {channel === 'whatsapp' && !counting && count != null && reachable != null && (count - reachable) > 0 && (
-            <div className="flex items-start gap-1.5 text-amber-700">
-              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-              <span>
-                {(count - reachable).toLocaleString()} excluded
-                {excluded ? ` — ${[
-                  excluded.no_number ? `${excluded.no_number} no WhatsApp number` : null,
-                  excluded.no_consent ? `${excluded.no_consent} no marketing opt-in` : null,
-                  excluded.opted_out ? `${excluded.opted_out} opted out` : null,
-                  excluded.undeliverable ? `${excluded.undeliverable} not on WhatsApp` : null,
-                ].filter(Boolean).join(', ')}` : ''}
-              </span>
-            </div>
-          )}
-        </div>
+          : <AudienceBuilder filter={filter} onChange={handleFilterChange} defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW} presets={AUDIENCE_PRESETS} locationId={locationId} />}
+        {/* FILTER-B.3 — the shared count block, replacing this surface's own
+            inline count. Same component, same request and same wording as the
+            WhatsApp/SMS/sequence builders, so the four can no longer drift.
+            FILTER-A's presets sit above it and write real rows; the count is
+            the only thing that states a number, which is why no preset chip
+            carries one. */}
+        <AudienceCount
+          className="mt-2"
+          locationId={locationId}
+          filter={countFilter}
+          channel={channel}
+          onResult={handleCountResult}
+        />
       </Section>
 
       {/* Compose */}
