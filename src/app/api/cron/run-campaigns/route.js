@@ -32,6 +32,54 @@ export const dynamic = 'force-dynamic'
 const MAX_CAMPAIGNS_PER_TICK = 3   // limit parallelism within one cron invocation
 const FAIR_PICK_WINDOW = 20        // SAAS4-O3 — candidates fetched for the fair pick
 
+// COMMSFIX.C.5 — how long a campaign may sit erroring before it is declared
+// dead rather than retrying. Short enough that an operator finds out the same
+// morning; long enough that a Postmark blip or a deploy mid-tick is ridden out.
+export const QUEUED_FAILURE_GRACE_MS = 15 * 60_000
+
+const MAX_LAST_ERROR_CHARS = 1000
+
+/**
+ * COMMSFIX.C.5 — decide what a failing tick writes onto the campaign row.
+ *
+ * Every failing tick stamps `last_error` (mig 509): before this, a failure left
+ * NO trace on any operator surface — the campaign kept status 'queued' and
+ * /communications/sent showed a cheerful amber chip while nothing was
+ * happening. The 8 Aug audience truncation lived in exactly that blind spot.
+ *
+ * The status only flips to 'failed' once the campaign is genuinely stuck:
+ *   • an error was ALREADY on the row coming into this tick, so this is at
+ *     least the second consecutive failure, not one blip;
+ *   • `send_started_at` is null, so populate never completed — once chunks are
+ *     going out, individual failures are the recipient-level retry machinery's
+ *     job (CAMPAIGN-REL.1/.2) and the campaign must not be killed around them;
+ *   • the campaign is older than the grace window.
+ *
+ * Pure and exported so the decision is testable without the cron's plumbing.
+ *
+ * @param {{ id: string, created_at?: string, send_started_at?: string|null, last_error?: string|null }} campaign
+ *   the row AS READ AT THE START OF THIS TICK — `last_error` is therefore the
+ *   PREVIOUS tick's error, which is what makes the "already failing" test work.
+ * @param {unknown} error
+ * @param {number} [now]
+ * @returns {{ last_error: string, status?: 'failed' }}
+ */
+export function campaignFailurePatch(campaign, error, now = Date.now()) {
+  const message = (error instanceof Error ? error.message : String(error ?? 'unknown error'))
+    .slice(0, MAX_LAST_ERROR_CHARS)
+  const patch = { last_error: message }
+
+  const createdAt = campaign?.created_at ? Date.parse(campaign.created_at) : NaN
+  const stuck =
+    Boolean(campaign?.last_error) &&
+    !campaign?.send_started_at &&
+    Number.isFinite(createdAt) &&
+    now - createdAt > QUEUED_FAILURE_GRACE_MS
+
+  if (stuck) patch.status = 'failed'
+  return patch
+}
+
 function unauthorized() {
   return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
 }
@@ -127,19 +175,34 @@ export async function GET(request) {
   const campaigns = pickFairCampaigns(window, MAX_CAMPAIGNS_PER_TICK)
 
   for (const campaign of campaigns || []) {
+    // COMMSFIX.C.5 — whatever went wrong, it lands on the campaign row.
+    let tickError = null
     try {
       const result = await tickCampaignSend(db, campaign)
       summary.ticks += 1
       summary.sent += result.sent || 0
       summary.bounced += result.bounced || 0
       if (result.error) {
+        tickError = result.error
         summary.errors.push({ campaign_id: campaign.id, phase: result.phase, error: result.error })
         console.warn(`[cron run-campaigns] campaign ${campaign.id} (${campaign.name}) phase=${result.phase} error: ${result.error}`)
       }
     } catch (err) {
       const msg = err?.message || String(err)
+      tickError = msg
       summary.errors.push({ campaign_id: campaign.id, error: msg })
       console.error(`[cron run-campaigns] campaign ${campaign.id} threw: ${msg}`)
+    }
+
+    if (tickError) {
+      const patch = campaignFailurePatch(campaign, tickError)
+      const { error: stampErr } = await db.from('campaigns').update(patch).eq('id', campaign.id)
+      if (stampErr) {
+        console.error(`[cron run-campaigns] could not stamp last_error on ${campaign.id}: ${stampErr.message}`)
+      } else if (patch.status === 'failed') {
+        summary.failed = (summary.failed || 0) + 1
+        console.error(`[cron run-campaigns] campaign ${campaign.id} (${campaign.name}) marked FAILED after repeated errors: ${patch.last_error}`)
+      }
     }
   }
 
