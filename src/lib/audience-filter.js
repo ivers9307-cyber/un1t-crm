@@ -21,6 +21,18 @@
 // The allowlist mirrors src/components/AudienceBuilder.jsx so legitimate UI
 // flows pass through unchanged. New fields must be added here AND in the
 // builder.
+//
+// COMMSFIX.B.1 — negative operators are NULL-INCLUSIVE. Bare PostgREST
+// neq / not.ilike / not.cs compile to SQL predicates that a NULL never
+// satisfies, so "membership type is not time" silently excluded every
+// contact whose type was unsynced (229 live contacts — the 8-Aug sale
+// email incident class). Operator intent for "is not X" is "everyone
+// except X", so neq / not_contains on scalar AND array fields compile to
+// an OR group `(field <op-negated> value OR field IS NULL)`:
+//   - AND logic: one `.or('f.neq.v,f.is.null')` per negative filter
+//     (chained .or() calls AND together in PostgREST);
+//   - OR logic: each negative becomes a nested `or(f.neq.v,f.is.null)`
+//     disjunct inside the single top-level .or().
 
 import { selectAll } from '@/lib/select-all'
 
@@ -249,7 +261,9 @@ function applyArrayFieldOp(query, field, op, v) {
       return query.contains(field, [String(v ?? '')])
     case 'neq':
     case 'not_contains':
-      return query.not(field, 'cs', pgArrayLiteral(v))
+      // COMMSFIX.B.1 — NULL-inclusive: "doesn't have this tag" must also
+      // match contacts whose tags column is NULL (never tagged at all).
+      return query.or(`${field}.not.cs.${orValue(pgArrayLiteral(v))},${field}.is.null`)
     case 'is_null':
       return query.is(field, null)
     case 'is_not_null':
@@ -270,7 +284,8 @@ function toOrCondition(field, op, v, fieldConfig) {
         return `${field}.cs.${orValue(pgArrayLiteral(v))}`
       case 'neq':
       case 'not_contains':
-        return `${field}.not.cs.${orValue(pgArrayLiteral(v))}`
+        // COMMSFIX.B.1 — NULL-inclusive nested disjunct.
+        return `or(${field}.not.cs.${orValue(pgArrayLiteral(v))},${field}.is.null)`
       case 'is_null':
         return `${field}.is.null`
       case 'is_not_null':
@@ -282,7 +297,8 @@ function toOrCondition(field, op, v, fieldConfig) {
   }
   switch (op) {
     case 'eq': return `${field}.eq.${orValue(v)}`
-    case 'neq': return `${field}.neq.${orValue(v)}`
+    // COMMSFIX.B.1 — NULL-inclusive negatives as nested or() groups.
+    case 'neq': return `or(${field}.neq.${orValue(v)},${field}.is.null)`
     case 'gt': return `${field}.gt.${orValue(v)}`
     case 'lt': return `${field}.lt.${orValue(v)}`
     case 'gte': return `${field}.gte.${orValue(v)}`
@@ -294,7 +310,7 @@ function toOrCondition(field, op, v, fieldConfig) {
         ? `${field}.eq.00000000-0000-0000-0000-000000000000`
         : `${field}.in.(${v.map(orValue).join(',')})`
     case 'contains': return `${field}.ilike.${orIlikePattern(v)}`
-    case 'not_contains': return `${field}.not.ilike.${orIlikePattern(v)}`
+    case 'not_contains': return `or(${field}.not.ilike.${orIlikePattern(v)},${field}.is.null)`
     case 'is_null': return `${field}.is.null`
     case 'is_not_null':
     case 'not_null': return `${field}.not.is.null`
@@ -405,7 +421,9 @@ export function applyAudienceFilter(query, filter) {
         query = query.eq(field, v)
         break
       case 'neq':
-        query = query.neq(field, v)
+        // COMMSFIX.B.1 — NULL-inclusive "is not": chained .or() calls AND
+        // together in PostgREST, so this stays an AND-composed predicate.
+        query = query.or(`${field}.neq.${orValue(v)},${field}.is.null`)
         break
       case 'in': {
         if (!Array.isArray(v)) {
@@ -434,7 +452,8 @@ export function applyAudienceFilter(query, filter) {
         query = query.ilike(field, `%${String(v ?? '')}%`)
         break
       case 'not_contains':
-        query = query.not(field, 'ilike', `%${String(v ?? '')}%`)
+        // COMMSFIX.B.1 — NULL-inclusive "does not contain".
+        query = query.or(`${field}.not.ilike.${orIlikePattern(v)},${field}.is.null`)
         break
       case 'is_null':
         query = query.is(field, null)

@@ -306,6 +306,96 @@ describe('applyAudienceFilter — OR logic (COMMS-AUDIT batch 6)', () => {
   })
 })
 
+// COMMSFIX.B.1 — negative operators are NULL-inclusive. PostgREST neq /
+// not.ilike / not.cs compile to SQL predicates that exclude NULL rows, so
+// "membership type is not time" silently dropped every contact whose type
+// was unsynced (229 live contacts; the 8-Aug sale-email incident class).
+// Operator intent for "is not X" is "everyone except X", so each negative
+// compiles to an OR group with `field.is.null`. Chained .or() calls AND
+// together in PostgREST, so the AND branch emits one .or(neq,is.null) per
+// negative filter; the OR branch nests each negative as an or(...) disjunct.
+describe('applyAudienceFilter — NULL-inclusive negative operators (COMMSFIX.B.1)', () => {
+  let q
+  beforeEach(() => { q = makeMockQuery() })
+
+  it('neq is NULL-inclusive: compiles to an or(neq, is.null) group', () => {
+    applyAudienceFilter(q.query, {
+      logic: 'and',
+      filters: [{ field: 'glofox_membership_type', op: 'neq', value: 'time' }],
+    })
+    expect(q.calls).toEqual([
+      ['or', 'glofox_membership_type.neq.time,glofox_membership_type.is.null'],
+    ])
+  })
+
+  it('not_contains is NULL-inclusive', () => {
+    applyAudienceFilter(q.query, {
+      filters: [{ field: 'label', op: 'not_contains', value: 'x' }],
+    })
+    expect(q.calls).toEqual([
+      ['or', 'label.not.ilike.%x%,label.is.null'],
+    ])
+  })
+
+  it('numeric neq is NULL-inclusive and still coerces the value', () => {
+    applyAudienceFilter(q.query, {
+      filters: [{ field: 'glofox_membership_price_cents', op: 'neq', value: '10000' }],
+    })
+    expect(q.calls).toEqual([
+      ['or', 'glofox_membership_price_cents.neq.10000,glofox_membership_price_cents.is.null'],
+    ])
+  })
+
+  it('two negatives under AND emit one .or() group each (chained .or() calls AND)', () => {
+    applyAudienceFilter(q.query, {
+      logic: 'and',
+      filters: [
+        { field: 'glofox_membership_type', op: 'neq', value: 'time' },
+        { field: 'glofox_membership_status', op: 'neq', value: 'member' },
+      ],
+    })
+    expect(q.calls).toEqual([
+      ['or', 'glofox_membership_type.neq.time,glofox_membership_type.is.null'],
+      ['or', 'glofox_membership_status.neq.member,glofox_membership_status.is.null'],
+    ])
+  })
+
+  it('tags neq / not_contains are NULL-inclusive (array branch)', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'neq', value: 'PTC' }] })
+    applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'not_contains', value: 'PTC' }] })
+    expect(q.calls).toEqual([
+      ['or', 'tags.not.cs."{\\"PTC\\"}",tags.is.null'],
+      ['or', 'tags.not.cs."{\\"PTC\\"}",tags.is.null'],
+    ])
+  })
+
+  it('OR logic nests NULL-inclusive negatives as or() groups', () => {
+    applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [
+        { field: 'glofox_membership_type', op: 'neq', value: 'time' },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+      ],
+    })
+    expect(q.calls).toEqual([
+      ['or', 'or(glofox_membership_type.neq.time,glofox_membership_type.is.null),pipeline_stage_slug.eq.member'],
+    ])
+  })
+
+  it('OR logic nests a NULL-inclusive not_contains disjunct', () => {
+    applyAudienceFilter(q.query, {
+      logic: 'or',
+      filters: [
+        { field: 'label', op: 'not_contains', value: 'x' },
+        { field: 'email_status', op: 'eq', value: 'active' },
+      ],
+    })
+    expect(q.calls).toEqual([
+      ['or', 'or(label.not.ilike.%x%,label.is.null),email_status.eq.active'],
+    ])
+  })
+})
+
 // TAGFIX — contacts.tags is text[]; the scalar eq/ilike path was a
 // PostgREST 400 ("Couldn't compute recipient count") for every
 // Free-text tag filter. Array fields route through cs instead.
@@ -323,19 +413,26 @@ describe('applyAudienceFilter — array field (contacts.tags)', () => {
     expect(q.calls).toEqual([['contains', 'tags', ['PTC']]])
   })
 
-  it('neq on tags negates cs with a quoted array literal', () => {
+  // COMMSFIX.B.1 — negated tag membership is now NULL-inclusive: it
+  // compiles to .or(not.cs, is.null) instead of the bare .not(cs) that
+  // silently dropped contacts with a NULL tags column.
+  it('neq on tags negates cs NULL-inclusively via .or()', () => {
     applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'neq', value: 'PTC' }] })
-    expect(q.calls).toEqual([['not', 'tags', 'cs', '{"PTC"}']])
+    expect(q.calls).toEqual([['or', 'tags.not.cs."{\\"PTC\\"}",tags.is.null']])
   })
 
   it('not_contains mirrors neq', () => {
     applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'not_contains', value: 'PTC' }] })
-    expect(q.calls).toEqual([['not', 'tags', 'cs', '{"PTC"}']])
+    expect(q.calls).toEqual([['or', 'tags.not.cs."{\\"PTC\\"}",tags.is.null']])
   })
 
   it('escapes quotes and backslashes in the negated array literal', () => {
     applyAudienceFilter(q.query, { filters: [{ field: 'tags', op: 'neq', value: 'a"b\\c' }] })
-    expect(q.calls).toEqual([['not', 'tags', 'cs', '{"a\\"b\\\\c"}']])
+    // Array literal {"a\"b\\c"} then or-string quoting doubles the escapes —
+    // same two-layer quoting the OR-branch test below has always locked in.
+    const lit = '{"a\\"b\\\\c"}'
+    const quoted = `"${lit.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+    expect(q.calls).toEqual([['or', `tags.not.cs.${quoted},tags.is.null`]])
   })
 
   it('is_null / not_null still pass through', () => {
@@ -360,12 +457,12 @@ describe('applyAudienceFilter — array field (contacts.tags)', () => {
     ])
   })
 
-  it('OR renders tags neq as not.cs', () => {
+  it('OR renders tags neq as a nested NULL-inclusive or() group', () => {
     applyAudienceFilter(q.query, {
       logic: 'or',
       filters: [{ field: 'tags', op: 'neq', value: 'PTC' }],
     })
-    expect(q.calls).toEqual([['or', 'tags.not.cs."{\\"PTC\\"}"']])
+    expect(q.calls).toEqual([['or', 'or(tags.not.cs."{\\"PTC\\"}",tags.is.null)']])
   })
 })
 
