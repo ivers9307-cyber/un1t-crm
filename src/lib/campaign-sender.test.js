@@ -450,9 +450,11 @@ describe('tickCampaignSend — A/B default-path regression (no ab_subject_b)', (
 
   it('populate for a plain campaign inserts recipient rows WITHOUT an ab_variant key', async () => {
     const contacts = [makeContact('c1'), makeContact('c2'), makeContact('c3'), makeContact('c4')]
-    buildAudienceQueryAsync.mockResolvedValue({
-      query: { range: vi.fn(async (from) => ({ data: from === 0 ? contacts : [], error: null })) },
-    })
+    const query = {
+      order: vi.fn(() => query),
+      range: vi.fn(async (from) => ({ data: from === 0 ? contacts : [], error: null })),
+    }
+    buildAudienceQueryAsync.mockResolvedValue({ query })
     const { db, statements } = makeDb(abRouteFor({ count: 0 }))
 
     await tickCampaignSend(db, campaign)
@@ -468,9 +470,11 @@ describe('tickCampaignSend — A/B default-path regression (no ab_subject_b)', (
 describe('tickCampaignSend — A/B populate (slice assignment at populate time)', () => {
   it('assigns ab_variant to ~pct% of recipients, half a / half b, remainder null', async () => {
     const contacts = Array.from({ length: 10 }, (_, i) => makeContact(`c${i + 1}`))
-    buildAudienceQueryAsync.mockResolvedValue({
-      query: { range: vi.fn(async (from) => ({ data: from === 0 ? contacts : [], error: null })) },
-    })
+    const query = {
+      order: vi.fn(() => query),
+      range: vi.fn(async (from) => ({ data: from === 0 ? contacts : [], error: null })),
+    }
+    buildAudienceQueryAsync.mockResolvedValue({ query })
     const { db, statements } = makeDb(abRouteFor({ count: 0 }))
 
     await tickCampaignSend(db, abCampaign()) // pct 20 of 10 → slice of 2
@@ -492,9 +496,11 @@ describe('tickCampaignSend — A/B populate (slice assignment at populate time)'
 
   it('an audience too small to test short-circuits to winner A at populate time', async () => {
     const contacts = [makeContact('c1'), makeContact('c2')]
-    buildAudienceQueryAsync.mockResolvedValue({
-      query: { range: vi.fn(async (from) => ({ data: from === 0 ? contacts : [], error: null })) },
-    })
+    const query = {
+      order: vi.fn(() => query),
+      range: vi.fn(async (from) => ({ data: from === 0 ? contacts : [], error: null })),
+    }
+    buildAudienceQueryAsync.mockResolvedValue({ query })
     const { db, statements } = makeDb(abRouteFor({ count: 0 }))
 
     await tickCampaignSend(db, abCampaign())
@@ -1068,5 +1074,78 @@ describe('tickCampaignSend — resend children (CAMPAIGN-RESEND)', () => {
     const stamps = touchStamps(statements)
     expect(stamps).toHaveLength(1)
     expect(stamps[0].ops.find(o => o.method === 'in').args[1]).toEqual(['contact-r1'])
+  })
+})
+
+describe('tickCampaignSend — audience populate pagination (CAMPAIGN.14)', () => {
+  // 8 Aug 2026 — the "SUMMER SALE" campaign reached 1,000 of 3,053
+  // matched contacts. The CAMPAIGN.11 pagination loop had no ORDER BY,
+  // so PostgREST pages could overlap/skip; a duplicated contact then
+  // blew up the recipient insert on the (campaign_id, contact_id)
+  // unique key AFTER chunk 1, leaving exactly 1,000 rows behind.
+  function pagedAudience(pages) {
+    const orderCalls = []
+    const rangeCalls = []
+    let call = 0
+    const query = {
+      order: vi.fn((...args) => { orderCalls.push(args); return query }),
+      range: vi.fn(async (from, to) => {
+        rangeCalls.push([from, to])
+        const data = pages[call] ?? []
+        call++
+        return { data, error: null }
+      }),
+    }
+    buildAudienceQueryAsync.mockImplementation(async () => ({ query }))
+    return { orderCalls, rangeCalls }
+  }
+
+  it('orders every audience page by id so .range() pagination is stable', async () => {
+    const page1 = Array.from({ length: 1000 }, (_, i) => makeContact(`p${i}`))
+    const { orderCalls, rangeCalls } = pagedAudience([page1, []])
+    const { db } = makeDb(abRouteFor({ count: 0 }))
+
+    await tickCampaignSend(db, campaign)
+
+    expect(rangeCalls).toEqual([[0, 999], [1000, 1999]])
+    expect(orderCalls).toHaveLength(2)
+    for (const args of orderCalls) {
+      expect(args[0]).toBe('id')
+      expect(args[1]).toEqual(expect.objectContaining({ ascending: true }))
+    }
+  })
+
+  it('dedupes contacts that appear on more than one page before inserting', async () => {
+    const page1 = Array.from({ length: 1000 }, (_, i) => makeContact(`p${i}`))
+    // Page 2 overlaps page 1 (p998, p999) then adds three new contacts.
+    const page2 = [makeContact('p998'), makeContact('p999'), makeContact('n1'), makeContact('n2'), makeContact('n3')]
+    pagedAudience([page1, page2])
+    const { db, statements } = makeDb(abRouteFor({ count: 0 }))
+
+    await tickCampaignSend(db, campaign)
+
+    const inserts = statements.filter(s => s.table === 'campaign_recipients' && s.ops[0].method === 'insert')
+    const rows = inserts.flatMap(s => s.ops[0].args[0])
+    expect(rows).toHaveLength(1003)
+    expect(new Set(rows.map(r => r.contact_id)).size).toBe(1003)
+
+    const update = campaignUpdates(statements).find(u => 'total_recipients' in u)
+    expect(update.total_recipients).toBe(1003)
+  })
+
+  it('surfaces a populate status-update failure instead of swallowing it', async () => {
+    pagedAudience([[makeContact('c1')], []])
+    const base = abRouteFor({ count: 0 })
+    const { db } = makeDb((state) => {
+      if (state.table === 'campaigns' && state.ops[0]?.method === 'update' && 'total_recipients' in (state.ops[0].args[0] || {})) {
+        return { error: { message: 'column campaigns.send_started_at does not exist' } }
+      }
+      return base(state)
+    })
+
+    const result = await tickCampaignSend(db, campaign)
+
+    expect(result.phase).toBe('populate')
+    expect(result.error).toMatch(/send_started_at/)
   })
 })
