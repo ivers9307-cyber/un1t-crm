@@ -47,6 +47,18 @@
 // that the filter uses the RIGHT location id. Listing a helper in
 // SCOPING_HELPERS asserts you've READ it and it scopes internally — don't
 // add names blind.
+//
+// Known gap (PAGE-SCOPE.1, checked and empty as of 2026-08-09): a page that
+// reads tenant rows ONLY through a src/lib helper which makes its own
+// service-role client is skipped, since the page itself never names
+// createServerClient. Audited at the time: the only such data-reading
+// delegates were tenant-privacy.js (filters organization_id),
+// landing-logo.js (public_path — public marketing content) and policies.js
+// (policies/policy_versions/policy_views carry NO location_id — estate-wide
+// staff policies, so they aren't tenant tables at all). @/lib/auth's
+// internal client is the auth lookup itself, not a tenant read. If you add
+// a lib that fetches tenant rows on its own client, scope it there and add
+// it to SCOPING_HELPERS.
 
 import fs from 'node:fs'
 import path from 'node:path'
