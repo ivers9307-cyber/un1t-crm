@@ -339,9 +339,13 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
             <p className="text-xs text-un1t-subtle mb-3">
               Filters apply on top of "active sms_status + has phone + at this location" — opted-out and missing-phone contacts are always excluded.
             </p>
+            {/* COMMSFIX.B.4 — the prop is `filter`, not `value`; the old
+                value= made every saved/deep-linked audience invisible and one
+                'Add filter' click silently replaced it with the default row. */}
             <AudienceBuilder
-              value={audienceFilter}
+              filter={audienceFilter}
               onChange={setAudienceFilter}
+              audienceCount={null}
               disabled={isLocked || isScheduled}
             />
           </div>

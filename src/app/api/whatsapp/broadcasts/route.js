@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { getCurrentUser, assertLocationAccess , getUserLocationIds} from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, audienceFilterSchema, url, timeOfDay } from '@/lib/schemas'
+import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 
 const BroadcastCreateSchema = z.object({
   name: z.string().min(1).max(200),
@@ -71,6 +72,17 @@ export async function POST(request) {
   const locationId = body.location_id || user.activeLocation?.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+
+  // COMMSFIX.B.7 — reject an invalid audience filter at save time instead of
+  // parking a broadcast whose audience can never resolve.
+  try {
+    validateAudienceFilter(body.audience_filter)
+  } catch (e) {
+    if (e instanceof InvalidAudienceFilterError) {
+      return NextResponse.json({ success: false, error: e.message }, { status: 400 })
+    }
+    throw e
+  }
 
   const db = createServerClient()
   const isDrip = body.delivery_mode === 'drip'

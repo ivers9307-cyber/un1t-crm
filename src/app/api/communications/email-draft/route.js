@@ -14,6 +14,7 @@ import { getCurrentUser, assertLocationAccess } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike } from '@/lib/schemas'
+import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 
 export const runtime = 'nodejs'
 
@@ -53,6 +54,16 @@ export async function POST(request) {
   }
   if (action === 'schedule' && !scheduled_at) {
     return NextResponse.json({ success: false, error: 'scheduled_at is required to schedule' }, { status: 400 })
+  }
+  // COMMSFIX.B.7 — reject an invalid audience filter at save time instead of
+  // parking a campaign that can never populate (it wedges 'queued' forever).
+  try {
+    validateAudienceFilter(audience_filter)
+  } catch (e) {
+    if (e instanceof InvalidAudienceFilterError) {
+      return NextResponse.json({ success: false, error: e.message }, { status: 400 })
+    }
+    throw e
   }
   // CAMPAIGN-RESEND — marketing only (the outbound stream has open
   // tracking off by design, so "didn't open" is unknowable there), and a

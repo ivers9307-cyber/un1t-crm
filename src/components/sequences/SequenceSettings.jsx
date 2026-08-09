@@ -230,7 +230,10 @@ export default function SequenceSettings({ sequence }) {
               <span className="block text-xs font-medium text-un1t-subtle">Audience — who can enter</span>
               <span className="block text-[11px] text-un1t-subtle/80">Only enrol contacts who match these conditions when the trigger fires. Leave empty to allow anyone.</span>
             </div>
-            <AudienceBuilder filter={audienceFilter || { logic: 'and', filters: [] }} onChange={f => { setAudienceFilter(f); touch() }} />
+            {/* COMMSFIX.B.6 — audienceCount={null}: no live count is wired
+                here, and an omitted prop rendered the dangling
+                "<undefined> contacts match" footer. */}
+            <AudienceBuilder filter={audienceFilter || { logic: 'and', filters: [] }} onChange={f => { setAudienceFilter(f); touch() }} audienceCount={null} />
           </div>
 
           {/* Goal */}

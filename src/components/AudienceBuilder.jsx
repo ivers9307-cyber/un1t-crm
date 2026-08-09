@@ -1,7 +1,12 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Users } from 'lucide-react'
+import { Plus, Trash2, Users, AlertTriangle } from 'lucide-react'
+// COMMSFIX.B.3 — the server-side allowlist is the single source of truth for
+// which ops a field supports. The per-type op lists below are filtered
+// against it so the UI can never build a row the count/populate side 400s on
+// (e.g. is_null on email_status, which is eq/neq-only server-side).
+import { AUDIENCE_FIELDS } from '@/lib/audience-filter'
 
 const FIELD_OPTIONS = [
   // FUNNEL.1 — primary funnel-stage filter (canonical funnel slugs,
@@ -43,8 +48,11 @@ const FIELD_OPTIONS = [
   { value: 'glofox_roaming_enabled', label: 'Roaming Enabled',      type: 'boolean' },
   { value: 'glofox_account_active',  label: 'Glofox Account Active', type: 'boolean' },
   { value: 'emergency_contact',      label: 'Has Emergency Contact', type: 'exists' },
+  // COMMSFIX.B.3 — 'unsubscribed' removed: mig 501 CHECK-bans the value
+  // (email_status is reputation-only; consent lives per-location in
+  // contact_location_preferences), so the option could never match a row.
   { value: 'email_status',          label: 'Email Status',          type: 'select',
-    options: ['active', 'bounced', 'complained', 'unsubscribed'] },
+    options: ['active', 'bounced', 'complained'] },
   { value: 'lead_source',           label: 'Lead Source',           type: 'select',
     options: ['booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'classpass', 'other'] },
   { value: 'label',                 label: 'Label',                 type: 'text' },
@@ -89,9 +97,17 @@ const FIELD_OPTIONS = [
 ]
 
 const OPS_BY_TYPE = {
+  // COMMSFIX.B.3 — is empty / is not empty added to select, text and number
+  // types (the library has supported is_null/not_null on most of these
+  // fields all along; the UI hid them, which is what made the NULL-dropping
+  // "is not X" incident unbuildable-around). opsForField() intersects each
+  // list with the server allowlist, so fields like email_status that are
+  // eq/neq-only server-side never show the null ops.
   select:  [
     { value: 'eq',  label: 'is' },
     { value: 'neq', label: 'is not' },
+    { value: 'is_null',  label: 'is empty' },
+    { value: 'not_null', label: 'is not empty' },
   ],
   // tag-select uses the same eq/neq semantics as select but pulls
   // its options dynamically from /api/segments.
@@ -117,13 +133,18 @@ const OPS_BY_TYPE = {
     { value: 'neq',          label: 'does not equal' },
     { value: 'contains',     label: 'contains' },
     { value: 'not_contains', label: 'does not contain' },
+    { value: 'is_null',      label: 'is empty' },
+    { value: 'not_null',     label: 'is not empty' },
   ],
   number:  [
     { value: 'eq',  label: 'equals' },
+    { value: 'neq', label: 'is not' },
     { value: 'gt',  label: 'greater than' },
     { value: 'lt',  label: 'less than' },
     { value: 'gte', label: 'at least' },
     { value: 'lte', label: 'at most' },
+    { value: 'is_null',  label: 'is empty' },
+    { value: 'not_null', label: 'is not empty' },
   ],
   date:    [
     { value: 'gt',       label: 'after' },
@@ -146,15 +167,29 @@ const OPS_BY_TYPE = {
   ],
 }
 
+// COMMSFIX.B.3 — returns null for a field not in FIELD_OPTIONS. The old
+// FIELD_OPTIONS[0] fallback made a saved legacy filter (e.g. pre-FUNNEL.1
+// lead_status) silently masquerade as a 'Stage' row: the display bore no
+// relation to what was saved, and touching the op wrote Stage-ops onto the
+// foreign field. Unknown fields now render an inert warning row instead.
 function getFieldConfig(fieldValue) {
-  return FIELD_OPTIONS.find(f => f.value === fieldValue) || FIELD_OPTIONS[0]
+  return FIELD_OPTIONS.find(f => f.value === fieldValue) || null
+}
+
+// The ops offered for a row = the per-type list ∩ the server allowlist for
+// that specific field. Keeps the UI unable to build a row the count/populate
+// side rejects (the composer used to swallow that 400 silently).
+function opsForField(fieldConfig) {
+  const base = OPS_BY_TYPE[fieldConfig.type] || []
+  const allowed = AUDIENCE_FIELDS[fieldConfig.value]?.ops
+  return allowed ? base.filter(op => allowed.includes(op.value)) : base
 }
 
 function needsValue(op) {
   return !['is_null', 'not_null'].includes(op)
 }
 
-export default function AudienceBuilder({ filter, onChange, audienceCount }) {
+export default function AudienceBuilder({ filter, onChange, audienceCount, disabled = false }) {
   const filters = filter?.filters || []
   const logic = filter?.logic || 'and'
 
@@ -203,6 +238,10 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
   }, [usesEventField, eventOptions])
 
   function updateFilter(newFilters, newLogic) {
+    // COMMSFIX.B.3 — a disabled builder is read-only: belt-and-braces on top
+    // of the disabled attributes below (SMSBroadcastEditor passes disabled
+    // for locked/scheduled broadcasts; it used to be silently ignored).
+    if (disabled) return
     onChange({ filters: newFilters, logic: newLogic || logic })
   }
 
@@ -228,7 +267,8 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
 
   function handleFieldChange(index, newField) {
     const config = getFieldConfig(newField)
-    const ops = OPS_BY_TYPE[config.type] || []
+    if (!config) return // only reachable if the <select> ever carries an unknown value
+    const ops = opsForField(config)
     const defaultOp = ops[0]?.value || 'eq'
     const defaultValue = config.type === 'select' ? (config.options?.[0] || '')
       : config.type === 'boolean' ? 'true'
@@ -243,16 +283,20 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
         <div className="flex items-center gap-2 text-sm">
           <span className="text-un1t-subtle">Match</span>
           <button
+            type="button"
+            disabled={disabled}
             onClick={() => updateFilter(filters, 'and')}
-            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-50 ${
               logic === 'and' ? 'bg-un1t-text text-un1t-bg' : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text'
             }`}
           >
             ALL filters
           </button>
           <button
+            type="button"
+            disabled={disabled}
             onClick={() => updateFilter(filters, 'or')}
-            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-50 ${
               logic === 'or' ? 'bg-un1t-text text-un1t-bg' : 'border border-un1t-border text-un1t-subtle hover:text-un1t-text'
             }`}
           >
@@ -273,7 +317,35 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
       <div className="space-y-2">
         {filters.map((f, index) => {
           const fieldConfig = getFieldConfig(f.field)
-          const ops = OPS_BY_TYPE[fieldConfig.type] || []
+
+          // COMMSFIX.B.3 — unknown/legacy saved field (lead_status, or a
+          // library field not in FIELD_OPTIONS): render an inert warning row
+          // instead of silently masquerading as the first field option. Only
+          // the delete button is active; the count/populate side would throw
+          // 'Unknown audience field' on this row anyway.
+          if (!fieldConfig) {
+            return (
+              <div key={index} className="flex items-center gap-2 bg-un1t-surface border border-amber-500/40 rounded-lg p-3">
+                {index > 0 && (
+                  <span className="text-xs text-un1t-muted font-medium w-10 text-center uppercase">{logic}</span>
+                )}
+                {index === 0 && filters.length > 1 && <span className="w-10" />}
+                <AlertTriangle size={14} className="text-amber-700 shrink-0" />
+                <span className="text-sm font-mono text-un1t-text">{f.field}</span>
+                <span className="text-xs text-amber-700 flex-1">Saved with an unsupported field — remove this row</span>
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => removeFilter(index)}
+                  className="p-1.5 text-un1t-muted hover:text-red-400 transition-colors rounded disabled:opacity-50"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            )
+          }
+
+          const ops = opsForField(fieldConfig)
           const showValue = needsValue(f.op)
 
           return (
@@ -289,6 +361,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
               {/* Field */}
               <select
                 value={f.field}
+                disabled={disabled}
                 onChange={e => handleFieldChange(index, e.target.value)}
                 className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
               >
@@ -300,6 +373,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
               {/* Operator */}
               <select
                 value={f.op}
+                disabled={disabled}
                 onChange={e => updateRow(index, { op: e.target.value })}
                 className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
               >
@@ -312,7 +386,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
               {showValue && fieldConfig.type === 'select' ? (
                 <select
                   value={f.value}
-                  onChange={e => updateRow(index, { value: e.target.value })}
+                  disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
                   className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
                 >
                   {fieldConfig.options?.map(opt => (
@@ -322,7 +396,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
               ) : showValue && fieldConfig.type === 'tag-select' ? (
                 <select
                   value={f.value || ''}
-                  onChange={e => updateRow(index, { value: e.target.value })}
+                  disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
                   className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
                 >
                   <option value="">— pick a tag —</option>
@@ -335,7 +409,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
               ) : showValue && fieldConfig.type === 'plan-select' ? (
                 <select
                   value={f.value || ''}
-                  onChange={e => updateRow(index, { value: e.target.value })}
+                  disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
                   className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
                 >
                   <option value="">
@@ -348,7 +422,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
               ) : showValue && fieldConfig.type === 'event-select' ? (
                 <select
                   value={f.value || ''}
-                  onChange={e => updateRow(index, { value: e.target.value })}
+                  disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
                   className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
                 >
                   <option value="">
@@ -365,7 +439,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
                 <input
                   type="number"
                   value={f.value}
-                  onChange={e => updateRow(index, { value: e.target.value })}
+                  disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
                   className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted w-24"
                 />
               ) : showValue && fieldConfig.type === 'date' ? (
@@ -374,7 +448,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
                     <input
                       type="number"
                       value={f.value}
-                      onChange={e => updateRow(index, { value: e.target.value })}
+                      disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
                       placeholder="30"
                       className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted w-20"
                     />
@@ -384,14 +458,14 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
                   <input
                     type="date"
                     value={f.value}
-                    onChange={e => updateRow(index, { value: e.target.value })}
+                    disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
                     className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
                   />
                 )
               ) : showValue && fieldConfig.type === 'boolean' ? (
                 <select
                   value={f.value === true || f.value === 'true' ? 'true' : 'false'}
-                  onChange={e => updateRow(index, { value: e.target.value })}
+                  disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
                   className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
                 >
                   <option value="true">Yes</option>
@@ -401,7 +475,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
                 <input
                   type="text"
                   value={f.value}
-                  onChange={e => updateRow(index, { value: e.target.value })}
+                  disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
                   placeholder="Value..."
                   className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text placeholder:text-un1t-muted focus:outline-none focus:border-un1t-muted flex-1"
                 />
@@ -409,8 +483,10 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
 
               {/* Remove */}
               <button
+                type="button"
+                disabled={disabled}
                 onClick={() => removeFilter(index)}
-                className="p-1.5 text-un1t-muted hover:text-red-400 transition-colors rounded"
+                className="p-1.5 text-un1t-muted hover:text-red-400 transition-colors rounded disabled:opacity-50"
               >
                 <Trash2 size={14} />
               </button>
@@ -422,8 +498,10 @@ export default function AudienceBuilder({ filter, onChange, audienceCount }) {
       {/* Add filter + count */}
       <div className="flex items-center justify-between">
         <button
+          type="button"
+          disabled={disabled}
           onClick={addFilter}
-          className="flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text transition-colors"
+          className="flex items-center gap-1.5 text-xs text-un1t-subtle hover:text-un1t-text transition-colors disabled:opacity-50"
         >
           <Plus size={14} />
           Add filter

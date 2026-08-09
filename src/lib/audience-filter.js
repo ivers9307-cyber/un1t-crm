@@ -21,6 +21,18 @@
 // The allowlist mirrors src/components/AudienceBuilder.jsx so legitimate UI
 // flows pass through unchanged. New fields must be added here AND in the
 // builder.
+//
+// COMMSFIX.B.1 — negative operators are NULL-INCLUSIVE. Bare PostgREST
+// neq / not.ilike / not.cs compile to SQL predicates that a NULL never
+// satisfies, so "membership type is not time" silently excluded every
+// contact whose type was unsynced (229 live contacts — the 8-Aug sale
+// email incident class). Operator intent for "is not X" is "everyone
+// except X", so neq / not_contains on scalar AND array fields compile to
+// an OR group `(field <op-negated> value OR field IS NULL)`:
+//   - AND logic: one `.or('f.neq.v,f.is.null')` per negative filter
+//     (chained .or() calls AND together in PostgREST);
+//   - OR logic: each negative becomes a nested `or(f.neq.v,f.is.null)`
+//     disjunct inside the single top-level .or().
 
 import { selectAll } from '@/lib/select-all'
 
@@ -249,7 +261,9 @@ function applyArrayFieldOp(query, field, op, v) {
       return query.contains(field, [String(v ?? '')])
     case 'neq':
     case 'not_contains':
-      return query.not(field, 'cs', pgArrayLiteral(v))
+      // COMMSFIX.B.1 — NULL-inclusive: "doesn't have this tag" must also
+      // match contacts whose tags column is NULL (never tagged at all).
+      return query.or(`${field}.not.cs.${orValue(pgArrayLiteral(v))},${field}.is.null`)
     case 'is_null':
       return query.is(field, null)
     case 'is_not_null':
@@ -270,7 +284,8 @@ function toOrCondition(field, op, v, fieldConfig) {
         return `${field}.cs.${orValue(pgArrayLiteral(v))}`
       case 'neq':
       case 'not_contains':
-        return `${field}.not.cs.${orValue(pgArrayLiteral(v))}`
+        // COMMSFIX.B.1 — NULL-inclusive nested disjunct.
+        return `or(${field}.not.cs.${orValue(pgArrayLiteral(v))},${field}.is.null)`
       case 'is_null':
         return `${field}.is.null`
       case 'is_not_null':
@@ -282,7 +297,8 @@ function toOrCondition(field, op, v, fieldConfig) {
   }
   switch (op) {
     case 'eq': return `${field}.eq.${orValue(v)}`
-    case 'neq': return `${field}.neq.${orValue(v)}`
+    // COMMSFIX.B.1 — NULL-inclusive negatives as nested or() groups.
+    case 'neq': return `or(${field}.neq.${orValue(v)},${field}.is.null)`
     case 'gt': return `${field}.gt.${orValue(v)}`
     case 'lt': return `${field}.lt.${orValue(v)}`
     case 'gte': return `${field}.gte.${orValue(v)}`
@@ -294,7 +310,7 @@ function toOrCondition(field, op, v, fieldConfig) {
         ? `${field}.eq.00000000-0000-0000-0000-000000000000`
         : `${field}.in.(${v.map(orValue).join(',')})`
     case 'contains': return `${field}.ilike.${orIlikePattern(v)}`
-    case 'not_contains': return `${field}.not.ilike.${orIlikePattern(v)}`
+    case 'not_contains': return `or(${field}.not.ilike.${orIlikePattern(v)},${field}.is.null)`
     case 'is_null': return `${field}.is.null`
     case 'is_not_null':
     case 'not_null': return `${field}.not.is.null`
@@ -374,6 +390,13 @@ export function applyAudienceFilter(query, filter) {
       || (fieldConfig.type === 'number'
           && (NUMERIC_COMPARE_OPS.has(op) || op === 'eq' || op === 'neq'))
     if (wantsNumber) {
+      // COMMSFIX.B.2 — Number('') / Number(null) are 0 and Number(true) is 1,
+      // so a blank builder row silently became "= 0" (a large real cohort)
+      // and "more than [blank] days ago" meant "ever". Reject them before
+      // the coercion; only real numbers / numeric strings pass.
+      if (v === '' || v === null || v === undefined || typeof v === 'boolean') {
+        throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a numeric value`)
+      }
       const n = Number(v)
       if (!Number.isFinite(n)) {
         throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a numeric value`)
@@ -405,7 +428,9 @@ export function applyAudienceFilter(query, filter) {
         query = query.eq(field, v)
         break
       case 'neq':
-        query = query.neq(field, v)
+        // COMMSFIX.B.1 — NULL-inclusive "is not": chained .or() calls AND
+        // together in PostgREST, so this stays an AND-composed predicate.
+        query = query.or(`${field}.neq.${orValue(v)},${field}.is.null`)
         break
       case 'in': {
         if (!Array.isArray(v)) {
@@ -434,7 +459,8 @@ export function applyAudienceFilter(query, filter) {
         query = query.ilike(field, `%${String(v ?? '')}%`)
         break
       case 'not_contains':
-        query = query.not(field, 'ilike', `%${String(v ?? '')}%`)
+        // COMMSFIX.B.1 — NULL-inclusive "does not contain".
+        query = query.or(`${field}.not.ilike.${orIlikePattern(v)},${field}.is.null`)
         break
       case 'is_null':
         query = query.is(field, null)
@@ -678,6 +704,39 @@ export async function resolveEventFilters({ db, query, filter }) {
   }
 
   return { query }
+}
+
+/**
+ * COMMSFIX.B.7 — validate an audience filter WITHOUT building a query or
+ * touching the DB. For routes that PERSIST a filter (email-draft, SMS/WA
+ * broadcast create, sequences PUT): an invalid filter must be rejected with
+ * a 400 at save time, not parked in the DB where it can never populate (the
+ * campaign wedges 'queued' forever; the sequence silently enrols nobody).
+ *
+ * Reuses applyAudienceFilter's full validation (unknown field, off-allowlist
+ * op, OR+virtual-field rejection, numeric/boolean value guards) against a
+ * passive probe that absorbs every query method, then adds the non-empty
+ * value checks the tag/event resolvers would make at resolve time.
+ *
+ * Throws InvalidAudienceFilterError; returns undefined on a valid filter.
+ * null / undefined / empty filters are valid ("everyone").
+ */
+export function validateAudienceFilter(filter) {
+  if (filter == null) return
+  let probe
+  const handler = { get: () => (..._args) => probe }
+  probe = new Proxy({}, handler)
+  applyAudienceFilter(probe, filter)
+  for (const f of filter?.filters || []) {
+    const cfg = AUDIENCE_FIELDS[f?.field]
+    if (!cfg) continue // applyAudienceFilter already threw on unknown fields
+    if (cfg.type === 'tag' && (typeof f.value !== 'string' || !f.value.trim())) {
+      throw new InvalidAudienceFilterError('tag filter requires a non-empty string value')
+    }
+    if (cfg.type === 'event' && (typeof f.value !== 'string' || !f.value.trim())) {
+      throw new InvalidAudienceFilterError('event filter requires a non-empty event id')
+    }
+  }
 }
 
 /**
