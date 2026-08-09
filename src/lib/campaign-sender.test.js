@@ -1379,6 +1379,119 @@ describe('tickCampaignSend — resumable populate (POPFIX.1)', () => {
       expect.objectContaining({ status: 'sending', total_recipients: 2500 }))
     expect(world.sendStartedAt).toBeTruthy()
   })
+
+  it('skips populate entirely once send_started_at is stamped (no audience query, no write)', async () => {
+    audienceOf(10)
+    const { world, route } = makeWorld({
+      seed: Array.from({ length: 10 }, (_, i) => ({
+        contact_id: `contact-p${String(i).padStart(4, '0')}`, campaign_id: 'camp-1', status: 'sent',
+      })),
+    })
+    const { db } = makeDb(route)
+
+    await tickCampaignSend(db, { ...campaign, send_started_at: '2026-07-10T09:00:00.000Z' })
+
+    expect(buildAudienceQueryAsync).not.toHaveBeenCalled()
+    expect(world.writes).toHaveLength(0)
+    expect(world.campaignUpdates.some(u => 'total_recipients' in u)).toBe(false)
+  })
+
+  it('self-heals a campaign whose chunks all landed but whose stamp failed', async () => {
+    // CAMPAIGN.14 surfaced exactly this: every recipient row on disk, no
+    // send_started_at. Populate re-runs as a no-op upsert and re-stamps.
+    audienceOf(10)
+    const seed = Array.from({ length: 10 }, (_, i) => ({
+      contact_id: `contact-p${String(i).padStart(4, '0')}`, campaign_id: 'camp-1', status: 'queued',
+    }))
+    const { world, route } = makeWorld({ seed })
+    const { db } = makeDb(route)
+
+    const result = await tickCampaignSend(db, { ...campaign, send_started_at: null })
+
+    expect(result).toEqual({ phase: 'populate', sent: 0 })
+    expect(world.writes).toHaveLength(1)          // the upsert ran…
+    expect(world.rows.size).toBe(10)              // …and added nothing
+    expect(world.campaignUpdates).toContainEqual(
+      expect.objectContaining({ status: 'sending', total_recipients: 10 }))
+    expect(world.sendStartedAt).toBeTruthy()
+  })
+
+  it('leaves an already-SENT recipient row untouched when populate re-runs', async () => {
+    // The whole reason the write is ignoreDuplicates rather than a plain
+    // upsert: resetting a 'sent' row to 'queued' would re-send that person.
+    audienceOf(10)
+    const seed = Array.from({ length: 9 }, (_, i) => ({
+      contact_id: `contact-p${String(i).padStart(4, '0')}`,
+      campaign_id: 'camp-1',
+      status: i === 0 ? 'sent' : 'queued',
+      postmark_message_id: i === 0 ? 'pm-already-delivered' : null,
+      attempts: i === 0 ? 1 : 0,
+    }))
+    const { world, route } = makeWorld({ seed })   // p0009 is missing
+    const { db } = makeDb(route)
+
+    await tickCampaignSend(db, { ...campaign, send_started_at: null })
+
+    // The resumed populate added only the missing row…
+    expect(world.rows.size).toBe(10)
+    expect(world.rows.get('contact-p0009').status).toBe('queued')
+    // …and the delivered one is byte-for-byte what it was.
+    expect(world.rows.get('contact-p0000')).toEqual({
+      contact_id: 'contact-p0000',
+      campaign_id: 'camp-1',
+      status: 'sent',
+      postmark_message_id: 'pm-already-delivered',
+      attempts: 1,
+    })
+    expect(world.sendStartedAt).toBeTruthy()
+  })
+
+  it('writes recipients with the (campaign_id, contact_id) conflict target and ignoreDuplicates', async () => {
+    // Pinned: a plain .insert() here reintroduces the abort-on-collision that
+    // truncated the 8 Aug send.
+    audienceOf(3)
+    const { db, statements } = makeDb(makeWorld().route)
+
+    await tickCampaignSend(db, { ...campaign, send_started_at: null })
+
+    const writes = statements.filter(s =>
+      s.table === 'campaign_recipients' && ['insert', 'upsert'].includes(s.ops[0]?.method))
+    expect(writes).toHaveLength(1)
+    expect(writes[0].ops[0].method).toBe('upsert')
+    expect(writes[0].ops[0].args[1]).toEqual({
+      onConflict: 'campaign_id,contact_id',
+      ignoreDuplicates: true,
+    })
+  })
+
+  it('assigns a contact the SAME ab_variant on a second populate pass', async () => {
+    // assignAbVariants is a deterministic FNV-1a hash of the contact id, so a
+    // resumed populate must not reshuffle the test slice.
+    const variantsOfLastWrite = (world) => {
+      const rows = world.writes[world.writes.length - 1].rows
+      return new Map(rows.map(r => [r.contact_id, r.ab_variant]))
+    }
+
+    audienceOf(20)
+    const firstRun = makeWorld()
+    const passOne = makeDb(firstRun.route)
+    await tickCampaignSend(passOne.db, abCampaign({ send_started_at: null }))
+    const before = variantsOfLastWrite(firstRun.world)
+
+    // Second pass over the SAME audience with the rows already on disk.
+    audienceOf(20)
+    const secondRun = makeWorld({ seed: [...firstRun.world.rows.values()] })
+    const passTwo = makeDb(secondRun.route)
+    await tickCampaignSend(passTwo.db, abCampaign({ send_started_at: null }))
+    const after = variantsOfLastWrite(secondRun.world)
+
+    expect([...before.values()].filter(Boolean)).not.toHaveLength(0)  // a slice exists
+    expect(after).toEqual(before)
+    // And the stored rows were never rewritten by the second pass.
+    for (const [contactId, variant] of before) {
+      expect(secondRun.world.rows.get(contactId).ab_variant).toBe(variant)
+    }
+  })
 })
 
 // ── COMMSFIX.C.1 — email_sends must exist before the webhook arrives ────────
