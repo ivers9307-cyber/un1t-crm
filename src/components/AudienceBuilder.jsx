@@ -75,8 +75,17 @@ const FIELD_OPTIONS = [
   { value: 'event_registration',    label: 'Registered for event',  type: 'event-select' },
   { value: 'total_emails_sent',     label: 'Emails Sent',           type: 'number' },
   { value: 'total_emails_opened',   label: 'Emails Opened',         type: 'number' },
+  // GAPS-P1.3 — server-allowlisted since mig 005 and backfilled by mig 508,
+  // but never offered here while its sibling above was. An operator could
+  // build "opened > 0" and not "clicked > 0".
+  { value: 'total_emails_clicked',  label: 'Emails Clicked',        type: 'number' },
   { value: 'trial_credits_remaining', label: 'Trial Credits Left',  type: 'number' },
   { value: 'last_emailed_at',       label: 'Last Emailed',          type: 'date' },
+  // GAPS-P1.3 — engagement RECENCY (mig 511). "Last Emailed" says whether WE
+  // emailed them; these say whether they engaged. Pair either with the date
+  // type's days_since ops for "opened in the last 30 days".
+  { value: 'last_email_open_at',    label: 'Last Email Open',       type: 'date' },
+  { value: 'last_email_click_at',   label: 'Last Email Click',      type: 'date' },
   { value: 'created_at',            label: 'Contact Created',       type: 'date' },
   { value: 'lead_created_at',       label: 'Lead Created',          type: 'date' },
   // GLOFOX2.1.13 — Glofox-side tenure date (joined_at preferred,

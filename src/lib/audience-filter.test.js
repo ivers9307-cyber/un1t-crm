@@ -572,6 +572,21 @@ describe('AUDIENCE_FIELDS allowlist', () => {
     expect(AUDIENCE_FIELDS.event_registration.type).toBe('event')
     expect(AUDIENCE_FIELDS.event_registration.ops).toEqual(['eq', 'neq'])
   })
+
+  // GAPS-P1.3 — engagement RECENCY (mig 511). The two columns the inactivity
+  // cron and both win-back templates were already driving; registering them
+  // here is what makes "opened in the last 30 days" buildable as an audience
+  // at all. They must carry the same op set as every other date field —
+  // days_since_gt / days_since_lt in particular, which is how a recency
+  // segment is actually expressed.
+  it.each(['last_email_open_at', 'last_email_click_at'])('exposes %s as a date field with the standard date ops', (field) => {
+    expect(AUDIENCE_FIELDS).toHaveProperty(field)
+    expect(AUDIENCE_FIELDS[field].type).toBe('date')
+    expect(AUDIENCE_FIELDS[field].ops).toEqual(AUDIENCE_FIELDS.last_emailed_at.ops)
+    expect(AUDIENCE_FIELDS[field].ops).toEqual(
+      expect.arrayContaining(['days_since_gt', 'days_since_lt', 'is_null', 'is_not_null'])
+    )
+  })
 })
 
 // ─── tag virtual field — applyAudienceFilter skip behaviour ──────

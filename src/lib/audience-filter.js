@@ -158,6 +158,16 @@ export const AUDIENCE_FIELDS = Object.freeze({
   // win-back of recently expired memberships.
   glofox_membership_expiry:  { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
   last_emailed_at:           { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
+  // GAPS-P1 (mig 511) — engagement RECENCY, as distinct from
+  // last_emailed_at, which only says whether WE emailed them.
+  // Maintained on every Postmark Open/Click and equal to
+  // max(email_sends.opened_at) / max(clicked_at) per contact. These
+  // are what an "opened in the last 30 days" segment needs
+  // (days_since_lt), and last_email_open_at is also the inactivity
+  // cron's stored signal — it was driven for months as a column that
+  // did not exist (see mig 511's header).
+  last_email_open_at:        { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
+  last_email_click_at:       { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
   last_wa_message_at:        { type: 'date',    ops: ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'is_null', 'is_not_null', 'not_null', 'days_since_gt', 'days_since_lt'] },
 
   // Machine-derived retargeting tags (mig 085). 'tag' compares

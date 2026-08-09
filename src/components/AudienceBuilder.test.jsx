@@ -16,6 +16,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, fireEvent } from '@testing-library/react'
 import AudienceBuilder from './AudienceBuilder.jsx'
+import { AUDIENCE_FIELDS } from '@/lib/audience-filter'
 
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
@@ -371,5 +372,45 @@ describe('AudienceBuilder — date rows are born saveable (P1.4)', () => {
     const row = onChange.mock.calls.at(-1)[0].filters[0]
     expect(row.op).toBe('lt')
     expect(row.value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+})
+
+// ── GAPS-P1.3 — engagement fields the builder was missing ─────────────────
+//
+// New audience fields go in BOTH registries: AUDIENCE_FIELDS (the server
+// allowlist applyAudienceFilter enforces) and FIELD_OPTIONS (this builder).
+// A field in only one is either invisible to operators or a guaranteed 400.
+//   • last_email_open_at / last_email_click_at are new in mig 511 — "opened
+//     in the last 30 days" is the whole reason the column was made real;
+//   • total_emails_clicked has been server-allowlisted since mig 005 and was
+//     simply never offered here, while its sibling total_emails_opened was.
+describe('AudienceBuilder — engagement fields (GAPS-P1.3)', () => {
+  function fieldOptionValues() {
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: 'created_at', op: 'gt', value: '2026-01-01' }] }}
+        onChange={() => {}}
+        audienceCount={null}
+      />
+    )
+    return optionValues(rowSelects(container)[0])
+  }
+
+  it.each(['last_email_open_at', 'last_email_click_at', 'total_emails_clicked'])(
+    'offers %s in the field dropdown',
+    (field) => {
+      expect(fieldOptionValues()).toContain(field)
+    },
+  )
+
+  it('keeps every offered field inside the server allowlist (both-registries invariant)', () => {
+    // '' is the FILTER-P1.1 unset-row placeholder ("Choose a field…"), not a
+    // field — an unset row is inert and produces no predicate, so it is
+    // deliberately absent from AUDIENCE_FIELDS. Every OTHER option must be
+    // registered server-side, which is the invariant this pins.
+    const unknown = fieldOptionValues()
+      .filter(v => v !== '')
+      .filter(v => !Object.hasOwn(AUDIENCE_FIELDS, v))
+    expect(unknown).toEqual([])
   })
 })

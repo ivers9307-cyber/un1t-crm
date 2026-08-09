@@ -507,3 +507,37 @@ describe('runInactivityTriggers', () => {
     expect(enrolContacts).not.toHaveBeenCalled()
   })
 })
+
+// ── GAPS-P1.4 — a stored inactivity signal must be a REAL contacts column ──
+//
+// This is the guard that would have caught Defect A. 'last_email_open_at' sat
+// in this whitelist, in the SequenceSettings dropdown and in BOTH packaged
+// win-back templates while no such column existed on public.contacts, and the
+// docstring above runInactivityTriggers asserted the opposite. Nothing could
+// see it: mocked tests and `next build` do not know the live schema, and the
+// only symptom in prod would have been a console.warn as a 42703 took out the
+// inactivity sweep for every sequence at every location (selectAll throws,
+// runInactivityTriggers has no inner try/catch, the sole catch is at the cron
+// boundary).
+//
+// AUDIENCE_FIELDS is the repo's registry of real, queryable contacts columns —
+// every entry is a column applyAudienceFilter puts in a live WHERE clause, so
+// a name that got in here without getting in there is the same defect again.
+describe('runInactivityTriggers — stored signals are real contacts columns (GAPS-P1.4)', () => {
+  it('exports the stored-signal whitelist so the contract is checkable', () => {
+    expect(cronTriggers.INACTIVITY_SIGNAL_FIELDS).toBeTypeOf('object')
+    expect(Object.keys(cronTriggers.INACTIVITY_SIGNAL_FIELDS).length).toBeGreaterThan(0)
+  })
+
+  it('every stored signal is a registered date field in AUDIENCE_FIELDS', async () => {
+    const { AUDIENCE_FIELDS } = await import('@/lib/audience-filter')
+    for (const [signal, column] of Object.entries(cronTriggers.INACTIVITY_SIGNAL_FIELDS)) {
+      expect(AUDIENCE_FIELDS[column], `${signal} → contacts.${column} is not a registered field`).toBeDefined()
+      expect(AUDIENCE_FIELDS[column].type, `${signal} → contacts.${column} is not a date field`).toBe('date')
+    }
+  })
+
+  it('offers last_email_open_at as a stored signal (mig 511 made the column real)', () => {
+    expect(cronTriggers.INACTIVITY_SIGNAL_FIELDS.last_email_open_at).toBe('last_email_open_at')
+  })
+})

@@ -819,3 +819,145 @@ describe('processPostmarkEvent — Click (COMMSFIX.F.2)', () => {
     spy.mockRestore()
   })
 })
+
+// ── GAPS-P1.2 — contacts.last_email_open_at / last_email_click_at ──────────
+//
+// mig 511 makes both columns real and backfills them as max(opened_at) /
+// max(clicked_at) per contact off email_sends. The webhook has to maintain
+// EXACTLY that quantity or the two drift apart silently:
+//
+//   • it stamps with the SAME timestamp it writes to email_sends.opened_at /
+//     clicked_at — not a second `new Date()`, not body.ReceivedAt;
+//   • it stamps on EVERY Open, not just FirstOpen. email_sends.opened_at is
+//     rewritten on every Open event, so a FirstOpen gate here (which is right
+//     for increment_contact_opens, a UNIQUE-open counter) would freeze the
+//     contact stamp at the first open while email_sends kept moving;
+//   • it never writes the columns through a bare contacts.update. The
+//     never-move-backwards guard lives inside the RPC (mig 511:
+//     `last_email_open_at is null or last_email_open_at < p_at`), where it is
+//     atomic against a concurrent worker and cannot be lost to a later edit
+//     here. A read-modify-write in JS would reintroduce exactly the lost-update
+//     race COMMSFIX.F.2 removed from clicked_links.
+function stubStampDb({ send, rpcError = null } = {}) {
+  const rpcCalls = []
+  const updates = []
+
+  function builder(table) {
+    const b = { _op: 'select', _values: null, _filters: [] }
+    const settle = (shape) => {
+      if (b._op === 'insert') return Promise.resolve({ data: null, error: null })
+      if (b._op === 'update') {
+        updates.push({ table, values: b._values, filters: b._filters })
+        return Promise.resolve({ data: [], error: null })
+      }
+      const row = table === 'email_sends' ? send : null
+      return Promise.resolve({ data: shape === 'single' ? row : [], error: null })
+    }
+    b.select = () => b
+    b.insert = (values) => { b._op = 'insert'; b._values = values; return b }
+    b.update = (values) => { b._op = 'update'; b._values = values; return b }
+    b.eq = (col, val) => { b._filters.push(['eq', col, val]); return b }
+    b.is = (col, val) => { b._filters.push(['is', col, val]); return b }
+    b.in = (col, val) => { b._filters.push(['in', col, val]); return b }
+    b.not = (col, op, val) => { b._filters.push(['not', col, op, val]); return b }
+    b.single = () => settle('single')
+    b.maybeSingle = () => settle('single')
+    b.then = (resolve, reject) => settle('list').then(resolve, reject)
+    return b
+  }
+
+  return {
+    rpcCalls,
+    updates,
+    from: builder,
+    rpc: (fn, args) => {
+      rpcCalls.push([fn, args])
+      const isStamp = fn === 'stamp_contact_email_open' || fn === 'stamp_contact_email_click'
+      return Promise.resolve({ error: isStamp ? rpcError : null })
+    },
+  }
+}
+
+const stampCalls = (db, fn) => db.rpcCalls.filter(([name]) => name === fn)
+const sendUpdate = (db, key) => db.updates.find((u) => u.table === 'email_sends' && key in (u.values || {}))
+
+describe('processPostmarkEvent — engagement recency stamps (GAPS-P1.2)', () => {
+  it('Open stamps last_email_open_at with the same timestamp email_sends.opened_at got', async () => {
+    const db = stubStampDb({ send: { id: 's1', contact_id: 'c1', campaign_id: 'camp1' } })
+
+    const r = await processPostmarkEvent(db, { RecordType: 'Open', MessageID: 'pm-o', FirstOpen: true })
+
+    expect(r.ok).toBe(true)
+    const calls = stampCalls(db, 'stamp_contact_email_open')
+    expect(calls).toHaveLength(1)
+    // Same quantity as the backfill's max(opened_at): the contact stamp and
+    // the send row must carry an identical instant, not two clock reads.
+    expect(calls[0][1]).toEqual({ p_contact_id: 'c1', p_at: sendUpdate(db, 'opened_at').values.opened_at })
+  })
+
+  it('Open stamps on a REPEAT open too (not FirstOpen-gated, unlike the unique-open counter)', async () => {
+    const db = stubStampDb({ send: { id: 's1', contact_id: 'c1', campaign_id: 'camp1' } })
+
+    const r = await processPostmarkEvent(db, { RecordType: 'Open', MessageID: 'pm-o', FirstOpen: false })
+
+    expect(r.ok).toBe(true)
+    expect(stampCalls(db, 'stamp_contact_email_open')).toHaveLength(1)
+    // …while the unique-open counter stays gated, as mig 508 specifies.
+    expect(stampCalls(db, 'increment_contact_opens')).toHaveLength(0)
+  })
+
+  it('Click stamps last_email_click_at with the same timestamp email_sends.clicked_at got', async () => {
+    const db = stubStampDb({ send: { id: 's1', contact_id: 'c1', campaign_id: null, location_id: 'loc1' } })
+
+    const r = await processPostmarkEvent(db, { RecordType: 'Click', MessageID: 'pm-c', OriginalLink: 'https://un1t.ie/x' })
+
+    expect(r.ok).toBe(true)
+    const calls = stampCalls(db, 'stamp_contact_email_click')
+    expect(calls).toHaveLength(1)
+    expect(calls[0][1]).toEqual({ p_contact_id: 'c1', p_at: sendUpdate(db, 'clicked_at').values.clicked_at })
+  })
+
+  // THE NEVER-MOVE-BACKWARDS GUARD, JS side. The SQL predicate itself is
+  // pinned by tests/migration-511-contact-email-engagement-stamps.test.js
+  // ("guards each stamp so it can only move forwards"); this asserts the
+  // processor actually routes through it instead of writing the column raw.
+  it.each(['Open', 'Click'])('%s never writes the stamp columns through a bare contacts.update', async (recordType) => {
+    const db = stubStampDb({ send: { id: 's1', contact_id: 'c1', campaign_id: null, location_id: 'loc1' } })
+
+    await processPostmarkEvent(db, { RecordType: recordType, MessageID: 'pm-x', FirstOpen: true, OriginalLink: 'https://un1t.ie/x' })
+
+    const raw = db.updates.filter((u) => u.table === 'contacts'
+      && ('last_email_open_at' in (u.values || {}) || 'last_email_click_at' in (u.values || {})))
+    expect(raw).toEqual([])
+  })
+
+  it.each([
+    ['Open', 'stamp_contact_email_open'],
+    ['Click', 'stamp_contact_email_click'],
+  ])('%s: a failing stamp is LOGGED and never fails the event (reportRpc pattern)', async (recordType, fn) => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = stubStampDb({
+      send: { id: 's1', contact_id: 'c1', campaign_id: null, location_id: 'loc1' },
+      rpcError: { message: 'function does not exist' },
+    })
+
+    const r = await processPostmarkEvent(db, { RecordType: recordType, MessageID: 'pm-x', FirstOpen: true, OriginalLink: 'https://un1t.ie/x' })
+
+    expect(r.ok).toBe(true)
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining(fn),
+      expect.stringContaining('does not exist'),
+    )
+    spy.mockRestore()
+  })
+
+  it.each(['Open', 'Click'])('%s with no matching email_sends row stamps nothing', async (recordType) => {
+    const db = stubStampDb({ send: null })
+
+    const r = await processPostmarkEvent(db, { RecordType: recordType, MessageID: 'pm-x', FirstOpen: true, OriginalLink: 'https://un1t.ie/x' })
+
+    expect(r.ok).toBe(true)
+    expect(stampCalls(db, 'stamp_contact_email_open')).toEqual([])
+    expect(stampCalls(db, 'stamp_contact_email_click')).toEqual([])
+  })
+})

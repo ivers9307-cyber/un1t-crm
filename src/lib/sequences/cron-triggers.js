@@ -271,16 +271,37 @@ export async function runAnniversaryTriggers() {
  *
  * Implementation note: 'last_booking_at' is materialised on the
  * fly via the bookings table since contacts.last_booking_at isn't
- * a stored column today. last_emailed_at + last_email_open_at ARE
- * stored on contacts.
+ * a stored column. The signals in INACTIVITY_SIGNAL_FIELDS are
+ * stored columns on contacts and queried directly.
+ *
+ * GAPS-P1 — that last sentence used to be asserted of
+ * last_email_open_at and was FALSE: no such column existed on
+ * public.contacts (live information_schema, 2026-08-09) while this
+ * whitelist, the SequenceSettings dropdown and both packaged
+ * win-back templates all drove it. mig 511 makes it real and
+ * backfills it; the whitelist is exported so a test can hold every
+ * stored signal against the AUDIENCE_FIELDS registry of real
+ * contacts columns rather than against a comment.
  */
+
+/**
+ * Stored inactivity signals: config value → contacts column.
+ *
+ * Mirrored by INACT_SIGNALS in SequenceSettings.jsx (plus the
+ * derived 'last_booking_at'). An entry here MUST be a real column —
+ * selectAll throws on query error and this runner has no inner
+ * try/catch, so one bad signal takes the whole sweep down for every
+ * sequence at every location.
+ */
+export const INACTIVITY_SIGNAL_FIELDS = Object.freeze({
+  last_emailed_at: 'last_emailed_at',
+  last_email_open_at: 'last_email_open_at',
+})
+
 export async function runInactivityTriggers() {
   const db = createServerClient()
   const stats = { fired: 0, skipped: 0 }
-  const SIGNAL_FIELDS = {
-    last_emailed_at: 'last_emailed_at',
-    last_email_open_at: 'last_email_open_at',
-  }
+  const SIGNAL_FIELDS = INACTIVITY_SIGNAL_FIELDS
 
   const { data: sequences } = await db
     .from('email_sequences')
