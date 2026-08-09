@@ -8,6 +8,7 @@
 import { NextResponse } from 'next/server'
 import { createServerClient } from '@/lib/supabase'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
+import { hasPermissionForLocation } from '@/lib/permissions'
 import { getEmailCapStatus } from '@/lib/usage-caps'
 import { checkSpend } from '@/lib/wallet-enforcement'
 
@@ -30,7 +31,21 @@ export async function POST(_request, props) {
   const guard = assertLocationAccessOr404(user, campaign.location_id)
   if (guard) return guard
 
-  // Only draft / scheduled / failed campaigns can be sent. 'sending' /
+  // COMMSFIX.D.5 — permission parity across the three email entry points. This
+  // one, the REAL send to the whole audience, was the weakest: getCurrentUser
+  // plus location access only, while send-test requires ADMIN_ROLES and the
+  // composer's email-draft requires hasPermission('email'). A user with
+  // location access but no email permission could broadcast by POSTing here,
+  // yet got 403 'Admin only' on the safer test send — the gates were backwards.
+  // Checked against the CAMPAIGN's location, not the session's active one.
+  // Audit 2026-08-09 composer-ux.
+  if (!hasPermissionForLocation(user, campaign.location_id, 'email')) {
+    return NextResponse.json({ success: false, error: 'No email permission at this location' }, { status: 403 })
+  }
+
+  // Only draft / scheduled / failed campaigns can be sent ('failed' is the
+  // COMMSFIX.C.5 re-send path — the operator fixes the cause and sends
+  // again, which clears last_error). 'sending' /
   // 'sent' / 'cancelled' all reject — the operator should clone
   // the campaign if they want to send it again.
   //

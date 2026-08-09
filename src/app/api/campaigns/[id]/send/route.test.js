@@ -44,6 +44,7 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/usage-caps', () => ({
   getEmailCapStatus: vi.fn(async () => ({ capped: false })),
 }))
+vi.mock('@/lib/permissions', () => ({ hasPermissionForLocation: vi.fn(() => true) }))
 vi.mock('@/lib/wallet-enforcement', async (importOriginal) => {
   const actual = await importOriginal()
   return { ...actual, checkSpend: vi.fn(actual.checkSpend) }
@@ -52,6 +53,7 @@ vi.mock('@/lib/wallet-enforcement', async (importOriginal) => {
 import { POST } from './route.js'
 import { getEmailCapStatus } from '@/lib/usage-caps'
 import { checkSpend, clearBillingStateCache } from '@/lib/wallet-enforcement'
+import { hasPermissionForLocation } from '@/lib/permissions'
 
 const props = { params: Promise.resolve({ id: 'camp-1' }) }
 const CAMPAIGN = {
@@ -134,5 +136,33 @@ describe('POST /api/campaigns/[id]/send — refuses a bodyless campaign', () => 
     expect(res.status).toBe(400)
     expect(body.error).toMatch(/subject/i)
     expect(updates).toEqual([])
+  })
+})
+
+// COMMSFIX.D.5 — the REAL send was the weakest gate of the three email entry
+// points: getCurrentUser + location access only, while send-test requires
+// ADMIN_ROLES and the composer's email-draft requires hasPermission('email').
+// A user with location access but no email permission could POST this endpoint
+// and broadcast to the full audience. Audit 2026-08-09 composer-ux.
+describe('POST /api/campaigns/[id]/send — requires the email permission', () => {
+  it('403s a user without the email permission, and queues nothing', async () => {
+    hasPermissionForLocation.mockReturnValueOnce(false)
+    const res = await POST({}, props)
+    const body = await res.json()
+
+    expect(res.status).toBe(403)
+    expect(body.error).toMatch(/email/i)
+    expect(updates).toEqual([])
+  })
+
+  it('checks the permission against the CAMPAIGN location, not the active one', async () => {
+    await POST({}, props)
+    expect(hasPermissionForLocation).toHaveBeenCalledWith(expect.anything(), 'loc-1', 'email')
+  })
+
+  it('queues for a user who has it', async () => {
+    const res = await POST({}, props)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: true, queued: true })
   })
 })
