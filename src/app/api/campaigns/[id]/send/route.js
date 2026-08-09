@@ -21,7 +21,7 @@ export async function POST(_request, props) {
   const db = createServerClient()
   const { data: campaign, error } = await db
     .from('campaigns')
-    .select('id, location_id, status, name')
+    .select('id, location_id, status, name, subject, html_content')
     .eq('id', params.id)
     .single()
   if (error || !campaign) {
@@ -43,6 +43,19 @@ export async function POST(_request, props) {
       success: false,
       error: `Campaign is '${campaign.status}', cannot send`,
     }, { status: 400 })
+  }
+
+  // COMMSFIX.D.2e — a campaign with no body (or no subject) must never reach
+  // 'queued'. Postmark permanently rejects HtmlBody null, so the entire
+  // audience records as bounced and the run looks like a deliverability
+  // catastrophe rather than an empty draft. This is the same guard the
+  // email-draft route (D.2d) and the cron promote step apply — every path to
+  // 'queued' is covered. Audit 2026-08-09 composer-ux, CONFIRMED high.
+  if (!campaign.subject || !String(campaign.subject).trim()) {
+    return NextResponse.json({ success: false, error: 'This campaign has no subject — add one before sending.' }, { status: 400 })
+  }
+  if (!campaign.html_content || !String(campaign.html_content).trim()) {
+    return NextResponse.json({ success: false, error: 'This campaign has no email body — nothing was queued. Open it in the editor and add content.' }, { status: 400 })
   }
 
   // SAAS4-M2 — optional per-org HARD email-send cap. Mirrors the
