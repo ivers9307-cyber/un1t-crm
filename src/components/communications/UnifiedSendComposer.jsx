@@ -55,12 +55,17 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // Schedule (all three channels; WhatsApp joined with WA-SCHEDULE)
   const [scheduleMode, setScheduleMode] = useState('now') // 'now' | 'later'
   const [scheduledAtLocal, setScheduledAtLocal] = useState('')
-  // Audience count (debounced)
+  // Audience count (debounced). COMMSFIX.B.6 — `count` is the will-receive
+  // (eligible) number for every channel since B5; `matched` is the
+  // filter-only number; `countError` carries the server's 400 message so an
+  // invalid filter (e.g. OR + tag) is VISIBLE instead of being swallowed
+  // into the add-a-condition placeholder while Send stayed enabled.
   const [count, setCount] = useState(null)
+  const [matched, setMatched] = useState(null)
   const [counting, setCounting] = useState(false)
+  const [countError, setCountError] = useState(null)
   const [reachable, setReachable] = useState(null)   // WhatsApp only
-  const [excluded, setExcluded] = useState(null)     // { no_number, no_consent, opted_out }
-  const [suppressed, setSuppressed] = useState(null) // email only — inactivity-suppressed (EMAIL-HYGIENE.1)
+  const [excluded, setExcluded] = useState(null)     // per-channel breakdown from the count route
   // Submit
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
@@ -97,12 +102,23 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         })
         const data = await res.json()
         if (!alive) return
-        setCount(data?.success ? data.count : null)
-        setReachable(data?.success && channel === 'whatsapp' ? (data.reachable ?? null) : null)
-        setExcluded(data?.success && channel === 'whatsapp' ? (data.excluded ?? null) : null)
-        setSuppressed(data?.success && channel === 'email' ? (data.suppressed ?? null) : null)
+        if (data?.success) {
+          setCount(data.count ?? null)
+          setMatched(typeof data.matched === 'number' ? data.matched : null)
+          setReachable(channel === 'whatsapp' ? (data.reachable ?? null) : null)
+          setExcluded(data.excluded ?? null)
+          setCountError(null)
+        } else {
+          // Surface the server's message (InvalidAudienceFilterError → 400)
+          // instead of silently rendering the add-a-condition placeholder.
+          setCount(null); setMatched(null); setReachable(null); setExcluded(null)
+          setCountError(data?.error || `Couldn't count the audience (${res.status})`)
+        }
       } catch {
-        if (alive) { setCount(null); setReachable(null); setExcluded(null); setSuppressed(null) }
+        if (alive) {
+          setCount(null); setMatched(null); setReachable(null); setExcluded(null)
+          setCountError('Couldn’t count the audience — check your connection and try again.')
+        }
       } finally {
         if (alive) setCounting(false)
       }
@@ -140,7 +156,11 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // For WhatsApp the meaningful gate is the reachable count, not raw matches —
   // an audience of 1 with 0 reachable has nobody to send to.
   const sendableCount = channel === 'whatsapp' ? reachable : count
-  const canSend = !busy && composeValid && scheduleValid && audienceValid && resendValid && (sendableCount == null || sendableCount > 0)
+  // COMMSFIX.B.6 — Send requires a REAL positive count: null (still loading /
+  // failed) and an errored count both disable it. The old `== null` escape
+  // let an operator queue a campaign whose audience could never resolve.
+  const countReady = typeof sendableCount === 'number' && !countError
+  const canSend = !busy && composeValid && scheduleValid && audienceValid && resendValid && countReady && sendableCount > 0
 
   // ── submit ──────────────────────────────────────────────────────
   async function postJson(url, payload) {
@@ -248,7 +268,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
     setLabel(''); setFilter(EMPTY_FILTER); setScheduleMode('now'); setScheduledAtLocal('')
     setResendEnabled(false); setResendWaitHours(48); setResendSubject('')
     setWaMode('blast'); setDailyCap(500); setPerTickCap(''); setWindowStart('09:00'); setWindowEnd('20:00')
-    setReachable(null); setExcluded(null)
+    setReachable(null); setExcluded(null); setMatched(null); setCountError(null)
   }
 
   // ── result screen ───────────────────────────────────────────────
@@ -355,22 +375,36 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         )}
         {useExplicit
           ? <ContactMultiSelect locationId={locationId} value={people} onChange={setPeople} />
-          : <AudienceBuilder filter={filter} onChange={setFilter} />}
+          : <AudienceBuilder filter={filter} onChange={setFilter} audienceCount={null} />}
         <div className="mt-2 flex flex-col gap-0.5 text-xs text-un1t-subtle">
           <div className="flex items-center gap-1.5">
             <Users size={13} />
             {counting
               ? <span className="flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> counting…</span>
-              : count == null
-                ? <span>Add a condition to see how many contacts match.</span>
-                : channel === 'whatsapp'
-                  ? <span><b className="text-un1t-text">{count.toLocaleString()}</b> match · <b className="text-un1t-text">{(reachable ?? 0).toLocaleString()}</b> reachable on WhatsApp</span>
-                  : <span><b className="text-un1t-text">{count.toLocaleString()}</b> contact{count === 1 ? '' : 's'} match this filter</span>}
+              : countError
+                ? <span className="flex items-start gap-1.5 text-rose-700"><AlertTriangle size={13} className="mt-0.5 shrink-0" />{countError}</span>
+                : count == null
+                  ? <span>Add a condition to see how many contacts match.</span>
+                  : channel === 'whatsapp'
+                    ? <span><b className="text-un1t-text">{count.toLocaleString()}</b> match · <b className="text-un1t-text">{(reachable ?? 0).toLocaleString()}</b> reachable on WhatsApp</span>
+                    : matched != null
+                      ? <span><b className="text-un1t-text">{matched.toLocaleString()}</b> match this filter · <b className="text-un1t-text">{count.toLocaleString()}</b> will receive it</span>
+                      : <span><b className="text-un1t-text">{count.toLocaleString()}</b> contact{count === 1 ? '' : 's'} match this filter</span>}
           </div>
-          {channel === 'email' && !counting && (suppressed ?? 0) > 0 && (
+          {/* COMMSFIX.B.6 — email excluded breakdown from the B5 send-parity
+              count (reasons are independent counts and may overlap). */}
+          {channel === 'email' && !counting && !countError && excluded && (matched ?? 0) - (count ?? 0) > 0 && (
             <div className="flex items-start gap-1.5 text-amber-700">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-              <span>{suppressed.toLocaleString()} excluded for inactivity (no opens or clicks in 90 days)</span>
+              <span>
+                {((matched ?? 0) - (count ?? 0)).toLocaleString()} won&apos;t receive it
+                {' — '}
+                {[
+                  excluded.not_opted_in ? `${excluded.not_opted_in.toLocaleString()} no marketing opt-in` : null,
+                  excluded.bounced_or_complained ? `${excluded.bounced_or_complained.toLocaleString()} bounced or complained` : null,
+                  excluded.suppressed ? `${excluded.suppressed.toLocaleString()} inactive 90+ days` : null,
+                ].filter(Boolean).join(', ')}
+              </span>
             </div>
           )}
           {channel === 'whatsapp' && !counting && count != null && reachable != null && (count - reachable) > 0 && (
