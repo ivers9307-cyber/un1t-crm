@@ -140,6 +140,73 @@ describe('GLOFOX3.5 welcome template', () => {
   })
 })
 
+// COMMSFIX.E.4 — customer-facing template copy house rules.
+//
+// Richard's standing rules for customer copy: no em-dashes (the AI
+// tell), no emoji, no gush. Plus two correctness rules from the
+// 2026-08-09 audit: no hard-coded 'Stillorgan' (wrong for any second
+// location — {{location_name}} is the merge tag, and sendEmailStep/
+// sendSmsStep both resolve it now), and no '{{event_name}}' (the tag
+// does not exist in applyMergeTags — unknown tokens pass through
+// VERBATIM, so customers received the literal token in subject lines).
+describe('COMMSFIX.E.4 — customer-facing template copy house rules', () => {
+  // Customer-facing strings only: step subjects, email bodies, SMS
+  // bodies. Template descriptions are staff-facing picker copy and
+  // internal_task configs never reach a customer.
+  const customerStrings = SEQUENCE_TEMPLATES.flatMap((t) =>
+    t.steps.flatMap((s, i) =>
+      [['subject', s.subject], ['html_content', s.html_content], ['sms_body', s.sms_body]]
+        .filter(([, v]) => typeof v === 'string' && v.length > 0)
+        .map(([key, value]) => ({ label: `${t.id}.steps[${i}].${key}`, value }))))
+
+  it('collects a non-trivial corpus (sanity)', () => {
+    expect(customerStrings.length).toBeGreaterThan(30)
+  })
+
+  it('contains no em-dashes', () => {
+    for (const s of customerStrings) {
+      expect(s.value, s.label).not.toContain('—')
+    }
+  })
+
+  it('contains no emoji', () => {
+    const emoji = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2B00}-\u{2BFF}]/u
+    for (const s of customerStrings) {
+      expect(emoji.test(s.value), `${s.label} contains emoji: ${s.value}`).toBe(false)
+    }
+  })
+
+  it('contains no hard-coded Stillorgan (must be {{location_name}})', () => {
+    for (const s of customerStrings) {
+      expect(s.value, s.label).not.toMatch(/stillorgan/i)
+    }
+  })
+
+  it('references no non-existent {{event_name}} merge tag', () => {
+    for (const s of customerStrings) {
+      expect(s.value, s.label).not.toContain('{{event_name}}')
+    }
+  })
+
+  it('race_welcome copy is registration-relative (no race-day claims at registration time)', () => {
+    // The trigger is race_registered — step offsets are relative to the
+    // moment of REGISTRATION, which can be weeks before the race. 'Your
+    // race is tomorrow' / 'Big effort today' belong to an event_reminder
+    // or race_finished trigger, never here.
+    const tpl = getTemplate('race_welcome')
+    for (const [i, s] of tpl.steps.entries()) {
+      const text = `${s.subject || ''} ${s.html_content || ''} ${s.sms_body || ''}`
+      expect(text, `race_welcome.steps[${i}]`).not.toMatch(/race is tomorrow|big effort today|thanks for racing/i)
+    }
+  })
+
+  it('birthday_wishes description matches the engine (dob month+day, yearly re-fire)', () => {
+    const tpl = getTemplate('birthday_wishes')
+    expect(tpl.description).toMatch(/month and day/i)
+    expect(tpl.trigger_config).toEqual({ from_field: 'dob', days_after: 0 })
+  })
+})
+
 // RADAR-DUNNING.1 — the overdue-payment dunning template. Locks down
 // the segment_added trigger + multi-channel shape so a refactor can't
 // silently break the automated arrears chase.

@@ -190,10 +190,23 @@ export async function sendEmailStep(db, { enrollment: _enrollment, step, sequenc
   // append is idempotent — if the merged body already contains the
   // unsubscribe link, appendUnsubscribeFooter skips it so recipients
   // don't see two "Unsubscribe" links.
+  // COMMSFIX.E.4 — resolve the location name so {{location_name}}
+  // renders in sequence EMAIL steps as it already does in SMS steps
+  // (six shipped templates sign off 'UN1T {{location_name}}'; without
+  // the extra it rendered 'UN1T ' with a trailing space). Best-effort:
+  // a branding miss must never block a send, so a missing row merges ''.
+  const { data: seqLocation } = await db
+    .from('locations')
+    .select('id, name')
+    .eq('id', sequence.location_id)
+    .single()
+  const locationName = seqLocation?.name || ''
+
   const baseUrl = getAppUrl()
   const unsubscribeUrl = buildUnsubscribeUrl(contact, baseUrl, sequence?.location_id)
-  const mergedSubject = applyMergeTags(subject, contact)
+  const mergedSubject = applyMergeTags(subject, contact, { location_name: locationName })
   const merged = applyMergeTags(html, contact, {
+    location_name: locationName,
     unsubscribe_url: unsubscribeUrl,
     preference_url: `${baseUrl}/preferences/${unsubscribeUrl.split('/unsubscribe/')[1]}`,
   })

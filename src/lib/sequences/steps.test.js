@@ -785,6 +785,9 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
             },
           }
         }
+        // COMMSFIX.E.4 — sendEmailStep resolves the location name for the
+        // {{location_name}} merge tag (parity with the SMS step).
+        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', name: 'Stillorgan' } }) }) }) }
         throw new Error(`unexpected table ${table}`)
       },
       rpc(name) { rpcCalls.push(name); return Promise.resolve({ data: null, error: null }) },
@@ -796,7 +799,27 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
     pm = await import('@/lib/postmark')
     pm.sendMarketingEmail.mockReset()
     pm.sendTransactionalEmail.mockReset()
+    pm.applyMergeTags.mockClear()
     pm.sendMarketingEmail.mockResolvedValue({ messageId: 'cccccccc-0000-0000-0000-000000000003' })
+  })
+
+  it('COMMSFIX.E.4 — passes location_name to the merge for BOTH subject and body (the SMS step already did)', async () => {
+    // Six shipped templates sign customer emails 'UN1T {{location_name}}'
+    // — without the extra, applyMergeTags substitutes '' and members got
+    // 'UN1T ' (trailing space, no studio name).
+    const db = emailDb()
+    await steps.sendEmailStep(db, { enrollment: { id: 'e9' }, step, sequence, contact: consentedContact })
+    expect(pm.applyMergeTags).toHaveBeenCalledWith(
+      step.subject, consentedContact,
+      expect.objectContaining({ location_name: 'Stillorgan' }),
+    )
+    expect(pm.applyMergeTags).toHaveBeenCalledWith(
+      step.html_content, consentedContact,
+      expect.objectContaining({
+        location_name: 'Stillorgan',
+        unsubscribe_url: expect.stringContaining('/unsubscribe/'),
+      }),
+    )
   })
 
   it('sends via sendMarketingEmail (broadcast stream), NOT sendTransactionalEmail, with unsubscribe URL + atomic sequence attribution', async () => {
