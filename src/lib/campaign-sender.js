@@ -136,16 +136,25 @@ export async function tickCampaignSend(db, campaign) {
     return { phase: 'cancelled' }
   }
 
-  // Phase 1 — if the campaign has no recipients yet, populate them.
-  // This happens on the FIRST cron tick after the operator queues
-  // the campaign. We don't send any emails this tick — populate
-  // is its own time budget. Next tick picks up the first chunk.
-  const { count: existingCount } = await db
-    .from('campaign_recipients')
-    .select('id', { count: 'exact', head: true })
-    .eq('campaign_id', campaignId)
-
-  if ((existingCount || 0) === 0) {
+  // Phase 1 — if the campaign has not finished populating, populate it.
+  // This normally happens on the FIRST cron tick after the operator queues
+  // the campaign. We don't send any emails this tick — populate is its own
+  // time budget. Next tick picks up the first chunk.
+  //
+  // POPFIX.1 — the guard is send_started_at (mig 507), NOT a recipient row
+  // count. Rows go in as RECIPIENT_INSERT_CHUNK batches below, so a chunk
+  // that fails (transient DB error, Vercel timeout, deploy mid-tick) leaves
+  // chunks 1..N-1 committed. Under the old `existingCount === 0` guard the
+  // next tick saw those rows, skipped populate entirely, sent only the
+  // partial set and finalised 'sent' with plausible-looking stats — the same
+  // outcome as the 8 Aug 2026 truncation (CAMPAIGN.14), by the one path that
+  // fix did not close. send_started_at is stamped ONLY after every chunk has
+  // succeeded (below), so it answers the question actually being asked:
+  // "did populate finish?".
+  //
+  // Self-healing, deliberately: a campaign whose chunks all landed but whose
+  // stamp failed re-runs populate as a no-op upsert and re-stamps.
+  if (campaign.send_started_at == null) {
     const contacts = []
     if (campaign.parent_campaign_id) {
       // CAMPAIGN-RESEND — the child's audience is the parent's non-openers,
@@ -228,9 +237,16 @@ export async function tickCampaignSend(db, campaign) {
       if (abEnabled) row.ab_variant = variantById.get(c.id) || null
       return row
     })
+    // POPFIX.1 — idempotent write, so a resumed populate FINISHES the job
+    // instead of aborting on the (campaign_id, contact_id) unique key
+    // (campaign_recipients_campaign_id_contact_id_key). ignoreDuplicates
+    // leaves an already-inserted row completely untouched: its status
+    // ('sent'!), ab_variant, attempts and timestamps are never reset, so a
+    // re-run can never re-send anyone. Only missing rows are added.
     for (let i = 0; i < recipientRows.length; i += RECIPIENT_INSERT_CHUNK) {
       const chunk = recipientRows.slice(i, i + RECIPIENT_INSERT_CHUNK)
-      const { error } = await db.from('campaign_recipients').insert(chunk)
+      const { error } = await db.from('campaign_recipients')
+        .upsert(chunk, { onConflict: 'campaign_id,contact_id', ignoreDuplicates: true })
       if (error) return { phase: 'populate', error: `recipient insert failed: ${error.message}` }
     }
 

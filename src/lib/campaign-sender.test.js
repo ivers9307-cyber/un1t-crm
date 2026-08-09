@@ -125,6 +125,10 @@ const campaign = {
   from_email: 'hello@un1t.ie',
   reply_to: null,
   sent_at: null,
+  // POPFIX.1 — populate completion is now read off the campaign row, not off
+  // a recipient row count, so the default fixture is an already-populated
+  // campaign (phase 2). Populate-phase tests pass send_started_at: null.
+  send_started_at: '2026-07-10T09:00:00.000Z',
 }
 
 // All statements that UPDATE campaign_recipients targeting a given id
@@ -589,9 +593,9 @@ describe('tickCampaignSend — A/B default-path regression (no ab_subject_b)', (
     buildAudienceQueryAsync.mockResolvedValue({ query })
     const { db, statements } = makeDb(abRouteFor({ count: 0 }))
 
-    await tickCampaignSend(db, campaign)
+    await tickCampaignSend(db, { ...campaign, send_started_at: null })
 
-    const insert = statements.find(s => s.table === 'campaign_recipients' && s.ops[0].method === 'insert')
+    const insert = statements.find(s => s.table === 'campaign_recipients' && s.ops[0].method === 'upsert')
     expect(insert).toBeTruthy()
     for (const row of insert.ops[0].args[0]) {
       expect(row).not.toHaveProperty('ab_variant')
@@ -609,9 +613,9 @@ describe('tickCampaignSend — A/B populate (slice assignment at populate time)'
     buildAudienceQueryAsync.mockResolvedValue({ query })
     const { db, statements } = makeDb(abRouteFor({ count: 0 }))
 
-    await tickCampaignSend(db, abCampaign()) // pct 20 of 10 → slice of 2
+    await tickCampaignSend(db, abCampaign({ send_started_at: null })) // pct 20 of 10 → slice of 2
 
-    const insert = statements.find(s => s.table === 'campaign_recipients' && s.ops[0].method === 'insert')
+    const insert = statements.find(s => s.table === 'campaign_recipients' && s.ops[0].method === 'upsert')
     const rows = insert.ops[0].args[0]
     expect(rows).toHaveLength(10)
     const a = rows.filter(r => r.ab_variant === 'a')
@@ -635,9 +639,9 @@ describe('tickCampaignSend — A/B populate (slice assignment at populate time)'
     buildAudienceQueryAsync.mockResolvedValue({ query })
     const { db, statements } = makeDb(abRouteFor({ count: 0 }))
 
-    await tickCampaignSend(db, abCampaign())
+    await tickCampaignSend(db, abCampaign({ send_started_at: null }))
 
-    const insert = statements.find(s => s.table === 'campaign_recipients' && s.ops[0].method === 'insert')
+    const insert = statements.find(s => s.table === 'campaign_recipients' && s.ops[0].method === 'upsert')
     for (const row of insert.ops[0].args[0]) expect(row.ab_variant).toBe(null)
     expect(campaignUpdates(statements)).toContainEqual(expect.objectContaining({ ab_winner: 'a', status: 'sending' }))
   })
@@ -1127,7 +1131,7 @@ describe('tickCampaignSend — resend children (CAMPAIGN-RESEND)', () => {
       survivors: [{ id: 'c-1' }, { id: 'c-3' }],
     }))
 
-    const result = await tickCampaignSend(db, childCampaign())
+    const result = await tickCampaignSend(db, childCampaign({ send_started_at: null }))
 
     expect(result.phase).toBe('populate')
     expect(buildAudienceQueryAsync).not.toHaveBeenCalled()
@@ -1148,7 +1152,7 @@ describe('tickCampaignSend — resend children (CAMPAIGN-RESEND)', () => {
     expect(viewRead.ops.find(o => o.method === 'in').args).toEqual(['id', ['c-1', 'c-2', 'c-3']])
 
     // Only survivors become recipient rows.
-    const insert = statements.find(s => s.table === 'campaign_recipients' && s.ops[0].method === 'insert')
+    const insert = statements.find(s => s.table === 'campaign_recipients' && s.ops[0].method === 'upsert')
     expect(insert.ops[0].args[0]).toEqual([
       { campaign_id: 'child-1', contact_id: 'c-1', status: 'queued' },
       { campaign_id: 'child-1', contact_id: 'c-3', status: 'queued' },
@@ -1163,12 +1167,12 @@ describe('tickCampaignSend — resend children (CAMPAIGN-RESEND)', () => {
       survivors: [],
     }))
 
-    const result = await tickCampaignSend(db, childCampaign())
+    const result = await tickCampaignSend(db, childCampaign({ send_started_at: null }))
 
     expect(result).toEqual({ phase: 'populate', sent: 0 })
     expect(campaignUpdates(statements)).toContainEqual(
       expect.objectContaining({ status: 'sent', total_recipients: 0 }))
-    expect(statements.some(s => s.table === 'campaign_recipients' && s.ops[0].method === 'insert')).toBe(false)
+    expect(statements.some(s => s.table === 'campaign_recipients' && ['insert', 'upsert'].includes(s.ops[0].method))).toBe(false)
   })
 
   it('surfaces a populate error when the parent non-opener read fails', async () => {
@@ -1181,7 +1185,7 @@ describe('tickCampaignSend — resend children (CAMPAIGN-RESEND)', () => {
       return {}
     })
 
-    const result = await tickCampaignSend(db, childCampaign())
+    const result = await tickCampaignSend(db, childCampaign({ send_started_at: null }))
     expect(result.phase).toBe('populate')
     expect(result.error).toMatch(/boom/)
   })
@@ -1237,7 +1241,7 @@ describe('tickCampaignSend — audience populate pagination (CAMPAIGN.14)', () =
     const { orderCalls, rangeCalls } = pagedAudience([page1, []])
     const { db } = makeDb(abRouteFor({ count: 0 }))
 
-    await tickCampaignSend(db, campaign)
+    await tickCampaignSend(db, { ...campaign, send_started_at: null })
 
     expect(rangeCalls).toEqual([[0, 999], [1000, 1999]])
     expect(orderCalls).toHaveLength(2)
@@ -1254,9 +1258,9 @@ describe('tickCampaignSend — audience populate pagination (CAMPAIGN.14)', () =
     pagedAudience([page1, page2])
     const { db, statements } = makeDb(abRouteFor({ count: 0 }))
 
-    await tickCampaignSend(db, campaign)
+    await tickCampaignSend(db, { ...campaign, send_started_at: null })
 
-    const inserts = statements.filter(s => s.table === 'campaign_recipients' && s.ops[0].method === 'insert')
+    const inserts = statements.filter(s => s.table === 'campaign_recipients' && s.ops[0].method === 'upsert')
     const rows = inserts.flatMap(s => s.ops[0].args[0])
     expect(rows).toHaveLength(1003)
     expect(new Set(rows.map(r => r.contact_id)).size).toBe(1003)
@@ -1275,10 +1279,218 @@ describe('tickCampaignSend — audience populate pagination (CAMPAIGN.14)', () =
       return base(state)
     })
 
-    const result = await tickCampaignSend(db, campaign)
+    const result = await tickCampaignSend(db, { ...campaign, send_started_at: null })
 
     expect(result.phase).toBe('populate')
     expect(result.error).toMatch(/send_started_at/)
+  })
+})
+
+// ── POPFIX.1 — populate must be RESUMABLE ──────────────────────────────────
+//
+// Recipient rows go in as 1,000-row chunks. If chunk N fails (transient DB
+// error, Vercel timeout, deploy mid-tick) chunks 1..N-1 are already committed.
+// The old guard asked "does this campaign have ANY recipient rows?", so the
+// next tick saw rows, skipped populate entirely, sent only the partial set and
+// finalised 'sent' with plausible-looking stats — the same outcome as the
+// 8 Aug 2026 truncation, through the one path CAMPAIGN.14 did not close.
+//
+// The guard is now campaigns.send_started_at (mig 507), which is stamped only
+// AFTER every chunk has succeeded — i.e. it means "populate finished" — and
+// the write is an idempotent upsert so a re-run finishes the job instead of
+// colliding on (campaign_id, contact_id).
+describe('tickCampaignSend — resumable populate (POPFIX.1)', () => {
+  // Audience of `n` contacts served through the paginated range query.
+  function audienceOf(n) {
+    const contacts = Array.from({ length: n }, (_, i) => makeContact(`p${String(i).padStart(4, '0')}`))
+    const query = {
+      order: vi.fn(() => query),
+      range: vi.fn(async (from, to) => ({ data: contacts.slice(from, to + 1), error: null })),
+    }
+    buildAudienceQueryAsync.mockImplementation(async () => ({ query }))
+    return contacts
+  }
+
+  // A campaign_recipients table that behaves like the real one: the
+  // (campaign_id, contact_id) unique key rejects a plain INSERT of a pair that
+  // already exists, and an ignoreDuplicates upsert leaves the stored row
+  // EXACTLY as it was (status, ab_variant and any send progress intact).
+  function makeWorld({ seed = [], failOnWriteCall = 0 } = {}) {
+    const world = {
+      rows: new Map(seed.map(r => [r.contact_id, { ...r }])),
+      writes: [],
+      campaignUpdates: [],
+      sendStartedAt: null,
+    }
+    const route = (state) => {
+      if (state.table === 'campaign_recipients') {
+        const first = state.ops[0]
+        if (first.method === 'select' && first.args[1]?.head) return { count: world.rows.size }
+        if (first.method === 'insert' || first.method === 'upsert') {
+          world.writes.push({ method: first.method, options: first.args[1] ?? null, rows: first.args[0] })
+          if (world.writes.length === failOnWriteCall) return { error: { message: 'deadlock detected' } }
+          const ignoreDuplicates = first.method === 'upsert' && first.args[1]?.ignoreDuplicates === true
+          for (const row of first.args[0]) {
+            if (world.rows.has(row.contact_id)) {
+              if (first.method === 'insert') {
+                return { error: { message: 'duplicate key value violates unique constraint "campaign_recipients_campaign_id_contact_id_key"' } }
+              }
+              if (ignoreDuplicates) continue
+            }
+            world.rows.set(row.contact_id, { ...row })
+          }
+          return {}
+        }
+        return { data: [] }
+      }
+      if (state.table === 'campaigns' && state.ops[0]?.method === 'update') {
+        const payload = state.ops[0].args[0]
+        world.campaignUpdates.push(payload)
+        if (payload.send_started_at) world.sendStartedAt = payload.send_started_at
+        return {}
+      }
+      return { data: [] }
+    }
+    return { world, route }
+  }
+
+  // The campaign row as the cron re-reads it on the NEXT tick.
+  const asStored = (world, base = campaign) => ({ ...base, send_started_at: world.sendStartedAt })
+
+  it('finishes a populate that died mid-chunk on the next tick (full audience, not the partial set)', async () => {
+    audienceOf(2500)
+    const { world, route } = makeWorld({ failOnWriteCall: 2 })
+    const { db } = makeDb(route)
+
+    // Tick 1 — chunk 1 commits, chunk 2 dies. 1,000 of 2,500 rows on disk
+    // and NO send_started_at stamp.
+    const first = await tickCampaignSend(db, { ...campaign, send_started_at: null })
+    expect(first.phase).toBe('populate')
+    expect(first.error).toMatch(/deadlock/)
+    expect(world.rows.size).toBe(1000)
+    expect(world.sendStartedAt).toBeNull()
+
+    // Tick 2 — must RESUME populate, not send the partial set.
+    const second = await tickCampaignSend(db, asStored(world))
+
+    expect(second.error).toBeUndefined()
+    expect(world.rows.size).toBe(2500)
+    expect(world.campaignUpdates).toContainEqual(
+      expect.objectContaining({ status: 'sending', total_recipients: 2500 }))
+    expect(world.sendStartedAt).toBeTruthy()
+  })
+
+  it('skips populate entirely once send_started_at is stamped (no audience query, no write)', async () => {
+    audienceOf(10)
+    const { world, route } = makeWorld({
+      seed: Array.from({ length: 10 }, (_, i) => ({
+        contact_id: `contact-p${String(i).padStart(4, '0')}`, campaign_id: 'camp-1', status: 'sent',
+      })),
+    })
+    const { db } = makeDb(route)
+
+    await tickCampaignSend(db, { ...campaign, send_started_at: '2026-07-10T09:00:00.000Z' })
+
+    expect(buildAudienceQueryAsync).not.toHaveBeenCalled()
+    expect(world.writes).toHaveLength(0)
+    expect(world.campaignUpdates.some(u => 'total_recipients' in u)).toBe(false)
+  })
+
+  it('self-heals a campaign whose chunks all landed but whose stamp failed', async () => {
+    // CAMPAIGN.14 surfaced exactly this: every recipient row on disk, no
+    // send_started_at. Populate re-runs as a no-op upsert and re-stamps.
+    audienceOf(10)
+    const seed = Array.from({ length: 10 }, (_, i) => ({
+      contact_id: `contact-p${String(i).padStart(4, '0')}`, campaign_id: 'camp-1', status: 'queued',
+    }))
+    const { world, route } = makeWorld({ seed })
+    const { db } = makeDb(route)
+
+    const result = await tickCampaignSend(db, { ...campaign, send_started_at: null })
+
+    expect(result).toEqual({ phase: 'populate', sent: 0 })
+    expect(world.writes).toHaveLength(1)          // the upsert ran…
+    expect(world.rows.size).toBe(10)              // …and added nothing
+    expect(world.campaignUpdates).toContainEqual(
+      expect.objectContaining({ status: 'sending', total_recipients: 10 }))
+    expect(world.sendStartedAt).toBeTruthy()
+  })
+
+  it('leaves an already-SENT recipient row untouched when populate re-runs', async () => {
+    // The whole reason the write is ignoreDuplicates rather than a plain
+    // upsert: resetting a 'sent' row to 'queued' would re-send that person.
+    audienceOf(10)
+    const seed = Array.from({ length: 9 }, (_, i) => ({
+      contact_id: `contact-p${String(i).padStart(4, '0')}`,
+      campaign_id: 'camp-1',
+      status: i === 0 ? 'sent' : 'queued',
+      postmark_message_id: i === 0 ? 'pm-already-delivered' : null,
+      attempts: i === 0 ? 1 : 0,
+    }))
+    const { world, route } = makeWorld({ seed })   // p0009 is missing
+    const { db } = makeDb(route)
+
+    await tickCampaignSend(db, { ...campaign, send_started_at: null })
+
+    // The resumed populate added only the missing row…
+    expect(world.rows.size).toBe(10)
+    expect(world.rows.get('contact-p0009').status).toBe('queued')
+    // …and the delivered one is byte-for-byte what it was.
+    expect(world.rows.get('contact-p0000')).toEqual({
+      contact_id: 'contact-p0000',
+      campaign_id: 'camp-1',
+      status: 'sent',
+      postmark_message_id: 'pm-already-delivered',
+      attempts: 1,
+    })
+    expect(world.sendStartedAt).toBeTruthy()
+  })
+
+  it('writes recipients with the (campaign_id, contact_id) conflict target and ignoreDuplicates', async () => {
+    // Pinned: a plain .insert() here reintroduces the abort-on-collision that
+    // truncated the 8 Aug send.
+    audienceOf(3)
+    const { db, statements } = makeDb(makeWorld().route)
+
+    await tickCampaignSend(db, { ...campaign, send_started_at: null })
+
+    const writes = statements.filter(s =>
+      s.table === 'campaign_recipients' && ['insert', 'upsert'].includes(s.ops[0]?.method))
+    expect(writes).toHaveLength(1)
+    expect(writes[0].ops[0].method).toBe('upsert')
+    expect(writes[0].ops[0].args[1]).toEqual({
+      onConflict: 'campaign_id,contact_id',
+      ignoreDuplicates: true,
+    })
+  })
+
+  it('assigns a contact the SAME ab_variant on a second populate pass', async () => {
+    // assignAbVariants is a deterministic FNV-1a hash of the contact id, so a
+    // resumed populate must not reshuffle the test slice.
+    const variantsOfLastWrite = (world) => {
+      const rows = world.writes[world.writes.length - 1].rows
+      return new Map(rows.map(r => [r.contact_id, r.ab_variant]))
+    }
+
+    audienceOf(20)
+    const firstRun = makeWorld()
+    const passOne = makeDb(firstRun.route)
+    await tickCampaignSend(passOne.db, abCampaign({ send_started_at: null }))
+    const before = variantsOfLastWrite(firstRun.world)
+
+    // Second pass over the SAME audience with the rows already on disk.
+    audienceOf(20)
+    const secondRun = makeWorld({ seed: [...firstRun.world.rows.values()] })
+    const passTwo = makeDb(secondRun.route)
+    await tickCampaignSend(passTwo.db, abCampaign({ send_started_at: null }))
+    const after = variantsOfLastWrite(secondRun.world)
+
+    expect([...before.values()].filter(Boolean)).not.toHaveLength(0)  // a slice exists
+    expect(after).toEqual(before)
+    // And the stored rows were never rewritten by the second pass.
+    for (const [contactId, variant] of before) {
+      expect(secondRun.world.rows.get(contactId).ab_variant).toBe(variant)
+    }
   })
 })
 
