@@ -20,6 +20,7 @@
 
 import { createServerClient } from '@/lib/supabase'
 import { logWarn } from '@/lib/log'
+import { selectAll, selectAllByKeys } from '@/lib/select-all'
 import { contactMatchesSequenceAudience } from './audience.js'
 import { enrolContacts } from './enrol.js'
 
@@ -169,13 +170,18 @@ export async function runAnniversaryTriggers() {
     const hi = new Date(targetMs + TOLERANCE_MS)
     const sourceRef = `${fromField}:${daysAfter}`
 
-    const { data: contacts } = await db
+    // COMMSFIX.E.2 — page the FULL matching set (.order('id') + .range(),
+    // the selectAll/CAMPAIGN.14 recipe). The old unordered .limit(500)
+    // returned the DB's arbitrary first 500 rows every tick; contacts
+    // beyond row 500 were never swept.
+    const contacts = await selectAll((from, to) => db
       .from('contacts')
       .select(`id, ${fromField}`)
       .eq('location_id', seq.location_id)
       .gte(fromField, lo.toISOString())
       .lte(fromField, hi.toISOString())
-      .limit(500)
+      .order('id')
+      .range(from, to))
 
     for (const c of (contacts || [])) {
       if (!c.id) continue
@@ -251,33 +257,42 @@ export async function runInactivityTriggers() {
 
     let candidates = []
     if (SIGNAL_FIELDS[signal]) {
-      // Stored signal — direct query on contacts.
+      // Stored signal — direct query on contacts. COMMSFIX.E.2: page the
+      // FULL matching set (.order('id') + .range(), the selectAll recipe) —
+      // the old unordered .limit(500) returned the same arbitrary 500 rows
+      // every tick, so contacts beyond row 500 were never swept.
       const field = SIGNAL_FIELDS[signal]
-      const { data } = await db
+      candidates = await selectAll((from, to) => db
         .from('contacts')
         .select('id')
         .eq('location_id', seq.location_id)
         .lt(field, cutoff)
-        .limit(500)
-      candidates = data || []
+        .order('id')
+        .range(from, to))
     } else if (signal === 'last_booking_at') {
       // Derived signal — find contacts at the location whose most
       // recent booking is older than the cutoff. Pull recent
       // bookings and find which contacts DON'T appear → they're
-      // the inactive ones. Capped at 500 contacts per location.
-      const { data: contacts } = await db
+      // the inactive ones. COMMSFIX.E.2: scan ALL location contacts
+      // (paginated), and chunk the bookings .in() lookup via
+      // selectAllByKeys — a bare .in() with thousands of ids both
+      // overflows the request URL and caps its match set at 1000.
+      const contacts = await selectAll((from, to) => db
         .from('contacts')
         .select('id')
         .eq('location_id', seq.location_id)
-        .limit(500)
-      const ids = (contacts || []).map((c) => c.id)
+        .order('id')
+        .range(from, to))
+      const ids = contacts.map((c) => c.id)
       if (ids.length === 0) continue
-      const { data: recent } = await db
+      const recent = await selectAllByKeys(ids, (keys, from, to) => db
         .from('bookings')
         .select('contact_id')
-        .in('contact_id', ids)
+        .in('contact_id', keys)
         .gte('booking_date', cutoff.slice(0, 10))
-      const recentSet = new Set((recent || []).map((b) => b.contact_id))
+        .order('id')
+        .range(from, to))
+      const recentSet = new Set(recent.map((b) => b.contact_id))
       candidates = ids.filter((id) => !recentSet.has(id)).map((id) => ({ id }))
     } else {
       continue // unknown signal

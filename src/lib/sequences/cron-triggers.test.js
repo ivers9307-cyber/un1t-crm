@@ -47,19 +47,24 @@ beforeEach(() => {
  * shift() one config off.
  */
 function mockDb(tables) {
+  const calls = []
   return {
+    calls,
     from: vi.fn((table) => {
       const t = tables[table]
       if (!t) throw new Error(`unexpected table: ${table}`)
       const cfg = Array.isArray(t) ? t.shift() : t
+      const record = (method) => vi.fn((...args) => { calls.push({ table, method, args }); return builder })
       const builder = {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        in: vi.fn().mockReturnThis(),
-        gte: vi.fn().mockReturnThis(),
-        lte: vi.fn().mockReturnThis(),
-        lt: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockReturnThis(),
+        select: record('select'),
+        eq: record('eq'),
+        in: record('in'),
+        gte: record('gte'),
+        lte: record('lte'),
+        lt: record('lt'),
+        limit: record('limit'),
+        order: record('order'),
+        range: record('range'),
         maybeSingle: vi.fn().mockResolvedValue({ data: cfg.maybeSingle ?? null, error: null }),
         single: vi.fn().mockResolvedValue({ data: cfg.single ?? null, error: null }),
         then: (onF) => Promise.resolve({ data: cfg.list ?? [], error: null }).then(onF),
@@ -214,6 +219,8 @@ describe('runAnniversaryTriggers', () => {
           gte: vi.fn().mockReturnThis(),
           lte: vi.fn().mockReturnThis(),
           limit: vi.fn().mockReturnThis(),
+          order: vi.fn().mockReturnThis(),
+          range: vi.fn().mockReturnThis(),
           then: (onF) => Promise.resolve({
             data: table === 'email_sequences' ? [
               { id: 's1', location_id: 'loc-1', trigger_config: { from_field: 'created_at_im_evil', days_after: 30 }, audience_filter: null },
@@ -336,6 +343,74 @@ describe('runInactivityTriggers', () => {
       contactIds: ['c1'],
       sourceType: 'inactivity',
     }))
+  })
+
+  // ── COMMSFIX.E.2 — the sweeps must paginate the FULL matching set ──
+  //
+  // The audit confirmed the CAMPAIGN.14 truncation class unfixed here:
+  // unordered .limit(500) queries returned the DB's arbitrary first 500
+  // rows every tick; already-enrolled rows still match the filter, so the
+  // same 500 came back forever and contacts beyond row 500 were NEVER
+  // swept. The queries must page the whole set with .order('id') +
+  // .range() (the selectAll recipe).
+
+  it('COMMSFIX.E.2 — inactivity stored-signal sweep paginates past 1000 rows with .order(id) + .range()', async () => {
+    const page1 = Array.from({ length: 1000 }, (_, i) => ({ id: `c${i}` }))
+    const page2 = [{ id: 'c1000' }, { id: 'c1001' }, { id: 'c1002' }]
+    const db = mockDb({
+      email_sequences: { list: [
+        { id: 's1', location_id: 'loc-1', trigger_config: { signal: 'last_email_open_at', days_inactive: 60 }, audience_filter: null },
+      ] },
+      contacts: [{ list: page1 }, { list: page2 }],
+      sequence_enrollments: { list: [] },
+    })
+    createServerClient.mockReturnValue(db)
+    const stats = await cronTriggers.runInactivityTriggers()
+    expect(stats.fired).toBe(1003)
+    expect(enrolContacts).toHaveBeenCalledTimes(1003)
+    // Stable ordering is what makes .range() paging sound.
+    expect(db.calls).toContainEqual({ table: 'contacts', method: 'order', args: ['id'] })
+    expect(db.calls.filter((c) => c.table === 'contacts' && c.method === 'range').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('COMMSFIX.E.2 — anniversary sweep paginates past 1000 rows with .order(id) + .range()', async () => {
+    const page1 = Array.from({ length: 1000 }, (_, i) => ({ id: `c${i}` }))
+    const page2 = [{ id: 'c1000' }, { id: 'c1001' }]
+    const db = mockDb({
+      email_sequences: { list: [
+        { id: 's1', location_id: 'loc-1', trigger_config: { from_field: 'last_emailed_at', days_after: 365 }, audience_filter: null },
+      ] },
+      contacts: [{ list: page1 }, { list: page2 }],
+      sequence_enrollments: { list: [] },
+    })
+    createServerClient.mockReturnValue(db)
+    const stats = await cronTriggers.runAnniversaryTriggers()
+    expect(stats.fired).toBe(1002)
+    expect(enrolContacts).toHaveBeenCalledTimes(1002)
+    expect(db.calls).toContainEqual({ table: 'contacts', method: 'order', args: ['id'] })
+    expect(db.calls.filter((c) => c.table === 'contacts' && c.method === 'range').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('COMMSFIX.E.2 — derived last_booking_at scans ALL location contacts, not the first 500', async () => {
+    // 1002 contacts at the location; only c0 has a recent booking →
+    // 1001 inactive contacts must be considered (the old code capped
+    // the whole scan at an unordered 500).
+    const page1 = Array.from({ length: 1000 }, (_, i) => ({ id: `c${i}` }))
+    const page2 = [{ id: 'c1000' }, { id: 'c1001' }]
+    const db = mockDb({
+      email_sequences: { list: [
+        { id: 's1', location_id: 'loc-1', trigger_config: { signal: 'last_booking_at', days_inactive: 60 }, audience_filter: null },
+      ] },
+      contacts: [{ list: page1 }, { list: page2 }],
+      bookings: { list: [{ contact_id: 'c0' }] },
+      sequence_enrollments: { list: [] },
+    })
+    createServerClient.mockReturnValue(db)
+    const stats = await cronTriggers.runInactivityTriggers()
+    expect(stats.fired).toBe(1001)
+    expect(enrolContacts).toHaveBeenCalledTimes(1001)
+    expect(enrolContacts).not.toHaveBeenCalledWith(expect.objectContaining({ contactIds: ['c0'] }))
+    expect(db.calls).toContainEqual({ table: 'contacts', method: 'order', args: ['id'] })
   })
 
   it('derived last_booking_at: short-circuits when there are no contacts at the location', async () => {
