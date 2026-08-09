@@ -41,6 +41,8 @@ const EXIT_REASON_LABELS = {
   goal_met: 'Goal met',
   // SEQEXIT.1 — the audience filter is re-checked before every step.
   left_audience: 'No longer matched the audience',
+  // SEQGAPS.1 — an operator pressed Exit on the roster below.
+  manual_exit: 'Removed by staff',
   unsubscribed: 'Unsubscribed',
   unspecified: 'Unspecified',
 }
@@ -97,6 +99,9 @@ export default function AutomationPerformance({ sequenceId, steps = [] }) {
   const [hidden, setHidden] = useState(false)
   const [resumingId, setResumingId] = useState(null)
   const [resumeError, setResumeError] = useState(null)
+  const [exitingId, setExitingId] = useState(null)
+  const [exitError, setExitError] = useState(null)
+  const [exitNote, setExitNote] = useState(null)
   const aliveRef = useRef(true)
 
   const load = useCallback(async (isRefresh) => {
@@ -135,6 +140,35 @@ export default function AutomationPerformance({ sequenceId, steps = [] }) {
       if (aliveRef.current) setResumeError('Resume failed — network error')
     } finally {
       if (aliveRef.current) setResumingId(null)
+      await load(true)
+    }
+  }, [sequenceId, load])
+
+  // SEQGAPS.1 — take one contact out of the automation by hand, for when
+  // neither the goal nor the audience fires. Irreversible and there is no
+  // re-entry path, so it confirms by name first. The route CAS-es on
+  // status IN ('active','paused'): a 409 means someone (or the scheduler)
+  // got there first, which is a fact to state plainly, not an error.
+  const exitRun = useCallback(async (run) => {
+    const confirmed = typeof window === 'undefined' || window.confirm(
+      `Exit ${run.contact_name} from this automation?\n\n`
+      + 'They stop receiving its steps and there is no undo — putting them back means enrolling them again. '
+      + 'A step already handed to the email or WhatsApp provider may still arrive.',
+    )
+    if (!confirmed) return
+    setExitingId(run.id)
+    setExitError(null)
+    setExitNote(null)
+    try {
+      const res = await fetch(`/api/sequences/${sequenceId}/enrollments/${run.id}/exit`, { method: 'POST' })
+      const j = await res.json().catch(() => ({}))
+      if (!aliveRef.current) return
+      if (res.status === 409) setExitNote(j?.error || 'They had already left this sequence.')
+      else if (!res.ok) setExitError(j?.error || 'Exit failed')
+    } catch {
+      if (aliveRef.current) setExitError('Exit failed — network error')
+    } finally {
+      if (aliveRef.current) setExitingId(null)
       await load(true)
     }
   }, [sequenceId, load])
@@ -205,6 +239,13 @@ export default function AutomationPerformance({ sequenceId, steps = [] }) {
           {resumeError && (
             <p className="text-xs text-red-700 bg-red-500/10 rounded-lg px-3 py-2 mb-2">{resumeError}</p>
           )}
+          {exitError && (
+            <p className="text-xs text-red-700 bg-red-500/10 rounded-lg px-3 py-2 mb-2">{exitError}</p>
+          )}
+          {/* A 409 is not a failure — the CAS simply lost. Say so plainly. */}
+          {exitNote && (
+            <p className="text-xs text-un1t-subtle bg-un1t-border/30 rounded-lg px-3 py-2 mb-2">{exitNote}</p>
+          )}
           {(!runs || runs.length === 0) ? (
             <div className="bg-un1t-surface border border-un1t-border rounded-xl px-4 py-6 text-center">
               <p className="text-sm text-un1t-subtle">
@@ -240,16 +281,30 @@ export default function AutomationPerformance({ sequenceId, steps = [] }) {
                     {r.state === 'paused' && r.outcome?.startsWith('Paused:') && (
                       <span className="text-xs text-amber-700 max-w-xs truncate" title={r.outcome}>{r.outcome}</span>
                     )}
-                    {r.state === 'paused' && (
-                      <button
-                        type="button"
-                        onClick={() => resume(r.id)}
-                        disabled={resumingId === r.id}
-                        className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 disabled:opacity-50"
-                      >
-                        <Play size={10} /> {resumingId === r.id ? 'Resuming…' : 'Resume'}
-                      </button>
-                    )}
+                    <div className="flex items-center gap-1.5">
+                      {r.state === 'paused' && (
+                        <button
+                          type="button"
+                          onClick={() => resume(r.id)}
+                          disabled={resumingId === r.id}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20 disabled:opacity-50"
+                        >
+                          <Play size={10} /> {resumingId === r.id ? 'Resuming…' : 'Resume'}
+                        </button>
+                      )}
+                      {/* SEQGAPS.1 — only a live enrolment can be exited; the
+                          route CAS-es on the same two statuses. */}
+                      {(r.state === 'active' || r.state === 'paused') && (
+                        <button
+                          type="button"
+                          onClick={() => exitRun(r)}
+                          disabled={exitingId === r.id}
+                          className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-700 hover:bg-rose-500/20 disabled:opacity-50"
+                        >
+                          <LogOut size={10} /> {exitingId === r.id ? 'Exiting…' : 'Exit'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
