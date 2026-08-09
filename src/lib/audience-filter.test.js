@@ -88,6 +88,39 @@ describe('applyAudienceFilter', () => {
       .toThrow(/requires a numeric value/)
   })
 
+  // COMMSFIX.B.2 — Number('') / Number(null) / Number(true) are 0 / 0 / 1,
+  // so a blank builder row silently became "= 0" (a large real cohort) and
+  // "more than [blank] days ago" meant "ever". Blank/absent/boolean values
+  // on numeric ops must error, not coerce.
+  it('rejects an empty-string value on a numeric op instead of coercing to 0', () => {
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'total_emails_sent', op: 'eq', value: '' }] }))
+      .toThrow(InvalidAudienceFilterError)
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'total_emails_sent', op: 'eq', value: '' }] }))
+      .toThrow(/requires a numeric value/)
+  })
+
+  it('rejects a null value on a numeric op', () => {
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'total_emails_sent', op: 'gte', value: null }] }))
+      .toThrow(/requires a numeric value/)
+  })
+
+  it('rejects an undefined value on a numeric op', () => {
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'total_emails_sent', op: 'lt' }] }))
+      .toThrow(/requires a numeric value/)
+  })
+
+  it('rejects a boolean value on a numeric op (Number(true) is 1)', () => {
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'total_emails_sent', op: 'eq', value: true }] }))
+      .toThrow(/requires a numeric value/)
+  })
+
+  it('rejects a blank day-count on days_since ops instead of meaning "0 days ago"', () => {
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'last_attended_at', op: 'days_since_gt', value: '' }] }))
+      .toThrow(/requires a numeric value/)
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'last_attended_at', op: 'days_since_lt', value: null }] }))
+      .toThrow(/requires a numeric value/)
+  })
+
   it('rejects when filters is not an array', () => {
     expect(() => applyAudienceFilter(q.query, { filters: 'oops' })).toThrow(/must be an array/)
   })

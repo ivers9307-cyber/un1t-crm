@@ -390,6 +390,13 @@ export function applyAudienceFilter(query, filter) {
       || (fieldConfig.type === 'number'
           && (NUMERIC_COMPARE_OPS.has(op) || op === 'eq' || op === 'neq'))
     if (wantsNumber) {
+      // COMMSFIX.B.2 — Number('') / Number(null) are 0 and Number(true) is 1,
+      // so a blank builder row silently became "= 0" (a large real cohort)
+      // and "more than [blank] days ago" meant "ever". Reject them before
+      // the coercion; only real numbers / numeric strings pass.
+      if (v === '' || v === null || v === undefined || typeof v === 'boolean') {
+        throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a numeric value`)
+      }
       const n = Number(v)
       if (!Number.isFinite(n)) {
         throw new InvalidAudienceFilterError(`Filter "${field} ${op}" requires a numeric value`)
