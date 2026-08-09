@@ -89,6 +89,43 @@ describe('email-draft — resend-to-non-openers config', () => {
     expect(inserted).toHaveLength(0)
   })
 
+  // COMMSFIX.D.2d — server backstop. The composer is no longer able to post an
+  // empty body (D.2a/b/c), but the route is the last line: nothing may queue or
+  // schedule a campaign with no subject or no html_content, whatever the client.
+  it.each([
+    ['send', undefined],
+    ['send', ''],
+    ['send', '   '],
+    ['schedule', undefined],
+    ['schedule', ''],
+  ])('rejects action %s with html_content %p', async (action, html_content) => {
+    const res = await post({
+      ...base, action, html_content,
+      ...(action === 'schedule' ? { scheduled_at: '2026-09-01T09:00:00.000Z' } : {}),
+    })
+    expect(res.status).toBe(400)
+    expect(inserted).toHaveLength(0)
+    const body = await res.json()
+    expect(body.error).toMatch(/body|content/i)
+  })
+
+  it.each(['send', 'schedule'])('rejects action %s with no subject', async (action) => {
+    const res = await post({
+      ...base, action, subject: '   ',
+      ...(action === 'schedule' ? { scheduled_at: '2026-09-01T09:00:00.000Z' } : {}),
+    })
+    expect(res.status).toBe(400)
+    expect(inserted).toHaveLength(0)
+    const body = await res.json()
+    expect(body.error).toMatch(/subject/i)
+  })
+
+  it('still allows a draft with no body — that is what a draft is for', async () => {
+    const res = await post({ ...base, action: 'draft', html_content: undefined, subject: undefined })
+    expect(res.status).toBe(200)
+    expect(inserted).toHaveLength(1)
+  })
+
   it('a campaign without resend opts in to nothing', async () => {
     const res = await post(base)
     expect(res.status).toBe(200)

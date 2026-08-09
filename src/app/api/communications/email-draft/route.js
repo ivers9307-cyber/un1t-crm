@@ -65,6 +65,24 @@ export async function POST(request) {
     }
     throw e
   }
+
+  // COMMSFIX.D.2d — server backstop against a bodyless broadcast. A blank
+  // export used to arrive here as html_content '' and be stored as NULL, then
+  // queued: Postmark permanently rejects HtmlBody null, so the entire audience
+  // records as bounced. A DRAFT may legitimately be empty; a send or a
+  // schedule may not. Audit 2026-08-09 composer-ux, CONFIRMED high.
+  //
+  // Sibling of the B.7 check above — one refuses an audience that can never
+  // resolve, the other content that can never deliver. Both exist because the
+  // composer could fire either past the client-side gates.
+  if (action === 'send' || action === 'schedule') {
+    if (!subject || !subject.trim()) {
+      return NextResponse.json({ success: false, error: 'A subject is required to send or schedule this campaign' }, { status: 400 })
+    }
+    if (!html_content || !html_content.trim()) {
+      return NextResponse.json({ success: false, error: 'The email body is empty — nothing was queued. Wait for the designer to load, then send again.' }, { status: 400 })
+    }
+  }
   // CAMPAIGN-RESEND — marketing only (the outbound stream has open
   // tracking off by design, so "didn't open" is unknowable there), and a
   // wait is required so the spawner has a real deadline.
