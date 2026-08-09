@@ -79,9 +79,11 @@ export async function PUT(request, props) {
 
   const db = createServerClient()
 
-  // Verify caller can write to this sequence's location
+  // Verify caller can write to this sequence's location. trigger_type /
+  // trigger_config / status feed the activation guard below (effective
+  // values = request merged over the stored row).
   const { data: existing } = await db.from('email_sequences')
-    .select('location_id')
+    .select('location_id, trigger_type, trigger_config, status')
     .eq('id', params.id)
     .single()
   if (!existing) return NextResponse.json({ success: false, error: 'Sequence not found' }, { status: 404 })
@@ -104,6 +106,31 @@ export async function PUT(request, props) {
         return NextResponse.json({ success: false, error: e.message }, { status: 400 })
       }
       throw e
+    }
+  }
+
+  // COMMSFIX.E.5 — refuse to ACTIVATE a sequence that can never fire.
+  // segment_added/segment_removed triggers require trigger_config.
+  // segment_id (triggers.js skips any sequence without it), yet two
+  // dunning sequences sat in the DB with an empty config, so activating
+  // them would have enrolled nobody with no signal to the operator. Gate
+  // on EFFECTIVE values so a status-only PUT on a stored segment sequence
+  // is caught too. Drafts stay saveable without a segment — only
+  // activation is gated.
+  //
+  // Sibling of the B.7 check above: both refuse to persist a sequence that
+  // silently enrols nobody, one via a broken audience, one via a trigger
+  // that can never match.
+  const effTriggerType = updates.trigger_type ?? existing.trigger_type
+  const effStatus = updates.status ?? existing.status
+  if (effStatus === 'active' && ['segment_added', 'segment_removed'].includes(effTriggerType)) {
+    const effTriggerConfig = updates.trigger_config !== undefined ? updates.trigger_config : existing.trigger_config
+    const segmentId = (effTriggerConfig && typeof effTriggerConfig === 'object') ? effTriggerConfig.segment_id : null
+    if (!segmentId) {
+      return NextResponse.json({
+        success: false,
+        error: 'This sequence fires when contacts enter or leave a segment, but no segment is selected — it would never enrol anyone. Pick a segment in the trigger settings, then activate.',
+      }, { status: 400 })
     }
   }
 
