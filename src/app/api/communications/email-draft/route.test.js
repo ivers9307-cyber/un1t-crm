@@ -96,3 +96,46 @@ describe('email-draft — resend-to-non-openers config', () => {
     expect(inserted[0]).not.toHaveProperty('resend_wait_hours')
   })
 })
+
+// COMMSFIX.B.7 — invalid audience filters are rejected at save time with the
+// InvalidAudienceFilterError message, instead of being parked on a campaign
+// that can never populate (it would wedge 'queued' forever; the composer
+// used to swallow the count-time 400 too).
+describe('email-draft — audience filter validated at save time (B7)', () => {
+  it('rejects an OR + tag filter with the library message', async () => {
+    const res = await post({
+      ...base,
+      audience_filter: {
+        logic: 'or',
+        filters: [
+          { field: 'tag', op: 'eq', value: 'hot_lead' },
+          { field: 'pipeline_stage_slug', op: 'eq', value: 'new_lead' },
+        ],
+      },
+    })
+    expect(res.status).toBe(400)
+    expect(inserted).toHaveLength(0)
+    const body = await res.json()
+    expect(body.error).toMatch(/OR logic is not supported together with tag or event filters/)
+  })
+
+  it('rejects an unknown legacy field', async () => {
+    const res = await post({
+      ...base,
+      audience_filter: { logic: 'and', filters: [{ field: 'lead_status', op: 'eq', value: 'active_trial' }] },
+    })
+    expect(res.status).toBe(400)
+    expect(inserted).toHaveLength(0)
+    const body = await res.json()
+    expect(body.error).toMatch(/Unknown audience field/)
+  })
+
+  it('still accepts a valid filter', async () => {
+    const res = await post({
+      ...base,
+      audience_filter: { logic: 'and', filters: [{ field: 'glofox_membership_type', op: 'neq', value: 'time' }] },
+    })
+    expect(res.status).toBe(200)
+    expect(inserted).toHaveLength(1)
+  })
+})

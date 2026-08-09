@@ -707,6 +707,39 @@ export async function resolveEventFilters({ db, query, filter }) {
 }
 
 /**
+ * COMMSFIX.B.7 — validate an audience filter WITHOUT building a query or
+ * touching the DB. For routes that PERSIST a filter (email-draft, SMS/WA
+ * broadcast create, sequences PUT): an invalid filter must be rejected with
+ * a 400 at save time, not parked in the DB where it can never populate (the
+ * campaign wedges 'queued' forever; the sequence silently enrols nobody).
+ *
+ * Reuses applyAudienceFilter's full validation (unknown field, off-allowlist
+ * op, OR+virtual-field rejection, numeric/boolean value guards) against a
+ * passive probe that absorbs every query method, then adds the non-empty
+ * value checks the tag/event resolvers would make at resolve time.
+ *
+ * Throws InvalidAudienceFilterError; returns undefined on a valid filter.
+ * null / undefined / empty filters are valid ("everyone").
+ */
+export function validateAudienceFilter(filter) {
+  if (filter == null) return
+  let probe
+  const handler = { get: () => (..._args) => probe }
+  probe = new Proxy({}, handler)
+  applyAudienceFilter(probe, filter)
+  for (const f of filter?.filters || []) {
+    const cfg = AUDIENCE_FIELDS[f?.field]
+    if (!cfg) continue // applyAudienceFilter already threw on unknown fields
+    if (cfg.type === 'tag' && (typeof f.value !== 'string' || !f.value.trim())) {
+      throw new InvalidAudienceFilterError('tag filter requires a non-empty string value')
+    }
+    if (cfg.type === 'event' && (typeof f.value !== 'string' || !f.value.trim())) {
+      throw new InvalidAudienceFilterError('event filter requires a non-empty event id')
+    }
+  }
+}
+
+/**
  * Convenience wrapper: resolve tag + event virtual fields AND apply scalar
  * filters in one call. Use this in async contexts (most route handlers
  * already are). Existing sync callers continue using applyAudienceFilter

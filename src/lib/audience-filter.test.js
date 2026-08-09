@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { applyAudienceFilter, AUDIENCE_FIELDS, InvalidAudienceFilterError, resolveTagFilters, resolveEventFilters, applyAudienceFilterAsync, mergeRegistrationContactIds, LIVE_REGISTRATION_STATUSES } from './audience-filter.js'
+import { applyAudienceFilter, AUDIENCE_FIELDS, InvalidAudienceFilterError, resolveTagFilters, resolveEventFilters, applyAudienceFilterAsync, mergeRegistrationContactIds, LIVE_REGISTRATION_STATUSES, validateAudienceFilter } from './audience-filter.js'
 
 // Mock Supabase query builder — every method returns `this` and records the call.
 function makeMockQuery() {
@@ -770,6 +770,68 @@ describe('resolveEventFilters — DB-backed (explicit mock)', () => {
       filter: { filters: [{ field: 'event_registration', op: 'eq', value: 'evt-1' }] },
     })
     expect(calls.some(c => c[0] === 'in' && c[1] === 'id')).toBe(true)
+  })
+})
+
+// ─── COMMSFIX.B.7 — save-time validation without a query ─────────
+// Routes that PERSIST an audience filter (email-draft, sms/wa broadcasts,
+// sequences PUT) call this so an OR+tag or unknown-field filter is rejected
+// with a 400 at save time instead of being parked in the DB where it can
+// never populate (the campaign wedges 'queued'; the sequence enrols nobody).
+
+describe('validateAudienceFilter (COMMSFIX.B.7)', () => {
+  it('accepts null / undefined / empty filters', () => {
+    expect(() => validateAudienceFilter(null)).not.toThrow()
+    expect(() => validateAudienceFilter(undefined)).not.toThrow()
+    expect(() => validateAudienceFilter({ logic: 'and', filters: [] })).not.toThrow()
+  })
+
+  it('accepts a valid scalar filter', () => {
+    expect(() => validateAudienceFilter({
+      logic: 'and',
+      filters: [{ field: 'glofox_membership_type', op: 'neq', value: 'time' }],
+    })).not.toThrow()
+  })
+
+  it('accepts a valid tag + scalar AND filter', () => {
+    expect(() => validateAudienceFilter({
+      logic: 'and',
+      filters: [
+        { field: 'tag', op: 'eq', value: 'vip' },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+      ],
+    })).not.toThrow()
+  })
+
+  it('rejects an unknown field', () => {
+    expect(() => validateAudienceFilter({ filters: [{ field: 'lead_status', op: 'eq', value: 'x' }] }))
+      .toThrow(InvalidAudienceFilterError)
+    expect(() => validateAudienceFilter({ filters: [{ field: 'lead_status', op: 'eq', value: 'x' }] }))
+      .toThrow(/Unknown audience field/)
+  })
+
+  it('rejects OR combined with a tag filter (the campaign-wedging combination)', () => {
+    expect(() => validateAudienceFilter({
+      logic: 'or',
+      filters: [
+        { field: 'tag', op: 'eq', value: 'hot_lead' },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'new_lead' },
+      ],
+    })).toThrow(/OR logic is not supported together with tag or event filters/)
+  })
+
+  it('rejects an off-allowlist op and a blank numeric value', () => {
+    expect(() => validateAudienceFilter({ filters: [{ field: 'pipeline_stage_slug', op: 'contains', value: 'mem' }] }))
+      .toThrow(/not allowed on field/)
+    expect(() => validateAudienceFilter({ filters: [{ field: 'total_emails_sent', op: 'eq', value: '' }] }))
+      .toThrow(/requires a numeric value/)
+  })
+
+  it('rejects empty tag / event values without touching a DB', () => {
+    expect(() => validateAudienceFilter({ filters: [{ field: 'tag', op: 'eq', value: '  ' }] }))
+      .toThrow(/non-empty string/)
+    expect(() => validateAudienceFilter({ filters: [{ field: 'event_registration', op: 'eq', value: '' }] }))
+      .toThrow(/non-empty event id/)
   })
 })
 

@@ -12,6 +12,7 @@ import { getCurrentUser, assertLocationAccess, getUserLocationIds } from '@/lib/
 import { hasPermission } from '@/lib/permissions'
 import { validateBody } from '@/lib/validate'
 import { uuidLike, audienceFilterSchema } from '@/lib/schemas'
+import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 
 export const runtime = 'nodejs'
 
@@ -75,6 +76,17 @@ export async function POST(request) {
   const locationId = body.location_id || user.activeLocation?.id
   const guard = assertLocationAccess(user, locationId)
   if (guard) return guard
+
+  // COMMSFIX.B.7 — reject an invalid audience filter at save time instead of
+  // parking a broadcast whose audience can never resolve.
+  try {
+    validateAudienceFilter(body.audience_filter)
+  } catch (e) {
+    if (e instanceof InvalidAudienceFilterError) {
+      return NextResponse.json({ success: false, error: e.message }, { status: 400 })
+    }
+    throw e
+  }
 
   // 'scheduled' requires a scheduled_at; otherwise it'd sit invisible to
   // the cron (which picks up status='scheduled' AND scheduled_at <= now).

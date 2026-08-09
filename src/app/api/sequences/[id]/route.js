@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getCurrentUser, assertLocationAccessOr404 } from '@/lib/auth'
 import { validateBody } from '@/lib/validate'
+import { validateAudienceFilter, InvalidAudienceFilterError } from '@/lib/audience-filter'
 
 const SequenceUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -90,6 +91,21 @@ export async function PUT(request, props) {
   const validation = await validateBody(request, SequenceUpdateSchema)
   if (!validation.ok) return validation.response
   const updates = { ...validation.data }
+
+  // COMMSFIX.B.7 — reject an invalid audience_filter at save time. A bad
+  // filter used to save cleanly, then contactMatchesSequenceAudience failed
+  // closed at every trigger evaluation — the sequence silently enrolled
+  // NOBODY with only a server log line as evidence. null clears the gate.
+  if (updates.audience_filter != null) {
+    try {
+      validateAudienceFilter(updates.audience_filter)
+    } catch (e) {
+      if (e instanceof InvalidAudienceFilterError) {
+        return NextResponse.json({ success: false, error: e.message }, { status: 400 })
+      }
+      throw e
+    }
+  }
 
   // FLOW2 webhook handling:
   // 1. Auto-generate webhook_token when the operator switches an
