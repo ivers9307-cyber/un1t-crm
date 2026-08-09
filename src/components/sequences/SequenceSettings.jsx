@@ -17,6 +17,12 @@ const PIPELINE_SLUGS = [
 ]
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
+// SEQEXIT.1 — the audience stopped being an entry gate and became a
+// continuing condition. The field looks identical, so the new meaning has
+// to be stated next to it; operators cannot infer it from an unchanged UI.
+export const AUDIENCE_CONTINUOUS_HINT =
+  'These conditions are checked again before every step, not just at enrolment — a contact who stops matching leaves the sequence.'
+
 // Friendly labels for the engine's trigger vocabulary (must stay in sync with
 // schema.js TRIGGER_TYPES / the PUT route enum / the runner).
 const TRIGGER_OPTIONS = [
@@ -237,6 +243,7 @@ export default function SequenceSettings({ sequence }) {
             <div>
               <span className="block text-xs font-medium text-un1t-subtle">Audience — who can enter</span>
               <span className="block text-[11px] text-un1t-subtle/80">Only enrol contacts who match these conditions when the trigger fires. Leave empty to allow anyone.</span>
+              <span className="block text-[11px] text-un1t-subtle/80 mt-1">{AUDIENCE_CONTINUOUS_HINT}</span>
             </div>
             {/* COMMSFIX.B.6 — audienceCount={null}: no live count is wired
                 here, and an omitted prop rendered the dangling
