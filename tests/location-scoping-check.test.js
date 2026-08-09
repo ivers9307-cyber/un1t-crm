@@ -12,6 +12,7 @@ import {
   fileHasTenantEvidence,
   tablesQueried,
   classifyRoute,
+  classifyPage,
   findStaleExemptions,
 } from '../scripts/check-location-scoping.mjs'
 
@@ -226,6 +227,64 @@ describe('classifyRoute', () => {
       { table: 'contacts', exempt: true },
       { table: 'deals', exempt: false },
     ])
+  })
+})
+
+describe('classifyPage', () => {
+  const TABLES = new Set(['email_templates', 'contacts'])
+
+  // The TPL-IDOR.1 shape: server page, service-role client, bare-id fetch,
+  // only a login check — the class the /api-only scan could never see.
+  const unscopedServerPage = `
+    import { createServerClient } from '@/lib/supabase'
+    const user = await getCurrentUser()
+    if (!user) redirect('/login')
+    const db = createServerClient()
+    const { data } = await db.from('email_templates').select('*').eq('id', params.id).single()
+  `
+
+  it('flags a service-role page querying a tenant table with no scoping (the TPL-IDOR.1 class)', () => {
+    const res = classifyPage('src/app/email/templates/[id]/page.js', unscopedServerPage, TABLES, {})
+    expect(res.findings).toEqual([{ table: 'email_templates', exempt: false }])
+  })
+
+  it('skips pages that never call the service-role client (client/API-fed pages)', () => {
+    const src = `'use client'\n// data comes through /api routes with their own guards`
+    expect(classifyPage('src/app/contacts/page.js', src, TABLES, {})).toEqual({ skipped: 'no-service-role' })
+  })
+
+  it('passes a page that guards the fetched row with assertLocationAccess', () => {
+    const src = `
+      import { createServerClient } from '@/lib/supabase'
+      const db = createServerClient()
+      const { data: template } = await db.from('email_templates').select('*').eq('id', params.id).single()
+      if (!template || assertLocationAccess(user, template.location_id)) notFound()
+    `
+    const res = classifyPage('src/app/email/templates/[id]/page.js', src, TABLES, {})
+    expect(res.findings).toEqual([])
+  })
+
+  it('passes a page whose chain filters on location_id', () => {
+    const src = `
+      import { createServerClient } from '@/lib/supabase'
+      const db = createServerClient()
+      const { data } = await db.from('contacts').select('*').eq('location_id', user.activeLocation.id)
+    `
+    const res = classifyPage('src/app/contacts/page.js', src, TABLES, {})
+    expect(res.findings).toEqual([])
+  })
+
+  it('honours EXEMPT entries keyed by the page path', () => {
+    const exempt = {
+      'src/app/offers/page.js': { email_templates: 'public catalogue (test fixture)' },
+    }
+    const res = classifyPage('src/app/offers/page.js', unscopedServerPage, TABLES, exempt)
+    expect(res.findings).toEqual([{ table: 'email_templates', exempt: true }])
+  })
+
+  it('does not apply the cron path skip to pages (only /api routes have system paths)', () => {
+    const res = classifyPage('src/app/cron/page.js', unscopedServerPage, TABLES, {})
+    expect(res.findings).toEqual([{ table: 'email_templates', exempt: false }])
   })
 })
 
