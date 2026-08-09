@@ -414,3 +414,27 @@ describe('AudienceBuilder — engagement fields (GAPS-P1.3)', () => {
     expect(unknown).toEqual([])
   })
 })
+
+// ── FILTER-B.1 / FILTER-FOUND row 2 — the omitted-prop trap ──────────
+//
+// The count footer rendered on `audienceCount !== null`, so a host that
+// OMITTED the prop (rather than passing null) got `undefined !== null` →
+// a dangling "undefined contacts match". COMMSFIX.B.6 fixed each host
+// individually; the trap stayed in the component for the next one.
+describe('AudienceBuilder — audienceCount defaults to null (FILTER-FOUND row 2)', () => {
+  it('renders no count footer when the prop is omitted entirely', () => {
+    const { container } = render(
+      <AudienceBuilder filter={{ logic: 'and', filters: [] }} onChange={() => {}} />,
+    )
+    expect(container.textContent).not.toContain('contacts match')
+    expect(container.textContent).not.toContain('undefined')
+  })
+
+  it('still renders the footer when a host passes a real number', () => {
+    const { container } = render(
+      <AudienceBuilder filter={{ logic: 'and', filters: [] }} onChange={() => {}} audienceCount={42} />,
+    )
+    expect(container.textContent).toContain('42')
+    expect(container.textContent).toContain('contacts match')
+  })
+})

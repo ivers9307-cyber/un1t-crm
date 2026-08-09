@@ -476,7 +476,14 @@ export const STAGE_MEMBER_DEFAULT_ROW = Object.freeze({
 // born broken. It stays UNSET (and therefore inert) until a value is picked.
 const AWAITS_A_VALUE = ['tag-select', 'event-select', 'plan-select']
 
-export default function AudienceBuilder({ filter, onChange, audienceCount, disabled = false, defaultFilterRow = null, presets = null, locationId = null }) {
+// FILTER-B.1 / FILTER-FOUND row 2 — `audienceCount` DEFAULTS TO NULL. The
+// footer below renders on a non-null count, so a host that simply OMITTED the
+// prop used to get `undefined !== null` → a dangling "undefined contacts
+// match". COMMSFIX.B.6 fixed each host individually and left the trap armed
+// for the next embed; the default closes it at the component. Hosts wanting a
+// live number now mount the shared <AudienceCount> instead of feeding this
+// footer, which survives only for CampaignEditor's own count state.
+export default function AudienceBuilder({ filter, onChange, audienceCount = null, disabled = false, defaultFilterRow = null, presets = null, locationId = null }) {
   const filters = filter?.filters || []
   const logic = filter?.logic || 'and'
 
@@ -1103,9 +1110,10 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
         {/* FILTER-A.4 — a LIVE region, and mounted unconditionally. A screen
             reader user editing a filter never heard the audience change, and a
             region that only appears once there is a number to show is not
-            announced when that first number arrives. */}
+            announced when that first number arrives. The `!= null` guard also
+            covers the FILTER-B.1 omitted-prop case (now defaulted). */}
         <span aria-live="polite" aria-atomic="true" className="text-sm text-un1t-subtle">
-          {audienceCount !== null && audienceCount !== undefined && (
+          {audienceCount != null && (
             <>
               <Users size={14} className="inline mr-1.5" aria-hidden="true" />
               <strong className="text-un1t-text">{audienceCount}</strong> contacts match
