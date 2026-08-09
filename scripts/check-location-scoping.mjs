@@ -337,30 +337,13 @@ export const EXEMPT = {
       'Push-delivery fleet dashboard (NOTIF.4 + STAFF-DEV.4) gated by hasPermission(settings): groups active staff under EVERY location on purpose — it is the estate-wide device/app-version fleet view. Single-org estate today; revisit when a second org onboards (same caveat as public/branding).',
   },
 
-  // Real findings from the first page scan. The template pages already have
-  // their fix open (PR #1307, TPL-IDOR.1) — remove those entries when it
-  // merges. The event-types pages need the same campaigns/[id] treatment in
-  // their own fix PR.
-  'src/app/bookings/event-types/[id]/page.js': {
-    event_types:
-      'TODO-LEAK: bare-id fetch with no user check inside the page at all (auth = the proxy login gate only) — any logged-in staffer at any location opens any location\'s booking type. Fix = fetch → assertLocationAccess → notFound (the campaigns/[id] pattern).',
-    bookings:
-      'TODO-LEAK: lists every booking for the foreign event type including contact name/email PII — cleared by the same page guard (the bookings query keys off the event id).',
-  },
-  'src/app/bookings/event-types/[id]/edit/page.js': {
-    event_types:
-      'TODO-LEAK: logged-in check only, bare-id fetch straight into the edit form — cross-location edit view. Same fix as the detail page.',
-  },
-  'src/app/email/templates/[id]/page.js': {
-    email_templates:
-      'TODO-LEAK: fix already open in PR #1307 (TPL-IDOR.1 — assertLocationAccess + notFound after the fetch). Remove this entry once #1307 merges.',
-  },
-  'src/app/whatsapp/templates/[id]/page.js': {
-    whatsapp_templates:
-      'TODO-LEAK: fix already open in PR #1307 (TPL-IDOR.1). Remove once #1307 merges.',
-    whatsapp_template_events:
-      'TODO-LEAK: cleared by the same #1307 guard (it runs before the events query). Remove once #1307 merges.',
-  },
+  // The first page scan's four real findings needed NO exemption in the end:
+  // both fixes landed before this check did, so the pages carry their own
+  // guards. /email/templates/[id] + /whatsapp/templates/[id] → TPL-IDOR.1
+  // (#1307); /bookings/event-types/[id] + /edit → EVT-IDOR.1 (#1311, found
+  // by this scan — the detail page had no user check in it at all and listed
+  // the foreign event's bookings incl. contact PII). Future real findings go
+  // here as 'TODO-LEAK:' rows.
 }
 
 // ---------------------------------------------------------------------------
