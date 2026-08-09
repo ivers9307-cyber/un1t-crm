@@ -15,6 +15,54 @@
 import { applyMarketingPreferencesBulk } from './marketing-consent.js'
 import { findBcaSubmissionByMessageId, recordBcaPostmarkEvent } from './bca-events.js'
 import { recordTicketMessageDelivery } from './email-delivery-status.js'
+import { escapeLikePattern } from './like-escape.js'
+
+/**
+ * COMMSFIX.C.7 — which contact a SubscriptionChange reactivation is about.
+ *
+ * Message-bound events resolve through email_sends like every other handler.
+ * A Postmark-SIDE reactivation is not tied to a delivered message, so it
+ * arrives carrying the zero GUID and matches nothing — those carry `Recipient`
+ * instead. (Before COMMSFIX.C.2 every zero-GUID SubscriptionChange also shared
+ * one dedup key, so only the first ever got this far at all.)
+ *
+ * `.ilike` with escapeLikePattern, not `.eq`: contacts are stored mixed-case,
+ * and an unescaped pattern would let `_`/`%` — both legal email characters —
+ * match a DIFFERENT contact (CLAUDE.md, the inbound-email misfiling class).
+ */
+async function resolveReactivationContact(db, body, messageId) {
+  const { data: send } = await db.from('email_sends')
+    .select('contact_id')
+    .eq('postmark_message_id', messageId)
+    .single()
+  if (send?.contact_id) return send.contact_id
+
+  const recipient = typeof body?.Recipient === 'string' ? body.Recipient.trim() : ''
+  if (!recipient) return null
+
+  const { data: contact } = await db.from('contacts')
+    .select('id')
+    .ilike('email', escapeLikePattern(recipient))
+    .maybeSingle()
+  return contact?.id || null
+}
+
+/**
+ * COMMSFIX.C.3 — call a best-effort counter RPC and LOG any failure.
+ *
+ * Best-effort means "never fail the event", not "never tell anyone". Both
+ * failure channels have to be covered: supabase-js builders are thenables with
+ * no .catch (so the await needs a try/catch), and PostgREST/Postgres errors
+ * come back in the RESULT object rather than as a throw.
+ */
+async function reportRpc(db, fn, args) {
+  try {
+    const { error } = await db.rpc(fn, args)
+    if (error) console.error(`[postmark processor] ${fn} failed:`, error.message)
+  } catch (err) {
+    console.error(`[postmark processor] ${fn} threw:`, err?.message || err)
+  }
+}
 
 /**
  * Process a single Postmark webhook payload.
@@ -67,23 +115,74 @@ export async function processPostmarkEvent(db, body) {
   try {
     switch (recordType) {
       case 'Delivery': {
-        await db.from('email_sends')
+        // COMMSFIX.C.1 — the increment rides the TRANSITION, not the event.
+        //
+        // `.is('delivered_at', null)` makes the UPDATE itself the guard: the
+        // returned rows are exactly the ones this event moved from NULL to a
+        // timestamp, so a replayed Delivery (now possible — COMMSFIX.C.2
+        // narrows the webhook dedup key) matches zero rows and increments
+        // nothing. Two concurrent workers race on the row lock and only one
+        // sees a row back. Reading campaign_id off the returned row also drops
+        // the follow-up SELECT the old code needed.
+        const { data: deliveredSends } = await db.from('email_sends')
           .update({ status: 'delivered', delivered_at: body.DeliveredAt })
           .eq('postmark_message_id', messageId)
+          .is('delivered_at', null)
+          .select('id, campaign_id, contact_id')
 
-        await db.from('campaign_recipients')
+        // 'sending' belongs here: the chunk claim flips queued→sending before
+        // the batch goes out, and the Delivery webhook regularly beats the
+        // per-recipient 'sent' update, so those rows were being skipped.
+        const { data: stampedRecipients } = await db.from('campaign_recipients')
           .update({ status: 'delivered', delivered_at: body.DeliveredAt })
           .eq('postmark_message_id', messageId)
-          .in('status', ['sent', 'queued'])
+          .in('status', ['sent', 'queued', 'sending'])
+          .select('id')
 
-        const { data: send } = await db.from('email_sends')
-          .select('campaign_id')
-          .eq('postmark_message_id', messageId)
-          .single()
+        // COMMSFIX.C.1b — …and when even that matches nothing, resolve the
+        // recipient through the send row. C.1 moved the email_sends insert
+        // ahead of the loop that stamps campaign_recipients.postmark_message_id,
+        // so a fast Delivery webhook now lands in a window where the send row
+        // exists but no recipient row carries the id yet. Keying on the send's
+        // (campaign_id, contact_id) — UNIQUE on campaign_recipients — addresses
+        // exactly the right row, so the recipient-level stamp isn't lost to the
+        // very reordering that fixed the campaign counter.
+        if (!(stampedRecipients || []).length) {
+          const viaSend = (deliveredSends || []).find(s => s?.campaign_id && s?.contact_id)
+          if (viaSend) {
+            await db.from('campaign_recipients')
+              .update({ status: 'delivered', delivered_at: body.DeliveredAt })
+              .eq('campaign_id', viaSend.campaign_id)
+              .eq('contact_id', viaSend.contact_id)
+              .in('status', ['sent', 'queued', 'sending'])
+          }
+        }
 
-        if (send?.campaign_id) {
+        // COMMSFIX.C.1c — C.1 shrinks the race to a single INSERT, but a
+        // Delivery that still beats it is lost FOREVER: the webhook dedup key
+        // rejects Postmark's retry at the door and nothing else ever sets
+        // delivered_at, so recalculate_campaign_stats keeps reporting the gap
+        // as fact. Silence is exactly how this defect survived months of
+        // campaigns, so the one case that means real loss — no email_sends row
+        // exists for the message AT ALL — is logged. Zero updated rows is the
+        // normal replay path (the row is already delivered), so the cheap
+        // count probe only runs on that branch and only to tell the two apart.
+        if (!(deliveredSends || []).length) {
+          const { count: knownSends } = await db.from('email_sends')
+            .select('id', { count: 'exact', head: true })
+            .eq('postmark_message_id', messageId)
+          if (!knownSends) {
+            console.error(
+              `[postmark processor] Delivery for unknown message ${messageId} — no email_sends row; ` +
+              'delivery NOT recorded and the retry will be deduped. Suspect the send-loop insert race.'
+            )
+          }
+        }
+
+        const campaignId = (deliveredSends || []).find(s => s?.campaign_id)?.campaign_id
+        if (campaignId) {
           const { error } = await db.rpc('increment_campaign_metric', {
-            p_campaign_id: send.campaign_id,
+            p_campaign_id: campaignId,
             p_field: 'total_delivered',
           })
           if (error) console.error('[postmark processor] total_delivered increment failed:', error.message)
@@ -119,7 +218,12 @@ export async function processPostmarkEvent(db, body) {
           if (body.FirstOpen) {
             // supabase-js builders are thenables, not Promises — they
             // have .then but no .catch. Wrap in try/catch around await.
-            try { await db.rpc('increment_contact_opens', { p_contact_id: openSend.contact_id }) } catch {}
+            // COMMSFIX.C.3 — still best-effort, but no longer SILENT. This
+            // call spent months hitting a function that did not exist (mig 508
+            // creates it) and nothing anywhere said so: the catch swallowed
+            // throws, and supabase-js returns PostgREST errors in the result
+            // rather than throwing, so the error object went straight in the bin.
+            await reportRpc(db, 'increment_contact_opens', { p_contact_id: openSend.contact_id })
           }
 
           await db.from('campaign_recipients')
@@ -187,7 +291,8 @@ export async function processPostmarkEvent(db, body) {
             if (error) console.error('[postmark processor] total_clicked increment failed:', error.message)
           }
 
-          try { await db.rpc('increment_contact_clicks', { p_contact_id: clickSend.contact_id }) } catch {}
+          // COMMSFIX.C.3 — see the Open handler; best-effort but logged.
+          await reportRpc(db, 'increment_contact_clicks', { p_contact_id: clickSend.contact_id })
         }
         break
       }
@@ -279,7 +384,38 @@ export async function processPostmarkEvent(db, body) {
       }
 
       case 'SubscriptionChange': {
-        if (body.SuppressSending) {
+        if (!body.SuppressSending) {
+          // COMMSFIX.C.7 — REACTIVATION. An operator clearing a suppression in
+          // Postmark (or Postmark clearing one itself) was silently ignored,
+          // so our mirror of that block stayed stuck on forever: a contact
+          // stamped email_status='bounced' by an old hard bounce, or carrying
+          // the engagement-hygiene email_suppressed_at stamp, never came back
+          // even though the address demonstrably works again.
+          //
+          // What this DOES NOT do is re-opt anyone into marketing. Postmark's
+          // suppression is a DELIVERY block; consent is a separate family, and
+          // flipping email_marketing back on off a provider event would be
+          // opting somebody in without their say-so. Marketing consent is
+          // restored only by the person themselves, via the preference centre.
+          const contactId = await resolveReactivationContact(db, body, messageId)
+          if (contactId) {
+            // Same guarded no-op shape as the Open/Click hygiene clear.
+            await db.from('contacts')
+              .update({ email_suppressed_at: null })
+              .eq('id', contactId)
+              .not('email_suppressed_at', 'is', null)
+
+            // email_status is reputation-only (LOCCOMMS.5), and a Postmark
+            // reactivation is precisely a reputation reset. Guarded so an
+            // 'active' row is never rewritten.
+            await db.from('contacts')
+              .update({ email_status: 'active' })
+              .eq('id', contactId)
+              .in('email_status', ['bounced', 'complained'])
+          }
+          break
+        }
+        {
           const { data: unsubSend } = await db.from('email_sends')
             .select('contact_id, campaign_id')
             .eq('postmark_message_id', messageId)
@@ -319,9 +455,14 @@ export async function processPostmarkEvent(db, body) {
       }
 
       default:
-        if (process.env.NODE_ENV !== 'production') {
-          console.log(`[postmark processor] unhandled record_type: ${recordType}`)
-        }
+        // COMMSFIX.C.7 — LOUD IN PROD. This was gated on NODE_ENV !==
+        // 'production', so in prod the queue row was marked processed with
+        // zero trace: no log line, no counter, no dead-letter row. If Postmark
+        // ships a new RecordType, every event of it "succeeds" while doing
+        // nothing and there is no artefact to discover it from. Still returns
+        // ok — the webhook contract is 200 for unrecognised events (CLAUDE.md),
+        // so a provider never auto-disables the hook over one.
+        console.error(`[postmark processor] UNHANDLED record_type: ${recordType} (message ${messageId}) — event acknowledged but nothing was done with it`)
     }
     return { ok: true }
   } catch (error) {

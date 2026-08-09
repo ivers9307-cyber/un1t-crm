@@ -7,17 +7,9 @@ import { createServerClient } from '@/lib/supabase'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { MessageSquare, MessageCircle, Mail, Send } from 'lucide-react'
+import { sendStatusChip } from './send-status.js'
 
 export const dynamic = 'force-dynamic'
-
-const STATUS_STYLE = {
-  draft: 'bg-un1t-border/40 text-un1t-subtle',
-  scheduled: 'bg-blue-500/15 text-blue-700',
-  queued: 'bg-amber-500/15 text-amber-700',
-  sending: 'bg-amber-500/15 text-amber-700',
-  sent: 'bg-emerald-500/15 text-emerald-700',
-  cancelled: 'bg-rose-500/15 text-rose-700',
-}
 
 function fmtDate(iso) {
   if (!iso) return ''
@@ -63,8 +55,10 @@ export default async function SendsHistoryPage() {
   }
   if (canEmail && locationId) {
     // campaigns has its own count columns (total_bounced, not total_failed).
+    // COMMSFIX.C.5 — last_error (mig 509) is why a campaign is 'failed', or why
+    // one still sitting at 'queued' is not moving.
     const { data } = await db.from('campaigns')
-      .select('id, name, status, total_recipients, total_sent, total_bounced, created_at, scheduled_at, sent_at, parent_campaign_id, resend_enabled')
+      .select('id, name, status, total_recipients, total_sent, total_bounced, created_at, scheduled_at, sent_at, parent_campaign_id, resend_enabled, last_error')
       .eq('location_id', locationId).order('created_at', { ascending: false }).limit(100)
     for (const c of data || []) rows.push({ ...c, channel: 'email', total_failed: c.total_bounced || 0, detail: `/email/campaigns/${c.id}` })
   }
@@ -119,7 +113,15 @@ export default async function SendsHistoryPage() {
                       </Link>
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full capitalize ${STATUS_STYLE[r.status] || STATUS_STYLE.draft}`}>{r.status}</span>
+                      {(() => {
+                        const chip = sendStatusChip(r)
+                        return (
+                          <span
+                            title={chip.title}
+                            className={`text-[11px] font-medium px-2 py-0.5 rounded-full capitalize ${chip.className}`}
+                          >{r.status}</span>
+                        )
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-right text-un1t-subtle tabular-nums">
                       {(r.status === 'sent' || r.status === 'sending')

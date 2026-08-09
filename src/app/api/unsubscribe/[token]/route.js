@@ -65,7 +65,18 @@ export async function POST(request, props) {
   // back-compat: emails already delivered carry the old location-less URL, and
   // someone clicking one expects to be removed. Removing them from everything
   // is the only direction that cannot generate a spam complaint.
-  const scopeLocationId = new URL(request.url).searchParams.get('l') || null
+  const requestUrl = new URL(request.url)
+  const scopeLocationId = requestUrl.searchParams.get('l') || null
+
+  // COMMSFIX.C.4 — `?c=` names the campaign whose email carried this link.
+  // Shape-checked, not looked up: a garbage value must be IGNORED, never
+  // passed to increment_campaign_metric (whose UPDATE would simply match no
+  // row, but a non-uuid would raise on the cast and fail the request — for a
+  // metric, on the unsubscribe path, which must never fail).
+  const rawCampaignId = requestUrl.searchParams.get('c')
+  const campaignId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawCampaignId || '')
+    ? rawCampaignId
+    : null
 
   // Find the contact preference by token
   const { data: pref, error } = await db
@@ -146,6 +157,26 @@ export async function POST(request, props) {
       await db.from('consent_log').insert(
         logEntries.map((e) => ({ ...e, location_id: scopeLocationId })),
       )
+    }
+
+    // COMMSFIX.C.4 — attribute the unsubscribe to the campaign that carried
+    // the link. Gated on email_marketing having ACTUALLY flipped in this
+    // request (channelPatch is built only from channels that were true), which
+    // is the same replay guard the SubscriptionChange handler uses: a second
+    // click, or an already-unsubscribed contact, produces an empty patch and
+    // counts nothing. An SMS-only opt-out is not an email unsubscribe.
+    // Best-effort — the counter must never fail someone's opt-out, and
+    // supabase-js builders are thenables with no .catch.
+    if (campaignId && channelPatch.email_marketing === false) {
+      try {
+        const { error: incErr } = await db.rpc('increment_campaign_metric', {
+          p_campaign_id: campaignId,
+          p_field: 'total_unsubscribed',
+        })
+        if (incErr) console.error('[unsubscribe] total_unsubscribed increment failed:', incErr.message)
+      } catch (err) {
+        console.error('[unsubscribe] total_unsubscribed increment threw:', err?.message || err)
+      }
     }
   }
 

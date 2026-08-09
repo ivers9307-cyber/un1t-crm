@@ -614,6 +614,37 @@ describe('LOCCOMMS.4 — unsubscribe URL carries the sending location', () => {
   })
 })
 
+// COMMSFIX.C.4 — campaigns.total_unsubscribed only ever moved on Postmark's own
+// SubscriptionChange webhook, which fires for POSTMARK-side suppressions (spam
+// complaint, hard bounce, manual). The primary unsubscribe path — the footer
+// link and Gmail/Apple's one-click button, both resolving to our
+// /api/unsubscribe/[token] — carried no campaign id at all, so the counter sat
+// near zero and an operator could never see which campaign burned the list.
+describe('COMMSFIX.C.4 — unsubscribe URL carries the sending campaign', () => {
+  const contact = { contact_preferences: [{ unsubscribe_token: 'tok' }] }
+
+  it('appends &c= alongside ?l= when a campaign is supplied', () => {
+    expect(buildUnsubscribeUrl(contact, 'https://crm.example', 'loc-hatch', 'camp-1'))
+      .toBe('https://crm.example/unsubscribe/tok?l=loc-hatch&c=camp-1')
+  })
+
+  it('uses ?c= when there is a campaign but no location', () => {
+    expect(buildUnsubscribeUrl(contact, 'https://crm.example', null, 'camp-1'))
+      .toBe('https://crm.example/unsubscribe/tok?c=camp-1')
+  })
+
+  it('omits the campaign entirely for a non-campaign send (sequence step)', () => {
+    expect(buildUnsubscribeUrl(contact, 'https://crm.example', 'loc-hatch'))
+      .toBe('https://crm.example/unsubscribe/tok?l=loc-hatch')
+  })
+
+  it('survives the List-Unsubscribe transform with both params intact', () => {
+    const page = buildUnsubscribeUrl(contact, 'https://crm.example', 'loc-hatch', 'camp-1')
+    expect(toListUnsubscribeUrl(page))
+      .toBe('https://crm.example/api/unsubscribe/tok?l=loc-hatch&c=camp-1')
+  })
+})
+
 describe('EMAIL-MAILBOX-ADMIN.1 — where a studio’s replies go', () => {
   const LOC = 'loc-1'
   const mailbox = (over = {}) => ({

@@ -511,7 +511,7 @@ export function applyMergeTags(html, contact, extras = {}) {
  * provides baseUrl from getAppUrl() so this is unit-testable
  * without env vars.
  */
-export function buildUnsubscribeUrl(contact, baseUrl, locationId) {
+export function buildUnsubscribeUrl(contact, baseUrl, locationId, campaignId) {
   const prefs = contact?.contact_preferences?.[0] || contact?.contact_preferences
   const token = prefs?.unsubscribe_token || contact?.id
   // LOCCOMMS.4 — `?l=` scopes the opt-out to the SENDING location, so leaving a
@@ -521,8 +521,19 @@ export function buildUnsubscribeUrl(contact, baseUrl, locationId) {
   // location. Emails already delivered carry the old location-less URL and must
   // keep working; someone clicking one expects to be removed, and removing them
   // from everything is the only direction that cannot generate a complaint.
-  const scope = locationId ? `?l=${encodeURIComponent(locationId)}` : ''
-  return `${baseUrl}/unsubscribe/${token}${scope}`
+  //
+  // COMMSFIX.C.4 — `&c=` names the campaign that carried this link, so
+  // /api/unsubscribe/[token] can attribute the opt-out. Without it
+  // campaigns.total_unsubscribed only ever moved on Postmark's own
+  // SubscriptionChange webhook (spam complaint / hard bounce / manual
+  // suppression), never on the primary path: the footer link and Gmail/Apple's
+  // one-click button, both of which resolve to our own endpoint. Absent for
+  // non-campaign sends (sequence steps) — attribution is per campaign only.
+  const params = []
+  if (locationId) params.push(`l=${encodeURIComponent(locationId)}`)
+  if (campaignId) params.push(`c=${encodeURIComponent(campaignId)}`)
+  const query = params.length ? `?${params.join('&')}` : ''
+  return `${baseUrl}/unsubscribe/${token}${query}`
 }
 
 /**

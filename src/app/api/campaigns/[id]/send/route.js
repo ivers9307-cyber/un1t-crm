@@ -30,10 +30,15 @@ export async function POST(_request, props) {
   const guard = assertLocationAccessOr404(user, campaign.location_id)
   if (guard) return guard
 
-  // Only draft / scheduled campaigns can be sent. 'sending' /
+  // Only draft / scheduled / failed campaigns can be sent. 'sending' /
   // 'sent' / 'cancelled' all reject — the operator should clone
   // the campaign if they want to send it again.
-  if (!['draft', 'scheduled'].includes(campaign.status)) {
+  //
+  // COMMSFIX.C.5 — 'failed' is re-sendable by design: it is the terminal state
+  // the cron assigns to a campaign whose populate kept erroring, and the whole
+  // point of surfacing it is that the operator fixes the cause (usually the
+  // audience filter) and sends again. Re-queueing clears last_error below.
+  if (!['draft', 'scheduled', 'failed'].includes(campaign.status)) {
     return NextResponse.json({
       success: false,
       error: `Campaign is '${campaign.status}', cannot send`,
@@ -80,6 +85,7 @@ export async function POST(_request, props) {
       status: 'queued',
       cancel_requested_at: null,    // clear any stale cancel flag from a previous abort
       scheduled_at: null,           // send-now overrides any scheduled time
+      last_error: null,             // COMMSFIX.C.5 — this attempt starts clean
     })
     .eq('id', params.id)
 

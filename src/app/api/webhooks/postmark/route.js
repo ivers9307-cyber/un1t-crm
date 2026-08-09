@@ -58,6 +58,53 @@ export function verifyPostmarkRequest({ headerValue, primarySecret, previousSecr
   return { ok: false, status: 403, reason: 'token_mismatch' }
 }
 
+/**
+ * COMMSFIX.C.2 — build the idempotency key for one Postmark event.
+ *
+ * `${RecordType}:${MessageID}` is stable for the lifetime of a message, so the
+ * mig 107 dedup layer did not merely drop Postmark's retries — it dropped every
+ * genuine repeat event, permanently. Prod: 927 multi-open sends in May 2026
+ * (pre-deploy) against ZERO in June/July/August across ~6,200 opened sends.
+ * Second clicks (even on a different link) and second bounces went the same way.
+ *
+ * A retry redelivers the IDENTICAL payload, so keying on a per-event field that
+ * Postmark itself sets keeps retries deduped while letting real repeats through:
+ *   • Open / Click  → ReceivedAt (per-event timestamp).
+ *   • Bounce        → Postmark's per-bounce `ID`.
+ *   • Delivery      → unchanged; one message delivers once.
+ *   • SubscriptionChange → unchanged when bound to a message. Postmark-side
+ *     suppressions (bulk import, manual) carry the ZERO GUID as MessageID, so
+ *     every one of them collided on a single key and only the first ever landed
+ *     — those get the recipient appended.
+ *
+ * Counter idempotency is the processor's job and already holds: FirstOpen gates
+ * total_opened, the status guards gate the rest, and COMMSFIX.C.1 put
+ * total_delivered on the delivered_at transition.
+ *
+ * Exported for unit test (src/lib/postmark-webhook-dedup.test.js).
+ */
+export function buildWebhookEventId(body) {
+  const recordType = body?.RecordType || 'unknown'
+  const messageId = body?.MessageID
+  switch (recordType) {
+    case 'Open':
+    case 'Click':
+      return `${recordType}:${messageId}:${body?.ReceivedAt ?? ''}`
+    case 'Bounce':
+      return `Bounce:${messageId}:${body?.ID ?? ''}`
+    case 'SubscriptionChange':
+      return isZeroGuid(messageId)
+        ? `SubscriptionChange:${messageId}:${body?.Recipient ?? ''}`
+        : `SubscriptionChange:${messageId}`
+    default:
+      return `${recordType}:${messageId}`
+  }
+}
+
+function isZeroGuid(messageId) {
+  return typeof messageId === 'string' && /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(messageId)
+}
+
 export async function POST(request) {
   const auth = verifyPostmarkRequest({
     headerValue: request.headers.get('x-webhook-token'),
@@ -100,12 +147,12 @@ export async function POST(request) {
   const recordType = body.RecordType || 'unknown'
   const db = createServerClient()
 
-  // Idempotency (mig 107). Same dedup as before — short-circuits
-  // duplicate Postmark retries BEFORE queueing so we don't enqueue
-  // the same event twice.
+  // Idempotency (mig 107) — short-circuits duplicate Postmark retries BEFORE
+  // queueing so we don't enqueue the same event twice. COMMSFIX.C.2 narrowed
+  // the key per record type; see buildWebhookEventId above for why.
   const dedup = await recordWebhookEvent({
     db, provider: WEBHOOK_PROVIDERS.POSTMARK,
-    eventId: `${recordType}:${messageId}`,
+    eventId: buildWebhookEventId(body),
   })
   if (dedup.seen) {
     return NextResponse.json({ success: true, deduped: true })

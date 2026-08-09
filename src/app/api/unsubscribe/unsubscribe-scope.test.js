@@ -24,6 +24,9 @@ const HATCH = 'loc-hatch'
 // mig 489 trigger fan the opt-out out to every location.
 function makeDb({ pref, locRow }) {
   const writes = { contact_preferences: [], contact_location_preferences: [], contacts: [], consent_log: [] }
+  // COMMSFIX.C.4 — the route now attributes an actual opt-out flip to the
+  // campaign that carried the link, so the fake has to record rpc calls.
+  const rpcCalls = []
   const db = {
     from(table) {
       const api = {
@@ -38,8 +41,9 @@ function makeDb({ pref, locRow }) {
       }
       return api
     },
+    rpc(fn, args) { rpcCalls.push([fn, args]); return Promise.resolve({ error: null }) },
   }
-  return { db, writes }
+  return { db, writes, rpcCalls }
 }
 
 const req = (url, body) => new Request(url, {
@@ -131,5 +135,84 @@ describe('LOCCOMMS.4 — per-location unsubscribe', () => {
     expect(patch.email_marketing).toBe(false)
     expect(patch.sms_marketing).toBeUndefined()
     expect(patch.whatsapp_marketing).toBeUndefined()
+  })
+})
+
+// COMMSFIX.C.4 — attribute one-click / footer unsubscribes to the campaign.
+//
+// campaigns.total_unsubscribed only ever moved on Postmark's own
+// SubscriptionChange webhook, which fires for POSTMARK-side suppressions (spam
+// complaint, hard bounce, manual). Gmail/Apple one-click and the email footer
+// both resolve HERE, so the counter an operator reads to spot a campaign that
+// burned the list sat near zero no matter how many people left.
+const CAMP = '11111111-2222-4333-8444-555555555555'
+
+describe('COMMSFIX.C.4 — campaign attribution on unsubscribe', () => {
+  it('increments total_unsubscribed for the campaign when the opt-out actually flipped', async () => {
+    const { db, rpcCalls } = makeDb({
+      pref: { id: 'p1', contact_id: 'c1', email_marketing: true, contacts: { id: 'c1' } },
+      locRow: { email_marketing: true, sms_marketing: true, whatsapp_marketing: true },
+    })
+    createServerClient.mockReturnValue(db)
+
+    await POST(req(`https://crm.example/api/unsubscribe/tok?l=${HATCH}&c=${CAMP}`), props)
+
+    expect(rpcCalls).toContainEqual([
+      'increment_campaign_metric',
+      { p_campaign_id: CAMP, p_field: 'total_unsubscribed' },
+    ])
+  })
+
+  it('does NOT increment when nothing flipped — a replayed click must not inflate it', async () => {
+    const { db, rpcCalls } = makeDb({
+      pref: { id: 'p1', contact_id: 'c1', email_marketing: false, contacts: { id: 'c1' } },
+      locRow: { email_marketing: false, sms_marketing: false, whatsapp_marketing: false },
+    })
+    createServerClient.mockReturnValue(db)
+
+    const res = await POST(req(`https://crm.example/api/unsubscribe/tok?l=${HATCH}&c=${CAMP}`), props)
+
+    expect(res.status).toBe(200)
+    expect(rpcCalls).toEqual([])
+  })
+
+  it('only counts an EMAIL opt-out — an SMS-only opt-out is not an email unsubscribe', async () => {
+    const { db, rpcCalls } = makeDb({
+      pref: { id: 'p1', contact_id: 'c1', email_marketing: false, contacts: { id: 'c1' } },
+      locRow: { email_marketing: false, sms_marketing: true, whatsapp_marketing: false },
+    })
+    createServerClient.mockReturnValue(db)
+
+    await POST(
+      req(`https://crm.example/api/unsubscribe/tok?l=${HATCH}&c=${CAMP}`, { channels: ['sms_marketing'] }),
+      props,
+    )
+
+    expect(rpcCalls).toEqual([])
+  })
+
+  it('ignores a garbage campaign id rather than firing an rpc that will raise', async () => {
+    const { db, rpcCalls } = makeDb({
+      pref: { id: 'p1', contact_id: 'c1', email_marketing: true, contacts: { id: 'c1' } },
+      locRow: { email_marketing: true, sms_marketing: true, whatsapp_marketing: true },
+    })
+    createServerClient.mockReturnValue(db)
+
+    await POST(req(`https://crm.example/api/unsubscribe/tok?l=${HATCH}&c=not-a-uuid`), props)
+
+    expect(rpcCalls).toEqual([])
+  })
+
+  it('with no c= at all, behaves exactly as before', async () => {
+    const { db, writes, rpcCalls } = makeDb({
+      pref: { id: 'p1', contact_id: 'c1', email_marketing: true, contacts: { id: 'c1' } },
+      locRow: { email_marketing: true, sms_marketing: true, whatsapp_marketing: true },
+    })
+    createServerClient.mockReturnValue(db)
+
+    await POST(req(`https://crm.example/api/unsubscribe/tok?l=${HATCH}`), props)
+
+    expect(rpcCalls).toEqual([])
+    expect(writes.contact_location_preferences).toHaveLength(1)
   })
 })
