@@ -75,6 +75,39 @@ describe('CampaignEditor — a code-authored draft opens in code mode', () => {
   })
 })
 
+describe('CampaignEditor — the schedule input seeds in LOCAL time', () => {
+  // Run this file under TZ=Europe/Dublin and TZ=America/New_York; the
+  // assertion is offset-derived so it holds in both.
+  const SCHEDULED = '2026-08-20T09:00:00.000Z'   // 10:00 Dublin (IST)
+
+  function expectedLocal(iso) {
+    const off = new Date(iso).getTimezoneOffset()
+    return new Date(Date.parse(iso) - off * 60_000).toISOString().slice(0, 16)
+  }
+
+  function openScheduleTray() {
+    fireEvent.click(screen.getByTitle('Send at a later date and time'))
+    return document.querySelector('input[type="datetime-local"]')
+  }
+
+  it('shows the operator wall clock, not the UTC one', () => {
+    renderEditor({ status: 'draft', scheduled_at: SCHEDULED, html_content: CODE_HTML })
+    expect(openScheduleTray().value).toBe(expectedLocal(SCHEDULED))
+  })
+
+  it('does not shift the send when the operator re-confirms without touching the time', () => {
+    renderEditor({ status: 'draft', scheduled_at: SCHEDULED, html_content: CODE_HTML })
+    // handleSchedule reinterprets the input value as local time; the seeded
+    // value must therefore round-trip back to the SAME instant.
+    expect(new Date(openScheduleTray().value).toISOString()).toBe(SCHEDULED)
+  })
+
+  it('leaves the input empty when nothing is scheduled', () => {
+    renderEditor({ status: 'draft', html_content: CODE_HTML })
+    expect(openScheduleTray().value).toBe('')
+  })
+})
+
 describe('CampaignEditor — deleting a draft lands somewhere real', () => {
   it('navigates to the sends list, not the 404 /email/campaigns', async () => {
     vi.stubGlobal('confirm', vi.fn(() => true))
