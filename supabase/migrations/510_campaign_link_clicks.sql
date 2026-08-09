@@ -126,7 +126,14 @@ select r.campaign_id, r.contact_id, c.location_id,
   cross join lateral jsonb_array_elements(r.clicked_links) e
  where r.clicked_links is not null
    and jsonb_typeof(r.clicked_links) = 'array'
-   and e->>'url' is not null;
+   and e->>'url' is not null
+   -- campaigns.location_id is NULLABLE (mig 005) while this table's is NOT
+   -- NULL, so one location-less campaign with clicks would abort the whole
+   -- migration. Prod has none today (verified 2026-08-09: 0 campaigns with a
+   -- null location_id, 0 click rows behind one), so this skips nothing now and
+   -- keeps the migration safe to re-run later. Such a click has no tenant
+   -- boundary and the report could never read it anyway.
+   and c.location_id is not null;
 
 comment on table campaign_link_clicks is
   'COMMSFIX.F (mig 510) — one row per Postmark Click event. Replaces the campaign_recipients.clicked_links jsonb array (and its read-modify-write). Written only by the Postmark webhook processor on the service-role client; read via campaign_link_click_stats().';
