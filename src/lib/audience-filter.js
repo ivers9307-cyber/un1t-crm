@@ -221,6 +221,28 @@ export class InvalidAudienceFilterError extends Error {
   }
 }
 
+// FILTER-P1.1 — an UNSET builder row: the operator clicked "Add filter" but
+// has not chosen a field yet ({ field: '', op: '', value: '' }).
+//
+// Before this, addFilter() seeded every new row with `Stage = member`. In the
+// send composer that was a defensible guess; in a sequence it was not —
+// SEQEXIT.1 made the audience filter a CONTINUING condition, re-checked before
+// every step, so one click of "Add filter" both restricted enrolment to
+// members AND exited every non-member mid-sequence. The host now supplies the
+// default; with none, the row starts unset and must be INERT: no predicate, no
+// validation error, no persisted meaning. Only a BLANK field is skipped — any
+// other unrecognised field still throws (a typo must never widen an audience).
+export function isUnsetFilterRow(f) {
+  return !f || typeof f !== 'object' || f.field == null || f.field === ''
+}
+
+// Drop unset rows before a filter leaves the builder for the count endpoint or
+// the database, so neither ever sees a half-built row.
+export function stripUnsetFilterRows(filter) {
+  if (!filter || !Array.isArray(filter.filters)) return filter
+  return { ...filter, filters: filter.filters.filter(f => !isUnsetFilterRow(f)) }
+}
+
 // ── OR support (PostgREST .or()) ─────────────────────────────────
 // When filter.logic === 'or', the scalar predicates must be combined with
 // OR, not chained (chaining ANDs). PostgREST expresses OR as a single
@@ -358,6 +380,9 @@ export function applyAudienceFilter(query, filter) {
     if (!f || typeof f !== 'object') {
       throw new InvalidAudienceFilterError('Each filter must be an object')
     }
+
+    // FILTER-P1.1 — a row with no field chosen yet is inert, not an error.
+    if (isUnsetFilterRow(f)) continue
 
     const { field, op, value } = f
     const fieldConfig = AUDIENCE_FIELDS[field]

@@ -189,7 +189,14 @@ function needsValue(op) {
   return !['is_null', 'not_null'].includes(op)
 }
 
-export default function AudienceBuilder({ filter, onChange, audienceCount, disabled = false }) {
+// FILTER-P1.1 — the row "Add filter" used to hard-code for every host. It is
+// now opt-in: a host that wants a starting guess passes it as defaultFilterRow.
+// Kept here (not inlined at four call sites) so the guess has one definition.
+export const STAGE_MEMBER_DEFAULT_ROW = Object.freeze({
+  field: 'pipeline_stage_slug', op: 'eq', value: 'member',
+})
+
+export default function AudienceBuilder({ filter, onChange, audienceCount, disabled = false, defaultFilterRow = null }) {
   const filters = filter?.filters || []
   const logic = filter?.logic || 'and'
 
@@ -246,13 +253,16 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
   }
 
   function addFilter() {
-    // FUNNEL.1 — default new rows to Stage = member (established
-    // members: the most common broadcast audience). lead_status is no
-    // longer in FIELD_OPTIONS; the audience-filter allowlist would
-    // reject it.
+    // FILTER-P1.1 — the HOST decides the starting row. FUNNEL.1's blanket
+    // `Stage = member` default was a defensible guess in a send composer and
+    // actively harmful in a sequence: since SEQEXIT.1 the audience filter is a
+    // CONTINUING condition re-checked before every step, so a click of "Add
+    // filter" both narrowed enrolment to members and exited every non-member
+    // mid-sequence. With no defaultFilterRow the row starts UNSET — inert
+    // until the operator picks a field (see isUnsetFilterRow).
     updateFilter([
       ...filters,
-      { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+      defaultFilterRow ? { ...defaultFilterRow } : { field: '', op: '', value: '' },
     ])
   }
 
@@ -266,6 +276,12 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
   }
 
   function handleFieldChange(index, newField) {
+    // FILTER-P1.1 — back to the placeholder: clear op + value too, or the row
+    // keeps a stale predicate that no visible control explains.
+    if (!newField) {
+      updateRow(index, { field: '', op: '', value: '' })
+      return
+    }
     const config = getFieldConfig(newField)
     if (!config) return // only reachable if the <select> ever carries an unknown value
     const ops = opsForField(config)
@@ -318,6 +334,40 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
         {filters.map((f, index) => {
           const fieldConfig = getFieldConfig(f.field)
 
+          // FILTER-P1.1 — a row the operator has not given a field to yet.
+          // Renders as a bare "Choose a field…" picker: no operator, no value,
+          // and applyAudienceFilter compiles it to nothing, so it can neither
+          // narrow an audience nor fail validation while it sits half-built.
+          if (!f.field) {
+            return (
+              <div key={index} className="flex items-center gap-2 bg-un1t-surface border border-un1t-border rounded-lg p-3">
+                {index > 0 && (
+                  <span className="text-xs text-un1t-muted font-medium w-10 text-center uppercase">{logic}</span>
+                )}
+                {index === 0 && filters.length > 1 && <span className="w-10" />}
+                <select
+                  value=""
+                  disabled={disabled}
+                  onChange={e => handleFieldChange(index, e.target.value)}
+                  className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
+                >
+                  <option value="">Choose a field…</option>
+                  {FIELD_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => removeFilter(index)}
+                  className="p-1.5 text-un1t-muted hover:text-red-400 transition-colors rounded disabled:opacity-50"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            )
+          }
+
           // COMMSFIX.B.3 — unknown/legacy saved field (lead_status, or a
           // library field not in FIELD_OPTIONS): render an inert warning row
           // instead of silently masquerading as the first field option. Only
@@ -365,6 +415,9 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
                 onChange={e => handleFieldChange(index, e.target.value)}
                 className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
               >
+                {/* FILTER-P1.1 — reachable "unset" so a row can be emptied
+                    without deleting it (and so a saved unset row round-trips). */}
+                <option value="">Choose a field…</option>
                 {FIELD_OPTIONS.map(opt => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}

@@ -10,7 +10,8 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { MessageSquare, MessageCircle, Mail, Send, Clock, Check, AlertTriangle, Users, Loader2, Filter, Bookmark } from 'lucide-react'
 import { Button } from '@/components/ui'
-import AudienceBuilder from '@/components/AudienceBuilder'
+import AudienceBuilder, { STAGE_MEMBER_DEFAULT_ROW } from '@/components/AudienceBuilder'
+import { stripUnsetFilterRows } from '@/lib/audience-filter'
 import ContactMultiSelect from './ContactMultiSelect'
 import { useUnlayerEditor } from './useUnlayerEditor'
 import { smsSegmentInfo, SMS_MAX_LEN, SMS_MERGE_TAGS, waBodyVariables, WA_VARIABLE_FIELDS } from '@/lib/communications/compose'
@@ -142,10 +143,13 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
   // Explicit "pick people" mode is SMS/WhatsApp only — email hands off to the
   // campaign editor, whose AudienceBuilder can't represent an id-in filter yet.
   const useExplicit = audienceMode === 'people' && channel !== 'email'
+  // FILTER-P1.1 — strip half-built rows here, at the single point the filter
+  // leaves the builder for the count endpoint AND for every persist path
+  // below, so an unset row can neither be counted nor saved.
   const effectiveFilter = useMemo(() => (
     useExplicit
       ? { logic: 'and', filters: [{ field: 'id', op: 'in', value: people.map(p => p.id) }] }
-      : filter
+      : stripUnsetFilterRows(filter)
   ), [useExplicit, people, filter])
 
   // Inline Unlayer editor for the email channel (the full editor stays at
@@ -506,7 +510,7 @@ export default function UnifiedSendComposer({ locationId, channels = [], templat
         )}
         {useExplicit
           ? <ContactMultiSelect locationId={locationId} value={people} onChange={setPeople} />
-          : <AudienceBuilder filter={filter} onChange={handleFilterChange} audienceCount={null} />}
+          : <AudienceBuilder filter={filter} onChange={handleFilterChange} audienceCount={null} defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW} />}
         <div className="mt-2 flex flex-col gap-0.5 text-xs text-un1t-subtle">
           <div className="flex items-center gap-1.5">
             <Users size={13} />

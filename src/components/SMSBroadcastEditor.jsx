@@ -18,7 +18,7 @@ import {
   ArrowLeft, Save, Send, Users, MessageSquare,
   CheckCircle2, XCircle, Trash2, Ban, Calendar, Clock,
 } from 'lucide-react'
-import AudienceBuilder from './AudienceBuilder'
+import AudienceBuilder, { STAGE_MEMBER_DEFAULT_ROW } from './AudienceBuilder'
 
 // SMS segment math — single GSM7 fits 160 chars; multi-segment
 // concatenation is 153 per segment (7 lost to UDH per segment).
@@ -349,6 +349,7 @@ export default function SMSBroadcastEditor({ broadcast, recipients = [], locatio
               onChange={setAudienceFilter}
               audienceCount={null}
               disabled={isLocked || isScheduled}
+              defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW}
             />
           </div>
 

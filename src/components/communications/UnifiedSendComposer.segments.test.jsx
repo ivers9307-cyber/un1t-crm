@@ -26,6 +26,9 @@ vi.mock('@/components/AudienceBuilder', () => ({
       <button type="button" onClick={() => onChange(HAND_EDITED)}>edit filter by hand</button>
     </div>
   ),
+  // FILTER-P1.1 — the real module exports this named default row; the mock
+  // must too, or every host importing it fails to resolve.
+  STAGE_MEMBER_DEFAULT_ROW: { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
 }))
 vi.mock('./ContactMultiSelect', () => ({ default: () => <div /> }))
 vi.mock('./useUnlayerEditor', async () => {

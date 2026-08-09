@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Save, Send, Users, CheckCircle2, XCircle, Ban, Clock } from 'lucide-react'
-import AudienceBuilder from './AudienceBuilder'
+import AudienceBuilder, { STAGE_MEMBER_DEFAULT_ROW } from './AudienceBuilder'
 import { estimateDripDays } from '@/lib/whatsapp-drip'
 import { groupWaTemplates, UNGROUPED_LABEL } from '@shared/wa-template-groups'
 
@@ -609,10 +609,14 @@ export default function WABroadcastEditor({ broadcast, templates, locationId, us
               <p className="text-xs text-un1t-muted mb-4">
                 Only contacts with a WhatsApp number who have opted in to WhatsApp marketing will receive this broadcast.
               </p>
+              {/* FILTER-P1.1 — a send surface keeps the legacy Stage = member
+                  starting guess; only the sequence + contacts builders start
+                  unset (an unset default here would WIDEN a broadcast). */}
               <AudienceBuilder
                 filter={audienceFilter}
                 onChange={setAudienceFilter}
                 audienceCount={null}
+                defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW}
               />
             </div>
           </div>

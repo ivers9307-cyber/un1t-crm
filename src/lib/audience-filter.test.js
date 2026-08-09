@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { applyAudienceFilter, AUDIENCE_FIELDS, InvalidAudienceFilterError, resolveTagFilters, resolveEventFilters, applyAudienceFilterAsync, mergeRegistrationContactIds, LIVE_REGISTRATION_STATUSES, validateAudienceFilter } from './audience-filter.js'
+import { applyAudienceFilter, AUDIENCE_FIELDS, InvalidAudienceFilterError, resolveTagFilters, resolveEventFilters, applyAudienceFilterAsync, mergeRegistrationContactIds, LIVE_REGISTRATION_STATUSES, validateAudienceFilter, isUnsetFilterRow, stripUnsetFilterRows } from './audience-filter.js'
 
 // Mock Supabase query builder — every method returns `this` and records the call.
 function makeMockQuery() {
@@ -907,5 +907,73 @@ describe('resolveTagFilters / resolveEventFilters — paginate past the 1000-row
     const inCall = calls.find(c => c[0] === 'in' && c[1] === 'id')
     expect(inCall).toBeTruthy()
     expect(inCall[2]).toHaveLength(1800)
+  })
+})
+
+// ── FILTER-P1.1 — unset rows are inert ───────────────────────────────
+//
+// The builder can now hold a row the operator has not yet given a field to
+// ({ field: '', op: '', value: '' }). It must produce NO predicate, NO
+// validation error and NO count change anywhere — otherwise "Add filter"
+// would 400 the count endpoint the moment it was clicked.
+describe('unset filter rows (P1.1)', () => {
+  let q
+  beforeEach(() => { q = makeMockQuery() })
+
+  it('applies no predicate for a row with an empty field', () => {
+    applyAudienceFilter(q.query, { filters: [{ field: '', op: '', value: '' }] })
+    expect(q.calls).toHaveLength(0)
+  })
+
+  it('applies no predicate for a row with a missing field', () => {
+    applyAudienceFilter(q.query, { filters: [{ op: 'eq', value: 'x' }] })
+    expect(q.calls).toHaveLength(0)
+  })
+
+  it('still applies the set rows alongside an unset one', () => {
+    applyAudienceFilter(q.query, {
+      filters: [
+        { field: '', op: '', value: '' },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+      ],
+    })
+    expect(q.calls).toEqual([['eq', 'pipeline_stage_slug', 'member']])
+  })
+
+  it('still rejects a NON-empty unknown field (only blank fields are skipped)', () => {
+    expect(() => applyAudienceFilter(q.query, { filters: [{ field: 'password', op: 'eq', value: 'x' }] }))
+      .toThrow(/Unknown audience field/)
+  })
+
+  it('validateAudienceFilter accepts a filter containing an unset row', () => {
+    expect(() => validateAudienceFilter({ logic: 'and', filters: [{ field: '', op: '', value: '' }] })).not.toThrow()
+  })
+
+  it('isUnsetFilterRow identifies blank rows only', () => {
+    expect(isUnsetFilterRow({ field: '', op: '', value: '' })).toBe(true)
+    expect(isUnsetFilterRow({ op: 'eq' })).toBe(true)
+    expect(isUnsetFilterRow(null)).toBe(true)
+    expect(isUnsetFilterRow({ field: 'pipeline_stage_slug', op: 'eq', value: 'member' })).toBe(false)
+  })
+
+  it('stripUnsetFilterRows drops unset rows before a filter is counted or persisted', () => {
+    const filter = {
+      logic: 'and',
+      filters: [
+        { field: '', op: '', value: '' },
+        { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+      ],
+    }
+    expect(stripUnsetFilterRows(filter)).toEqual({
+      logic: 'and',
+      filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'member' }],
+    })
+  })
+
+  it('stripUnsetFilterRows passes null / empty filters straight through', () => {
+    expect(stripUnsetFilterRows(null)).toBe(null)
+    expect(stripUnsetFilterRows(undefined)).toBe(undefined)
+    const clean = { logic: 'and', filters: [{ field: 'gender', op: 'eq', value: 'male' }] }
+    expect(stripUnsetFilterRows(clean)).toEqual(clean)
   })
 })

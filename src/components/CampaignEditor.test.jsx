@@ -17,7 +17,12 @@ import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/re
 const push = vi.fn()
 const refresh = vi.fn()
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh }) }))
-vi.mock('./AudienceBuilder', () => ({ default: () => <div data-testid="audience-builder" /> }))
+vi.mock('./AudienceBuilder', () => ({
+  default: () => <div data-testid="audience-builder" />,
+  // FILTER-P1.1 — the real module exports this named default row; the mock
+  // must too, or every host importing it fails to resolve.
+  STAGE_MEMBER_DEFAULT_ROW: { field: 'pipeline_stage_slug', op: 'eq', value: 'member' },
+}))
 
 let deleteError = null
 vi.mock('@/lib/supabase', () => ({

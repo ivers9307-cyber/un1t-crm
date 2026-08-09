@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation'
 import { createBrowserClient } from '@/lib/supabase'
 import { isoToLocalDatetime, localDatetimeToIso } from '@/lib/datetime-local'
 import { ArrowLeft, Save, Send, Users, Code, Paintbrush, Mail, Loader2, CheckCircle2, AlertCircle, Calendar, X, Trash2 } from 'lucide-react'
-import AudienceBuilder from './AudienceBuilder'
+import AudienceBuilder, { STAGE_MEMBER_DEFAULT_ROW } from './AudienceBuilder'
+import { stripUnsetFilterRows } from '@/lib/audience-filter'
 import Link from 'next/link'
 
 export default function CampaignEditor({ campaign, locationId, userId, initialAudienceFilter = null }) {
@@ -240,7 +241,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
         reply_to: replyTo || null,
         design_json: design,
         html_content: html,
-        audience_filter: audienceFilter,
+        audience_filter: stripUnsetFilterRows(audienceFilter),
         location_id: locationId,
         created_by: userId,
         // Marketing → broadcast stream; Utility → outbound (transactional)
@@ -502,7 +503,8 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
       const response = await fetch(`/api/campaigns/${campaignId}/preview`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filter: filterOverride ?? audienceFilter, email_type: emailType }),
+        // FILTER-P1.1 — a half-built row never reaches the count endpoint.
+        body: JSON.stringify({ filter: stripUnsetFilterRows(filterOverride ?? audienceFilter), email_type: emailType }),
       })
       const result = await response.json().catch(() => ({}))
       if (!response.ok || !result.success) {
@@ -865,6 +867,7 @@ export default function CampaignEditor({ campaign, locationId, userId, initialAu
                 refreshAudienceCount()
               }}
               audienceCount={audienceCount}
+              defaultFilterRow={STAGE_MEMBER_DEFAULT_ROW}
             />
           </div>
         )}

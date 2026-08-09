@@ -190,3 +190,93 @@ describe('AudienceBuilder — disabled prop (B3.4)', () => {
     expect(onChange).toHaveBeenCalled()
   })
 })
+
+// ── FILTER-P1.1 — the dangerous default ──────────────────────────────
+//
+// addFilter used to hard-code `Stage = member` for every host. Since
+// SEQEXIT.1 made a sequence's audience a CONTINUING condition (re-checked
+// before every step), one click of "Add filter" in SequenceSettings both
+// restricted enrolment to members AND exited every non-member mid-sequence.
+// The host now supplies the default; with none, the row starts UNSET and is
+// inert until a field is chosen.
+describe('AudienceBuilder — host-supplied default row (P1.1)', () => {
+  function addRow(props = {}) {
+    const onChange = vi.fn()
+    const { container } = render(
+      <AudienceBuilder filter={{ logic: 'and', filters: [] }} onChange={onChange} audienceCount={null} {...props} />
+    )
+    const addBtn = Array.from(container.querySelectorAll('button')).find(b => /add filter/i.test(b.textContent))
+    fireEvent.click(addBtn)
+    return onChange
+  }
+
+  it('adds an UNSET row when the host supplies no default (sequences, contacts)', () => {
+    const onChange = addRow()
+    expect(onChange).toHaveBeenCalledWith({ logic: 'and', filters: [{ field: '', op: '', value: '' }] })
+  })
+
+  it('adds the host default row when one is supplied (send composers keep their guess)', () => {
+    const onChange = addRow({ defaultFilterRow: { field: 'pipeline_stage_slug', op: 'eq', value: 'member' } })
+    expect(onChange).toHaveBeenCalledWith({
+      logic: 'and',
+      filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'member' }],
+    })
+  })
+
+  it('renders an unset row as a "choose a field" placeholder with no operator or value control', () => {
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: '', op: '', value: '' }] }}
+        onChange={() => {}}
+        audienceCount={null}
+      />
+    )
+    const selects = rowSelects(container)
+    // Exactly one select: the field picker. No op select, no value control.
+    expect(selects).toHaveLength(1)
+    expect(container.querySelectorAll('input')).toHaveLength(0)
+    expect(selects[0].value).toBe('')
+    expect(optionValues(selects[0])[0]).toBe('')
+    expect(selects[0].querySelector('option').textContent).toMatch(/choose a field/i)
+  })
+
+  it('does NOT render the unknown-field warning for an unset row', () => {
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: '', op: '', value: '' }] }}
+        onChange={() => {}}
+        audienceCount={null}
+      />
+    )
+    expect(container.textContent).not.toMatch(/unsupported field/i)
+  })
+
+  it('choosing a field on an unset row fills in a usable op + value', () => {
+    const onChange = vi.fn()
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: '', op: '', value: '' }] }}
+        onChange={onChange}
+        audienceCount={null}
+      />
+    )
+    fireEvent.change(rowSelects(container)[0], { target: { value: 'pipeline_stage_slug' } })
+    expect(onChange).toHaveBeenCalledWith({
+      logic: 'and',
+      filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'new_lead' }],
+    })
+  })
+
+  it('lets an operator revert a chosen row back to unset', () => {
+    const onChange = vi.fn()
+    const { container } = render(
+      <AudienceBuilder
+        filter={{ logic: 'and', filters: [{ field: 'pipeline_stage_slug', op: 'eq', value: 'member' }] }}
+        onChange={onChange}
+        audienceCount={null}
+      />
+    )
+    fireEvent.change(rowSelects(container)[0], { target: { value: '' } })
+    expect(onChange).toHaveBeenCalledWith({ logic: 'and', filters: [{ field: '', op: '', value: '' }] })
+  })
+})
