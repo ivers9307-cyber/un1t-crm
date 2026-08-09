@@ -158,6 +158,27 @@ export async function processPostmarkEvent(db, body) {
           }
         }
 
+        // COMMSFIX.C.1c — C.1 shrinks the race to a single INSERT, but a
+        // Delivery that still beats it is lost FOREVER: the webhook dedup key
+        // rejects Postmark's retry at the door and nothing else ever sets
+        // delivered_at, so recalculate_campaign_stats keeps reporting the gap
+        // as fact. Silence is exactly how this defect survived months of
+        // campaigns, so the one case that means real loss — no email_sends row
+        // exists for the message AT ALL — is logged. Zero updated rows is the
+        // normal replay path (the row is already delivered), so the cheap
+        // count probe only runs on that branch and only to tell the two apart.
+        if (!(deliveredSends || []).length) {
+          const { count: knownSends } = await db.from('email_sends')
+            .select('id', { count: 'exact', head: true })
+            .eq('postmark_message_id', messageId)
+          if (!knownSends) {
+            console.error(
+              `[postmark processor] Delivery for unknown message ${messageId} — no email_sends row; ` +
+              'delivery NOT recorded and the retry will be deduped. Suspect the send-loop insert race.'
+            )
+          }
+        }
+
         const campaignId = (deliveredSends || []).find(s => s?.campaign_id)?.campaign_id
         if (campaignId) {
           const { error } = await db.rpc('increment_campaign_metric', {

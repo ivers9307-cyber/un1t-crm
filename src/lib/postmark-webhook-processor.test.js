@@ -275,7 +275,7 @@ describe('processPostmarkEvent — ticket delivery stamping (EMAIL-DELIVERY.1)',
 //   • The recipient stamp must also match rows still in 'sending'. The chunk
 //     claim flips queued→sending and the Delivery webhook routinely beats the
 //     per-recipient 'sent' update, so a 'sending' row was silently skipped.
-function stubDeliveryTransitionDb({ updatedRows = [], recipientRows = [] } = {}) {
+function stubDeliveryTransitionDb({ updatedRows = [], recipientRows = [], existingSendCount = 1 } = {}) {
   const rpcCalls = []
   const sendUpdates = []
   const recipientUpdates = []
@@ -292,9 +292,16 @@ function stubDeliveryTransitionDb({ updatedRows = [], recipientRows = [] } = {})
         return Promise.resolve({ data: recipientRows, error: null })
       }
       if (b._op === 'update') return Promise.resolve({ data: null, error: null })
+      // head:true count probe — "does ANY email_sends row exist for this id"
+      if (b._count && table === 'email_sends') {
+        return Promise.resolve({ data: null, count: existingSendCount, error: null })
+      }
       return Promise.resolve({ data: shape === 'single' ? null : [], error: null })
     }
-    b.select = () => (b._op === 'update' ? settle('list') : b)
+    b.select = (_cols, opts) => {
+      if (opts?.head) b._count = true
+      return b._op === 'update' ? settle('list') : b
+    }
     b.update = (values) => { b._op = 'update'; b._values = values; return b }
     b.eq = (col, val) => { b._filters.push(['eq', col, val]); return b }
     b.in = (col, val) => { b._filters.push(['in', col, val]); return b }
@@ -372,6 +379,34 @@ describe('processPostmarkEvent — Delivery transition guard (COMMSFIX.C.1)', ()
     expect(fallback.values.status).toBe('delivered')
     expect(fallback.filters).toContainEqual(['eq', 'campaign_id', 'camp1'])
     expect(fallback.filters).toContainEqual(['eq', 'contact_id', 'c1'])
+  })
+
+  // COMMSFIX.C.1c — the residual window C.1 leaves is small (one INSERT) but
+  // real, and a Delivery lost in it is lost FOREVER: the webhook dedup key
+  // rejects Postmark's retry at the door, and nothing else ever sets
+  // delivered_at. Silence is precisely how this defect hid for months, so the
+  // one case that means data loss — no email_sends row exists AT ALL for the
+  // message — has to be loud. A replay of an already-delivered message also
+  // returns zero updated rows and must stay quiet.
+  it('logs loudly when a Delivery arrives for a message with no email_sends row', async () => {
+    const db = stubDeliveryTransitionDb({ updatedRows: [], existingSendCount: 0 })
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await processPostmarkEvent(db, DELIVERY)
+
+    expect(spy).toHaveBeenCalled()
+    expect(spy.mock.calls.flat().join(' ')).toMatch(/pm-d1/)
+    spy.mockRestore()
+  })
+
+  it('stays quiet for a replayed Delivery whose send row is already delivered', async () => {
+    const db = stubDeliveryTransitionDb({ updatedRows: [], existingSendCount: 1 })
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await processPostmarkEvent(db, DELIVERY)
+
+    expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
   })
 
   it('does NOT run the fallback when the message-id match already stamped a row', async () => {
