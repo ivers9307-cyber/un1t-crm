@@ -17,6 +17,23 @@ import { findBcaSubmissionByMessageId, recordBcaPostmarkEvent } from './bca-even
 import { recordTicketMessageDelivery } from './email-delivery-status.js'
 
 /**
+ * COMMSFIX.C.3 — call a best-effort counter RPC and LOG any failure.
+ *
+ * Best-effort means "never fail the event", not "never tell anyone". Both
+ * failure channels have to be covered: supabase-js builders are thenables with
+ * no .catch (so the await needs a try/catch), and PostgREST/Postgres errors
+ * come back in the RESULT object rather than as a throw.
+ */
+async function reportRpc(db, fn, args) {
+  try {
+    const { error } = await db.rpc(fn, args)
+    if (error) console.error(`[postmark processor] ${fn} failed:`, error.message)
+  } catch (err) {
+    console.error(`[postmark processor] ${fn} threw:`, err?.message || err)
+  }
+}
+
+/**
  * Process a single Postmark webhook payload.
  *
  * @param {SupabaseClient} db — service-role client
@@ -129,7 +146,12 @@ export async function processPostmarkEvent(db, body) {
           if (body.FirstOpen) {
             // supabase-js builders are thenables, not Promises — they
             // have .then but no .catch. Wrap in try/catch around await.
-            try { await db.rpc('increment_contact_opens', { p_contact_id: openSend.contact_id }) } catch {}
+            // COMMSFIX.C.3 — still best-effort, but no longer SILENT. This
+            // call spent months hitting a function that did not exist (mig 508
+            // creates it) and nothing anywhere said so: the catch swallowed
+            // throws, and supabase-js returns PostgREST errors in the result
+            // rather than throwing, so the error object went straight in the bin.
+            await reportRpc(db, 'increment_contact_opens', { p_contact_id: openSend.contact_id })
           }
 
           await db.from('campaign_recipients')
@@ -197,7 +219,8 @@ export async function processPostmarkEvent(db, body) {
             if (error) console.error('[postmark processor] total_clicked increment failed:', error.message)
           }
 
-          try { await db.rpc('increment_contact_clicks', { p_contact_id: clickSend.contact_id }) } catch {}
+          // COMMSFIX.C.3 — see the Open handler; best-effort but logged.
+          await reportRpc(db, 'increment_contact_clicks', { p_contact_id: clickSend.contact_id })
         }
         break
       }

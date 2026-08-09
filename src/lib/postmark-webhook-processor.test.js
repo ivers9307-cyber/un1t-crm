@@ -350,3 +350,82 @@ describe('processPostmarkEvent — Delivery transition guard (COMMSFIX.C.1)', ()
     expect(statuses).toEqual(expect.arrayContaining(['sent', 'queued', 'sending']))
   })
 })
+
+// ── COMMSFIX.C.3 — the contact engagement RPCs were failing in total silence ──
+//
+// increment_contact_opens / increment_contact_clicks were called from here but
+// NEVER EXISTED in the database (a live pg_proc check confirmed it; only a
+// passing mention in mig 314's comments). Two layers hid it: `try { await } {}`
+// swallowed the throw, and supabase-js reports PostgREST errors in the RESULT,
+// not by throwing, so even without the catch nothing would have surfaced. The
+// columns they feed — contacts.total_emails_opened / total_emails_clicked — are
+// live AudienceBuilder fields, so 'Emails Clicked > 0' matched nobody and
+// 'Emails Opened = 0' swept in ~1,900 contacts who do open. Mig 508 creates the
+// functions; this pins that a future failure is at least LOUD.
+function stubRpcFailureDb({ send, failing }) {
+  const calls = []
+  function builder(table) {
+    const b = { _op: 'select' }
+    const settle = (shape) => {
+      if (b._op === 'update') return Promise.resolve({ data: [], error: null })
+      return Promise.resolve({ data: shape === 'single' ? (table === 'email_sends' ? send : null) : [], error: null })
+    }
+    b.select = () => (b._op === 'update' ? settle('list') : b)
+    b.update = () => { b._op = 'update'; return b }
+    b.eq = () => b
+    b.in = () => b
+    b.is = () => b
+    b.not = () => b
+    b.or = () => b
+    b.single = () => settle('single')
+    b.maybeSingle = () => settle('single')
+    b.then = (resolve, reject) => settle('list').then(resolve, reject)
+    return b
+  }
+  return {
+    calls,
+    from: builder,
+    rpc: (fn) => {
+      calls.push(fn)
+      return fn === failing
+        ? Promise.resolve({ error: { message: `function public.${fn} does not exist` } })
+        : Promise.resolve({ error: null })
+    },
+  }
+}
+
+describe('processPostmarkEvent — contact engagement RPC failures are logged (COMMSFIX.C.3)', () => {
+  it('logs when increment_contact_opens fails instead of swallowing it', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = stubRpcFailureDb({ send: { id: 's1', contact_id: 'c1', campaign_id: null }, failing: 'increment_contact_opens' })
+
+    const r = await processPostmarkEvent(db, { RecordType: 'Open', MessageID: 'pm-1', FirstOpen: true })
+
+    expect(r.ok).toBe(true)
+    expect(db.calls).toContain('increment_contact_opens')
+    expect(err.mock.calls.flat().join(' ')).toMatch(/increment_contact_opens/)
+    err.mockRestore()
+  })
+
+  it('logs when increment_contact_clicks fails instead of swallowing it', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = stubRpcFailureDb({ send: { id: 's1', contact_id: 'c1', campaign_id: null }, failing: 'increment_contact_clicks' })
+
+    const r = await processPostmarkEvent(db, { RecordType: 'Click', MessageID: 'pm-1', OriginalLink: 'https://a' })
+
+    expect(r.ok).toBe(true)
+    expect(db.calls).toContain('increment_contact_clicks')
+    expect(err.mock.calls.flat().join(' ')).toMatch(/increment_contact_clicks/)
+    err.mockRestore()
+  })
+
+  it('a working rpc logs nothing', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const db = stubRpcFailureDb({ send: { id: 's1', contact_id: 'c1', campaign_id: null }, failing: null })
+
+    await processPostmarkEvent(db, { RecordType: 'Open', MessageID: 'pm-1', FirstOpen: true })
+
+    expect(err).not.toHaveBeenCalled()
+    err.mockRestore()
+  })
+})
