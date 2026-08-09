@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Plus, Trash2, Users, AlertTriangle, Sparkles } from 'lucide-react'
 // FILTER-A.1 — the verified preset definitions live in their own module so the
 // counts they produce can be checked against the spec table without rendering.
@@ -14,7 +14,42 @@ import { AUDIENCE_FIELDS } from '@/lib/audience-filter'
 // UTC one; `new Date().toISOString().split('T')[0]` is lint-banned for this.
 import { dublinTodayStr } from '@/lib/dublin-time'
 
+// FILTER-A.2 — the groups an operator thinks in, in the order they think of
+// them. Rendered as <optgroup>s; every FIELD_OPTIONS entry must name one (the
+// fields test enforces it), so a new field cannot land ungrouped at the bottom
+// of a wall of 39 options the way the old DB-column ordering let it.
+export const FIELD_GROUPS = Object.freeze([
+  'Funnel',
+  'Membership & billing',
+  'Attendance',
+  'Money',
+  'Email behaviour',
+  'Tags & labels',
+  'Events',
+  'Dates & tenure',
+  'Profile & data quality',
+])
+
+// FILTER-A.2 — funnel slugs are stored raw and used to be rendered by
+// `replace(/_/g,' ')`, which produced "classpass" and "pack member". Display
+// names are explicit so ClassPass keeps its capitals and a retired slug that
+// is NOT in this map is detectable (see the saved-value warning below —
+// three live campaigns still carry `active_member`).
+const STAGE_LABELS = Object.freeze({
+  new_lead: 'New lead',
+  first_class: 'First class',
+  second_class: 'Second class',
+  trial_done: 'Trial done',
+  converted: 'Converted',
+  member: 'Member',
+  pack_member: 'Pack member',
+  classpass: 'ClassPass',
+  cold_lead: 'Cold lead',
+  dormant: 'Dormant',
+})
+
 export const FIELD_OPTIONS = [
+  // ── Funnel ──────────────────────────────────────────────────────
   // FUNNEL.1 — primary funnel-stage filter (canonical funnel slugs,
   // mig 350). Denormalised onto contacts.pipeline_stage_slug (originally
   // mig 155, synced from deals.stage_id via trigger). Stage placement is
@@ -22,98 +57,157 @@ export const FIELD_OPTIONS = [
   // it. It replaced the legacy "Lead Status" filter that was effectively
   // dead (>99% defaulted on import and was never reliably updated).
   { value: 'pipeline_stage_slug',   label: 'Stage',                 type: 'select',
+    group: 'Funnel',
+    hint: 'Where our funnel classifier places them. This is the one to use — Membership Status below is the raw vendor field it reads.',
     options: ['new_lead', 'first_class', 'second_class', 'trial_done',
-              'converted', 'member', 'pack_member', 'classpass', 'cold_lead', 'dormant'] },
+              'converted', 'member', 'pack_member', 'classpass', 'cold_lead', 'dormant'],
+    valueLabels: STAGE_LABELS },
+  { value: 'lead_source',           label: 'Lead Source',           type: 'select',
+    group: 'Funnel',
+    options: ['booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'classpass', 'other'],
+    valueLabels: { walkin: 'Walk-in', classpass: 'ClassPass', whatsapp: 'WhatsApp', tiktok: 'TikTok', meta: 'Meta' } },
+  { value: 'glofox_source',         label: 'Signup Source',         type: 'text',
+    group: 'Funnel',
+    hint: 'How the booking system recorded the signup. Lead Source above is ours and is the one campaigns normally use.' },
   // GLOFOX2.1.8 — Glofox-side raw membership status. This is what the
   // pipeline classifier reads — most operators should filter on
   // "Stage" above instead. Kept as an advanced filter for power users
   // (credit_member upsells, classpass_payg cohorts).
-  { value: 'glofox_membership_status', label: 'Glofox Raw Status (advanced)', type: 'select',
+  { value: 'glofox_membership_status', label: 'Membership Status (advanced)', type: 'select',
+    group: 'Membership & billing',
+    hint: 'Raw status from the booking system — the input our Stage classifier reads. Prefer Stage unless you specifically need a raw value.',
     options: ['cold', 'tour', 'no_sale_tour', 'trial', 'no_sale_trial',
-              'member', 'credit_member', 'classpass_payg', 'ex_member', 'lead'] },
+              'member', 'credit_member', 'classpass_payg', 'ex_member', 'lead'],
+    valueLabels: { no_sale_tour: 'Tour, no sale', no_sale_trial: 'Trial, no sale',
+                   credit_member: 'Credit member', classpass_payg: 'ClassPass / PAYG', ex_member: 'Ex-member' } },
   // CHURN-PREP.2 — current Glofox membership plan. The plan list is
   // operator-defined (not a fixed enum), so the value dropdown is
   // loaded dynamically from /api/contacts/membership-plans at mount.
-  { value: 'glofox_membership_plan', label: 'Membership Plan',      type: 'plan-select' },
+  { value: 'glofox_membership_plan', label: 'Membership Plan',      type: 'plan-select',
+    group: 'Membership & billing',
+    hint: 'The named plan they are on ("3 Month Membership"). Membership Type below is the shape of it (recurring / pack / pay-as-you-go).' },
   // GLOFOX-PROFILE (mig 196) — wider Glofox membership profile,
   // synced nightly. Lets campaigns target billing structure and
   // member attributes alongside plan / status.
+  //
+  // FILTER-A.2 — `time` reads as a date field and means monthly recurring.
+  // That mistranslation is exactly what the 8-Aug sale email turned on, so
+  // the raw values are never shown to an operator again.
   { value: 'glofox_membership_type', label: 'Membership Type',      type: 'select',
-    options: ['time', 'num_classes', 'payg'] },
+    group: 'Membership & billing',
+    hint: 'The billing shape. "Monthly recurring" is the group a sale email normally excludes.',
+    options: ['time', 'num_classes', 'payg'],
+    valueLabels: { time: 'Monthly recurring', num_classes: 'Class pack', payg: 'Pay as you go' } },
   // 'locked' = a membership in payment arrears (the radar's Overdue
   // tab). Pick it to build an overdue segment for a dunning sequence.
-  { value: 'glofox_membership_state', label: 'Membership State (locked = overdue)', type: 'select',
-    options: ['active', 'paused', 'locked'] },
-  { value: 'glofox_membership_expiry', label: 'Membership Renews/Expires', type: 'date' },
-  { value: 'glofox_membership_price_cents', label: 'Membership Price (cents)', type: 'number' },
-  { value: 'glofox_billing_interval', label: 'Billing Interval',    type: 'text' },
-  { value: 'glofox_payment_method',  label: 'Payment Method',       type: 'text' },
-  { value: 'glofox_source',          label: 'Glofox Source',        type: 'text' },
-  { value: 'gender',                 label: 'Gender',               type: 'select',
-    options: ['male', 'female', 'other'] },
-  { value: 'glofox_roaming_enabled', label: 'Roaming Enabled',      type: 'boolean' },
-  { value: 'glofox_account_active',  label: 'Glofox Account Active', type: 'boolean' },
-  { value: 'emergency_contact',      label: 'Has Emergency Contact', type: 'exists' },
+  { value: 'glofox_membership_state', label: 'Membership State',    type: 'select',
+    group: 'Membership & billing',
+    hint: '"Locked" means the membership is in payment arrears — that is the overdue / dunning audience.',
+    options: ['active', 'paused', 'locked'],
+    valueLabels: { active: 'Active', paused: 'Paused', locked: 'Locked (in arrears)' } },
+  { value: 'glofox_membership_expiry', label: 'Membership Renews/Expires', type: 'date',
+    group: 'Membership & billing' },
+  { value: 'glofox_billing_interval', label: 'Billing Interval',    type: 'text',
+    group: 'Membership & billing' },
+  { value: 'glofox_payment_method',  label: 'Payment Method',       type: 'text',
+    group: 'Membership & billing' },
+  { value: 'glofox_roaming_enabled', label: 'Roaming Enabled',      type: 'boolean',
+    group: 'Membership & billing' },
+  { value: 'glofox_account_active',  label: 'Booking Account Active', type: 'boolean',
+    group: 'Membership & billing' },
+  // ── Attendance ──────────────────────────────────────────────────
+  // GLOFOX2.1.14 — booking-engagement aggregates from Glofox sync.
+  // Powers re-engagement audiences ("haven't attended in 14 days"),
+  // welcome sequences ("first attendance"), and high-engagement
+  // segmentation ("attended >8 classes this month").
+  { value: 'last_attended_at',      label: 'Last Attended',          type: 'date',
+    group: 'Attendance',
+    hint: 'Last class they actually turned up to. A no-show moves Last Booked but not this.' },
+  { value: 'last_booked_at',        label: 'Last Booked',            type: 'date',
+    group: 'Attendance',
+    hint: 'Last class they booked, whether or not they showed up. A no-show updates this and not Last Attended.' },
+  { value: 'total_attended_30d',    label: 'Attended (30d)',         type: 'number', group: 'Attendance' },
+  { value: 'total_bookings_30d',    label: 'Bookings (30d)',         type: 'number', group: 'Attendance' },
+  { value: 'total_noshow_30d',      label: 'No-shows (30d)',         type: 'number', group: 'Attendance' },
+  { value: 'trial_credits_remaining', label: 'Trial Credits Left',   type: 'number', group: 'Attendance' },
+  // ── Money ───────────────────────────────────────────────────────
+  // GLOFOX2.1.20 — Lifetime Value from invoice webhook. Powers VIP
+  // segmentation, at-risk audiences, and revenue-cohort analysis.
+  //
+  // FILTER-A.2 — stored in cents for precision; the operator types EUROS
+  // and the builder converts. "Lifetime Value (cents) > 50000" asked an
+  // operator to do arithmetic to express €500, and getting it wrong is
+  // silent — the filter still resolves, just against the wrong cohort.
+  { value: 'lifetime_value_cents',       label: 'Lifetime Value (€)',    type: 'money', group: 'Money' },
+  { value: 'glofox_membership_price_cents', label: 'Membership Price (€)', type: 'money', group: 'Money' },
+  { value: 'lifetime_transaction_count', label: 'Lifetime Payments',     type: 'number', group: 'Money' },
+  { value: 'last_payment_at',            label: 'Last Payment',          type: 'date',
+    group: 'Money',
+    hint: 'Last payment that actually succeeded. Last Invoice below counts attempts too.' },
+  { value: 'last_invoice_at',            label: 'Last Invoice (any status)', type: 'date',
+    group: 'Money',
+    hint: 'Any invoice, paid or not — and the invoice table is stale, so treat this as a weak signal and never as "what they owe".' },
+  // ── Email behaviour ─────────────────────────────────────────────
   // COMMSFIX.B.3 — 'unsubscribed' removed: mig 501 CHECK-bans the value
   // (email_status is reputation-only; consent lives per-location in
   // contact_location_preferences), so the option could never match a row.
   { value: 'email_status',          label: 'Email Status',          type: 'select',
+    group: 'Email behaviour',
+    hint: 'Deliverability only (bounces, complaints). Marketing consent is applied automatically by the send and is not a filter.',
     options: ['active', 'bounced', 'complained'] },
-  { value: 'lead_source',           label: 'Lead Source',           type: 'select',
-    options: ['booking', 'meta', 'tiktok', 'walkin', 'referral', 'website', 'whatsapp', 'classpass', 'other'] },
-  { value: 'label',                 label: 'Label',                 type: 'text' },
+  { value: 'total_emails_sent',     label: 'Emails Sent',           type: 'number', group: 'Email behaviour' },
+  { value: 'total_emails_opened',   label: 'Emails Opened',         type: 'number', group: 'Email behaviour' },
+  // GAPS-P1.3 — server-allowlisted since mig 005 and backfilled by mig 508,
+  // but never offered here while its sibling above was. An operator could
+  // build "opened > 0" and not "clicked > 0".
+  { value: 'total_emails_clicked',  label: 'Emails Clicked',        type: 'number', group: 'Email behaviour' },
+  { value: 'last_emailed_at',       label: 'Last Emailed',          type: 'date',
+    group: 'Email behaviour',
+    hint: 'When WE last emailed them. The two below are whether THEY engaged.' },
+  // GAPS-P1.3 — engagement RECENCY (mig 511). "Last Emailed" says whether WE
+  // emailed them; these say whether they engaged. Pair either with the date
+  // type's days_since ops for "opened in the last 30 days".
+  { value: 'last_email_open_at',    label: 'Last Email Open',       type: 'date', group: 'Email behaviour' },
+  { value: 'last_email_click_at',   label: 'Last Email Click',      type: 'date', group: 'Email behaviour' },
+  // ── Tags & labels ───────────────────────────────────────────────
   // FILTER-P1.3 — contacts.tags is TEXT[], not text. Its own builder type so
   // it stops borrowing the scalar text op list, which offered "contains" (an
   // exact element match here, so typing PT never found PTC — the same
   // operation as "equals" under a second name) and is-empty/is-not-empty
   // NULL tests that were meaningless against a DEFAULT '{}' column.
-  { value: 'tags',                  label: 'Free-text tag',         type: 'tag-array' },
+  { value: 'tags',                  label: 'Free-text tag',         type: 'tag-array', group: 'Tags & labels' },
   // Phase 3 (mig 085): machine-derived retargeting tags. Resolved
   // server-side via contact_tags. The select options are loaded
   // dynamically from /api/segments at mount time.
-  { value: 'tag',                   label: 'Segment tag',           type: 'tag-select' },
+  { value: 'tag',                   label: 'Segment tag',           type: 'tag-select', group: 'Tags & labels' },
+  { value: 'label',                 label: 'Label',                 type: 'text', group: 'Tags & labels' },
+  // ── Events ──────────────────────────────────────────────────────
   // EVENT-FILTER — virtual field. Resolved server-side via
   // resolveEventFilters (race_registrations → contacts.id). Options load
   // dynamically from /api/communications/events. Value is a race_events id.
-  { value: 'event_registration',    label: 'Registered for event',  type: 'event-select' },
-  { value: 'total_emails_sent',     label: 'Emails Sent',           type: 'number' },
-  { value: 'total_emails_opened',   label: 'Emails Opened',         type: 'number' },
-  // GAPS-P1.3 — server-allowlisted since mig 005 and backfilled by mig 508,
-  // but never offered here while its sibling above was. An operator could
-  // build "opened > 0" and not "clicked > 0".
-  { value: 'total_emails_clicked',  label: 'Emails Clicked',        type: 'number' },
-  { value: 'trial_credits_remaining', label: 'Trial Credits Left',  type: 'number' },
-  { value: 'last_emailed_at',       label: 'Last Emailed',          type: 'date' },
-  // GAPS-P1.3 — engagement RECENCY (mig 511). "Last Emailed" says whether WE
-  // emailed them; these say whether they engaged. Pair either with the date
-  // type's days_since ops for "opened in the last 30 days".
-  { value: 'last_email_open_at',    label: 'Last Email Open',       type: 'date' },
-  { value: 'last_email_click_at',   label: 'Last Email Click',      type: 'date' },
-  { value: 'created_at',            label: 'Contact Created',       type: 'date' },
-  { value: 'lead_created_at',       label: 'Lead Created',          type: 'date' },
+  { value: 'event_registration',    label: 'Registered for event',  type: 'event-select', group: 'Events' },
+  // ── Dates & tenure ──────────────────────────────────────────────
+  { value: 'created_at',            label: 'Contact Created',       type: 'date',
+    group: 'Dates & tenure',
+    hint: 'When the contact row appeared in the CRM — an import date as often as a real first-touch date.' },
+  { value: 'lead_created_at',       label: 'Lead Created',          type: 'date',
+    group: 'Dates & tenure',
+    hint: 'Known unreliable — lead_created_at was poisoned by a historical backfill. Do not trust it for cohort dates; use Joined or Contact Created.' },
   // GLOFOX2.1.13 — Glofox-side tenure date (joined_at preferred,
   // falls back to created). Powers "Members > 6 months" anniversary
   // campaigns + cohort analysis.
-  { value: 'joined_at',             label: 'Joined (Glofox)',       type: 'date' },
-  // GLOFOX2.1.14 — booking-engagement aggregates from Glofox sync.
-  // Powers re-engagement audiences ("haven't attended in 14 days"),
-  // welcome sequences ("first attendance"), and high-engagement
-  // segmentation ("attended >8 classes this month").
-  { value: 'last_attended_at',      label: 'Last Attended (Glofox)', type: 'date' },
-  { value: 'last_booked_at',        label: 'Last Booked (Glofox)',   type: 'date' },
-  { value: 'total_attended_30d',    label: 'Attended (30d)',         type: 'number' },
-  { value: 'total_bookings_30d',    label: 'Bookings (30d)',         type: 'number' },
-  { value: 'total_noshow_30d',      label: 'No-shows (30d)',         type: 'number' },
-  // GLOFOX2.1.20 — Lifetime Value from invoice webhook. Powers VIP
-  // segmentation, at-risk audiences, and revenue-cohort analysis.
-  // Cents for precision — operator types "50000" for €500.
-  { value: 'lifetime_value_cents',       label: 'Lifetime Value (cents)', type: 'number' },
-  { value: 'lifetime_transaction_count', label: 'Lifetime Payments',       type: 'number' },
-  { value: 'last_payment_at',            label: 'Last Payment',            type: 'date' },
-  { value: 'last_invoice_at',            label: 'Last Invoice (any status)', type: 'date' },
-  { value: 'glofox_member_id',      label: 'Has Glofox ID',         type: 'exists' },
-  { value: 'gympass_member_id',     label: 'Gympass Member',        type: 'exists' },
-  { value: 'phone',                 label: 'Has Phone',             type: 'exists' },
+  { value: 'joined_at',             label: 'Joined',                type: 'date',
+    group: 'Dates & tenure',
+    hint: 'Membership start date — the trustworthy one for tenure and anniversary campaigns.' },
+  // ── Profile & data quality ──────────────────────────────────────
+  { value: 'gender',                 label: 'Gender',               type: 'select',
+    group: 'Profile & data quality',
+    options: ['male', 'female', 'other'],
+    valueLabels: { male: 'Male', female: 'Female', other: 'Other' } },
+  { value: 'emergency_contact',      label: 'Has Emergency Contact', type: 'exists', group: 'Profile & data quality' },
+  { value: 'glofox_member_id',      label: 'Linked to Booking System', type: 'exists', group: 'Profile & data quality' },
+  { value: 'gympass_member_id',     label: 'Gympass Member',        type: 'exists', group: 'Profile & data quality' },
+  { value: 'phone',                 label: 'Has Phone',             type: 'exists', group: 'Profile & data quality' },
 ]
 
 const OPS_BY_TYPE = {
@@ -175,6 +269,18 @@ const OPS_BY_TYPE = {
     { value: 'is_null',  label: 'is empty' },
     { value: 'not_null', label: 'is not empty' },
   ],
+  // FILTER-A.2 — money is number semantics with a euro↔cent display shim.
+  // The stored value stays cents, so nothing downstream changes.
+  money:   [
+    { value: 'eq',  label: 'equals' },
+    { value: 'neq', label: 'is not' },
+    { value: 'gt',  label: 'greater than' },
+    { value: 'lt',  label: 'less than' },
+    { value: 'gte', label: 'at least' },
+    { value: 'lte', label: 'at most' },
+    { value: 'is_null',  label: 'is empty' },
+    { value: 'not_null', label: 'is not empty' },
+  ],
   date:    [
     { value: 'gt',       label: 'after' },
     { value: 'lt',       label: 'before' },
@@ -218,6 +324,43 @@ function needsValue(op) {
   return !['is_null', 'not_null'].includes(op)
 }
 
+// FILTER-A.2 — the grouped field picker.
+//
+// DELIBERATELY a native <select> with <optgroup>, not a custom searchable
+// combobox. A native select already gives keyboard navigation, type-ahead,
+// mobile's native picker and correct screen-reader semantics (including group
+// announcement) for free; a hand-rolled combobox has to re-earn all of that,
+// and one that gets it wrong is a worse outcome than the flat select it
+// replaces. The grouping is what actually fixes the reported problem — the
+// first-letter type-ahead collisions ("Membership …" ×4, "Last …" ×5) come
+// from 39 options in one undifferentiated list, not from the lack of a search
+// box. Tradeoff recorded rather than hidden: there is still no substring
+// search, so an operator who does not know which group a field lives in must
+// open the list and scan nine short groups instead of one long one.
+function FieldSelect({ value, onChange, disabled, describedBy, className }) {
+  return (
+    <select
+      value={value || ''}
+      disabled={disabled}
+      onChange={onChange}
+      aria-label="Field"
+      aria-describedby={describedBy || undefined}
+      className={className}
+    >
+      {/* FILTER-P1.1 — reachable "unset" so a row can be emptied without
+          deleting it (and so a saved unset row round-trips). */}
+      <option value="">Choose a field…</option>
+      {FIELD_GROUPS.map(group => (
+        <optgroup key={group} label={group}>
+          {FIELD_OPTIONS.filter(o => o.group === group).map(opt => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
+  )
+}
+
 // FILTER-P1.4 — a date row must be born with a value the server will accept.
 // The old default ('after' + '') validated fine, persisted, and only failed at
 // SEND time as a raw Postgres `invalid input syntax for type timestamp`. The
@@ -231,6 +374,25 @@ function defaultValueForDateOp(op) {
   return DAYS_SINCE_OPS.includes(op) ? DEFAULT_DAY_COUNT : dublinTodayStr()
 }
 
+// FILTER-A.2 — euro ↔ cent shim for the two money-typed fields. The STORED
+// value stays cents (nothing downstream changes); only the input speaks euros.
+// Rounded, not truncated, so 12.345 → 1235 rather than 1234.
+export function centsToEuroText(cents) {
+  if (cents === '' || cents === null || cents === undefined) return ''
+  const n = Number(cents)
+  return Number.isFinite(n) ? String(n / 100) : ''
+}
+// Monotonic source of row keys. Module-level so it survives a re-render
+// without a ref (refs may not be touched during render).
+let ROW_KEY_SEQ = 0
+function mintRowKey() { return `fr-${ROW_KEY_SEQ++}` }
+
+export function euroTextToCents(text) {
+  if (text === '' || text === null || text === undefined) return ''
+  const n = Number(text)
+  return Number.isFinite(n) ? String(Math.round(n * 100)) : ''
+}
+
 // FILTER-P1.1 — the row "Add filter" used to hard-code for every host. It is
 // now opt-in: a host that wants a starting guess passes it as defaultFilterRow.
 // Kept here (not inlined at four call sites) so the guess has one definition.
@@ -241,6 +403,32 @@ export const STAGE_MEMBER_DEFAULT_ROW = Object.freeze({
 export default function AudienceBuilder({ filter, onChange, audienceCount, disabled = false, defaultFilterRow = null, presets = null }) {
   const filters = filter?.filters || []
   const logic = filter?.logic || 'and'
+
+  // FILTER-A.2/A.4 — STABLE ROW IDENTITY. Rows were keyed by array index, so
+  // deleting row 2 of 5 re-keyed rows 3-5: React reused the DOM nodes for
+  // different filters, focus landed on a control that now represented another
+  // row, and any per-row local state (the money draft below) followed the
+  // wrong row. Keys are minted once per row and spliced in lockstep with the
+  // array, so a row keeps its identity for its whole life. They are UI-only
+  // and never reach the saved filter JSON.
+  //
+  // Held in state rather than a ref because a ref may not be read or written
+  // during render (react-hooks/refs). The length-mismatch branch is React's
+  // sanctioned derived-state-during-render pattern: it re-renders before
+  // commit, so the placeholder keys below never reach the DOM.
+  const [rowKeyState, setRowKeyState] = useState(() => filters.map(() => mintRowKey()))
+  if (rowKeyState.length !== filters.length) {
+    setRowKeyState(filters.map((_, i) => rowKeyState[i] || mintRowKey()))
+  }
+  const rowKeys = rowKeyState.length === filters.length
+    ? rowKeyState
+    : filters.map((_, i) => rowKeyState[i] || `pending-${i}`)
+
+  // FILTER-A.2 — money inputs are the one place the stored value and the typed
+  // value differ, so the raw keystrokes need somewhere to live. Without this
+  // draft the round-trip cents → euros rewrites "12." to "12" on the next
+  // render and a decimal amount is literally untypeable.
+  const [euroDrafts, setEuroDrafts] = useState({})
 
   // Tag options loaded once at mount from /api/segments (Phase 3,
   // mig 085). Only fetched if the user actually opens a tag-select
@@ -302,6 +490,8 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
     // filter" both narrowed enrolment to members and exited every non-member
     // mid-sequence. With no defaultFilterRow the row starts UNSET — inert
     // until the operator picks a field (see isUnsetFilterRow).
+    if (disabled) return
+    setRowKeyState(k => [...k, mintRowKey()])
     updateFilter([
       ...filters,
       defaultFilterRow ? { ...defaultFilterRow } : { field: '', op: '', value: '' },
@@ -309,6 +499,10 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
   }
 
   function removeFilter(index) {
+    if (disabled) return
+    const goneKey = rowKeys[index]
+    setRowKeyState(k => k.filter((_, i) => i !== index))
+    if (goneKey) setEuroDrafts(d => { const next = { ...d }; delete next[goneKey]; return next })
     updateFilter(filters.filter((_, i) => i !== index))
   }
 
@@ -358,7 +552,12 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
   // composer's count path is the only thing allowed to state a number, and it
   // states it after the rows land (see src/lib/audience-presets.js).
   function applyPreset(preset) {
-    updateFilter(presetFilter(preset).filters, 'and')
+    if (disabled) return
+    const rows = presetFilter(preset).filters
+    // A preset is a wholesale replacement, so every row is a new row.
+    setRowKeyState(rows.map(() => mintRowKey()))
+    setEuroDrafts({})
+    updateFilter(rows, 'and')
   }
 
   return (
@@ -437,22 +636,17 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
           // narrow an audience nor fail validation while it sits half-built.
           if (!f.field) {
             return (
-              <div key={index} className="flex items-center gap-2 bg-un1t-surface border border-un1t-border rounded-lg p-3">
+              <div key={rowKeys[index]} className="flex items-center gap-2 bg-un1t-surface border border-un1t-border rounded-lg p-3">
                 {index > 0 && (
                   <span className="text-xs text-un1t-muted font-medium w-10 text-center uppercase">{logic}</span>
                 )}
                 {index === 0 && filters.length > 1 && <span className="w-10" />}
-                <select
+                <FieldSelect
                   value=""
                   disabled={disabled}
                   onChange={e => handleFieldChange(index, e.target.value)}
                   className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
-                >
-                  <option value="">Choose a field…</option>
-                  {FIELD_OPTIONS.map(opt => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </select>
+                />
                 <button
                   type="button"
                   disabled={disabled}
@@ -472,7 +666,7 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
           // 'Unknown audience field' on this row anyway.
           if (!fieldConfig) {
             return (
-              <div key={index} className="flex items-center gap-2 bg-un1t-surface border border-amber-500/40 rounded-lg p-3">
+              <div key={rowKeys[index]} className="flex items-center gap-2 bg-un1t-surface border border-amber-500/40 rounded-lg p-3">
                 {index > 0 && (
                   <span className="text-xs text-un1t-muted font-medium w-10 text-center uppercase">{logic}</span>
                 )}
@@ -494,9 +688,21 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
 
           const ops = opsForField(fieldConfig)
           const showValue = needsValue(f.op)
+          const rowKey = rowKeys[index]
+          const hintId = fieldConfig.hint ? `${rowKey}-hint` : null
+          // FILTER-A.2 — a saved value that is no longer an offered option. A
+          // bare <select> whose value matches no <option> renders BLANK, so
+          // three live campaigns carrying the retired `active_member` stage
+          // looked like an unset row while still filtering on it. Keep the
+          // value selectable and say so out loud.
+          const retiredValue = fieldConfig.options && showValue
+            && typeof f.value === 'string' && f.value !== ''
+            && !fieldConfig.options.includes(f.value)
+            ? f.value : null
 
           return (
-            <div key={index} className="flex items-center gap-2 bg-un1t-surface border border-un1t-border rounded-lg p-3">
+            <div key={rowKey} className="bg-un1t-surface border border-un1t-border rounded-lg p-3">
+             <div className="flex flex-wrap items-center gap-2">
               {/* Connector */}
               {index > 0 && (
                 <span className="text-xs text-un1t-muted font-medium w-10 text-center uppercase">
@@ -506,19 +712,13 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
               {index === 0 && filters.length > 1 && <span className="w-10" />}
 
               {/* Field */}
-              <select
+              <FieldSelect
                 value={f.field}
                 disabled={disabled}
+                describedBy={hintId}
                 onChange={e => handleFieldChange(index, e.target.value)}
                 className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted"
-              >
-                {/* FILTER-P1.1 — reachable "unset" so a row can be emptied
-                    without deleting it (and so a saved unset row round-trips). */}
-                <option value="">Choose a field…</option>
-                {FIELD_OPTIONS.map(opt => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
+              />
 
               {/* Operator */}
               <select
@@ -539,9 +739,17 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
                   disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
                   className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted flex-1"
                 >
+                  {/* FILTER-A.2 — explicit display names. The old
+                      replace(/_/g,' ') produced "classpass" and "pack member",
+                      and left `time` reading as a date field when it means
+                      monthly recurring — the exact value behind the 8-Aug
+                      mis-send. */}
                   {fieldConfig.options?.map(opt => (
-                    <option key={opt} value={opt}>{opt.replace(/_/g, ' ')}</option>
+                    <option key={opt} value={opt}>
+                      {fieldConfig.valueLabels?.[opt] || opt.replace(/_/g, ' ')}
+                    </option>
                   ))}
+                  {retiredValue && <option value={retiredValue}>{retiredValue} (retired)</option>}
                 </select>
               ) : showValue && fieldConfig.type === 'tag-select' ? (
                 <select
@@ -592,6 +800,31 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
                   disabled={disabled} onChange={e => updateRow(index, { value: e.target.value })}
                   className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted w-24"
                 />
+              ) : showValue && fieldConfig.type === 'money' ? (
+                // FILTER-A.2 — the operator types 120, we store 12000. The
+                // draft holds the literal keystrokes so a half-typed decimal
+                // ("12.") survives the cents round-trip instead of being
+                // rewritten to "12" on the next render.
+                <div className="flex items-center gap-1.5">
+                  <span className="text-sm text-un1t-muted" aria-hidden="true">€</span>
+                  {/* type=text, not number: a number input SANITISES its own
+                      value, so "12." reads back as '' and the euro↔cent
+                      round-trip wipes the decimal point the operator just
+                      typed. inputMode keeps the numeric keypad on mobile. */}
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    data-testid="money-input"
+                    value={euroDrafts[rowKey] ?? centsToEuroText(f.value)}
+                    disabled={disabled}
+                    onChange={e => {
+                      const text = e.target.value
+                      setEuroDrafts(d => ({ ...d, [rowKey]: text }))
+                      updateRow(index, { value: euroTextToCents(text) })
+                    }}
+                    className="bg-un1t-bg border border-un1t-border rounded-md px-2.5 py-1.5 text-sm text-un1t-text focus:outline-none focus:border-un1t-muted w-28"
+                  />
+                </div>
               ) : showValue && fieldConfig.type === 'date' ? (
                 ['days_since_gt', 'days_since_lt'].includes(f.op) ? (
                   <div className="flex items-center gap-1.5">
@@ -640,6 +873,27 @@ export default function AudienceBuilder({ filter, onChange, audienceCount, disab
               >
                 <Trash2 size={14} />
               </button>
+             </div>
+
+              {/* FILTER-A.2 — disambiguating hint. Seven pairs in this list are
+                  indistinguishable from their labels alone (Stage vs raw
+                  Membership Status, the four membership-shaped selects, Last
+                  Booked vs Last Attended, the three creation dates, Last
+                  Payment vs Last Invoice). Two of them carry a data-quality
+                  warning the operator has no other way to learn:
+                  lead_created_at is poisoned, and the invoice table is stale. */}
+              {fieldConfig.hint && (
+                <p id={hintId} className="mt-1.5 text-xs text-un1t-muted">{fieldConfig.hint}</p>
+              )}
+              {retiredValue && (
+                <p className="mt-1.5 text-xs text-amber-700 flex items-start gap-1.5">
+                  <AlertTriangle size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
+                  <span>
+                    <span className="font-mono">{retiredValue}</span> no longer exists as a value for this
+                    field — it was saved before the option was retired and will match nobody. Pick a current value.
+                  </span>
+                </p>
+              )}
             </div>
           )
         })}
