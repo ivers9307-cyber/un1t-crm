@@ -9,6 +9,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { hasPermission } from '@/lib/permissions'
 import { createServerClient } from '@/lib/supabase'
 import { tierLabel, qualityAccent } from '@/lib/whatsapp-number-health'
+import { loadEmailHubStats } from './email-hub-stats.js'
 import { Mail, MessageCircle, MessageSquare, Megaphone, Repeat, FileText, Inbox, Send, ShieldCheck, Gauge } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
@@ -49,18 +50,12 @@ export default async function CommunicationsHub() {
   const db = createServerClient()
   const locationId = user.activeLocation?.id
 
-  // Email stats
-  let totalSent = 0, totalOpened = 0, openRate = 0, activeSequences = 0
+  // Email stats — COMMSFIX.C.6 moved the queries into loadEmailHubStats so the
+  // filters (status not the dead `active` column; broadcast-stream-only open
+  // rate) are unit-testable.
+  let totalSent = 0, openRate = 0, activeSequences = 0
   if (canEmail && locationId) {
-    const [{ count: sent }, { count: opened }, { count: seqCount }] = await Promise.all([
-      db.from('email_sends').select('id', { count: 'exact', head: true }).eq('location_id', locationId),
-      db.from('email_sends').select('id', { count: 'exact', head: true }).eq('location_id', locationId).not('opened_at', 'is', null),
-      db.from('email_sequences').select('id', { count: 'exact', head: true }).eq('location_id', locationId).eq('active', true),
-    ])
-    totalSent = sent || 0
-    totalOpened = opened || 0
-    openRate = totalSent > 0 ? Math.round((totalOpened / totalSent) * 100) : 0
-    activeSequences = seqCount || 0
+    ({ totalSent, openRate, activeSequences } = await loadEmailHubStats(db, locationId))
   }
 
   // WhatsApp stats
