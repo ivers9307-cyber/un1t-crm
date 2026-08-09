@@ -65,7 +65,7 @@
 // before any phase work, so mid-test cancels behave exactly like
 // mid-send cancels.
 
-import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch, consentFieldForStream, isTransientSendError, getDefaultMailboxAddress } from './postmark.js'
+import { buildAudienceQueryAsync, applyMergeTags, buildUnsubscribeUrl, appendUnsubscribeFooter, sendBatch, consentFieldForStream, consentColumnFor, isTransientSendError, getDefaultMailboxAddress } from './postmark.js'
 import { resolveEmailSender } from './tenant-email.js'
 import { injectPreheader, htmlToPlainText } from './email-content.js'
 import { resolveAbPhase, assignAbVariants, clampAbTestPct, decideAbWinner, subjectForVariant } from './campaign-ab.js'
@@ -332,7 +332,7 @@ export async function tickCampaignSend(db, campaign) {
       ab_variant,
       contact:contacts!inner(
         id, email, first_name, last_name, name, phone, pipeline_stage_slug,
-        email_status, email_marketing, email_administrative, glofox_passcode,
+        email_status, glofox_passcode,
         last_marketing_touch_at,
         contact_preferences(unsubscribe_token)
       )
@@ -461,14 +461,46 @@ export async function tickCampaignSend(db, campaign) {
   }
 
   // Consent re-check (HIGH) — the audience was filtered at POPULATE time,
-  // possibly many ticks (minutes) ago. A contact who has since unsubscribed
-  // or hard-bounced must NOT be emailed. Re-apply the exact populate-time
-  // gate (postmark.js buildAudienceQuery): consent for this stream still
-  // granted AND email_status not bounced/complained.
-  const consentOk = (c) => {
-    const granted = stream === 'outbound' ? c.email_administrative === true : c.email_marketing === true
-    return granted && !['bounced', 'complained'].includes(c.email_status)
+  // possibly many ticks (minutes — or, under an A/B wait / frequency-cap
+  // deferral, hours to days) ago. A contact who has since unsubscribed or
+  // hard-bounced must NOT be emailed.
+  //
+  // COMMSFIX.A.1 — re-apply the populate-time gate against the PER-LOCATION
+  // view (contact_location_audience), not the embedded contacts columns:
+  // those are GLOBAL (mig 155), and since LOCCOMMS.4 every unsubscribe link
+  // is ?l=-scoped and writes ONLY contact_location_preferences — which never
+  // flips the global column — so a location-scoped opt-out between populate
+  // and send was invisible here (and the inverse skew wrongly cancelled
+  // per-location-consented recipients whose global flag was false). The
+  // view read also re-applies email_suppressed_at (marketing only, matching
+  // buildAudienceQueryAsync) for free. One extra indexed read per chunk;
+  // chunk ≤ CHUNK_SIZE (500), so a single .in() stays under the 1k cap.
+  let viewQuery = db
+    .from('contact_location_audience')
+    .select('id')
+    .eq('audience_location_id', campaign.location_id)
+    .eq(consentColumnFor(consentField), true)
+    .in('id', claimed.map(r => r.contact_id))
+  if (consentField === 'email_marketing') {
+    viewQuery = viewQuery.is('email_suppressed_at', null)
   }
+  const { data: stillEligible, error: viewErr } = await viewQuery
+  if (viewErr) {
+    // Fail the tick for this chunk rather than sending unverified. Release
+    // the claim (no attempts bump — nothing reached Postmark) so a later
+    // tick retries; if this release itself fails, reclaimStuckSending
+    // sweeps the rows back after SENDING_LEASE_MS anyway.
+    await db.from('campaign_recipients')
+      .update({ status: 'queued', claimed_at: null })
+      .in('id', claimed.map(r => r.id))
+      .eq('status', 'sending')
+    return { phase: 'send', error: `consent re-check failed: ${viewErr.message}` }
+  }
+  const eligibleIds = new Set((stillEligible || []).map(r => r.id))
+  // Membership in the view read = consent still granted; keep the
+  // bounced/complained reputation re-check from the embedded contact.
+  const consentOk = (c) =>
+    eligibleIds.has(c.id) && !['bounced', 'complained'].includes(c.email_status)
   const suppressed = claimed.filter(r => !consentOk(r.contact))
   const queuedRows = claimed.filter(r => consentOk(r.contact))
   if (suppressed.length > 0) {

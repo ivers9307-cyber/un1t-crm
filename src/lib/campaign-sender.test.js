@@ -68,8 +68,14 @@ const op = (state, method) => state.ops.find(o => o.method === method)
 const hasEq = (state, col, val) => state.ops.some(o => o.method === 'eq' && o.args[0] === col && o.args[1] === val)
 
 // Standard route: phase-2 campaign with recipients already populated.
-function routeFor({ count = 1, stale = [], candidates = [] }) {
+// viewSurvivors — COMMSFIX.A.1: what the mid-send consent re-check on
+// contact_location_audience returns; defaults to "every candidate is
+// still eligible" so tests that aren't about consent behave as before.
+function routeFor({ count = 1, stale = [], candidates = [], viewSurvivors = null }) {
   return (state) => {
+    if (state.table === 'contact_location_audience') {
+      return { data: viewSurvivors ?? candidates.map(r => ({ id: r.contact_id })) }
+    }
     if (state.table !== 'campaign_recipients') return { data: [] }
     const first = state.ops[0]
     if (first.method === 'select' && first.args[1]?.head) return { count }
@@ -354,6 +360,127 @@ describe('tickCampaignSend — Reply-To (EMAIL-MAILBOX-ADMIN.1)', () => {
   })
 })
 
+// ── COMMSFIX.A.1 — mid-send consent re-check reads the per-location view ──
+//
+// Populate gates on contact_location_audience.loc_email_marketing (+
+// email_suppressed_at IS NULL), but the old post-claim re-check gated on
+// the embedded GLOBAL contacts.email_marketing. Since LOCCOMMS.4 every
+// unsubscribe link is ?l=-scoped and writes ONLY
+// contact_location_preferences — invisible to the global column — so a
+// location-scoped opt-out between populate and send was ignored (and the
+// inverse skew wrongly cancelled per-location-consented recipients whose
+// global flag was false).
+describe('tickCampaignSend — mid-send consent re-check (COMMSFIX.A.1)', () => {
+  it('re-check cancels a recipient whose per-location email_marketing went false after populate', async () => {
+    // Global column still true — only the VIEW knows about the scoped opt-out.
+    const { db, statements } = makeDb(routeFor({
+      candidates: [makeRecipient('r1', 0)],
+      viewSurvivors: [],
+    }))
+    sendBatch.mockResolvedValue([])
+
+    const result = await tickCampaignSend(db, campaign)
+
+    expect(recipientUpdates(statements, 'r1'))
+      .toContainEqual(expect.objectContaining({ status: 'cancelled' }))
+    expect(sendBatch).not.toHaveBeenCalled()
+    expect(result.sent).toBe(0)
+  })
+
+  it('re-check still sends a per-location-consented recipient even if the GLOBAL email_marketing is false', async () => {
+    const recipient = makeRecipient('r1', 0)
+    recipient.contact.email_marketing = false // global skew — must NOT cancel
+    const { db, statements } = makeDb(routeFor({
+      candidates: [recipient],
+      viewSurvivors: [{ id: 'contact-r1' }],
+    }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, campaign)
+
+    expect(sendBatch).toHaveBeenCalledTimes(1)
+    expect(sendBatch.mock.calls[0][0][0].to).toBe('r1@x.ie')
+    const updates = recipientUpdates(statements, 'r1')
+    expect(updates).toContainEqual(expect.objectContaining({ status: 'sent' }))
+    expect(updates.some(u => u.status === 'cancelled')).toBe(false)
+  })
+
+  it('re-check re-applies email_suppressed_at via the per-location view', async () => {
+    const { db, statements } = makeDb(routeFor({
+      candidates: [makeRecipient('r1', 0)],
+      viewSurvivors: [], // suppressed after populate → absent from the view read
+    }))
+    sendBatch.mockResolvedValue([])
+
+    await tickCampaignSend(db, campaign)
+
+    // The re-check carries the full populate-time marketing gate set.
+    const viewRead = statements.find(s => s.table === 'contact_location_audience')
+    expect(viewRead).toBeTruthy()
+    expect(hasEq(viewRead, 'audience_location_id', 'loc-1')).toBe(true)
+    expect(hasEq(viewRead, 'loc_email_marketing', true)).toBe(true)
+    expect(viewRead.ops.find(o => o.method === 'is').args).toEqual(['email_suppressed_at', null])
+    expect(viewRead.ops.find(o => o.method === 'in').args).toEqual(['id', ['contact-r1']])
+    expect(recipientUpdates(statements, 'r1'))
+      .toContainEqual(expect.objectContaining({ status: 'cancelled' }))
+    expect(sendBatch).not.toHaveBeenCalled()
+  })
+
+  it('re-check gates a utility campaign on the view’s email_administrative with no suppression gate', async () => {
+    // NOTE: administrative consent is deliberately GLOBAL (LOCCOMMS.3 —
+    // LOCATION_CONSENT_COLUMNS maps only the marketing channels to loc_*);
+    // the view surfaces it as plain email_administrative, and populate
+    // gates on exactly that via consentColumnFor. The re-check must match.
+    const { db, statements } = makeDb(routeFor({ candidates: [makeRecipient('r1', 0)] }))
+    sendBatch.mockResolvedValue([{ ErrorCode: 0, MessageID: 'pm-1' }])
+
+    await tickCampaignSend(db, { ...campaign, postmark_stream: 'outbound' })
+
+    const viewRead = statements.find(s => s.table === 'contact_location_audience')
+    expect(viewRead).toBeTruthy()
+    expect(hasEq(viewRead, 'email_administrative', true)).toBe(true)
+    // Administrative mail is never suppression-gated (mirrors populate).
+    expect(viewRead.ops.some(o => o.method === 'is' && o.args[0] === 'email_suppressed_at')).toBe(false)
+    expect(sendBatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-check view error releases the claim and fails the tick without sending', async () => {
+    const base = routeFor({ candidates: [makeRecipient('r1', 0)] })
+    const { db, statements } = makeDb((state) => {
+      if (state.table === 'contact_location_audience') {
+        return { data: null, error: { message: 'view boom' } }
+      }
+      return base(state)
+    })
+    sendBatch.mockResolvedValue([])
+
+    const result = await tickCampaignSend(db, campaign)
+
+    expect(result.error).toMatch(/view boom/)
+    expect(sendBatch).not.toHaveBeenCalled()
+    const updates = recipientUpdates(statements, 'r1')
+    // Claim released for a later tick — never sent, never cancelled.
+    expect(updates).toContainEqual(expect.objectContaining({ status: 'queued', claimed_at: null }))
+    expect(updates.some(u => u.status === 'sent' || u.status === 'cancelled')).toBe(false)
+  })
+
+  it('re-check keeps cancelling bounced/complained reputation flips', async () => {
+    const recipient = makeRecipient('r1', 0)
+    recipient.contact.email_status = 'bounced' // flipped after populate
+    const { db, statements } = makeDb(routeFor({
+      candidates: [recipient],
+      viewSurvivors: [{ id: 'contact-r1' }], // consent itself still granted
+    }))
+    sendBatch.mockResolvedValue([])
+
+    await tickCampaignSend(db, campaign)
+
+    expect(recipientUpdates(statements, 'r1'))
+      .toContainEqual(expect.objectContaining({ status: 'cancelled' }))
+    expect(sendBatch).not.toHaveBeenCalled()
+  })
+})
+
 // ── CAMPAIGN-AB (COMMS-AUDIT 2026-07-10) — subject-line A/B testing ──
 
 const HOUR = 3600_000
@@ -382,8 +509,13 @@ function abRouteFor({
   inflight = 0,
   statRows = [],
   winnerCasGranted = true,
+  viewSurvivors = null,
 } = {}) {
   return (state) => {
+    if (state.table === 'contact_location_audience') {
+      // COMMSFIX.A.1 — mid-send consent re-check; default: all eligible.
+      return { data: viewSurvivors ?? candidates.map(r => ({ id: r.contact_id })) }
+    }
     if (state.table === '__rpc__') {
       const [fn] = state.ops[0].args
       if (fn === 'campaign_ab_variant_stats') return { data: statRows, error: null }

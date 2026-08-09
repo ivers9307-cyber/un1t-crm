@@ -41,7 +41,7 @@ const CHANNEL_OPTIONS = [
   },
 ]
 
-export default function UnsubscribePage({ token }) {
+export default function UnsubscribePage({ token, locationId = null }) {
   // All three pre-selected because the user clicked an "unsubscribe"
   // link — assume they want out of everything unless they say otherwise.
   const [selected, setSelected] = useState(
@@ -68,7 +68,14 @@ export default function UnsubscribePage({ token }) {
     setStatus('loading')
     setErrorMsg(null)
     try {
-      const res = await fetch(`/api/unsubscribe/${token}`, {
+      // COMMSFIX.A.2 (LOCCOMMS.4) — forward the location scope the email
+      // link carried (?l=). The API route resolves scopeLocationId from the
+      // POST URL's query; without it every page unsubscribe writes the
+      // GLOBAL contact_preferences row and the mig 489 trigger fans the
+      // opt-out to every location. No locationId → unchanged global
+      // behaviour for old location-less links.
+      const scope = locationId ? `?l=${encodeURIComponent(locationId)}` : ''
+      const res = await fetch(`/api/unsubscribe/${token}${scope}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channels: [...selected] }),
