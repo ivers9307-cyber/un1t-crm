@@ -241,7 +241,9 @@ export default function SequenceSettings({ sequence }) {
           {/* Audience — who is eligible to enter */}
           <div className="rounded-lg border border-un1t-border/70 bg-un1t-bg/40 p-3 space-y-2">
             <div>
-              <span className="block text-xs font-medium text-un1t-subtle">Audience — who can enter</span>
+              {/* SEQEXIT.1 — the old label said "who can enter", which is now the
+                  wrong mental model: the same conditions also decide who STAYS. */}
+              <span className="block text-xs font-medium text-un1t-subtle">Audience — who this applies to</span>
               <span className="block text-[11px] text-un1t-subtle/80">Only enrol contacts who match these conditions when the trigger fires. Leave empty to allow anyone.</span>
               <span className="block text-[11px] text-un1t-subtle/80 mt-1">{AUDIENCE_CONTINUOUS_HINT}</span>
             </div>
