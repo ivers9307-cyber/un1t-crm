@@ -68,12 +68,19 @@ const sql = existsSync(FILE)
     expect(sql).not.toMatch(/using\s*\(\s*false\s*\)/)
   })
 
-  it('adds a SECURITY DEFINER stats RPC that authenticated/anon cannot execute', () => {
+  // SECURITY INVOKER, not DEFINER. The only caller is the service-role client,
+  // which bypasses RLS either way, so DEFINER buys nothing — but it would turn
+  // a future accidental `grant execute ... to authenticated` into a
+  // cross-location IDOR, the exact class #1307 and #1311 just fixed. Under
+  // INVOKER that same mistake still lands on the table's location-scoped SELECT
+  // policy. Defence in depth for free.
+  it('adds a SECURITY INVOKER stats RPC that authenticated/anon cannot execute', () => {
     expect(sql).toMatch(
       /create or replace function public\.campaign_link_click_stats\(p_campaign_id uuid\)/,
     )
     expect(sql).toMatch(/returns table\s*\(\s*url text,\s*clicks bigint,\s*unique_clickers bigint\s*\)/)
-    expect(sql).toMatch(/security definer/)
+    expect(sql).toMatch(/security invoker/)
+    expect(sql).not.toMatch(/security definer/)
     expect(sql).toMatch(/set search_path = public/)
     expect(sql).toMatch(/count\(distinct .*contact_id\)/)
     expect(sql).toMatch(

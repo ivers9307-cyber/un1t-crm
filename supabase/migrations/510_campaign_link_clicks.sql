@@ -11,7 +11,7 @@
 --
 -- The array is also the wrong shape for the question operators actually ask —
 -- "which link did people click?" is a GROUP BY url, and you cannot group
--- across 19,140 jsonb arrays. One row per click event fixes both: every click
+-- across thousands of jsonb arrays. One row per click event fixes both: every click
 -- is an INSERT (no read, nothing to lose) and the report is a plain aggregate.
 --
 -- clicked_links is DEPRECATED, not dropped (repo convention): the data stays
@@ -62,7 +62,8 @@ create policy campaign_link_clicks_select
 
 -- ── Report aggregate ────────────────────────────────────────────────
 -- Aggregating in the route would hit the 1,000-row select cap on any real
--- campaign (19,140 click rows exist before this migration even runs), so the
+-- campaign as click volume grows (and repeat clicks start flowing again with
+-- COMMSFIX.C.2), so the
 -- GROUP BY lives in Postgres.
 --
 -- unique_clickers is the honest headline — one enthusiastic person clicking
@@ -77,7 +78,12 @@ create or replace function public.campaign_link_click_stats(p_campaign_id uuid)
 returns table (url text, clicks bigint, unique_clickers bigint)
 language sql
 stable
-security definer
+-- SECURITY INVOKER: the only caller is the service-role client, which bypasses
+-- RLS anyway, so DEFINER buys nothing — while a future accidental
+-- `grant execute … to authenticated` would become a cross-location IDOR under
+-- DEFINER (the class #1307/#1311 just fixed) but still lands on this table's
+-- location-scoped SELECT policy under INVOKER.
+security invoker
 set search_path = public
 as $$
   select c.url,
@@ -100,8 +106,16 @@ grant execute on function public.campaign_link_click_stats(uuid)
 -- stamps because the early array entries predate the clicked_at key.
 -- jsonb_typeof guards the handful of rows that could hold a non-array, and
 -- the cross join lateral drops empty arrays ('[]' is the column default) for
--- free. Verified live 2026-08-09: 19,140 rows carry a non-null clicked_links
--- holding exactly one entry, so this inserts ~19,140 rows.
+-- free — and most of them ARE empty.
+--
+-- Verified against prod 2026-08-09 (the earlier "~19,140 rows each holding one
+-- entry" reading was wrong: clicked_links DEFAULTS to '[]'::jsonb, so nearly
+-- every recipient row is non-null and empty). Actual history: 18,147 empty
+-- defaults, 993 recipients carrying at least one click, 23 of those carrying
+-- MORE than one (pre-dating the 2026-05-08 dedup key that capped the rest),
+-- 218 distinct URLs. **This backfill inserts 1,108 rows** — check that number
+-- after applying; a materially different count means the click path changed
+-- between this migration being written and applied.
 insert into public.campaign_link_clicks (campaign_id, contact_id, location_id, url, clicked_at, postmark_message_id)
 select r.campaign_id, r.contact_id, c.location_id,
        e->>'url',
