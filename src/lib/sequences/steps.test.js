@@ -604,7 +604,8 @@ describe('send-step return ids are row uuids, never provider ids (re-send loop g
     const out = await steps.sendSmsStep(sendStepDb(), {
       step: { id: 'step-2', sms_body: 'Hi there' },
       sequence: { id: 'seq-1', location_id: 'loc-1', name: 'Nudge' },
-      contact: { id: 'c1', phone: '+353860000000', sms_status: 'active' },
+      // COMMSFIX.E.1 — the SMS step now gates on the per-location consent row.
+      contact: { id: 'c1', phone: '+353860000000', sms_status: 'active', contact_location_preferences: [{ location_id: 'loc-1', sms_marketing: true, email_marketing: true, whatsapp_marketing: true }] },
     })
     expect(out).toBe('bbbbbbbb-0000-0000-0000-000000000002')
     expect(String(out)).not.toContain('SM')
@@ -892,5 +893,146 @@ describe('sendEmailStep — marketing consent + broadcast stream (COMMS-AUDIT)',
       enrollment: { id: 'e9' }, step, sequence,
       contact: { ...consentedContact, email: null },
     })).rejects.toThrow(/no email address/)
+  })
+})
+
+// ── COMMSFIX.E.1 — SMS step: per-location marketing consent + graceful
+// skips ───────────────────────────────────────────────────────────
+//
+// The 2026-08-09 comms audit confirmed sendSmsStep was the ONLY send
+// step still bypassing the per-location consent model (it read global
+// contacts.sms_status only, never contact_location_preferences.
+// sms_marketing) AND still THROWING on per-contact conditions (no
+// phone / opted out), feeding error_count until MAX_ERRORS auto-
+// paused the whole enrolment — the identical wedge class already
+// fixed for email/WA after the live 2026-07-10 incident. These tests
+// pin the email/WA contract onto SMS: locationConsent() gate, row
+// absent = never send, per-contact conditions are recorded SKIPS.
+describe('sendSmsStep — per-location consent gate + graceful skips (COMMSFIX.E.1)', () => {
+  const step = { id: 'st-sms', step_order: 3, sms_body: 'Hi {{first_name}}' }
+  const sequence = { id: 'seq-sms', name: 'Dunning chase', location_id: 'loc-1' }
+  const consentedContact = {
+    id: 'c1', location_id: 'loc-1', phone: '+353860000000', sms_status: 'active',
+    contact_location_preferences: [{ location_id: 'loc-1', email_marketing: true, sms_marketing: true, whatsapp_marketing: true }],
+  }
+
+  function smsDb() {
+    const activityInserts = []
+    const rpcCalls = []
+    return {
+      activityInserts,
+      rpcCalls,
+      from(table) {
+        if (table === 'activities') {
+          return {
+            insert: (row) => {
+              activityInserts.push(row)
+              // recordStepSkip awaits the bare insert (thenable); the
+              // send path chains .select().single() — support both.
+              return {
+                select: () => ({ single: async () => ({ data: { id: 'dddddddd-0000-0000-0000-000000000004' } }) }),
+                then: (onF) => Promise.resolve({ error: null }).then(onF),
+              }
+            },
+          }
+        }
+        if (table === 'locations') return { select: () => ({ eq: () => ({ single: async () => ({ data: { id: 'loc-1', name: 'Stillorgan', twilio_alpha_sender_id: 'UN1T' } }) }) }) }
+        throw new Error(`unexpected table ${table}`)
+      },
+      rpc(name) { rpcCalls.push(name); return Promise.resolve({ data: null, error: null }) },
+    }
+  }
+
+  let tw
+  beforeEach(async () => {
+    tw = await import('@/lib/twilio')
+    tw.sendLocationSms.mockReset()
+    tw.sendLocationSms.mockResolvedValue({ sid: 'SM_PROVIDER' })
+  })
+
+  it('per-location sms consent not true → recorded skip (no Twilio call, resolves null, no throw)', async () => {
+    for (const sms_marketing of [false, null, undefined]) {
+      const db = smsDb()
+      const out = await steps.sendSmsStep(db, {
+        step, sequence, contact: {
+          ...consentedContact,
+          contact_location_preferences: [{ location_id: 'loc-1', sms_marketing, email_marketing: true, whatsapp_marketing: true }],
+        },
+      })
+      expect(out).toBeNull()
+      expect(db.activityInserts).toHaveLength(1)
+      expect(db.activityInserts[0].subject).toMatch(/skipped/i)
+      expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/sms marketing/i)
+    }
+    expect(tw.sendLocationSms).not.toHaveBeenCalled()
+  })
+
+  it('no preferences row for the sequence location → recorded skip (row absent = never send)', async () => {
+    const db = smsDb()
+    const out = await steps.sendSmsStep(db, {
+      step, sequence, contact: {
+        ...consentedContact,
+        contact_location_preferences: [{ location_id: 'loc-other', sms_marketing: true, email_marketing: true, whatsapp_marketing: true }],
+      },
+    })
+    expect(out).toBeNull()
+    expect(tw.sendLocationSms).not.toHaveBeenCalled()
+    expect(db.activityInserts).toHaveLength(1)
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/list/i)
+  })
+
+  it('missing phone → recorded skip, not a throw (no more MAX_ERRORS wedge)', async () => {
+    const db = smsDb()
+    const out = await steps.sendSmsStep(db, {
+      step, sequence, contact: { ...consentedContact, phone: null },
+    })
+    expect(out).toBeNull()
+    expect(tw.sendLocationSms).not.toHaveBeenCalled()
+    expect(db.activityInserts).toHaveLength(1)
+    expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toMatch(/phone/i)
+  })
+
+  it.each(['opted_out', 'invalid', 'undeliverable'])(
+    'sms_status %s → recorded skip, not a throw',
+    async (sms_status) => {
+      const db = smsDb()
+      const out = await steps.sendSmsStep(db, {
+        step, sequence, contact: { ...consentedContact, sms_status },
+      })
+      expect(out).toBeNull()
+      expect(tw.sendLocationSms).not.toHaveBeenCalled()
+      expect(db.activityInserts).toHaveLength(1)
+      expect(`${db.activityInserts[0].subject} ${db.activityInserts[0].note}`).toContain(sms_status)
+    },
+  )
+
+  it('a skip does not bump the per-step sent metric', async () => {
+    const db = smsDb()
+    await steps.sendSmsStep(db, {
+      step, sequence, contact: { ...consentedContact, phone: null },
+    })
+    expect(db.rpcCalls).not.toContain('increment_step_sent')
+  })
+
+  it('consented contact with active status sends and returns the activities row id', async () => {
+    const db = smsDb()
+    const out = await steps.sendSmsStep(db, { step, sequence, contact: consentedContact })
+    expect(tw.sendLocationSms).toHaveBeenCalledTimes(1)
+    expect(out).toBe('dddddddd-0000-0000-0000-000000000004')
+    expect(db.rpcCalls).toContain('increment_step_sent')
+  })
+
+  it('absent sms_status still sends (back-compat for pre-mig-059 contacts)', async () => {
+    const db = smsDb()
+    const { sms_status: _drop, ...noStatus } = consentedContact
+    const out = await steps.sendSmsStep(db, { step, sequence, contact: noStatus })
+    expect(tw.sendLocationSms).toHaveBeenCalledTimes(1)
+    expect(out).toBe('dddddddd-0000-0000-0000-000000000004')
+  })
+
+  it('missing sms_body still throws (sequence-config fault → operator must fix)', async () => {
+    await expect(steps.sendSmsStep(smsDb(), {
+      step: { ...step, sms_body: null }, sequence, contact: consentedContact,
+    })).rejects.toThrow(/sms_body/)
   })
 })
