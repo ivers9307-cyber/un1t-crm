@@ -319,6 +319,66 @@ const noUnescapedIlikePattern = {
   },
 }
 
+// A bare <button> inside a <form> defaults to type="submit" (HTML spec), so a
+// tab pill, a close X or any secondary action placed in a form submits it —
+// reloading/clearing the form, or firing onSubmit, on a click that was meant to
+// do something else entirely. #1319 hand-fixed 36 of these across the campaign
+// and email components; a repo-wide survey then found 301 untyped <button>s, so
+// the convention (CLAUDE.md: "Every <button> in a <form> defaults to
+// type='submit' — set type='button' on every non-submit") clearly needs a rule
+// rather than memory.
+//
+// Precision-first, because this runs at ERROR level over the whole repo and a
+// wrong flag on a shared primitive blocks every PR. Deliberate non-flags:
+//   - no <form> ancestor in this file — outside a form the default is inert
+//   - any explicit `type`, INCLUDING a dynamic `type={expr}`; a dynamic type is
+//     still a deliberate choice and we cannot judge its value
+//   - a `{...spread}` is present — the type may arrive through it
+//   - an uppercase <Button> — only the lowercase intrinsic defaults to submit;
+//     the repo's own primitive sets its own type
+//
+// KNOWN LIMIT: an AST rule only sees one JSX tree, so a button reached through a
+// COMPONENT BOUNDARY (<form> renders <Foo/>, and <Foo/> renders the <button>) is
+// invisible here. The rule is a floor, not an exhaustive check.
+function isNamedJsxElement(node, name) {
+  if (!node || node.type !== 'JSXElement') return false
+  const open = node.openingElement
+  const id = open && open.name
+  return !!id && id.type === 'JSXIdentifier' && id.name === name
+}
+
+const noUntypedButtonInForm = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description:
+        "Disallow a lowercase <button> with no `type` attribute inside a <form> — it defaults to type=\"submit\". Does NOT flag buttons carrying a {...spread} (the type may come from it) or buttons reached through a component boundary (invisible to an AST rule).",
+    },
+    schema: [],
+    messages: {
+      untyped:
+        'A <button> inside a <form> defaults to type="submit" (HTML spec), so this click submits the form. Set type="button" if it is a tab pill / close X / secondary action, or type="submit" if it genuinely is the form\'s primary action (CLAUDE.md invariant).',
+    },
+  },
+  create(context) {
+    return {
+      JSXElement(node) {
+        if (!isNamedJsxElement(node, 'button')) return
+        const attrs = (node.openingElement && node.openingElement.attributes) || []
+        for (const attr of attrs) {
+          // A spread may carry `type` — a false positive on a shared UI
+          // primitive is worse than the miss.
+          if (attr.type === 'JSXSpreadAttribute') return
+          if (attr.type === 'JSXAttribute' && attr.name && attr.name.name === 'type') return
+        }
+        const ancestors = context.sourceCode.getAncestors(node)
+        if (!ancestors.some((a) => isNamedJsxElement(a, 'form'))) return
+        context.report({ node: node.openingElement, messageId: 'untyped' })
+      },
+    }
+  },
+}
+
 export default {
   rules: {
     'no-catch-on-supabase-builder': noCatchOnSupabaseBuilder,
@@ -327,5 +387,6 @@ export default {
     'no-utc-today': noUtcToday,
     'no-low-contrast-chip': noLowContrastChip,
     'no-unescaped-ilike-pattern': noUnescapedIlikePattern,
+    'no-untyped-button-in-form': noUntypedButtonInForm,
   },
 }

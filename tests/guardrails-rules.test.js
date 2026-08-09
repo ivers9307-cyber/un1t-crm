@@ -11,6 +11,16 @@ const ruleTester = new RuleTester({
   languageOptions: { ecmaVersion: 2022, sourceType: 'module' },
 })
 
+// JSX-enabled tester — the button-type rule walks a JSX ancestor chain, so its
+// cases need the same parserOptions the guardrails config gives src/**.
+const jsxRuleTester = new RuleTester({
+  languageOptions: {
+    ecmaVersion: 2022,
+    sourceType: 'module',
+    parserOptions: { ecmaFeatures: { jsx: true } },
+  },
+})
+
 ruleTester.run('no-catch-on-supabase-builder', plugin.rules['no-catch-on-supabase-builder'], {
   valid: [
     'async () => { await db.from("x").select("*") }',
@@ -103,5 +113,38 @@ ruleTester.run('no-low-contrast-chip', plugin.rules['no-low-contrast-chip'], {
     { code: '"bg-red-50 text-red-400"', errors: [{ messageId: 'lowContrast' }] },
     // template literal with both halves in static text
     { code: 'const c = `px-2 bg-teal-500/20 ${x} text-teal-400`', errors: [{ messageId: 'lowContrast' }] },
+  ],
+})
+
+jsxRuleTester.run('no-untyped-button-in-form', plugin.rules['no-untyped-button-in-form'], {
+  valid: [
+    // no <form> ancestor in this file — outside a form the default is inert
+    'const A = () => <div><button onClick={x}>Go</button></div>',
+    // explicit literal types
+    'const A = () => <form><button type="button" onClick={x}>X</button></form>',
+    'const A = () => <form><button type="submit">Save</button></form>',
+    'const A = () => <form><button type="reset">Reset</button></form>',
+    // dynamic type — still explicit; we cannot judge the value
+    'const A = () => <form><button type={t}>X</button></form>',
+    // a spread may carry the type — false positives on shared primitives are worse
+    'const A = () => <form><button {...props}>X</button></form>',
+    // uppercase component — the repo primitive sets its own type
+    'const A = () => <form><Button onClick={x}>X</Button></form>',
+    // a form SIBLING, not an ancestor
+    'const A = () => <div><form><input /></form><button onClick={x}>X</button></div>',
+  ],
+  invalid: [
+    // nested several levels deep — proves the ancestor walk, not a direct-child check
+    {
+      code: 'const A = () => <form onSubmit={s}><div><fieldset><span><button onClick={x}>X</button></span></fieldset></div></form>',
+      errors: [{ messageId: 'untyped' }],
+    },
+    // direct child
+    { code: 'const A = () => <form><button onClick={x}>X</button></form>', errors: [{ messageId: 'untyped' }] },
+    // two in one form
+    {
+      code: 'const A = () => <form><div><button onClick={a}>A</button><button onClick={b}>B</button></div></form>',
+      errors: [{ messageId: 'untyped' }, { messageId: 'untyped' }],
+    },
   ],
 })
